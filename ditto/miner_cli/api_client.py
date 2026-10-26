@@ -85,6 +85,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     AvatarRejectedError,
+    GeneratorPaymentRejectedError,
     HotkeyAgentNotFoundError,
     LoginRejectedError,
     LoginRequiredError,
@@ -119,6 +120,11 @@ _ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 _ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
 _ERROR_CODE_PAYMENT_RECOVERY_EXPIRED = 3208
 _ERROR_CODE_PAYMENT_REPLAYED = 3207
+# Generator fee refusals the same proof can never overcome. 3201 (extrinsic not
+# found) is left out: an archive node that has not caught up yet reports it.
+_DEFINITIVE_GENERATOR_PAYMENT_CODES = frozenset(
+    {3202, 3203, 3204, 3205, 3206, 3207, 3208}
+)
 
 # Safe post-payment retry set. These statuses conventionally represent a
 # transient request, capacity, gateway, or service failure. Other 4xx responses
@@ -395,6 +401,66 @@ class ApiClient:
         if response.status_code not in (200, 201):
             raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
         return OwnerLinkResponse.model_validate(response.json())
+
+    # ---- /generator (generator competition, shadow) ---------------------
+
+    def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
+        response = self._request("POST", "/api/v1/generator/submissions", json=body)
+        if response.status_code != 200:
+            message = _format_error(response, prefix="generator upload")
+            if (
+                response.status_code == 402
+                and _safe_envelope(response).get("error_code")
+                in _DEFINITIVE_GENERATOR_PAYMENT_CODES
+            ):
+                raise GeneratorPaymentRejectedError(message)
+            raise ApiResponseError(message)
+        result: dict[str, Any] = response.json()
+        return result
+
+    def get_generator_upload_terms(
+        self, *, hotkey: str, source_sha256: str
+    ) -> dict[str, Any] | None:
+        """What a generator upload needs now, or ``None`` on an older Platform.
+
+        A Platform without the endpoint predates generator upload fees, so it
+        never requires one.
+        """
+        response = self._request(
+            "GET",
+            "/api/v1/generator/upload-terms",
+            params={"hotkey": hotkey, "source_sha256": source_sha256},
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="generator upload terms")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
+    def list_generator_submissions(
+        self, *, hotkey: str, limit: int = 25
+    ) -> dict[str, Any]:
+        response = self._request(
+            "GET",
+            "/api/v1/generator/submissions",
+            params={"hotkey": hotkey, "limit": limit},
+        )
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="generator submissions")
+            )
+        result: dict[str, Any] = response.json()
+        return result
+
+    def get_generator_board(self) -> dict[str, Any]:
+        response = self._request("GET", "/api/v1/generator/board")
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="generator board"))
+        result: dict[str, Any] = response.json()
+        return result
 
     # ---- /name-claims ---------------------------------------------------
 

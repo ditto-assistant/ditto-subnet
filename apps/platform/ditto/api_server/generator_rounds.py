@@ -1,0 +1,2053 @@
+"""Generator-competition rounds: the chain-epoch agent x generator matrix.
+
+A round is keyed on the chain's own epoch counter,
+``round_index = SubnetEpochIndex // epochs_per_round``, so every round opens
+and closes on a Yuma epoch boundary and lands in the same epoch-pinned ledger
+validators fold. The lifecycle (:func:`advance_rounds`, driven by
+:class:`GeneratorRoundLoop` and safe to re-run):
+
+1. **Commit.** While round ``r`` runs, Platform draws round ``r + 1``'s 32-byte
+   secret and publishes ``commitment = RoundCommitment(r + 1, secret)`` on
+   Platform. When ``onchain_commitment`` is enabled, Platform elects up to
+   :data:`ROUND_COMMITMENT_PUBLISHERS` fresh validators (a stable per-round
+   order) to publish ``dgr1:{r + 1}:{commitment}`` with
+   ``Commitments.set_commitment`` from their own Pylon identity
+   (``endpoints/validator_generator_round.py``). This is best effort: a round
+   opens whether or not any validator confirmed the on-chain copy.
+2. **Open.** At the first epoch of round ``r``, a round committed before that
+   epoch derives ``seed = RoundSeed(r, secret, open_block_hash)`` (the block
+   the epoch fired at, unknowable when the secret was committed) and freezes
+   its generator columns (best qualified generators, the public default
+   generator filling empty counted columns, plus challengers) and its agent
+   panel (the top ledger owners plus reference agents).
+3. **Generate.** The scorer builds each column generator and runs it on its
+   column seed; Platform stores the canonical round dataset.
+4. **Run.** Validators lease each panel agent on a ``generator_round`` ticket
+   and post per-case results (``endpoints/validator_generator_round.py``).
+   A panel agent that becomes ineligible mid-round is dropped (never leased
+   or scored again; its seat is not refilled), and the round is void once
+   fewer than ``min_panel`` agents remain seated.
+5. **Close and score.** When every seated panel agent reported, or the
+   round's last epoch ends, the scorer applies ``challenge.ScoreRound`` to the
+   matrix: column scores for generators and pairwise-neutral standings for
+   agents. A round with fewer than ``min_panel`` results that answered at
+   least one case is void instead (see :class:`PanelTally`).
+6. **Reveal.** ``privacy_window_rounds`` after a round opens, its secret,
+   seed, and dataset become public so anyone can re-derive every case.
+
+Derivations mirror ``research/dittobench-datagen/challenge/round.go`` and are
+pinned by ``challenge/testdata/round_vectors.json``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import contextlib
+import hashlib
+import logging
+import secrets
+import struct
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
+
+from pydantic import ValidationError
+from sqlalchemy import and_, func, select, true, update
+
+from ditto.api_models.generator import PanelCaseResult
+from ditto.api_models.generator_ledger import (
+    GeneratorLedgerEntry,
+    GeneratorLedgerResponse,
+)
+from ditto.api_models.generator_round_validator import (
+    GeneratorRoundCaseResult,
+    GeneratorRoundCommitmentJobResponse,
+    GeneratorRoundCommitmentReportRequest,
+    GeneratorRoundCommitmentReportResponse,
+    round_commitment_payload,
+)
+from ditto.api_models.generator_rounds import (
+    GeneratorRoundAttemptView,
+    GeneratorRoundColumnView,
+    GeneratorRoundCommitmentPublicationView,
+    GeneratorRoundGenerateResult,
+    GeneratorRoundLoopStatus,
+    GeneratorRoundResultView,
+    GeneratorRoundSchedule,
+    GeneratorRoundScoreResult,
+    GeneratorRoundStandingView,
+    GeneratorRoundSummary,
+    GeneratorRoundWork,
+    RoundCaseRef,
+    RoundMatrix,
+    RoundMatrixAgent,
+    RoundMatrixColumn,
+    RoundSourceColumn,
+)
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_models.validator_capabilities import ValidatorCapabilities
+from ditto.db.models import (
+    Agent,
+    BannedHotkey,
+    GeneratorRound,
+    GeneratorRoundAttempt,
+    GeneratorRoundCaseVerdict,
+    GeneratorRoundCommitmentPublication,
+    GeneratorRoundResult,
+    GeneratorSubmission,
+    ValidatorHeartbeat,
+    ValidatorTicket,
+)
+from ditto.db.queries.generator import claimed_fingerprints
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.api_server.generator_competition import ResolvedSettings
+    from ditto.chain.models import EpochSchedule
+
+logger = logging.getLogger(__name__)
+
+ROUND_COMMIT_DOMAIN = b"dittobench-generator-round-commit/v1"
+ROUND_SEED_DOMAIN = b"dittobench-generator-round-seed/v1"
+COLUMN_SEED_DOMAIN = b"dittobench-generator-round-column-seed/v1"
+PUBLIC_DEFAULT_OWNER = "public-default"
+MAX_COLUMNS = 8
+# A generation or scoring lease the scorer never answers is re-leased after
+# this long; a round whose generation keeps failing is voided.
+ROUND_LEASE_TTL = timedelta(minutes=30)
+MAX_GENERATION_ATTEMPTS = 4
+# Round commitment publication by validators (best effort, never gates a
+# round): how many confirmed publications a round wants, how long one elected
+# validator holds its claim before the next in order may take its place, how
+# often an unfinished election widens by one more validator, and how fresh a
+# validator's heartbeat must be to be elected.
+ROUND_COMMITMENT_PUBLISHERS = 3
+COMMITMENT_CLAIM_TTL = timedelta(minutes=10)
+COMMITMENT_ESCALATION_INTERVAL = timedelta(minutes=15)
+COMMITMENT_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
+PUBLISHER_ORDER_DOMAIN = b"dittobench-generator-round-publisher/v1"
+
+
+# --- derivations ------------------------------------------------------------
+
+
+def round_index_for(subnet_epoch_index: int, epochs_per_round: int) -> int:
+    return subnet_epoch_index // epochs_per_round
+
+
+def round_first_epoch(round_index: int, epochs_per_round: int) -> int:
+    return round_index * epochs_per_round
+
+
+def round_commitment(round_index: int, secret: bytes) -> str:
+    return hashlib.sha256(
+        ROUND_COMMIT_DOMAIN + b"\x00" + struct.pack(">Q", round_index) + secret
+    ).hexdigest()
+
+
+def round_seed(round_index: int, secret: bytes, open_block_hash: str) -> str:
+    block = bytes.fromhex(open_block_hash.lower().removeprefix("0x"))
+    if len(block) != 32:
+        raise ValueError("round open block hash must be 32 bytes of hex")
+    return hashlib.sha256(
+        ROUND_SEED_DOMAIN + b"\x00" + struct.pack(">Q", round_index) + secret + block
+    ).hexdigest()
+
+
+def round_column_seed(seed: str, column_id: str) -> str:
+    return hashlib.sha256(
+        COLUMN_SEED_DOMAIN + b"\x00" + seed.encode() + b"\x00" + column_id.encode()
+    ).hexdigest()
+
+
+def round_case_id(column_id: str, case_id: str) -> str:
+    return f"{column_id}/{case_id}"
+
+
+# --- chain position ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ChainPosition:
+    """The subnet's epoch position at one finalized head."""
+
+    subnet_epoch_index: int
+    last_epoch_block: int
+    last_epoch_block_hash: str
+    tempo: int
+    block: int
+
+
+@dataclass
+class RoundActions:
+    actions: list[str] = field(default_factory=list)
+
+    def note(self, message: str) -> None:
+        logger.info("generator rounds: %s", message)
+        self.actions.append(message)
+
+
+# --- column and panel selection ---------------------------------------------
+
+
+async def _qualified_generators(session: AsyncSession) -> list[GeneratorSubmission]:
+    return list(
+        await session.scalars(
+            select(GeneratorSubmission)
+            .where(
+                GeneratorSubmission.status == "active",
+                GeneratorSubmission.qualified_at.is_not(None),
+                GeneratorSubmission.public_default.is_(False),
+            )
+            .order_by(
+                GeneratorSubmission.qualified_at, GeneratorSubmission.submitted_at
+            )
+        )
+    )
+
+
+async def public_default_generator(
+    session: AsyncSession,
+) -> GeneratorSubmission | None:
+    return await session.scalar(
+        select(GeneratorSubmission).where(
+            GeneratorSubmission.status == "active",
+            GeneratorSubmission.public_default.is_(True),
+        )
+    )
+
+
+def _column(index: int, row: GeneratorSubmission, *, counted: bool) -> dict[str, Any]:
+    return {
+        "column_id": f"c{index}",
+        "submission_id": str(row.submission_id),
+        "miner_hotkey": row.miner_hotkey,
+        "owner_key": "" if row.public_default else row.owner_key,
+        "source_sha256": row.source_sha256,
+        "counted": counted,
+        "public_default": row.public_default,
+    }
+
+
+async def select_columns(
+    session: AsyncSession, settings: GeneratorCompetitionSettings
+) -> list[dict[str, Any]]:
+    """Freeze a round's generator columns, counted first.
+
+    Counted columns go to the best qualified generators by latest round
+    score, then to qualified generators that have never held a column, then
+    to the public default generator (each default column runs on its own
+    column seed, so the default can fill several without repeating cases).
+    Challenger columns go to qualified generators that have never held a
+    column, oldest qualification first, then to the next-best scored ones.
+    One column per owner, so a miner with several hotkeys holds one column.
+    """
+    qualified = await _qualified_generators(session)
+    scored = sorted(
+        (row for row in qualified if row.round_score is not None),
+        key=lambda row: (
+            -(row.round_score or 0.0),
+            -(row.round_scored_index or 0),
+            row.qualified_at or row.submitted_at,
+            str(row.submission_id),
+        ),
+    )
+    fresh = [row for row in qualified if row.round_score is None]
+    used_owners: set[str] = set()
+    used_ids: set[UUID] = set()
+    columns: list[dict[str, Any]] = []
+
+    def take(pool: list[GeneratorSubmission], limit: int, *, counted: bool) -> None:
+        for row in pool:
+            if limit <= 0 or len(columns) >= MAX_COLUMNS:
+                return
+            if row.owner_key in used_owners or row.submission_id in used_ids:
+                continue
+            columns.append(_column(len(columns), row, counted=counted))
+            used_owners.add(row.owner_key)
+            used_ids.add(row.submission_id)
+            limit -= 1
+
+    take(scored, settings.counted_columns, counted=True)
+    take(fresh, settings.counted_columns - len(columns), counted=True)
+    default = await public_default_generator(session)
+    if default is not None and default.qualified_at is not None:
+        while len(columns) < settings.counted_columns:
+            columns.append(_column(len(columns), default, counted=True))
+    challengers = settings.challenger_columns
+    before = len(columns)
+    take(fresh, challengers, counted=False)
+    take(scored, challengers - (len(columns) - before), counted=False)
+    return columns
+
+
+# A panel agent the round lane can lease: a finalized agent with a screened
+# image whose miner hotkey is not banned. Anything else (banned, rejected,
+# quarantined, an ``ath_pending_review`` hold, a banned hotkey) would sit
+# pending until the round ends, so it is skipped when the panel freezes and
+# dropped from a round that is already running.
+ROUND_RUNNABLE_STATUSES = frozenset({"scored", "live"})
+
+
+async def panel_ineligibility(
+    session: AsyncSession, agent_ids: list[str]
+) -> dict[str, str]:
+    """Why each of ``agent_ids`` cannot run in a round; runnable ids are absent."""
+    if not agent_ids:
+        return {}
+    rows = {
+        str(row.agent_id): row
+        for row in await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.status,
+                Agent.miner_hotkey,
+                Agent.screened_image_sha256,
+            ).where(Agent.agent_id.in_([UUID(agent_id) for agent_id in agent_ids]))
+        )
+    }
+    hotkeys = {row.miner_hotkey for row in rows.values()}
+    banned = (
+        set(
+            await session.scalars(
+                select(BannedHotkey.hotkey).where(BannedHotkey.hotkey.in_(hotkeys))
+            )
+        )
+        if hotkeys
+        else set()
+    )
+    out: dict[str, str] = {}
+    for agent_id in agent_ids:
+        row = rows.get(agent_id)
+        if row is None:
+            out[agent_id] = "agent not found"
+        elif str(row.status) not in ROUND_RUNNABLE_STATUSES:
+            out[agent_id] = f"agent status is {row.status}"
+        elif row.miner_hotkey in banned:
+            out[agent_id] = "miner hotkey is banned"
+        elif row.screened_image_sha256 is None:
+            out[agent_id] = "agent has no screened image"
+    return out
+
+
+@dataclass(frozen=True)
+class RoundPanel:
+    panel: list[dict[str, Any]]
+    skipped_references: list[str]
+    """Configured reference agents left off the panel, with why."""
+    skipped_agents: list[dict[str, Any]]
+    """Ranked owners passed over because their agent cannot run, best first."""
+
+
+async def select_round_panel(
+    session: AsyncSession, settings: GeneratorCompetitionSettings
+) -> RoundPanel:
+    """The round's agent panel: the best ``panel_size`` runnable ledger owners
+    plus the runnable reference agents.
+
+    A ranked agent the lane could not lease (:func:`panel_ineligibility`) is
+    skipped and the next ranked owner takes its seat, still one agent per
+    owner, so a ban landing just before a round opens does not shrink the
+    panel. The champion stays the ledger's first owner: when that agent
+    cannot run, no panel agent is the champion.
+    """
+    from ditto.api_server.generator_competition import select_panel
+
+    # A reference agent that also ranks is seated as a reference only, and the
+    # next ranked agent takes its ranked seat, so the panel reaches
+    # panel_size + references whenever enough agents exist.
+    references = {str(agent_id) for agent_id in settings.reference_agent_ids}
+    ranked = await select_panel(session, size=None)
+    champion = next((slot["agent_id"] for slot in ranked if slot["champion"]), None)
+    candidates = [slot for slot in ranked if slot["agent_id"] not in references]
+    blocked = await panel_ineligibility(
+        session,
+        [slot["agent_id"] for slot in candidates] + sorted(references),
+    )
+    panel: list[dict[str, Any]] = []
+    skipped_agents: list[dict[str, Any]] = []
+    for slot in candidates:
+        if len(panel) >= settings.panel_size:
+            break
+        reason = blocked.get(slot["agent_id"])
+        if reason is not None:
+            skipped_agents.append({**slot, "reason": reason})
+            continue
+        panel.append(slot)
+    seen = {slot["agent_id"] for slot in panel}
+    skipped: list[str] = []
+    for agent_id in settings.reference_agent_ids:
+        if str(agent_id) in seen:
+            continue
+        reason = blocked.get(str(agent_id))
+        if reason is not None:
+            skipped.append(f"reference agent {agent_id}: {reason}")
+            continue
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        panel.append(
+            {
+                "agent_id": str(agent_id),
+                "owner_key": f"reference:{agent_id}",
+                "miner_hotkey": agent.miner_hotkey,
+                # A champion that is also a reference stays the champion.
+                "champion": str(agent_id) == champion,
+                "reference": True,
+            }
+        )
+        seen.add(str(agent_id))
+    return RoundPanel(
+        panel=panel, skipped_references=skipped, skipped_agents=skipped_agents
+    )
+
+
+# --- lifecycle --------------------------------------------------------------
+
+
+async def get_round(
+    session: AsyncSession, round_index: int, *, for_update: bool = False
+) -> GeneratorRound | None:
+    stmt = select(GeneratorRound).where(GeneratorRound.round_index == round_index)
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await session.scalar(stmt)
+
+
+def _commit_row(
+    round_index: int,
+    *,
+    settings: GeneratorCompetitionSettings,
+    epoch_index: int,
+    now: datetime,
+) -> GeneratorRound:
+    secret = secrets.token_bytes(32)
+    return GeneratorRound(
+        round_index=round_index,
+        status="committed",
+        epochs_per_round=settings.epochs_per_round,
+        secret=secret,
+        commitment=round_commitment(round_index, secret),
+        committed_at=now,
+        committed_epoch_index=epoch_index,
+        commitment_publication="pending" if settings.onchain_commitment else "disabled",
+        lease_attempts=0,
+    )
+
+
+def void_round(row: GeneratorRound, reason: str, *, now: datetime) -> None:
+    row.status = "void"
+    row.void_reason = reason[:1000]
+    row.lease_id = None
+    row.lease_expires_at = None
+    row.closed_at = row.closed_at or now
+
+
+async def _result_count(session: AsyncSession, round_index: int) -> int:
+    return int(
+        await session.scalar(
+            select(func.count()).where(GeneratorRoundResult.round_index == round_index)
+        )
+        or 0
+    )
+
+
+def active_panel(row: GeneratorRound) -> list[dict[str, Any]]:
+    """The round's frozen panel minus agents dropped while it ran."""
+    return [slot for slot in row.panel or () if not slot.get("dropped_reason")]
+
+
+@dataclass(frozen=True)
+class PanelTally:
+    """What the round's still-seated panel reported.
+
+    ``answered`` counts results with at least one unfaulted case. A run that
+    faulted every case (an infrastructure failure, not an agent's answer)
+    reports nothing a column can be scored against: with only such results
+    every case is unsolved, so the round would score every column 0 and wipe
+    every generator's ledger. Such a result counts as not reported."""
+
+    seated: int
+    reported: int
+    answered: int
+
+
+async def panel_tally(session: AsyncSession, row: GeneratorRound) -> PanelTally:
+    seated = {slot["agent_id"] for slot in active_panel(row)}
+    rows = await session.execute(
+        select(GeneratorRoundResult.agent_id, GeneratorRoundResult.answered).where(
+            GeneratorRoundResult.round_index == row.round_index
+        )
+    )
+    reported = [answered for agent_id, answered in rows if str(agent_id) in seated]
+    return PanelTally(
+        seated=len(seated),
+        reported=len(reported),
+        answered=sum(1 for answered in reported if answered > 0),
+    )
+
+
+async def _drop_ineligible(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> dict[str, str]:
+    """Drop seated panel agents that can no longer run (caller commits).
+
+    The panel stays frozen: a dropped agent keeps its slot, marked with why
+    and when, its live round lease is expired, and it is never leased or
+    scored in this round again. Nobody takes its seat mid-round."""
+    if row.status != "running":
+        return {}
+    blocked = await panel_ineligibility(
+        session, [slot["agent_id"] for slot in active_panel(row)]
+    )
+    if not blocked:
+        return {}
+    row.panel = [
+        {
+            **slot,
+            "dropped_reason": blocked[slot["agent_id"]],
+            "dropped_at": now.isoformat(),
+        }
+        if slot["agent_id"] in blocked and not slot.get("dropped_reason")
+        else slot
+        for slot in row.panel or ()
+    ]
+    await expire_round_tickets(
+        session,
+        row,
+        now=now,
+        detail="panel agent dropped: no longer eligible",
+        agent_ids={UUID(agent_id) for agent_id in blocked},
+    )
+    for agent_id, reason in blocked.items():
+        logger.info(
+            "generator round %s: dropped panel agent %s (%s)",
+            row.round_index,
+            agent_id,
+            reason,
+        )
+    return blocked
+
+
+async def drop_ineligible_panel_agents(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> list[str]:
+    """Drop a running round's panel agents that became ineligible, then void
+    the round if fewer than ``min_panel`` remain seated, or close it if every
+    remaining agent already reported. Returns one note per change."""
+    dropped = await _drop_ineligible(session, row, now=now)
+    if not dropped:
+        return []
+    notes = [
+        f"round {row.round_index}: dropped panel agent {agent_id} ({reason})"
+        for agent_id, reason in dropped.items()
+    ]
+    settings = await round_settings(session, row)
+    tally = await panel_tally(session, row)
+    if tally.seated < settings.min_panel:
+        outcome = await close_round(
+            session, row, now=now, reason="too few eligible panel agents remain"
+        )
+        notes.append(f"round {row.round_index}: {outcome} after panel drops")
+    elif tally.reported >= tally.seated:
+        outcome = await close_round(
+            session, row, now=now, reason="every eligible panel agent reported"
+        )
+        notes.append(f"round {row.round_index}: {outcome} after panel drops")
+    return notes
+
+
+async def expire_round_tickets(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    now: datetime,
+    detail: str,
+    agent_ids: set[UUID] | None = None,
+) -> int:
+    """Expire live round tickets of a closed round and close their attempts.
+
+    ``agent_ids`` limits this to those panel agents (a mid-round drop)."""
+    if row.dataset_sha256 is None:
+        return 0
+    only = (
+        GeneratorRoundAttempt.agent_id.in_(agent_ids)
+        if agent_ids is not None
+        else true()
+    )
+    from ditto.db.queries.inference import revoke_ticket_inference
+
+    # Only tickets this round's own leased attempts name (agent, validator,
+    # deadline) are expired; a dataset digest alone does not identify a round.
+    tickets = list(
+        await session.scalars(
+            select(ValidatorTicket)
+            .join(
+                GeneratorRoundAttempt,
+                and_(
+                    GeneratorRoundAttempt.round_index == row.round_index,
+                    GeneratorRoundAttempt.status == "leased",
+                    GeneratorRoundAttempt.agent_id == ValidatorTicket.agent_id,
+                    GeneratorRoundAttempt.validator_hotkey
+                    == ValidatorTicket.validator_hotkey,
+                    GeneratorRoundAttempt.ticket_deadline == ValidatorTicket.deadline,
+                ),
+            )
+            .where(
+                ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.dataset_sha256 == row.dataset_sha256,
+                only,
+            )
+            .with_for_update(of=ValidatorTicket)
+        )
+    )
+    for ticket in tickets:
+        await revoke_ticket_inference(session, ticket=ticket, now=now)
+        ticket.status = TicketStatus.EXPIRED
+        ticket.retry_after = None
+    await session.execute(
+        update(GeneratorRoundAttempt)
+        .where(
+            GeneratorRoundAttempt.round_index == row.round_index,
+            GeneratorRoundAttempt.status == "leased",
+            only,
+        )
+        .values(status="failed", detail=detail, finished_at=now)
+    )
+    return len(tickets)
+
+
+async def round_settings(
+    session: AsyncSession, row: GeneratorRound
+) -> GeneratorCompetitionSettings:
+    """The policy the round opened under: closing and scoring a frozen round
+    never depend on a settings write made after it opened."""
+    from ditto.api_server.generator_competition import settings_at
+
+    return await settings_at(session, row.settings_revision)
+
+
+async def close_round(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    now: datetime,
+    reason: str,
+) -> str:
+    """Move a running round to scoring, or void it.
+
+    Panel agents that became ineligible are dropped first, so their results
+    never reach the matrix. The round is void (and so never credits a column
+    score) with fewer than ``min_panel`` results from its seated panel
+    (``insufficient_panel``), or fewer than ``min_panel`` of those results
+    with at least one answered case (``insufficient_answered_results``; see
+    :class:`PanelTally`). ``min_panel`` comes from the round's own settings
+    revision."""
+    settings = await round_settings(session, row)
+    await _drop_ineligible(session, row, now=now)
+    tally = await panel_tally(session, row)
+    dropped = len(row.panel or ()) - tally.seated
+    await expire_round_tickets(session, row, now=now, detail=f"round closed: {reason}")
+    row.closed_at = now
+    note = f"{reason}" + (f"; {dropped} panel agent(s) dropped" if dropped else "")
+    if tally.reported < settings.min_panel:
+        void_round(
+            row,
+            f"insufficient_panel: {tally.reported} agent result(s) from "
+            f"{tally.seated} eligible panel agent(s), min_panel "
+            f"{settings.min_panel} ({note})",
+            now=now,
+        )
+        return "void"
+    if tally.answered < settings.min_panel:
+        void_round(
+            row,
+            f"insufficient_answered_results: {tally.answered} of "
+            f"{tally.reported} agent result(s) answered at least one case, "
+            f"min_panel {settings.min_panel}; every other result faulted every "
+            f"case ({note})",
+            now=now,
+        )
+        return "void"
+    row.status = "scoring"
+    row.lease_id = None
+    row.lease_expires_at = None
+    return "scoring"
+
+
+async def advance_rounds(
+    session: AsyncSession,
+    *,
+    resolved: ResolvedSettings,
+    position: ChainPosition,
+    now: datetime,
+) -> RoundActions:
+    """Apply every due lifecycle transition for this chain position (caller
+    commits). Idempotent: re-running at the same position changes nothing."""
+    out = RoundActions()
+    settings = resolved.settings
+    if settings.mode == "off":
+        return out
+    per = settings.epochs_per_round
+    current = round_index_for(position.subnet_epoch_index, per)
+
+    # 1. Close every earlier round still in flight. Every multi-round lock in
+    # this module is taken in ascending round_index order (see
+    # claim_commitment_publication), so a tick and a validator poll that lock
+    # overlapping rounds cannot deadlock.
+    stale = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.round_index < current,
+                GeneratorRound.status.in_(("committed", "generating", "running")),
+            )
+            .order_by(GeneratorRound.round_index)
+            .with_for_update()
+        )
+    )
+    for row in stale:
+        if row.status == "committed":
+            void_round(row, "round passed without opening", now=now)
+            out.note(f"round {row.round_index}: void (never opened)")
+        elif row.status == "generating":
+            void_round(row, "round dataset was not generated before it closed", now=now)
+            out.note(f"round {row.round_index}: void (not generated)")
+        else:
+            outcome = await close_round(session, row, now=now, reason="round ended")
+            out.note(f"round {row.round_index}: {outcome} at round end")
+
+    # 1b. Drop panel agents that became ineligible from the running round.
+    running = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.round_index >= current,
+                GeneratorRound.status == "running",
+            )
+            .with_for_update()
+        )
+    )
+    for row in running:
+        for note in await drop_ineligible_panel_agents(session, row, now=now):
+            out.note(note)
+
+    # 2. Commit the next round ahead of time.
+    if await get_round(session, current + 1) is None:
+        session.add(
+            _commit_row(
+                current + 1,
+                settings=settings,
+                epoch_index=position.subnet_epoch_index,
+                now=now,
+            )
+        )
+        out.note(f"round {current + 1}: committed")
+
+    # 3. Open the current round.
+    opening = await get_round(session, current, for_update=True)
+    first_epoch = round_first_epoch(current, per)
+    if opening is None:
+        late = _commit_row(
+            current, settings=settings, epoch_index=position.subnet_epoch_index, now=now
+        )
+        late.commitment_publication = "disabled"
+        void_round(late, "not committed before the round opened", now=now)
+        session.add(late)
+        out.note(f"round {current}: void (not committed in time)")
+    elif opening.status == "committed":
+        if position.subnet_epoch_index != first_epoch:
+            # The seed binds the boundary block of the round's first epoch, and
+            # only the latest boundary is observable: a round the loop reaches
+            # late cannot be opened on the block its commitment promised.
+            void_round(opening, "round opening epoch was missed", now=now)
+            out.note(f"round {current}: void (opening epoch missed)")
+        elif opening.committed_epoch_index >= first_epoch:
+            void_round(opening, "not committed before the round opened", now=now)
+            out.note(f"round {current}: void (committed too late)")
+        else:
+            await open_round(
+                session, opening, resolved=resolved, position=position, now=now
+            )
+            out.note(f"round {current}: {opening.status}")
+
+    # 4. Settle the publication of every round that left ``committed``: no
+    # validator is asked to publish a commitment once its round opened.
+    for settled in await settle_commitment_publications(session):
+        out.note(settled)
+
+    # 5. Reveal rounds past the privacy window.
+    reveal = await session.scalars(
+        select(GeneratorRound)
+        .where(
+            GeneratorRound.round_index <= current - settings.privacy_window_rounds,
+            GeneratorRound.status.in_(("scored", "void")),
+            GeneratorRound.revealed_at.is_(None),
+        )
+        .order_by(GeneratorRound.round_index)
+        .with_for_update()
+    )
+    for revealed in reveal:
+        revealed.revealed_at = now
+        out.note(f"round {revealed.round_index}: revealed")
+    await session.flush()
+    return out
+
+
+async def open_round(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    resolved: ResolvedSettings,
+    position: ChainPosition,
+    now: datetime,
+) -> None:
+    settings = resolved.settings
+    row.open_epoch_index = position.subnet_epoch_index
+    row.open_block = position.last_epoch_block
+    row.open_block_hash = position.last_epoch_block_hash.lower()
+    row.opened_at = now
+    # Status and seed move together: the table pins committed <=> no seed.
+    row.status = "generating"
+    row.seed = round_seed(row.round_index, row.secret, position.last_epoch_block_hash)
+    row.settings_revision = resolved.revision
+    row.cases_per_column = settings.cases_per_seed
+    columns = await select_columns(session, settings)
+    frozen = await select_round_panel(session, settings)
+    panel, skipped = frozen.panel, frozen.skipped_references
+    row.columns = columns
+    row.panel = panel
+    # Recorded before any void below, so a round voided for an undersized
+    # panel still shows which agents were skipped and why.
+    generation: dict[str, Any] = {}
+    if skipped:
+        generation["skipped_reference_agents"] = skipped
+    if frozen.skipped_agents:
+        generation["skipped_panel_agents"] = frozen.skipped_agents
+    row.generation = generation or None
+    if not any(column["counted"] for column in columns):
+        void_round(
+            row,
+            "no counted generator columns (no qualified generator and no "
+            "qualified public default generator)",
+            now=now,
+        )
+        return
+    if len(panel) < settings.min_panel:
+        void_round(
+            row,
+            f"panel has {len(panel)} agent(s), min_panel {settings.min_panel}"
+            + (f"; {'; '.join(skipped)}" if skipped else "")
+            + (
+                f"; {len(frozen.skipped_agents)} ranked agent(s) skipped as ineligible"
+                if frozen.skipped_agents
+                else ""
+            ),
+            now=now,
+        )
+        return
+
+
+# --- scorer work ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RoundLease:
+    row: GeneratorRound
+    work: GeneratorRoundWork
+
+
+class RoundResultRejected(ValueError):
+    """A scorer round result does not match the round's lease."""
+
+
+async def _source_columns(
+    session: AsyncSession, row: GeneratorRound
+) -> list[RoundSourceColumn]:
+    out: list[RoundSourceColumn] = []
+    for column in row.columns or ():
+        sub = await session.get(GeneratorSubmission, UUID(column["submission_id"]))
+        if sub is None or sub.source_sha256 != column["source_sha256"]:
+            raise RoundResultRejected(
+                f"column {column['column_id']} source is no longer available"
+            )
+        out.append(
+            RoundSourceColumn(
+                column_id=column["column_id"],
+                submission_id=sub.submission_id,
+                miner_hotkey=column["miner_hotkey"],
+                source_sha256=sub.source_sha256,
+                source_base64=base64.b64encode(sub.source_bytes).decode("ascii"),
+            )
+        )
+    return out
+
+
+async def build_matrix(session: AsyncSession, row: GeneratorRound) -> RoundMatrix:
+    """The round's agent x generator matrix, in ScoreRound's input shape."""
+    cases_by_column: dict[str, list[dict[str, str]]] = row.column_cases or {}
+    columns = [
+        RoundMatrixColumn(
+            column_id=column["column_id"],
+            owner_key=column["owner_key"],
+            counted=bool(column["counted"]),
+            cases=[RoundCaseRef(**ref) for ref in cases_by_column[column["column_id"]]],
+        )
+        for column in row.columns or ()
+        if column["column_id"] in cases_by_column
+    ]
+    results = {
+        str(result.agent_id): result
+        for result in await session.scalars(
+            select(GeneratorRoundResult).where(
+                GeneratorRoundResult.round_index == row.round_index
+            )
+        )
+    }
+    agents = [
+        RoundMatrixAgent(
+            agent_id=slot["agent_id"],
+            owner_key=slot["owner_key"],
+            reference=bool(slot.get("reference", False)),
+            champion=bool(slot.get("champion", False)),
+            results=[PanelCaseResult(**r) for r in results[slot["agent_id"]].results],
+        )
+        for slot in active_panel(row)
+        if slot["agent_id"] in results
+    ]
+    fingerprints = [ref.fingerprint for column in columns for ref in column.cases]
+    claimed = await claimed_fingerprints(
+        session, fingerprints=fingerprints, exclude_round_index=row.round_index
+    )
+    return RoundMatrix(columns=columns, agents=agents, claimed_fingerprints=claimed)
+
+
+async def lease_round_work(
+    session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
+) -> RoundLease | None:
+    """Lease the oldest round needing scorer work (caller commits)."""
+    if resolved.settings.mode == "off":
+        return None
+    row = await session.scalar(
+        select(GeneratorRound)
+        .where(
+            GeneratorRound.status.in_(("generating", "scoring")),
+            (GeneratorRound.lease_id.is_(None))
+            | (GeneratorRound.lease_expires_at <= now),
+        )
+        .order_by(GeneratorRound.round_index)
+        .limit(1)
+        .with_for_update(skip_locked=True)
+    )
+    if row is None:
+        return None
+    if row.status == "generating" and row.lease_attempts >= MAX_GENERATION_ATTEMPTS:
+        void_round(row, "round generation lease expired repeatedly", now=now)
+        await session.flush()
+        return None
+    row.lease_id = uuid4()
+    row.lease_expires_at = now + ROUND_LEASE_TTL
+    row.lease_attempts += 1
+    await session.flush()
+    if row.status == "generating":
+        assert row.seed is not None and row.cases_per_column is not None
+        work = GeneratorRoundWork(
+            kind="generate",
+            lease_id=row.lease_id,
+            round_index=row.round_index,
+            lease_expires_at=row.lease_expires_at,
+            seed=row.seed,
+            cases_per_column=row.cases_per_column,
+            columns=await _source_columns(session, row),
+        )
+    else:
+        work = GeneratorRoundWork(
+            kind="score",
+            lease_id=row.lease_id,
+            round_index=row.round_index,
+            lease_expires_at=row.lease_expires_at,
+            params=(await round_settings(session, row)).score_params(),
+            matrix=await build_matrix(session, row),
+        )
+    return RoundLease(row=row, work=work)
+
+
+def _check_lease(
+    row: GeneratorRound | None, lease_id: UUID, status: str
+) -> GeneratorRound:
+    if row is None:
+        raise RoundResultRejected("round not found")
+    if row.status != status or row.lease_id != lease_id:
+        raise RoundResultRejected(f"round is {row.status}; lease is not current")
+    return row
+
+
+async def record_generation(
+    session: AsyncSession,
+    payload: GeneratorRoundGenerateResult,
+    *,
+    now: datetime,
+) -> GeneratorRound:
+    """Store a round's generated dataset (caller commits).
+
+    A miner generator that qualified but fails on its round column seed is
+    rejected like a failed qualification: generators must work on every seed.
+    The public default generator failing only drops its column.
+    """
+    row = _check_lease(
+        await get_round(session, payload.round_index, for_update=True),
+        payload.lease_id,
+        "generating",
+    )
+    frozen = {column["column_id"]: column for column in row.columns or ()}
+    if {c.column_id for c in payload.columns} != set(frozen):
+        raise RoundResultRejected("result columns do not match the round's columns")
+    column_cases: dict[str, list[dict[str, str]]] = {}
+    summary: list[dict[str, Any]] = []
+    for result in payload.columns:
+        column = frozen[result.column_id]
+        if str(result.submission_id) != column["submission_id"]:
+            raise RoundResultRejected(
+                f"column {result.column_id} names another submission"
+            )
+        expected_seed = round_column_seed(row.seed or "", result.column_id)
+        ok = bool(result.ok and result.seed is not None and result.seed.valid)
+        if ok:
+            assert result.seed is not None
+            if result.seed.seed != expected_seed:
+                raise RoundResultRejected(
+                    f"column {result.column_id} ran on another seed"
+                )
+            refs = result.seed.validation.cases or []
+            if len(refs) != row.cases_per_column:
+                raise RoundResultRejected(
+                    f"column {result.column_id} case count mismatch"
+                )
+            column_cases[result.column_id] = [
+                {
+                    "case_id": round_case_id(result.column_id, ref.case_id),
+                    "fingerprint": ref.fingerprint,
+                }
+                for ref in refs
+            ]
+        summary.append(
+            {
+                "column_id": result.column_id,
+                "ok": ok,
+                "error": (result.error or result.build.error or "")[:2000] or None,
+                "build_ms": result.build.duration_ms,
+                "generate_ms": result.seed.duration_ms if result.seed else None,
+            }
+        )
+        if not ok and not column["public_default"]:
+            sub = await session.get(
+                GeneratorSubmission, UUID(column["submission_id"]), with_for_update=True
+            )
+            if sub is not None and sub.status == "active":
+                sub.status = "rejected"
+                sub.status_reason = (
+                    f"round_generation_failed: round {row.round_index} column "
+                    f"{result.column_id}: {result.error or 'invalid pack'}"
+                )[:1000]
+                sub.updated_at = now
+    generation = dict(row.generation or {})
+    generation.update(
+        {
+            "scorer_version": payload.scorer_version,
+            "sandbox": payload.sandbox,
+            "columns": summary,
+            "generated_at": now.isoformat(),
+        }
+    )
+    row.generation = generation
+    row.lease_id = None
+    row.lease_expires_at = None
+    counted_ok = [cid for cid in column_cases if frozen[cid]["counted"]]
+    if (
+        not counted_ok
+        or payload.dataset_base64 is None
+        or payload.dataset_sha256 is None
+    ):
+        void_round(
+            row, "no counted column produced a valid pack on its round seed", now=now
+        )
+        return row
+    try:
+        dataset = base64.b64decode(payload.dataset_base64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise RoundResultRejected("dataset_base64 is not valid base64") from exc
+    if hashlib.sha256(dataset).hexdigest() != payload.dataset_sha256:
+        raise RoundResultRejected("dataset bytes do not match dataset_sha256")
+    row.dataset_bytes = dataset
+    row.dataset_sha256 = payload.dataset_sha256
+    row.column_cases = column_cases
+    row.status = "running"
+    await session.flush()
+    return row
+
+
+async def record_round_score(
+    session: AsyncSession, payload: GeneratorRoundScoreResult, *, now: datetime
+) -> GeneratorRound:
+    """Persist a scored matrix: verdicts, column scores, standings (caller commits)."""
+    row = _check_lease(
+        await get_round(session, payload.round_index, for_update=True),
+        payload.lease_id,
+        "scoring",
+    )
+    frozen = {column["column_id"]: column for column in row.columns or ()}
+    expected = set(row.column_cases or {})
+    if {c.column_id for c in payload.score.columns} != expected:
+        raise RoundResultRejected("score columns do not match the generated columns")
+    for column_score in payload.score.columns:
+        column = frozen[column_score.column_id]
+        for position, verdict in enumerate(column_score.pack.cases):
+            session.add(
+                GeneratorRoundCaseVerdict(
+                    round_index=row.round_index,
+                    column_id=column_score.column_id,
+                    case_id=verdict.case_id,
+                    submission_id=UUID(column["submission_id"]),
+                    position=position,
+                    fingerprint=verdict.fingerprint,
+                    status=verdict.status,
+                    panel_size=verdict.panel_size,
+                    solvers=verdict.solvers,
+                    solver_owners=verdict.solver_owners,
+                    mean_score=verdict.mean_score,
+                    champion_failed=verdict.champion_failed,
+                    credit=verdict.credit,
+                )
+            )
+        if not column["public_default"]:
+            sub = await session.get(
+                GeneratorSubmission, UUID(column["submission_id"]), with_for_update=True
+            )
+            if sub is not None and (
+                sub.round_scored_index is None
+                or sub.round_scored_index <= row.round_index
+            ):
+                sub.round_score = column_score.pack.score
+                sub.round_scored_index = row.round_index
+                sub.updated_at = now
+    row.score = payload.score.model_dump(mode="json")
+    row.scorer_version = payload.scorer_version
+    row.scored_at = now
+    row.status = "scored"
+    row.lease_id = None
+    row.lease_expires_at = None
+    await session.flush()
+    return row
+
+
+# --- validator panel runs ---------------------------------------------------
+
+
+# A panel run must finish before its round closes: closing expires the round's
+# tickets and revokes their inference grants, so a run leased minutes before
+# the boundary loses inference mid-seed and faults every case. No lease is
+# issued once less than ``round_lease_cutoff`` remains.
+#
+# The cutoff scales with the round's size. Measured lease-to-result times: an
+# 80-case round (5 x 16) took about 3.3 minutes; round 25948 (4 valid columns x
+# 32 = 128 cases) took 4.3, 4.5, 4.8, 5.0 and 6.0 minutes for its five panel
+# runs. That fits ~80 s of fixed work (image fetch, sandbox start, a memory
+# seeding per column, dataset checks) plus ~1.5 s per case, with the slowest
+# run at ~2.8 s per case all-in. Budgeting 5 minutes plus 4 s per case keeps
+# at least a 1.6x margin over that slowest rate:
+#
+#   cases  cutoff   expected run (fit .. slowest rate)
+#   160    20 min   ~5-7.5 min     (5 x 32: the floor applies)
+#   350    28 min   ~10-16 min     (5 x 70)
+#   400    32 min   ~11-19 min     (5 x 80)
+#   640    48 min   ~17-30 min     (8 x 80, the cap)
+#
+# A one-epoch round (~72 min) opens with ~2.5 minutes of generation, so at 70
+# per column it still leases panel runs for ~40 minutes. At the 640-case cap
+# only ~20 minutes remain, so a round that large wants epochs_per_round >= 2.
+ROUND_LEASE_CUTOFF = timedelta(minutes=20)
+"""The cutoff floor: no round is leased with less than this left."""
+ROUND_LEASE_OVERHEAD = timedelta(minutes=5)
+ROUND_LEASE_SECONDS_PER_CASE = 4.0
+CHAIN_BLOCK_SECONDS = 12
+
+
+def round_lease_cutoff(case_count: int) -> timedelta:
+    """Time a round must have left before a panel run of ``case_count`` cases
+    is leased: the floor, or the run's budgeted length when that is longer."""
+    budget = ROUND_LEASE_OVERHEAD + timedelta(
+        seconds=ROUND_LEASE_SECONDS_PER_CASE * max(0, case_count)
+    )
+    return max(ROUND_LEASE_CUTOFF, budget)
+
+
+def round_column_cases(row: GeneratorRound) -> int:
+    """The largest column in a generated round: what a validator's scorer must
+    be able to run. Falls back to the frozen ``cases_per_column``."""
+    sizes = [len(refs) for refs in (row.column_cases or {}).values()]
+    return max(sizes, default=row.cases_per_column or 0)
+
+
+def round_seconds_left(row: GeneratorRound, head: EpochSchedule) -> float | None:
+    """Estimated seconds until ``row`` closes, at a chain ``head`` read now.
+
+    The round closes when ``SubnetEpochIndex`` reaches the first epoch of the
+    next round. The next epoch fires at the chain client's predicted
+    ``next_epoch_block``, which honors an owner-scheduled ``PendingEpochAt``
+    and the stateful scheduler; each further epoch the round still spans adds
+    ``tempo`` blocks. The caller reads ``head`` at lease time,
+    so nothing is extrapolated from a stale snapshot. Zero once the head has
+    reached the closing epoch; None when the head predates the round.
+    """
+    closing_epoch = (row.round_index + 1) * row.epochs_per_round
+    epochs_after_next = closing_epoch - head.subnet_epoch_index - 1
+    if head.subnet_epoch_index < row.round_index * row.epochs_per_round:
+        return None
+    if epochs_after_next < 0:
+        # The chain is already past the round's closing boundary.
+        return 0.0
+    close_block = head.next_epoch_block + epochs_after_next * head.tempo
+    return (close_block - head.block) * CHAIN_BLOCK_SECONDS
+
+
+async def running_round(
+    session: AsyncSession, *, for_update: bool = False
+) -> GeneratorRound | None:
+    stmt = (
+        select(GeneratorRound)
+        .where(GeneratorRound.status == "running")
+        .order_by(GeneratorRound.round_index.desc())
+        .limit(1)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await session.scalar(stmt)
+
+
+async def round_for_dataset(
+    session: AsyncSession, dataset_sha256: str
+) -> GeneratorRound | None:
+    return await session.scalar(
+        select(GeneratorRound).where(GeneratorRound.dataset_sha256 == dataset_sha256)
+    )
+
+
+async def pending_panel_agents(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> list[UUID]:
+    """Panel agents with no accepted result and no live lease, panel order."""
+    done = set(
+        await session.scalars(
+            select(GeneratorRoundResult.agent_id).where(
+                GeneratorRoundResult.round_index == row.round_index
+            )
+        )
+    )
+    live = set(
+        await session.scalars(
+            select(GeneratorRoundAttempt.agent_id)
+            .join(
+                ValidatorTicket,
+                (ValidatorTicket.agent_id == GeneratorRoundAttempt.agent_id)
+                & (
+                    ValidatorTicket.validator_hotkey
+                    == GeneratorRoundAttempt.validator_hotkey
+                )
+                & (ValidatorTicket.deadline == GeneratorRoundAttempt.ticket_deadline),
+            )
+            .where(
+                GeneratorRoundAttempt.round_index == row.round_index,
+                GeneratorRoundAttempt.status == "leased",
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
+                ValidatorTicket.deadline > now,
+            )
+        )
+    )
+    return [
+        UUID(slot["agent_id"])
+        for slot in active_panel(row)
+        if UUID(slot["agent_id"]) not in done and UUID(slot["agent_id"]) not in live
+    ]
+
+
+def round_case_ids(row: GeneratorRound) -> list[str]:
+    return [
+        ref["case_id"] for refs in (row.column_cases or {}).values() for ref in refs
+    ]
+
+
+class RoundSubmissionRejected(ValueError):
+    """A validator's round results do not match the round's dataset."""
+
+
+def validate_round_results(
+    row: GeneratorRound, results: list[GeneratorRoundCaseResult]
+) -> None:
+    expected = round_case_ids(row)
+    got = [r.case_id for r in results]
+    if len(got) != len(set(got)):
+        raise RoundSubmissionRejected("round results repeat a case")
+    if set(got) != set(expected):
+        raise RoundSubmissionRejected(
+            "round results must cover exactly the round dataset's cases"
+        )
+
+
+async def record_panel_result(
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    ticket_deadline: datetime,
+    run_id: str,
+    results: list[GeneratorRoundCaseResult],
+    signature: str,
+    now: datetime,
+) -> bool:
+    """Store one agent's results; ``False`` when the agent already reported.
+    Closes the round early once every seated panel agent reported."""
+    existing = await session.get(GeneratorRoundResult, (row.round_index, agent_id))
+    attempt = await session.get(
+        GeneratorRoundAttempt,
+        (row.round_index, agent_id, validator_hotkey, ticket_deadline),
+    )
+    if attempt is not None:
+        attempt.status = "completed"
+        attempt.finished_at = now
+    if existing is not None:
+        return False
+    session.add(
+        GeneratorRoundResult(
+            round_index=row.round_index,
+            agent_id=agent_id,
+            validator_hotkey=validator_hotkey,
+            ticket_deadline=ticket_deadline,
+            run_id=run_id,
+            results=[r.model_dump(mode="json") for r in results],
+            answered=sum(1 for r in results if not r.fault),
+            faulted=sum(1 for r in results if r.fault),
+            signature=signature,
+            recorded_at=now,
+        )
+    )
+    await session.flush()
+    tally = await panel_tally(session, row)
+    if tally.reported >= tally.seated:
+        await close_round(
+            session,
+            row,
+            now=now,
+            reason="every panel agent reported",
+        )
+    return True
+
+
+# --- views ------------------------------------------------------------------
+
+
+def _revealed(row: GeneratorRound) -> bool:
+    return row.revealed_at is not None
+
+
+async def round_summary(
+    session: AsyncSession, row: GeneratorRound, *, operator: bool = False
+) -> GeneratorRoundSummary:
+    revealed = _revealed(row)
+    tally = await panel_tally(session, row)
+    return GeneratorRoundSummary(
+        round_index=row.round_index,
+        status=row.status,  # type: ignore[arg-type]
+        epochs_per_round=row.epochs_per_round,
+        commitment=row.commitment,
+        commitment_publication=row.commitment_publication,  # type: ignore[arg-type]
+        commitment_confirmations=await commitment_confirmations(
+            session, row.round_index
+        ),
+        committed_at=row.committed_at,
+        open_epoch_index=row.open_epoch_index,
+        open_block=row.open_block,
+        open_block_hash=row.open_block_hash,
+        opened_at=row.opened_at,
+        column_count=len(row.columns or ()),
+        panel_size=len(row.panel or ()),
+        panel_dropped=len(row.panel or ()) - tally.seated,
+        results=await _result_count(session, row.round_index),
+        answered_results=tally.answered,
+        closed_at=row.closed_at,
+        scored_at=row.scored_at,
+        void_reason=row.void_reason,
+        revealed_at=row.revealed_at,
+        secret_hex=row.secret.hex() if revealed else None,
+        seed=row.seed if revealed else None,
+        dataset_sha256=row.dataset_sha256 if (revealed or operator) else None,
+    )
+
+
+def column_views(row: GeneratorRound) -> list[GeneratorRoundColumnView]:
+    scores = {
+        column["column_id"]: column["pack"]
+        for column in (row.score or {}).get("columns", ())
+    }
+    generated = {
+        column["column_id"]: bool(column.get("ok"))
+        for column in (row.generation or {}).get("columns", ())
+    }
+    out: list[GeneratorRoundColumnView] = []
+    for column in row.columns or ():
+        pack = scores.get(column["column_id"])
+        out.append(
+            GeneratorRoundColumnView(
+                column_id=column["column_id"],
+                submission_id=UUID(column["submission_id"]),
+                miner_hotkey=None
+                if column["public_default"]
+                else column["miner_hotkey"],
+                counted=bool(column["counted"]),
+                public_default=bool(column["public_default"]),
+                generated=generated.get(column["column_id"]),
+                score=pack["score"] if pack else None,
+                discriminating=pack["discriminating"] if pack else None,
+                trivial=pack["trivial"] if pack else None,
+                unsolved=pack["unsolved"] if pack else None,
+                duplicate=pack["duplicate"] if pack else None,
+            )
+        )
+    return out
+
+
+def standing_views(row: GeneratorRound) -> list[GeneratorRoundStandingView]:
+    reference = {slot["agent_id"] for slot in row.panel or () if slot.get("reference")}
+    return [
+        GeneratorRoundStandingView(
+            agent_id=UUID(agent["agent_id"]),
+            rank=agent["rank"],
+            pairwise_score=agent["pairwise_score"],
+            wins=agent["wins"],
+            ties=agent["ties"],
+            losses=agent["losses"],
+            opponents=agent["opponents"],
+            common_mean=agent["common_mean"],
+            common_cases=agent["common_cases"],
+            reference=agent["agent_id"] in reference,
+        )
+        for agent in (row.score or {}).get("agents", ())
+    ]
+
+
+async def attempt_views(
+    session: AsyncSession, round_index: int
+) -> list[GeneratorRoundAttemptView]:
+    rows = await session.scalars(
+        select(GeneratorRoundAttempt)
+        .where(GeneratorRoundAttempt.round_index == round_index)
+        .order_by(GeneratorRoundAttempt.issued_at)
+    )
+    return [
+        GeneratorRoundAttemptView(
+            agent_id=a.agent_id,
+            validator_hotkey=a.validator_hotkey,
+            ticket_deadline=a.ticket_deadline,
+            slot_id=a.slot_id,
+            status=a.status,  # type: ignore[arg-type]
+            detail=a.detail,
+            issued_at=a.issued_at,
+            finished_at=a.finished_at,
+        )
+        for a in rows
+    ]
+
+
+def _result_exclusion(
+    result: GeneratorRoundResult, dropped: dict[str, str]
+) -> str | None:
+    reason = dropped.get(str(result.agent_id))
+    if reason is not None:
+        return f"agent dropped from the panel: {reason}"
+    if result.answered == 0:
+        return "faulted every case; counts as not reported"
+    return None
+
+
+async def result_views(
+    session: AsyncSession, row: GeneratorRound
+) -> list[GeneratorRoundResultView]:
+    dropped = {
+        slot["agent_id"]: slot["dropped_reason"]
+        for slot in row.panel or ()
+        if slot.get("dropped_reason")
+    }
+    rows = await session.scalars(
+        select(GeneratorRoundResult)
+        .where(GeneratorRoundResult.round_index == row.round_index)
+        .order_by(GeneratorRoundResult.recorded_at)
+    )
+    out = []
+    for r in rows:
+        answered = [c["score"] for c in r.results if not c.get("fault")]
+        out.append(
+            GeneratorRoundResultView(
+                agent_id=r.agent_id,
+                validator_hotkey=r.validator_hotkey,
+                run_id=r.run_id,
+                answered=r.answered,
+                faulted=r.faulted,
+                mean_score=(sum(answered) / len(answered)) if answered else None,
+                recorded_at=r.recorded_at,
+                excluded_reason=_result_exclusion(r, dropped),
+            )
+        )
+    return out
+
+
+async def list_rounds(
+    session: AsyncSession, *, limit: int = 20, offset: int = 0
+) -> list[GeneratorRound]:
+    return list(
+        await session.scalars(
+            select(GeneratorRound)
+            .order_by(GeneratorRound.round_index.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+
+
+async def round_counts_by_status(session: AsyncSession) -> dict[str, int]:
+    rows = await session.execute(
+        select(GeneratorRound.status, func.count()).group_by(GeneratorRound.status)
+    )
+    return {status: int(count) for status, count in rows}
+
+
+# --- ledger -----------------------------------------------------------------
+
+
+async def build_round_ledger(
+    session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
+) -> GeneratorLedgerResponse:
+    """Each hotkey's latest round column score within the freshness window.
+
+    ``shadow`` marks every entry ``weight_eligible=False``. ``enforce`` marks an
+    entry eligible when its generator qualified (a scored round column implies
+    it did, but the check is explicit so an unqualified row can never be paid).
+    A superseded generator stays eligible: its last round score keeps counting
+    until the hotkey's new generator is scored. The public default generator
+    and rejected generators never appear; ``mode=off`` serves an empty ledger,
+    which folds to zero generator emission. Eligibility alone pays nothing:
+    validators pay the generator track only from a governed share.
+    """
+    settings = resolved.settings
+    if settings.mode == "off":
+        return GeneratorLedgerResponse(
+            count=0, mode="off", window_days=settings.window_days
+        )
+    since = now - timedelta(days=settings.window_days)
+    # The latest *scored* round: a void round never credits or replaces a
+    # generator's column score, even if it holds verdicts.
+    latest = (
+        select(
+            GeneratorRoundCaseVerdict.submission_id,
+            func.max(GeneratorRoundCaseVerdict.round_index).label("round_index"),
+        )
+        .join(
+            GeneratorRound,
+            GeneratorRound.round_index == GeneratorRoundCaseVerdict.round_index,
+        )
+        .where(GeneratorRound.status == "scored")
+        .group_by(GeneratorRoundCaseVerdict.submission_id)
+        .subquery()
+    )
+    rows = await session.execute(
+        select(GeneratorSubmission, GeneratorRound)
+        .join(latest, latest.c.submission_id == GeneratorSubmission.submission_id)
+        .join(GeneratorRound, GeneratorRound.round_index == latest.c.round_index)
+        .where(
+            GeneratorSubmission.public_default.is_(False),
+            GeneratorSubmission.status != "rejected",
+            GeneratorRound.status == "scored",
+            GeneratorRound.scored_at >= since,
+        )
+    )
+    best: dict[str, tuple[GeneratorSubmission, GeneratorRound]] = {}
+    for sub, rnd in rows.tuples():
+        prior = best.get(sub.miner_hotkey)
+        if prior is None or rnd.round_index > prior[1].round_index:
+            best[sub.miner_hotkey] = (sub, rnd)
+    entries: list[GeneratorLedgerEntry] = []
+    for sub, rnd in best.values():
+        column = next(
+            (
+                c
+                for c in (rnd.score or {}).get("columns", ())
+                if any(
+                    col["column_id"] == c["column_id"]
+                    and col["submission_id"] == str(sub.submission_id)
+                    for col in rnd.columns or ()
+                )
+            ),
+            None,
+        )
+        if column is None:
+            continue
+        entries.append(
+            GeneratorLedgerEntry(
+                miner_hotkey=sub.miner_hotkey,
+                submission_id=sub.submission_id,
+                round_index=rnd.round_index,
+                weight_eligible=(
+                    settings.mode == "enforce" and sub.qualified_at is not None
+                ),
+                score=float(column["pack"]["score"]),
+                discriminating_cases=int(column["pack"]["discriminating"]),
+                first_seen=sub.submitted_at,
+                scored_at=rnd.scored_at or now,
+            )
+        )
+    entries.sort(key=lambda e: (-e.score, e.first_seen, e.miner_hotkey))
+    return GeneratorLedgerResponse(
+        entries=entries,
+        count=len(entries),
+        window_days=settings.window_days,
+        mode=settings.mode,
+        generated_at=now,
+    )
+
+
+# --- driver -----------------------------------------------------------------
+
+
+class GeneratorRoundLoop:
+    """Drive round transitions from the chain's epoch counter.
+
+    One loop per platform role. Every tick reads the subnet's epoch schedule
+    at a finalized head and applies :func:`advance_rounds` in one
+    transaction. A chain read failure changes nothing: rounds never advance on
+    a guess. Platform never publishes a round commitment itself; elected
+    validators do (:func:`claim_commitment_publication`).
+    """
+
+    def __init__(
+        self,
+        *,
+        app_state: Any,
+        session_maker: async_sessionmaker,
+        interval_seconds: float = 60.0,
+    ) -> None:
+        self._app_state = app_state
+        self._session_maker = session_maker
+        self._interval = interval_seconds
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+        self.schedule: GeneratorRoundSchedule | None = None
+        self.status = GeneratorRoundLoopStatus(
+            last_tick_at=None,
+            last_success_at=None,
+            last_error=None,
+            last_actions=[],
+            ticks=0,
+        )
+
+    async def start(self) -> None:
+        if self._task is None:
+            self._task = asyncio.create_task(self._run(), name="generator-round-loop")
+
+    async def aclose(self) -> None:
+        self._stop.set()
+        task, self._task = self._task, None
+        if task is not None:
+            await task
+
+    async def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self.tick()
+            except Exception:  # noqa: BLE001 - the loop must survive any tick
+                logger.exception("generator round loop tick failed")
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stop.wait(), timeout=self._interval)
+
+    async def read_position(self) -> ChainPosition:
+        chain = getattr(self._app_state, "chain", None)
+        if chain is None:
+            raise RuntimeError("chain client is unavailable")
+        netuid = self._app_state.config.chain.netuid
+        schedule = await chain.read_epoch_schedule(netuid)
+        block_hash = await chain.get_finalized_block_hash(schedule.last_epoch_block)
+        return ChainPosition(
+            subnet_epoch_index=schedule.subnet_epoch_index,
+            last_epoch_block=schedule.last_epoch_block,
+            last_epoch_block_hash=block_hash,
+            tempo=schedule.tempo,
+            block=schedule.block,
+        )
+
+    async def tick(self, *, now: datetime | None = None) -> RoundActions:
+        from ditto.api_server.generator_competition import load_settings
+
+        now = now or datetime.now(UTC)
+        actions = RoundActions()
+        error: str | None = None
+        try:
+            async with self._session_maker() as session:
+                resolved = await load_settings(session)
+            per = resolved.settings.epochs_per_round
+            if resolved.settings.mode == "off":
+                self.schedule = GeneratorRoundSchedule(
+                    mode="off", epochs_per_round=per, observed_at=now
+                )
+                return actions
+            position = await self.read_position()
+            current = round_index_for(position.subnet_epoch_index, per)
+            self.schedule = GeneratorRoundSchedule(
+                mode=resolved.settings.mode,
+                epochs_per_round=per,
+                subnet_epoch_index=position.subnet_epoch_index,
+                current_round=current,
+                next_round_epoch=round_first_epoch(current + 1, per),
+                tempo=position.tempo,
+                block=position.block,
+                observed_at=now,
+            )
+            async with self._session_maker() as session, session.begin():
+                actions = await advance_rounds(
+                    session, resolved=resolved, position=position, now=now
+                )
+            return actions
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"[:500]
+            if self.schedule is not None:
+                self.schedule = self.schedule.model_copy(update={"last_error": error})
+            raise
+        finally:
+            self.status = GeneratorRoundLoopStatus(
+                last_tick_at=now,
+                last_success_at=now if error is None else self.status.last_success_at,
+                last_error=error,
+                last_actions=actions.actions[-20:],
+                ticks=self.status.ticks + 1,
+            )
+
+
+# --- commitment publication by validators -----------------------------------
+
+
+def publisher_rank_key(round_index: int, validator_hotkey: str) -> str:
+    """A validator's place in a round's publisher order (lower goes first).
+
+    Stable per round and unpredictable across rounds, so the same few
+    validators are asked for one round while the duty rotates between rounds.
+    """
+    return hashlib.sha256(
+        PUBLISHER_ORDER_DOMAIN
+        + b"\x00"
+        + struct.pack(">Q", round_index)
+        + validator_hotkey.encode()
+    ).hexdigest()
+
+
+def publisher_order(round_index: int, hotkeys: Iterable[str]) -> list[str]:
+    return sorted(set(hotkeys), key=lambda h: (publisher_rank_key(round_index, h), h))
+
+
+def _aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def commitment_capable(heartbeat: ValidatorHeartbeat, *, now: datetime) -> bool:
+    """A fresh heartbeat advertising the ``round_commitments`` capability."""
+    if now - _aware(heartbeat.seen_at) > COMMITMENT_HEARTBEAT_FRESHNESS:
+        return False
+    try:
+        capabilities = ValidatorCapabilities.model_validate(heartbeat.capabilities)
+    except ValidationError:
+        return False
+    return capabilities.round_commitments
+
+
+async def commitment_capable_hotkeys(
+    session: AsyncSession, *, now: datetime
+) -> list[str]:
+    heartbeats = await session.scalars(
+        select(ValidatorHeartbeat).where(
+            ValidatorHeartbeat.seen_at >= now - COMMITMENT_HEARTBEAT_FRESHNESS
+        )
+    )
+    return [
+        heartbeat.validator_hotkey
+        for heartbeat in heartbeats
+        if commitment_capable(heartbeat, now=now)
+    ]
+
+
+@dataclass(frozen=True)
+class CommitmentElection:
+    """Who should publish one round's commitment now."""
+
+    target: int
+    confirmed: tuple[str, ...]
+    elected: tuple[str, ...]
+
+
+def elect_commitment_publishers(
+    row: GeneratorRound,
+    publications: Iterable[GeneratorRoundCommitmentPublication],
+    capable: Iterable[str],
+    *,
+    now: datetime,
+    target: int = ROUND_COMMITMENT_PUBLISHERS,
+) -> CommitmentElection:
+    """Elect the validators that should publish ``row``'s commitment now.
+
+    Confirmed publications count toward ``target``. The remaining places go to
+    capable validators in the round's publisher order, skipping any that
+    already failed or let a claim expire. A live claim keeps its place. Each
+    :data:`COMMITMENT_ESCALATION_INTERVAL` since the first claim without
+    reaching ``target`` widens the election by one validator, so a validator
+    that is fresh but never answers cannot stall publication. Once ``target``
+    confirmed, nobody else is elected.
+    """
+    publications = list(publications)
+    confirmed = tuple(
+        sorted(p.validator_hotkey for p in publications if p.status == "confirmed")
+    )
+    needed = max(0, target - len(confirmed))
+    if needed == 0:
+        return CommitmentElection(target=target, confirmed=confirmed, elected=())
+    excluded = set(confirmed) | {
+        p.validator_hotkey
+        for p in publications
+        if p.status == "failed"
+        or (p.status == "claimed" and _aware(p.claim_expires_at) <= now)
+    }
+    claims = [_aware(p.claimed_at) for p in publications]
+    widen = int((now - min(claims)) / COMMITMENT_ESCALATION_INTERVAL) if claims else 0
+    candidates = [
+        hotkey
+        for hotkey in publisher_order(row.round_index, capable)
+        if hotkey not in excluded
+    ]
+    return CommitmentElection(
+        target=target,
+        confirmed=confirmed,
+        elected=tuple(candidates[: needed + widen]),
+    )
+
+
+async def _publications(
+    session: AsyncSession, round_index: int, *, for_update: bool = False
+) -> list[GeneratorRoundCommitmentPublication]:
+    stmt = (
+        select(GeneratorRoundCommitmentPublication)
+        .where(GeneratorRoundCommitmentPublication.round_index == round_index)
+        .order_by(GeneratorRoundCommitmentPublication.claimed_at)
+    )
+    if for_update:
+        stmt = stmt.with_for_update()
+    return list(await session.scalars(stmt))
+
+
+async def commitment_confirmations(session: AsyncSession, round_index: int) -> int:
+    return int(
+        await session.scalar(
+            select(func.count()).where(
+                GeneratorRoundCommitmentPublication.round_index == round_index,
+                GeneratorRoundCommitmentPublication.status == "confirmed",
+            )
+        )
+        or 0
+    )
+
+
+async def claim_commitment_publication(
+    session: AsyncSession, *, validator_hotkey: str, now: datetime
+) -> GeneratorRoundCommitmentJobResponse | None:
+    """Hand ``validator_hotkey`` a commitment to publish if it is elected.
+
+    Only rounds still ``committed`` with publication ``pending`` are offered:
+    a commitment published after its round opened proves nothing. The rounds
+    are locked so concurrent polls see each other's claims (caller commits).
+    """
+    rows = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.status == "committed",
+                GeneratorRound.commitment_publication == "pending",
+            )
+            .order_by(GeneratorRound.round_index)
+            .with_for_update()
+        )
+    )
+    if not rows:
+        return None
+    capable = await commitment_capable_hotkeys(session, now=now)
+    if validator_hotkey not in capable:
+        return None
+    for row in rows:
+        publications = await _publications(session, row.round_index, for_update=True)
+        mine = next(
+            (p for p in publications if p.validator_hotkey == validator_hotkey), None
+        )
+        if mine is not None:
+            # Already answered, or a live claim this validator is working on.
+            continue
+        election = elect_commitment_publishers(row, publications, capable, now=now)
+        if validator_hotkey not in election.elected:
+            continue
+        claim = GeneratorRoundCommitmentPublication(
+            round_index=row.round_index,
+            validator_hotkey=validator_hotkey,
+            commitment=row.commitment,
+            status="claimed",
+            claimed_at=now,
+            claim_expires_at=now + COMMITMENT_CLAIM_TTL,
+        )
+        session.add(claim)
+        await session.flush()
+        return GeneratorRoundCommitmentJobResponse(
+            round_index=row.round_index,
+            commitment=row.commitment,
+            payload=round_commitment_payload(row.round_index, row.commitment),
+            claim_expires_at=claim.claim_expires_at,
+        )
+    return None
+
+
+class CommitmentReportRejected(ValueError):
+    """A commitment report names no claim or another commitment."""
+
+
+async def record_commitment_report(
+    session: AsyncSession,
+    report: GeneratorRoundCommitmentReportRequest,
+    *,
+    now: datetime,
+) -> GeneratorRoundCommitmentReportResponse:
+    """Record one elected validator's publication outcome (caller commits).
+
+    Idempotent: a repeated report, or a ``failed`` report after a
+    ``confirmed`` one, changes nothing. A late ``confirmed`` report is still
+    recorded (the value is on chain at its block); it moves the round to
+    ``published`` only while the round still collects publications.
+    """
+    row = await get_round(session, report.round_index, for_update=True)
+    if row is None:
+        raise CommitmentReportRejected("unknown round")
+    if report.commitment != row.commitment:
+        raise CommitmentReportRejected("report names another commitment")
+    publication = await session.get(
+        GeneratorRoundCommitmentPublication,
+        (report.round_index, report.validator_hotkey),
+        with_for_update=True,
+    )
+    if publication is None:
+        raise CommitmentReportRejected("no publication was claimed by this validator")
+    duplicate = publication.status == "confirmed" or (
+        publication.status == "failed" and report.outcome == "failed"
+    )
+    if not duplicate:
+        publication.status = report.outcome
+        publication.reported_at = now
+        publication.block_number = report.block_number
+        publication.extrinsic_hash = report.extrinsic_hash
+        publication.detail = report.detail
+        await session.flush()
+    confirmations = await commitment_confirmations(session, row.round_index)
+    if not duplicate and report.outcome == "confirmed":
+        row.commitment_published_at = row.commitment_published_at or now
+        if (
+            row.commitment_publication == "pending"
+            and confirmations >= ROUND_COMMITMENT_PUBLISHERS
+        ):
+            row.commitment_publication = "published"
+            row.commitment_error = None
+    return GeneratorRoundCommitmentReportResponse(
+        round_index=row.round_index,
+        accepted=not duplicate,
+        duplicate=duplicate,
+        confirmations=confirmations,
+        target=ROUND_COMMITMENT_PUBLISHERS,
+    )
+
+
+async def settle_commitment_publications(session: AsyncSession) -> list[str]:
+    """Close publication for rounds that left ``committed`` while pending.
+
+    One confirmed validator publication is enough for ``published``. With
+    none, an opened round is ``failed`` (the on-chain copy never landed) and a
+    void round ``disabled`` (nobody needs it). Returns one note per round.
+    """
+    rows = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.commitment_publication == "pending",
+                GeneratorRound.status != "committed",
+            )
+            .order_by(GeneratorRound.round_index)
+            .with_for_update()
+        )
+    )
+    notes: list[str] = []
+    for row in rows:
+        confirmations = await commitment_confirmations(session, row.round_index)
+        if confirmations > 0:
+            row.commitment_publication = "published"
+            row.commitment_error = None
+        elif row.status == "void":
+            row.commitment_publication = "disabled"
+        else:
+            row.commitment_publication = "failed"
+            row.commitment_error = (
+                "no validator confirmed the on-chain commitment before the round opened"
+            )
+        notes.append(
+            f"round {row.round_index}: commitment publication "
+            f"{row.commitment_publication} ({confirmations} confirmed)"
+        )
+    return notes
+
+
+async def commitment_publication_views(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> tuple[list[GeneratorRoundCommitmentPublicationView], list[str]]:
+    """Every validator publication of ``row`` plus who is elected right now."""
+    publications = await _publications(session, row.round_index)
+    order = {
+        hotkey: rank
+        for rank, hotkey in enumerate(
+            publisher_order(row.round_index, (p.validator_hotkey for p in publications))
+        )
+    }
+    views = [
+        GeneratorRoundCommitmentPublicationView(
+            validator_hotkey=p.validator_hotkey,
+            status=(
+                "expired"
+                if p.status == "claimed" and _aware(p.claim_expires_at) <= now
+                else p.status  # type: ignore[arg-type]
+            ),
+            claimed_at=p.claimed_at,
+            claim_expires_at=p.claim_expires_at,
+            reported_at=p.reported_at,
+            block_number=p.block_number,
+            extrinsic_hash=p.extrinsic_hash,
+            detail=p.detail,
+        )
+        for p in sorted(publications, key=lambda p: order[p.validator_hotkey])
+    ]
+    elected: list[str] = []
+    if row.status == "committed" and row.commitment_publication == "pending":
+        capable = await commitment_capable_hotkeys(session, now=now)
+        elected = list(
+            elect_commitment_publishers(row, publications, capable, now=now).elected
+        )
+    return views, elected

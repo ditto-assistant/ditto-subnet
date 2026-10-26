@@ -134,12 +134,6 @@ jobs:
           uv run python ../../scripts/generate_confirmation_installation.py
           --check
 
-      - name: Coding execution delivery vectors match their generator
-        run: |
-          uv run ruff format --check ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
-          uv run ruff check ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
-          uv run python ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py --check
-
   test:
     needs: validate
     if: inputs.backend
@@ -243,7 +237,7 @@ jobs:
         if: matrix.suite == 'api-server'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache: true
           cache-dependency-path: services/dittobench-api/go.sum
 
@@ -354,7 +348,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.22.1
           cache: npm
           cache-dependency-path: |
             apps/platform/package-lock.json

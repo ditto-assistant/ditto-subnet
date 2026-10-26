@@ -80,6 +80,7 @@ import {
   setQueuePolicySettingsInputSchema,
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
+  validatorCapacityEntrySchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
   setValidatorIssuancePauseInputSchema,
@@ -124,6 +125,8 @@ import {
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
   validatorFleetObservabilityMemberSchema,
+  setTrackShareSettingsInputSchema,
+  trackSharesConfirmation,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -987,6 +990,33 @@ describe('admin API schemas', () => {
         }),
       ).toThrow()
     }
+  })
+
+  it('parses a live generator-round lease on a row with no scoring attempt yet', () => {
+    // SN-334: a round lease is not a scoring attempt, so the row it created
+    // reports zero, and the panel must not drop the whole list over it.
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'memory-agent',
+          miner_hotkey: '5Miner',
+          validator_hotkey: '5Validator',
+          issued_at: '2026-10-24T07:00:00Z',
+          deadline: '2026-10-24T08:30:00Z',
+          bench_version: 13,
+          attempt_count: 0,
+          score_count: 3,
+          provisional_composite: 0.9,
+          purpose: 'generator_round',
+        },
+      ],
+    })
+    expect(parsed.items[0].purpose).toBe('generator_round')
+    expect(parsed.items[0].attempt_count).toBe(0)
   })
 })
 
@@ -2060,6 +2090,21 @@ describe('source review causal evidence schema', () => {
     const parsed = sourceReviewFindingSchema.parse(generatedFinding)
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
+
+  it.each(['final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome'] as const)(
+    'preserves the published I8 authority transition for %s', (effect) => {
+      const finding = {
+        ...generatedFinding,
+        causal_evidence: {
+          ...generatedFinding.causal_evidence,
+          authority_transition: 'evaluation_identity_authoritative',
+          scorer_visible_effect: effect,
+        },
+      } satisfies GeneratedSourceReviewFinding
+      expect(sourceReviewFindingSchema.parse(finding).causal_evidence).toEqual(finding.causal_evidence)
+    },
+  )
 
   it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
     const proof = {
@@ -3375,6 +3420,136 @@ describe('validator slot settings schemas', () => {
     })
     expect(parsed.effective.source).toBe('revision')
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
+  })
+
+  it('reads capacity from a platform that predates reserved round slots as zero', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-25T00:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 4,
+      serviceable_slots: 4,
+      claimed_slots: 1,
+      assignments: [],
+    })
+    expect(parsed.reserved_round_slots).toBe(0)
+  })
+
+  describe('per-validator overrides and the round reservation', () => {
+    const bigHost = '5' + 'B'.repeat(47)
+    const smallHost = '5' + 'C'.repeat(47)
+    const withOverrides = {
+      ...settings,
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+        [smallHost]: { max_concurrent_slots: 1, generator_round_reserved_slots: null },
+      },
+    }
+
+    it('accepts and round-trips overrides through the write schema', () => {
+      const parsed = setValidatorSlotSettingsInputSchema.parse(
+        input({ settings: withOverrides, confirmation: validatorSlotConfirmation(2) }),
+      )
+      expect(parsed.settings).toEqual(withOverrides)
+      // The body Backroom forwards is exactly what it parsed: nothing stripped.
+      expect(JSON.parse(JSON.stringify(parsed.settings))).toEqual(withOverrides)
+    })
+
+    it('still parses a policy from a platform that predates the new fields', () => {
+      expect(validatorSlotSettingsSchema.parse(settings)).toEqual(settings)
+    })
+
+    it('rejects out-of-range, empty and mis-keyed overrides', () => {
+      const bad = (perValidator: unknown, reserved: unknown = 1) =>
+        validatorSlotSettingsSchema.safeParse({
+          ...settings,
+          generator_round_reserved_slots: reserved,
+          per_validator: perValidator,
+        }).success
+      expect(bad({}, 9)).toBe(false)
+      expect(bad({}, -1)).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 0 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: { generator_round_reserved_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: {} })).toBe(false)
+      expect(bad({ 'not-a-hotkey': { max_concurrent_slots: 2 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 4 } })).toBe(true)
+    })
+
+    it('caps the override map at 256 validators', () => {
+      const overrides = (count: number) =>
+        Object.fromEntries(
+          Array.from({ length: count }, (_, index) => [
+            '5' + index.toString().padStart(47, 'A').replace(/0/g, 'z'),
+            { max_concurrent_slots: 2 },
+          ]),
+        )
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(256) })
+          .success,
+      ).toBe(true)
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(257) })
+          .success,
+      ).toBe(false)
+    })
+
+    it('reads the per-validator fleet sizing view', () => {
+      const parsed = validatorSlotSettingsControlSchema.parse({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: withOverrides,
+          checksum: '',
+          source: 'default',
+          hard_slot_ceiling: 8,
+          disk_restricted_slots: 1,
+          max_age_seconds: 5.0,
+        },
+        generator_round_reservation_active: true,
+        fleet: [
+          {
+            validator_hotkey: bigHost,
+            seen_at: '2026-10-25T00:00:00Z',
+            online: true,
+            issuance_paused: false,
+            round_capable: true,
+            override: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+            advertised_slots: 8,
+            healthy_slots: 8,
+            max_concurrent_slots: 6,
+            allowed_slots: 6,
+            configured_reserved_round_slots: 2,
+            reserved_round_slots: 2,
+            non_round_slot_budget: 4,
+            live_leases_by_purpose: { canonical_quorum: 3, generator_round: 1 },
+            host_specs: {
+              cpu_count: 32,
+              cpu_physical_cores: 16,
+              memory_total_mib: 131072,
+              disk_total_gib: 2000,
+              architecture: 'x86_64',
+            },
+            cpu_percent: 60,
+            memory_percent: 20,
+            disk_percent: 40,
+          },
+        ],
+      })
+      expect(parsed.generator_round_reservation_active).toBe(true)
+      expect(parsed.fleet?.[0]).toMatchObject({
+        allowed_slots: 6,
+        reserved_round_slots: 2,
+        non_round_slot_budget: 4,
+      })
+      expect(parsed.effective.settings.per_validator).toEqual(withOverrides.per_validator)
+    })
   })
 
   // The empty-default failure class: the platform 422s a partial body, but a
@@ -5243,5 +5418,32 @@ describe('targeted validator retry input', () => {
     expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
     expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
     expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
+  })
+})
+
+describe('track share settings', () => {
+  it('spells out the split, with no trailing space and a clear phrase for null', () => {
+    expect(trackSharesConfirmation({ generator: 1000, memory: 9000 })).toBe(
+      'APPLY TRACK SHARES memory=9000 generator=1000',
+    )
+    expect(trackSharesConfirmation({ memory: 0 })).toBe('APPLY TRACK SHARES')
+    expect(trackSharesConfirmation(null)).toBe('CLEAR TRACK SHARES')
+  })
+
+  it('mirrors the Platform refusals', () => {
+    const base = { expectedRevision: 0, reason: 'activate generator emissions' }
+    const parse = (shares: Record<string, number> | null) =>
+      setTrackShareSettingsInputSchema.safeParse({
+        ...base,
+        settings: { track_shares_bps: shares },
+        confirmation: trackSharesConfirmation(shares),
+      }).success
+    expect(parse({ memory: 9000, generator: 1000 })).toBe(true)
+    expect(parse(null)).toBe(true)
+    expect(parse({ generator: 1000 })).toBe(false)
+    expect(parse({ memory: 9000, router: 1000 })).toBe(false)
+    expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
+    expect(parse({ memory: 0 })).toBe(false)
+    expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
   })
 })

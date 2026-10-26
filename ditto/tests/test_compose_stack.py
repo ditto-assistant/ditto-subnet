@@ -51,7 +51,7 @@ def test_sandbox_image_pins_compatible_rootful_dind_and_installs_guard_tools() -
 
     assert dockerfile.startswith(
         "FROM docker.io/library/docker:29-dind@"
-        "sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515"
+        "sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977"
     )
     assert "RUN apk add --no-cache curl socat" in dockerfile
 

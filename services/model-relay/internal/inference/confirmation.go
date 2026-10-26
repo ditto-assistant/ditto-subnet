@@ -716,24 +716,26 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 	var upstreamErr *providerCallError
 	upstreamStarted := time.Now()
 	providerFailure := func() *httpError {
-		// Provider execution is single-shot. The policy-shaped arguments remain
-		// for rolling compatibility but cannot authorize another paid dispatch.
+		// Provider execution is single-shot unless the operator has activated
+		// backpressure recovery. When activated it covers every confirmation
+		// lane, not just the reader: the judge is pinned to one ZDR endpoint
+		// with allow_fallbacks false, so a shared-pool 429 on any of its ~48
+		// calls has nowhere to route and otherwise ends the whole bundle. Only
+		// a provably receipt-free rejection is ever re-dispatched.
 		backpressureMaxAttempts := providerMaxAttempts
 		var maxElapsed time.Duration
-		if grantSnapshot.Lane == "reader" {
-			backpressureMaxAttempts = confirmationReaderBackpressureMaxAttempts
-			maxElapsed = confirmationReaderBackpressureMaxElapsed
+		if cfg.ConfirmationBackpressureRetry {
+			backpressureMaxAttempts = confirmationBackpressureMaxAttempts
+			maxElapsed = confirmationBackpressureMaxElapsed
 		}
 		result, callErr := postProviderWithRetryPolicy(ctx, d.Upstream, cfg.UpstreamURL, upstreamPayload,
 			openrouterHeaders(cfg.OpenRouterAPIKey, true), cfg.ResponseBodyBytes, cfg.TimeoutSeconds,
 			providerRetryPolicy{
-				retryBackpressure:              true,
-				retryPreProviderNotFoundModel:  expectedModel,
-				backpressureMaxAttempts:        backpressureMaxAttempts,
-				requireReceiptFreeBackpressure: grantSnapshot.Lane == "reader",
-				receiptFreeExpectedModel:       expectedModel,
-				receiptFreeExpectedProvider:    result.grant.RouteProvider,
-				maxElapsed:                     maxElapsed,
+				retryBackpressure:             true,
+				retryPreProviderNotFoundModel: expectedModel,
+				backpressureMaxAttempts:       backpressureMaxAttempts,
+				receiptFreeExpectedModel:      expectedModel,
+				maxElapsed:                    maxElapsed,
 			}, d.sleep())
 		upstreamRes, upstreamErr = result, callErr
 		if callErr != nil {
@@ -747,11 +749,16 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			return &httpError{status: 500, message: "internal server error"}
 		}
 		if result.status >= 400 {
+			// receipt_free is the single field that explains why a backpressure
+			// rejection was or was not re-dispatched. Without it an envelope
+			// change silently disables recovery with no operator-visible signal.
 			d.Logger.Warn("confirmation provider rejected request",
 				slog.String("lane", grantSnapshot.Lane),
 				slog.Int("upstream_status", result.status),
 				slog.Int("upstream_attempts", result.attempts),
-				slog.Bool("backpressure", providerIsBackpressure(result.status, result.header)))
+				slog.Bool("backpressure", providerIsBackpressure(result.status, result.header)),
+				slog.Bool("receipt_free", providerFailureIsReceiptFree(result, expectedModel)),
+				slog.Bool("retry_activated", cfg.ConfirmationBackpressureRetry))
 			return httpErrorf(502, "confirmation provider unavailable")
 		}
 		if result.bodyOverLimit {
@@ -816,7 +823,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		outcome.status = "completed"
 		return nil
 	}()
-	if receiptFreeResultOverload(upstreamRes, expectedModel, expectedProvider) {
+	if receiptFreeResultOverload(upstreamRes, expectedModel) {
 		_ = d.openProviderCircuit(
 			ctx,
 			now,

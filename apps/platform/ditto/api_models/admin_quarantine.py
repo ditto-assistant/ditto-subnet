@@ -21,6 +21,7 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
+from ditto.api_models.source_review_evidence import StoredSourceReviewEvidence
 from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     AdjudicationRunDiagnostic,
@@ -361,6 +362,23 @@ class AdminScreeningAttempt(BaseModel):
     duplicate_of: UUID | None
     duplicate_name: str | None = None
     duplicate_version: int | None = None
+    lineage_parent_agent_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Same-hotkey prior version whose diff and review history scoped this "
+            "attempt's model review. Null is an ordinary full review."
+        ),
+    )
+    lineage_scope: Literal["diff", "full"] | None = Field(
+        default=None,
+        description=(
+            "Scope the bound lineage packet selected. Null with a parent means "
+            "the worker never fetched the packet and reviewed in full."
+        ),
+    )
+    lineage_packet_sha256: str | None = Field(
+        default=None, description="Digest of the exact packet the worker received."
+    )
 
 
 class AdminScreeningFailureDiagnostic(BaseModel):
@@ -456,33 +474,19 @@ class AdminScreeningVerificationCheck(BaseModel):
     receipt_count: int
 
 
-class AdminV13PrivatePackageRegisterRequest(BaseModel):
-    """Operator assertion of sealed digests; never private case bytes."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    profile_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    pair_inventory_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    clean_agent_id: UUID
-    clean_attempt_id: UUID
-    clean_artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    clean_image_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    runner_hotkey: str = Field(min_length=1, max_length=120)
-
-
 class AdminV13PrivatePrerequisite(BaseModel):
     code: str
     status: Literal["not_observed", "recorded_unverified", "mechanically_verified"]
 
 
 class AdminV13PrivatePackageReadiness(BaseModel):
-    """Prerequisite visibility only: no V13 policy pass or CLEAR status."""
+    """Historical inventory for a retired program; no activation or CLEAR path."""
 
+    program_status: Literal["retired"] = "retired"
     registration_status: Literal["not_registered", "registered_unverified"]
-    prerequisites: list[AdminV13PrivatePrerequisite]
+    prerequisites: list[AdminV13PrivatePrerequisite] = Field(
+        description="Historical observations, not an activation checklist"
+    )
     clear_authorized: Literal[False] = False
 
 
@@ -508,6 +512,7 @@ class AdminScreeningVerificationReadiness(BaseModel):
     checks: list[AdminScreeningVerificationCheck]
     private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
     private_package: AdminV13PrivatePackageReadiness | None = None
+    source_review: StoredSourceReviewEvidence | None = None
     receipts: list[AdminScreeningVerificationReceipt]
     receipt_count: int
     receipts_truncated: bool
@@ -1313,6 +1318,7 @@ class AdminValidatorAssignment(BaseModel):
     deadline: datetime
     bench_version: int
     attempt_count: int
+    """Scoring leases on this row; zero for a lease on a round-only row."""
     score_count: int
     provisional_composite: float | None
     slot_id: str = "slot-0"
@@ -1321,6 +1327,7 @@ class AdminValidatorAssignment(BaseModel):
         "canonical_quorum",
         "continual_retest",
         "benchmark_canary",
+        "generator_round",
     ] = "legacy_unclassified"
     agent_status: str | None = None
     first_reported_at: datetime | None = None

@@ -170,7 +170,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 			if tc.retryAfter != "" {
 				header.Set("Retry-After", tc.retryAfter)
 			}
-			if got := confirmationReaderBackpressureDelay(header); got != tc.want {
+			if got := confirmationBackpressureDelay(header); got != tc.want {
 				t.Fatalf("delay: got %s want %s", got, tc.want)
 			}
 		})
@@ -178,7 +178,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 	multiple := make(http.Header)
 	multiple.Add("Retry-After", "1")
 	multiple.Add("Retry-After", "60")
-	if got := confirmationReaderBackpressureDelay(multiple); got != 10*time.Second {
+	if got := confirmationBackpressureDelay(multiple); got != 10*time.Second {
 		t.Fatalf("duplicate Retry-After: got %s want 10s", got)
 	}
 }
@@ -208,10 +208,9 @@ func TestConfirmationReaderBackpressureDoesNotWaitForRetryDeadline(t *testing.T)
 		1024,
 		5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     elapsedBudget,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              elapsedBudget,
 		},
 		func(_ context.Context, delay time.Duration) { slept = delay },
 	)
@@ -239,10 +238,9 @@ func TestConfirmationReader503KeepsOrdinaryAttemptCap(t *testing.T) {
 		context.Background(), upstream.Client(), upstream.URL,
 		map[string]any{"model": "fixed/model"}, nil, 1024, 5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     confirmationReaderBackpressureMaxElapsed,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              confirmationBackpressureMaxElapsed,
 		},
 		func(context.Context, time.Duration) {},
 	)
@@ -268,10 +266,9 @@ func TestConfirmationReaderBackpressureDoesNotScheduleCancellationWait(t *testin
 		ctx, upstream.Client(), upstream.URL,
 		map[string]any{"model": "fixed/model"}, nil, 1024, 5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     confirmationReaderBackpressureMaxElapsed,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              confirmationBackpressureMaxElapsed,
 		},
 		func(context.Context, time.Duration) { cancel() },
 	)
@@ -294,53 +291,55 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 		body string
 		want bool
 	}{
-		"string error is not canonical":  {body: `{"error":"rate limited"}`},
-		"canonical object error":         {body: `{"error":{"code":429,"message":"rate limited"}}`, want: true},
-		"canonical route metadata":       {body: `{"error":{"code":429,"message":"rate limited"},` + canonicalMetadata + `}`, want: true},
-		"missing error":                  {body: `{}`},
-		"malformed":                      {body: `{"error":`},
-		"non-finite number":              {body: `{"error":{"code":429,"message":"rate limited"},"value":NaN}`},
-		"positive infinity":              {body: `{"error":{"code":429,"message":"rate limited"},"value":Infinity}`},
-		"negative infinity":              {body: `{"error":{"code":429,"message":"rate limited"},"value":-Infinity}`},
-		"duplicate error":                {body: `{"error":"first","error":"second"}`},
-		"missing code":                   {body: `{"error":{"message":"rate limited"}}`},
-		"mismatched code":                {body: `{"error":{"code":503,"message":"rate limited"}}`},
-		"missing message":                {body: `{"error":{"code":429}}`},
-		"empty message":                  {body: `{"error":{"code":429,"message":""}}`},
-		"unknown error field":            {body: `{"error":{"code":429,"message":"rate limited","provider_name":"DeepInfra"}}`},
-		"unknown billing object":         {body: `{"error":{"code":429,"message":"rate limited"},"billing":{"amount_microusd":0}}`},
-		"unknown response id":            {body: `{"error":{"code":429,"message":"rate limited"},"response_id":"r"}`},
-		"unknown token usage":            {body: `{"error":{"code":429,"message":"rate limited"},"token_usage":{}}`},
-		"top level usage":                {body: `{"error":{"code":429,"message":"rate limited"},"usage":{}}`},
-		"nested usage":                   {body: `{"error":{"code":429,"message":"rate limited","metadata":{"usage":{}}}}`},
-		"cost":                           {body: `{"error":{"code":429,"message":"rate limited"},"cost":0}`},
-		"generation":                     {body: `{"error":{"code":429,"message":"rate limited"},"generation":"gen-1"}`},
-		"generation id":                  {body: `{"error":{"code":429,"message":"rate limited"},"generation_id":"gen-1"}`},
-		"provider":                       {body: `{"error":{"code":429,"message":"rate limited"},"provider":"DeepInfra"}`},
-		"choices":                        {body: `{"error":{"code":429,"message":"rate limited"},"choices":[]}`},
-		"receipt":                        {body: `{"error":{"code":429,"message":"rate limited"},"receipt":{"id":"r"}}`},
-		"receipt id":                     {body: `{"error":{"code":429,"message":"rate limited"},"receipt_id":"r"}`},
-		"billed flag":                    {body: `{"error":{"code":429,"message":"rate limited"},"billed":false}`},
-		"nested charged flag":            {body: `{"error":{"code":429,"message":"rate limited","metadata":{"charged":false}}}`},
-		"nested provider":                {body: `{"error":{"code":429,"message":"rate limited","metadata":{"provider":"DeepInfra"}}}`},
-		"nested cost in list":            {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"cost":0}]}}`},
-		"nested receipt":                 {body: `{"error":{"code":429,"message":"rate limited","metadata":{"receipt":"r"}}}`},
-		"nested choices in list":         {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"choices":[]}]}}`},
-		"metadata attempt one":           {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":1`, 1) + `}`},
-		"metadata negative zero attempt": {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":-0`, 1) + `}`},
-		"metadata attempts present":      {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0,`, `"attempt":0,"attempts":[],`, 1) + `}`},
-		"metadata endpoint selected":     {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"selected":false`, `"selected":true`, 1) + `}`},
-		"metadata requested mismatch":    {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"requested":"fixed/model"`, `"requested":"other/model"`, 1) + `}`},
-		"metadata model mismatch":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"model":"fixed/model"`, `"model":"other/model"`, 1) + `}`},
-		"metadata provider mismatch":     {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1) + `}`},
-		"metadata null":                  {body: `{"error":{"code":429,"message":"rate limited"},"openrouter_metadata":null}`},
+		"string error is not canonical":    {body: `{"error":"rate limited"}`},
+		"bare error without routing proof": {body: `{"error":{"code":429,"message":"rate limited"}}`},
+		"canonical route metadata":         {body: `{"error":{"code":429,"message":"rate limited"},` + canonicalMetadata + `}`, want: true},
+		"missing error":                    {body: `{}`},
+		"malformed":                        {body: `{"error":`},
+		"non-finite number":                {body: `{"error":{"code":429,"message":"rate limited"},"value":NaN}`},
+		"positive infinity":                {body: `{"error":{"code":429,"message":"rate limited"},"value":Infinity}`},
+		"negative infinity":                {body: `{"error":{"code":429,"message":"rate limited"},"value":-Infinity}`},
+		"duplicate error":                  {body: `{"error":"first","error":"second"}`},
+		"missing code":                     {body: `{"error":{"message":"rate limited"}}`},
+		"mismatched code":                  {body: `{"error":{"code":503,"message":"rate limited"}}`},
+		"missing message":                  {body: `{"error":{"code":429}}`},
+		"empty message":                    {body: `{"error":{"code":429,"message":""}}`},
+		"unknown error field":              {body: `{"error":{"code":429,"message":"rate limited","provider_name":"DeepInfra"}}`},
+		"unknown billing object":           {body: `{"error":{"code":429,"message":"rate limited"},"billing":{"amount_microusd":0}}`},
+		"unknown response id":              {body: `{"error":{"code":429,"message":"rate limited"},"response_id":"r"}`},
+		"unknown token usage":              {body: `{"error":{"code":429,"message":"rate limited"},"token_usage":{}}`},
+		"top level usage":                  {body: `{"error":{"code":429,"message":"rate limited"},"usage":{}}`},
+		"nested usage":                     {body: `{"error":{"code":429,"message":"rate limited","metadata":{"usage":{}}}}`},
+		"cost":                             {body: `{"error":{"code":429,"message":"rate limited"},"cost":0}`},
+		"generation":                       {body: `{"error":{"code":429,"message":"rate limited"},"generation":"gen-1"}`},
+		"generation id":                    {body: `{"error":{"code":429,"message":"rate limited"},"generation_id":"gen-1"}`},
+		"provider":                         {body: `{"error":{"code":429,"message":"rate limited"},"provider":"DeepInfra"}`},
+		"choices":                          {body: `{"error":{"code":429,"message":"rate limited"},"choices":[]}`},
+		"receipt":                          {body: `{"error":{"code":429,"message":"rate limited"},"receipt":{"id":"r"}}`},
+		"receipt id":                       {body: `{"error":{"code":429,"message":"rate limited"},"receipt_id":"r"}`},
+		"billed flag":                      {body: `{"error":{"code":429,"message":"rate limited"},"billed":false}`},
+		"nested charged flag":              {body: `{"error":{"code":429,"message":"rate limited","metadata":{"charged":false}}}`},
+		"nested provider":                  {body: `{"error":{"code":429,"message":"rate limited","metadata":{"provider":"DeepInfra"}}}`},
+		"nested cost in list":              {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"cost":0}]}}`},
+		"nested receipt":                   {body: `{"error":{"code":429,"message":"rate limited","metadata":{"receipt":"r"}}}`},
+		"nested choices in list":           {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"choices":[]}]}}`},
+		"metadata attempt one":             {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":1`, 1) + `}`, want: true},
+		"metadata attempt two":             {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":2`, 1) + `}`},
+		"metadata negative zero attempt":   {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":-0`, 1) + `}`},
+		"metadata attempts present":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0,`, `"attempt":0,"attempts":[],`, 1) + `}`},
+		"metadata endpoint selected":       {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"selected":false`, `"selected":true`, 1) + `}`},
+		"metadata requested mismatch":      {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"requested":"fixed/model"`, `"requested":"other/model"`, 1) + `}`},
+		"metadata model mismatch":          {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"model":"fixed/model"`, `"model":"other/model"`, 1) + `}`},
+		"unselected other provider":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1) + `}`, want: true},
+		"selected other provider":          {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1), `"selected":false`, `"selected":true`, 1) + `}`},
+		"metadata null":                    {body: `{"error":{"code":429,"message":"rate limited"},"openrouter_metadata":null}`},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := providerBackpressureIsReceiptFree(&providerHTTPResult{
 				status: http.StatusTooManyRequests,
 				body:   []byte(tc.body),
-			}, "fixed/model", "deepinfra")
+			}, "fixed/model")
 			if got != tc.want {
 				t.Fatalf("receipt-free classification: got %v want %v", got, tc.want)
 			}
@@ -349,7 +348,7 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 	if providerBackpressureIsReceiptFree(&providerHTTPResult{
 		status: http.StatusInternalServerError,
 		body:   []byte(`{"error":"boom"}`),
-	}, "fixed/model", "deepinfra") {
+	}, "fixed/model") {
 		t.Fatal("non-429/503 response was classified as receipt-free backpressure")
 	}
 }
@@ -551,7 +550,7 @@ func TestGenerationErrorWithReceiptMetadataIsClassifiedWithoutReplay(t *testing.
 			if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
 				t.Fatalf("failure class=%q", got)
 			}
-			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b", "openrouter") {
+			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b") {
 				t.Fatal("receipt-bearing failure must never authorize replay")
 			}
 		})
@@ -587,7 +586,7 @@ func TestReceiptFree429RetriesOnceAndRecovers(t *testing.T) {
 		if calls == 1 {
 			w.Header().Set("Retry-After", "2")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
+			_, _ = w.Write([]byte(receiptFreeEnvelope(429, "openai/gpt-oss-20b")))
 			return
 		}
 		_, _ = w.Write([]byte(validAggregateChatBody))
@@ -619,7 +618,7 @@ func TestReceiptFreeHTTP502RetriesOnceAndRecovers(t *testing.T) {
 		calls++
 		if calls == 1 {
 			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(`{"error":{"code":502,"message":"bad gateway"}}`))
+			_, _ = w.Write([]byte(receiptFreeEnvelope(502, "openai/gpt-oss-20b")))
 			return
 		}
 		_, _ = w.Write([]byte(validAggregateChatBody))

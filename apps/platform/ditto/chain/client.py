@@ -208,7 +208,7 @@ class ChainClient:
             url = (
                 self._historical_substrate_urls()[0]
                 if archive
-                else self._substrate_url()
+                else self._live_substrate_urls()[0]
             )
         return _treasury_substrate(url, runtime_cache=cache)
 
@@ -701,16 +701,23 @@ class ChainClient:
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""
 
-        try:
-            async with header_substrate(self._substrate_url()) as substrate:
-                block_hash = await substrate.get_chain_finalised_head()
-                block_number = await substrate.get_block_number(block_hash)
-        except TimeoutError as e:
-            raise ChainTimeoutError("get_finalized_block() timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_finalized_block() failed: {self._safe_rpc_error(e)}"
-            ) from e
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            try:
+                async with header_substrate(url) as substrate:
+                    block_hash = await substrate.get_chain_finalised_head()
+                    block_number = await substrate.get_block_number(block_hash)
+                break
+            except TimeoutError as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainTimeoutError("get_finalized_block() timed out") from e
+            except Exception as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainConnectionError(
+                    f"get_finalized_block() failed: {self._safe_rpc_error(e)}"
+                ) from e
         if not block_hash or block_number is None:
             raise ExtrinsicNotFoundError("finalized chain head is unavailable")
         return BlockInfo(number=int(block_number), hash=str(block_hash).lower())
@@ -722,26 +729,44 @@ class ChainClient:
             raise ExtrinsicNotFoundError(
                 f"finalized block number {block_number} is invalid"
             )
-        try:
-            async with header_substrate(self._substrate_url()) as substrate:
-                finalized_hash = await substrate.get_chain_finalised_head()
-                finalized_number = await substrate.get_block_number(finalized_hash)
-                if finalized_number is None or block_number > int(finalized_number):
-                    raise ExtrinsicNotFoundError(
-                        f"block {block_number} is not finalized"
-                    )
-                block_hash = await substrate.get_block_hash(block_number)
-        except (ExtrinsicNotFoundError, ChainTimeoutError, ChainConnectionError):
-            raise
-        except TimeoutError as e:
-            raise ChainTimeoutError(
-                f"get_finalized_block_hash({block_number}) timed out"
-            ) from e
-        except Exception as e:
-            raise ChainConnectionError(
-                "get_finalized_block_hash"
-                f"({block_number}) failed: {self._safe_rpc_error(e)}"
-            ) from e
+        urls = self._live_substrate_urls()
+        not_finalized: ExtrinsicNotFoundError | None = None
+        for index, url in enumerate(urls):
+            try:
+                async with header_substrate(url) as substrate:
+                    finalized_hash = await substrate.get_chain_finalised_head()
+                    finalized_number = await substrate.get_block_number(finalized_hash)
+                    if finalized_number is None or block_number > int(finalized_number):
+                        raise ExtrinsicNotFoundError(
+                            f"block {block_number} is not finalized"
+                        )
+                    block_hash = await substrate.get_block_hash(block_number)
+                break
+            except ExtrinsicNotFoundError as e:
+                # A lagging provider may not have finalized this height yet.
+                not_finalized = e
+                if index + 1 < len(urls):
+                    continue
+                raise
+            except (ChainTimeoutError, ChainConnectionError):
+                raise
+            except TimeoutError as e:
+                if index + 1 < len(urls):
+                    continue
+                if not_finalized is not None:
+                    raise not_finalized from e
+                raise ChainTimeoutError(
+                    f"get_finalized_block_hash({block_number}) timed out"
+                ) from e
+            except Exception as e:
+                if index + 1 < len(urls):
+                    continue
+                if not_finalized is not None:
+                    raise not_finalized from e
+                raise ChainConnectionError(
+                    "get_finalized_block_hash"
+                    f"({block_number}) failed: {self._safe_rpc_error(e)}"
+                ) from e
         if not block_hash:
             raise ExtrinsicNotFoundError(
                 f"no finalized block hash found for block number {block_number}"
@@ -796,53 +821,62 @@ class ChainClient:
         """
         from async_substrate_interface import AsyncSubstrateInterface
 
-        try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
-                block_hash = await substrate.get_chain_head()
-                header = await substrate.get_block_header(block_hash=block_hash)
-                block = _block_number_from_header(header)
-                weight_map = await substrate.query_map(
-                    module=_SUBTENSOR_MODULE,
-                    storage_function=_WEIGHTS_STORAGE,
-                    params=[netuid],
-                    block_hash=block_hash,
-                    fully_exhaust=True,
-                )
-                key_map = await substrate.query_map(
-                    module=_SUBTENSOR_MODULE,
-                    storage_function=_KEYS_STORAGE,
-                    params=[netuid],
-                    block_hash=block_hash,
-                    fully_exhaust=True,
-                )
-                owner_result = await substrate.query(
-                    module=_SUBTENSOR_MODULE,
-                    storage_function=_SUBNET_OWNER_HOTKEY_STORAGE,
-                    params=[netuid],
-                    block_hash=block_hash,
-                )
-                raw_weights = [
-                    (int(uid), value or []) async for uid, value in weight_map
-                ]
-                hotkeys = {
-                    int(uid): str(hotkey) async for uid, hotkey in key_map if hotkey
-                }
-                owner_hotkey_value = _unwrap_substrate_value(owner_result)
-                # Same connection, same block hash: the tempo position a reader
-                # sees therefore belongs to the very matrix beside it, and the
-                # extra reads cost one round trip each on a socket the matrix
-                # read already paid to open. Both are decoration on the matrix,
-                # so neither may fail the call -- see :meth:`_read_epoch`.
-                epoch = await self._read_epoch(substrate, netuid, block, block_hash)
-                block_timestamp = await self._read_block_timestamp(
-                    substrate, block_hash
-                )
-        except TimeoutError as e:
-            raise ChainTimeoutError(f"get_weights(netuid={netuid}) timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_weights(netuid={netuid}) failed: {e}"
-            ) from e
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            try:
+                async with AsyncSubstrateInterface(url=url) as substrate:
+                    block_hash = await substrate.get_chain_head()
+                    header = await substrate.get_block_header(block_hash=block_hash)
+                    block = _block_number_from_header(header)
+                    weight_map = await substrate.query_map(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_WEIGHTS_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                        fully_exhaust=True,
+                    )
+                    key_map = await substrate.query_map(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_KEYS_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                        fully_exhaust=True,
+                    )
+                    owner_result = await substrate.query(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_SUBNET_OWNER_HOTKEY_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                    )
+                    raw_weights = [
+                        (int(uid), value or []) async for uid, value in weight_map
+                    ]
+                    hotkeys = {
+                        int(uid): str(hotkey) async for uid, hotkey in key_map if hotkey
+                    }
+                    owner_hotkey_value = _unwrap_substrate_value(owner_result)
+                    # Same connection, same block hash: the tempo position a reader
+                    # sees therefore belongs to the very matrix beside it, and the
+                    # extra reads cost one round trip each on a socket the matrix
+                    # read already paid to open. Both are decoration on the matrix,
+                    # so neither may fail the call -- see :meth:`_read_epoch`.
+                    epoch = await self._read_epoch(substrate, netuid, block, block_hash)
+                    block_timestamp = await self._read_block_timestamp(
+                        substrate, block_hash
+                    )
+                break
+            except TimeoutError as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainTimeoutError(
+                    f"get_weights(netuid={netuid}) timed out"
+                ) from e
+            except Exception as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainConnectionError(
+                    f"get_weights(netuid={netuid}) failed: {e}"
+                ) from e
 
         vectors = []
         for validator_uid, raw_vector in raw_weights:
@@ -908,7 +942,7 @@ class ChainClient:
         context = (
             nullcontext(substrate)
             if substrate is not None
-            else AsyncSubstrateInterface(url=self._substrate_url())
+            else AsyncSubstrateInterface(url=self._live_substrate_urls()[0])
         )
         try:
             async with context as substrate:
@@ -1664,6 +1698,21 @@ class ChainClient:
         if network == "local":
             return _LOCAL_WS_URL
         return network
+
+    def _live_substrate_urls(self) -> tuple[str, ...]:
+        """Return the paid provider first, then the network's live entrypoint.
+
+        The public Finney entrypoint refuses websocket handshakes with HTTP 429
+        under load, so every live read prefers the configured paid node and
+        keeps the entrypoint only as a fallback. ``subtensor_network`` stays
+        the network identity; this chooses transport only.
+        """
+        urls: list[str] = []
+        configured_url = self._configured_archive_url()
+        if configured_url:
+            urls.append(configured_url)
+        urls.append(self._substrate_url())
+        return tuple(dict.fromkeys(urls))
 
     def _configured_archive_url(self) -> str | None:
         """Return the configured provider URL with its credential attached."""

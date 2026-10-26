@@ -43,7 +43,7 @@ env:
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
-  HEARTBEAT_PROTOCOL: "32"
+  HEARTBEAT_PROTOCOL: "33"
   COMPOSE_SCHEMA: "1"
   SCREENER_FLEET_UPDATE_PROTOCOL: "1"
 
@@ -525,7 +525,7 @@ jobs:
       - name: Install Go for model-relay verification
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache-dependency-path: services/model-relay/go.sum
 
       - name: Gate model-relay release on exact merge source
@@ -568,7 +568,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Gate Backroom release on exact merge source
         run: |
@@ -600,7 +600,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.27.3"
           cache-dependency-path: services/dittobench-api/go.sum
 
       - name: Gate DittoBench API release on exact merge source
@@ -628,7 +628,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
           cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Gate DittoBench datagen release on exact merge source
@@ -873,7 +873,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: pnpm
           cache-dependency-path: apps/backroom/pnpm-lock.yaml
 
@@ -1970,7 +1970,7 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
           cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Verify the monorepo-tagged generate service

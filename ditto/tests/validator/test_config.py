@@ -487,6 +487,38 @@ class TestRouterRankSharesValidation:
             replace(cfg, router_rank_shares=bad)
 
 
+class TestGeneratorEligibilityRequiresTheLedger:
+    def test_eligibility_without_the_ledger_read_fails_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(ValidatorConfigError, match="generator_ledger_read_enabled"):
+            replace(cfg, generator_ledger_read_enabled=False)
+        replace(
+            cfg, generator_weight_eligible=False, generator_ledger_read_enabled=False
+        )
+
+    def test_protocol_33_ships_the_generator_track_active_and_reading(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        assert cfg.generator_track_state == "active"
+        assert cfg.generator_weight_eligible is True
+        assert cfg.generator_ledger_read_enabled is True
+        # Inert by construction: the compiled split gives generator nothing.
+        assert cfg.track_shares_bps.get("generator", 0) == 0
+
+    def test_disabling_the_ledger_read_refuses_to_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "false")
+        with pytest.raises(ValidatorConfigError, match="generator_ledger_read_enabled"):
+            parse_validator_config_from_env()
+
+
 class TestRouterLedgerReadFlag:
     def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _base_env(monkeypatch)

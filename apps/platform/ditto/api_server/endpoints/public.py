@@ -43,13 +43,12 @@ import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from datetime import time as datetime_time
 from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from pydantic import ValidationError
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, union
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -89,7 +88,6 @@ from ditto.api_models import (
     PublicChainWeight,
     PublicChainWeightsResponse,
     PublicClaimedSlot,
-    PublicCodingShadowScore,
     PublicCompositeBreakdown,
     PublicConfirmationProgress,
     PublicConfirmationScore,
@@ -271,6 +269,10 @@ from ditto.api_server.gate_evidence import (
     gate_note_ids_for,
     public_gate_evidence,
 )
+from ditto.api_server.generator_round_reservation import (
+    round_reservation_active,
+    validator_advertises_rounds,
+)
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -290,6 +292,7 @@ from ditto.api_server.koth import (
 from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_shares,
+    pin_generator_fraction,
     pin_provisional_incumbent,
     served_rank_shares,
 )
@@ -299,6 +302,7 @@ from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundEr
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
+    reserved_round_slots,
     resolve_slot_settings,
     validator_issuance_paused,
 )
@@ -361,10 +365,6 @@ from ditto.db.queries.benchmark_rollout import (
     protocol_serves_version,
     rollout_state,
     verified_scorer_for_version,
-)
-from ditto.db.queries.coding_evaluations import (
-    CodingShadowRunBundle,
-    latest_coding_shadow_runs,
 )
 from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
@@ -463,6 +463,7 @@ from ditto.db.queries.source_review_queue_slo import (
     load_source_review_queue_slo_snapshot,
 )
 from ditto.db.queries.tickets import (
+    generator_round_free_ticket,
     get_score_continuation_floor,
     get_score_continuation_floor_row,
     get_score_priority_floors,
@@ -492,12 +493,8 @@ _SUBMISSION_BUILD_LIMIT = 8
 _TIMELINE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 # v1 predates the memory subscore, so it has nothing to plot on this axis.
 _TIMELINE_MIN_BENCH_VERSION = 2
-# Keep the complete scored memory era available to consumers without letting the
-# per-version ledger scan grow without bound. The dashboard may apply a tighter
-# presentation window to preserve legibility, but the public response retains the
-# newest contracts in this window so a consumer never has to invent missing
-# release metadata.
-_TIMELINE_MAX_RELEASES = 8
+# Keep discovery and the per-version ledger scan bounded to the chart's window.
+_TIMELINE_MAX_RELEASES = 4
 # A leaderboard pinned to a *settled* benchmark version is finished work: the
 # rollout has moved past it, so nothing routine writes to it again. It is still
 # not immutable (an ATH review or a score replacement can correct an old row),
@@ -851,6 +848,11 @@ def _decorate_vectors_with_pins(
             )
             return None, True
 
+    def generator_fraction(pin: LedgerEpochSnapshot | None) -> float:
+        context = getattr(pin, "context", None) if pin is not None else None
+        served = context.get("served") if isinstance(context, dict) else None
+        return pin_generator_fraction(served) if isinstance(served, dict) else 0.0
+
     expected_current, invalid_current = expected(current)
     expected_previous, invalid_previous = expected(previous)
     decorated: list[PublicValidatorWeightVector] = []
@@ -861,6 +863,8 @@ def _decorate_vectors_with_pins(
             expected_current=expected_current,
             expected_previous=expected_previous,
             burn_hotkey=burn_hotkey,
+            generator_current=generator_fraction(current),
+            generator_previous=generator_fraction(previous),
         )
         if invalid_current or invalid_previous and verdict != "current":
             # A valid current match is independently meaningful. A failed
@@ -2390,64 +2394,6 @@ async def _attested_owner_roots_for_agents(
     }
 
 
-def _public_coding_shadow(
-    bundle: CodingShadowRunBundle | None,
-    *,
-    artifact_sha256: str,
-    screened_image_sha256: str | None,
-    bench_version: int,
-) -> PublicCodingShadowScore | None:
-    if bundle is None:
-        return None
-    run = bundle.run
-    results = tuple(bundle.results.values())
-    if len(results) > SCORING_QUORUM:
-        return None
-    current = (
-        screened_image_sha256 is not None
-        and run.artifact_sha256 == artifact_sha256
-        and run.screened_image_sha256 == screened_image_sha256
-        and run.bench_version == bench_version
-    )
-    if not current:
-        return PublicCodingShadowScore(
-            status="stale",
-            score=None,
-            result_count=min(len(results), SCORING_QUORUM),
-            bench_version=run.bench_version,
-            coding_contract_version=1,
-            completed_at=None,
-            shadow_only=True,
-            weight_eligible=False,
-        )
-    if len(results) >= SCORING_QUORUM:
-        return PublicCodingShadowScore(
-            status="complete",
-            score=(
-                statistics.median_low(
-                    sorted(result.repair_mean_micros for result in results)
-                )
-                / 1_000_000
-            ),
-            result_count=SCORING_QUORUM,
-            bench_version=run.bench_version,
-            coding_contract_version=1,
-            completed_at=max(result.created_at for result in results),
-            shadow_only=True,
-            weight_eligible=False,
-        )
-    return PublicCodingShadowScore(
-        status="collecting" if bundle.tickets else "scheduled",
-        score=None,
-        result_count=len(results),
-        bench_version=run.bench_version,
-        coding_contract_version=1,
-        completed_at=None,
-        shadow_only=True,
-        weight_eligible=False,
-    )
-
-
 def _public_reward_eligibility(
     record: Any | None,
 ) -> PublicRewardEligibility | None:
@@ -2615,7 +2561,6 @@ def _public_entry(
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
     name_handle: PublicNameHandle | None = None,
     avatar_url: str | None = None,
-    coding_shadow: PublicCodingShadowScore | None = None,
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
     reward_eligibility: Any | None = None,
@@ -2710,7 +2655,6 @@ def _public_entry(
         agent_version=agent_version,
         artifact_release=artifact_release,
         submission_family=submission_family,
-        coding_shadow=coding_shadow,
         miner_hotkey=r.miner_hotkey,
         miner_uid=miner_uid,
         registered=registered,
@@ -3217,18 +3161,57 @@ async def benchmark_timeline(
 ) -> PublicBenchmarkTimelineResponse:
     """Running best finalized miner memory score across the newest contracts.
 
-    The window follows the bench_version changelog rather than a hardcoded
-    range, so shipping a new contract puts it on the timeline on its own. See
-    :data:`_TIMELINE_MAX_RELEASES` for why it stays bounded.
+    Discover competitions from accepted scores and started rollouts. The public
+    glossary supplies optional titles only: stale or future documentation must
+    never determine which live competitions appear.
     """
 
     response.headers["Cache-Control"] = _TIMELINE_CACHE_CONTROL
-    # ``version_entries`` is newest-first, so the head of the list is the window.
-    version_docs = [
-        entry
+    titles = {
+        int(entry["version"]): str(entry["title"])
         for entry in bench_glossary_data.version_entries()
-        if int(entry["version"]) >= _TIMELINE_MIN_BENCH_VERSION
-    ][:_TIMELINE_MAX_RELEASES]
+    }
+    rollout_statuses = ("collecting", "blocked_ineligible", "activated")
+    # Discover version IDs before reading score timestamps or rollout metadata.
+    # Each source contributes at most four IDs, and every subsequent ledger
+    # read is restricted to the resulting four-version window.
+    scored_versions = (
+        select(Score.bench_version)
+        .where(Score.bench_version >= _TIMELINE_MIN_BENCH_VERSION)
+        .distinct()
+        .order_by(Score.bench_version.desc())
+        .limit(_TIMELINE_MAX_RELEASES)
+        .subquery()
+    )
+    rollout_versions = (
+        select(BenchmarkRollout.desired_version.label("bench_version"))
+        .where(
+            BenchmarkRollout.desired_version >= _TIMELINE_MIN_BENCH_VERSION,
+            BenchmarkRollout.status.in_(rollout_statuses),
+        )
+        .distinct()
+        .order_by(BenchmarkRollout.desired_version.desc())
+        .limit(_TIMELINE_MAX_RELEASES)
+        .subquery()
+    )
+    candidates = union(
+        select(scored_versions.c.bench_version),
+        select(rollout_versions.c.bench_version),
+    ).subquery()
+    versions = list(
+        await session.scalars(
+            select(candidates.c.bench_version)
+            .order_by(candidates.c.bench_version.desc())
+            .limit(_TIMELINE_MAX_RELEASES)
+        )
+    )
+    if not versions:
+        return PublicBenchmarkTimelineResponse(
+            generated_at=datetime.now(UTC),
+            score_quorum=SCORING_QUORUM,
+            releases=[],
+            points=[],
+        )
     rollout_rows = (
         await session.execute(
             select(
@@ -3237,12 +3220,8 @@ async def benchmark_timeline(
                 BenchmarkRollout.activated_at,
             )
             .where(
-                BenchmarkRollout.desired_version.in_(
-                    [int(entry["version"]) for entry in version_docs]
-                ),
-                BenchmarkRollout.status.in_(
-                    ("collecting", "blocked_ineligible", "activated")
-                ),
+                BenchmarkRollout.desired_version.in_(versions),
+                BenchmarkRollout.status.in_(rollout_statuses),
             )
             .order_by(
                 BenchmarkRollout.desired_version,
@@ -3267,32 +3246,54 @@ async def benchmark_timeline(
             )
         ):
             rollout_by_version[version] = row
+    # Most competitions have rollout timestamps. Only legacy score-only eras
+    # need an aggregate over scores; do not scan them when rollouts date all
+    # four versions.
+    undated_versions = [
+        version for version in versions if version not in rollout_by_version
+    ]
+    first_scored_at: dict[int, datetime] = {}
+    if undated_versions:
+        score_rows = (
+            await session.execute(
+                select(
+                    Score.bench_version,
+                    func.min(Score.created_at).label("first_scored_at"),
+                )
+                .where(Score.bench_version.in_(undated_versions))
+                .group_by(Score.bench_version)
+            )
+        ).all()
+        first_scored_at = {
+            int(row.bench_version): _timeline_utc(row.first_scored_at)
+            for row in score_rows
+        }
     releases = [
         PublicBenchmarkRelease(
-            bench_version=int(entry["version"]),
+            bench_version=version,
             released_at=(
-                _timeline_utc(rollout_by_version[int(entry["version"])].created_at)
-                if int(entry["version"]) in rollout_by_version
-                else datetime.combine(
-                    datetime.fromisoformat(str(entry["epoch"])).date(),
-                    datetime_time.min,
-                    tzinfo=UTC,
-                )
+                _timeline_utc(rollout_by_version[version].created_at)
+                if version in rollout_by_version
+                else first_scored_at[version]
             ),
             activated_at=(
                 _timeline_utc(
                     cast(
                         datetime,
-                        rollout_by_version[int(entry["version"])].activated_at,
+                        rollout_by_version[version].activated_at,
                     )
                 )
-                if int(entry["version"]) in rollout_by_version
-                and rollout_by_version[int(entry["version"])].activated_at is not None
+                if version in rollout_by_version
+                and rollout_by_version[version].activated_at is not None
                 else None
             ),
-            title=str(entry["title"]),
+            title=titles.get(version, f"DittoBench v{version}"),
         )
-        for entry in version_docs
+        # Score-only versions can disappear between discovery and this read
+        # under READ COMMITTED (for example, an agent deletion cascades scores).
+        # Keep every remaining dated competition; the next poll rediscovers it.
+        for version in versions
+        if version in rollout_by_version or version in first_scored_at
     ]
     releases.sort(key=lambda entry: entry.bench_version)
     released_at = {entry.bench_version: entry.released_at for entry in releases}
@@ -3301,6 +3302,13 @@ async def benchmark_timeline(
         bench_versions=[entry.bench_version for entry in releases],
         not_before_by_version=released_at,
     )
+    if not points:
+        return PublicBenchmarkTimelineResponse(
+            generated_at=datetime.now(UTC),
+            score_quorum=SCORING_QUORUM,
+            releases=releases,
+            points=[],
+        )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
@@ -4025,7 +4033,6 @@ async def build_public_leaderboard(
                     Agent.agent_id,
                     Agent.name,
                     Agent.version,
-                    Agent.screened_image_sha256,
                 ).where(Agent.agent_id.in_([row.agent_id for row in rows]))
             )
         )
@@ -4033,14 +4040,8 @@ async def build_public_leaderboard(
         .all()
     )
     agent_metadata = {
-        agent_id: (name, version, screened_image_sha256)
-        for agent_id, name, version, screened_image_sha256 in agent_rows
+        agent_id: (name, version) for agent_id, name, version in agent_rows
     }
-    coding_runs = await latest_coding_shadow_runs(
-        session,
-        agent_ids=[row.agent_id for row in rows],
-        bench_version=display_version,
-    )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
@@ -4184,9 +4185,7 @@ async def build_public_leaderboard(
             else None
         )
         adjustment_present = bounded_factor is not None or legacy_bonus is not None
-        stored_name, stored_version, screened_image_sha256 = agent_metadata[
-            row.agent_id
-        ]
+        stored_name, stored_version = agent_metadata[row.agent_id]
         display_name, name_handle = _public_named(
             stored_name,
             row.emission_owner_root,
@@ -4201,12 +4200,6 @@ async def build_public_leaderboard(
                 stored_version,
                 name_handle=name_handle,
                 avatar_url=avatar_urls.get(row.miner_hotkey),
-                coding_shadow=_public_coding_shadow(
-                    coding_runs.get(row.agent_id),
-                    artifact_sha256=row.sha256,
-                    screened_image_sha256=screened_image_sha256,
-                    bench_version=row.bench_version,
-                ),
                 finalized=True,
                 score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
                 settled_composite=settled,
@@ -4305,9 +4298,7 @@ async def build_public_leaderboard(
         settled, rolling, rolling_count = rollout_states.get(
             row.agent_id, (None, None, None)
         )
-        stored_name, stored_version, screened_image_sha256 = agent_metadata[
-            row.agent_id
-        ]
+        stored_name, stored_version = agent_metadata[row.agent_id]
         display_name, name_handle = _public_named(
             stored_name,
             row.emission_owner_root,
@@ -4322,12 +4313,6 @@ async def build_public_leaderboard(
                 stored_version,
                 name_handle=name_handle,
                 avatar_url=avatar_urls.get(row.miner_hotkey),
-                coding_shadow=_public_coding_shadow(
-                    coding_runs.get(row.agent_id),
-                    artifact_sha256=row.sha256,
-                    screened_image_sha256=screened_image_sha256,
-                    bench_version=row.bench_version,
-                ),
                 finalized=False,
                 score_count=count,
                 settled_composite=settled,
@@ -4996,6 +4981,7 @@ def _validator_heartbeats_response(
     now: datetime,
     active_bench_version: int,
     slot_settings: ValidatorSlotSettings,
+    round_reservation_active: bool = False,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5181,6 +5167,24 @@ def _validator_heartbeats_response(
         bench_serviceability = _bench_serviceability(
             row, active_bench_version=active_bench_version
         )
+        allowed_slots = (
+            0
+            if issuance_paused
+            else allowed_slot_count(
+                slot_settings,
+                advertised_slots=(capacity.configured_slots if capacity else 1),
+                sample=HostResourceSample(
+                    cpu_percent=(metrics.cpu_percent if metrics is not None else None),
+                    memory_percent=(
+                        metrics.memory_percent if metrics is not None else None
+                    ),
+                    disk_percent=(
+                        metrics.disk_percent if metrics is not None else None
+                    ),
+                ),
+                validator_hotkey=row.validator_hotkey,
+            )
+        )
         entries.append(
             PublicValidatorHeartbeat(
                 validator_hotkey=row.validator_hotkey,
@@ -5209,24 +5213,14 @@ def _validator_heartbeats_response(
                 issuance_paused=issuance_paused,
                 # Resolved with the very function ticket issue calls, so the
                 # fleet view cannot drift from dispatch as the policy changes.
-                allowed_slots=(
-                    0
-                    if issuance_paused
-                    else allowed_slot_count(
-                        slot_settings,
-                        advertised_slots=(capacity.configured_slots if capacity else 1),
-                        sample=HostResourceSample(
-                            cpu_percent=(
-                                metrics.cpu_percent if metrics is not None else None
-                            ),
-                            memory_percent=(
-                                metrics.memory_percent if metrics is not None else None
-                            ),
-                            disk_percent=(
-                                metrics.disk_percent if metrics is not None else None
-                            ),
-                        ),
-                    )
+                allowed_slots=allowed_slots,
+                reserved_round_slots=reserved_round_slots(
+                    slot_settings,
+                    validator_hotkey=row.validator_hotkey,
+                    allowed_slots=allowed_slots,
+                    rounds_active=(
+                        round_reservation_active and validator_advertises_rounds(row)
+                    ),
                 ),
                 healthy_slots=(capacity.healthy_slots if capacity else ["slot-0"]),
                 admission=(capacity.admission if capacity else "accepting"),
@@ -5334,6 +5328,7 @@ async def load_validator_fleet(
         now=now,
         active_bench_version=await active_bench_version(session),
         slot_settings=await resolve_slot_settings(app_state),
+        round_reservation_active=await round_reservation_active(app_state, session),
     )
 
 
@@ -6161,7 +6156,6 @@ def _public_activity_response(
     owner_roots: dict[UUID, str] | None = None,
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
-    coding_runs: dict[UUID, CodingShadowRunBundle] | None = None,
     miner_uids: dict[str, int] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
@@ -6404,16 +6398,6 @@ def _public_activity_response(
                     row.agent.agent_id
                 ),
                 score_count=row.score_count,
-                coding_shadow=(
-                    _public_coding_shadow(
-                        (coding_runs or {}).get(row.agent.agent_id),
-                        artifact_sha256=row.agent.sha256,
-                        screened_image_sha256=row.agent.screened_image_sha256,
-                        bench_version=active_bench_version,
-                    )
-                    if active_bench_version is not None
-                    else None
-                ),
                 provisional_composite=row.provisional_composite,
                 validator_queue_rank=_queue_rank(queue_preview, row.agent.agent_id),
                 validator_queue_gate=_queue_gate(queue_preview, row.agent.agent_id),
@@ -7077,11 +7061,6 @@ async def activity(
         owner_roots=await _attested_owner_roots_for_rows(session, rows),
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
-        coding_runs=await latest_coding_shadow_runs(
-            session,
-            agent_ids=[row.agent.agent_id for row in rows],
-            bench_version=active_version,
-        ),
         miner_uids=registered_uids,
     )
 
@@ -7343,11 +7322,6 @@ async def operations(
         owner_roots=owner_roots,
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
-        coding_runs=await latest_coding_shadow_runs(
-            session,
-            agent_ids=[row.agent.agent_id for row in activity_rows],
-            bench_version=active_version,
-        ),
         miner_uids=registered_uids,
     )
     validator_snapshot = _validator_heartbeats_response(
@@ -7361,6 +7335,9 @@ async def operations(
         now=now,
         active_bench_version=active_version,
         slot_settings=await resolve_slot_settings(request.app.state),
+        round_reservation_active=await round_reservation_active(
+            request.app.state, session
+        ),
     )
     rows_by_agent = {row.agent.agent_id: row for row in activity_rows}
     desired_version = cast(int, benchmark_rollout["desired_version"])
@@ -8002,7 +7979,12 @@ async def agent_pipeline(
     tickets = list(
         await session.scalars(
             select(ValidatorTicket)
-            .where(ValidatorTicket.agent_id == agent_id)
+            .where(
+                ValidatorTicket.agent_id == agent_id,
+                # A generator-round lease is not a validation attempt, and a
+                # round-only row has none to report.
+                generator_round_free_ticket(),
+            )
             .order_by(
                 ValidatorTicket.issued_at.desc(),
                 ValidatorTicket.validator_hotkey,

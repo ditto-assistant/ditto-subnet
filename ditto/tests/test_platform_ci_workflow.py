@@ -25,9 +25,50 @@ def _step(job: dict, name: str) -> dict:
     return next(step for step in job["steps"] if step.get("name") == name)
 
 
-def test_standalone_platform_verification_is_manual_only() -> None:
-    for path in (BACKEND_WORKFLOW, DASHBOARD_WORKFLOW):
-        assert set(_triggers(_load(path))) == {"workflow_dispatch"}
+def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
+    backend_triggers = _triggers(_load(BACKEND_WORKFLOW))
+    dashboard_triggers = _triggers(_load(DASHBOARD_WORKFLOW))
+    backend_paths = backend_triggers["pull_request"]["paths"]
+    dashboard_paths = dashboard_triggers["pull_request"]["paths"]
+
+    assert backend_paths[:5] == [
+        "apps/platform/**",
+        "!apps/platform/dashboard/**",
+        "!apps/platform/faircopy.config.mjs",
+        "!apps/platform/package.json",
+        "!apps/platform/package-lock.json",
+    ]
+    assert {
+        "apps/platform/dashboard/**",
+        "apps/platform/faircopy.config.mjs",
+        "apps/platform/package.json",
+        "apps/platform/package-lock.json",
+    } <= set(dashboard_paths)
+    for paths in (backend_paths, dashboard_paths):
+        assert "packages/ditto-screening-protocol/**" in paths
+        assert ".github/workflows/platform-verify.yml" in paths
+    for triggers in (backend_triggers, dashboard_triggers):
+        assert "workflow_dispatch" in triggers
+        assert "push" not in triggers
+
+
+def test_backend_workflow_runs_on_screener_verdict_producer_changes() -> None:
+    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
+    assert {
+        "workers/screener/ditto_screener/policy.py",
+        "workers/screener/ditto_screener/worker.py",
+    } <= backend_paths
+
+
+def test_backend_workflow_does_not_trigger_on_coding_competition_contracts() -> None:
+    # Coding-competition CI stays operator-dispatched (SN-120): contract
+    # vectors and coding wire models no longer pull Platform CI onto a PR.
+    backend_paths = _triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"]
+    assert not [
+        path
+        for path in backend_paths
+        if "dittobench-coding-contract" in path or "api_models/coding_" in path
+    ]
 
 
 def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
@@ -126,12 +167,6 @@ def test_shared_verification_keeps_static_database_and_security_gates() -> None:
     assert _step(static, "ruff format check")["run"] == "uv run ruff format --check ."
     assert _step(static, "ruff check")["run"] == "uv run ruff check ."
     assert _step(static, "mypy")["run"] == "uv run mypy ditto/"
-    execution_generator = _step(
-        static, "Coding execution delivery vectors match their generator"
-    )["run"]
-    assert "ruff format --check" in execution_generator
-    assert "ruff check" in execution_generator
-    assert "generate_execution_delivery_vectors.py --check" in execution_generator
     assert jobs["security"]["if"] == "inputs.security"
     assert _step(jobs["security"], "Scan reachable Git history for secrets")
     assert test_job["services"]["postgres"]["image"] == "postgres:16-alpine"

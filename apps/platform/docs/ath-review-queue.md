@@ -161,6 +161,58 @@ Both carry `hold_free: true` (the row's `algorithm_provenance` and the action's
   `open` (manual or automated) reopens the row and a reject supersedes it,
   leaving `clear`, `reopen`, `reject` in the action history.
 
+## A withdrawn reject is reconsidered on the record
+
+An ATH reject bans one agent UUID, but it is not irreversible. When a reject
+turns out to rest on an unsupported ground, the operator reconsiders it through
+the same court. The motivating case was ditto-subnet#3081: ten policy-v13 agents
+whose only ground was a benign 6000-character tool-result cut.
+
+- Single row: `open` on a `banned` agent whose review is `resolved` / `reject`
+  reopens that review (`reconsidering_rejection`), then `resolve` `clear`
+  restores it.
+- Batched: a `clear` ruling on such an agent previews `steps: ["open", "clear"]`,
+  and an `open` ruling previews `steps: ["open"]` (held for further review).
+- The guards are the usual `expected_sha256` and `expected_score_count`. The
+  ruling's `reason` becomes the `reopen` action's reason and then the
+  resolution reason, so the queue and `get_ath_review` read
+  `reason_source: reconsideration` with the reject as `superseded_*` history.
+- The reopen records the status from before the reject, and the clear returns
+  the agent to it: `live`, `scored`, or `evaluating` for a below-quorum reject,
+  which goes back to the validator queue rather than to a score it never earned.
+  A copy hold that never recorded one defaults to `scored`, never `live`.
+- `would_change_crown` reprojects the canonical finalized ledger with the
+  restored status, exactly like clearing a held agent. A `live` or `evaluating`
+  restoration stays outside the scored ledger.
+- The action history keeps `reject`, `reopen`, `clear`. Nothing is deleted.
+  Quarantines the reject closed stay closed, and validator tickets it expired
+  are not reissued.
+- Only a rejected ATH review is reconsidered. An agent banned by any other path
+  has no review to reopen and stays a `conflict`. The miner-wide
+  `banned_hotkeys` upload gate is separate (`unban_hotkey`) and is never
+  touched here.
+
+## Court crown projections
+
+Preview uses the canonical ledger inputs and fleet gates, including current
+registration, statistical bands and the active epoch pin's champion owner.
+Each hypothetical removal or restoration is applied before owner collapse;
+hidden sibling generations can therefore replace a removed representative.
+The original pin-owner anchor survives every simulated step. A legacy pin
+without an owner root anchors only its exact champion UUID.
+
+The diagnostic builder never materializes efficiency assignments, records
+eligibility rehearsals, writes a pin or rolls back the caller's transaction.
+An enabled efficiency fold requires existing current-epoch assignments.
+Restoration while reward eligibility is enforcing is explicitly unsupported
+and previews as a conflict; the court does not guess the restored posture.
+
+Version 2 preview tokens bind the pin/policy context and every cumulative
+champion and raw leader. Execute checks these before each item, including
+after an earlier item lands. A changed successor is stale even when the
+`would_change_crown` boolean stays true. These read guards do not lock epoch
+pin production atomically with an individual ruling transaction.
+
 ## Precedents are the resolved holdings
 
 `GET /api/v1/admin/copy-reviews/precedents` is the court reporter, not the
@@ -171,12 +223,20 @@ first. Backroom reaches it as `search_ath_precedents`. The static path is
 declared before `/copy-reviews/{agent_id}` so `precedents` is never parsed as
 a UUID.
 
-## Two surfaces that are not the queue
+## Two surfaces that are not the ATH queue
 
-**`GET /admin/screening-quarantines?status=active` is effectively always
-empty.** The platform actor `platform:deferred-source-review` auto-resolves
-each quarantine to `rescreen` within milliseconds of it being raised. Active
-quarantines are a transient screener state, not operator work.
+**`GET /admin/screening-quarantines?status=active` is the pre-score hold
+queue, not the ATH queue.** Its active rows are real operator work: anti-cheat
+`quarantine` outcomes, the platform's `repeatedly-inconclusive` park, and
+reviewer-inconclusive screenings held for operator review (see
+`docs/screener-protocol.md`). Nothing resolves them automatically; the
+operator works them with `resolve_screening_quarantine` or the guarded
+preview/execute batch. What the platform records already resolved, by the
+actor `platform:deferred-source-review`, is the evidence-only row written
+next to an outcome that did not hold (a `pass` with review notes, a
+provisional admission, a deferred deep review whose evidence lives on its ATH
+review, or an infrastructure fault parked for retry). Those rows never appear
+as `active`.
 
 The exception is a quarantine a scored policy rescreen records while the agent
 keeps its board position. If an ATH reject then bans that exact agent, the

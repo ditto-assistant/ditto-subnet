@@ -433,6 +433,17 @@ class ScreenerQueueItem(BaseModel):
             )
         ),
     ] = None
+    lineage_parent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            description=(
+                "Same-hotkey prior version of this agent whose diff and review "
+                "history scope the model review. The worker fetches the "
+                "attempt's lineage packet before reviewing; null is an "
+                "ordinary full review."
+            )
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def validate_precheck(self) -> ScreenerQueueItem:
@@ -442,6 +453,13 @@ class ScreenerQueueItem(BaseModel):
             raise ValueError("deferred source review requires the mechanical lane")
         if self.review_settings_override is not None and self.build_only:
             raise ValueError("review settings override requires a full review")
+        if self.lineage_parent_agent_id is not None and (
+            self.build_only
+            or self.duplicate_of is not None
+            or self.review_settings_override is not None
+            or self.attempt_id is None
+        ):
+            raise ValueError("lineage review requires a claimed ordinary source review")
         if self.attempt_id is not None and self.policy_version is None:
             raise ValueError("claimed screening work requires a policy version")
         return self

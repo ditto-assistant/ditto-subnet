@@ -34,13 +34,6 @@ class RelayError(ValueError):
     """Only fixed, source-owned codes may be persisted as private diagnostics."""
 
 
-class DrainingHTTPServer(ThreadingHTTPServer):
-    """Wait for every request handler before writing the settled ledger."""
-
-    daemon_threads = False
-    block_on_close = True
-
-
 class Relay:
     def __init__(self, key: str, state_file: Path, *, budget_microusd: int = BUDGET):
         if type(budget_microusd) is not int or not 0 < budget_microusd <= BUDGET:
@@ -503,14 +496,12 @@ def serve(relay: Relay) -> None:
             self.wfile.write(encoded)
 
     # Serial dispatch plus a bounded socket backlog contains malicious fan-out.
-    private_case = os.environ.get("DITTO_PRIVATE_CASE") == "1"
-    server_type = DrainingHTTPServer if private_case else ThreadingHTTPServer
-    server = server_type(("0.0.0.0", 11434), Handler)
-    tls = server_type(("0.0.0.0", 443), Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", 11434), Handler)
+    tls = ThreadingHTTPServer(("0.0.0.0", 443), Handler)
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain("/private/leaf.crt", "/private/leaf.key")
     tls.socket = context.wrap_socket(tls.socket, server_side=True)
-    chat = server_type(("0.0.0.0", 11435), Handler)
+    chat = ThreadingHTTPServer(("0.0.0.0", 11435), Handler)
     servers = [server, tls, chat]
     stopped = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stopped.set())
@@ -525,24 +516,16 @@ def serve(relay: Relay) -> None:
         # outer stop deadline still bounds hostile or stalled connections.
         for listener in servers:
             listener.server_close()
-        if private_case:
-            with relay.lock:
-                relay.settled = True
-                relay.save()
 
 
 if __name__ == "__main__":
     if sys.argv[1:] == ["harness"]:
         harness_stdio()
     elif not sys.argv[1:]:
-        private_budget = os.environ.get("DITTO_PRIVATE_BUDGET_MICROUSD")
         serve(
             Relay(
                 os.environ["OPENROUTER_API_KEY"],
                 Path("/state/usage.json"),
-                budget_microusd=(
-                    int(private_budget) if private_budget is not None else BUDGET
-                ),
             )
         )
     else:

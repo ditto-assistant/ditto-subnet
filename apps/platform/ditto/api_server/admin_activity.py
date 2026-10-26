@@ -21,11 +21,13 @@ from ditto.api_models.confirmation_bundles import ConfirmationBundleSettings
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.copy_court_settings import CopyCourtSettings
 from ditto.api_models.efficiency_settings import EfficiencyBonusSettings
+from ditto.api_models.generator import GeneratorCompetitionSettings
 from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
 from ditto.api_models.queue_policy_settings import QueuePolicySettings
 from ditto.api_models.scoring_lease_settings import ScoringLeaseSettings
 from ditto.api_models.screener_provider_settings import ScreenerProviderSettings
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
+from ditto.api_models.track_share_settings import TrackShareSettings
 from ditto.api_models.treasury_settings import TreasurySettings, public_wallet_address
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.db.models import AdminActivity, AdminActivityOutcome
@@ -110,17 +112,29 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
             (
                 "cpu_percent_ceiling",
                 "disk_percent_ceiling",
+                "generator_round_reserved_slots",
                 "max_concurrent_slots",
                 "memory_percent_ceiling",
                 "paused_validator_hotkeys",
+                "per_validator",
                 "resource_block_percent_ceiling",
             )
         ),
     ),
     "burn-settings": (BurnSettings, frozenset(("burn_share",))),
+    "track-share-settings": (
+        TrackShareSettings,
+        frozenset(("track_shares_bps",)),
+    ),
     "scoring-lease-settings": (
         ScoringLeaseSettings,
         frozenset(("scoring_ticket_ttl_minutes",)),
+    ),
+    # The whole generator policy is operational, not private: no field names a
+    # wallet, account, or credential.
+    "generator-competition/settings": (
+        GeneratorCompetitionSettings,
+        frozenset(GeneratorCompetitionSettings.model_fields),
     ),
     "treasury-settings": (
         TreasurySettings,

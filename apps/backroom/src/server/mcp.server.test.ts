@@ -108,6 +108,141 @@ describe('Backroom MCP tools', () => {
     } finally { await writer.client.close(); await writer.server.close() }
   })
 
+  describe('manual Gamma collector transfers', () => {
+    const destination = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'
+    const requestId = '11111111-2222-4333-8444-555555555555'
+    const envelope = {
+      version: 1, collector_policy_digest: 'a'.repeat(64), destination,
+      request: {
+        request_id: requestId, after_operation: 3, source_block: 100, bucket_id: 'gm_credits',
+        amount_rao: 1_500_000_000, retained_alpha_rao: 10_000_000_000, expires_block: 200,
+        reason: 'Fund GM credits for October',
+      },
+    }
+    const preview = { envelope, confirmation_digest: 'b'.repeat(64), spending_authority: 'not_queued' }
+    const confirmation = `TRANSFER 1.5 ALPHA TO GM_CREDITS ${destination}`
+    const previewInput = {
+      bucket_id: 'gm_credits', amount_alpha: '1.5', retained_alpha_rao: 10_000_000_000,
+      reason: 'Fund GM credits for October',
+    }
+
+    it('previews with the operator actor, the Platform body and the exact confirmation phrase', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(preview))
+      vi.stubGlobal('fetch', fetchMock)
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        // The panel's preview server function requires a write-level session.
+        expect((await readonly.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: previewInput })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const args of [
+          { ...previewInput, amount_rao: 1_500_000_000 },
+          { ...previewInput, amount_alpha: undefined },
+          { ...previewInput, amount_alpha: '1.0000000001' },
+          { ...previewInput, amount_alpha: '0' },
+        ]) {
+          expect((await writer.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: args })).isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: previewInput })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual({ ...preview, confirmation })
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/treasury-manual\/preview$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        expect(body).toEqual({
+          request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+          bucket_id: 'gm_credits', amount_rao: 1_500_000_000, retained_alpha_rao: 10_000_000_000,
+          reason: 'Fund GM credits for October',
+        })
+
+        const { amount_alpha: _alpha, ...rest } = previewInput
+        const exact = await writer.client.callTool({
+          name: 'preview_treasury_manual_transfer',
+          arguments: { ...rest, amount_rao: 1_500_000_000, request_id: requestId },
+        })
+        expect(exact.isError).not.toBe(true)
+        const [, exactInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+        expect(JSON.parse(String(exactInit.body))).toMatchObject({ request_id: requestId, amount_rao: 1_500_000_000 })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('queues only the exact previewed confirmation and adapts to the Platform wire literal', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const transfer = {
+        request_id: requestId, envelope, status: 'queued', actor: session.email,
+        created_at: '2026-10-24T18:00:00Z', updated_at: '2026-10-24T18:00:00Z', last_error: null, receipt: null,
+      }
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(transfer))
+      vi.stubGlobal('fetch', fetchMock)
+      const input = { envelope, confirmation_digest: preview.confirmation_digest, confirmation }
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        expect((await readonly.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: input })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const wrong of [
+          'TRANSFER SN118 ALPHA ONCE',
+          `TRANSFER 15 ALPHA TO GM_CREDITS ${destination}`,
+          confirmation.toLowerCase(),
+          `${confirmation} `,
+        ]) {
+          const refused = await writer.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: { ...input, confirmation: wrong } })
+          expect(refused.isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: input })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual(transfer)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/treasury-manual$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        expect(JSON.parse(String(init.body))).toEqual({
+          envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE',
+        })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('publishes the queue tool as a destructive, write-scoped, non-idempotent operation', async () => {
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const { tools } = await client.listTools()
+        const previewTool = tools.find(tool => tool.name === 'preview_treasury_manual_transfer')
+        const queueTool = tools.find(tool => tool.name === 'queue_treasury_manual_transfer')
+        expect(previewTool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+        expect(queueTool?.annotations).toEqual({
+          readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true,
+        })
+        expect(TOOL_SCOPE_REQUIREMENTS.get('preview_treasury_manual_transfer')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(TOOL_SCOPE_REQUIREMENTS.get('queue_treasury_manual_transfer')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(previewTool?.description).toContain('not_queued')
+        for (const fragment of [
+          'real on-chain SN118 alpha transfer from the Gamma collector',
+          "named bucket's holding coldkey",
+          'Custody re-verifies everything',
+          'one unresolved claim blocks another',
+          'Call preview first',
+        ]) expect(queueTool?.description).toContain(fragment)
+        const help = readJsonResult(await client.callTool({
+          name: 'get_backroom_tool_help', arguments: { tool: 'queue_treasury_manual_transfer' },
+        })) as { guidance: string }
+        expect(help.guidance).toContain('DESTRUCTIVE')
+        expect(help.guidance).toContain('preview_treasury_manual_transfer first')
+      } finally { await client.close(); await server.close() }
+    })
+  })
+
   it('preflights a receipt with read scope and never invokes receipt ingress', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const selection = { stage: 'service_distribution', epoch_index: 9, bucket_id: 'gamma', source_block: 100,
@@ -378,6 +513,29 @@ describe('Backroom MCP tools', () => {
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
         'get_backroom_tool_help',
+        'get_generator_competition_settings',
+        'set_generator_competition_settings',
+        'list_generator_submissions',
+        'get_generator_submission',
+        'get_generator_run',
+        'get_generator_probe',
+        'rotate_generator_probe_seed',
+        'list_generator_promotion_candidates',
+        'get_generator_board',
+        'rescore_generator_submission',
+        'reject_generator_submission',
+        'list_generator_rounds',
+        'get_generator_round',
+        'preview_generator_round',
+        'get_generator_round_loop',
+        'tick_generator_rounds',
+        'get_generator_round_dataset',
+        'void_generator_round',
+        'close_generator_round',
+        'republish_generator_round_commitment',
+        'release_generator_round_lease',
+        'register_default_generator',
+        'create_default_generator_upload',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -385,12 +543,12 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
+        'get_track_share_settings',
         'get_copy_court_settings',
         'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
         'get_continual_retest_diagnostic',
         'get_continual_retest_settings',
-        'get_core_qualification_policy',
         'get_confirmation_bundle_settings',
         'get_confirmation_bundle',
         'get_confirmation_lane_diagnosis',
@@ -426,9 +584,6 @@ describe('Backroom MCP tools', () => {
         'get_v13_official_controls',
         'get_v13_official_control_approvals',
         'get_v13_official_control_artifact',
-        'stage_v13_official_control_image',
-        'verify_v13_official_control_image',
-        'record_v13_official_control_approval',
         'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -445,9 +600,8 @@ describe('Backroom MCP tools', () => {
         'get_validator_capacity',
         'list_confirmation_bundles',
         'set_burn_settings',
+        'set_track_share_settings',
         'set_continual_retest_settings',
-        'set_core_qualification_policy',
-        'refresh_agent_core_qualification',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
@@ -457,6 +611,7 @@ describe('Backroom MCP tools', () => {
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
         'get_lineage_source_diff',
+        'get_screening_review_lineage',
         'get_screening_baseline_diff',
         'read_screening_baseline_diff_file',
         'get_screening_quarantine_context',
@@ -477,6 +632,7 @@ describe('Backroom MCP tools', () => {
         'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
+        'get_agent_source_release_evidence',
         'get_miner_github_link',
         'get_github_contributor_status',
         'get_github_link_revocation_preflight',
@@ -511,6 +667,8 @@ describe('Backroom MCP tools', () => {
         'get_treasury_ledger',
         'get_treasury_receipt_preflight',
         'get_treasury_manual_transfers',
+        'preview_treasury_manual_transfer',
+        'queue_treasury_manual_transfer',
         'get_treasury_activation_preflight',
         'get_treasury_ledger_readiness',
         'quote_treasury_topup',
@@ -523,14 +681,7 @@ describe('Backroom MCP tools', () => {
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
-        'get_agent_coding_certifications',
-        'get_agent_coding_shadow_evaluations',
-        'get_coding_catalog_releases',
-        'get_coding_control_plane',
-        'get_coding_private_v2_releases',
-        'issue_coding_shadow_ticket_set',
         'get_validator_weight_diagnostics',
-        'get_agent_core_qualification',
         'get_agent_emission_eligibility',
         'get_claim_provenance_cases',
         'get_agent_scores',
@@ -553,13 +704,11 @@ describe('Backroom MCP tools', () => {
         'search_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
-        'record_v13_benign_approval',
         'record_treasury_settings',
         'record_treasury_runtime',
         'get_treasury_runtime',
         'get_runtime_interface_report',
         'record_treasury_receipt',
-        'record_v13_replay_private_group',
         'search_screening_source',
         'rebuild_screened_image',
         'get_screening_artifact',
@@ -600,14 +749,6 @@ describe('Backroom MCP tools', () => {
         'set_conversation_settings',
         'authorize_conversation_retry',
         'unban_hotkey',
-        'register_coding_catalog_release',
-        'register_coding_private_v2_release',
-        'register_v13_replay_private_package',
-        'supersede_coding_catalog_release',
-        'retire_coding_catalog_release',
-        'quarantine_coding_private_v2_release',
-        'reconcile_coding_shadow_artifact',
-        'retire_coding_private_v2_release',
       ].sort(),
     )
     expect(response.tools.map((tool) => tool.name)).not.toContain(
@@ -619,9 +760,10 @@ describe('Backroom MCP tools', () => {
           properties?: Record<string, { maxLength?: number }>
         }
       ).properties?.reason
-      if (tool.name === 'record_treasury_receipt') {
-        // Machine observation metadata is bounded by the Platform wire model;
-        // it is not a case review or a substitute for independent proof.
+      if (tool.name === 'record_treasury_receipt' || tool.name === 'preview_treasury_manual_transfer') {
+        // Machine observation metadata and the manual transfer envelope's
+        // audit reason are bounded by the Platform wire model; neither is a
+        // case review or a substitute for independent proof.
         expect(reason?.maxLength).toBe(240)
       } else {
         expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()
@@ -640,21 +782,15 @@ describe('Backroom MCP tools', () => {
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
     // screening-reject tool, the gradient-hold and adjudicator controls, the
-    // screener policy-activation write schema, the coding certification read
-    // tool, the four bounded shadow core-qualification operations, the
-    // shadow coding-evaluation ledger read, the exact
-    // node/resource/image/controller bootstrap-grant schema, and the signed
-    // catalog register/retire/read tools, plus the two complete screener
+    // screener policy-activation write schema, the exact
+    // node/resource/image/controller bootstrap-grant schema, plus the two complete screener
     // provider/node capacity write schemas plus the two one-at-a-time scored
     // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
     // The block-bound weight diagnostic adds one tool and its bounded UID input;
     // The copy-court pair adds two read tools with a small input schema;
-    // apply_copy_court_settings reuses the existing settings schema. The five
-    // Coding control tools add bounded release, exact-run, and fixed-k=3 input
-    // schemas; the large private receipt remains a record in the MCP catalog
-    // and is parsed exactly by the service before forwarding. The epoch-pin
+    // apply_copy_court_settings reuses the existing settings schema. The epoch-pin
     // history read tool adds one more small input schema. The batched ATH
     // rulings triple adds the rulings-document schema twice (inline preview and
     // inline execute) plus the bounded board projection; its tutorials live in
@@ -726,13 +862,31 @@ describe('Backroom MCP tools', () => {
     // Keep procedure text in tool help and retain about 0.5 KB headroom.
     // Six official-control operations add compact UUID schemas and short
     // summaries. Detailed procedures stay in help; services validate IDs.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(205_300)
+    // One publication-evidence read adds two compact UUIDs and a one-line
+    // summary: measured 205,900 bytes. Retain about 0.5 KB headroom.
+    // The retained source-review evidence read (#3111) together with the
+    // exact-artifact source handoffs (#3107) measured 206,434 on main.
+    // Retiring the thirteen coding-track tools (SN-186: certifications, shadow
+    // evaluations, contract-v1 catalog, native private-v2 custody, shadow
+    // reconcile/ticket-set and the control-plane read) removes their release,
+    // receipt and exact-run schemas: measured 196,554 bytes. Retain about
+    // 0.5 KB headroom.
+    // Eleven generator-competition tools (seven reads, four guarded writes)
+    // publish compact uuid inputs and one-line summaries; the whole-object
+    // settings write carries its 15 bounded fields (~1.6 KB). On top of the
+    // retirement above, measured 203,881 bytes; keep about 0.5 KB headroom.
+    // Eleven generator-round tools (five reads, six guarded writes; the
+    // round dataset download is artifact-scoped) publish compact string
+    // inputs and one-line summaries with procedures in tool help. Measured
+    // 210,748 bytes; keep about 0.5 KB headroom.
+    // The lineage-scoped review packet read (one UUID input, one-line summary)
+    // adds about 0.5 KB on top; keep the same ~0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(211_800)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
-    // the coding-evaluation ledger read, the bootstrap-grant line, and three
-    // short catalog-release lines; operational tutorials stay in
+    // and the bootstrap-grant line; operational tutorials stay in
     // get_backroom_tool_help. Raised from 24_000 for the epoch-pin history
     // line (its catalog entry is already the concise 157-char form, and the
     // catalog had no headroom left under 24_000), then to 25_100 to admit the
@@ -765,7 +919,11 @@ describe('Backroom MCP tools', () => {
       // The canary review-posture pin clause measured 31,854; the node
       // canary cap (#2447) also adds a short catalog note.
       // Six concise official-control summaries, with procedure text in help.
-      32_500,
+      // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
+      // The eleven generator-competition summaries bring it to 26,304, and
+      // the eleven generator-round summaries to 27,023; keep about 200 chars
+      // of headroom.
+      27_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -1481,6 +1639,7 @@ describe('Backroom MCP tools', () => {
       for (const [name, fragment, scope, readOnly] of [
         ['get_copy_review_source_diff', 'per-file diff manifest', BACKROOM_ARTIFACT_SCOPE, true],
         ['get_lineage_source_diff', 'rejected ancestor', BACKROOM_ARTIFACT_SCOPE, true],
+        ['get_screening_review_lineage', 'never a verdict', BACKROOM_ARTIFACT_SCOPE, true],
         ['apply_copy_court_settings', 'complete', BACKROOM_WRITE_SCOPE, false],
         ['expand_benchmark_rollout_cohort', 'exact next ranked suffix', BACKROOM_WRITE_SCOPE, false],
         ['get_ath_review', 'ath_pending_review', undefined, true],
@@ -1667,10 +1826,11 @@ describe('Backroom MCP tools', () => {
 
       // An intersection publishes as `{}`: clients then cannot send the
       // arguments the tool validates, so every write must publish properties.
-      // create_ath_rulings_upload is the one write that takes no arguments.
+      // The two presigned-upload writes are the only ones that take no arguments.
       const opaque = tools
         .filter((tool) => tool.annotations?.readOnlyHint === false)
         .filter((tool) => tool.name !== 'create_ath_rulings_upload')
+        .filter((tool) => tool.name !== 'create_default_generator_upload')
         .filter((tool) => Object.keys(tool.inputSchema?.properties ?? {}).length === 0)
         .map((tool) => tool.name)
       expect(opaque).toEqual([])
@@ -3660,6 +3820,145 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('reads the track split and tolerates an older Platform that omits new fields', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const control = {
+      current: [],
+      history: [],
+      default: { track_shares_bps: null },
+      effective: {
+        revision: 0,
+        scope: '*',
+        settings: { track_shares_bps: null },
+        checksum: '',
+        source: 'default',
+        max_age_seconds: 5,
+        in_force_bps: { memory: 10000 },
+        unallocated_bps: 0,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_track_share_settings', arguments: {} })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        settings: { track_shares_bps: null },
+        in_force_bps: { memory: 10000 },
+        served: null,
+        required_protocol: 33,
+        generator_mode: null,
+      },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies the generator activation split with the exact split phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const split = { memory: 9000, generator: 1000 }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          revision: 1,
+          parent_revision: 0,
+          scope: '*',
+          settings: { track_shares_bps: split },
+          reason: 'pay the generator competition 10%',
+          actor: 'peyton@omniaura.ai',
+          created_at: '2026-10-25T12:00:00Z',
+          checksum: 'ab'.repeat(32),
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          current: [],
+          history: [],
+          default: { track_shares_bps: null },
+          effective: {
+            revision: 1,
+            scope: '*',
+            settings: { track_shares_bps: split },
+            checksum: 'ab'.repeat(32),
+            source: 'revision',
+            max_age_seconds: 5,
+            in_force_bps: split,
+            unallocated_bps: 0,
+            served: true,
+            required_protocol: 33,
+            live_validator_count: 4,
+            generator_mode: 'enforce',
+            confirmation_hint: 'APPLY TRACK SHARES memory=9000 generator=1000',
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const refused = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: split },
+        reason: 'pay the generator competition 10%',
+        confirmation: 'APPLY TRACK SHARES',
+      },
+    })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    const unpaid = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: { memory: 9000, router: 1000 } },
+        reason: 'pay the router track 10%',
+        confirmation: 'APPLY TRACK SHARES memory=9000 router=1000',
+      },
+    })
+    expect(unpaid.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const response = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: split },
+        reason: 'pay the generator competition 10%',
+        confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 1, in_force_bps: split, served: true },
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: { track_shares_bps: split },
+          reason: 'pay the generator competition 10%',
+          actor: 'peyton@omniaura.ai',
+          confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
   it('applies one efficiency bonus revision with the exact platform contract', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const settings = {
@@ -4243,6 +4542,7 @@ describe('Backroom MCP tools', () => {
             issuance_paused: false,
             configured_slots: 8,
             serviceable_slots: 8,
+            reserved_round_slots: 1,
             claimed_slots: 2,
             assignments: [
               {
@@ -4302,6 +4602,7 @@ describe('Backroom MCP tools', () => {
     expect(
       body.validators[0]?.assignments.map((item) => item.estimated_remaining_slot_minutes),
     ).toEqual([120, null])
+    expect(body.validators[0]).toMatchObject({ reserved_round_slots: 1 })
 
     await client.close()
     await server.close()
@@ -6093,6 +6394,66 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('forwards per-validator overrides and the round reservation verbatim', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const bigHost = '5' + 'B'.repeat(47)
+    const settings = {
+      max_concurrent_slots: 3,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+      paused_validator_hotkeys: [],
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+      },
+    }
+    const control = {
+      current: [],
+      history: [],
+      default: { ...settings, per_validator: {} },
+      effective: {
+        revision: 1,
+        scope: '*',
+        settings,
+        checksum: 'ef'.repeat(32),
+        source: 'revision',
+        hard_slot_ceiling: 8,
+        disk_restricted_slots: 1,
+        max_age_seconds: 5.0,
+      },
+      generator_round_reservation_active: true,
+      fleet: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 1 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings,
+        reason: 'size the big validator up and reserve two round slots on it',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).settings).toEqual(settings)
+    expect(readJsonResult(response)).toMatchObject({
+      generator_round_reservation_active: true,
+      effective: { settings },
+    })
+
+    await client.close()
+    await server.close()
+  })
+
   // The confirmation names the resulting cap, so the number is stated twice and
   // the two statements are only ever checked against each other. A caller who
   // types the current cap while ramping to a new one is caught here.
@@ -6809,6 +7170,51 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('retains committed court outcomes when the final board read fails without replay or raw detail', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const batchId = '0b3c5d7e-9f01-4a23-8b45-c67d89e0f123'
+    const agentId = 'c25489aa-faf0-46fc-8b06-8e2240a5ac01'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ detail: {
+      message: 'do-not-reflect-private-error',
+      private_secret: 'never-expose-this',
+      batch_id: batchId,
+      items: [{
+        index: 0, action: 'clear', agent_id: agentId, status: 'applied',
+        would_change_crown: true, steps_applied: ['open', 'clear'], annotated: true,
+        agent_status: 'scored', message: 'private audit context',
+      }, {
+        index: 1, action: 'reject', agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
+        status: 'failed', would_change_crown: null, steps_applied: [],
+        write_outcome_unknown: true, annotated: false, message: 'private error',
+      }],
+      applied_count: 1, already_applied_count: 0, failed_count: 1,
+    } }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+      },
+    })
+    expect(execute.isError).toBe(true)
+    const text = readTextResult(execute)
+    expect(text).toContain('inspect all item outcomes before any retry')
+    expect(text).toContain(batchId)
+    expect(text).toContain(agentId)
+    expect(text).toContain('"status":"applied"')
+    expect(text).toContain('"steps_applied":["open","clear"]')
+    expect(text).toContain('"applied_count":1')
+    expect(text).toContain('"write_outcome_unknown":true')
+    expect(text).toContain('"would_change_crown":null')
+    expect(text).not.toContain('private')
+    expect(text).not.toContain('never-expose-this')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await client.close()
+    await server.close()
+  })
+
   it('explains a durable ATH hold through a read-only grant', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
@@ -7228,13 +7634,13 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('enumerates the ATH hold queue, not the auto-resolved quarantine queue', async () => {
+  it('enumerates the ATH hold queue, not the pre-score quarantine queue', async () => {
     // The defect: this tool read /admin/screening-quarantines?status=active,
-    // which the platform actor `platform:deferred-source-review` auto-resolves
-    // to `rescreen` within milliseconds. It therefore answered
-    // `{items: [], count: 0}` while agents sat in ath_pending_review, and the
-    // only working enumeration was an eight-call ~1.5MB sweep of
-    // list_screening_submissions.
+    // the separate pre-score hold queue (its evidence-only rows are written
+    // already resolved by `platform:deferred-source-review`). It therefore
+    // answered `{items: [], count: 0}` while agents sat in
+    // ath_pending_review, and the only working enumeration was an eight-call
+    // ~1.5MB sweep of list_screening_submissions.
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
@@ -7666,6 +8072,9 @@ describe('Backroom MCP tools', () => {
           duplicate_of: null,
           duplicate_name: null,
           duplicate_version: null,
+          lineage_parent_agent_id: null,
+          lineage_scope: null,
+          lineage_packet_sha256: null,
         },
       ],
     }
@@ -10208,820 +10617,6 @@ describe('Backroom MCP tools', () => {
         }),
       }),
     )
-
-    await client.close()
-    await server.close()
-  })
-
-  it('reports artifact-bound shadow coding certification history', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
-    const payload = {
-      agent_id: agentId,
-      agent_name: 'coding-agent',
-      miner_hotkey: '5Miner',
-      artifact_sha256: 'a'.repeat(64),
-      screened_image_sha256: 'b'.repeat(64),
-      coding_supported: true,
-      coding_certified: true,
-      active_certification_count: 1,
-      total: 1,
-      certifications: [
-        {
-          certification_row_id: '11111111-1111-4111-8111-111111111111',
-          validator_hotkey: '5Validator',
-          bench_version: 12,
-          ticket_deadline: '2026-08-20T20:00:00Z',
-          coding_contract_version: 1,
-          certification_id: 'cert-001',
-          status: 'certified',
-          failure_stage: null,
-          failure_code: null,
-          certification_sha256: 'c'.repeat(64),
-          canary_manifest_sha256: 'd'.repeat(64),
-          screened_image_sha256: 'b'.repeat(64),
-          transcript_object_key: `sha256/${'e'.repeat(64)}`,
-          frozen_submission_object_key: `sha256/${'f'.repeat(64)}`,
-          issued_at: '2026-08-20T18:00:00Z',
-          expires_at: '2026-08-20T19:00:00Z',
-          created_at: '2026-08-20T18:00:01Z',
-          active: true,
-          stale_reason: 'active',
-        },
-      ],
-    }
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const listed = await client.listTools()
-    const codingCertTool = listed.tools.find(
-      (tool) => tool.name === 'get_agent_coding_certifications',
-    )
-    expect(codingCertTool?.description).toMatch(/weight_eligible is always false/i)
-    expect(codingCertTool?.description).toMatch(/backroom:read/)
-
-    const response = await client.callTool({
-      name: 'get_agent_coding_certifications',
-      arguments: { agentId, limit: 25 },
-    })
-
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      agent_id: agentId,
-      coding_certified: true,
-      active_certification_count: 1,
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-certifications?limit=25`,
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer platform-admin-token',
-        }),
-      }),
-    )
-
-    await client.close()
-    await server.close()
-  })
-
-  it('reports the separate weight-zero shadow coding ledger', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
-    const payload = {
-      agent_id: agentId,
-      agent_name: 'coding-agent',
-      miner_hotkey: '5Miner',
-      artifact_sha256: 'a'.repeat(64),
-      screened_image_sha256: 'b'.repeat(64),
-      total_assignments: 1,
-      assignments: [
-        {
-          assignment_row_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          assignment_sha256: '1'.repeat(64),
-          coding_run_id: 'coding-run-001',
-          bench_version: 12,
-          coding_contract_version: 1,
-          artifact_sha256: 'a'.repeat(64),
-          screened_image_sha256: 'b'.repeat(64),
-          corpus_release_id: 'private-coding-corpus-v1',
-          catalog_commitment_sha256: '2'.repeat(64),
-          anchor_block_number: 1_000,
-          anchor_block_hash: `0x${'3'.repeat(64)}`,
-          selection_delay_blocks: 20,
-          selection_block_number: 1_020,
-          assigned_at: '2026-08-21T00:00:00Z',
-          task_count: 1,
-          core_qualification_observation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-          certification_row_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-          current: true,
-          stale_reason: 'current',
-          created_at: '2026-08-21T00:00:00Z',
-          weight_eligible: false,
-        },
-      ],
-      total_runs: 1,
-      runs: [
-        {
-          run_row_id: '11111111-1111-4111-8111-111111111111',
-          assignment_row_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          assignment_sha256: '1'.repeat(64),
-          coding_run_id: 'coding-run-001',
-          bench_version: 12,
-          coding_contract_version: 1,
-          artifact_sha256: 'a'.repeat(64),
-          screened_image_sha256: 'b'.repeat(64),
-          corpus_release_id: 'private-coding-corpus-v1',
-          run_manifest_sha256: 'c'.repeat(64),
-          task_set_manifest_sha256: 'd'.repeat(64),
-          task_count: 1,
-          selection_block_number: 1_020,
-          selection_block_hash: `0x${'4'.repeat(64)}`,
-          selection_block_timestamp: '2026-08-21T00:01:00Z',
-          issued: true,
-          core_qualification_observation_id: '22222222-2222-4222-8222-222222222222',
-          ticket_count: 1,
-          result_count: 1,
-          quorum_complete: false,
-          median_repair_mean_micros: null,
-          current: true,
-          stale_reason: 'current',
-          tickets: [
-            {
-              ticket_id: '33333333-3333-4333-8333-333333333333',
-              validator_hotkey: '5Validator',
-              certification_row_id: '44444444-4444-4444-8444-444444444444',
-              issued_at: '2026-08-21T00:00:00Z',
-              deadline: '2026-08-21T01:00:00Z',
-              authoring_freeze: {
-                freeze_id: '66666666-6666-4666-8666-666666666666',
-                ticket_id: '33333333-3333-4333-8333-333333333333',
-                validator_hotkey: '5Validator',
-                authoring_evidence_sha256: '6'.repeat(64),
-                authoring_event_root: '7'.repeat(64),
-                authoring_transcript_sha256: '8'.repeat(64),
-                authoring_transcript_bytes: 4096,
-                authoring_event_count: 4,
-                frozen_patch_sha256: '9'.repeat(64),
-                changed_path_root: 'a'.repeat(64),
-                final_tree_sha256: 'b'.repeat(64),
-                changed_path_count: 1,
-                changed_bytes: 128,
-                protected_paths_intact: true,
-                frozen_at: '2026-08-21T00:20:00Z',
-                weight_eligible: false,
-              },
-              result: {
-                result_id: '55555555-5555-4555-8555-555555555555',
-                ticket_id: '33333333-3333-4333-8333-333333333333',
-                validator_hotkey: '5Validator',
-                run_evidence_sha256: 'e'.repeat(64),
-                task_count: 1,
-                resolved_count: 1,
-                repair_failure_count: 0,
-                infrastructure_count: 0,
-                invalid_count: 0,
-                candidate_integrity_count: 0,
-                control_plane_integrity_count: 0,
-                scoreable_task_count: 1,
-                repair_mean_micros: 1_000_000,
-                submitted_at: '2026-08-21T00:30:00Z',
-                weight_eligible: false,
-              },
-            },
-          ],
-          created_at: '2026-08-21T00:00:00Z',
-          weight_eligible: false,
-        },
-      ],
-      shadow_only: true,
-    }
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const response = await client.callTool({
-      name: 'get_agent_coding_shadow_evaluations',
-      arguments: { agentId, limit: 25 },
-    })
-
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      agent_id: agentId,
-      total_assignments: 1,
-      total_runs: 1,
-      runs: [{ issued: true }],
-      shadow_only: true,
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-shadow-evaluations?limit=25`,
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }),
-      }),
-    )
-
-    await client.close()
-    await server.close()
-  })
-
-  it('reads native private-v2 registry state without exposing private payload extensions', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const registration = {
-      schema: 'dittobench-coding-private-v2-registration-v1',
-      coding_contract_version: 2,
-      shadow_only: true,
-      weight_eligible: false,
-      corpus_release_id: 'opaque-native-release',
-      private_release_sha256: 'a'.repeat(64),
-      catalog_sha256: 'b'.repeat(64),
-      catalog_merkle_root: 'c'.repeat(64),
-      payload_sha256: 'd'.repeat(64),
-      transport_sha256: 'e'.repeat(64),
-      wrapping_key_sha256: 'f'.repeat(64),
-      publication_receipt_sha256: '1'.repeat(64),
-      previous_registration_sha256: null,
-      registration_sha256: '2'.repeat(64),
-      wrapped_data_key: 'must-strip-nested-private-field',
-    }
-    const row = {
-      release_row_id: '11111111-1111-4111-8111-111111111111',
-      registration,
-      publication_source_sha: 'a'.repeat(40),
-      provider_probe_receipt_sha256: '3'.repeat(64),
-      private_input_authority_sha256: '4'.repeat(64),
-      curator_signing_key_sha256: '5'.repeat(64),
-      publication_object_count: 652,
-      status: 'registered',
-      registered_reason: 'synthetic registration audit',
-      registered_actor: 'synthetic-operator',
-      registered_at: '2026-09-08T00:00:00Z',
-      lifecycle_event_count: 0,
-      latest_event_reason: null,
-      latest_event_actor: null,
-      latest_event_at: null,
-      shadow_only: true,
-      selectable: false,
-      weight_eligible: false,
-      publication_receipt: { objects: ['must-strip-private-object-coordinate'] },
-    }
-    const payload = { total: 7, releases: [row], shadow_only: true, selectable: false,
-      weight_eligible: false, provider_credential: 'must-strip-private-credential' }
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json(payload))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-    try {
-      const tools = await client.listTools()
-      expect(tools.tools.find((tool) => tool.name === 'get_coding_private_v2_releases')?.annotations)
-        .toMatchObject({ readOnlyHint: true, destructiveHint: false, idempotentHint: true })
-      for (const status of ['registered', 'quarantined', 'retired']) {
-        row.status = status
-        const response = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: { limit: 25 } })
-        expect(response.isError, readTextResult(response)).not.toBe(true)
-        expect(readJsonResult(response)).toMatchObject({ total: 7, selectable: false, weight_eligible: false })
-        expect(readTextResult(response)).toContain(status)
-        expect(readTextResult(response)).toContain(registration.registration_sha256)
-        expect(readTextResult(response)).not.toContain('must-strip')
-      }
-      expect(fetchMock).toHaveBeenCalledWith(
-        'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
-        expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }) }),
-      )
-      expect(fetchMock.mock.calls.every(([_url, options]) => !options.body && (!options.method || options.method === 'GET'))).toBe(true)
-      const before = fetchMock.mock.calls.length
-      for (const limit of [0, 101, 1.5]) {
-        const response = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: { limit } })
-        expect(response.isError).toBe(true)
-      }
-      expect(fetchMock.mock.calls.length).toBe(before)
-      payload.selectable = true
-      expect((await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })).isError).toBe(true)
-      payload.selectable = false
-      registration.coding_contract_version = 1
-      expect((await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })).isError).toBe(true)
-    } finally {
-      await client.close()
-      await server.close()
-    }
-  })
-
-  it('preserves an empty native registry and never falls back to the v1 catalog', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({
-      total: 0, releases: [], shadow_only: true, selectable: false, weight_eligible: false,
-    }))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-    try {
-      const response = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })
-      expect(readJsonResult(response)).toEqual({ total: 0, releases: [], shadow_only: true, selectable: false, weight_eligible: false })
-      expect(fetchMock.mock.calls[0][0]).toBe('https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=50')
-      fetchMock.mockResolvedValue(Response.json({ detail: 'not deployed' }, { status: 404 }))
-      const unavailable = await client.callTool({ name: 'get_coding_private_v2_releases', arguments: {} })
-      expect(unavailable.isError).toBe(true)
-      expect(fetchMock).toHaveBeenCalledTimes(2)
-      expect(fetchMock.mock.calls.every(([url]) => String(url).includes('/coding-private-v2-releases?'))).toBe(true)
-    } finally {
-      await client.close()
-      await server.close()
-    }
-  })
-
-  it('reads the unified Coding control plane without conflating v1 and v2 releases', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const catalog = { total: 0, releases: [], shadow_only: true }
-    const privateV2 = {
-      total: 0,
-      releases: [],
-      shadow_only: true,
-      selectable: false,
-      weight_eligible: false,
-    }
-    const native = {
-      total_native_operations: 0,
-      native_operations: [],
-      hosted_control_configured: false,
-      contract_v1_reconciliation_enabled: false,
-      contract_v1_ticket_set_enabled: false,
-      contract_v1_ticket_lease_seconds: 3600,
-      native_v2_selectable: false,
-      shadow_only: true,
-      weight_eligible: false,
-    }
-    const fetchMock = vi.fn().mockImplementation(async (url: string) => Response.json(
-      url.includes('/coding-catalog/releases')
-        ? catalog
-        : url.includes('/coding-private-v2-releases')
-          ? privateV2
-          : native,
-    ))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-    try {
-      const response = await client.callTool({
-        name: 'get_coding_control_plane',
-        arguments: { limit: 25 },
-      })
-      expect(response.isError, readTextResult(response)).not.toBe(true)
-      expect(readJsonResult(response)).toEqual({
-        catalog,
-        private_v2: privateV2,
-        native,
-        shadow_only: true,
-        weight_eligible: false,
-      })
-      expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
-        'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
-        'https://platform-api.heyditto.ai/api/v1/admin/coding-control-plane?limit=25',
-        'https://platform-api.heyditto.ai/api/v1/admin/coding-private-v2-releases?limit=25',
-      ])
-    } finally {
-      await client.close()
-      await server.close()
-    }
-  })
-
-  it('controls signed private-v2 custody and fixed k=3 shadow launch with exact guards', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const registration = {
-      schema: 'dittobench-coding-private-v2-registration-v1',
-      coding_contract_version: 2,
-      shadow_only: true,
-      weight_eligible: false,
-      corpus_release_id: 'native-v2-release',
-      private_release_sha256: 'a'.repeat(64),
-      catalog_sha256: 'b'.repeat(64),
-      catalog_merkle_root: 'c'.repeat(64),
-      payload_sha256: 'd'.repeat(64),
-      transport_sha256: 'e'.repeat(64),
-      wrapping_key_sha256: 'f'.repeat(64),
-      publication_receipt_sha256: '1'.repeat(64),
-      previous_registration_sha256: null,
-      registration_sha256: '2'.repeat(64),
-    }
-    const publicationReceipt = {
-      schema: 'dittobench-coding-private-v2-publication-v1',
-      source_sha: 'a'.repeat(40),
-      checked_at: '2026-09-10T12:40:00Z',
-      provider: 'hippius',
-      probe_receipt_payload_sha256: '3'.repeat(64),
-      private_input_authority_sha256: '4'.repeat(64),
-      transport_sha256: registration.transport_sha256,
-      payload_sha256: registration.payload_sha256,
-      catalog_sha256: registration.catalog_sha256,
-      catalog_merkle_root: registration.catalog_merkle_root,
-      wrapping_key_sha256: registration.wrapping_key_sha256,
-      curator_signing_key_sha256: '5'.repeat(64),
-      curator_signature_b64: `${'A'.repeat(86)}==`,
-      object_count: 1,
-      objects: [{
-        object_index: 0,
-        remote_object_key_sha256: '6'.repeat(64),
-        delighted: 'strip-me',
-        ciphertext_sha256: '7'.repeat(64),
-        ciphertext_size_bytes: 128,
-        status: 'uploaded',
-      }],
-      ready: true,
-      shadow_only: true,
-      weight_eligible: false,
-      receipt_payload_sha256: '8'.repeat(64),
-    }
-    const curatorDigest = '5'.repeat(64)
-    const receipt = publicationReceipt
-    const control = {
-      total: 1,
-      releases: [{
-        release_row_id: '11111111-1111-4111-8111-111111111111',
-        registration,
-        publication_source_sha: 'a'.repeat(40),
-        provider_probe_receipt_sha256: '3'.repeat(64),
-        private_input_authority_sha256: '4'.repeat(64),
-        curator_signing_key_sha256: curatorDigest,
-        publication_object_count: 1,
-        status: 'registered',
-        registered_reason: 'register signed native release',
-        registered_actor: 'brian@omniaura.ai',
-        registered_at: '2026-09-10T12:45:00Z',
-        lifecycle_event_count: 0,
-        latest_event_reason: null,
-        latest_event_actor: null,
-        latest_event_at: null,
-        shadow_only: true,
-        selectable: false,
-        weight_eligible: false,
-      }],
-      shadow_only: true,
-      selectable: false,
-      weight_eligible: false,
-    }
-    const reconciliation = {
-      state: 'issued',
-      assignment_row_id: '22222222-2222-4222-8222-222222222222',
-      selection_block_number: 9_100_000,
-      run_row_id: '33333333-3333-4333-8333-333333333333',
-      assignment_idempotent: false,
-      issuance_idempotent: false,
-      weight_eligible: false,
-    }
-    const validators = [
-      `5${'A'.repeat(47)}`,
-      `5${'B'.repeat(47)}`,
-      `5${'C'.repeat(47)}`,
-    ]
-    const ticketSet = {
-      run_row_id: reconciliation.run_row_id,
-      ticket_set_id: '44444444-4444-4444-8444-444444444444',
-      tickets: validators.map((validator_hotkey, index) => ({
-        ticket_id: `${index + 5}5555555-5555-4555-8555-555555555555`,
-        validator_hotkey,
-        issued_at: '2026-09-10T13:00:00Z',
-        deadline: '2026-09-10T14:00:00Z',
-      })),
-      idempotent: false,
-      weight_eligible: false,
-    }
-    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
-      if (url.endsWith('/coding-shadow/reconcile')) return Response.json(reconciliation)
-      if (url.endsWith('/coding-shadow/ticket-sets')) return Response.json(ticketSet)
-      return Response.json(control)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-    try {
-      const registered = await client.callTool({
-        name: 'register_coding_private_v2_release',
-        arguments: {
-          registration,
-          publicationReceipt: receipt,
-          curatorPublicKeyPem: '-----BEGIN PUBLIC KEY-----\npublic\n-----END PUBLIC KEY-----\n',
-          reason: 'register signed native release',
-          confirmation: `REGISTER SHADOW CODING PRIVATE V2 RELEASE native-v2-release ${registration.registration_sha256} ${curatorDigest}`,
-        },
-      })
-      expect(registered.isError, readTextResult(registered)).not.toBe(true)
-
-      for (const [name, verb] of [
-        ['quarantine_coding_private_v2_release', 'QUARANTINE'],
-        ['retire_coding_private_v2_release', 'RETIRE'],
-      ] as const) {
-        const response = await client.callTool({
-          name,
-          arguments: {
-            corpusReleaseId: registration.corpus_release_id,
-            expectedRegistrationSha256: registration.registration_sha256,
-            reason: `${verb.toLowerCase()} exact native release`,
-            confirmation: `${verb} SHADOW CODING PRIVATE V2 RELEASE ${registration.corpus_release_id} ${registration.registration_sha256}`,
-          },
-        })
-        expect(response.isError, readTextResult(response)).not.toBe(true)
-      }
-
-      const runId = 'coding-shadow-run-1'
-      const reconciled = await client.callTool({
-        name: 'reconcile_coding_shadow_artifact',
-        arguments: {
-          agentId: '66666666-6666-4666-8666-666666666666',
-          benchVersion: 12,
-          corpusReleaseId: 'contract-v1-release',
-          codingRunId: runId,
-          reason: 'prepare exact qualified artifact',
-          confirmation: `RECONCILE SHADOW CODING 66666666-6666-4666-8666-666666666666 12 contract-v1-release ${runId}`,
-        },
-      })
-      expect(reconciled.isError, readTextResult(reconciled)).not.toBe(true)
-
-      const issued = await client.callTool({
-        name: 'issue_coding_shadow_ticket_set',
-        arguments: {
-          runRowId: reconciliation.run_row_id,
-          ticketSetId: ticketSet.ticket_set_id,
-          validatorHotkeys: validators,
-          reason: 'launch fixed certified validator set',
-          confirmation: `ISSUE SHADOW CODING TICKET SET ${reconciliation.run_row_id} ${ticketSet.ticket_set_id} ${validators.join(',')}`,
-        },
-      })
-      expect(issued.isError, readTextResult(issued)).not.toBe(true)
-
-      const calls = fetchMock.mock.calls.map(([url, options]) => ({
-        url: String(url),
-        body: options?.body ? JSON.parse(String(options.body)) : null,
-      }))
-      expect(calls.find(({ url }) => url.endsWith('/coding-private-v2-releases/register'))?.body)
-        .toMatchObject({ actor: 'peyton@omniaura.ai', publication_receipt: { object_count: 1 } })
-      expect(calls.find(({ url }) => url.endsWith('/coding-shadow/reconcile'))?.body)
-        .toMatchObject({ agent_id: '66666666-6666-4666-8666-666666666666', reason: 'prepare exact qualified artifact' })
-      expect(calls.find(({ url }) => url.endsWith('/coding-shadow/ticket-sets'))?.body)
-        .toMatchObject({ validator_hotkeys: validators, reason: 'launch fixed certified validator set' })
-    } finally {
-      await client.close()
-      await server.close()
-    }
-  })
-
-  it('registers, reads, and retires signed shadow coding catalog commitments', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const commitment = {
-      schema: 'dittobench-coding-catalog-commitment-v1',
-      coding_contract_version: 1,
-      weight_eligible: false,
-      corpus_release_id: 'private-coding-corpus-v1',
-      catalog_merkle_root: 'a'.repeat(64),
-      selection_derivation_id: 'coding-selection-v1',
-      selection_chain_genesis_hash: `0x${'b'.repeat(64)}`,
-      grader_contract_sha256: 'c'.repeat(64),
-      inference_grant_sha256: 'd'.repeat(64),
-      task_version_count: 100,
-      curator_hotkey: `5${'A'.repeat(47)}`,
-      committed_at_unix: 1_787_310_000,
-      commitment_sha256: 'e'.repeat(64),
-    }
-    const control = {
-      total: 1,
-      releases: [
-        {
-          release_row_id: '11111111-1111-4111-8111-111111111111',
-          commitment,
-          signature: 'f'.repeat(128),
-          registered_reason: 'register private coding catalog commitment',
-          registered_actor: 'peyton@omniaura.ai',
-          registered_at: '2026-08-21T00:00:00Z',
-          retired: false,
-          retired_reason: null,
-          retired_actor: null,
-          retired_at: null,
-          exposure_count: 0,
-          exposed_run_count: 0,
-          shadow_only: true,
-        },
-      ],
-      shadow_only: true,
-    }
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json(control))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    expect(
-      (
-        await client.callTool({
-          name: 'get_coding_catalog_releases',
-          arguments: { limit: 25 },
-        })
-      ).isError,
-    ).not.toBe(true)
-    const registered = await client.callTool({
-      name: 'register_coding_catalog_release',
-      arguments: {
-        commitment,
-        signature: 'f'.repeat(128),
-        reason: 'register private coding catalog commitment',
-        confirmation: 'REGISTER SHADOW CODING CATALOG private-coding-corpus-v1',
-      },
-    })
-    expect(registered.isError, JSON.stringify(registered.content)).not.toBe(true)
-    const replacementCommitment = {
-      ...commitment,
-      corpus_release_id: 'private-coding-corpus-v2',
-      catalog_merkle_root: '1'.repeat(64),
-      commitment_sha256: '2'.repeat(64),
-    }
-    const superseded = await client.callTool({
-      name: 'supersede_coding_catalog_release',
-      arguments: {
-        previousCorpusReleaseId: commitment.corpus_release_id,
-        expectedPreviousCommitmentSha256: commitment.commitment_sha256,
-        replacementCommitment,
-        replacementSignature: 'a'.repeat(128),
-        reason: 'append reviewed replacement and retire predecessor',
-        confirmation:
-          'SUPERSEDE SHADOW CODING CATALOG private-coding-corpus-v1 WITH private-coding-corpus-v2',
-      },
-    })
-    expect(superseded.isError, JSON.stringify(superseded.content)).not.toBe(true)
-    expect(
-      (
-        await client.callTool({
-          name: 'retire_coding_catalog_release',
-          arguments: {
-            corpusReleaseId: commitment.corpus_release_id,
-            expectedCommitmentSha256: commitment.commitment_sha256,
-            reason: 'retire exhausted private coding catalog',
-            confirmation: 'RETIRE SHADOW CODING CATALOG private-coding-corpus-v1',
-          },
-        })
-      ).isError,
-    ).not.toBe(true)
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
-      expect.anything(),
-    )
-    const registerCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/api/v1/admin/coding-catalog/releases'),
-    )
-    expect(JSON.parse(String(registerCall?.[1]?.body))).toMatchObject({
-      actor: 'peyton@omniaura.ai',
-      commitment: { weight_eligible: false },
-    })
-    const retireCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/api/v1/admin/coding-catalog/retire'),
-    )
-    expect(JSON.parse(String(retireCall?.[1]?.body))).toMatchObject({
-      actor: 'peyton@omniaura.ai',
-      corpus_release_id: 'private-coding-corpus-v1',
-    })
-    const supersedeCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/api/v1/admin/coding-catalog/supersede'),
-    )
-    expect(JSON.parse(String(supersedeCall?.[1]?.body))).toMatchObject({
-      actor: 'peyton@omniaura.ai',
-      previous_corpus_release_id: 'private-coding-corpus-v1',
-      replacement_commitment: { corpus_release_id: 'private-coding-corpus-v2' },
-    })
-
-    await client.close()
-    await server.close()
-  })
-
-  it('controls and inspects shadow core qualification without activating it', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
-    const policy = {
-      schema: 'ditto-core-qualification-policy-v1',
-      weight_eligible: false,
-      bench_version: 12,
-      enter_composite: 0.8,
-      enter_tool_mean: 0.8,
-      enter_memory_mean: 0.8,
-      exit_composite: 0.7,
-      exit_tool_mean: 0.7,
-      exit_memory_mean: 0.7,
-      enter_observations: 2,
-      exit_observations: 2,
-    }
-    const revision = {
-      revision: 1,
-      parent_revision: 0,
-      policy,
-      checksum: 'a'.repeat(64),
-      reason: 'calibrate shadow core qualification',
-      actor: 'peyton@omniaura.ai',
-      created_at: '2026-08-21T00:00:00Z',
-    }
-    const policyControl = {
-      bench_version: 12,
-      configured: true,
-      current: revision,
-      history: [revision],
-      required_confirmation: 'APPLY SHADOW CORE QUALIFICATION V12',
-      shadow_only: true,
-    }
-    const observation = {
-      sequence: 1,
-      observation_id: '11111111-1111-4111-8111-111111111111',
-      agent_id: agentId,
-      artifact_sha256: 'b'.repeat(64),
-      screened_image_sha256: 'c'.repeat(64),
-      bench_version: 12,
-      policy_revision: 1,
-      policy_checksum: 'a'.repeat(64),
-      score_evidence_sha256: 'd'.repeat(64),
-      score_count: 3,
-      full_size: true,
-      complete_wave: true,
-      validator_hotkeys: ['5ValA', '5ValB', '5ValC'],
-      run_ids: ['run-a', 'run-b', 'run-c'],
-      median_composite: 0.85,
-      median_tool_mean: 0.86,
-      median_memory_mean: 0.84,
-      entry_passed: true,
-      retention_passed: true,
-      qualified: true,
-      enter_streak: 2,
-      exit_streak: 0,
-      decision: 'entered',
-      source: 'score_commit',
-      actor: null,
-      reason: null,
-      observed_at: '2026-08-21T00:10:00Z',
-      weight_eligible: false,
-      current: true,
-      stale_reason: 'current',
-    }
-    const status = {
-      agent_id: agentId,
-      agent_name: 'core-agent',
-      miner_hotkey: '5Miner',
-      artifact_sha256: 'b'.repeat(64),
-      screened_image_sha256: 'c'.repeat(64),
-      bench_version: 12,
-      configured: true,
-      qualified: true,
-      current_observation: observation,
-      total: 1,
-      observations: [observation],
-      shadow_only: true,
-    }
-    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      return Response.json(url.includes(`/agents/${agentId}/`) ? status : policyControl)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const readPolicy = await client.callTool({
-      name: 'get_core_qualification_policy',
-      arguments: { benchVersion: 12, historyLimit: 10 },
-    })
-    expect(readPolicy.isError).not.toBe(true)
-    expect(readJsonResult(readPolicy)).toMatchObject({ configured: true, shadow_only: true })
-
-    const written = await client.callTool({
-      name: 'set_core_qualification_policy',
-      arguments: {
-        expectedRevision: 0,
-        policy,
-        reason: 'calibrate shadow core qualification',
-        confirmation: 'APPLY SHADOW CORE QUALIFICATION V12',
-      },
-    })
-    expect(written.isError).not.toBe(true)
-
-    const readAgent = await client.callTool({
-      name: 'get_agent_core_qualification',
-      arguments: { agentId, benchVersion: 12, limit: 25 },
-    })
-    expect(readAgent.isError).not.toBe(true)
-    expect(readJsonResult(readAgent)).toMatchObject({ qualified: true, shadow_only: true })
-
-    const refreshed = await client.callTool({
-      name: 'refresh_agent_core_qualification',
-      arguments: {
-        agentId,
-        benchVersion: 12,
-        reason: 'recover current score evidence after a shadow outage',
-        confirmation: 'REFRESH SHADOW CORE QUALIFICATION V12',
-      },
-    })
-    expect(refreshed.isError).not.toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/core-qualification?bench_version=12&limit=25`,
-      expect.anything(),
-    )
-    const writeCall = fetchMock.mock.calls.find(
-      ([url]) => String(url).endsWith('/api/v1/admin/core-qualification/policy'),
-    )
-    expect(JSON.parse(String(writeCall?.[1]?.body))).toMatchObject({
-      expected_revision: 0,
-      actor: 'peyton@omniaura.ai',
-      policy: { weight_eligible: false },
-    })
-    const refreshCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith(`/agents/${agentId}/core-qualification/refresh`),
-    )
-    expect(JSON.parse(String(refreshCall?.[1]?.body))).toMatchObject({
-      bench_version: 12,
-      actor: 'peyton@omniaura.ai',
-    })
 
     await client.close()
     await server.close()

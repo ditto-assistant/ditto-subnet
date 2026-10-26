@@ -110,3 +110,27 @@ ports:
 gcp:
   project: ditto-app-dev
   region: us-central1
+
+# Pre-write gate for rendered env files, paired with the env_render_guard role.
+#
+# The guard reads a file back AFTER the template task wrote it, so a placeholder
+# it catches has already replaced the live file. Per its own 2026-07-23 record
+# the service keeps its old environment in memory, so the damage stays LATENT
+# until the next restart -- that incident was "caught by luck" days later.
+#
+# Used as `validate:` on a template/copy task, this runs the same scan against
+# the temp file and refuses to install it, so a bad render never reaches the
+# live path at all. Keep both: this prevents, the guard still verifies, and the
+# guard remains the backstop for anything written outside a validated task.
+#
+# Comment lines are skipped so a template may document a placeholder token,
+# matching env_render_guard's own `reject('match', '\s*#')`.
+# awk, not a `grep | grep` pipeline: a pipeline reports only the LAST command's
+# status, so a first grep that cannot READ the file emits nothing, the second
+# returns 1 for no-match, and a leading `!` turns that into "accept". A gate
+# that accepts a file it never scanned is the exact failure this exists to stop.
+# awk is one process: 0 clean, 1 placeholder found, 2 unreadable or missing.
+# Keep it to a single %s -- Ansible substitutes the temp path with Python `%`
+# formatting, so a second %s (e.g. in a printf) raises instead of validating.
+env_render_validate_placeholders: >-
+  awk '/^[[:space:]]*#/ {next} /TODO_[A-Z0-9_]+|FIXME_[A-Z0-9_]+|CHANGEME|REPLACE_ME/ {found=1} END {exit found?1:0}' %s

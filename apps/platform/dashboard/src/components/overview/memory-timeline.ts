@@ -204,6 +204,12 @@ export function harnessMeasuredVersions(evidence: HarnessEvidence): number[] {
     .sort((a, b) => a - b);
 }
 
+export function visibleHarnesses(shownVersions: Record<number, boolean>): HarnessEvidence[] {
+  return THIRD_PARTY_HARNESSES.filter((evidence) =>
+    evidence.points.some((point) => shownVersions[point.benchVersion]),
+  );
+}
+
 export function harnessUnmeasuredVersions(
   evidence: HarnessEvidence,
   shownVersions: Record<number, boolean>,
@@ -256,6 +262,9 @@ export function harnessCoverageText(shownVersions: Record<number, boolean>): str
  * the records + the shown window so the coverage sentence can never drift
  * from the plotted lines. */
 export function harnessMethodText(shownVersions: Record<number, boolean>): string {
+  if (!visibleHarnesses(shownVersions).length) {
+    return "The miner line is the running high of finalized three-validator memory medians within each benchmark version. Only the four most recent competitions are shown, discovered automatically from recorded rollouts and accepted scores. Points are ordered by scoring completion time within each contract's equal-width band. Every contract rescores from scratch; scores across different contracts are not directly comparable.";
+  }
   return (
     "The miner line is the running high of finalized three-validator memory medians within each benchmark version; points are ordered by their actual scoring completion time. The horizontal axis gives every contract an equal band rather than equal clock time, because contracts ran for very different durations and the short ones were unreadable on a wall-clock scale. Hermes and OpenClaw are single-seed off-network practice runs. Versions 2–6 used the same Qwen3-32B model and pinned OpenRouter/Nebius route; v7–v8 use the frozen GPT-OSS-20B aggregate OpenRouter route. Versions 2–7 use seed " +
     (THIRD_PARTY_HARNESSES[0] as HarnessEvidence).seed +
@@ -269,8 +278,8 @@ export function harnessMethodText(shownVersions: Record<number, boolean>): strin
 // The record line alone hides the shape of the competition: the field is
 // what shows a whole subnet climbing. Every contract's full finalized board
 // is already public per bench_version, so the scatter needs no new endpoint.
-// Settled contracts are immutable, so each is fetched once and kept; only
-// the newest board is allowed to refetch.
+// Each settled board is fetched once and kept. The active and newest boards
+// can both change while the next competition is collecting.
 
 export interface MemoryFieldEntry {
   version: number;
@@ -308,10 +317,11 @@ export function resetMemoryFieldCache(): void {
 
 export function loadMemoryField(
   versions: number[],
-  activeVersion: number,
+  activeVersion: number | number[],
 ): Promise<Record<number, MemoryFieldEntry[]>> {
+  const liveVersions = Array.isArray(activeVersion) ? activeVersion : [activeVersion];
   const wanted = versions.filter(
-    (version) => !memoryFieldByVersion[version] || version === activeVersion,
+    (version) => !memoryFieldByVersion[version] || liveVersions.includes(version),
   );
   if (!wanted.length) return Promise.resolve(memoryFieldByVersion);
   return poolMap(wanted, 3, (version) =>
@@ -346,10 +356,15 @@ export function loadMemoryField(
 
 // ── The chart itself (renderMemoryTimeline 4293–4654) ────────
 
-// The generation ramp is validated for up to six steps; past that the
-// lightness gap between adjacent contracts drops below the legible floor,
-// so window to the most recent six rather than silently muddying it.
-export const TIMELINE_MAX_ERAS = 6;
+export const TIMELINE_MAX_ERAS = 4;
+
+/** One window for rendering, method copy, and per-version network requests. */
+export function timelineReleases(data: TimelinePayload | null): TimelineRelease[] {
+  return ((data && data.releases) || [])
+    .filter((release) => Number(release.bench_version) >= 2)
+    .sort((a, b) => Number(a.bench_version) - Number(b.bench_version))
+    .slice(-TIMELINE_MAX_ERAS);
+}
 
 /** The rollout fields the chart reads (monolith reads them off lastRollout). */
 export interface TimelineRolloutContext {
@@ -456,10 +471,7 @@ export function memoryTimelineHtml(
   data: TimelinePayload | null,
   options: MemoryTimelineOptions,
 ): MemoryTimelineResult {
-  const allReleases = ((data && data.releases) || [])
-    .filter((release) => Number(release.bench_version) >= 2)
-    .sort((a, b) => Number(a.bench_version) - Number(b.bench_version));
-  const releases = allReleases.slice(-TIMELINE_MAX_ERAS);
+  const releases = timelineReleases(data);
   const shownVersions: Record<number, boolean> = {};
   releases.forEach((release) => {
     shownVersions[Number(release.bench_version)] = true;
@@ -597,7 +609,7 @@ export function memoryTimelineHtml(
     });
   });
 
-  const externalSeries = THIRD_PARTY_HARNESSES.map((evidence) => ({
+  const externalSeries = visibleHarnesses(shownVersions).map((evidence) => ({
     id: evidence.id,
     evidence,
     points: (evidence.points || [])
@@ -1158,11 +1170,14 @@ export function memoryTimelineHtml(
         "</strong></span>"
       : "<span>Miner history is not yet available</span>") +
     (pendingTotal ? "<span><strong>" + pendingTotal + "</strong> awaiting quorum</span>" : "") +
-    "<span><strong>" +
-    latestReferences.length +
-    "</strong> native reference series" +
-    (referenceThrough != null && unmeasuredEras.length ? " through v" + referenceThrough : "") +
-    "</span></p>" +
+    (latestReferences.length
+      ? "<span><strong>" +
+        latestReferences.length +
+        "</strong> native reference series" +
+        (referenceThrough != null && unmeasuredEras.length ? " through v" + referenceThrough : "") +
+        "</span>"
+      : "") +
+    "</p>" +
     '<div class="memory-timeline-legend" aria-label="Timeline legend"><span class="legend-group">Best finalized miner' +
     eraLegend +
     "</span>" +
@@ -1172,21 +1187,29 @@ export function memoryTimelineHtml(
     width +
     " " +
     height +
-    '" role="img" aria-labelledby="memory-timeline-title memory-timeline-desc"><title id="memory-timeline-title">Best miner memory score with Hermes and OpenClaw across DittoBench v' +
+    '" role="img" aria-labelledby="memory-timeline-title memory-timeline-desc"><title id="memory-timeline-title">Best miner memory score' +
+    (externalSeries.length ? " with Hermes and OpenClaw" : "") +
+    " across DittoBench v" +
     firstEra.version +
     " through v" +
     lastEra.version +
-    '</title><desc id="memory-timeline-desc">Memory score from zero to one. Each benchmark contract occupies an equal band across the horizontal axis, coloured light to dark as the generations advance, with its records ordered left to right inside the band. A muted dashed connector crosses each contract boundary because every contract rescores from scratch. Third-party points are retrospective measurements placed in each contract band, and a contract they have not been run on is labelled in place rather than left blank.</desc>' +
+    '</title><desc id="memory-timeline-desc">Memory score from zero to one. Each benchmark contract occupies an equal band across the horizontal axis, coloured light to dark as the generations advance, with its records ordered left to right inside the band. A muted dashed connector crosses each contract boundary because every contract rescores from scratch.' +
+    (externalSeries.length
+      ? " Third-party points are retrospective measurements placed in each contract band; missing measurements are labelled."
+      : "") +
+    "</desc>" +
     svg.join("") +
     '</svg><div class="memory-timeline-tooltip" role="tooltip" hidden></div></div>' +
     '<details class="timeline-data-details"><summary>How to read this chart</summary>' +
-    '<p class="memory-timeline-note">Faded dots are every finalized run on that contract, ordered by upload; the solid line traces the record as it was beaten. Runs that have been scored but have not reached quorum are not plotted, so a rank here can never move retroactively. Each contract gets an equal band, not equal clock time, so a generation that ran for hours stays as readable as one that ran for days. The dashed step between bands marks a contract change, where every agent rescores from scratch. Third-party points are retrospective runs; hover or focus any point for its exact date, model, and route. ' +
+    '<p class="memory-timeline-note">Faded dots are every finalized run on that contract, ordered by upload; the solid line traces the record as it was beaten. Runs that have been scored but have not reached quorum are not plotted, so a rank here can never move retroactively. Each contract gets an equal band, not equal clock time, so a generation that ran for hours stays as readable as one that ran for days. The dashed step between bands marks a contract change, where every agent rescores from scratch. Hover or focus any point for its details. ' +
     esc(
       unmeasuredEras.length
         ? "No reference harness has been run on " +
             versionList(unmeasuredEras.map((era) => era.version)) +
             ", so their lines stop where the measurements stop; that band's empty space is an unmeasured contract, not a score of zero."
-        : "Every contract shown carries a reference measurement.",
+        : externalSeries.length
+          ? "Every contract shown carries a reference measurement."
+          : "",
     ) +
     (openVersion
       ? " The v" +

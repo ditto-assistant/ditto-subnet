@@ -93,6 +93,15 @@ class ChainConfig:
     full WebSocket URL.
     """
 
+    subtensor_rpc_url: str | None = None
+    """Optional WebSocket URL of a provider for ``subtensor_network``.
+
+    Transport only: substrate reads try it before the network's public
+    entrypoint, which refuses handshakes with HTTP 429 under load. It may
+    carry a provider credential, so it is never logged. ``subtensor_network``
+    remains the network identity.
+    """
+
     archive_blocks_cutoff: int = 300
     """Recent-block window served from the live node; older blocks go to archive.
 
@@ -140,6 +149,7 @@ def parse_chain_config_from_env() -> ChainConfig:
         # Same token; only in identity mode (a bare read client sets no identity).
         identity_token=token if identity_name else None,
         subtensor_network=os.environ.get("SUBTENSOR_NETWORK", "finney"),
+        subtensor_rpc_url=os.environ.get("SUBTENSOR_RPC_URL") or None,
         archive_blocks_cutoff=int(os.environ.get("ARCHIVE_BLOCKS_CUTOFF", "300")),
     )
 

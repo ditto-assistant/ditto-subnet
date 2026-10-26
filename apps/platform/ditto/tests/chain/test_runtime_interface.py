@@ -198,7 +198,7 @@ def test_pinned_audited_interfaces_are_self_consistent(pinned, releases) -> None
 
 def test_treasury_call_baseline_names_the_signed_runtime() -> None:
     release, calls = audited_runtime_interfaces.TREASURY_CALL_BASELINE
-    assert release == "v482"
+    assert release == "v483"
     assert {"Proxy.proxy", "SubtensorModule.transfer_stake"} <= set(calls)
     assert all(len(digest) == 16 for digest in calls.values())
 

@@ -42,6 +42,7 @@ from ditto_screener.heartbeat import (
 )
 from ditto_screener.review_settings import (
     EffectiveReviewSettings,
+    ProbeBatteryObservationRequest,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
@@ -50,6 +51,7 @@ from ditto_screener.review_settings import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ArtifactResponse,
+    ReviewLineagePacket,
     ScreenedImageCompletedPart,
     ScreenedImagePartUploadRequest,
     ScreenedImagePartUploadResponse,
@@ -70,7 +72,6 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
     SourceReviewNote,
 )
-from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -229,70 +230,6 @@ class PlatformClient:
                 f"conversation control returned HTTP {response.status_code}"
             )
         return response.json()
-
-    async def submit_replay_private_receipt(
-        self, receipt: V13ReplayPrivateReceipt
-    ) -> dict[str, Any]:
-        """One authenticated report-only dispatch; never retry uncertain writes."""
-        response = await self._client.post(
-            self._base
-            + _PREFIX
-            + f"/verification-replays/{receipt.binding.replay_id}/private-receipt",
-            json=receipt.model_dump(mode="json"),
-            headers=await self._auth_headers(),
-            timeout=30,
-        )
-        if response.status_code != 200:
-            raise PlatformError(
-                f"replay private receipt returned HTTP {response.status_code}"
-            )
-        body = response.json()
-        if (
-            type(body) is not dict
-            or body.get("policy_verification_complete") is not False
-            or body.get("status") != "recorded_unverified"
-        ):
-            raise PlatformError("replay private receipt response invalid")
-        return body
-
-    async def replay_private_inputs(self, replay_id: UUID) -> dict[str, Any]:
-        """Fetch current short-lived image URLs and immutable role bindings."""
-        response = await self._client.get(
-            self._base + _PREFIX + f"/verification-replays/{replay_id}/private-inputs",
-            headers=await self._auth_headers(),
-            timeout=30,
-        )
-        if response.status_code != 200:
-            raise PlatformError(
-                f"replay private inputs returned HTTP {response.status_code}"
-            )
-        body = response.json()
-        if (
-            type(body) is not dict
-            or body.get("replay_id") != str(replay_id)
-            or body.get("policy_verification_complete") is not False
-        ):
-            raise PlatformError("replay private inputs response invalid")
-        return body
-
-    async def renew_verification_replay(self, replay_id: UUID) -> dict[str, Any]:
-        response = await self._client.post(
-            self._base + _PREFIX + f"/verification-replays/{replay_id}/renew",
-            headers=await self._auth_headers(),
-            timeout=30,
-        )
-        if response.status_code != 200:
-            raise PlatformError(
-                f"replay lease renewal returned HTTP {response.status_code}"
-            )
-        body = response.json()
-        if (
-            type(body) is not dict
-            or body.get("replay_id") != str(replay_id)
-            or body.get("status") != "running"
-        ):
-            raise PlatformError("replay lease renewal response invalid")
-        return body
 
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""
@@ -501,6 +438,25 @@ class PlatformClient:
             )
         return ShadowReviewObservationResponse.model_validate(resp.json())
 
+    async def submit_probe_battery(
+        self, agent_id: UUID, request: ProbeBatteryObservationRequest
+    ) -> ShadowReviewObservationResponse:
+        """Persist report-only probe battery leads without changing outcome."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/probe-battery"
+        try:
+            resp = await self._client.post(
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"probe battery submission failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"probe battery rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ShadowReviewObservationResponse.model_validate(resp.json())
+
     async def get_required_policy_version(self) -> int:
         """Read the platform policy without claiming or mutating queue state."""
         url = f"{self._base}{_PREFIX}/queue"
@@ -577,6 +533,41 @@ class PlatformClient:
                 )
                 raise ClaimResponseInvalid(message, ()) from error
             raise ClaimResponseInvalid(message, tuple(refs)) from error
+
+    async def get_review_lineage(
+        self, agent_id: UUID, *, attempt_id: UUID, artifact_sha256: str
+    ) -> ReviewLineagePacket:
+        """Fetch and bind the lineage-scoped review packet for one leased attempt.
+
+        The packet must name exactly this agent, attempt and artifact; anything
+        else is refused so a stale or crossed packet can never scope a review.
+        """
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-lineage"
+        try:
+            resp = await self._client.post(
+                url,
+                headers=await self._auth_headers(),
+                params={"attempt_id": str(attempt_id)},
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"lineage packet fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"lineage packet rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            packet = ReviewLineagePacket.model_validate(resp.json())
+        except (ValueError, ValidationError) as error:
+            # json.JSONDecodeError is a ValueError; the worker's lineage
+            # fallback keys on PlatformError.
+            raise PlatformError("lineage packet response is invalid") from error
+        if (
+            packet.agent_id != agent_id
+            or packet.attempt_id != attempt_id
+            or packet.artifact_sha256 != artifact_sha256.lower()
+        ):
+            raise PlatformError("lineage packet does not match the claimed attempt")
+        return packet
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None

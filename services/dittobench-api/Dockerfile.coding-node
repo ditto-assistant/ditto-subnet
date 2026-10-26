@@ -1,4 +1,4 @@
-FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS supervisor
+FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS supervisor
 WORKDIR /src/services/dittobench-api
 COPY services/dittobench-api/go.mod services/dittobench-api/go.sum ./
 COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
@@ -9,7 +9,7 @@ COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
     -o /out/supervisor ./cmd/dittobench-coding-supervisor
 
-FROM node:24.20.0-bookworm@sha256:be23f54a88d34e8824c741b19b91064094f92c1c97b194144bfc8b50d67258e2 AS build
+FROM node:24.22.1-bookworm@sha256:6449e19d8184d84062525b6a7524def03146c2cb04a7f08b076680d0e8e4240a AS build
 COPY services/dittobench-api/coding_runtime/node/confinement.c /src/confinement.c
 RUN cc -shared -fPIC -O2 -Wall -Wextra -Werror -I/usr/local/include/node \
     /src/confinement.c -o /confinement.node
@@ -17,7 +17,7 @@ WORKDIR /opt/coding-node
 COPY services/dittobench-api/coding_runtime/node/package.json services/dittobench-api/coding_runtime/node/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
-FROM node:24.20.0-bookworm-slim@sha256:ba849c60be29959425b8734d57b8b4b7d56f98edd9504c9af091d5281095a71e AS node
+FROM node:24.22.1-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS node
 FROM scratch AS runtime-base
 COPY --from=node / /
 ENV PATH=/usr/local/bin:/usr/bin:/bin

@@ -220,11 +220,14 @@ def envelope_response(
     message: str,
     *,
     headers: dict[str, str] | None = None,
+    detail: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """Build the canonical JSON response with the request id echoed on a header.
 
     Header is set here as backup so error responses still carry the id
     even on code paths where ``RequestIDMiddleware`` cannot set it.
+    ``detail`` is explicit route-owned execution metadata, never an exception
+    object or arbitrary HTTPException.detail.
     """
     rid = request_id_var.get()
     response_headers = dict(headers or {})
@@ -238,7 +241,10 @@ def envelope_response(
         response_headers["Cache-Control"] = "no-store"
     return JSONResponse(
         status_code=status_code,
-        content=_envelope(error_code, message),
+        content={
+            **_envelope(error_code, message),
+            **({"detail": detail} if detail is not None else {}),
+        },
         headers=response_headers,
     )
 

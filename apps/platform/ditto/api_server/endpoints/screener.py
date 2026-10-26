@@ -96,6 +96,7 @@ from ditto.api_models import (
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
+    ProbeBatteryObservationRequest,
     ScreeningVerificationReceiptRequest,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
@@ -157,11 +158,21 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.review_lineage import (
+    ReviewLineageUnavailableError,
+    assemble_review_lineage_packet,
+    load_review_lineage,
+)
 from ditto.api_server.scored_runtime_evidence import scored_runtime_evidence_for_lease
 from ditto.api_server.screener_node_identity import is_enrolled_node_heartbeat_instance
 from ditto.api_server.screener_policy_activation import (
     EffectiveScreenerPolicy,
     resolve_screener_policy_activation,
+)
+from ditto.api_server.screening_inconclusive import (
+    INCONCLUSIVE_OPERATOR_REVIEW_PUBLIC_REASON,
+    INCONCLUSIVE_RETRY_PUBLIC_REASON,
+    inconclusive_requires_operator_review,
 )
 from ditto.api_server.storage import (
     ObjectDownloadFailedError,
@@ -187,6 +198,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreenerNodeBootstrapGrant,
     ScreenerPolicyActivation,
+    ScreenerProbeBattery,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
     ScreeningAttempt,
@@ -199,6 +211,7 @@ from ditto.db.models import (
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_SCREENER_ARTIFACT,
+    ENDPOINT_SCREENER_REVIEW_LINEAGE,
     record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
@@ -236,6 +249,7 @@ from ditto.db.queries.screening_review_events import append_automated_review_eve
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     AdjudicationCompletionReceipt,
+    ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
     ScreenResultOutcome,
     SourceReviewFinding,
@@ -2491,6 +2505,109 @@ async def review_settings_revision(
 
 
 @router.post(
+    "/agent/{agent_id}/probe-battery",
+    response_model=ShadowReviewObservationResponse,
+)
+async def submit_probe_battery(
+    agent_id: UUID,
+    payload: ProbeBatteryObservationRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> ShadowReviewObservationResponse:
+    """Persist report-only probe battery leads without mutating submission state.
+
+    A lead is an unverified black-box observation from dictated model replies;
+    it never participates in the signed decision or any queue transition.
+    """
+    async with session.begin():
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        if (
+            attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+            or attempt.build_only
+        ):
+            raise AgentNotScreenableError(
+                "probe battery does not match an active screening attempt"
+            )
+        if (
+            attempt.review_settings_revision != payload.settings_revision
+            or attempt.review_settings_scope != payload.settings_scope
+            or attempt.review_settings_checksum != payload.settings_checksum
+        ):
+            raise AgentNotScreenableError(
+                "probe battery settings differ from the attempt's claimed revision"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError("probe battery arrived after lease expiry")
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        if agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        if agent.sha256.lower() != payload.artifact_sha256:
+            raise AgentNotScreenableError(
+                "probe battery artifact does not match the claimed submission"
+            )
+        settings = await session.get(
+            ScreenerReviewSettingsRevision, payload.settings_revision
+        )
+        if (
+            settings is None
+            or settings.scope != payload.settings_scope
+            or settings.checksum != payload.settings_checksum
+            or settings.settings.get("probe_battery_mode") != "shadow"
+        ):
+            raise AgentNotScreenableError(
+                "probe battery does not match a revision that enables it"
+            )
+        review: dict[str, Any] | None = (
+            payload.review.model_dump(mode="json")
+            if payload.review is not None
+            else None
+        )
+        values = {
+            "agent_id": agent_id,
+            "screener_hotkey": screener_hotkey,
+            "artifact_sha256": payload.artifact_sha256,
+            "settings_revision": payload.settings_revision,
+            "settings_scope": payload.settings_scope,
+            "settings_checksum": payload.settings_checksum,
+            "status": payload.status,
+            "encoding": payload.encoding,
+            "seed_first": payload.seed_first,
+            "items_run": payload.items_run,
+            "probe_count": payload.probe_count,
+            "leads": [lead.model_dump(mode="json") for lead in payload.leads],
+            "battery_ms": payload.battery_ms,
+            "review": review,
+        }
+        existing = await session.get(ScreenerProbeBattery, payload.attempt_id)
+        if existing is not None:
+            battery_values = {k: v for k, v in values.items() if k != "review"}
+            if any(
+                getattr(existing, key) != value for key, value in battery_values.items()
+            ):
+                raise AgentNotScreenableError(
+                    "probe battery conflicts with the stored attempt observation"
+                )
+            if existing.review is None and review is not None:
+                # A retry may attach the report-only review to its battery.
+                existing.review = review
+            elif review is not None and existing.review != review:
+                raise AgentNotScreenableError(
+                    "probe review conflicts with the stored attempt observation"
+                )
+            return ShadowReviewObservationResponse(accepted=True)
+        session.add(ScreenerProbeBattery(attempt_id=payload.attempt_id, **values))
+    return ShadowReviewObservationResponse(accepted=True)
+
+
+@router.post(
     "/agent/{agent_id}/shadow-review",
     response_model=ShadowReviewObservationResponse,
 )
@@ -3873,6 +3990,7 @@ async def claim(
                 )
                 else None
             ),
+            lineage_parent_agent_id=attempt.lineage_parent_agent_id,
         )
         for agent, attempt, duplicate_of in claimed
     ]
@@ -3980,6 +4098,148 @@ async def agent_artifact(
         download_url=url,
         expires_at=datetime.now(UTC) + _ARTIFACT_URL_TTL,
     )
+
+
+@router.post(
+    "/agent/{agent_id}/review-lineage",
+    response_model=ReviewLineagePacket,
+    responses={
+        401: {"description": "Missing/invalid screener auth."},
+        404: {"description": "No agent with the given id."},
+        409: {
+            "description": (
+                "No active attempt, no lineage parent, an unreadable parent "
+                "artifact, or a packet that changed after it was bound."
+            )
+        },
+    },
+)
+async def agent_review_lineage(
+    agent_id: UUID,
+    request: Request,
+    response: Response,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+    storage: StorageDep,
+    attempt_id: Annotated[UUID, Query()],
+    instance_id: Annotated[str | None, Query(pattern=_INSTANCE_ID_PATTERN)] = None,
+) -> ReviewLineagePacket:
+    """Bind and return the lineage-scoped review packet for one leased attempt.
+
+    The packet is the diff from the attempt's lineage parent plus the prior
+    rulings and the parent's automated findings. The first fetch binds its
+    scope and digest to the attempt; a later fetch that would produce a
+    different packet (a ruling landed mid-attempt) is refused, so the worker
+    falls back to an ordinary full review rather than mixing two histories.
+    """
+    response.headers["Cache-Control"] = "no-store"
+
+    def _active(attempt: ScreeningAttempt | None) -> ScreeningAttempt:
+        if (
+            attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+        ):
+            raise AgentNotScreenableError(
+                "lineage packet does not match an active screening attempt"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError("screening attempt lease has expired")
+        if attempt.lineage_parent_agent_id is None:
+            raise AgentNotScreenableError("screening attempt has no lineage parent")
+        return attempt
+
+    async with session.begin():
+        agent = await get_agent_by_id(session, agent_id=agent_id)
+        if agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        attempt = _active(await get_screening_attempt(session, attempt_id=attempt_id))
+        try:
+            context = await load_review_lineage(session, agent=agent, attempt=attempt)
+        except ReviewLineageUnavailableError as error:
+            raise AgentNotScreenableError(
+                f"lineage packet unavailable: {error}"
+            ) from error
+        agent_sha256 = agent.sha256
+    # Artifact reads and the diff run with no transaction open: storage and
+    # archive parsing must not hold a database connection.
+    try:
+        packet = await assemble_review_lineage_packet(context, storage)
+    except ReviewLineageUnavailableError as error:
+        raise AgentNotScreenableError(f"lineage packet unavailable: {error}") from error
+    async with session.begin():
+        attempt = _active(
+            await get_screening_attempt(session, attempt_id=attempt_id, for_update=True)
+        )
+        if attempt.lineage_packet_sha256 is None:
+            # A ruling can land between building the packet and taking this
+            # lock; re-read the history under the lock and refuse to bind a
+            # packet that no longer matches it (the worker retries or falls
+            # back to a full review).
+            locked_agent = await get_agent_by_id(
+                session, agent_id=agent_id, for_update=True
+            )
+            if locked_agent is None:
+                raise AgentNotFoundError(f"no agent with id={agent_id}")
+            # The packet was diffed against the candidate read before the
+            # artifact work; bind only if that is still the candidate.
+            if (
+                locked_agent.sha256 != agent_sha256
+                or packet.artifact_sha256 != agent_sha256
+            ):
+                raise AgentNotScreenableError(
+                    "lineage candidate changed while the packet was built"
+                )
+            try:
+                fresh = await load_review_lineage(
+                    session, agent=locked_agent, attempt=attempt
+                )
+            except ReviewLineageUnavailableError as error:
+                raise AgentNotScreenableError(
+                    f"lineage packet unavailable: {error}"
+                ) from error
+            if fresh.history_digest() != context.history_digest():
+                raise AgentNotScreenableError(
+                    "lineage history moved while the packet was built"
+                )
+            attempt.lineage_scope = packet.scope.value
+            attempt.lineage_packet_sha256 = packet.packet_sha256
+        elif attempt.lineage_packet_sha256 != packet.packet_sha256:
+            raise AgentNotScreenableError(
+                "lineage packet changed after it was bound to this attempt"
+            )
+    logger.info(
+        "screener=%s bound lineage packet agent_id=%s attempt_id=%s parent=%s "
+        "scope=%s changed_files=%d rulings=%d findings=%d",
+        screener_hotkey,
+        agent_id,
+        attempt_id,
+        packet.parent.agent_id,
+        packet.scope.value,
+        packet.changed_file_count,
+        len(packet.rulings),
+        len(packet.findings),
+    )
+    for audited in (agent_id, packet.parent.agent_id):
+        await record_artifact_fetch(
+            session,
+            agent_id=audited,
+            endpoint=ENDPOINT_SCREENER_REVIEW_LINEAGE,
+            requester_kind="screener",
+            requester_id=screener_hotkey,
+            requester_instance_id=instance_id,
+            lease_id=attempt_id,
+            artifact_sha256=(
+                agent_sha256 if audited == agent_id else packet.parent.artifact_sha256
+            ),
+            source_ip=client_ip(request),
+            detail=request_detail(request),
+        )
+    return packet
 
 
 @router.post(
@@ -5354,12 +5614,27 @@ async def submit_result(
             if deferred_mechanical_admission
             else "Bounded source review exhausted; admitted for scoring"
         )
+    elif (
+        payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+        and inconclusive_requires_operator_review(payload.reason_code)
+        and not (reported_attempt is not None and reported_attempt.build_only)
+    ):
+        # A reviewer non-verdict: the source review ran and could not decide.
+        # It neither passes nor rejects the submission, and retrying the same
+        # artifact under the same policy has no reason to conclude otherwise,
+        # so hold it as an active screening quarantine. Nothing resolves that
+        # row automatically; an operator releases, rejects, or rescreens it.
+        # (A build-only attempt, deferred mechanical admission included, ran no
+        # source review and cannot hold.)
+        target = AgentStatus.QUARANTINED
+        public_reason = INCONCLUSIVE_OPERATOR_REVIEW_PUBLIC_REASON
     elif payload.outcome == ScreenResultOutcome.INCONCLUSIVE:
-        # Inconclusive remains a NON-verdict: it neither passes nor rejects the
-        # submission. Persist the completed attempt and park it for an exact
-        # operator-issued retry.
+        # An infrastructure fault the worker carried as ``inconclusive`` (a
+        # provider or transport failure after an earlier finding, or the
+        # signed-runtime preflight). Persist the completed attempt and park it
+        # for an exact operator-issued retry.
         target = AgentStatus.SCREENING_FAILED
-        public_reason = "Screening was inconclusive; manual retry required"
+        public_reason = INCONCLUSIVE_RETRY_PUBLIC_REASON
     elif payload.outcome == ScreenResultOutcome.QUARANTINE:
         # A build-only attempt rebuilds an already-adjudicated submission's
         # prerequisites and runs no source review, so it must not be able to
@@ -5469,6 +5744,7 @@ async def submit_result(
             and outcome_value in {"pass", "pass_inconclusive", "inconclusive"}
             else "expired"
             if payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and target != AgentStatus.QUARANTINED
             else "quarantined"
             if target == AgentStatus.QUARANTINED or outcome_value == "quarantine"
             else "passed"
@@ -5734,6 +6010,19 @@ async def submit_result(
                 )
             )
         ) and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+        if (
+            payload.outcome == ScreenResultOutcome.INCONCLUSIVE
+            and target == AgentStatus.QUARANTINED
+            and retain_scored_policy_rescreen
+        ):
+            # A released scored policy canary keeps its board position until
+            # L4 clears or rejects it, so a reviewer non-verdict here cannot
+            # move the agent into the quarantine court (whose resolvers need
+            # a ``quarantined`` agent). Keep the one-row rollout's existing
+            # contract: record the evidence and pause for an operator retry.
+            target = AgentStatus.SCREENING_FAILED
+            public_reason = INCONCLUSIVE_RETRY_PUBLIC_REASON
+            attempt_status = "expired"
         if late_deferred_result:
             # An operator resolution is authoritative. A screener response that
             # was already in flight may finish after clear/reject; retain its
@@ -5901,9 +6190,14 @@ async def submit_result(
                 else "paused"
             )
         if target == AgentStatus.QUARANTINED or records_review_evidence:
-            if target == AgentStatus.QUARANTINED and (
-                payload.manifest_digest is None or payload.reason_code is None
+            if (
+                target == AgentStatus.QUARANTINED
+                and payload.outcome != ScreenResultOutcome.INCONCLUSIVE
+                and (payload.manifest_digest is None or payload.reason_code is None)
             ):
+                # An inconclusive hold may arrive without a review binding
+                # (no audit); it falls back to the inconclusive sentinels
+                # below instead of being refused.
                 raise AgentNotScreenableError(
                     "quarantine result is missing bounded evidence"
                 )

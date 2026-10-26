@@ -18,7 +18,7 @@ func TestBenchVersionDatasetVectors(t *testing.T) {
 		{protocol.BenchVersionV2, "dfb4fc243d7d3e84bb4e896d5873bbc9bda114e16f5215f913c13adbfbc4a7fe"},
 		{protocol.BenchVersionV3, "766183922b5a56725bdf44573fc31adf05355dc80fe9654d436935363fcdb3f2"},
 		{protocol.BenchVersionV13, "59bd8592ff8b820b2e0bb49ceb992940c9a45a2935a47ba8062b80707f85766a"},
-		{protocol.BenchVersionV14, "8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50"},
+		{protocol.BenchVersionV14, "cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432"},
 	} {
 		prof, ok := gen.ProfileForVersion("full", tc.version)
 		if !ok {

@@ -73,6 +73,16 @@ A request line ending `-> ERR in Nms` is immediately followed by the
 traceback. VM app logs do NOT ship to Cloud Logging; `gcloud logging read`
 on `resource.type="gce_instance"` finds nothing.
 
+## Hetzner primary screener
+
+The bare-metal primary is not a GCE instance. For its supporting host journals,
+use `.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh`
+from the repo root. It authenticates as `logs` on company Tailscale, with one
+explicit key and pinned host keys; no sudo or GCP login is needed. The release
+operations skill documents its bounded options. Read Backroom first for live
+SN118 queue, admission, attempts and capacity. The GCE helper below retains
+IAP/OS Login and must never be used as a fallback for the Hetzner host.
+
 ## GCE screener workers
 
 Production screening workers are ephemeral instances labeled

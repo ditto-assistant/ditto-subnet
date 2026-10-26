@@ -999,13 +999,15 @@ async def test_deadline_bounds_a_completion_and_its_retry(tmp_path: Path) -> Non
     async def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
         requests += 1
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(5)
         return httpx.Response(200, json={})
 
-    deadline = asyncio.get_running_loop().time() + 0.03
-    result = await _adjudicator(
-        _key(tmp_path), httpx.MockTransport(handler)
-    ).adjudicate(_archive(tmp_path), notes=[_CONCERN], deadline=deadline)
+    adjudicator = _adjudicator(_key(tmp_path), httpx.MockTransport(handler))
+    archive = _archive(tmp_path)
+    # Fixture I/O must not consume the completion deadline on a loaded runner.
+    # Leave time to enter the provider, whose response still exceeds the lease.
+    deadline = asyncio.get_running_loop().time() + 1
+    result = await adjudicator.adjudicate(archive, notes=[_CONCERN], deadline=deadline)
 
     assert result.decision == "escalate"
     assert result.clear_clause is None
@@ -2039,8 +2041,8 @@ def test_adjudicator_prompt_treats_forced_choice_as_i7() -> None:
     assert adjudicator_prompt_revision(10) == "adjudicator-v4-policy-v10"
     assert adjudicator_prompt_revision(11) == "adjudicator-v4-policy-v11"
     assert adjudicator_prompt_revision(12) == "adjudicator-v4-policy-v12"
-    assert adjudicator_prompt_revision(13) == "adjudicator-v14-policy-v13"
-    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v14-policy-v13"
+    assert adjudicator_prompt_revision(13) == "adjudicator-v19-policy-v13"
+    assert ADJUDICATOR_PROMPT_REVISION == "adjudicator-v19-policy-v13"
 
 
 def test_adjudicator_policy_v12_narrows_plain_normalization() -> None:

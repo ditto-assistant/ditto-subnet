@@ -176,6 +176,12 @@ def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
     payload = baseline.model_dump()
     legacy = baseline.settings.model_dump(mode="json")
     legacy.pop("adjudicator_max_completion_tokens", None)
+    # Every legacy revision predates the probe battery.
+    legacy.pop("probe_battery_mode", None)
+    legacy.pop("probe_battery_timeout_seconds", None)
+    legacy.pop("probe_review_mode", None)
+    legacy.pop("probe_review_timeout_seconds", None)
+    legacy.pop("probe_review_max_cost_usd", None)
     for name in dropped:
         legacy.pop(name, None)
     payload["checksum"] = hashlib.sha256(
@@ -270,6 +276,16 @@ def _platform_shaped_payload(config, **updates: object) -> dict:
             hashed.pop(name)
     if not hashed["l2_always_escalate"]:
         hashed.pop("l2_always_escalate")
+    if hashed["probe_battery_mode"] == "off":
+        hashed.pop("probe_battery_mode")
+        hashed.pop("probe_battery_timeout_seconds")
+    if hashed["probe_review_mode"] == "off":
+        for name in (
+            "probe_review_mode",
+            "probe_review_timeout_seconds",
+            "probe_review_max_cost_usd",
+        ):
+            hashed.pop(name)
     payload["checksum"] = hashlib.sha256(
         json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

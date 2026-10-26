@@ -186,11 +186,11 @@ def test_gce_pull_authenticates_and_activates_the_descriptor_once(
     )
 
 
-def test_manual_ci_keeps_fast_safety_gates() -> None:
+def test_pr_ci_keeps_fast_safety_gates() -> None:
     workflow = workflow_text("screener-ci.yml")
 
     assert "workflow_dispatch:" in workflow
-    assert "pull_request:" not in workflow
+    assert "pull_request:" in workflow
     assert "  push:" not in workflow
     assert 'uv run pytest -m "not integration"' in workflow
     assert "uv run ruff format --check ." in workflow

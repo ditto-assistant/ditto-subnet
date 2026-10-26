@@ -1,0 +1,159 @@
+---
+# Converge the generator competition scorer: Docker for the generator sandbox,
+# challenge-scorer built from an exact monorepo revision with the base role's
+# pinned Go toolchain, and a systemd unit holding the Platform bearer.
+- name: Verify gcloud is available for Secret Manager
+  ansible.builtin.command: gcloud --version
+  changed_when: false
+
+- name: Verify the pinned Go toolchain from the base role
+  ansible.builtin.command: /usr/local/go/bin/go version
+  changed_when: false
+
+# --- Docker engine (genrun shells out to `docker`) ---
+- name: Add Docker apt key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /usr/share/keyrings/docker.asc
+    mode: "0644"
+    checksum: "sha256:{{ docker_apt_key_sha256 }}"
+
+# apt_repository is deprecated (removed in ansible-core 2.25). The
+# deb822_repository migration is deferred — see roles/README.md
+# "Deferred: apt_repository -> deb822_repository".
+- name: Add Docker apt repo
+  ansible.builtin.apt_repository:
+    repo: "deb [arch={{ generator_scorer_docker_apt_arch }} signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] }} stable"
+    filename: docker
+    state: present
+
+- name: Install Docker engine and git
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - git
+    state: present
+    update_cache: true
+
+- name: Ensure Docker is enabled and running
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Ensure scorer directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ generator_scorer_checkout }}", owner: "{{ generator_scorer_owner }}", group: "{{ generator_scorer_group }}", mode: "0755" }
+    - { path: "{{ generator_scorer_state_dir }}", owner: "{{ generator_scorer_owner }}", group: "{{ generator_scorer_group }}", mode: "0700" }
+    - { path: "{{ generator_scorer_state_dir }}/tmp", owner: "{{ generator_scorer_owner }}", group: "{{ generator_scorer_group }}", mode: "0700" }
+    - { path: "{{ generator_scorer_state_dir }}/docker", owner: "{{ generator_scorer_owner }}", group: "{{ generator_scorer_group }}", mode: "0700" }
+    - { path: "{{ generator_scorer_state_dir }}/go", owner: "{{ generator_scorer_owner }}", group: "{{ generator_scorer_group }}", mode: "0700" }
+    - { path: "{{ generator_scorer_config_dir }}", owner: root, group: root, mode: "0700" }
+
+- name: Clone or update the subnet monorepo at the pinned revision
+  ansible.builtin.git:
+    repo: "{{ generator_scorer_repo_url }}"
+    dest: "{{ generator_scorer_checkout }}"
+    version: "{{ generator_scorer_revision }}"
+    force: true
+  become: true
+  become_user: "{{ generator_scorer_owner }}"
+
+# Build on every converge. The Go build cache makes an unchanged revision
+# cheap, and gating on the checkout changing would let a retry after a failed
+# build skip the build and install stale output. The copy below replaces the
+# binary, and restarts the unit, only when the bytes differ.
+- name: Build challenge-scorer
+  ansible.builtin.command:
+    cmd: /usr/local/go/bin/go build -trimpath -buildvcs=false -o {{ generator_scorer_state_dir }}/challenge-scorer ./cmd/challenge-scorer
+    chdir: "{{ generator_scorer_checkout }}/services/dittobench-api"
+  become: true
+  become_user: "{{ generator_scorer_owner }}"
+  environment:
+    GOPATH: "{{ generator_scorer_state_dir }}/go"
+    GOCACHE: "{{ generator_scorer_state_dir }}/go/cache"
+    GOTOOLCHAIN: local
+    CGO_ENABLED: "0"
+  changed_when: false
+
+- name: Install the challenge-scorer binary
+  ansible.builtin.copy:
+    src: "{{ generator_scorer_state_dir }}/challenge-scorer"
+    dest: "{{ generator_scorer_binary }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  notify: restart generator scorer
+
+# Pre-pull the sandbox's pinned builder and runner images so the first job
+# does not spend its lease on a registry pull.
+- name: Read the pinned sandbox images
+  ansible.builtin.shell: >-
+    set -o pipefail &&
+    sed -nE 's/^\s*(BuilderImage|RunnerImage)\s*=\s*"([^"]+)".*/\2/p'
+    {{ generator_scorer_checkout }}/research/dittobench-datagen/genrun/genrun.go
+  args:
+    executable: /bin/bash
+  register: generator_scorer_images
+  changed_when: false
+  failed_when: generator_scorer_images.stdout_lines | length != 2
+
+- name: Pull the pinned sandbox images
+  ansible.builtin.command: docker pull {{ item }}
+  loop: "{{ generator_scorer_images.stdout_lines }}"
+  register: generator_scorer_pull
+  changed_when: "'Downloaded newer image' in generator_scorer_pull.stdout"
+
+- name: Read the Platform bearer through the attached identity
+  ansible.builtin.command: >-
+    gcloud secrets versions access latest
+    --secret={{ generator_scorer_token_secret }} --project={{ generator_scorer_gcp_project }}
+  register: generator_scorer_token_read
+  changed_when: false
+  no_log: true
+
+- name: Validate the Platform bearer before rendering it
+  ansible.builtin.assert:
+    that:
+      - generator_scorer_token_read.stdout | trim | length >= 32
+    fail_msg: "generator-scorer-token-prod has no usable version (Platform requires at least 32 characters)"
+  no_log: true
+
+- name: Render the scorer environment
+  ansible.builtin.template:
+    src: scorer.env.j2
+    dest: "{{ generator_scorer_config_dir }}/scorer.env"
+    owner: root
+    group: root
+    mode: "0600"
+  vars:
+    generator_scorer_token: "{{ generator_scorer_token_read.stdout | trim }}"
+  no_log: true
+  notify: restart generator scorer
+
+- name: Install the scorer systemd unit
+  ansible.builtin.template:
+    src: ditto-generator-scorer.service.j2
+    dest: "/etc/systemd/system/{{ generator_scorer_unit }}.service"
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - reload systemd for generator scorer
+    - restart generator scorer
+
+- name: Enable and start the scorer
+  ansible.builtin.systemd:
+    name: "{{ generator_scorer_unit }}"
+    enabled: true
+    state: started
+    daemon_reload: true

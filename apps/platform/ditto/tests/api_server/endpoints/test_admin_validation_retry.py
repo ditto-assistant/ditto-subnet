@@ -4278,3 +4278,73 @@ async def test_targeted_final_quorum_retry_is_guarded_audited_and_idempotent(
     assert len(recoveries) == 1 and recoveries[0].actor == "operator"
     assert len(recoveries[0].ticket_snapshot) == 4
     assert recoveries[0].target_validator_hotkey == "validator-3"
+
+
+async def test_retry_views_do_not_count_generator_round_runs(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SN-334: a round run is neither live scoring work nor a spent attempt."""
+    # Two of three scores, so one more validator is needed and none has
+    # failed: the submission is simply queued.
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=2)
+    async with retry_maker() as session, session.begin():
+        # A round run still leased on a row the round created ...
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="validator-8",
+                slot_id="slot-2",
+                status=TicketStatus.ISSUED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=_PAST,
+                deadline=_FUTURE,
+                bench_version=_BENCH_VERSION,
+                attempt_count=0,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+        # ... and a finished one that left the row it created behind.
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="validator-9",
+                slot_id="slot-3",
+                status=TicketStatus.EXPIRED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=_T0 - timedelta(hours=2),
+                deadline=_T0 - timedelta(hours=1),
+                bench_version=_BENCH_VERSION,
+                attempt_count=0,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+    _install(app, retry_maker)
+
+    detail = await _detail(client, agent_id)
+    assert {ticket["validator_hotkey"] for ticket in detail["tickets"]} == {
+        "validator-0",
+        "validator-1",
+    }
+    # Not blocked as "a validator ticket is still active" by the round lease.
+    assert detail["blocking_reason"] != "a validator ticket is still active"
+
+    triage = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    assert triage.status_code == 200, triage.text
+    rows = [
+        item
+        for item in triage.json()["submissions"]
+        if item["agent_id"] == str(agent_id)
+    ]
+    assert len(rows) == 1
+    # Before SN-334 the live round lease read as "running" and the finished
+    # round-created row as an exhausted validator.
+    assert rows[0]["retry_state"] == "queued"
+    assert rows[0]["exhausted_validator_count"] == 0
+    assert rows[0]["attempts_used"] == 1
+    assert rows[0]["ticket_states"] == {"scored": 2}

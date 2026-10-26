@@ -1,9 +1,30 @@
 name: Platform CI
 
-# Cost control: standalone verification is operator-dispatched; release gates
-# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/platform/**
+      - "!apps/platform/dashboard/**"
+      - "!apps/platform/faircopy.config.mjs"
+      - "!apps/platform/package.json"
+      - "!apps/platform/package-lock.json"
+      - packages/ditto-screening-protocol/**
+      # The static job checks the generated confirmation release assets
+      # against this generator's constants, so a generator-only change must
+      # reach that job.
+      - scripts/generate_confirmation_installation.py
+      # test_inference.py asserts the request-field fates against this table.
+      - docs/inference-request-fields.json
+      # The screener worker produces the signed verdicts Platform's submit
+      # endpoint consumes; a producer-only change must run the consumer tests.
+      - workers/screener/ditto_screener/policy.py
+      - workers/screener/ditto_screener/worker.py
+      # The fingerprint language inventory mirrors the screener's language
+      # table; test_source_languages.py pins the mirror.
+      - workers/screener/ditto_screener/source_masking.py
+      - .github/workflows/platform-ci.yml
+      - .github/workflows/platform-verify.yml
 permissions:
   contents: read
 

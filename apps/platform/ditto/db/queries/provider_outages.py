@@ -157,6 +157,14 @@ async def park_scoring_leases(
                 canary.finished_at = now
             parked += 1
             continue
+        if ticket.purpose == TicketPurpose.GENERATOR_ROUND:
+            # A round run is not a scoring attempt. Parking it must neither
+            # start a scoring cooldown, mint a no-fault scoring resume, nor
+            # overwrite the shared row's scoring failure evidence. The agent
+            # returns to the round's pending set for another lease.
+            ticket.retry_after = None
+            parked += 1
+            continue
         ticket.deadline = now
         ticket.retry_after = max(now, _aware(circuit.retry_at))
         # One logical ticket may receive at most one no-fault outage resume.

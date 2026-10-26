@@ -41,6 +41,7 @@ from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ditto.api_models.generator_ledger import GeneratorLedgerEntry
     from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry, LedgerResponse
 
@@ -273,6 +274,47 @@ def compute_router_weights(
     }
 
 
+def compute_generator_weights(
+    entries: Sequence[GeneratorLedgerEntry], *, rank_shares: Sequence[float]
+) -> dict[str, float]:
+    """Rank generator-competition miners by their latest fresh run score.
+
+    Platform has already run each generator on secret seeds against a
+    top-agent panel and folded every hotkey to its latest run scored inside the
+    freshness window (see :mod:`ditto.api_models.generator_ledger`). This fold
+    only ranks that pool and assigns ``rank_shares`` by position, tie-breaking
+    on ``first_seen`` then ``submission_id`` so every validator folds identical bytes.
+    Only entries marked ``weight_eligible`` with a positive score earn anything,
+    and
+    malformed ``rank_shares`` degrade to ``{}``: like the router fold, this
+    runs on the consensus ``put_weights`` path and must never raise.
+    """
+    if not rank_shares:
+        return {}
+    if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
+        return {}
+    scored = [
+        entry
+        for entry in entries
+        if entry.weight_eligible and math.isfinite(entry.score) and entry.score > 0.0
+    ]
+    ranked = sorted(
+        scored,
+        key=lambda entry: (-entry.score, entry.first_seen, str(entry.submission_id)),
+    )
+    distinct: list[GeneratorLedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    return {
+        entry.miner_hotkey: rank_shares[index]
+        for index, entry in enumerate(distinct[: len(rank_shares)])
+    }
+
+
 def _has_positive_weight(vector: Mapping[str, float]) -> bool:
     """Whether a track vector carries any payable (strictly positive) weight.
 
@@ -357,6 +399,52 @@ def track_allocated_share(
         if bps > 0 and _has_positive_weight(vectors.get(track_id, {}))
     )
     return allocated / BASIS_POINT_SCALE
+
+
+def reassign_unclaimed_shares(
+    shares_bps: Mapping[str, int],
+    vectors: Mapping[str, Mapping[str, float]],
+    *,
+    fallbacks: Mapping[str, str],
+) -> dict[str, int]:
+    """Move an empty track's bps to its declared fallback track.
+
+    By default an eligible track that folds no payable miner leaves its share
+    unclaimed and :func:`track_allocated_share` burns it. A track may instead
+    name a fallback (``fallbacks[track_id]``, e.g. ``generator -> memory``):
+    when the track produced no positive weight and the fallback is itself a
+    paying track with a positive share, the track's bps are added to the
+    fallback's and the track drops out of the map. The generator track
+    declares memory so a governed generator share with no weight-eligible
+    generator (Platform still in shadow, an empty round window) pays agent
+    miners rather than burning, which also keeps that state byte-identical
+    to the memory-only fold: with
+    ``{memory: 9000, generator: 1000}`` and no eligible generator, memory
+    folds at the full ``BASIS_POINT_SCALE`` and passes through unchanged.
+
+    One hop only, in a deterministic order, so the result never depends on
+    dict iteration: a fallback that is itself empty keeps the moved bps
+    unclaimed, and they burn exactly as its own would. Integer bps in, integer
+    bps out, so every validator folds the same split.
+    """
+    original = {track_id: bps for track_id, bps in shares_bps.items() if bps > 0}
+    resolved = dict(original)
+    for track_id in sorted(original):
+        target = fallbacks.get(track_id)
+        if (
+            target is None
+            or target == track_id
+            # A fallback governance holds at 0 bps is not paying: the share
+            # stays unclaimed and burns rather than funding a zeroed track.
+            or target not in original
+            or _has_positive_weight(vectors.get(track_id, {}))
+        ):
+            continue
+        # Move only the track's own configured bps (never bps it received),
+        # so a chain of fallbacks is still a single hop.
+        resolved[track_id] -= original[track_id]
+        resolved[target] = resolved.get(target, 0) + original[track_id]
+    return {track_id: bps for track_id, bps in resolved.items() if bps > 0}
 
 
 def split_unpaid_share(weights: Mapping[str, float]) -> tuple[dict[str, float], float]:

@@ -84,6 +84,52 @@ lease, moves the submission to the non-scoreable `quarantined` state, and
 appends a `screening_quarantines` row. Raw source, model transcripts, private
 prompts, and challenge contents are never stored in the platform database.
 
+### Inconclusive screenings are held for operator review
+
+An `inconclusive` outcome reaches Platform from two different causes, and
+`ditto/api_server/screening_inconclusive.py` tells them apart by reason code:
+
+- **A reviewer non-verdict** (`l2-model-inconclusive`,
+  `source-review-inconclusive`, `l3-adjudicator-inconclusive`, a critic or
+  adjudicator disagreement, an unresolved violation lead, a review budget that
+  stopped on its notes ledger, or no code at all). The source review ran and
+  could not decide, so retrying the same artifact under the same policy has no
+  reason to conclude differently. Platform completes the attempt as
+  `quarantined`, moves the submission to `quarantined` with the public reason
+  "Screening was inconclusive; held for operator review", and opens an
+  **active** `screening_quarantines` row. Nothing resolves that row
+  automatically: the infrastructure retry planner only considers
+  `screening_failed` rows, the claim never takes a `quarantined` agent, and
+  the attempt no longer counts toward the repeated-inconclusive park cap. The
+  operator releases, rejects, or rescreens it with `resolve_screening_quarantine`
+  or the guarded preview/execute batch, exactly like an anti-cheat hold. It is
+  counted as `escalation` in the ordinary source-review SLO.
+- **An infrastructure fault carried as `inconclusive`.** The worker reports
+  an L2/L3 provider or transport failure as `inconclusive` once an earlier
+  stage recorded a finding, and the signed-runtime preflight reports
+  `l2-runtime-evidence-unavailable` that way. A code registered as
+  `fleet_infra`, `provider_backoff`, or `operator_retry` in
+  `ditto_screening_protocol.reason_codes`, or one carrying a worker fault
+  marker (`provider-fault`, `response-contract`, `credits-exhausted`,
+  `transport-failure`, `analyzer-contract`, `analyzer-exited`,
+  `http-<status>`, or a timeout or exception-class tail), keeps the previous
+  behavior: the attempt ends `expired`, the submission parks in
+  `screening_failed` with "Screening was inconclusive; manual retry required",
+  and an operator authorizes one exact retry with `retry_failed_screening_now`.
+
+The split is a deny list of fault shapes because the worker composes most
+codes dynamically; an unrecognized code is held for a human rather than
+retried. Two cases keep the retry path even for a reviewer non-verdict: a
+build-only attempt (it ran no source review), and a released scored policy
+canary, which keeps its board position and pauses its one-row rollout for an
+operator retry because the quarantine court only resolves a `quarantined`
+agent. A deferred deep review is unchanged: it keeps its
+`ath_pending_review` hold.
+
+Submissions that were parked in `screening_failed` as inconclusive before this
+routing shipped are not migrated. An operator can rescreen one with
+`retry_failed_screening_now`.
+
 Backroom and other operator clients use the bearer-protected endpoints below:
 
 - `GET /api/v1/admin/screening-quarantines`
@@ -158,6 +204,38 @@ loses nothing, because the attempt row keeps the earlier lead verbatim.
 Quarantine listings default to `sort=oldest` so operator queues process the
 longest-waiting submission first. Clients may request `sort=newest`; pagination
 uses the same timestamp and quarantine-ID direction for deterministic results.
+
+## Lineage-scoped review
+
+When a claimed attempt is an ordinary source review (not build-only, not an
+exact duplicate, not a pinned canary or forced full review) and the same
+`miner_hotkey` has an earlier `version` of the same agent `name`, the claim
+stores that earlier agent as `screening_attempts.lineage_parent_agent_id` and
+emits it on the queue item as `lineage_parent_agent_id`.
+
+The worker then calls `POST /api/v1/screener/agent/{agent_id}/review-lineage
+?attempt_id=...` under the same lease checks as the artifact download. The
+response is a digest-sealed `ReviewLineagePacket` (protocol
+`ditto_screening_protocol.review_lineage`): parent and history, every
+quarantine resolution, ATH action (with batch evidence references) and resolved
+dispute on those versions, the parent's automated review outcomes, and the
+bounded per-file diff. The first fetch binds `lineage_scope` and
+`lineage_packet_sha256` to the attempt; a later fetch that would produce a
+different packet is refused with 409. Any fetch failure leaves the worker on an
+ordinary full review.
+
+`scope` is `full` when the Dockerfile, a build manifest or an entrypoint
+changed, the diff exceeds 2,500 changed lines or 64 files, an opaque or unread
+file changed (compared by member digest), no ruling or finding exists under the
+attempt's policy, or the lineage has no review history. A Dockerfile kept in
+place whose only changed instructions are `ENV` or `LABEL` lines does not count
+as a build-surface change (a miner flipping declared feature switches is still
+reviewed against its lineage), unless a changed `ENV` name steers a build tool
+(`PIP_*`, `UV_*`, `NPM_*`, `CARGO_*`, `PATH`, proxies and the like); `ARG`,
+`FROM`, `RUN`, `COPY`, `ADD`, `CMD` and `ENTRYPOINT` edits always do. The L1 opening message
+and the L2/L3 dossier (`review_lineage` section) carry the packet, and the L2
+result and analyst caches include its digest, so an ordinary review's caches are
+unchanged.
 
 ## Miner disputes
 

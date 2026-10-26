@@ -4,6 +4,7 @@ import importlib.util
 import json
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -21,12 +22,83 @@ lookup_context = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lookup_context)
 
 
+def test_fallback_withdrawal_scope_is_public_safe_and_discoverable() -> None:
+    skill = ROOT / ".agents/skills/backroom-review"
+    manifest = (
+        skill / "references/precedents/october-25-fallback-recovery-withdrawal.json"
+    )
+    data = json.loads(manifest.read_text())
+    assert data["date"] == "2026-10-25"
+    rows = data["items"]
+    assert len(rows) == len({r["agent_id"] for r in rows}) == 51
+    for row in rows:
+        assert set(row) == {"agent_id", "artifact_sha256"}
+        assert str(uuid.UUID(row["agent_id"])) == row["agent_id"]
+        assert len(row["artifact_sha256"]) == 64
+        assert bytes.fromhex(row["artifact_sha256"])
+    assert "13449296-a28e-4849-95c8-6055d50e4784" not in {r["agent_id"] for r in rows}
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(skill / "scripts/search-precedents.py"),
+            "october-25-fallback-recovery-withdrawal",
+            "--json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    found = json.loads(result.stdout)
+    holding = next(
+        row
+        for row in found["items"]
+        if row["id"] == "october-25-fallback-recovery-withdrawal"
+    )
+    assert holding["resolution"] == "guidance"
+    assert "separate prohibited mechanism" in holding["holding"]
+    for entry in (
+        skill / "SKILL.md",
+        ROOT / ".agents/skills/backroom-board-sweep/SKILL.md",
+    ):
+        assert "october-25-fallback-recovery-withdrawal.md" in entry.read_text()
+
+
 def test_vtrust_routes_to_stateful_pylon_and_chain_evidence() -> None:
     topic = lookup("vTrust")[0]
     assert topic["id"] == "pylon-epoch-schedule"
     read = topic["read"]
     assert isinstance(read, list)
     assert "services/pylon/README.md" in read
+
+
+def test_historical_loss_withdrawals_preserve_court_and_identity_scope() -> None:
+    precedents = ROOT / ".agents/skills/backroom-review/references/precedents"
+    current = json.loads(
+        (precedents / "october-25-fallback-recovery-withdrawal.json").read_text()
+    )
+    historical = json.loads(
+        (precedents / "october-25-historical-loss-withdrawal.json").read_text()
+    )
+    assert historical["date"] == "2026-10-25"
+    assert len(historical["ath_items"]) == 17
+    assert len(historical["screening_items"]) == 1
+    rows = historical["ath_items"] + historical["screening_items"]
+    assert len({r["agent_id"] for r in rows}) == 18
+    assert not {r["agent_id"] for r in rows} & {r["agent_id"] for r in current["items"]}
+    for row in rows:
+        assert set(row) == {"agent_id", "artifact_sha256"}
+        assert str(uuid.UUID(row["agent_id"])) == row["agent_id"]
+        assert len(row["artifact_sha256"]) == 64
+        assert bytes.fromhex(row["artifact_sha256"])
+    assert historical["screening_items"][0]["agent_id"] == (
+        "1252e986-6ce5-4771-b7e5-39443d27d5d2"
+    )
+    guidance = (precedents / "october-25-historical-loss-withdrawal.md").read_text()
+    assert "Requeue is not CLEAR" in guidance
+    assert "does not claim all" in guidance
+    assert "not claim that the old policy text always said the same thing" in guidance
+    assert "requires checking each exact artifact for other" in guidance
+    assert "not a completed source CLEAR" in guidance
 
 
 def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:
@@ -93,14 +165,6 @@ def test_contributor_backlog_routes_to_review_and_delivery() -> None:
         ]
 
 
-def test_native_reserved_recovery_routes_to_operator_command() -> None:
-    topic = lookup("native evidence recovery")[0]
-    assert topic["id"] == "coding-evidence-recovery"
-    assert "apps/platform/ditto/coding_evidence_recovery.py" in topic_list(
-        topic, "owns"
-    )
-
-
 def test_hosted_authoring_input_routes_to_both_consumers() -> None:
     topic = lookup("hosted authoring input assembler")[0]
     assert topic["id"] == "coding-hosted-inputs"
@@ -136,12 +200,6 @@ def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
     assert lookup("Node suite compatibility")[0]["id"] == "coding-node-runtime"
     assert "services/dittobench-api/coding_runtime/node" in topic_list(topic, "owns")
     assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
-
-
-def test_native_custody_routes_to_platform_only():
-    topic = lookup("native v2 custody Unix proxy")[0]
-    assert topic["id"] == "coding-native-custody"
-    assert topic_list(topic, "skills") == ["ditto-subnet-platform"]
 
 
 def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
@@ -181,15 +239,6 @@ def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
     assert "services/dittobench-api/internal/codinghostedruntime" in topic_list(
         topic, "owns"
     )
-    assert "apps/platform/ditto/api_server/coding_hosted_runtime.py" in topic_list(
-        topic, "owns"
-    )
-
-
-def test_hosted_signer_startup_routes_to_platform():
-    topic = lookup("hosted control signer startup")[0]
-    assert topic["id"] == "coding-hosted-signer"
-    assert topic_list(topic, "skills") == ["ditto-subnet-platform"]
 
 
 def test_native_inference_routes_to_its_private_authority() -> None:
@@ -201,9 +250,6 @@ def test_native_inference_routes_to_its_private_authority() -> None:
 def test_native_provider_routes_to_its_private_authority() -> None:
     topic = lookup("native hosted provider adapter")[0]
     assert topic["id"] == "coding-hosted-inference"
-    assert "apps/platform/ditto/api_server/coding_hosted_provider.py" in topic_list(
-        topic, "owns"
-    )
 
 
 def test_native_relay_routes_to_both_runtime_owners() -> None:
@@ -217,12 +263,6 @@ def test_native_database_path_routes_to_private_infrastructure():
     topic = lookup("native private postgres path")[0]
     assert topic["id"] == "coding-hosted-postgres"
     assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
-
-
-def test_runtime_budget_routes_to_its_profile_owner() -> None:
-    topic = lookup("hosted runtime budget profile")[0]
-    assert topic["id"] == "coding-hosted-budget"
-    assert "ditto-subnet-platform" in topic_list(topic, "skills")
 
 
 def test_native_bundle_routes_to_build_and_installation():

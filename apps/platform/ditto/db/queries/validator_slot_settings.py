@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from ditto.db.models import ValidatorSlotSettingsRevision
+from ditto.api_models.ticket_status import TicketStatus
+from ditto.db.models import ValidatorSlotSettingsRevision, ValidatorTicket
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from datetime import datetime
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -64,3 +66,31 @@ async def insert_validator_slot_settings_revision(
     session.add(row)
     await session.flush()
     return row
+
+
+async def live_lease_purpose_counts(
+    session: AsyncSession, *, now: datetime
+) -> dict[str, dict[str, int]]:
+    """Live leases (``issued``, deadline ahead) per validator, by ticket purpose.
+
+    The same liveness rule the slot cap and the round reservation count with,
+    so the operator view of who holds what matches the issuance decision.
+    """
+    rows = (
+        await session.execute(
+            select(
+                ValidatorTicket.validator_hotkey,
+                ValidatorTicket.purpose,
+                func.count(),
+            )
+            .where(
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .group_by(ValidatorTicket.validator_hotkey, ValidatorTicket.purpose)
+        )
+    ).all()
+    counts: dict[str, dict[str, int]] = {}
+    for hotkey, purpose, count in rows:
+        counts.setdefault(hotkey, {})[str(purpose)] = int(count)
+    return counts

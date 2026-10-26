@@ -141,3 +141,19 @@ not prove a provider purchase or credited GM balance.
 Stopping the manual service or disabling Platform dispatch prevents new
 claims. Preserve pending journals and queued requests for reconciliation;
 do not reset/delete financial history during rollback.
+
+### Finney runtime upgrades
+
+A Subtensor upgrade no longer needs a cold signature by default. Custody keeps
+signing under the existing policy when its consumed signer surface is
+byte-identical to the signed runtime's. The surface is the storage, events,
+calls, matched indices and signed extensions in
+`COLLECTOR_SIGNER_SURFACE`. Backroom `get_runtime_interface_report` shows the
+same verdict as `treasury_signer.signs_on_this_runtime`.
+
+If that surface moved, the button stays blocked with "Finney runtime changed".
+That case still needs an audit and a new offline bundle; see
+[the v484 record](audits/collector-finney-v484/README.md). Operators and agents
+can queue a transfer through `preview_treasury_manual_transfer` followed by
+`queue_treasury_manual_transfer`. The second tool is destructive and requires
+the exact typed confirmation, which mirrors the button.

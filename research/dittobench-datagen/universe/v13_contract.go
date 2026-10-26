@@ -453,25 +453,27 @@ type v13Group struct {
 
 // v13Draws holds the per-seed draw state shared across groups.
 type v13Draws struct {
-	seed      int64
-	names     *rand.Rand
-	nameOrd   int
-	usedNames map[string]bool
-	usedOrgs  map[string]bool
-	usedPurp  map[string]bool
-	statusMap []int // class index -> alias term index
+	seed         int64
+	benchVersion int
+	names        *rand.Rand
+	nameOrd      int
+	usedNames    map[string]bool
+	usedOrgs     map[string]bool
+	usedPurp     map[string]bool
+	statusMap    []int // class index -> alias term index
 }
 
 // newV13Draws opens the per-seed draw state. stream separates the name RNG of
 // independent generators (business vs personal) so neither perturbs the other.
-func newV13Draws(seed int64, stream string) *v13Draws {
+func newV13Draws(seed int64, stream string, benchVersion int) *v13Draws {
 	return &v13Draws{
-		seed:      seed,
-		names:     rand.New(rand.NewSource(v10Seed(seed, "v13:people:"+stream))),
-		usedNames: map[string]bool{},
-		usedOrgs:  map[string]bool{},
-		usedPurp:  map[string]bool{},
-		statusMap: v13Perm(seed, "status-alias", len(v13StatusAliasTerms))[:len(V13StatusClasses)],
+		seed:         seed,
+		benchVersion: benchVersion,
+		names:        rand.New(rand.NewSource(v10Seed(seed, "v13:people:"+stream))),
+		usedNames:    map[string]bool{},
+		usedOrgs:     map[string]bool{},
+		usedPurp:     map[string]bool{},
+		statusMap:    v13Perm(seed, "status-alias", len(v13StatusAliasTerms))[:len(V13StatusClasses)],
 	}
 }
 
@@ -984,6 +986,13 @@ func renderV13Record(seed int64, group int, renderer V10Renderer, index int, row
 // invariant, causal counterfactual). Count must be a positive multiple of
 // four; 28 covers every family once.
 func GenerateV13Programs(seed int64, count int) ([]V10GeneratedCase, error) {
+	return GenerateV13ProgramsForVersion(seed, count, protocol.BenchVersionV13)
+}
+
+// GenerateV13ProgramsForVersion is GenerateV13Programs under an explicit
+// benchmark contract. v13 renders exactly as before; bench_version >= 14 files
+// the shuffled case-file rows in story order (ditto-subnet#3088).
+func GenerateV13ProgramsForVersion(seed int64, count, benchVersion int) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("v13 program count must be a positive multiple of four, got %d", count)
 	}
@@ -993,7 +1002,7 @@ func GenerateV13Programs(seed int64, count int) ([]V10GeneratedCase, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := newV13Draws(seed, "business")
+	d := newV13Draws(seed, "business", benchVersion)
 	out := make([]V10GeneratedCase, 0, count)
 	for group := 0; group < count/4; group++ {
 		g := d.drawGroup(group)
@@ -1056,6 +1065,7 @@ func materializeV13Case(
 	movable := []string{binding, m.Records[0], m.Records[1], m.Records[2]}
 	perm := v13Perm(seed, fmt.Sprintf("rows-%d", group), len(movable))
 	rows := []string{glossary[0], glossary[1]}
+	fixedRows := len(rows)
 	for _, p := range perm {
 		rows = append(rows, movable[p])
 	}
@@ -1066,7 +1076,7 @@ func materializeV13Case(
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    pairIDs[i],
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v13-session-%d", group), i),
-			Timestamp: v13CalendarTimestamp(seed, "business", group, i),
+			Timestamp: v13CalendarTimestamp(seed, "business", group, v13CaseFileSlot(d.benchVersion, perm, i, fixedRows)),
 			Prompt:    prompt, Response: response,
 		})
 	}

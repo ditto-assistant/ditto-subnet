@@ -34,6 +34,13 @@ attempt_count  >=  MAX_ATTEMPTS_PER_VERSION + manual_retry_grants + infra_retry_
 
 - **Another validator may pick the agent up immediately** — the cap and cooldown
   are per-validator, so a timeout on one validator never blocks the other two.
+- **Generator-round runs never count (SN-334).** A `generator_round` lease
+  shares the `(agent, version, validator)` row but never increments
+  `attempt_count`, and a row it creates starts at `0`. A zero-attempt
+  round-only row reads as no row to issuance, quorum occupancy, and the retry
+  triage views; a live round lease is not scoring work there either. Its
+  expiry or provider-outage park starts no cooldown and mints no no-fault
+  resume, and a scoring lane that reuses the row drops the round's dataset pin.
 - **A benchmark-version bump resets the budget.** Tickets are keyed by
   `bench_version`, so repaired scoring software revisits the artifact with a
   fresh 1-attempt budget on the new version.

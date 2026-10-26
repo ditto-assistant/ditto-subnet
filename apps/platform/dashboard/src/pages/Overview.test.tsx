@@ -471,7 +471,7 @@ describe("off-network harness comparison (row 2)", () => {
     const section = document.querySelector(".harness-comparison") as HTMLElement;
     expect(section.textContent).toContain("Method and comparability caveats");
     expect(section.textContent).toContain(
-      "Hermes Agent and OpenClaw measured retrospectively where reference runs are available",
+      "Follow the best finalized miner across the four most recent competitions.",
     );
     // Dropped affordances stay dropped: no harness filter, no chart-row
     // layout, no "Reference only" kicker above the title.
@@ -745,8 +745,70 @@ describe("memory timeline gaps (row 6)", () => {
 // "No version literal decides what is drawn." (Version-literal negative
 // greps live in src/build-invariants.test.ts.)
 describe("memory timeline window (row 7)", () => {
-  it("windows to the most recent TIMELINE_MAX_ERAS (6) releases at or above v2", () => {
-    expect(TIMELINE_MAX_ERAS).toBe(6);
+  it("refreshes the active and collecting boards while reusing settled competitions", async () => {
+    const requests: string[] = [];
+    restoreFetch = installFetch({ onRequest: (path) => requests.push(path) });
+    await loadMemoryField([10, 11, 12, 13], [12, 13]);
+    expect(requests).toHaveLength(4);
+    requests.length = 0;
+    await loadMemoryField([10, 11, 12, 13], [12, 13]);
+    expect(requests).toEqual([
+      "/public/leaderboard?bench_version=12",
+      "/public/leaderboard?bench_version=13",
+    ]);
+  });
+
+  it("fetches only four boards and rolls forward without rendering retired references", async () => {
+    const requests: string[] = [];
+    let newest = 13;
+    renderOverview({
+      onRequest: (path) => requests.push(path),
+      patch: (name, body) => {
+        if (name !== "bench-timeline") return body;
+        return {
+          releases: Array.from({ length: 8 }, (_, i) => newest - 7 + i).map((version) => ({
+            bench_version: version,
+            released_at: "2026-08-01T00:00:00Z",
+            activated_at: "2026-08-02T00:00:00Z",
+            title: "Contract v" + version,
+          })),
+          points: [],
+        };
+      },
+    });
+    const labels = (): string[] =>
+      Array.from(document.querySelectorAll(".timeline-era-label")).map(
+        (el) => el.firstChild?.textContent || "",
+      );
+    await waitFor(() => expect(labels()).toEqual(["v10", "v11", "v12", "v13"]));
+    await waitFor(() =>
+      expect(
+        requests.filter((path) => path.startsWith("/public/leaderboard?bench_version=")),
+      ).toHaveLength(4),
+    );
+    const section = document.querySelector(".harness-comparison") as HTMLElement;
+    expect(section.textContent).not.toMatch(/Hermes|OpenClaw|native reference|not yet measured/);
+    expect(section.querySelectorAll(".harness-comparison-evidence-links a")).toHaveLength(0);
+    expect(document.getElementById("memory-timeline-title")?.textContent).not.toMatch(
+      /Hermes|OpenClaw/,
+    );
+    expect(
+      requests.filter((path) => path.startsWith("/public/leaderboard?bench_version=")),
+    ).toEqual([10, 11, 12, 13].map((v) => "/public/leaderboard?bench_version=" + v));
+
+    requests.length = 0;
+    newest = 14;
+    refreshAllEndpoints();
+    await waitFor(() => expect(labels()).toEqual(["v11", "v12", "v13", "v14"]));
+    await waitFor(() => expect(requests).toContain("/public/leaderboard?bench_version=14"));
+    // Settled boards are reused; a rollover only needs the new board.
+    expect(
+      requests.filter((path) => path.startsWith("/public/leaderboard?bench_version=")),
+    ).toEqual(["/public/leaderboard?bench_version=14"]);
+  });
+
+  it("windows to the most recent TIMELINE_MAX_ERAS (4) releases at or above v2", () => {
+    expect(TIMELINE_MAX_ERAS).toBe(4);
     const releases = [1, 2, 3, 4, 5, 6, 7, 8].map((v) => ({
       bench_version: v,
       released_at: "2026-07-0" + Math.min(9, v) + "T00:00:00Z",
@@ -765,11 +827,11 @@ describe("memory timeline window (row 7)", () => {
       },
     );
     if (out.kind !== "chart") throw new Error("expected a chart");
-    // v1 is below the >= 2 floor; v2 falls out of the six-band window.
+    // Older contracts fall out of the four-band window.
     const drawn = Array.from(out.html.matchAll(/timeline-era-label[^>]*>v(\d+)</g)).map((m) =>
       Number(m[1]),
     );
-    expect(drawn).toEqual([3, 4, 5, 6, 7, 8]);
+    expect(drawn).toEqual([5, 6, 7, 8]);
   });
 });
 

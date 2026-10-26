@@ -520,10 +520,17 @@ func renderV13PersonalRecord(seed int64, group int, renderer V13PersonalRenderer
 // complete four-member metamorphic groups. Count must be a positive multiple
 // of four; 24 covers six of the seven domains (a seeded permutation).
 func GenerateV13PersonalPrograms(seed int64, count int) ([]V10GeneratedCase, error) {
+	return GenerateV13PersonalProgramsForVersion(seed, count, protocol.BenchVersionV13)
+}
+
+// GenerateV13PersonalProgramsForVersion is GenerateV13PersonalPrograms under an
+// explicit benchmark contract. v13 renders exactly as before; bench_version >=
+// 14 files the shuffled case-file rows in story order (ditto-subnet#3088).
+func GenerateV13PersonalProgramsForVersion(seed int64, count, benchVersion int) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("v13 personal program count must be a positive multiple of four, got %d", count)
 	}
-	d := newV13Draws(seed, "personal")
+	d := newV13Draws(seed, "personal", benchVersion)
 	domainPerm := v13Perm(seed, "personal-domains", len(V13PersonalDomains))
 	out := make([]V10GeneratedCase, 0, count)
 	for group := 0; group < count/4; group++ {
@@ -549,13 +556,13 @@ func GenerateV13PersonalPrograms(seed int64, count int) ([]V10GeneratedCase, err
 		for variant, spec := range variants {
 			member := renderV13PersonalMember(d, group, variant, g, spec.counter)
 			renderer := v13PersonalRenderers[(group+variant)%len(v13PersonalRenderers)]
-			out = append(out, materializeV13PersonalCase(seed, group, variant, groupID, renderer, g, member, spec.relation, spec.answer, spec.distract))
+			out = append(out, materializeV13PersonalCase(seed, group, variant, groupID, renderer, g, member, spec.relation, spec.answer, spec.distract, benchVersion))
 		}
 	}
 	return out, nil
 }
 
-func materializeV13PersonalCase(seed int64, group, variant int, groupID string, renderer V13PersonalRenderer, g v13PersonalGroup, m v13Member, relation, answerRelation string, includeDistractor bool) V10GeneratedCase {
+func materializeV13PersonalCase(seed int64, group, variant int, groupID string, renderer V13PersonalRenderer, g v13PersonalGroup, m v13Member, relation, answerRelation string, includeDistractor bool, benchVersion int) V10GeneratedCase {
 	prefix := fmt.Sprintf("v13p-%d-%d", group, variant)
 	scope := v13ProgramRecordScope(seed, "personal", group, relation)
 	rows := []string{m.Records[0], m.Records[1], m.Records[2]}
@@ -577,7 +584,7 @@ func materializeV13PersonalCase(seed int64, group, variant int, groupID string, 
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    id,
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v13p-session-%d", group), i),
-			Timestamp: v13CalendarTimestamp(seed, "personal", group, i),
+			Timestamp: v13CalendarTimestamp(seed, "personal", group, v13CaseFileSlot(benchVersion, perm, i, 0)),
 			Prompt:    prompt, Response: response,
 		})
 	}

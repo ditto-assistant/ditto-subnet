@@ -1751,8 +1751,15 @@ async def list_eligible_ledger(
     apply_v9_confirmation_policy: bool = True,
     dedupe_owners: bool = True,
     active_version: int | None = None,
+    diagnostic_scored_agent_ids: frozenset[UUID] = frozenset(),
+    diagnostic_excluded_agent_ids: frozenset[UUID] = frozenset(),
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
+
+    ``diagnostic_*`` membership overrides are for the read-only ATH court
+    projection only. They change no stored status. Authority callers leave
+    both empty; the canonical quorum, shadow and confirmation gates still
+    apply to every hypothetical member.
 
     "Best" breaks an exact tie toward the *newest* generation
     (:func:`~ditto.score_order.owner_family_order_terms`), because a saturated
@@ -1944,7 +1951,12 @@ async def list_eligible_ledger(
             EvaluationPayment.miner_coldkey.label("miner_coldkey"),
             _emission_owner_key().label("emission_owner"),
             Agent.created_at.label("first_seen"),
-            Agent.status.label("status"),
+            case(
+                (Agent.agent_id.in_(diagnostic_scored_agent_ids), AgentStatus.SCORED),
+                else_=Agent.status,
+            ).label("status")
+            if diagnostic_scored_agent_ids
+            else Agent.status.label("status"),
             agent_best.c.composite,
             agent_best.c.ranking_composite,
             agent_best.c.n,
@@ -1968,7 +1980,19 @@ async def list_eligible_ledger(
         # 2m == cnt (even) or 2m == cnt+1 (odd). A lone score picks itself; a
         # quorum of 3 picks the 2nd (true median).
         .where(
-            Agent.status == AgentStatus.SCORED,
+            (
+                or_(
+                    Agent.status == AgentStatus.SCORED,
+                    Agent.agent_id.in_(diagnostic_scored_agent_ids),
+                )
+                if diagnostic_scored_agent_ids
+                else Agent.status == AgentStatus.SCORED
+            ),
+            (
+                Agent.agent_id.not_in(diagnostic_excluded_agent_ids)
+                if diagnostic_excluded_agent_ids
+                else literal(True)
+            ),
             or_(
                 agent_best.c.srn * 2 == agent_best.c.cnt,
                 agent_best.c.srn * 2 == agent_best.c.cnt + 1,
@@ -2618,7 +2642,7 @@ async def list_eligible_ledger(
             Agent.size_bytes,
             *sketch_columns,
             Agent.created_at.label("first_seen"),
-            Agent.status,
+            winners.c.status,
             Score.composite,
             Score.tool_mean,
             Score.memory_mean,

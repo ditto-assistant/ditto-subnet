@@ -14,11 +14,10 @@ func overloadPhase(status int, body string) phaseTrace {
 }
 
 func TestReceiptFreeOverloadRequiresEveryPhaseToBeCanonicalBackpressure(t *testing.T) {
-	body := `{"error":{"code":429,"message":"rate limited"}}`
+	body := receiptFreeEnvelope(429, "openai/gpt-oss-20b")
 	status, ok := receiptFreeOverload(
 		[]phaseTrace{overloadPhase(429, body), overloadPhase(429, body)},
 		"openai/gpt-oss-20b",
-		"deepinfra",
 	)
 	if !ok || status != 429 {
 		t.Fatalf("canonical overload = (%d, %v), want (429, true)", status, ok)
@@ -28,7 +27,6 @@ func TestReceiptFreeOverloadRequiresEveryPhaseToBeCanonicalBackpressure(t *testi
 	if _, ok := receiptFreeOverload(
 		[]phaseTrace{overloadPhase(429, receipted)},
 		"openai/gpt-oss-20b",
-		"deepinfra",
 	); ok {
 		t.Fatal("receipt-bearing 429 opened the provider circuit")
 	}
@@ -36,7 +34,6 @@ func TestReceiptFreeOverloadRequiresEveryPhaseToBeCanonicalBackpressure(t *testi
 	if _, ok := receiptFreeOverload(
 		[]phaseTrace{overloadPhase(429, body), {timedOut: true}},
 		"openai/gpt-oss-20b",
-		"deepinfra",
 	); ok {
 		t.Fatal("mixed backpressure/transport exhaustion opened the provider circuit")
 	}

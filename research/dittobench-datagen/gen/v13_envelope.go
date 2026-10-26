@@ -262,7 +262,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	enterpriseCount := min(12, envelope.BusinessPrograms)
 	legacyCount := envelope.BusinessPrograms - enterpriseCount
 	if legacyCount > 0 {
-		business, err = universe.GenerateV13Programs(seed, legacyCount)
+		business, err = universe.GenerateV13ProgramsForVersion(seed, legacyCount, benchVersion)
 	}
 	if err == nil {
 		var enterprise []universe.V10GeneratedCase
@@ -274,7 +274,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	}
 	var personal []universe.V10GeneratedCase
 	if envelope.PersonalPrograms > 0 {
-		personal, err = universe.GenerateV13PersonalPrograms(seed, envelope.PersonalPrograms)
+		personal, err = universe.GenerateV13PersonalProgramsForVersion(seed, envelope.PersonalPrograms, benchVersion)
 		if err != nil {
 			return MemorySuite{}, err
 		}

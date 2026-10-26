@@ -41,6 +41,14 @@ front-load artifact downloads.
    Reconcile the exact assurance, clarification or reversal before ruling;
    record verified additions in the existing store, without publishing private
    conversations or unresolved findings.
+   Check recent withdrawals before challenging a prior CLEAR. Read its exact
+   reason and the current decisive bytes; unchanged inherited code does not
+   erase an assurance. Under the
+   [October 25 recovery holding](../backroom-review/references/precedents/october-25-fallback-recovery-withdrawal.md),
+   incidental loss from retrieval, summaries, compaction, checkpoints, retries
+   or fresh fallback alone is quality/reliability, even after a model consumed
+   a receipt. A reject needs a separate prohibited mechanism and material
+   consequence, never unread code or an unproven hypothetical failure.
 5. **Diff against the ruled sibling.** `get_lineage_source_diff` (add `path` for
    one file). If the diff removes exactly the charged mechanism and the other
    files are byte-identical to an artifact whose other paths were already read,
@@ -113,12 +121,18 @@ front-load artifact downloads.
   a bare `open` still needs scored or live.
 - **Same name is not same miner.** Precedents mentioning a "delta v5" or
   "delta v7" can belong to a different hotkey. Match by UUID.
-- **Safe harbors stay narrow.** A model-authorized repeat gate (a separate
+- **Apply current safe harbors.** A model-authorized repeat gate (a separate
   model decides, or the deciding model re-issues the call) is permitted. A
   blanket or phrase-gated success memo is I7 (Artemis v8 `2758f7a7`, test-v13 v3
-  `eb13f315`). Timestamps kept with no recency recipe is the lets_637 clear
-  (`8b3f0b57`); hidden timestamps plus an order disclaimer plus a change-wins
-  recipe is I5 (Harry v14 `30d854e5`).
+  `eb13f315`). The case-file currency rule, including its date disclaimer,
+  change cues and scoped timestamp omission, is permitted alone; combining
+  those elements is not an independent second factor. Harry v14 `30d854e5`
+  was restored. Read the [currency reversal](../backroom-review/references/precedents/october-23-case-file-currency.md)
+  before using an older chronology holding. A truthful 6000-character
+  tool-result cap is also benign alone; read the [cap reversal](../backroom-review/references/precedents/october-23-benign-tool-result-cap.md).
+  The [recovery withdrawal](../backroom-review/references/precedents/october-25-fallback-recovery-withdrawal.md)
+  also covers later receipt/history loss; multiple quality defects do not
+  supply a separate prohibited mechanism.
 - **Ported constructs cross hotkeys and languages.** Once a mechanism is
   charged, grep its prompt text (not identifiers) with `search_screening_source`
   across every ranked and evaluating row. A stage can be ported into Python,

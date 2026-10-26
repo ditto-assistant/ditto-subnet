@@ -57,6 +57,7 @@ from ditto_screener.policy import (
 from ditto_screener.review_settings import (
     MAX_SHADOW_PROVIDER_STAGES,
     EffectiveReviewSettings,
+    ProbeBatteryObservationRequest,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
     bootstrap_review_settings,
@@ -72,6 +73,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenerQueueItem,
     ScreenEvidenceItem,
     ScreenResultOutcome,
@@ -766,6 +768,39 @@ class ScreenerWorker:
             int(self._credits_pause_seconds),
         )
 
+    async def _review_lineage(
+        self, item: ScreenerQueueItem, attempt_id: UUID
+    ) -> ReviewLineagePacket | None:
+        """The attempt's lineage packet, or None for an ordinary full review.
+
+        A packet that cannot be fetched never blocks screening: the attempt
+        falls back to the full review it would have had without a lineage.
+        """
+        if item.lineage_parent_agent_id is None:
+            return None
+        try:
+            packet = await self._platform.get_review_lineage(
+                item.agent_id, attempt_id=attempt_id, artifact_sha256=item.sha256
+            )
+        except (PlatformError, ValidationError, ValueError) as error:
+            logger.warning(
+                "agent_id=%s lineage packet unavailable; full review: %s",
+                item.agent_id,
+                str(error)[:200],
+            )
+            return None
+        logger.info(
+            "agent_id=%s lineage parent=%s scope=%s changed_files=%d "
+            "rulings=%d findings=%d",
+            item.agent_id,
+            packet.parent.agent_id,
+            packet.scope.value,
+            packet.changed_file_count,
+            len(packet.rulings),
+            len(packet.findings),
+        )
+        return packet
+
     async def _screen_one(
         self,
         item: ScreenerQueueItem,
@@ -955,6 +990,7 @@ class ScreenerWorker:
                     artifact = await self._platform.get_artifact(
                         agent_id, attempt_id=attempt_id
                     )
+                    review_lineage = await self._review_lineage(item, attempt_id)
 
                     result = await self._gate.screen(
                         agent_id=agent_id,
@@ -981,6 +1017,7 @@ class ScreenerWorker:
                         policy_version=policy_version,
                         scored_runtime_evidence=item.scored_runtime_evidence,
                         scored_runtime_evidence_received_at=received_at,
+                        review_lineage=review_lineage,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(
@@ -1000,6 +1037,22 @@ class ScreenerWorker:
                 # Exception text can contain private findings or credentials.
                 logger.warning(
                     "shadow review telemetry failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
+            try:
+                battery = self._gate.pop_probe_battery(attempt_id)
+                if battery is not None:
+                    await self._submit_probe_battery(
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        summary=battery,
+                    )
+            except Exception as error:
+                # Same rule as the shadow review: report-only telemetry.
+                logger.warning(
+                    "probe battery telemetry failed attempt_id=%s error_type=%s",
                     attempt_id,
                     type(error).__name__,
                 )
@@ -1480,6 +1533,40 @@ class ScreenerWorker:
             reason_code,
             response.status,
         )
+
+    async def _submit_probe_battery(
+        self,
+        *,
+        agent_id: UUID,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        summary: dict[str, Any],
+    ) -> None:
+        """Best-effort report-only battery leads; never part of the verdict.
+
+        The gate stamps the summary with the revision it ran under; the worker's
+        current status may already name a later revision.
+        """
+        revision = summary.get("settings_revision")
+        if not isinstance(revision, int) or revision < 1:
+            logger.warning("discarding probe battery without an applied revision")
+            return
+        try:
+            request = ProbeBatteryObservationRequest.model_validate(
+                {
+                    **summary,
+                    "attempt_id": attempt_id,
+                    "artifact_sha256": artifact_sha256,
+                },
+                strict=False,
+            )
+            await self._platform.submit_probe_battery(agent_id, request)
+        except (ValidationError, ValueError, PlatformError) as error:
+            logger.warning(
+                "probe battery telemetry was not persisted attempt_id=%s error_type=%s",
+                attempt_id,
+                type(error).__name__,
+            )
 
     async def _submit_shadow_review(
         self,

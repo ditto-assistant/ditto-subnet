@@ -221,6 +221,17 @@ class ScorerBenchmarkCapability(BaseModel):
     deterministic_v13_datasets: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    # The scorer accepts ``generator-round-v1`` round datasets. Absent unless
+    # true, so validators without it sign exactly the bytes they always did.
+    generator_rounds: bool = Field(default=False, exclude_if=lambda value: not value)
+    # The largest round column (cases per pack) the scorer runs, read from its
+    # ``generator-round-max-cases-<n>`` feature and capped at what this
+    # validator accepts. Absent unless advertised, so validators without it sign
+    # exactly the bytes they always did; Platform then assumes the legacy column
+    # size and leases them no larger round.
+    generator_round_max_cases: int | None = Field(
+        default=None, ge=1, le=1000, exclude_if=lambda value: value is None
+    )
     # Additive and optional so a validator that predates heartbeat protocol v15
     # produces the exact same signing bytes it always did. Absent means "this
     # validator cannot report probe evidence", never "the probe succeeded".
@@ -316,6 +327,9 @@ class ValidatorCapabilities(BaseModel):
     sandbox_memory_limit: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    # Publishes generator-round seed commitments Platform elects it for
+    # (``Commitments.set_commitment`` from its own Pylon identity).
+    round_commitments: bool = Field(default=False, exclude_if=lambda value: not value)
     executor_isolation: ExecutorIsolation
     scorer_benchmarks: ScorerBenchmarkCapability | None = Field(
         default=None, exclude_if=lambda value: value is None

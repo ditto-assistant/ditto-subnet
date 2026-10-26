@@ -882,6 +882,9 @@ def _config() -> MagicMock:
     cfg.router_track_state = "shadow"
     cfg.router_weight_eligible = False
     cfg.router_rank_shares = (0.65, 0.14, 0.10, 0.07, 0.04)
+    cfg.generator_track_state = "shadow"
+    cfg.generator_weight_eligible = False
+    cfg.generator_rank_shares = (0.40, 0.25, 0.15, 0.12, 0.08)
     cfg.min_stake_tao = 0.0
     cfg.sweep_seconds = 120
     cfg.epoch_seconds = 3600
@@ -1929,6 +1932,95 @@ class TestRunOnce:
         # Every retest dispatch was preceded by an empty canonical poll; the
         # ordinary queue therefore keeps strict first refusal on spare slots.
         assert platform.request_job.await_count >= 2
+
+    async def test_round_work_is_requested_while_a_retest_holds_a_slot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Retests must not starve generator rounds.
+
+        Continual retests used to gate the round lane: rounds were asked for
+        only when the retest dispatch claimed nothing, so a steady stream of
+        retests left every spare slot idle. Round work now has its own
+        dispatcher on another idle slot.
+        """
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
+        config = _config()
+        config.benchmark_capacity = 2
+        dittobench = MagicMock()
+        dittobench.full_run_capacity = 2
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        # The sweep's heartbeat re-probes the scorer; keep it advertising the
+        # generator-round mode this host is testing.
+        worker._scorer_runs_generator_rounds = True
+        monkeypatch.setattr(worker, "_report_heartbeat", AsyncMock())
+        monkeypatch.setattr(
+            worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", 0.01, raising=False
+        )
+        retest_started = asyncio.Event()
+        release_retest = asyncio.Event()
+        round_requested = asyncio.Event()
+
+        async def run_retests(**_kwargs: object) -> bool:
+            retest_started.set()
+            await release_retest.wait()
+            return True
+
+        async def run_round(**_kwargs: object) -> bool:
+            # Only a request made while the retest still holds its slot counts.
+            if not release_retest.is_set():
+                round_requested.set()
+            return False
+
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+        monkeypatch.setattr(worker, "_run_generator_round_lane", run_round)
+
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.wait_for(retest_started.wait(), timeout=2)
+        await asyncio.wait_for(round_requested.wait(), timeout=2)
+        release_retest.set()
+        await asyncio.wait_for(sweep, timeout=5)
+
+    async def test_single_slot_host_asks_for_rounds_after_an_empty_retest_lane(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(return_value=None)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        # The sweep's heartbeat re-probes the scorer; keep it advertising the
+        # generator-round mode this host is testing.
+        worker._scorer_runs_generator_rounds = True
+        monkeypatch.setattr(worker, "_report_heartbeat", AsyncMock())
+        monkeypatch.setattr(
+            worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", 0.01, raising=False
+        )
+        calls: list[str] = []
+
+        async def run_retests(**_kwargs: object) -> bool:
+            calls.append("retest")
+            return False
+
+        async def run_round(**_kwargs: object) -> bool:
+            calls.append("round")
+            return False
+
+        monkeypatch.setattr(worker, "_run_top5_confirmation_lane", run_retests)
+        monkeypatch.setattr(worker, "_run_generator_round_lane", run_round)
+
+        await asyncio.wait_for(worker.run_once(set_weights=False), timeout=5)
+        assert calls[:2] == ["retest", "round"]
 
     async def test_retest_keeps_idle_sibling_polling_for_new_canonical_work(
         self, monkeypatch: pytest.MonkeyPatch

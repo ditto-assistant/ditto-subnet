@@ -1,9 +1,18 @@
 name: Backroom CI
 
-# Cost control: standalone verification is operator-dispatched; release gates
-# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/backroom/**
+      - apps/platform/ditto/api_models/**
+      - apps/platform/ditto/api_server/endpoints/**
+      - apps/platform/ditto/api_server/factory.py
+      - apps/platform/pyproject.toml
+      - apps/platform/uv.lock
+      - packages/ditto-screening-protocol/**
+      - .github/workflows/backroom-ci.yml
+
 permissions:
   contents: read
 
@@ -33,7 +42,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: pnpm
           cache-dependency-path: apps/backroom/pnpm-lock.yaml
 

@@ -31,17 +31,6 @@ class V13KnownBenignApprovalView(V13KnownBenignApprovalRequest):
     status: Literal["recorded_unverified"] = "recorded_unverified"
 
 
-class V13GenerationStartRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    target_agent_id: UUID
-    target_attempt_id: UUID
-    target_artifact_sha256: str = Field(pattern=_SHA)
-    target_image_sha256: str = Field(pattern=_SHA)
-    approval_id: UUID
-    profile_sha256: str = Field(pattern=_SHA)
-
-
 class V13GenerationGroupView(BaseModel):
     group_id: UUID
     target_agent_id: UUID
@@ -64,14 +53,6 @@ class V13GenerationGroupView(BaseModel):
 
 class V13ReplayGenerationGroupView(V13GenerationGroupView):
     replay_id: UUID
-
-
-class V13GroupPackageRegisterRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    generation_receipt_sha256: str = Field(pattern=_SHA)
-    manifest_sha256: str = Field(pattern=_SHA)
-    pair_inventory_sha256: str = Field(pattern=_SHA)
 
 
 class V13GroupPackageView(BaseModel):
