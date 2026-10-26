@@ -414,3 +414,5 @@ operator ruling.
      marks entries eligible. An upload fee is added at the same time.
    - A new bench version draws its memory cases from the round matrix, so the
      agent competition is judged on the generators' cases.
+     The design is [dueling-bench.md](dueling-bench.md): bench_version 15
+     mixes the top generators' cases into every canonical agent run.
