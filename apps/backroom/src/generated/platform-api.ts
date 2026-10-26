@@ -11560,6 +11560,8 @@ export interface components {
             seed: string | null;
             /** Settings Revision */
             settings_revision: number | null;
+            /** Skipped Panel Agents */
+            skipped_panel_agents?: components["schemas"]["GeneratorRoundSkippedAgent"][];
             /** Standings */
             standings: components["schemas"]["GeneratorRoundStandingView"][];
             summary: components["schemas"]["GeneratorRoundSummary"];
@@ -11612,6 +11614,8 @@ export interface components {
             /** Qualified Generators */
             qualified_generators: number;
             schedule: components["schemas"]["GeneratorRoundSchedule"];
+            /** Skipped Panel Agents */
+            skipped_panel_agents?: components["schemas"]["GeneratorRoundSkippedAgent"][];
         };
         /**
          * AdminGeneratorRunDetail
@@ -22062,6 +22066,10 @@ export interface components {
              * @default false
              */
             champion: boolean;
+            /** Dropped At */
+            dropped_at?: string | null;
+            /** Dropped Reason */
+            dropped_reason?: string | null;
             /** Miner Hotkey */
             miner_hotkey?: string | null;
             /** Owner Key */
@@ -22081,6 +22089,8 @@ export interface components {
             agent_id: string;
             /** Answered */
             answered: number;
+            /** Excluded Reason */
+            excluded_reason?: string | null;
             /** Faulted */
             faulted: number;
             /** Mean Score */
@@ -22175,6 +22185,24 @@ export interface components {
             /** Scorer Version */
             scorer_version: string;
         };
+        /**
+         * GeneratorRoundSkippedAgent
+         * @description A ranked owner passed over when the panel froze: its agent could not
+         *     run, so the next eligible owner took the seat.
+         */
+        GeneratorRoundSkippedAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+        };
         /** GeneratorRoundStandingView */
         GeneratorRoundStandingView: {
             /**
@@ -22206,6 +22234,11 @@ export interface components {
         };
         /** GeneratorRoundSummary */
         GeneratorRoundSummary: {
+            /**
+             * Answered Results
+             * @default 0
+             */
+            answered_results: number;
             /** Closed At */
             closed_at?: string | null;
             /**
@@ -22242,6 +22275,11 @@ export interface components {
             open_epoch_index?: number | null;
             /** Opened At */
             opened_at?: string | null;
+            /**
+             * Panel Dropped
+             * @default 0
+             */
+            panel_dropped: number;
             /**
              * Panel Size
              * @default 0

@@ -44,6 +44,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundLoopStatus,
     GeneratorRoundPanelSlot,
     GeneratorRoundSchedule,
+    GeneratorRoundSkippedAgent,
     void_round_confirmation,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -215,7 +216,8 @@ async def admin_round_preview(
     resolved = await load_settings(session)
     settings = resolved.settings
     columns = await select_columns(session, settings)
-    panel, skipped = await select_round_panel(session, settings)
+    frozen = await select_round_panel(session, settings)
+    panel, skipped = frozen.panel, frozen.skipped_references
     qualified = int(
         await session.scalar(
             select(func.count()).where(
@@ -266,6 +268,9 @@ async def admin_round_preview(
         qualified_generators=qualified,
         awaiting_qualification=awaiting,
         blockers=blockers,
+        skipped_panel_agents=[
+            GeneratorRoundSkippedAgent(**slot) for slot in frozen.skipped_agents
+        ],
     )
 
 
@@ -298,12 +303,16 @@ async def admin_round_detail(
         commitment_publications=publications,
         commitment_elected=elected,
         attempts=await attempt_views(session, round_index),
-        results=await result_views(session, round_index),
+        results=await result_views(session, row),
         pending_agents=(
             await pending_panel_agents(session, row, now=now)
             if row.status == "running"
             else []
         ),
+        skipped_panel_agents=[
+            GeneratorRoundSkippedAgent(**slot)
+            for slot in (row.generation or {}).get("skipped_panel_agents", ())
+        ],
         score=row.score,
         scorer_version=row.scorer_version,
         standings=standing_views(row),

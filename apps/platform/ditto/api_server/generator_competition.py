@@ -172,8 +172,11 @@ def inspect_source(raw: bytes, *, source_sha256: str) -> InspectedUpload:
     return InspectedUpload(raw=raw, info=info)
 
 
-async def select_panel(session: AsyncSession, *, size: int) -> list[dict[str, Any]]:
-    """The top ``size`` owners on the authoritative ledger, best first.
+async def select_panel(
+    session: AsyncSession, *, size: int | None
+) -> list[dict[str, Any]]:
+    """The top ``size`` owners on the authoritative ledger, best first
+    (``None``: every ranked owner).
 
     One agent per owner (the ledger already dedupes owners); the first is the
     champion. Owner keys use the emission owner space, matching packs'

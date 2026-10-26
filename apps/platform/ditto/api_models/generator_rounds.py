@@ -126,7 +126,15 @@ class GeneratorRoundSummary(RoundModel):
     opened_at: datetime | None = None
     column_count: int = 0
     panel_size: int = 0
+    """Agents frozen on the panel, including any dropped later."""
+    panel_dropped: int = 0
+    """Panel agents dropped while the round ran (banned, held, or otherwise
+    no longer runnable); they are never leased or scored in the round."""
     results: int = 0
+    answered_results: int = 0
+    """Results from seated panel agents that answered at least one case. A
+    round closes void (``insufficient_answered_results``) with fewer than
+    ``min_panel``: a run that faulted every case counts as not reported."""
     closed_at: datetime | None = None
     scored_at: datetime | None = None
     void_reason: str | None = None
@@ -171,6 +179,9 @@ class GeneratorRoundResultView(RoundModel):
     faulted: int
     mean_score: float | None
     recorded_at: datetime
+    excluded_reason: str | None = None
+    """Why this result does not count toward the round: its agent was
+    dropped from the panel, or it faulted every case."""
 
 
 class GeneratorRoundCommitmentPublicationView(RoundModel):
@@ -196,6 +207,21 @@ class GeneratorRoundPanelSlot(RoundModel):
     miner_hotkey: str | None = None
     champion: bool = False
     reference: bool = False
+    dropped_reason: str | None = None
+    """Set when the agent became ineligible while the round ran. The panel
+    stays frozen (nobody takes the seat); the agent is no longer leased and
+    its result, if any, is excluded from scoring."""
+    dropped_at: datetime | None = None
+
+
+class GeneratorRoundSkippedAgent(RoundModel):
+    """A ranked owner passed over when the panel froze: its agent could not
+    run, so the next eligible owner took the seat."""
+
+    agent_id: UUID
+    owner_key: str
+    miner_hotkey: str | None = None
+    reason: str
 
 
 class GeneratorRoundColumnSlot(RoundModel):
@@ -236,6 +262,8 @@ class AdminGeneratorRoundDetail(RoundModel):
     attempts: list[GeneratorRoundAttemptView]
     results: list[GeneratorRoundResultView]
     pending_agents: list[UUID]
+    skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
+    """Ranked owners skipped as ineligible when the panel froze."""
     score: dict | None
     scorer_version: str | None
     standings: list[GeneratorRoundStandingView]
@@ -324,6 +352,7 @@ class AdminGeneratorRoundPreview(RoundModel):
     qualified_generators: int
     awaiting_qualification: int
     blockers: list[str]
+    skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
 
 
 class GeneratorRoundLoopStatus(RoundModel):

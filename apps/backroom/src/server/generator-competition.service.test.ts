@@ -308,9 +308,10 @@ describe('generator competition MCP tools', () => {
     const reader = await connect([BACKROOM_READ_SCOPE])
     try {
       expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
-        .toMatchObject({ rounds: [{ round_index: 7 }], schedule: { current_round: 7 } })
+        .toMatchObject({ rounds: [{ round_index: 7, panel_dropped: 0 }], schedule: { current_round: 7 } })
+      // An older Platform without panel drops still parses, with empty drops.
       expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 7 } })))
-        .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 } })
+        .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 }, skipped_panel_agents: [] })
       // Validator-published commitments are visible per validator; an older
       // Platform without these fields (round 7 above) still parses.
       expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 9 } })))
@@ -441,6 +442,53 @@ describe('generator competition MCP tools', () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+
+  it('shows dropped and skipped panel agents and the void reason of a fault-only round', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const KEPT = '1a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const DROPPED = '2a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const SKIPPED = '3a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const summary = {
+      round_index: 9, status: 'void', epochs_per_round: 4, commitment: 'aa'.repeat(32),
+      commitment_publication: 'published', committed_at: '2026-10-24T00:00:00Z', column_count: 5,
+      panel_size: 4, panel_dropped: 1, results: 3, answered_results: 0, secret_hex: null, seed: null,
+      void_reason: 'insufficient_answered_results: 0 of 3 agent result(s) answered at least one case',
+    }
+    const slot = { owner_key: 'coldkey:a', champion: false, reference: false }
+    const result = { validator_hotkey: '5V', run_id: 'r', answered: 0, faulted: 80, mean_score: null, recorded_at: '2026-10-24T01:00:00Z' }
+    const detail = {
+      summary, settings_revision: 2, cases_per_column: 16, seed: null, columns: [],
+      panel: [
+        { ...slot, agent_id: KEPT },
+        { ...slot, agent_id: DROPPED, dropped_reason: 'agent status is banned', dropped_at: '2026-10-24T00:30:00Z' },
+      ],
+      generation: null, column_case_counts: {}, dataset_bytes: 1024, lease_id: null, lease_expires_at: null,
+      lease_attempts: 1, commitment_published_at: null, commitment_error: null, attempts: [],
+      results: [{ ...result, agent_id: KEPT, excluded_reason: 'faulted every case; counts as not reported' }],
+      pending_agents: [], score: null, scorer_version: null, standings: [], columns_scored: [],
+      skipped_panel_agents: [{ agent_id: SKIPPED, owner_key: 'coldkey:b', reason: 'miner hotkey is banned' }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes('/rounds?')
+        ? Response.json({ schedule: { mode: 'shadow', epochs_per_round: 4 }, rounds: [summary], counts_by_status: { void: 1 } })
+        : Response.json(detail)
+    )))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
+        .toMatchObject({ rounds: [{ panel_dropped: 1, answered_results: 0, void_reason: summary.void_reason }] })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 9 } })))
+        .toMatchObject({
+          panel: [{ agent_id: KEPT, dropped_reason: null }, { agent_id: DROPPED, dropped_reason: 'agent status is banned' }],
+          results: [{ agent_id: KEPT, excluded_reason: 'faulted every case; counts as not reported' }],
+          skipped_panel_agents: [{ agent_id: SKIPPED, reason: 'miner hotkey is banned' }],
+        })
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
     }
   })
 })

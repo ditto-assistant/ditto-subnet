@@ -56,7 +56,9 @@ from ditto.api_server.generator_rounds import (
     ROUND_LEASE_CUTOFF,
     CommitmentReportRejected,
     RoundSubmissionRejected,
+    active_panel,
     claim_commitment_publication,
+    drop_ineligible_panel_agents,
     pending_panel_agents,
     record_commitment_report,
     record_panel_result,
@@ -239,6 +241,11 @@ async def request_generator_round_job(
         row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
             return _no_work()
+        # A panel agent banned or held since the round opened is dropped
+        # (never leased), which may void or close the round outright.
+        await drop_ineligible_panel_agents(session, row, now=now)
+        if row.status != "running":
+            return _no_work()
         slot = await v._idle_retest_slot(
             session,
             heartbeat=heartbeat,
@@ -391,6 +398,8 @@ async def submit_generator_round_score(
             raise HTTPException(409, f"round is {row.status}; results are closed")
         if agent_id not in {UUID(slot["agent_id"]) for slot in row.panel or ()}:
             raise HTTPException(409, "agent is not on this round's panel")
+        if agent_id not in {UUID(slot["agent_id"]) for slot in active_panel(row)}:
+            raise HTTPException(409, "agent was dropped from this round's panel")
         try:
             validate_round_results(row, payload.results)
         except RoundSubmissionRejected as exc:

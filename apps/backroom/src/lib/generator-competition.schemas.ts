@@ -320,7 +320,11 @@ const roundSummarySchema = z.object({
   opened_at: z.string().nullable().optional(),
   column_count: z.number().int(),
   panel_size: z.number().int(),
+  // Older Platforms omit these. They never drop panel agents, so that count
+  // is zero; their answered-result count is unknown and stays absent.
+  panel_dropped: z.number().int().optional().default(0),
   results: z.number().int(),
+  answered_results: z.number().int().optional(),
   closed_at: z.string().nullable().optional(),
   scored_at: z.string().nullable().optional(),
   void_reason: z.string().nullable().optional(),
@@ -356,6 +360,16 @@ const roundPanelSlotSchema = z.object({
   miner_hotkey: z.string().nullable().optional(),
   champion: z.boolean(),
   reference: z.boolean(),
+  // Set when the agent became ineligible while the round ran.
+  dropped_reason: z.string().nullable().optional().default(null),
+  dropped_at: z.string().nullable().optional().default(null),
+})
+
+const skippedPanelAgentSchema = z.object({
+  agent_id: uuid,
+  owner_key: z.string(),
+  miner_hotkey: z.string().nullable().optional(),
+  reason: z.string(),
 })
 
 const standingSchema = z.object({
@@ -437,9 +451,11 @@ export const generatorRoundDetailSchema = z.object({
       faulted: z.number().int(),
       mean_score: z.number().nullable(),
       recorded_at: z.string(),
+      excluded_reason: z.string().nullable().optional().default(null),
     }),
   ),
   pending_agents: z.array(uuid),
+  skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
   score: z.record(z.string(), z.unknown()).nullable(),
   scorer_version: z.string().nullable(),
   standings: z.array(standingSchema),
@@ -453,6 +469,7 @@ export const generatorRoundPreviewSchema = z.object({
   qualified_generators: z.number().int(),
   awaiting_qualification: z.number().int(),
   blockers: z.array(z.string()),
+  skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
 })
 
 export const generatorRoundLoopSchema = z.object({

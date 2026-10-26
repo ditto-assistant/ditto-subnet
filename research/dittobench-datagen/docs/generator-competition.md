@@ -242,7 +242,10 @@ When a round opens it freezes:
   without affecting them.
 - **The panel.** This is the top `panel_size` agent owners from the ledger
   validators fold, plus `reference_agent_ids`: subnet-run baselines, each
-  counted as its own independent solver.
+  counted as its own independent solver. An agent the round lane could not
+  run (not `scored` or `live`, so banned, rejected, quarantined or held for
+  review; a banned miner hotkey; no screened image) is skipped, and the next
+  eligible ledger owner takes its seat, still one agent per owner.
 
 ### Execution
 
@@ -260,8 +263,19 @@ When a round opens it freezes:
    time.
 5. The validator posts signed per-case results. A failed run is handed back
    without charging the agent anything.
-6. The round closes when every panel agent reported, or when its last epoch
-   ends. With fewer than `min_panel` results it is void.
+6. A panel agent that becomes ineligible while the round runs is dropped:
+   its live lease is expired, it is never leased again, and its result, if
+   any, is left out of scoring. Nobody takes its seat, so the panel stays
+   frozen. The round is void as soon as fewer than `min_panel` agents remain
+   seated.
+7. The round closes when every seated panel agent reported, or when its last
+   epoch ends. It is void with fewer than `min_panel` results from seated
+   agents (`insufficient_panel`), or with fewer than `min_panel` results that
+   answered at least one case (`insufficient_answered_results`). A run that
+   faulted every case is an infrastructure failure, not an answer: with only
+   such results every case would be unsolved and every column would score 0.
+   A void round is never scored and never replaces a generator's ledger
+   score.
 
 ## Scoring (`challenge.ScoreCases`, `challenge.ScoreRound`)
 
@@ -289,8 +303,8 @@ cases:
 column score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (1 − u / (n − dup))²
 ```
 
-A generator's ledger score is its latest round column score within
-`window_days`.
+A generator's ledger score is its latest *scored* round column score within
+`window_days`; void rounds never count.
 
 **Agents.** Agents are ranked **pairwise-neutral**. Agents A and B are
 compared only on cases of counted columns owned by neither A's owner nor B's

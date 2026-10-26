@@ -24,9 +24,14 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
    column seed; Platform stores the canonical round dataset.
 4. **Run.** Validators lease each panel agent on a ``generator_round`` ticket
    and post per-case results (``endpoints/validator_generator_round.py``).
-5. **Close and score.** When every panel agent reported, or the round's last
-   epoch ends, the scorer applies ``challenge.ScoreRound`` to the matrix:
-   column scores for generators and pairwise-neutral standings for agents.
+   A panel agent that becomes ineligible mid-round is dropped (never leased
+   or scored again; its seat is not refilled), and the round is void once
+   fewer than ``min_panel`` agents remain seated.
+5. **Close and score.** When every seated panel agent reported, or the
+   round's last epoch ends, the scorer applies ``challenge.ScoreRound`` to the
+   matrix: column scores for generators and pairwise-neutral standings for
+   agents. A round with fewer than ``min_panel`` results that answered at
+   least one case is void instead (see :class:`PanelTally`).
 6. **Reveal.** ``privacy_window_rounds`` after a round opens, its secret,
    seed, and dataset become public so anyone can re-derive every case.
 
@@ -51,7 +56,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import and_, func, select, update
+from sqlalchemy import and_, func, select, true, update
 
 from ditto.api_models.generator import PanelCaseResult
 from ditto.api_models.generator_ledger import (
@@ -87,6 +92,7 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.db.models import (
     Agent,
+    BannedHotkey,
     GeneratorRound,
     GeneratorRoundAttempt,
     GeneratorRoundCaseVerdict,
@@ -281,33 +287,110 @@ async def select_columns(
     return columns
 
 
+# A panel agent the round lane can lease: a finalized agent with a screened
+# image whose miner hotkey is not banned. Anything else (banned, rejected,
+# quarantined, an ``ath_pending_review`` hold, a banned hotkey) would sit
+# pending until the round ends, so it is skipped when the panel freezes and
+# dropped from a round that is already running.
+ROUND_RUNNABLE_STATUSES = frozenset({"scored", "live"})
+
+
+async def panel_ineligibility(
+    session: AsyncSession, agent_ids: list[str]
+) -> dict[str, str]:
+    """Why each of ``agent_ids`` cannot run in a round; runnable ids are absent."""
+    if not agent_ids:
+        return {}
+    rows = {
+        str(row.agent_id): row
+        for row in await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.status,
+                Agent.miner_hotkey,
+                Agent.screened_image_sha256,
+            ).where(Agent.agent_id.in_([UUID(agent_id) for agent_id in agent_ids]))
+        )
+    }
+    hotkeys = {row.miner_hotkey for row in rows.values()}
+    banned = (
+        set(
+            await session.scalars(
+                select(BannedHotkey.hotkey).where(BannedHotkey.hotkey.in_(hotkeys))
+            )
+        )
+        if hotkeys
+        else set()
+    )
+    out: dict[str, str] = {}
+    for agent_id in agent_ids:
+        row = rows.get(agent_id)
+        if row is None:
+            out[agent_id] = "agent not found"
+        elif str(row.status) not in ROUND_RUNNABLE_STATUSES:
+            out[agent_id] = f"agent status is {row.status}"
+        elif row.miner_hotkey in banned:
+            out[agent_id] = "miner hotkey is banned"
+        elif row.screened_image_sha256 is None:
+            out[agent_id] = "agent has no screened image"
+    return out
+
+
+@dataclass(frozen=True)
+class RoundPanel:
+    panel: list[dict[str, Any]]
+    skipped_references: list[str]
+    """Configured reference agents left off the panel, with why."""
+    skipped_agents: list[dict[str, Any]]
+    """Ranked owners passed over because their agent cannot run, best first."""
+
+
 async def select_round_panel(
     session: AsyncSession, settings: GeneratorCompetitionSettings
-) -> tuple[list[dict[str, Any]], list[str]]:
-    """The round's agent panel and any reference agents that were skipped."""
+) -> RoundPanel:
+    """The round's agent panel: the best ``panel_size`` runnable ledger owners
+    plus the runnable reference agents.
+
+    A ranked agent the lane could not lease (:func:`panel_ineligibility`) is
+    skipped and the next ranked owner takes its seat, still one agent per
+    owner, so a ban landing just before a round opens does not shrink the
+    panel. The champion stays the ledger's first owner: when that agent
+    cannot run, no panel agent is the champion.
+    """
     from ditto.api_server.generator_competition import select_panel
 
     # A reference agent that also ranks is seated as a reference only, and the
     # next ranked agent takes its ranked seat, so the panel reaches
     # panel_size + references whenever enough agents exist.
     references = {str(agent_id) for agent_id in settings.reference_agent_ids}
-    ranked = await select_panel(session, size=settings.panel_size + len(references))
-    panel = [slot for slot in ranked if slot["agent_id"] not in references][
-        : settings.panel_size
-    ]
+    ranked = await select_panel(session, size=None)
     champion = next((slot["agent_id"] for slot in ranked if slot["champion"]), None)
+    candidates = [slot for slot in ranked if slot["agent_id"] not in references]
+    blocked = await panel_ineligibility(
+        session,
+        [slot["agent_id"] for slot in candidates] + sorted(references),
+    )
+    panel: list[dict[str, Any]] = []
+    skipped_agents: list[dict[str, Any]] = []
+    for slot in candidates:
+        if len(panel) >= settings.panel_size:
+            break
+        reason = blocked.get(slot["agent_id"])
+        if reason is not None:
+            skipped_agents.append({**slot, "reason": reason})
+            continue
+        panel.append(slot)
     seen = {slot["agent_id"] for slot in panel}
     skipped: list[str] = []
     for agent_id in settings.reference_agent_ids:
         if str(agent_id) in seen:
             continue
+        reason = blocked.get(str(agent_id))
+        if reason is not None:
+            skipped.append(f"reference agent {agent_id}: {reason}")
+            continue
         agent = await session.get(Agent, agent_id)
-        if agent is None or str(agent.status) not in {"scored", "live"}:
-            skipped.append(f"reference agent {agent_id} is not scored or live")
-            continue
-        if agent.screened_image_sha256 is None:
-            skipped.append(f"reference agent {agent_id} has no screened image")
-            continue
+        assert agent is not None
         panel.append(
             {
                 "agent_id": str(agent_id),
@@ -319,7 +402,9 @@ async def select_round_panel(
             }
         )
         seen.add(str(agent_id))
-    return panel, skipped
+    return RoundPanel(
+        panel=panel, skipped_references=skipped, skipped_agents=skipped_agents
+    )
 
 
 # --- lifecycle --------------------------------------------------------------
@@ -372,12 +457,129 @@ async def _result_count(session: AsyncSession, round_index: int) -> int:
     )
 
 
+def active_panel(row: GeneratorRound) -> list[dict[str, Any]]:
+    """The round's frozen panel minus agents dropped while it ran."""
+    return [slot for slot in row.panel or () if not slot.get("dropped_reason")]
+
+
+@dataclass(frozen=True)
+class PanelTally:
+    """What the round's still-seated panel reported.
+
+    ``answered`` counts results with at least one unfaulted case. A run that
+    faulted every case (an infrastructure failure, not an agent's answer)
+    reports nothing a column can be scored against: with only such results
+    every case is unsolved, so the round would score every column 0 and wipe
+    every generator's ledger. Such a result counts as not reported."""
+
+    seated: int
+    reported: int
+    answered: int
+
+
+async def panel_tally(session: AsyncSession, row: GeneratorRound) -> PanelTally:
+    seated = {slot["agent_id"] for slot in active_panel(row)}
+    rows = await session.execute(
+        select(GeneratorRoundResult.agent_id, GeneratorRoundResult.answered).where(
+            GeneratorRoundResult.round_index == row.round_index
+        )
+    )
+    reported = [answered for agent_id, answered in rows if str(agent_id) in seated]
+    return PanelTally(
+        seated=len(seated),
+        reported=len(reported),
+        answered=sum(1 for answered in reported if answered > 0),
+    )
+
+
+async def _drop_ineligible(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> dict[str, str]:
+    """Drop seated panel agents that can no longer run (caller commits).
+
+    The panel stays frozen: a dropped agent keeps its slot, marked with why
+    and when, its live round lease is expired, and it is never leased or
+    scored in this round again. Nobody takes its seat mid-round."""
+    if row.status != "running":
+        return {}
+    blocked = await panel_ineligibility(
+        session, [slot["agent_id"] for slot in active_panel(row)]
+    )
+    if not blocked:
+        return {}
+    row.panel = [
+        {
+            **slot,
+            "dropped_reason": blocked[slot["agent_id"]],
+            "dropped_at": now.isoformat(),
+        }
+        if slot["agent_id"] in blocked and not slot.get("dropped_reason")
+        else slot
+        for slot in row.panel or ()
+    ]
+    await expire_round_tickets(
+        session,
+        row,
+        now=now,
+        detail="panel agent dropped: no longer eligible",
+        agent_ids={UUID(agent_id) for agent_id in blocked},
+    )
+    for agent_id, reason in blocked.items():
+        logger.info(
+            "generator round %s: dropped panel agent %s (%s)",
+            row.round_index,
+            agent_id,
+            reason,
+        )
+    return blocked
+
+
+async def drop_ineligible_panel_agents(
+    session: AsyncSession, row: GeneratorRound, *, now: datetime
+) -> list[str]:
+    """Drop a running round's panel agents that became ineligible, then void
+    the round if fewer than ``min_panel`` remain seated, or close it if every
+    remaining agent already reported. Returns one note per change."""
+    dropped = await _drop_ineligible(session, row, now=now)
+    if not dropped:
+        return []
+    notes = [
+        f"round {row.round_index}: dropped panel agent {agent_id} ({reason})"
+        for agent_id, reason in dropped.items()
+    ]
+    settings = await round_settings(session, row)
+    tally = await panel_tally(session, row)
+    if tally.seated < settings.min_panel:
+        outcome = await close_round(
+            session, row, now=now, reason="too few eligible panel agents remain"
+        )
+        notes.append(f"round {row.round_index}: {outcome} after panel drops")
+    elif tally.reported >= tally.seated:
+        outcome = await close_round(
+            session, row, now=now, reason="every eligible panel agent reported"
+        )
+        notes.append(f"round {row.round_index}: {outcome} after panel drops")
+    return notes
+
+
 async def expire_round_tickets(
-    session: AsyncSession, row: GeneratorRound, *, now: datetime, detail: str
+    session: AsyncSession,
+    row: GeneratorRound,
+    *,
+    now: datetime,
+    detail: str,
+    agent_ids: set[UUID] | None = None,
 ) -> int:
-    """Expire live round tickets of a closed round and close their attempts."""
+    """Expire live round tickets of a closed round and close their attempts.
+
+    ``agent_ids`` limits this to those panel agents (a mid-round drop)."""
     if row.dataset_sha256 is None:
         return 0
+    only = (
+        GeneratorRoundAttempt.agent_id.in_(agent_ids)
+        if agent_ids is not None
+        else true()
+    )
     from ditto.db.queries.inference import revoke_ticket_inference
 
     # Only tickets this round's own leased attempts name (agent, validator,
@@ -400,6 +602,7 @@ async def expire_round_tickets(
                 ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.dataset_sha256 == row.dataset_sha256,
+                only,
             )
             .with_for_update(of=ValidatorTicket)
         )
@@ -413,6 +616,7 @@ async def expire_round_tickets(
         .where(
             GeneratorRoundAttempt.round_index == row.round_index,
             GeneratorRoundAttempt.status == "leased",
+            only,
         )
         .values(status="failed", detail=detail, finished_at=now)
     )
@@ -436,18 +640,38 @@ async def close_round(
     now: datetime,
     reason: str,
 ) -> str:
-    """Move a running round to scoring, or void it with too few results.
+    """Move a running round to scoring, or void it.
 
-    ``min_panel`` comes from the round's own settings revision."""
+    Panel agents that became ineligible are dropped first, so their results
+    never reach the matrix. The round is void (and so never credits a column
+    score) with fewer than ``min_panel`` results from its seated panel
+    (``insufficient_panel``), or fewer than ``min_panel`` of those results
+    with at least one answered case (``insufficient_answered_results``; see
+    :class:`PanelTally`). ``min_panel`` comes from the round's own settings
+    revision."""
     settings = await round_settings(session, row)
-    results = await _result_count(session, row.round_index)
+    await _drop_ineligible(session, row, now=now)
+    tally = await panel_tally(session, row)
+    dropped = len(row.panel or ()) - tally.seated
     await expire_round_tickets(session, row, now=now, detail=f"round closed: {reason}")
     row.closed_at = now
-    if results < settings.min_panel:
+    note = f"{reason}" + (f"; {dropped} panel agent(s) dropped" if dropped else "")
+    if tally.reported < settings.min_panel:
         void_round(
             row,
-            f"insufficient panel: {results} agent result(s), "
-            f"min_panel {settings.min_panel} ({reason})",
+            f"insufficient_panel: {tally.reported} agent result(s) from "
+            f"{tally.seated} eligible panel agent(s), min_panel "
+            f"{settings.min_panel} ({note})",
+            now=now,
+        )
+        return "void"
+    if tally.answered < settings.min_panel:
+        void_round(
+            row,
+            f"insufficient_answered_results: {tally.answered} of "
+            f"{tally.reported} agent result(s) answered at least one case, "
+            f"min_panel {settings.min_panel}; every other result faulted every "
+            f"case ({note})",
             now=now,
         )
         return "void"
@@ -498,6 +722,21 @@ async def advance_rounds(
         else:
             outcome = await close_round(session, row, now=now, reason="round ended")
             out.note(f"round {row.round_index}: {outcome} at round end")
+
+    # 1b. Drop panel agents that became ineligible from the running round.
+    running = list(
+        await session.scalars(
+            select(GeneratorRound)
+            .where(
+                GeneratorRound.round_index >= current,
+                GeneratorRound.status == "running",
+            )
+            .with_for_update()
+        )
+    )
+    for row in running:
+        for note in await drop_ineligible_panel_agents(session, row, now=now):
+            out.note(note)
 
     # 2. Commit the next round ahead of time.
     if await get_round(session, current + 1) is None:
@@ -580,7 +819,8 @@ async def open_round(
     row.settings_revision = resolved.revision
     row.cases_per_column = settings.cases_per_seed
     columns = await select_columns(session, settings)
-    panel, skipped = await select_round_panel(session, settings)
+    frozen = await select_round_panel(session, settings)
+    panel, skipped = frozen.panel, frozen.skipped_references
     row.columns = columns
     row.panel = panel
     if not any(column["counted"] for column in columns):
@@ -595,11 +835,21 @@ async def open_round(
         void_round(
             row,
             f"panel has {len(panel)} agent(s), min_panel {settings.min_panel}"
-            + (f"; {'; '.join(skipped)}" if skipped else ""),
+            + (f"; {'; '.join(skipped)}" if skipped else "")
+            + (
+                f"; {len(frozen.skipped_agents)} ranked agent(s) skipped as ineligible"
+                if frozen.skipped_agents
+                else ""
+            ),
             now=now,
         )
         return
-    row.generation = {"skipped_reference_agents": skipped} if skipped else None
+    generation: dict[str, Any] = {}
+    if skipped:
+        generation["skipped_reference_agents"] = skipped
+    if frozen.skipped_agents:
+        generation["skipped_panel_agents"] = frozen.skipped_agents
+    row.generation = generation or None
 
 
 # --- scorer work ------------------------------------------------------------
@@ -666,7 +916,7 @@ async def build_matrix(session: AsyncSession, row: GeneratorRound) -> RoundMatri
             champion=bool(slot.get("champion", False)),
             results=[PanelCaseResult(**r) for r in results[slot["agent_id"]].results],
         )
-        for slot in row.panel or ()
+        for slot in active_panel(row)
         if slot["agent_id"] in results
     ]
     fingerprints = [ref.fingerprint for column in columns for ref in column.cases]
@@ -983,7 +1233,7 @@ async def pending_panel_agents(
     )
     return [
         UUID(slot["agent_id"])
-        for slot in row.panel or ()
+        for slot in active_panel(row)
         if UUID(slot["agent_id"]) not in done and UUID(slot["agent_id"]) not in live
     ]
 
@@ -1024,7 +1274,7 @@ async def record_panel_result(
     now: datetime,
 ) -> bool:
     """Store one agent's results; ``False`` when the agent already reported.
-    Closes the round early once every panel agent reported."""
+    Closes the round early once every seated panel agent reported."""
     existing = await session.get(GeneratorRoundResult, (row.round_index, agent_id))
     attempt = await session.get(
         GeneratorRoundAttempt,
@@ -1050,7 +1300,8 @@ async def record_panel_result(
         )
     )
     await session.flush()
-    if await _result_count(session, row.round_index) >= len(row.panel or ()):
+    tally = await panel_tally(session, row)
+    if tally.reported >= tally.seated:
         await close_round(
             session,
             row,
@@ -1071,6 +1322,7 @@ async def round_summary(
     session: AsyncSession, row: GeneratorRound, *, operator: bool = False
 ) -> GeneratorRoundSummary:
     revealed = _revealed(row)
+    tally = await panel_tally(session, row)
     return GeneratorRoundSummary(
         round_index=row.round_index,
         status=row.status,  # type: ignore[arg-type]
@@ -1087,7 +1339,9 @@ async def round_summary(
         opened_at=row.opened_at,
         column_count=len(row.columns or ()),
         panel_size=len(row.panel or ()),
+        panel_dropped=len(row.panel or ()) - tally.seated,
         results=await _result_count(session, row.round_index),
+        answered_results=tally.answered,
         closed_at=row.closed_at,
         scored_at=row.scored_at,
         void_reason=row.void_reason,
@@ -1172,12 +1426,28 @@ async def attempt_views(
     ]
 
 
+def _result_exclusion(
+    result: GeneratorRoundResult, dropped: dict[str, str]
+) -> str | None:
+    reason = dropped.get(str(result.agent_id))
+    if reason is not None:
+        return f"agent dropped from the panel: {reason}"
+    if result.answered == 0:
+        return "faulted every case; counts as not reported"
+    return None
+
+
 async def result_views(
-    session: AsyncSession, round_index: int
+    session: AsyncSession, row: GeneratorRound
 ) -> list[GeneratorRoundResultView]:
+    dropped = {
+        slot["agent_id"]: slot["dropped_reason"]
+        for slot in row.panel or ()
+        if slot.get("dropped_reason")
+    }
     rows = await session.scalars(
         select(GeneratorRoundResult)
-        .where(GeneratorRoundResult.round_index == round_index)
+        .where(GeneratorRoundResult.round_index == row.round_index)
         .order_by(GeneratorRoundResult.recorded_at)
     )
     out = []
@@ -1192,6 +1462,7 @@ async def result_views(
                 faulted=r.faulted,
                 mean_score=(sum(answered) / len(answered)) if answered else None,
                 recorded_at=r.recorded_at,
+                excluded_reason=_result_exclusion(r, dropped),
             )
         )
     return out
@@ -1235,11 +1506,18 @@ async def build_round_ledger(
             count=0, mode="off", window_days=settings.window_days
         )
     since = now - timedelta(days=settings.window_days)
+    # The latest *scored* round: a void round never credits or replaces a
+    # generator's column score, even if it holds verdicts.
     latest = (
         select(
             GeneratorRoundCaseVerdict.submission_id,
             func.max(GeneratorRoundCaseVerdict.round_index).label("round_index"),
         )
+        .join(
+            GeneratorRound,
+            GeneratorRound.round_index == GeneratorRoundCaseVerdict.round_index,
+        )
+        .where(GeneratorRound.status == "scored")
         .group_by(GeneratorRoundCaseVerdict.submission_id)
         .subquery()
     )

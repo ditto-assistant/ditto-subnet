@@ -65,6 +65,7 @@ from ditto.api_server.generator_rounds import (
 from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
     Agent,
+    BannedHotkey,
     GeneratorOperatorAction,
     GeneratorRound,
     GeneratorRoundAttempt,
@@ -137,7 +138,7 @@ async def _apply_settings(
     client: httpx.AsyncClient, *, status: int = 200, **overrides: Any
 ) -> httpx.Response:
     current = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
-    settings = _settings(min_panel=3, panel_size=3, **overrides)
+    settings = _settings(**{"min_panel": 3, "panel_size": 3, **overrides})
     resp = await client.post(
         _SETTINGS_URL,
         headers=_ADMIN,
@@ -394,7 +395,9 @@ def _signed_job() -> dict[str, Any]:
     return payload.model_dump(mode="json")
 
 
-def _signed_score(job: dict[str, Any], case_ids: list[str], score: float) -> dict:
+def _signed_score(
+    job: dict[str, Any], case_ids: list[str], score: float, *, fault: bool = False
+) -> dict:
     payload = GeneratorRoundScoreRequest(
         validator_hotkey=_VALIDATOR.ss58_address,
         round_index=job["round_index"],
@@ -402,7 +405,10 @@ def _signed_score(job: dict[str, Any], case_ids: list[str], score: float) -> dic
         dataset_sha256=job["dataset_sha256"],
         run_id=f"run-{job['agent_id']}",
         results=[
-            GeneratorRoundCaseResult(case_id=cid, score=score) for cid in case_ids
+            GeneratorRoundCaseResult(
+                case_id=cid, score=0.0 if fault else score, fault=fault
+            )
+            for cid in case_ids
         ],
     )
     payload.signature = _VALIDATOR.sign(
@@ -481,6 +487,66 @@ def _matrix_score(work: dict[str, Any]) -> dict[str, Any]:
         "scorer_version": "challenge-scorer/3",
         "score": {"columns": columns, "agents": agents},
     }
+
+
+_JOB_URL = "/api/v1/validator/generator-round-job"
+
+
+async def _generate_round(client: httpx.AsyncClient) -> list[str]:
+    """Generate the leased round's dataset; returns its case ids."""
+    work = (
+        await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+    ).json()["work"]
+    assert work["kind"] == "generate"
+    generated = _generation(work)
+    resp = await client.post(
+        "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+    )
+    assert resp.status_code == 200 and resp.json()["status"] == "running", resp.text
+    return [
+        f"{column['column_id']}/{ref['case_id']}"
+        for column in generated["columns"]
+        for ref in column["seed"]["validation"]["cases"]
+    ]
+
+
+async def _lease_job(client: httpx.AsyncClient) -> dict[str, Any] | None:
+    resp = await client.post(
+        _JOB_URL,
+        headers={"X-Validator-Hotkey": _VALIDATOR.ss58_address},
+        json=_signed_job(),
+    )
+    if resp.status_code == 204:
+        return None
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def _report(
+    client: httpx.AsyncClient,
+    job: dict[str, Any],
+    case_ids: list[str],
+    *,
+    fault: bool = False,
+) -> None:
+    resp = await client.post(
+        f"/api/v1/validator/agent/{job['agent_id']}/generator-round-score",
+        json=_signed_score(job, case_ids, 0.75, fault=fault),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["accepted"] is True
+
+
+async def _ban_agent(maker: async_sessionmaker[AsyncSession], agent_id: UUID) -> None:
+    async with maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.BANNED
+
+
+async def _ban_hotkey(maker: async_sessionmaker[AsyncSession], hotkey: str) -> None:
+    async with maker() as session, session.begin():
+        session.add(BannedHotkey(hotkey=hotkey, reason="test ban"))
 
 
 def test_derivations_match_the_go_contract() -> None:
@@ -894,7 +960,7 @@ class TestRoundLifecycle:
         async with session_maker() as session:
             row = await get_round(session, 1)
             assert row is not None and row.status == "void"
-            assert "insufficient panel" in (row.void_reason or "")
+            assert (row.void_reason or "").startswith("insufficient_panel: 0 ")
             ticket = await session.get(
                 ValidatorTicket, (UUID(relet["agent_id"]), 13, _VALIDATOR.ss58_address)
             )
@@ -992,6 +1058,259 @@ class TestRoundLifecycle:
         await _qualify_all(session_maker)
         preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
         assert len(preview["columns"]) == 5 and len(preview["panel"]) == 3
+
+
+class TestPanelFreshness:
+    async def test_ineligible_ranked_agents_are_skipped_and_refilled_at_freeze(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(5)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        # Banned after ranking but before the panel freezes: the champion's
+        # agent, and a miner whose hotkey is banned.
+        await _ban_agent(session_maker, agents[0])
+        await _ban_hotkey(session_maker, "5PanelMiner2")
+
+        preview = (await client.get(f"{_ROUNDS_URL}/preview", headers=_ADMIN)).json()
+        assert [p["agent_id"] for p in preview["panel"]] == [
+            str(agents[i]) for i in (1, 3, 4)
+        ]
+        assert not any("panel has" in b for b in preview["blockers"])
+        assert {s["agent_id"] for s in preview["skipped_panel_agents"]} == {
+            str(agents[0]),
+            str(agents[2]),
+        }
+
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        async with session_maker() as session:
+            row = await get_round(session, 1)
+            assert row is not None and row.status == "generating"
+            panel = row.panel or []
+            # Refilled from the next eligible owners, still one per owner.
+            assert [slot["agent_id"] for slot in panel] == [
+                str(agents[i]) for i in (1, 3, 4)
+            ]
+            assert len({slot["owner_key"] for slot in panel}) == 3
+            # The ledger champion cannot run, so nobody seated is champion.
+            assert not any(slot["champion"] for slot in panel)
+
+        detail = (await client.get(f"{_ROUNDS_URL}/1", headers=_ADMIN)).json()
+        skipped = {s["agent_id"]: s["reason"] for s in detail["skipped_panel_agents"]}
+        assert skipped == {
+            str(agents[0]): "agent status is banned",
+            str(agents[2]): "miner hotkey is banned",
+        }
+
+    async def test_agents_banned_mid_round_are_dropped_without_voiding(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, panel_size=5, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(6)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        case_ids = await _generate_round(client)
+
+        # The first agent reports, then is banned: its result must not count.
+        first = await _lease_job(client)
+        assert first is not None and first["agent_id"] == str(agents[0])
+        await _report(client, first, case_ids)
+        await _ban_agent(session_maker, agents[0])
+        # The lane drops it on its next poll and leases the second agent,
+        # whose miner's hotkey is then banned mid-run.
+        second = await _lease_job(client)
+        assert second is not None and second["agent_id"] == str(agents[1])
+        await _ban_hotkey(session_maker, "5PanelMiner1")
+
+        actions = await _advance(session_maker, 5)
+        assert any(f"dropped panel agent {agents[1]}" in a for a in actions)
+        async with session_maker() as session:
+            row = await get_round(session, 1)
+            # Three seated agents remain (>= min_panel 3): still running.
+            assert row is not None and row.status == "running"
+            ticket = await session.get(
+                ValidatorTicket, (agents[1], 13, _VALIDATOR.ss58_address)
+            )
+            assert ticket is not None and ticket.status == TicketStatus.EXPIRED
+        # Ticking again changes nothing.
+        assert await _advance(session_maker, 5) == []
+
+        # Only the seated agents are leased (the sixth ranked agent never
+        # takes a dropped seat), and their reports close the round.
+        seen = []
+        while (job := await _lease_job(client)) is not None:
+            seen.append(job["agent_id"])
+            await _report(client, job, case_ids)
+        assert seen == [str(agents[i]) for i in (2, 3, 4)]
+
+        detail = (await client.get(f"{_ROUNDS_URL}/1", headers=_ADMIN)).json()
+        assert detail["summary"]["status"] == "scoring"
+        assert detail["summary"]["panel_size"] == 5
+        assert detail["summary"]["panel_dropped"] == 2
+        assert detail["summary"]["results"] == 4
+        assert detail["summary"]["answered_results"] == 3
+        dropped = {
+            p["agent_id"]: p["dropped_reason"]
+            for p in detail["panel"]
+            if p["dropped_reason"]
+        }
+        assert dropped == {
+            str(agents[0]): "agent status is banned",
+            str(agents[1]): "miner hotkey is banned",
+        }
+        excluded = {r["agent_id"]: r["excluded_reason"] for r in detail["results"]}
+        assert excluded[str(agents[0])].startswith("agent dropped from the panel")
+        assert excluded[str(agents[2])] is None
+
+        # The dropped agent's result never reaches the scored matrix.
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["kind"] == "score"
+        assert [a["agent_id"] for a in work["matrix"]["agents"]] == [
+            str(agents[i]) for i in (2, 3, 4)
+        ]
+        listing = (await client.get(_ROUNDS_URL, headers=_ADMIN)).json()
+        summary = next(r for r in listing["rounds"] if r["round_index"] == 1)
+        assert summary["panel_dropped"] == 2
+
+    async def test_too_few_eligible_agents_left_voids_the_round(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        await _generate_round(client)
+        job = await _lease_job(client)
+        assert job is not None and job["agent_id"] == str(agents[0])
+        await _ban_hotkey(session_maker, "5PanelMiner0")
+
+        actions = await _advance(session_maker, 5)
+        assert "round 1: void after panel drops" in actions
+        async with session_maker() as session:
+            row = await get_round(session, 1)
+            assert row is not None and row.status == "void"
+            assert (row.void_reason or "").startswith("insufficient_panel: 0 ")
+            assert "1 panel agent(s) dropped" in (row.void_reason or "")
+            ticket = await session.get(
+                ValidatorTicket, (agents[0], 13, _VALIDATOR.ss58_address)
+            )
+            assert ticket is not None and ticket.status == TicketStatus.EXPIRED
+            attempts = (
+                await session.scalars(
+                    select(GeneratorRoundAttempt).where(
+                        GeneratorRoundAttempt.round_index == 1
+                    )
+                )
+            ).all()
+            assert {a.status for a in attempts} == {"failed"}
+        assert await _lease_job(client) is None
+
+
+class TestFaultOnlyRounds:
+    async def test_all_faulted_round_is_void_and_never_touches_the_ledger(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        _patch_lane(monkeypatch)
+        await _register_default(client)
+        miner = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+
+        # Round 1 scores normally and sets the generator's ledger score.
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        case_ids = await _generate_round(client)
+        while (job := await _lease_job(client)) is not None:
+            await _report(client, job, case_ids)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-score",
+            headers=_SCORER,
+            json=_matrix_score(work),
+        )
+        assert resp.status_code == 200, resp.text
+        before = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert [(e["miner_hotkey"], e["round_index"]) for e in before] == [
+            ("5GenMinerA", 1)
+        ]
+        async with session_maker() as session:
+            sub = await session.get(GeneratorSubmission, miner)
+            assert sub is not None
+            score_before = sub.round_score
+            assert score_before is not None and sub.round_scored_index == 1
+
+        # Round 2: every panel run faults every case (infrastructure).
+        await _advance(session_maker, 8)
+        case_ids = await _generate_round(client)
+        while (job := await _lease_job(client)) is not None:
+            await _report(client, job, case_ids, fault=True)
+
+        detail = (await client.get(f"{_ROUNDS_URL}/2", headers=_ADMIN)).json()
+        assert detail["summary"]["status"] == "void"
+        assert detail["summary"]["void_reason"].startswith(
+            "insufficient_answered_results: 0 of 3"
+        )
+        assert detail["summary"]["results"] == 3
+        assert detail["summary"]["answered_results"] == 0
+        assert {r["excluded_reason"] for r in detail["results"]} == {
+            "faulted every case; counts as not reported"
+        }
+        # Never leased for scoring, never credited.
+        assert (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"] is None
+        after = (await client.get("/api/v1/generator/board")).json()["entries"]
+        assert after == before
+        async with session_maker() as session:
+            sub = await session.get(GeneratorSubmission, miner)
+            assert sub is not None
+            assert sub.round_score == score_before and sub.round_scored_index == 1
+            assert not (
+                await session.scalars(
+                    select(GeneratorRoundCaseVerdict).where(
+                        GeneratorRoundCaseVerdict.round_index == 2
+                    )
+                )
+            ).all()
 
 
 class TestOperatorControls:
