@@ -13,7 +13,7 @@ both lanes.
 The table is new and empty, so a plain create takes no lock on a hot table.
 
 Revision ID: 9e4b2d7c1a63
-Revises: b7e4c2a9d1f3
+Revises: c3f8a1d5e7b9
 """
 
 from collections.abc import Sequence
@@ -23,7 +23,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "9e4b2d7c1a63"
-down_revision: str | Sequence[str] | None = "b7e4c2a9d1f3"
+down_revision: str | Sequence[str] | None = "c3f8a1d5e7b9"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
