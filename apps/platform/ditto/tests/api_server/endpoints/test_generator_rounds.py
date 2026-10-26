@@ -1110,6 +1110,37 @@ class TestPanelFreshness:
             str(agents[2]): "miner hotkey is banned",
         }
 
+    async def test_an_undersized_frozen_panel_voids_and_keeps_its_skips(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        await _ban_agent(session_maker, agents[1])
+
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        detail = (await client.get(f"{_ROUNDS_URL}/1", headers=_ADMIN)).json()
+        assert detail["summary"]["status"] == "void"
+        assert detail["summary"]["void_reason"].startswith(
+            "panel has 2 agent(s), min_panel 3"
+        )
+        assert detail["skipped_panel_agents"] == [
+            {
+                "agent_id": str(agents[1]),
+                "owner_key": "coldkey:1",
+                "miner_hotkey": "5PanelMiner1",
+                "reason": "agent status is banned",
+            }
+        ]
+
     async def test_agents_banned_mid_round_are_dropped_without_voiding(
         self,
         app: FastAPI,

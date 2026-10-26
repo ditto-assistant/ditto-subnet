@@ -823,6 +823,14 @@ async def open_round(
     panel, skipped = frozen.panel, frozen.skipped_references
     row.columns = columns
     row.panel = panel
+    # Recorded before any void below, so a round voided for an undersized
+    # panel still shows which agents were skipped and why.
+    generation: dict[str, Any] = {}
+    if skipped:
+        generation["skipped_reference_agents"] = skipped
+    if frozen.skipped_agents:
+        generation["skipped_panel_agents"] = frozen.skipped_agents
+    row.generation = generation or None
     if not any(column["counted"] for column in columns):
         void_round(
             row,
@@ -844,12 +852,6 @@ async def open_round(
             now=now,
         )
         return
-    generation: dict[str, Any] = {}
-    if skipped:
-        generation["skipped_reference_agents"] = skipped
-    if frozen.skipped_agents:
-        generation["skipped_panel_agents"] = frozen.skipped_agents
-    row.generation = generation or None
 
 
 # --- scorer work ------------------------------------------------------------
