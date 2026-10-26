@@ -127,6 +127,7 @@ from ditto.validator.telemetry import (
     scored_agent_stat,
 )
 from ditto.validator.tracks import (
+    TRACK_GENERATOR,
     TRACK_MEMORY,
     MemoryFoldParams,
     TrackFoldInputs,
@@ -2442,13 +2443,17 @@ class ValidatorWorker:
             else GeneratorLedgerResponse(count=0)
         )
         if generator_ledger is None:
-            if self._config.generator_weight_eligible:
+            if registry.shares_bps().get(TRACK_GENERATOR, 0) > 0:
+                # A governed generator share is in force: folding an empty
+                # ledger would hand it to memory while validators that read
+                # the ledger pay generators. Keep the last accepted vector.
                 logger.warning(
-                    "generator ledger unavailable while generator weights are "
-                    "eligible; weights unchanged this epoch"
+                    "generator ledger unavailable while the generator track "
+                    "holds a governed share; weights unchanged this epoch"
                 )
                 return _WeightOutcome(leaderboard=leaderboard)
-            # Shadow: the track pays nothing, so an empty ledger changes no weight.
+            # No generator share (shadow, or the compiled 0 bps default): the
+            # track pays nothing, so an empty ledger changes no weight.
             generator_ledger = GeneratorLedgerResponse(count=0)
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
@@ -2489,7 +2494,11 @@ class ValidatorWorker:
         track_vectors = {
             track.track_id: track.fold(fold_inputs) for track in registry.tracks
         }
-        paying_shares_bps = registry.shares_bps()
+        # An empty generator vector hands its governed share to memory rather
+        # than burning it (``Track.unclaimed_share_to``), so a served
+        # ``{memory: 9000, generator: 1000}`` with no weight-eligible generator
+        # folds memory at the full pool: byte-identical to the memory-only fold.
+        paying_shares_bps = registry.claimed_shares_bps(track_vectors)
         eligible_vectors = {
             track_id: vector
             for track_id, vector in track_vectors.items()

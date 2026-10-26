@@ -140,7 +140,15 @@ from ditto import __version__
 # disk, and architecture, probed once per boot (the screener v6 block). Like the
 # weights fold, it changes the signed bytes only when present, so a failed probe
 # signs the v23/v27 domain. Platform must accept v32 before validators adopt it.
-HEARTBEAT_PROTOCOL_VERSION = 32
+# v33 folds the ``generator`` track as a paying track. A governed
+# ``LedgerResponse.track_shares_bps`` such as ``{memory: 9000, generator: 1000}``
+# pays generator ledger entries Platform marked ``weight_eligible``; a generator
+# share with no eligible entry falls back to memory instead of burning. A v32
+# validator folds the generator track in shadow, so it would burn that share
+# instead: Platform must withhold a map naming a nonzero generator share until
+# every recently-live weight setter reports v33+. Heartbeat signing bytes are
+# unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 33
 
 
 @dataclass(frozen=True)

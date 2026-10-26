@@ -2081,7 +2081,8 @@ class LedgerResponse(BaseModel):
         default_factory=dict,
         description=(
             "Optional per-track emission share in basis points (0-10000), "
-            "keyed by track id (``memory``/``coding``/``router``). The "
+            "keyed by track id (``memory``/``coding``/``router``/"
+            "``generator``). The "
             "operator-owned governance knob for the multi-competition split, "
             "served already-resolved like ``burn_share`` so the whole fleet "
             "folds one decided allocation. Absent (an older platform) or "

@@ -401,6 +401,49 @@ def track_allocated_share(
     return allocated / BASIS_POINT_SCALE
 
 
+def reassign_unclaimed_shares(
+    shares_bps: Mapping[str, int],
+    vectors: Mapping[str, Mapping[str, float]],
+    *,
+    fallbacks: Mapping[str, str],
+) -> dict[str, int]:
+    """Move an empty track's bps to its declared fallback track.
+
+    By default an eligible track that folds no payable miner leaves its share
+    unclaimed and :func:`track_allocated_share` burns it. A track may instead
+    name a fallback (``fallbacks[track_id]``, e.g. ``generator -> memory``):
+    when the track produced no positive weight and the fallback is itself a
+    paying track, the track's bps are added to the fallback's and the track
+    drops out of the map. The generator track declares memory so a governed
+    generator share with no weight-eligible generator (Platform still in
+    shadow, an empty round window) pays agent miners rather than burning,
+    which also keeps that state byte-identical to the memory-only fold: with
+    ``{memory: 9000, generator: 1000}`` and no eligible generator, memory
+    folds at the full ``BASIS_POINT_SCALE`` and passes through unchanged.
+
+    One hop only, in a deterministic order, so the result never depends on
+    dict iteration: a fallback that is itself empty keeps the moved bps
+    unclaimed, and they burn exactly as its own would. Integer bps in, integer
+    bps out, so every validator folds the same split.
+    """
+    original = {track_id: bps for track_id, bps in shares_bps.items() if bps > 0}
+    resolved = dict(original)
+    for track_id in sorted(original):
+        target = fallbacks.get(track_id)
+        if (
+            target is None
+            or target == track_id
+            or target not in shares_bps
+            or _has_positive_weight(vectors.get(track_id, {}))
+        ):
+            continue
+        # Move only the track's own configured bps (never bps it received),
+        # so a chain of fallbacks is still a single hop.
+        resolved[track_id] -= original[track_id]
+        resolved[target] = resolved.get(target, 0) + original[track_id]
+    return {track_id: bps for track_id, bps in resolved.items() if bps > 0}
+
+
 def split_unpaid_share(weights: Mapping[str, float]) -> tuple[dict[str, float], float]:
     """Separate a provisional incumbent's unpaid share from a blended vector.
 

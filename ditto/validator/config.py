@@ -94,6 +94,8 @@ BASIS_POINT_SCALE = 10_000
 # override this the same way ``burn_share`` overrides ``MINER_EMISSION_SHARE``
 # (see ``weights.resolve_track_shares``); a missing or malformed field folds back
 # to exactly this dict. The eligible sum must never exceed ``BASIS_POINT_SCALE``.
+# The generator track is active from protocol 33 but absent here, so it folds at
+# 0 bps until Platform governance serves it a share.
 TRACK_SHARES_BPS = {"memory": BASIS_POINT_SCALE, "coding": 0, "router": 0}
 # Router track rank shares: the relative emission slice each ranked router miner
 # receives (champion first). Only ratios matter -- ``blend_track_weights``
@@ -536,25 +538,35 @@ class ValidatorConfig:
     ``router_track_state`` — because turning the read on changes no chain output,
     only which ledger the (already zero-weighted) router fold logs and measures."""
 
-    generator_track_state: str = "shadow"
-    """Lifecycle state of the generator-competition track. ``shadow`` folds and
-    logs a generator vector every cycle with zero emission. Compiled-only for
-    consensus safety, like ``router_track_state``."""
+    generator_track_state: str = "active"
+    """Lifecycle state of the generator-competition track. Compiled-only for
+    consensus safety, like ``router_track_state``.
 
-    generator_weight_eligible: bool = False
-    """Whether the generator track may contribute emissions. ``False`` until it
-    and ``generator_track_state`` are promoted together in a release."""
+    ``active`` since protocol 33. That alone pays nothing: the track's share
+    comes from the platform-governed ``track_shares_bps`` and the compiled
+    default gives it 0 bps, and the fold pays only ledger entries Platform
+    marked ``weight_eligible`` (which it does only under generator settings
+    ``mode=enforce``). A generator share with no eligible entry falls back to
+    the memory track (see ``Track.unclaimed_share_to``), so until an operator
+    both serves a share and enforces the ledger the vector is byte-identical to
+    the memory-only fold."""
+
+    generator_weight_eligible: bool = True
+    """Whether the generator track may contribute emissions. Promoted with
+    ``generator_track_state`` in protocol 33; inert until Platform serves a
+    nonzero generator share and weight-eligible ledger entries."""
 
     generator_rank_shares: tuple[float, ...] = GENERATOR_RANK_SHARES
     """Relative emission slice per ranked generator miner (best first). Flatter
     than the agent curve: discriminating cases are a shared good, and several
     generators finding different blind spots is the goal. Inert while shadow."""
 
-    generator_ledger_read_enabled: bool = False
+    generator_ledger_read_enabled: bool = True
     """Whether the worker reads the generator ledger from the platform
-    (``VALIDATOR_GENERATOR_LEDGER_READ_ENABLED``). Reading changes no chain
-    output while the track is shadow; it only makes the zero-weighted fold
-    observable in the validator log."""
+    (``VALIDATOR_GENERATOR_LEDGER_READ_ENABLED``, default on since protocol 33).
+    Required while the track is weight-eligible: a validator that does not read
+    the ledger would fold an empty generator vector and pay a governed
+    generator share to memory while the rest of the fleet pays generators."""
 
     def __post_init__(self) -> None:
         """Fail loud at boot on a genuinely misconfigured router split.
@@ -585,9 +597,11 @@ class ValidatorConfig:
             )
         if self.generator_weight_eligible and not self.generator_ledger_read_enabled:
             # Eligibility without the ledger read would fold an empty ledger
-            # and silently pay the promoted track nothing.
+            # and pay a governed generator share to memory while the rest of
+            # the fleet pays generators: a consensus split, so refuse to boot.
             raise ValidatorConfigError(
-                "generator_weight_eligible requires generator_ledger_read_enabled"
+                "generator_weight_eligible requires generator_ledger_read_enabled; "
+                "unset VALIDATOR_GENERATOR_LEDGER_READ_ENABLED (default true)"
             )
 
     def signing_source_present(self) -> bool:
@@ -901,7 +915,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             in _truthy
         ),
         generator_ledger_read_enabled=(
-            os.environ.get("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "false").lower()
+            os.environ.get("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "true").lower()
             in _truthy
         ),
     )

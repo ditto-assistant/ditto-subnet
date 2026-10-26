@@ -402,7 +402,7 @@ operator ruling.
 | Scorer | `services/dittobench-api/cmd/challenge-scorer` | Qualification runs; round dataset generation; round matrix scoring |
 | Round execution | `services/dittobench-api/cmd/dittobench-api` (`generator-round-v1`) | Run a round dataset against one screened agent image with ticket inference and the production grader |
 | Platform | `apps/platform` | Signed uploads, private storage, settings, qualification, chain-epoch rounds (commit, open, close, reveal, on-chain commitment), validator round leases, copy detection, generator ledger |
-| Validator | `ditto/validator` | Run round panel runs on idle slots; `generator` track in `SHADOW` at 0 bps folding the generator ledger |
+| Validator | `ditto/validator` | Run round panel runs on idle slots; `generator` track `ACTIVE` since protocol 33, paying only a governed `track_shares_bps` share to `weight_eligible` ledger entries (an unclaimed share falls back to memory) |
 | Backroom | `apps/backroom` | Read and drive every part of the lane: settings, submissions, qualification runs, rounds, leases, results, the matrix, the round driver; activation and debugging writes with revision and confirmation |
 | Miner | `ditto generator`, `miners/dittobench-generator-starter-kit` | Rehearse, package, sign, and upload generators; reference generator to fork |
 

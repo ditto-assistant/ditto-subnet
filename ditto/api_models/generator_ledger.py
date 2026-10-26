@@ -1,11 +1,13 @@
-"""Generator-track ledger relayed to validators (shadow, weight-zero).
+"""Generator-track ledger relayed to validators.
 
 Platform is the generator competition's system of record: generators compete
 in chain-epoch rounds (their cases run by validators against the top agents),
 and Platform folds every hotkey to its latest round column score within the
 freshness window. Validators read this ledger through
 ``GET /scoring/generator-ledger`` and fold it as the ``generator`` track, which
-ships in ``SHADOW`` at 0 bps. Field discipline mirrors
+is active from protocol 33 but pays only a Platform-governed share
+(``LedgerResponse.track_shares_bps``) and only to entries marked
+``weight_eligible`` (generator settings ``mode=enforce``). Field discipline mirrors
 ``ditto.api_models.router_ledger``: unknown fields are ignored, ``score`` is the
 raw double, and an empty ledger folds to zero emission.
 """
@@ -35,9 +37,10 @@ class GeneratorLedgerEntry(GeneratorLedgerModel):
         bool,
         Field(
             description=(
-                "Whether this result may contribute emissions. Always False "
-                "while the competition is in shadow; the validator's track "
-                "state is the authority and this is a defensive echo."
+                "Whether this result may contribute emissions. False while "
+                "the competition is in shadow; under ``mode=enforce`` Platform "
+                "marks qualified miner generators eligible. The fold pays only "
+                "eligible entries, and only from a governed generator share."
             )
         ),
     ] = False
@@ -53,5 +56,8 @@ class GeneratorLedgerResponse(GeneratorLedgerModel):
     entries: list[GeneratorLedgerEntry] = Field(default_factory=list)
     count: int
     window_days: int = 0
-    mode: Literal["off", "shadow"] = "off"
+    # A plain string, not a closed literal: an unknown future mode must not
+    # make the whole ledger unreadable (the fold never reads it; it pays by
+    # each entry's ``weight_eligible``). ``enforce`` marks entries eligible.
+    mode: str = "off"
     generated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
