@@ -7,7 +7,7 @@ which inherits everything, so the agent and generator lanes charge exactly
 what they charged before until an operator writes an override.
 
 Revision ID: 5b7e1c9d3a42
-Revises: 9e4b2d7c1a63
+Revises: 7c3e9a1b5d42
 Create Date: 2026-10-26
 """
 
@@ -19,7 +19,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "5b7e1c9d3a42"
-down_revision: str | Sequence[str] | None = "9e4b2d7c1a63"
+down_revision: str | Sequence[str] | None = "7c3e9a1b5d42"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
