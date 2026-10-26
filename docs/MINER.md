@@ -166,7 +166,15 @@ if the agent is never submitted or scores 0. It is also separate from, and
 usually larger than, the evaluation fee.
 
 The coldkey pays the fee. The hotkey signs the artifact and receives incentive.
-The fee is configured in TAO through Backroom. TAO/USD pricing is recorded only
+The fee is configured in TAO through Backroom. Each competition has its own
+fee: agent uploads (the memory competition) pay the default submission fee, and
+generator uploads pay the generator competition's fee, which inherits the
+default until an operator sets a separate generator price. `GET
+/api/v1/public/submission-terms` lists every competition's deliverable
+(artifact kind, required files, size and source limits), cooldown, and fee;
+`ditto upload` and `ditto generator upload` print the relevant terms before
+asking you to pay. A payment must match its competition's fee exactly and funds
+one upload in one lane. TAO/USD pricing is recorded only
 for internal revenue reporting; it neither determines the amount due nor takes
 part in payment or admission validation. Never put wallet secrets in the build
 context.

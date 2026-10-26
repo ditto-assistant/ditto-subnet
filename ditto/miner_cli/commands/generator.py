@@ -51,12 +51,14 @@ from ditto.miner_cli.preferences import (
     load_pending_payment,
     save_pending_payment,
 )
+from ditto.miner_cli.submission_terms import show_submission_terms
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 MAX_ARCHIVE_BYTES = 4 << 20
 SIGNATURE_DOMAIN = "ditto-generator-v1"
 # Local key for a saved generator fee proof (kept apart from agent proofs).
 PENDING_PAYMENT_NAME = "generator"
+GENERATOR_COMPETITION = "generator"
 _DATAGEN_DIR = Path(__file__).resolve().parents[3] / "research" / "dittobench-datagen"
 
 
@@ -248,11 +250,37 @@ def _pay_fee(
     coldkey_name: str,
     subtensor_network: str,
 ) -> PaymentReceipt:
-    """Pay the quoted upload fee through the agent-upload payment path."""
+    """Pay the generator competition's quoted fee.
+
+    Each competition has its own price, so the amount comes only from these
+    generator terms, never from the agent-upload quote, and terms that name
+    another competition are refused before anything is sent. A Platform that
+    predates per-competition fees omits ``competition``; its terms are the
+    generator's.
+    """
+    competition = terms.get("competition", GENERATOR_COMPETITION)
+    if competition != GENERATOR_COMPETITION:
+        raise MinerCliError(
+            f"platform quoted the {competition!r} competition's fee for a "
+            "generator upload; no payment was sent"
+        )
     amount_rao = terms.get("payment_amount_rao")
     send_address = terms.get("payment_send_address")
-    if not isinstance(amount_rao, int) or not isinstance(send_address, str):
+    if (
+        not isinstance(amount_rao, int)
+        or isinstance(amount_rao, bool)
+        or amount_rao <= 0
+        or not isinstance(send_address, str)
+    ):
         raise MinerCliError("platform requires a fee but did not quote one")
+    source = terms.get("payment_amount_source")
+    purpose = "generator competition upload fee" + (
+        " (generator price)"
+        if source == "override"
+        else " (default submission fee)"
+        if source == "default"
+        else ""
+    )
     hotkey_ss58 = handle.hotkey_ss58
     chain_endpoint = getattr(args, "chain_endpoint", None) or None
     preflight_payment_signer(
@@ -267,6 +295,7 @@ def _pay_fee(
         hotkey_ss58=hotkey_ss58,
         coldkey_name=coldkey_name,
         skip=args.yes,
+        purpose=purpose,
     )
     print(f"submitting payment on subtensor={subtensor_network}...", file=sys.stderr)
     receipt = submit_eval_payment(
@@ -330,6 +359,9 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
         "bucket": GENERATOR_PAYMENTS_BUCKET,
     }
     with ApiClient(base_url=network.api_url) as client:
+        # The deliverable and the generator competition's own fee, shown
+        # before anything is paid. Informational; Platform enforces it.
+        show_submission_terms(client, GENERATOR_COMPETITION)
         receipt = recovery
         if receipt is None:
             # A finalized fee saved by an earlier attempt at this exact archive

@@ -110,7 +110,9 @@ uv run ditto generator board
 wrap the same tool.
 
 When the operator requires an upload fee, `ditto generator upload` charges the
-same TAO fee as an agent upload. It shows the amount and asks before paying
+generator competition's own TAO fee (the agent-upload fee unless the operator
+sets a separate generator price). It prints the generator submission terms
+(archive limits, cooldown, fee), shows the amount and asks before paying
 (`-y` skips the prompt), then attaches the payment proof. If the upload fails
 after payment, it prints `--payment-block-*` flags. Rerun with them within 24
 hours to reuse the payment without paying again. See "Upload fee" in

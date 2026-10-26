@@ -487,6 +487,7 @@ import {
   validatorFleetObservabilitySchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
+  canonicalCompetitionFees,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
   hotkeyBanLookupInputSchema,
@@ -579,6 +580,10 @@ import {
   platformPublicRequest,
 } from './ditto.server'
 import { NothingAppliedError, platformAdminWrite } from './platform-write'
+import {
+  submissionTermsReadSchema,
+  submissionTermsSchema,
+} from '../lib/submission-terms.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -1240,6 +1245,32 @@ export async function updateArtifactReleaseSettings(actor: string, rawInput: unk
   return fetchArtifactReleaseControl()
 }
 
+const SUBMISSION_TERMS_PATH = '/api/v1/public/submission-terms'
+
+/**
+ * Every competition's submission terms: deliverable, cooldown and own fee.
+ * A Platform that predates the endpoint answers 404; report that plainly
+ * (with where the same facts live there) instead of failing the read.
+ */
+export async function fetchCompetitionSubmissionTerms() {
+  try {
+    const payload = await platformPublicRequest(SUBMISSION_TERMS_PATH)
+    return submissionTermsReadSchema.parse({
+      competitions: submissionTermsSchema.parse(payload).competitions,
+      note: null,
+    })
+  } catch (error) {
+    if (!isPlatformPublicNotFound(error)) throw error
+    return submissionTermsReadSchema.parse({
+      competitions: null,
+      note:
+        'This Platform predates per-competition submission terms: every upload lane '
+        + 'charges get_submission_cooldown fee_amount_rao, generator uploads only while '
+        + 'get_generator_competition_settings upload_fee_required is true.',
+    })
+  }
+}
+
 const SUBMISSION_SETTINGS_PATH = '/api/v1/admin/submission-settings'
 
 export async function fetchSubmissionSettingsControl() {
@@ -1249,6 +1280,8 @@ export async function fetchSubmissionSettingsControl() {
 
 export async function updateSubmissionSettings(actor: string, rawInput: unknown) {
   const input = updateSubmissionSettingsInputSchema.parse(rawInput)
+  const competitionFees =
+    input.competitionFees === undefined ? undefined : canonicalCompetitionFees(input.competitionFees)
   await platformAdminRequest(SUBMISSION_SETTINGS_PATH, {
     method: 'POST',
     actor,
@@ -1256,12 +1289,29 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
       expected_revision: input.expectedRevision,
       cooldown_seconds: input.cooldownSeconds,
       fee_amount_rao: input.feeAmountRao,
+      // Omitted (not null) when unset, so an older Platform sees exactly the
+      // body it always did and the current overrides carry forward.
+      ...(competitionFees === undefined ? {} : { competition_fees: competitionFees }),
       reason: input.reason,
       actor,
       confirmation: input.confirmation,
     },
   })
-  return fetchSubmissionSettingsControl()
+  const control = await fetchSubmissionSettingsControl()
+  if (competitionFees !== undefined) {
+    // A Platform that predates per-competition fees refuses the extended
+    // confirmation phrase, but never report a price as set unless the stored
+    // revision carries it.
+    const stored = JSON.stringify(canonicalCompetitionFees(control.current.competition_fees))
+    if (stored !== JSON.stringify(competitionFees)) {
+      throw new Error(
+        `Platform stored revision ${control.current.revision} with competition_fees ${stored}, `
+        + `not ${JSON.stringify(competitionFees)}: it predates per-competition fees or the `
+        + 'settings moved. Re-read get_submission_cooldown before writing again.',
+      )
+    }
+  }
+  return control
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'

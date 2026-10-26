@@ -700,6 +700,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     )
 
     app.include_router(treasury_allocation_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.public_submission_terms import (
+        router as submission_terms_router,
+    )
+
+    app.include_router(submission_terms_router, prefix="/api/v1")
     from ditto.api_server.endpoints.public_treasury_ledger import (
         admin_router as admin_treasury_ledger_router,
     )

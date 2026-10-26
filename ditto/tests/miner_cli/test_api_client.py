@@ -135,6 +135,30 @@ class TestGeneratorUploadTerms:
             client.get_generator_upload_terms(hotkey="5Hot", source_sha256="ab")
 
 
+class TestSubmissionTerms:
+    def test_reads_one_competition(self) -> None:
+        seen: list[httpx.Request] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"competition": "memory"})
+
+        with make_client(_handler) as client:
+            assert client.get_submission_terms("memory") == {"competition": "memory"}
+        assert seen[0].url.path == "/api/v1/public/submission-terms/memory"
+
+    def test_an_older_platform_reads_as_none_and_failures_raise(self) -> None:
+        with make_client(lambda _request: httpx.Response(404)) as client:
+            assert client.get_submission_terms("generator") is None
+        with (
+            make_client(
+                lambda _request: _envelope_response(500, 3000, "boom")
+            ) as client,
+            pytest.raises(ApiResponseError, match="submission terms"),
+        ):
+            client.get_submission_terms("generator")
+
+
 class TestContributorAuthenticationErrors:
     def test_tokenless_cla_401_keeps_endpoint_error(self) -> None:
         with (

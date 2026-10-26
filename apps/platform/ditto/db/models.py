@@ -6693,6 +6693,15 @@ class SubmissionSettingsRevision(Base):
     parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """The default submission fee: what the memory (agent) lane charges and
+    what every other competition inherits unless ``competition_fees``
+    overrides it."""
+    competition_fees: Mapped[dict] = mapped_column(
+        _JSON_VARIANT, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    """Per-competition overrides, ``{competition: {"fee_amount_rao": int |
+    null, "fee_required": bool | null}}``; ``null`` (or a missing entry)
+    inherits. See :mod:`ditto.db.queries.submission_settings`."""
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6703,6 +6712,10 @@ class SubmissionSettingsRevision(Base):
         CheckConstraint(
             "cooldown_seconds BETWEEN 60 AND 86400",
             name="submission_settings_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(competition_fees) = 'object'",
+            name="submission_settings_competition_fees_check",
         ),
         CheckConstraint(
             "fee_amount_rao BETWEEN 1 AND 1000000000000",

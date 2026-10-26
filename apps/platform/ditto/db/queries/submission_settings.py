@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.submission_settings import (
+    MAX_SUBMISSION_FEE_RAO,
+    MEMORY_COMPETITION,
+    MIN_SUBMISSION_FEE_RAO,
+    OVERRIDABLE_COMPETITIONS,
+)
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
 from ditto.db.queries.agents import SubmissionCooldownError, get_submission_retry_at
 from ditto.db.queries.submission_deposit_address import (
@@ -25,6 +34,87 @@ MAX_SUBMISSION_COOLDOWN_SECONDS = 86400
 UPLOAD_ADMISSION_TTL = timedelta(hours=24)
 UPLOAD_ADMISSION_BLOCK_TTL = timedelta(minutes=15)
 
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class CompetitionFeeOverride:
+    """One competition's stored override; ``None`` inherits."""
+
+    fee_amount_rao: int | None = None
+    fee_required: bool | None = None
+
+
+@dataclass(frozen=True)
+class CompetitionFee:
+    """What one competition's upload lane charges right now."""
+
+    competition: str
+    fee_amount_rao: int
+    amount_source: Literal["default", "override"]
+    fee_required: bool
+    required_source: Literal["always", "competition_settings", "override"]
+
+
+def parse_competition_fees(raw: object) -> dict[str, CompetitionFeeOverride]:
+    """Read a stored ``competition_fees`` map, failing toward inheritance.
+
+    Only the admin endpoint writes this column, through the validating wire
+    model, so a malformed entry means corruption or a newer Platform's
+    shape: it is logged and read as "inherit everything" (the default
+    price and the competition's own fee switch) rather than refusing every
+    upload. An unknown competition id is ignored the same way, so a rollback
+    past a newer track keeps working.
+    """
+    if not isinstance(raw, Mapping):
+        if raw not in (None, {}):
+            logger.warning("ignoring non-object competition_fees %r", raw)
+        return {}
+    parsed: dict[str, CompetitionFeeOverride] = {}
+    for competition, entry in raw.items():
+        if competition not in OVERRIDABLE_COMPETITIONS:
+            logger.warning(
+                "ignoring fee override for unknown competition %r", competition
+            )
+            continue
+        if not isinstance(entry, Mapping):
+            logger.warning("ignoring malformed %s fee override %r", competition, entry)
+            continue
+        amount = entry.get("fee_amount_rao")
+        required = entry.get("fee_required")
+        if amount is not None and (
+            isinstance(amount, bool)
+            or not isinstance(amount, int)
+            or not MIN_SUBMISSION_FEE_RAO <= amount <= MAX_SUBMISSION_FEE_RAO
+        ):
+            logger.warning("ignoring malformed %s fee amount %r", competition, amount)
+            amount = None
+        if required is not None and not isinstance(required, bool):
+            logger.warning(
+                "ignoring malformed %s fee_required %r", competition, required
+            )
+            required = None
+        if amount is None and required is None:
+            continue
+        parsed[competition] = CompetitionFeeOverride(
+            fee_amount_rao=amount, fee_required=required
+        )
+    return parsed
+
+
+def dump_competition_fees(
+    overrides: Mapping[str, CompetitionFeeOverride],
+) -> dict[str, dict[str, int | bool | None]]:
+    """The canonical stored form: known competitions only, in registry order."""
+    return {
+        competition: {
+            "fee_amount_rao": overrides[competition].fee_amount_rao,
+            "fee_required": overrides[competition].fee_required,
+        }
+        for competition in OVERRIDABLE_COMPETITIONS
+        if competition in overrides
+    }
+
 
 @dataclass(frozen=True)
 class EffectiveSubmissionSettings:
@@ -32,6 +122,46 @@ class EffectiveSubmissionSettings:
     cooldown_seconds: int
     payment_address: str
     fee_amount_rao: int = DEFAULT_SUBMISSION_FEE_RAO
+    """The default fee: the memory (agent) lane's price, inherited by every
+    competition without its own amount."""
+    competition_fees: Mapping[str, CompetitionFeeOverride] = field(default_factory=dict)
+
+    def competition_fee(
+        self, competition: str, *, competition_requires_fee: bool
+    ) -> CompetitionFee:
+        """Resolve ``competition``'s price and whether it charges.
+
+        ``competition_requires_fee`` is the competition's own switch (the
+        generator ``upload_fee_required``), which decides only while the
+        override leaves ``fee_required`` unset. The memory lane always
+        charges the default fee.
+        """
+        if competition == MEMORY_COMPETITION:
+            return CompetitionFee(
+                competition=competition,
+                fee_amount_rao=self.fee_amount_rao,
+                amount_source="default",
+                fee_required=True,
+                required_source="always",
+            )
+        override = self.competition_fees.get(competition, CompetitionFeeOverride())
+        return CompetitionFee(
+            competition=competition,
+            fee_amount_rao=(
+                self.fee_amount_rao
+                if override.fee_amount_rao is None
+                else override.fee_amount_rao
+            ),
+            amount_source="default" if override.fee_amount_rao is None else "override",
+            fee_required=(
+                competition_requires_fee
+                if override.fee_required is None
+                else override.fee_required
+            ),
+            required_source=(
+                "competition_settings" if override.fee_required is None else "override"
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -54,15 +184,10 @@ async def latest_submission_settings(
     )
 
 
-async def effective_submission_settings(
-    session: AsyncSession,
-    *,
-    default_payment_address: str,
+def resolve_submission_settings(
+    latest: SubmissionSettingsRevision | None, *, payment_address: str
 ) -> EffectiveSubmissionSettings:
-    latest = await latest_submission_settings(session)
-    payment_address = await effective_submission_deposit_address(
-        session, default_address=default_payment_address
-    )
+    """The effective settings of ``latest`` (``None``: the built-in default)."""
     if latest is None:
         return EffectiveSubmissionSettings(
             revision=0,
@@ -75,7 +200,20 @@ async def effective_submission_settings(
         cooldown_seconds=latest.cooldown_seconds,
         fee_amount_rao=latest.fee_amount_rao,
         payment_address=payment_address,
+        competition_fees=parse_competition_fees(latest.competition_fees),
     )
+
+
+async def effective_submission_settings(
+    session: AsyncSession,
+    *,
+    default_payment_address: str,
+) -> EffectiveSubmissionSettings:
+    latest = await latest_submission_settings(session)
+    payment_address = await effective_submission_deposit_address(
+        session, default_address=default_payment_address
+    )
+    return resolve_submission_settings(latest, payment_address=payment_address)
 
 
 async def lock_upload_admission_coldkey(

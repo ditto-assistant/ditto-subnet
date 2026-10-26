@@ -3,7 +3,7 @@
 ``POST /generator/submissions`` accepts a signed generator source archive. The
 checks run cheap-before-expensive and every mutation happens after every check
 passes: lane open, fresh domain-separated signature, ban, the fee proof's
-presence and replay status (only while ``upload_fee_required``), subnet
+presence and replay status (only while the generator fee is required), subnet
 registration, archive bytes and structure (the Go contract's rules), duplicate
 source, duplicate tree, cooldown, the on-chain fee verification, then one
 insert that supersedes the hotkey's previous generator and records the fee.
@@ -11,6 +11,14 @@ insert that supersedes the hotkey's previous generator and records the fee.
 ``GET /generator/upload-terms`` tells a client, before it pays anything,
 whether a fee is required, its amount and receiving address, and every
 refusal Platform can already decide without the archive.
+
+The fee is the generator competition's own: the submission settings'
+``competition_fees.generator`` override, whose amount inherits the default
+(agent-upload) fee while unset and whose ``fee_required`` inherits the
+generator policy's ``upload_fee_required`` while unset. A proof must pay
+exactly that amount, so a transfer sized for the agent fee cannot fund a
+differently priced generator upload (and one proof never funds two uploads
+in either lane).
 
 Source never leaves Platform except to the trusted scorer. The listing and
 board here expose identities, lifecycle, and aggregate outcomes only.
@@ -92,6 +100,7 @@ from ditto.db.queries.payments import (
 from ditto.db.queries.scores import emission_owner
 from ditto.db.queries.submission_settings import (
     UPLOAD_ADMISSION_TTL,
+    CompetitionFee,
     effective_submission_settings,
 )
 
@@ -190,6 +199,25 @@ async def _replayed_or_retry(
     return None
 
 
+GENERATOR_COMPETITION = "generator"
+
+
+async def _generator_fee(
+    session: AsyncSession, request: Request, *, upload_fee_required: bool
+) -> tuple[CompetitionFee, str]:
+    """The generator competition's resolved fee and the receiving address."""
+    effective = await effective_submission_settings(
+        session,
+        default_payment_address=request.app.state.config.upload_payment_address,
+    )
+    return (
+        effective.competition_fee(
+            GENERATOR_COMPETITION, competition_requires_fee=upload_fee_required
+        ),
+        effective.payment_address,
+    )
+
+
 @router.get("/upload-terms", response_model=GeneratorUploadTerms)
 async def upload_terms(
     request: Request,
@@ -205,15 +233,16 @@ async def upload_terms(
     blockers: list[str] = []
     if not accepting:
         blockers.append("the generator competition is not accepting submissions")
-    payment_required = accepting and settings.upload_fee_required
+    fee, address = await _generator_fee(
+        session, request, upload_fee_required=settings.upload_fee_required
+    )
+    payment_required = accepting and fee.fee_required
     amount_rao: int | None = None
     send_address: str | None = None
+    amount_source = None
     if payment_required:
-        fee = await effective_submission_settings(
-            session,
-            default_payment_address=request.app.state.config.upload_payment_address,
-        )
-        amount_rao, send_address = fee.fee_amount_rao, fee.payment_address
+        amount_rao, send_address = fee.fee_amount_rao, address
+        amount_source = fee.amount_source
     retry_at = None
     if hotkey is not None:
         if await is_hotkey_banned(session, hotkey=hotkey):
@@ -237,6 +266,7 @@ async def upload_terms(
         payment_required=payment_required,
         payment_amount_rao=amount_rao,
         payment_send_address=send_address,
+        payment_amount_source=amount_source,
         upload_cooldown_seconds=settings.upload_cooldown_seconds,
         retry_at=retry_at,
         blockers=blockers,
@@ -266,7 +296,10 @@ async def upload_submission(
         )
     if await is_hotkey_banned(session, hotkey=payload.hotkey):
         raise HTTPException(status_code=403, detail="hotkey is banned from submitting")
-    fee_required = settings.upload_fee_required
+    fee, fee_address = await _generator_fee(
+        session, request, upload_fee_required=settings.upload_fee_required
+    )
+    fee_required = fee.fee_required
     if fee_required:
         if not payload.has_payment:
             raise HTTPException(status_code=402, detail=FEE_REQUIRED_DETAIL)
@@ -310,10 +343,6 @@ async def upload_submission(
             cooldown_seconds=settings.upload_cooldown_seconds,
             now=datetime.now(UTC),
         )
-        fee = await effective_submission_settings(
-            session,
-            default_payment_address=request.app.state.config.upload_payment_address,
-        )
         if session.in_transaction():
             await session.rollback()
         assert payload.payment_block_hash is not None
@@ -330,7 +359,7 @@ async def upload_submission(
                 ),
                 expected_hotkey=payload.hotkey,
                 expected_amount_rao=fee.fee_amount_rao,
-                expected_send_address=fee.payment_address,
+                expected_send_address=fee_address,
             )
         except ChainError as exc:
             logger.warning("chain unreachable during generator fee verify: %s", exc)

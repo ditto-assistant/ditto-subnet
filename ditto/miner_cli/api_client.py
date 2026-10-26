@@ -250,6 +250,21 @@ class ApiClient:
             raise ApiResponseError(_format_error(response, prefix="eval-pricing"))
         return EvalPricingResponse.model_validate(response.json())
 
+    # ---- /public/submission-terms ----------------------------------------
+
+    def get_submission_terms(self, competition: str) -> dict[str, Any] | None:
+        """One competition's deliverable, cooldown and fee, or ``None`` on a
+        Platform that predates per-competition submission terms."""
+        response = self._request(
+            "GET", f"/api/v1/public/submission-terms/{competition}"
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="submission terms"))
+        result: dict[str, Any] = response.json()
+        return result
+
     # ---- /upload/check --------------------------------------------------
 
     def post_upload_check(self, body: UploadCheckRequest) -> UploadCheckResponse:

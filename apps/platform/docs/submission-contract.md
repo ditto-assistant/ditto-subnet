@@ -18,6 +18,27 @@ file, and not `ditto-harness` (that's a pinned git dependency the crate builds o
 top of). The platform stores the tarball in object storage keyed by agent id and
 **never unpacks it**; the screener and validator do.
 
+## Per-competition terms
+
+Every competition with an upload lane publishes its submission terms at
+`GET /api/v1/public/submission-terms` (one competition:
+`/api/v1/public/submission-terms/{competition}`): the deliverable (artifact
+kind, format, contract version, required files, and each upload-time limit
+with its source: `code`, `environment`, or `setting`), the cooldown and its
+scope, and the competition's own fee. Today that is `memory` (this agent
+harness tarball) and `generator` (a `dittobench-generator/v1` Go source
+archive, see `research/dittobench-datagen/docs/generator-competition.md`).
+The terms are assembled from the same constants and settings the upload paths
+enforce; they add no rule of their own.
+
+Fees are per competition. The submission settings hold a default fee
+(`fee_amount_rao`, what agent uploads pay) and `competition_fees` overrides
+keyed by competition id; a competition without an override inherits the
+default amount and its own fee switch. A payment must equal its competition's
+fee exactly (underpayment and overpayment are both refused, and a refused
+proof is not spent), and one transfer funds one upload across every lane.
+The Backroom write is `set_submission_cooldown` with `competitionFees`.
+
 ## What's enforced today
 
 | Stage | Where | Check |

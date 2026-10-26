@@ -7071,6 +7071,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/public/submission-terms": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Submission Terms
+         * @description Every competition's deliverable, cooldown and fee.
+         */
+        get: operations["submission_terms_api_v1_public_submission_terms_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/submission-terms/{competition}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Competition Submission Terms
+         * @description One competition's deliverable, cooldown and fee.
+         */
+        get: operations["competition_submission_terms_api_v1_public_submission_terms__competition__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/submissions": {
         parameters: {
             query?: never;
@@ -14535,6 +14575,10 @@ export interface components {
              * @default admin_api
              */
             actor: string;
+            /** Competition Fees */
+            competition_fees?: {
+                [key: string]: components["schemas"]["CompetitionFeePolicy"];
+            } | null;
             /** Confirmation */
             confirmation: string;
             /** Cooldown Seconds */
@@ -14549,6 +14593,8 @@ export interface components {
         /** AdminSubmissionSettingsResponse */
         AdminSubmissionSettingsResponse: {
             current: components["schemas"]["SubmissionSettingsRevision"];
+            /** Effective Competition Fees */
+            effective_competition_fees?: components["schemas"]["EffectiveCompetitionFee"][];
             /** History */
             history: components["schemas"]["SubmissionSettingsRevision"][];
         };
@@ -15786,6 +15832,55 @@ export interface components {
              * @enum {string}
              */
             source: "platform" | "cache" | "bootstrap";
+        };
+        /**
+         * ArtifactContract
+         * @description The deliverable one competition accepts.
+         */
+        ArtifactContract: {
+            /** Contract Version */
+            contract_version?: string | null;
+            /** Format */
+            format: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "agent_harness_tarball" | "generator_source_archive";
+            /** Limits */
+            limits?: components["schemas"]["ArtifactLimit"][];
+            /** Notes */
+            notes?: string[];
+            /** Required Files */
+            required_files?: string[];
+            /** Signature Payload */
+            signature_payload: string;
+            /** Upload Endpoint */
+            upload_endpoint: string;
+        };
+        /**
+         * ArtifactLimit
+         * @description One upload-time limit on the artifact, with where it comes from.
+         */
+        ArtifactLimit: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Reference */
+            reference: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "code" | "environment" | "setting";
+            /**
+             * Unit
+             * @enum {string}
+             */
+            unit: "bytes" | "files" | "lines" | "characters" | "cases" | "version";
+            /** Value */
+            value: number | string;
         };
         /** ArtifactReleaseSettingsRevision */
         ArtifactReleaseSettingsRevision: {
@@ -18704,6 +18799,31 @@ export interface components {
              */
             v: number;
         };
+        /**
+         * CompetitionFeePolicy
+         * @description One competition's override. ``null`` inherits.
+         */
+        CompetitionFeePolicy: {
+            /** Fee Amount Rao */
+            fee_amount_rao?: number | null;
+            /** Fee Required */
+            fee_required?: boolean | null;
+        };
+        /** CompetitionSubmissionTerms */
+        CompetitionSubmissionTerms: {
+            /** Accepting */
+            accepting: boolean;
+            /**
+             * Competition
+             * @enum {string}
+             */
+            competition: "memory" | "generator";
+            cooldown: components["schemas"]["SubmissionCooldownTerms"];
+            deliverable: components["schemas"]["ArtifactContract"];
+            fee: components["schemas"]["SubmissionFeeTerms"];
+            /** Terms Endpoint */
+            terms_endpoint?: string | null;
+        };
         /** ConfirmationAblationCoordinatorProfile */
         ConfirmationAblationCoordinatorProfile: {
             /**
@@ -20363,6 +20483,28 @@ export interface components {
              * @enum {string}
              */
             source: "revision" | "default";
+        };
+        /**
+         * EffectiveCompetitionFee
+         * @description What one competition's upload lane charges right now.
+         */
+        EffectiveCompetitionFee: {
+            /**
+             * Amount Source
+             * @enum {string}
+             */
+            amount_source: "default" | "override";
+            /** Competition */
+            competition: string;
+            /** Fee Amount Rao */
+            fee_amount_rao: number;
+            /** Fee Required */
+            fee_required: boolean;
+            /**
+             * Required Source
+             * @enum {string}
+             */
+            required_source: "always" | "competition_settings" | "override";
         };
         /** EffectiveConfirmationBundleSettings */
         EffectiveConfirmationBundleSettings: {
@@ -22854,8 +22996,16 @@ export interface components {
             accepting: boolean;
             /** Blockers */
             blockers?: string[];
+            /**
+             * Competition
+             * @default generator
+             * @constant
+             */
+            competition: "generator";
             /** Payment Amount Rao */
             payment_amount_rao?: number | null;
+            /** Payment Amount Source */
+            payment_amount_source?: ("default" | "override") | null;
             /** Payment Required */
             payment_required: boolean;
             /** Payment Send Address */
@@ -36326,6 +36476,23 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** SubmissionCooldownTerms */
+        SubmissionCooldownTerms: {
+            /** Reference */
+            reference: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "owner_coldkey" | "hotkey";
+            /** Seconds */
+            seconds: number;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "code" | "environment" | "setting";
+        };
         /** SubmissionDepositAddressRevision */
         SubmissionDepositAddressRevision: {
             /** Actor */
@@ -36340,6 +36507,36 @@ export interface components {
             reason: string;
             /** Revision */
             revision: number;
+        };
+        /**
+         * SubmissionFeeTerms
+         * @description One competition's fee, resolved from the submission settings.
+         */
+        SubmissionFeeTerms: {
+            /** Amount Rao */
+            amount_rao: number;
+            /**
+             * Amount Source
+             * @enum {string}
+             */
+            amount_source: "default" | "override";
+            /**
+             * Asset
+             * @default TAO
+             * @constant
+             */
+            asset: "TAO";
+            /** Required */
+            required: boolean;
+            /**
+             * Required Source
+             * @enum {string}
+             */
+            required_source: "always" | "competition_settings" | "override";
+            /** Send Address */
+            send_address: string;
+            /** Settings Revision */
+            settings_revision: number;
         };
         /** SubmissionImageBuildClaimResponse */
         SubmissionImageBuildClaimResponse: {
@@ -36420,6 +36617,10 @@ export interface components {
         SubmissionSettingsRevision: {
             /** Actor */
             actor: string;
+            /** Competition Fees */
+            competition_fees?: {
+                [key: string]: components["schemas"]["CompetitionFeePolicy"];
+            };
             /** Cooldown Seconds */
             cooldown_seconds: number;
             /** Created At */
@@ -36508,6 +36709,11 @@ export interface components {
             scored_runtime_evidence?: components["schemas"]["ScoredRuntimeEvidenceLease"] | null;
             /** Source Url B64 */
             source_url_b64: string;
+        };
+        /** SubmissionTermsResponse */
+        SubmissionTermsResponse: {
+            /** Competitions */
+            competitions: components["schemas"]["CompetitionSubmissionTerms"][];
         };
         /** SubmitReceiptDiagnostics */
         SubmitReceiptDiagnostics: {
@@ -54638,6 +54844,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicScreenerHeartbeatsResponse"];
+                };
+            };
+        };
+    };
+    submission_terms_api_v1_public_submission_terms_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionTermsResponse"];
+                };
+            };
+        };
+    };
+    competition_submission_terms_api_v1_public_submission_terms__competition__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                competition: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompetitionSubmissionTerms"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

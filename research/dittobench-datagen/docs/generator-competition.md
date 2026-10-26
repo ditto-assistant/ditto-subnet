@@ -439,24 +439,41 @@ one's last round score keeps counting until the new one is scored.
 
 ## Upload fee
 
-Generator uploads can carry the same anti-spam TAO fee as agent uploads. The
-generator setting `upload_fee_required` ships `false`, so uploads are free
-until an operator turns it on in Backroom (`set_generator_competition_settings`).
+Generator uploads can carry an anti-spam TAO fee. Each competition has its
+own fee in the Platform submission settings, and the generator competition is
+priced separately from agent uploads. The generator setting
+`upload_fee_required` ships `false`, so uploads are free until an operator
+turns it on in Backroom (`set_generator_competition_settings`).
 
-- **Price and address.** The fee is the agent-upload fee: the submission
-  settings' `feeAmountRao` (`get_submission_cooldown`), paid to the same
-  address and verified by the same Platform payment verifier. One operator
-  price covers both lanes. A fee change between paying and uploading makes
+- **Price.** The generator fee is the submission settings'
+  `competition_fees.generator.fee_amount_rao` (Backroom
+  `set_submission_cooldown` `competitionFees`). While that is unset (the
+  default) it inherits the default fee, `feeAmountRao`, which is also what
+  agent (memory competition) uploads pay. Setting a generator price never
+  changes the agent fee. `get_submission_cooldown` reports every lane's
+  resolved fee in `effective_competition_fees`.
+- **Whether it is charged.** `competition_fees.generator.fee_required`, when
+  set, decides: `true` charges, `false` makes uploads free. While it is unset
+  (the default), `upload_fee_required` decides, exactly as before.
+- **Address and verifier.** The fee is paid to the submission deposit address
+  and verified by the agent-upload payment verifier.
+- **Exact amount.** A proof must pay the generator fee exactly. Less is
+  refused; so is more (an overpayment is not a credit, and a transfer sized
+  for the agent fee cannot fund a differently priced generator upload). A
+  refused proof is not spent. A fee change between paying and uploading makes
   the proof's amount mismatch; pay again at the new price.
 - **One payment, one upload.** A finalized `transfer_keep_alive` funds exactly
-  one upload across both lanes: a proof spent on an agent cannot fund a
-  generator, and a proof spent on a generator cannot fund an agent.
+  one upload across both lanes: a proof spent on (or credited to) an agent
+  cannot fund a generator, and a proof spent on a generator cannot fund an
+  agent, whatever the two prices are.
 - **Before paying.** `GET /generator/upload-terms?hotkey=...&source_sha256=...`
-  reports whether a fee is required, its amount and address, and every refusal
-  Platform can decide without the archive (lane closed, ban, cooldown, an
-  already uploaded archive). `ditto generator upload` reads it, refuses to pay
-  while anything blocks, pays through the agent-upload payment path, and
-  attaches the proof.
+  reports whether a fee is required, its amount (`payment_amount_source`:
+  `override` for the generator's own price, `default` when inherited) and
+  address, and every refusal Platform can decide without the archive (lane
+  closed, ban, cooldown, an already uploaded archive). `ditto generator
+  upload` shows the generator submission terms, reads the upload terms,
+  refuses to pay while anything blocks or when the quote is not a generator
+  quote, pays through the agent-upload payment path, and attaches the proof.
 - **Refused or lost uploads.** A refused upload does not spend the proof. It
   can be reused for 24 hours with `--payment-block-hash`,
   `--payment-block-number` and `--payment-extrinsic-index`. Resending the same
@@ -464,6 +481,19 @@ until an operator turns it on in Backroom (`set_generator_competition_settings`)
   that proof already funded.
 - **Older CLIs.** A CLI that predates the fee sends no proof and gets
   `402` telling the miner to upgrade.
+
+## Submission terms
+
+`GET /api/v1/public/submission-terms` (and `/{competition}`) states what each
+competition accepts in one place: the deliverable (artifact kind, format,
+contract version such as `dittobench-generator/v1`, required files, and every
+upload-time limit with its source: `code` for a release constant, `setting`
+for an operator setting such as `cases_per_seed`), the upload cooldown and its
+scope, and the competition's own fee. The values come from the same constants
+and settings the upload path enforces. Backroom reads it with
+`get_competition_submission_terms`, and both `ditto upload` and `ditto
+generator upload` print it before anything is paid. This is the miner
+submission contract only; build bounties have their own terms.
 
 ## Privacy
 

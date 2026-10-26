@@ -1,4 +1,9 @@
-"""Audited operator control for miner submission cooldown."""
+"""Audited operator control for miner submission cooldown and fees.
+
+One revision holds the coldkey cooldown, the default fee (the memory lane's
+price) and the per-competition fee overrides; see
+:mod:`ditto.api_models.submission_settings`.
+"""
 
 from __future__ import annotations
 
@@ -10,24 +15,45 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.submission_settings import (
+    UPLOAD_COMPETITIONS,
     AdminSubmissionSettingsRequest,
     AdminSubmissionSettingsResponse,
+    CompetitionFeePolicy,
+    EffectiveCompetitionFee,
+    competition_fees_confirmation,
 )
 from ditto.api_models.submission_settings import (
     SubmissionSettingsRevision as RevisionModel,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.generator_competition import load_settings
 from ditto.db.models import SubmissionSettingsRevision
 from ditto.db.queries.submission_settings import (
     DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
     DEFAULT_SUBMISSION_FEE_RAO,
+    CompetitionFeeOverride,
+    dump_competition_fees,
     latest_submission_settings,
+    parse_competition_fees,
+    resolve_submission_settings,
 )
 
 router = APIRouter(prefix="/admin/submission-settings", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
+
+
+def _policies(
+    overrides: dict[str, CompetitionFeeOverride],
+) -> dict[str, CompetitionFeePolicy]:
+    return {
+        competition: CompetitionFeePolicy(
+            fee_amount_rao=override.fee_amount_rao,
+            fee_required=override.fee_required,
+        )
+        for competition, override in overrides.items()
+    }
 
 
 def _revision(row: SubmissionSettingsRevision) -> RevisionModel:
@@ -36,6 +62,7 @@ def _revision(row: SubmissionSettingsRevision) -> RevisionModel:
         parent_revision=row.parent_revision,
         cooldown_seconds=row.cooldown_seconds,
         fee_amount_rao=row.fee_amount_rao,
+        competition_fees=_policies(parse_competition_fees(row.competition_fees)),
         reason=row.reason,
         actor=row.actor,
         created_at=row.created_at,
@@ -65,9 +92,31 @@ async def get_settings(
             .limit(100)
         )
     )
+    latest = rows[0] if rows else None
+    # The address is not part of this view; the deposit-address control owns
+    # it.
+    resolved = resolve_submission_settings(latest, payment_address="")
+    generator = (await load_settings(session)).settings
+    lane_switches = {"generator": generator.upload_fee_required}
+    effective = []
+    for competition in UPLOAD_COMPETITIONS:
+        fee = resolved.competition_fee(
+            competition,
+            competition_requires_fee=lane_switches.get(competition, True),
+        )
+        effective.append(
+            EffectiveCompetitionFee(
+                competition=fee.competition,
+                fee_amount_rao=fee.fee_amount_rao,
+                amount_source=fee.amount_source,
+                fee_required=fee.fee_required,
+                required_source=fee.required_source,
+            )
+        )
     return AdminSubmissionSettingsResponse(
-        current=_revision(rows[0]) if rows else _default_revision(),
+        current=_revision(latest) if latest is not None else _default_revision(),
         history=[_revision(row) for row in rows],
+        effective_competition_fees=effective,
     )
 
 
@@ -82,14 +131,30 @@ async def create_settings_revision(
         latest.fee_amount_rao if latest is not None else DEFAULT_SUBMISSION_FEE_RAO
     )
     fee_amount_rao = payload.fee_amount_rao or current_fee
+    # Omitted overrides carry forward unchanged and leave the phrase exactly
+    # as it was before per-competition fees, so a client that never sends
+    # them keeps working. An explicit map is the whole map, and is echoed.
+    if payload.competition_fees is None:
+        competition_fees = dump_competition_fees(
+            parse_competition_fees(latest.competition_fees)
+            if latest is not None
+            else {}
+        )
+    else:
+        competition_fees = {
+            competition: policy.model_dump()
+            for competition, policy in payload.competition_fees.items()
+        }
     expected_confirmation = (
         f"SET SUBMISSION COOLDOWN {payload.cooldown_seconds} SECONDS "
         f"FEE {fee_amount_rao} RAO"
     )
+    if payload.competition_fees is not None:
+        expected_confirmation += competition_fees_confirmation(payload.competition_fees)
     legacy_confirmation = f"SET SUBMISSION COOLDOWN {payload.cooldown_seconds} SECONDS"
     valid_confirmation = (
         {expected_confirmation, legacy_confirmation}
-        if payload.fee_amount_rao is None
+        if payload.fee_amount_rao is None and payload.competition_fees is None
         else {expected_confirmation}
     )
     if payload.confirmation not in valid_confirmation:
@@ -110,6 +175,7 @@ async def create_settings_revision(
         parent_revision=actual_revision,
         cooldown_seconds=payload.cooldown_seconds,
         fee_amount_rao=fee_amount_rao,
+        competition_fees=competition_fees,
         reason=payload.reason.strip(),
         actor=payload.actor.strip(),
     )

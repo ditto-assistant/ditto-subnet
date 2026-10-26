@@ -24,6 +24,7 @@ type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewF
 type GeneratedSourceReviewNote = PlatformComponents['schemas']['SourceReviewNote']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 type GeneratedAdminActiveHotkeyBan = PlatformComponents['schemas']['AdminActiveHotkeyBan']
+type GeneratedEffectiveCompetitionFee = PlatformComponents['schemas']['EffectiveCompetitionFee']
 type GeneratedAdminHotkeyBanAuditEntry =
   PlatformComponents['schemas']['AdminHotkeyBanAuditEntry']
 type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkeyBanControl']
@@ -1420,6 +1421,37 @@ export const SUBMISSION_FEE_MIN_RAO = 1
 export const SUBMISSION_FEE_MAX_RAO = 1_000_000_000_000
 export const RAO_PER_TAO = 1_000_000_000
 
+// Competitions that may carry a fee override. memory (agent uploads) is
+// priced by fee_amount_rao itself, the default every other competition
+// inherits; only generator has an upload lane today.
+export const OVERRIDABLE_FEE_COMPETITIONS = ['generator', 'coding', 'router'] as const
+export type OverridableFeeCompetition = (typeof OVERRIDABLE_FEE_COMPETITIONS)[number]
+
+export const competitionFeePolicySchema = z
+  .object({
+    // null charges the default fee_amount_rao.
+    fee_amount_rao: z
+      .number()
+      .int()
+      .min(SUBMISSION_FEE_MIN_RAO)
+      .max(SUBMISSION_FEE_MAX_RAO)
+      .nullable()
+      .default(null),
+    // null leaves it to the competition's own switch (generator:
+    // upload_fee_required); true charges, false makes uploads free.
+    fee_required: z.boolean().nullable().default(null),
+  })
+  .strict()
+
+export type CompetitionFeePolicy = z.infer<typeof competitionFeePolicySchema>
+
+export const competitionFeesInputSchema = z.partialRecord(
+  z.enum(OVERRIDABLE_FEE_COMPETITIONS),
+  competitionFeePolicySchema,
+)
+
+export type CompetitionFeesInput = z.infer<typeof competitionFeesInputSchema>
+
 export const submissionSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
@@ -1429,14 +1461,32 @@ export const submissionSettingsRevisionSchema = z.object({
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
   fee_amount_rao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // Per-competition overrides as written. A Platform that predates
+  // per-competition fees omits the map; every competition then inherits.
+  competition_fees: z.record(z.string(), competitionFeePolicySchema).default({}),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
 })
 
+export const effectiveCompetitionFeeSchema = z.object({
+  competition: z.string().min(1),
+  fee_amount_rao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  amount_source: z.enum(['default', 'override']),
+  fee_required: z.boolean(),
+  required_source: z.enum(['always', 'competition_settings', 'override']),
+} satisfies PlatformResponseShape<GeneratedEffectiveCompetitionFee>)
+
 export const submissionSettingsControlSchema = z.object({
   current: submissionSettingsRevisionSchema,
   history: z.array(submissionSettingsRevisionSchema).max(100),
+  // null: Platform predates per-competition fees (every upload lane charges
+  // fee_amount_rao, and generator uploads only while upload_fee_required).
+  effective_competition_fees: z
+    .array(effectiveCompetitionFeeSchema)
+    .max(16)
+    .nullable()
+    .default(null),
 })
 
 export const updateSubmissionSettingsInputSchema = z.object({
@@ -1447,12 +1497,47 @@ export const updateSubmissionSettingsInputSchema = z.object({
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
   feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // The WHOLE per-competition override map, or omitted to carry the current
+  // one forward unchanged; {} clears every override. Sending it appends the
+  // overrides to the confirmation phrase.
+  competitionFees: competitionFeesInputSchema.optional(),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
 
-export function submissionSettingsConfirmation(seconds: number, feeAmountRao: number) {
-  return `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
+/** Overrides that set at least one field, in Platform's canonical order. */
+export function canonicalCompetitionFees(competitionFees: CompetitionFeesInput) {
+  const out: Partial<Record<OverridableFeeCompetition, CompetitionFeePolicy>> = {}
+  for (const competition of OVERRIDABLE_FEE_COMPETITIONS) {
+    const policy = competitionFees[competition]
+    if (!policy) continue
+    const parsed = competitionFeePolicySchema.parse(policy)
+    if (parsed.fee_amount_rao === null && parsed.fee_required === null) continue
+    out[competition] = parsed
+  }
+  return out
+}
+
+/**
+ * The exact phrase Platform requires. Omitting competitionFees keeps the
+ * phrase every client used before per-competition fees.
+ */
+export function submissionSettingsConfirmation(
+  seconds: number,
+  feeAmountRao: number,
+  competitionFees?: CompetitionFeesInput,
+) {
+  const base = `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
+  if (competitionFees === undefined) return base
+  const parts = Object.entries(canonicalCompetitionFees(competitionFees)).map(
+    ([competition, policy]) => {
+      const amount = policy.fee_amount_rao === null ? 'INHERIT' : `${policy.fee_amount_rao} RAO`
+      const required =
+        policy.fee_required === null ? 'INHERIT' : policy.fee_required ? 'YES' : 'NO'
+      return `${competition.toUpperCase()} FEE ${amount} REQUIRED ${required}`
+    },
+  )
+  return `${base}; ${parts.length ? parts.join('; ') : 'ALL COMPETITIONS INHERIT'}`
 }
 
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>

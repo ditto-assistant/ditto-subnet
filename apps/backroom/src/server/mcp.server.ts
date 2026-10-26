@@ -388,6 +388,7 @@ import {
   fetchEmissionAllocation,
   setEmissionAllocation,
   fetchSubmissionSettingsControl,
+  fetchCompetitionSubmissionTerms,
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
@@ -1092,7 +1093,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_emission_eligibility:
     'Read exact earning/withheld reason, clear time and fleet visibility.',
   get_submission_cooldown:
-    'Read fee/coldkey cooldown; optional history, default 0.',
+    'Read coldkey cooldown, default fee, per-competition fee overrides and each lane\'s effective fee; optional history, default 0.',
+  set_submission_cooldown:
+    'Set cooldown, default fee and optional per-competition fees with CAS and exact phrase; see help.',
+  get_competition_submission_terms:
+    'Read every competition\'s submission terms: artifact contract and limits (with source), cooldown, and own fee.',
   list_hotkey_bans: 'Hotkey bans.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
@@ -1816,14 +1821,14 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_competition_settings', {
     title: 'Get generator competition settings',
-    description: 'Read the DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane with every ledger entry weight_eligible=false; enforce marks qualified miner generators eligible, which pays only with a served generator track share); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); window_days for the ledger; and upload_fee_required (true makes every generator upload carry a finalized TAO payment of the agent-upload fee, get_submission_cooldown feeAmountRao, to the same address, and a payment funds exactly one upload across both lanes; false, the shipped default and the reading of a Platform that predates the field, charges nothing). Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    description: 'Read the DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane with every ledger entry weight_eligible=false; enforce marks qualified miner generators eligible, which pays only with a served generator track share); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); window_days for the ledger; and upload_fee_required (true makes every generator upload carry a finalized TAO payment of the generator competition fee, get_submission_cooldown effective_competition_fees generator, which inherits the default fee until set_submission_cooldown competitionFees prices it, to the submission address, and a payment funds exactly one upload across both lanes; false, the shipped default and the reading of a Platform that predates the field, charges nothing; a competitionFees generator fee_required override decides instead when set). Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
     inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
   }, async ({ historyLimit, historyOffset }) =>
     result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
 
   registerTool('set_generator_competition_settings', {
     title: 'Set generator competition settings',
-    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. cases_per_seed is 8..80: about 70 per column over 5 counted columns gives a round the ~350 cases of a bench v13 run. Raising it rejects, on its next round seed, every miner generator that cannot fill the new size (the public starter kit fills 80; older forks often stop at 32), and a round leases only to validators whose scorer advertises that column size; larger rounds also need more time left before their close to be leased (20 minutes, or 5 minutes plus 4 seconds per round case when longer). To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. To charge generator uploads, set upload_fee_required=true: the amount and address are the agent-upload submission settings (change them with set_submission_cooldown), miners on an older CLI get a 402 telling them to upgrade, and uploads already accepted are unaffected. Returns the revision this write created. mode=enforce (confirmation APPLY GENERATOR COMPETITION ENFORCE) runs the lane exactly like shadow but marks qualified miner generators weight_eligible on the ledger; validators pay them only from a generator share served by set_track_share_settings, and hand an unpaid generator share back to memory, so enforce alone moves no emission. Requires backroom:write.',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. cases_per_seed is 8..80: about 70 per column over 5 counted columns gives a round the ~350 cases of a bench v13 run. Raising it rejects, on its next round seed, every miner generator that cannot fill the new size (the public starter kit fills 80; older forks often stop at 32), and a round leases only to validators whose scorer advertises that column size; larger rounds also need more time left before their close to be leased (20 minutes, or 5 minutes plus 4 seconds per round case when longer). To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. To charge generator uploads, set upload_fee_required=true: the amount is the generator competition fee (the default submission fee until set_submission_cooldown competitionFees gives generator its own fee_amount_rao), miners on an older CLI get a 402 telling them to upgrade, and uploads already accepted are unaffected. Returns the revision this write created. mode=enforce (confirmation APPLY GENERATOR COMPETITION ENFORCE) runs the lane exactly like shadow but marks qualified miner generators weight_eligible on the ledger; validators pay them only from a generator share served by set_track_share_settings, and hand an unpaid generator share back to memory, so enforce alone moves no emission. Requires backroom:write.',
     inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
 
@@ -2587,7 +2592,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get miner submission settings',
       description:
-        'Read the platform-owned TAO fee and cooldown enforced between accepted uploads from the same owner coldkey. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
+        'Read the platform-owned miner submission settings: the cooldown enforced between accepted agent uploads from the same owner coldkey, the default TAO fee (fee_amount_rao: what memory agent uploads pay and what every other competition inherits), the per-competition fee overrides as written (competition_fees: {generator: {fee_amount_rao, fee_required}}, null fields inherit), and effective_competition_fees: each upload lane\'s resolved amount and whether it is required, with amount_source (default or override) and required_source (always for memory; competition_settings when the generator upload_fee_required switch decides; override when competition_fees decides). effective_competition_fees=null means the Platform predates per-competition fees. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2602,6 +2607,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_competition_submission_terms',
+    {
+      title: 'Get competition submission terms',
+      description:
+        'Read what a miner submits to each competition with an upload lane (memory agent uploads, generator uploads), from GET /api/v1/public/submission-terms, the same terms the miner CLI shows before upload. Each entry gives the deliverable (artifact kind, format, contract version such as dittobench-generator/v1, required files, every upload-time limit with its source: code for a release constant, environment for a deploy variable, setting for an audited operator setting), the upload cooldown and its scope (owner coldkey or hotkey), and the competition\'s own fee (amount_rao, whether required, whether the amount is the default fee or this competition\'s override, the receiving address, and the submission settings revision it resolves from). Change a fee with set_submission_cooldown competitionFees; change the generator cooldown, pack size or fee switch with set_generator_competition_settings. competitions=null means the Platform predates these terms. This is the miner submission contract only; build bounties are separate. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchCompetitionSubmissionTerms()),
   )
 
   registerTool(
@@ -3994,7 +4010,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set miner submission settings',
       description:
-        'Apply one append-only revision of the platform-owned miner submission cooldown and TAO-denominated fee. Supply expectedRevision, cooldownSeconds, feeAmountRao, an operator reason, and the exact confirmation string returned by the schema helper. Requires backroom:write.',
+        'Apply one append-only revision of the platform-owned miner submission cooldown, default TAO fee and per-competition fees. Supply expectedRevision (get_submission_cooldown current.revision), cooldownSeconds, feeAmountRao (the default fee: memory agent uploads pay it and every competition without its own amount inherits it), an operator reason, and the exact confirmation. Omit competitionFees to carry the current overrides forward unchanged; the confirmation is then "SET SUBMISSION COOLDOWN <seconds> SECONDS FEE <feeAmountRao> RAO". To price a competition send the WHOLE override map, e.g. competitionFees={generator: {fee_amount_rao: 500000000, fee_required: null}} (known ids: generator, coding, router; memory is priced by feeAmountRao), where a null fee_amount_rao inherits feeAmountRao, fee_required true charges, false makes uploads free, and null leaves it to the generator upload_fee_required switch; {} clears every override. With competitionFees the confirmation appends, in the order generator, coding, router, "; <ID> FEE <rao> RAO REQUIRED <YES|NO|INHERIT>" per overridden competition (FEE INHERIT for a null amount), or "; ALL COMPETITIONS INHERIT" for {}: for the example, "SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT". An upload must pay its competition\'s amount exactly (less or more is refused and spends nothing), and one transfer funds one upload across both lanes. Uploads already accepted are unaffected. Requires backroom:write.',
       inputSchema: updateSubmissionSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

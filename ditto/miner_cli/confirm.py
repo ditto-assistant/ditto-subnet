@@ -57,6 +57,7 @@ def confirm_payment(
     hotkey_ss58: str,
     coldkey_name: str,
     skip: bool,
+    purpose: str | None = None,
 ) -> None:
     """Show a payment preview + prompt for confirmation.
 
@@ -68,6 +69,9 @@ def confirm_payment(
         coldkey_name: Wallet coldkey name (for display only).
         skip: When ``True`` the prompt is bypassed entirely. Used by
             the ``-y`` / ``--yes`` flag for scripted invocations.
+        purpose: Which competition's fee this is (each competition is
+            priced separately), shown so a miner never pays one lane's
+            quote believing it is another's.
 
     Raises:
         PaymentCancelledError: When the user does not answer ``y`` (any
@@ -76,6 +80,8 @@ def confirm_payment(
     tao = Decimal(amount_rao) / _RAO_PER_TAO
     print()
     print("Payment preview")
+    if purpose:
+        print(f"  For:     {purpose}")
     print(f"  Amount:  {tao} TAO  ({amount_rao} rao)")
     print(f"  To:      {dest_address}")
     print(f"  Coldkey: {coldkey_name}")

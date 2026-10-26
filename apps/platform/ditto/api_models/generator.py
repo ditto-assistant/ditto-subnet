@@ -147,11 +147,14 @@ class GeneratorCompetitionSettings(BaseModel):
     """Consecutive unfinished leases before a run backs off."""
     retry_backoff_seconds: Annotated[int, Field(ge=60, le=86_400)] = 3_600
     upload_fee_required: bool = False
-    """Require a finalized TAO payment proof on every miner upload. The fee
-    amount and receiving address are the agent-upload submission settings
-    (one operator-controlled price); a proof funds exactly one upload across
-    the agent and generator lanes. Off by default, and a revision written
-    before this field existed reads as off."""
+    """Require a finalized TAO payment proof on every miner upload. The
+    amount is the generator competition's fee in the submission settings
+    (``competition_fees.generator.fee_amount_rao``, inheriting the default
+    agent-upload fee while unset), paid to the submission deposit address; a
+    proof funds exactly one upload across the agent and generator lanes. A
+    ``competition_fees.generator.fee_required`` override, when set, decides
+    instead of this switch. Off by default, and a revision written before
+    this field existed reads as off."""
 
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
@@ -249,8 +252,8 @@ class GeneratorSubmissionUploadRequest(BaseModel):
     payment_block_number: Annotated[int | None, Field(ge=1)] = None
     payment_extrinsic_index: Annotated[int | None, Field(ge=0)] = None
     """The finalized ``Balances.transfer_keep_alive`` that pays the upload
-    fee, required only while ``upload_fee_required`` is on. All three or
-    none."""
+    fee, required only while the generator fee is required (see
+    ``GeneratorUploadTerms``). All three or none."""
 
     @model_validator(mode="after")
     def _payment_all_or_none(self) -> GeneratorSubmissionUploadRequest:
@@ -282,9 +285,19 @@ class GeneratorUploadTerms(GeneratorModel):
     """
 
     accepting: bool
+    competition: Literal["generator"] = "generator"
+    """The competition these terms price. A client checks it before paying,
+    so a quote for another lane can never be paid as a generator fee."""
     payment_required: bool
     payment_amount_rao: int | None = None
+    """The generator competition's own price, exact: an upload whose proof
+    pays any other amount (less or more) is refused, and the transfer does
+    not become a credit."""
     payment_send_address: str | None = None
+    payment_amount_source: Literal["default", "override"] | None = None
+    """``override`` when the generator competition has its own price,
+    ``default`` when it inherits the agent-upload fee; null when no payment
+    is required."""
     upload_cooldown_seconds: int
     retry_at: datetime | None = None
     blockers: list[str] = Field(default_factory=list)

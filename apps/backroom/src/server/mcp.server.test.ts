@@ -665,6 +665,7 @@ describe('Backroom MCP tools', () => {
         'decide_bounty_evaluation',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'get_competition_submission_terms',
         'get_treasury_settings',
         'get_treasury_receipts',
         'get_treasury_ledger',

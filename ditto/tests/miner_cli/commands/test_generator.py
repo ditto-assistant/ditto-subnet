@@ -95,11 +95,17 @@ class _FakeClient:
     posted: list[dict[str, Any]] = []
     # None models an older Platform with no terms endpoint.
     terms: dict[str, Any] | None = None
+    # None models a Platform without per-competition submission terms.
+    submission_terms: dict[str, Any] | None = None
     reject: Exception | None = None
     malformed = False
 
     def __init__(self, **_kwargs: Any) -> None:
         pass
+
+    def get_submission_terms(self, competition: str) -> dict[str, Any] | None:
+        assert competition == "generator"
+        return _FakeClient.submission_terms
 
     def get_generator_upload_terms(self, **query: str) -> dict[str, Any] | None:
         assert set(query) == {"hotkey", "source_sha256"}
@@ -291,6 +297,79 @@ def test_upload_refuses_before_paying_when_platform_would_refuse(
     archive = _fake_archive(tmp_path, monkeypatch)
     _FakeClient.terms = {**_FEE_TERMS, "blockers": ["generator upload cooldown"]}
     with pytest.raises(MinerCliError, match="no payment was sent.*cooldown"):
+        gen_cmd.run(_upload_args(archive))
+    assert calls == []
+    assert _FakeClient.posted == []
+
+
+def test_upload_pays_the_generator_competition_price(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A per-competition price is paid as quoted, never the agent fee."""
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = {
+        **_FEE_TERMS,
+        "competition": "generator",
+        "payment_amount_rao": 500_000_000,
+        "payment_amount_source": "override",
+    }
+    _FakeClient.posted = []
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    confirm = next(c["confirm"] for c in calls if "confirm" in c)
+    assert confirm["amount_rao"] == 500_000_000
+    assert confirm["purpose"] == "generator competition upload fee (generator price)"
+    pay = next(c["pay"] for c in calls if "pay" in c)
+    assert pay["amount_rao"] == 500_000_000
+
+
+def test_upload_shows_the_generator_submission_terms_first(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = None
+    _FakeClient.posted = []
+    _FakeClient.submission_terms = {
+        "competition": "generator",
+        "accepting": True,
+        "deliverable": {
+            "kind": "generator_source_archive",
+            "contract_version": "dittobench-generator/v1",
+            "limits": [],
+        },
+        "fee": {"required": False, "amount_rao": 200_000_000},
+    }
+    try:
+        assert gen_cmd.run(_upload_args(archive)) == 0
+    finally:
+        _FakeClient.submission_terms = None
+    err = capsys.readouterr().err
+    assert "Submission terms: generator competition" in err
+    assert "dittobench-generator/v1" in err
+
+
+@pytest.mark.parametrize(
+    "terms",
+    [
+        {**_FEE_TERMS, "competition": "memory"},
+        {**_FEE_TERMS, "payment_amount_rao": True},
+        {**_FEE_TERMS, "payment_amount_rao": 0},
+    ],
+)
+def test_upload_refuses_a_quote_that_is_not_a_generator_fee(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, terms: dict[str, Any]
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = terms
+    _FakeClient.posted = []
+    with pytest.raises(MinerCliError):
         gen_cmd.run(_upload_args(archive))
     assert calls == []
     assert _FakeClient.posted == []

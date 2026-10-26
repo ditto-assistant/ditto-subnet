@@ -61,9 +61,11 @@ export const generatorCompetitionSettingsSchema = z.object({
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
   validator_rounds_enabled: z.boolean(),
-  // Require a finalized TAO payment proof on every generator upload, priced
-  // and addressed by the agent-upload submission settings
-  // (get_submission_cooldown feeAmountRao). Ships off.
+  // Require a finalized TAO payment proof on every generator upload, priced by
+  // the generator competition's fee in the submission settings (inheriting
+  // the default fee until set_submission_cooldown competitionFees prices it).
+  // A competitionFees generator fee_required override decides instead when
+  // set. Ships off.
   upload_fee_required: z.boolean(),
 })
 

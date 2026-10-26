@@ -48,6 +48,7 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
+  fetchCompetitionSubmissionTerms,
   updateSubmissionSettings,
   fetchHotkeyBan,
   fetchHotkeyBans,
@@ -81,6 +82,10 @@ import {
   setConfirmationBundleSettings,
 } from './admin.service'
 import { deriveRequestId } from '../lib/idempotency'
+import {
+  submissionSettingsConfirmation,
+  updateSubmissionSettingsInputSchema,
+} from '../lib/admin.schemas'
 
 const originalToken = process.env.DITTO_ADMIN_API_TOKEN
 const originalBaseUrl = process.env.DITTO_PLATFORM_API_BASE_URL
@@ -1847,7 +1852,12 @@ describe('submission cooldown administration', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(fetchSubmissionSettingsControl()).resolves.toEqual(control)
+    // An older Platform omits the per-competition fields; reads default them.
+    await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
+      ...control,
+      current: { ...control.current, competition_fees: {} },
+      effective_competition_fees: null,
+    })
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
       cooldownSeconds: 1800,
@@ -1871,6 +1881,181 @@ describe('submission cooldown administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('per-competition submission fees and terms', () => {
+  const generatorFee = { fee_amount_rao: 500_000_000, fee_required: null }
+  const priced = {
+    current: {
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 200_000_000,
+      competition_fees: { generator: generatorFee },
+      reason: 'price the generator competition',
+      actor: 'operator@omniaura.ai',
+      created_at: '2026-10-26T12:00:00Z',
+    },
+    history: [],
+    effective_competition_fees: [
+      {
+        competition: 'memory',
+        fee_amount_rao: 200_000_000,
+        amount_source: 'default',
+        fee_required: true,
+        required_source: 'always',
+      },
+      {
+        competition: 'generator',
+        fee_amount_rao: 500_000_000,
+        amount_source: 'override',
+        fee_required: true,
+        required_source: 'competition_settings',
+      },
+    ],
+  }
+
+  it('builds the exact phrase for an override map', () => {
+    expect(
+      submissionSettingsConfirmation(3600, 200_000_000, {
+        router: { fee_amount_rao: null, fee_required: null },
+        generator: { fee_amount_rao: 500_000_000, fee_required: null },
+      }),
+    ).toBe(
+      'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT',
+    )
+    expect(
+      submissionSettingsConfirmation(60, 1, { generator: { fee_amount_rao: null, fee_required: false } }),
+    ).toBe('SET SUBMISSION COOLDOWN 60 SECONDS FEE 1 RAO; GENERATOR FEE INHERIT REQUIRED NO')
+    expect(submissionSettingsConfirmation(60, 1, {})).toBe(
+      'SET SUBMISSION COOLDOWN 60 SECONDS FEE 1 RAO; ALL COMPETITIONS INHERIT',
+    )
+    expect(submissionSettingsConfirmation(60, 1)).toBe('SET SUBMISSION COOLDOWN 60 SECONDS FEE 1 RAO')
+    expect(() =>
+      updateSubmissionSettingsInputSchema.parse({
+        expectedRevision: 1,
+        cooldownSeconds: 60,
+        feeAmountRao: 1,
+        competitionFees: { memory: { fee_amount_rao: 5 } },
+        reason: 'price the memory lane',
+        confirmation: 'x',
+      }),
+    ).toThrow()
+  })
+
+  it('sends a generator price and verifies the stored revision carries it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(priced.current))
+      .mockResolvedValueOnce(Response.json(priced))
+    vi.stubGlobal('fetch', fetchMock)
+    const confirmation =
+      'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT'
+
+    await expect(
+      updateSubmissionSettings('operator@omniaura.ai', {
+        expectedRevision: 1,
+        cooldownSeconds: 3600,
+        feeAmountRao: 200_000_000,
+        competitionFees: { generator: { fee_amount_rao: 500_000_000 } },
+        reason: 'price the generator competition',
+        confirmation,
+      }),
+    ).resolves.toEqual(priced)
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
+      expected_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 200_000_000,
+      competition_fees: { generator: generatorFee },
+      reason: 'price the generator competition',
+      actor: 'operator@omniaura.ai',
+      confirmation,
+    })
+  })
+
+  it('refuses to report a price Platform did not store', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const unpriced = {
+      ...priced,
+      current: { ...priced.current, competition_fees: {} },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(unpriced.current))
+        .mockResolvedValueOnce(Response.json(unpriced)),
+    )
+    await expect(
+      updateSubmissionSettings('operator@omniaura.ai', {
+        expectedRevision: 1,
+        cooldownSeconds: 3600,
+        feeAmountRao: 200_000_000,
+        competitionFees: { generator: { fee_amount_rao: 500_000_000 } },
+        reason: 'price the generator competition',
+        confirmation: 'anything',
+      }),
+    ).rejects.toThrow(/predates per-competition fees/)
+  })
+
+  it('reads every competition\'s terms and tolerates an older Platform', async () => {
+    const terms = {
+      competitions: [
+        {
+          competition: 'generator',
+          accepting: true,
+          deliverable: {
+            kind: 'generator_source_archive',
+            format: 'gzip-compressed tar of a Go main module',
+            contract_version: 'dittobench-generator/v1',
+            required_files: ['go.mod'],
+            limits: [
+              {
+                name: 'max_archive_bytes',
+                value: 4194304,
+                unit: 'bytes',
+                source: 'code',
+                reference: 'ditto.generator_archive.MAX_ARCHIVE_BYTES',
+                description: 'the compressed source archive',
+              },
+            ],
+            upload_endpoint: '/api/v1/generator/submissions',
+            signature_payload: 'ditto-generator-v1:{hotkey}',
+            notes: [],
+          },
+          cooldown: {
+            seconds: 3600,
+            scope: 'hotkey',
+            source: 'setting',
+            reference: 'generator_competition.upload_cooldown_seconds',
+          },
+          fee: {
+            required: true,
+            amount_rao: 500_000_000,
+            amount_source: 'override',
+            required_source: 'competition_settings',
+            send_address: '5Fee',
+            asset: 'TAO',
+            settings_revision: 2,
+          },
+          terms_endpoint: '/api/v1/generator/upload-terms',
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(terms))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchCompetitionSubmissionTerms()).resolves.toEqual({ ...terms, note: null })
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/public/submission-terms')
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(Response.json({ detail: 'Not Found' }, { status: 404 })),
+    )
+    const older = await fetchCompetitionSubmissionTerms()
+    expect(older.competitions).toBeNull()
+    expect(older.note).toMatch(/predates per-competition submission terms/)
   })
 })
 

@@ -194,6 +194,42 @@ export function SubmissionCooldownControlPanel({
             </div>
           </div>
 
+          {state.effective_competition_fees ? (
+            <div className="mt-5">
+              <p className="text-xs text-[var(--muted)]">
+                Fee per competition. The fee above is the memory (agent upload) price and the default
+                every other competition inherits; set a competition&apos;s own price with the MCP
+                tool set_submission_cooldown competitionFees. Saving here keeps those prices.
+              </p>
+              <table className="mt-2 w-full text-left text-xs" aria-label="Fee per competition">
+                <thead className="text-[var(--muted)]">
+                  <tr>
+                    <th className="py-1 font-medium">Competition</th>
+                    <th className="py-1 font-medium">Fee</th>
+                    <th className="py-1 font-medium">Charged</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {state.effective_competition_fees.map((fee) => (
+                    <tr key={fee.competition} className="border-t border-[var(--line)]">
+                      <td className="py-1.5 font-medium">{fee.competition}</td>
+                      <td className="py-1.5">
+                        {fee.fee_amount_rao / RAO_PER_TAO} TAO{' '}
+                        <span className="text-[var(--muted)]">
+                          ({fee.amount_source === 'override' ? 'own price' : 'default'})
+                        </span>
+                      </td>
+                      <td className="py-1.5">
+                        {fee.fee_required ? 'yes' : 'no'}{' '}
+                        <span className="text-[var(--muted)]">({fee.required_source})</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+
           <div className="mt-5 grid gap-2 sm:grid-cols-4">
             {presets.map((value) => (
               <button
