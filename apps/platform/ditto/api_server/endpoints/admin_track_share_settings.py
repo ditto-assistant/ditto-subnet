@@ -37,7 +37,9 @@ from ditto.api_server.track_share_settings import (
     TrackShareSettingsResolver,
     settings_from_row,
 )
+from ditto.api_server.treasury_runtime import lock_runtime
 from ditto.db.models import TrackShareSettingsRevision as RevisionRow
+from ditto.db.queries.emission_allocation import latest_emission_allocation_number
 from ditto.db.queries.heartbeats import (
     count_live_validators,
     live_weight_setter_fleet_supports_protocol,
@@ -177,6 +179,18 @@ async def create_settings_revision(
     if payload.confirmation != expected:
         raise HTTPException(
             status_code=409, detail=f"confirmation must be exactly {expected}"
+        )
+    # Serialize with the emission-allocation writer, which takes the same lock,
+    # so an allocation cannot commit between this check and the insert.
+    await lock_runtime(session)
+    owner = await latest_emission_allocation_number(session)
+    if owner:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"emission allocation revision {owner} owns the track split; "
+                "change it with set_emission_allocation"
+            ),
         )
     latest = await latest_track_share_settings_revision(session)
     actual_revision = latest.revision if latest is not None else 0

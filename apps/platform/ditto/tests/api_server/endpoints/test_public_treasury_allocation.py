@@ -69,6 +69,18 @@ async def test_service_first_forecast_is_public_but_inactive(
     assert body["buckets"][0]["holding_coldkey"] == ("5" + "c" * 47)
     assert body["sweep_interval_hours"] == 12
     assert "PRIVATE" not in result.text
+    # The per-destination split counts Gamma only while it enforces: this
+    # shadow bucket folds nothing, so the full burn takes everything.
+    assert body["emission_allocation_revision"] == 0
+    assert [(s["kind"], s["id"], s["share"]) for s in body["forecast_split"]] == [
+        ("burn", None, 1.0),
+        ("track", "memory", 0.0),
+        ("track", "generator", 0.0),
+        ("gamma", "gm_credits", 0.0),
+    ]
+    assert body["emission_split_source"] == "settings"
+    assert body["emission_split_epoch"] is None
+    assert body["emission_split"] == body["forecast_split"]
     audit = public_details("/api/v1/admin/treasury-settings", {"settings": policy})
     assert audit["settings"]["service_buckets"][0]["holding_coldkey"] == (
         "5" + "c" * 47
@@ -337,3 +349,91 @@ async def test_stale_or_malformed_pin_never_reports_active_routing(
     body = response.json()
     assert body["routing_status"] == expected
     assert body["effective_service_share"] == 0
+
+
+@pytest.mark.asyncio
+async def test_forecast_split_names_every_competition_track(app, client, session_maker):
+    from ditto.db.models import TrackShareSettingsRevision
+
+    app.state.session_maker = session_maker
+    async with session_maker() as session:
+        session.add(
+            BurnSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings={"burn_share": 0.5},
+                checksum="b" * 64,
+                reason="operator half burn",
+                actor="operator",
+            )
+        )
+        session.add(
+            TrackShareSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings={"track_shares_bps": {"memory": 7000, "generator": 3000}},
+                checksum="c" * 64,
+                reason="operator generator share",
+                actor="operator",
+            )
+        )
+        await session.commit()
+    body = (await client.get("/api/v1/public/treasury-allocation")).json()
+    split = {(s["kind"], s["id"]): s["share"] for s in body["forecast_split"]}
+    assert split == {
+        ("burn", None): pytest.approx(0.5),
+        ("track", "memory"): pytest.approx(0.35),
+        ("track", "generator"): pytest.approx(0.15),
+    }
+    # No protocol-33 weight setter is live, so the map is withheld and the
+    # in-force split folds memory at the whole post-burn pool.
+    assert body["emission_split_source"] == "settings"
+    in_force = {(s["kind"], s["id"]): s["bps"] for s in body["emission_split"]}
+    assert in_force == {
+        ("burn", None): pytest.approx(5000),
+        ("track", "memory"): pytest.approx(5000),
+        ("track", "generator"): pytest.approx(0),
+    }
+
+
+@pytest.mark.asyncio
+async def test_emission_split_reports_what_the_newest_epoch_pin_froze(
+    app, client, session_maker
+):
+    from uuid import uuid4
+
+    from ditto.db.models import LedgerEpochSnapshot
+
+    app.state.session_maker = session_maker
+    async with session_maker() as session:
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=uuid4(),
+                netuid=app.state.config.chain.netuid,
+                epoch_index=25_031,
+                last_epoch_block=9_000_000,
+                pinned_block=9_000_002,
+                pinned_block_hash="0x" + "ab" * 32,
+                pinned_at=datetime.now(UTC),
+                bench_version=13,
+                entries=[],
+                context={
+                    "served": {
+                        "burn_share": 0.5,
+                        "track_shares_bps": {"memory": 7000, "generator": 3000},
+                    }
+                },
+                ledger_digest="cd" * 32,
+            )
+        )
+        await session.commit()
+    body = (await client.get("/api/v1/public/treasury-allocation")).json()
+    assert body["emission_split_source"] == "epoch_pin"
+    assert body["emission_split_epoch"] == 25_031
+    assert [(s["kind"], s["id"]) for s in body["emission_split"]] == [
+        ("burn", None),
+        ("track", "memory"),
+        ("track", "generator"),
+    ]
+    shares = [s["share"] for s in body["emission_split"]]
+    assert shares == pytest.approx([0.5, 0.35, 0.15])

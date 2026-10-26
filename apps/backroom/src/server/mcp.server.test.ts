@@ -545,6 +545,7 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
         'get_track_share_settings',
+        'get_emission_allocation',
         'get_copy_court_settings',
         'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
@@ -602,6 +603,7 @@ describe('Backroom MCP tools', () => {
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_track_share_settings',
+        'set_emission_allocation',
         'set_continual_retest_settings',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
@@ -923,8 +925,9 @@ describe('Backroom MCP tools', () => {
       // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
       // The eleven generator-competition summaries bring it to 26,304, and
       // the eleven generator-round summaries to 27,023; keep about 200 chars
-      // of headroom.
-      27_200,
+      // of headroom. The one-line emission allocation pair (SN-350) adds
+      // about 150 chars.
+      27_400,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -3954,6 +3957,136 @@ describe('Backroom MCP tools', () => {
           confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
         }),
       }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one emission allocation with the exact split phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const entries = [
+      { kind: 'burn', bps: 5000 },
+      { kind: 'track', id: 'memory', bps: 3500 },
+      { kind: 'track', id: 'generator', bps: 1500 },
+    ]
+    const served = { burn_share: 0.5, track_shares_bps: { memory: 7000, generator: 3000 }, gamma_bps: {} }
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      allocation: { entries },
+      served,
+      burn_settings_revision: 18,
+      track_share_settings_revision: 1,
+      treasury_settings_revision: 0,
+      checksum: 'ab'.repeat(32),
+      reason: 'adopt the live split as one allocation',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-10-26T12:00:00Z',
+    }
+    const view = {
+      burn_share: 0.5,
+      track_shares_bps: { memory: 7000, generator: 3000 },
+      gamma_bps: {},
+      split: [
+        { kind: 'burn', bps: 5000, percent: 50 },
+        { kind: 'track', id: 'memory', bps: 3500, percent: 35 },
+        { kind: 'track', id: 'generator', bps: 1500, percent: 15 },
+      ],
+    }
+    const control = {
+      revision: 1,
+      source: 'allocation',
+      current: revision,
+      history: [revision],
+      confirmation_hint: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      configured: view,
+      track_shares_served: true,
+      in_force: view,
+      pinned: null,
+      in_sync: true,
+      gamma_mode: null,
+      gamma_buckets: [],
+      gamma_ranges: null,
+      legacy_equivalent: null,
+      rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07],
+      max_age_seconds: 5,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(revision))
+      .mockResolvedValueOnce(Response.json(control))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const wrongPhrase = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries,
+        reason: 'adopt the live split as one allocation',
+        confirmation: 'APPLY EMISSION ALLOCATION memory=3500 generator=1500 burn=5000',
+      },
+    })
+    expect(wrongPhrase.isError).toBe(true)
+    const shortSum = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries: entries.slice(0, 2),
+        reason: 'adopt the live split as one allocation',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500',
+      },
+    })
+    expect(shortSum.isError).toBe(true)
+    const unpaid = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries: [...entries.slice(0, 2), { kind: 'track', id: 'generator', bps: 500 }, { kind: 'track', id: 'router', bps: 1000 }],
+        reason: 'pay the router track',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 router=1000 generator=500',
+      },
+    })
+    expect(unpaid.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const response = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries: [entries[2], entries[0], entries[1]],
+        reason: 'adopt the live split as one allocation',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({ revision: 1, in_sync: true })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/emission-allocation',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          expected_revision: 0,
+          settings: { entries: [entries[2], entries[0], entries[1]] },
+          reason: 'adopt the live split as one allocation',
+          actor: 'peyton@omniaura.ai',
+          confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+        }),
+      }),
+    )
+
+    const read = await client.callTool({ name: 'get_emission_allocation', arguments: { historyLimit: 1 } })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({
+      source: 'allocation',
+      configured: { split: [{ kind: 'burn', percent: 50 }, { id: 'memory', percent: 35 }, { id: 'generator', percent: 15 }] },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/emission-allocation',
+      expect.objectContaining({ method: 'GET' }),
     )
 
     await client.close()

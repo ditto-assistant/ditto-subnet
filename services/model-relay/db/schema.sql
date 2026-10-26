@@ -3833,6 +3833,50 @@ CREATE TABLE public.efficiency_cohort_snapshots (
 
 
 --
+-- Name: emission_allocation_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_allocation_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    allocation jsonb NOT NULL,
+    served jsonb NOT NULL,
+    burn_settings_revision integer NOT NULL,
+    track_share_settings_revision integer NOT NULL,
+    treasury_settings_revision integer NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ac_6add CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ch_4c52 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_pa_3099 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_re_f2f4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_se_d33a CHECK (((burn_settings_revision >= 0) AND (track_share_settings_revision >= 0) AND (treasury_settings_revision >= 0)))
+);
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.emission_allocation_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.emission_allocation_revisions_revision_seq OWNED BY public.emission_allocation_revisions.revision;
+
+
+--
 -- Name: emission_eligibility_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7483,6 +7527,13 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: emission_allocation_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_allocation_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: emission_eligibility_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -8482,6 +8533,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_allocation_revisions emission_allocation_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT emission_allocation_parent_key UNIQUE (parent_revision);
+
+
+--
 -- Name: emission_eligibility_settings_revisions emission_eligibility_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9319,6 +9378,14 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions
 
 ALTER TABLE ONLY public.efficiency_cohort_snapshots
     ADD CONSTRAINT pk_efficiency_cohort_snapshots PRIMARY KEY (snapshot_id);
+
+
+--
+-- Name: emission_allocation_revisions pk_emission_allocation_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT pk_emission_allocation_revisions PRIMARY KEY (revision);
 
 
 --

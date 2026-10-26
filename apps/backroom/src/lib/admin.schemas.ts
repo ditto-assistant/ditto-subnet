@@ -1901,6 +1901,200 @@ export const setTrackShareSettingsInputSchema = z
 
 export type TrackShareSettingsControl = z.infer<typeof trackShareSettingsControlSchema>
 
+// ─── Emission allocation (SN-350) ───────────────────────────────────────────
+// One typed-weights split of total miner emission: burn, every paid track and
+// every Gamma service bucket in integer basis points summing to exactly 10000.
+// Platform derives burn_share, track_shares_bps and the Gamma bucket that
+// validators already fold, refuses splits it cannot express exactly, and is the
+// authority on every refusal. Mirrors
+// apps/platform/ditto/api_models/emission_allocation_math.py.
+export const EMISSION_ALLOCATION_BASIS_POINTS = 10_000
+export const EMISSION_ALLOCATION_KINDS = ['burn', 'track', 'gamma'] as const
+export const EMISSION_ALLOCATION_CONFIRMATION_PREFIX = 'APPLY EMISSION ALLOCATION'
+
+const emissionAllocationEntrySchema = z
+  .object({
+    kind: z.enum(EMISSION_ALLOCATION_KINDS),
+    id: z.string().min(1).optional(),
+    bucket: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{1,47}$/)
+      .optional(),
+    bps: z.number().int().min(0).max(EMISSION_ALLOCATION_BASIS_POINTS),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message })
+    if (entry.kind === 'burn' && (entry.id !== undefined || entry.bucket !== undefined)) {
+      issue('the burn entry takes no id or bucket')
+    }
+    if (entry.kind === 'track' && (entry.id === undefined || entry.bucket !== undefined)) {
+      issue('a track entry takes an id and no bucket')
+    }
+    if (entry.kind === 'gamma' && (entry.bucket === undefined || entry.id !== undefined)) {
+      issue('a gamma entry takes a bucket and no id')
+    }
+  })
+
+export type EmissionAllocationEntry = z.infer<typeof emissionAllocationEntrySchema>
+
+function emissionEntryLabel(entry: EmissionAllocationEntry) {
+  if (entry.kind === 'burn') return 'burn'
+  if (entry.kind === 'gamma') return `gamma:${entry.bucket}`
+  return entry.id ?? ''
+}
+
+function emissionEntryOrder(entry: EmissionAllocationEntry): [number, number, string] {
+  const kind = EMISSION_ALLOCATION_KINDS.indexOf(entry.kind)
+  if (entry.kind === 'track') {
+    const track = (TRACK_SHARE_TRACKS as readonly string[]).indexOf(entry.id ?? '')
+    return [kind, track < 0 ? TRACK_SHARE_TRACKS.length : track, entry.id ?? '']
+  }
+  return [kind, 0, entry.bucket ?? '']
+}
+
+export function canonicalEmissionEntries(entries: EmissionAllocationEntry[]) {
+  return [...entries].sort((left, right) => {
+    const a = emissionEntryOrder(left)
+    const b = emissionEntryOrder(right)
+    return a[0] - b[0] || a[1] - b[1] || a[2].localeCompare(b[2])
+  })
+}
+
+// The exact phrase Platform requires: every nonzero entry in canonical order
+// (burn, tracks in registry order, Gamma buckets by id), e.g.
+// "APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500".
+export function emissionAllocationConfirmation(entries: EmissionAllocationEntry[]) {
+  const parts = canonicalEmissionEntries(entries)
+    .filter((entry) => entry.bps > 0)
+    .map((entry) => `${emissionEntryLabel(entry)}=${entry.bps}`)
+  return [EMISSION_ALLOCATION_CONFIRMATION_PREFIX, ...parts].join(' ')
+}
+
+// Reads stay permissive so a stored revision always renders.
+const emissionAllocationSchema = z.object({ entries: z.array(emissionAllocationEntrySchema) })
+
+function checkEmissionEntries(
+  entries: EmissionAllocationEntry[],
+  ctx: z.RefinementCtx,
+  path: (string | number)[],
+) {
+  const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message })
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    const key = `${entry.kind}:${entry.id ?? entry.bucket ?? ''}`
+    if (seen.has(key)) issue(`duplicate entry ${emissionEntryLabel(entry)}`)
+    seen.add(key)
+    if (entry.kind === 'track') {
+      if (!(TRACK_SHARE_TRACKS as readonly string[]).includes(entry.id ?? '')) {
+        issue(`unknown track ${entry.id}`)
+      } else if (entry.bps > 0 && !TRACK_SHARE_PAYABLE.has(entry.id ?? '')) {
+        issue(`no shipped validator pays track ${entry.id}; only memory and generator may hold a nonzero share`)
+      }
+    }
+  }
+  if (!seen.has('burn:')) issue('name the burn entry, at 0 if nothing burns')
+  for (const track of TRACK_SHARE_PAYABLE) {
+    if (!seen.has(`track:${track}`)) issue(`name every paid track, at 0 if it takes nothing; missing ${track}`)
+  }
+  const total = entries.reduce((sum, entry) => sum + entry.bps, 0)
+  if (total !== EMISSION_ALLOCATION_BASIS_POINTS) {
+    issue(`entries sum to ${total} bps; an allocation accounts for exactly 10000`)
+  }
+}
+
+const emissionAllocationEntriesWriteSchema = z.array(emissionAllocationEntrySchema).min(3).max(32)
+
+export const emissionAllocationWriteSchema = z
+  .object({ entries: emissionAllocationEntriesWriteSchema })
+  .superRefine((settings, ctx) => {
+    checkEmissionEntries(settings.entries, ctx, ['entries'])
+  })
+
+const emissionServedFieldsSchema = z.object({
+  burn_share: z.number().min(0).max(1),
+  track_shares_bps: trackSharesMapSchema.nullable(),
+  gamma_bps: z.record(z.string(), z.number().int()),
+})
+
+export const emissionAllocationRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  allocation: emissionAllocationSchema,
+  served: emissionServedFieldsSchema,
+  burn_settings_revision: z.number().int().nonnegative(),
+  track_share_settings_revision: z.number().int().nonnegative(),
+  treasury_settings_revision: z.number().int().nonnegative(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+})
+
+const emissionShareSchema = z.object({
+  kind: z.enum(EMISSION_ALLOCATION_KINDS),
+  id: z.string().nullable().default(null),
+  bucket: z.string().nullable().default(null),
+  bps: z.number(),
+  percent: z.number(),
+})
+
+const emissionSplitViewSchema = z.object({
+  burn_share: z.number().min(0).max(1),
+  track_shares_bps: trackSharesMapSchema.nullable(),
+  gamma_bps: z.record(z.string(), z.number().int()),
+  split: z.array(emissionShareSchema),
+})
+
+export const emissionAllocationControlSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  source: z.enum(['allocation', 'legacy_settings']),
+  current: emissionAllocationRevisionSchema.nullable(),
+  history: z.array(emissionAllocationRevisionSchema),
+  confirmation_hint: z.string().nullable(),
+  configured: emissionSplitViewSchema,
+  track_shares_served: z.boolean().nullable(),
+  in_force: emissionSplitViewSchema.nullable(),
+  pinned: emissionSplitViewSchema
+    .extend({ epoch_index: z.number().int(), pinned_block: z.number().int() })
+    .nullable(),
+  in_sync: z.boolean().nullable(),
+  gamma_mode: z.string().nullable(),
+  gamma_buckets: z.array(z.string()),
+  gamma_ranges: z.record(z.string(), z.tuple([z.number().int(), z.number().int()])).nullable(),
+  legacy_equivalent: z
+    .object({
+      allocation: emissionAllocationSchema,
+      confirmation: z.string(),
+      byte_identical: z.boolean(),
+    })
+    .nullable(),
+  rank_shares: z.array(z.number()).nullable(),
+  max_age_seconds: z.number().nonnegative(),
+})
+
+
+export const setEmissionAllocationInputSchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    entries: emissionAllocationEntriesWriteSchema,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, ctx) => {
+    checkEmissionEntries(input.entries, ctx, ['entries'])
+    const expected = emissionAllocationConfirmation(input.entries)
+    if (input.confirmation !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}, naming every nonzero entry in order`,
+      })
+    }
+  })
+
+export type EmissionAllocationControl = z.infer<typeof emissionAllocationControlSchema>
+
 // ─── Terminal-review emission eligibility (ditto-subnet #2041) ──────────────
 // Read-only here. The gate decides which scored artifacts the validator fold may
 // pay, and it ships `off`: a posture that reads `off` / `source: "default"` is a

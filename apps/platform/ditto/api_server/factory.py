@@ -54,6 +54,7 @@ from ditto.api_server.efficiency_settings import (
     EfficiencyBonusSettingsResolver,
 )
 from ditto.api_server.embedding import create_embedder
+from ditto.api_server.emission_allocation import EmissionAllocationResolver
 from ditto.api_server.emission_eligibility import EmissionEligibilityResolver
 from ditto.api_server.endpoints import (
     admin_artifact_release_settings_router,
@@ -70,6 +71,7 @@ from ditto.api_server.endpoints import (
     admin_copy_review_router,
     admin_database_backup_router,
     admin_efficiency_bonus_settings_router,
+    admin_emission_allocation_router,
     admin_emission_eligibility_router,
     admin_generator_competition_router,
     admin_generator_rounds_router,
@@ -591,6 +593,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # Operator-owned per-track emission split (memory / generator). Unset by
     # default, so the ledger omits it and validators keep their compiled split.
     app.state.track_share_settings = TrackShareSettingsResolver()
+    # One typed-weights allocation (SN-350). Once written it owns burn_share
+    # and the track map; the ledger reads both from this single cached row.
+    app.state.emission_allocation = EmissionAllocationResolver()
     app.state.emission_eligibility = EmissionEligibilityResolver()
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
@@ -782,6 +787,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_claim_provenance_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_track_share_settings_router, prefix="/api/v1")
+    app.include_router(admin_emission_allocation_router, prefix="/api/v1")
     app.include_router(admin_emission_eligibility_router, prefix="/api/v1")
     app.include_router(admin_treasury_settings_router, prefix="/api/v1")
     from ditto.api_server.endpoints.admin_treasury_runtime import (

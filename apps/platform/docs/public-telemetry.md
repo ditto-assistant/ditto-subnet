@@ -413,6 +413,36 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   reader should label it rather than treat the matrix as absent. A 503 is
   reserved for having never read the matrix, or having last read it so long ago
   that presenting it would misrepresent current chain state.
+- `GET /api/v1/public/treasury-allocation` → the Gamma treasury policy and
+  routing, plus (SN-350) the whole split of total miner emission per
+  recipient. Existing fields are unchanged. The split fields:
+  - `emission_split: [{ kind, id, share, bps }]`: what validators fold now.
+    `kind` is `burn`, `track` or `gamma`; `id` is the track id (`memory`,
+    `generator`) or Gamma service bucket id, and `null` for burn. `share` is
+    the fraction of total miner emission (0..1) and `bps` the same value in
+    basis points; the entries sum to 1 (10000 bps). Order is burn, tracks in
+    registry order, then Gamma buckets.
+  - `emission_split_source`: `epoch_pin` when the split is read from the
+    newest epoch pin (the burn share, track map and enforcing Gamma
+    allocation frozen for every validator), `settings` before any pin exists
+    (the live served settings with the protocol-33 track-map gate and Gamma
+    activation applied), `unavailable` when neither can be read (then the
+    list is empty).
+  - `emission_split_epoch`: the pin's subnet epoch index, or `null` when the
+    source is not `epoch_pin`.
+  - `emission_allocation_revision`: the operator's emission allocation
+    revision (Backroom `set_emission_allocation`); `0` before the first one,
+    when the split still comes from the three legacy settings.
+  - `forecast_split`: same shape, the configured split for coming epochs
+    (Gamma counted only while it enforces), before the fleet gate applies.
+
+  Every value is derived from the fields validators are served
+  (`burn_share`, `track_shares_bps`, the enforcing Gamma allocation): Gamma is
+  carved first, `burn_share` burns that fraction of the remainder, and the
+  track map splits the rest. A track's share assumes it has a payable miner;
+  a generator track with no eligible generator hands its share to memory, and
+  any other empty track burns. Once the map is served, the live split reads burn `0.5`,
+  memory `0.35`, generator `0.15`.
 - `GET /api/v1/public/health` → subnet rollup **from what the platform records**:
   `miners`, `scored_miners`, `scored_agents`, `last_scored_at`, `scores_24h`,
   `avg_latency_ms`. Note: no `success_rate` — the platform only ever sees a

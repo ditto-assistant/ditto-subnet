@@ -126,6 +126,8 @@ import {
   publicLeaderboardSchema,
   validatorFleetObservabilityMemberSchema,
   setTrackShareSettingsInputSchema,
+  emissionAllocationConfirmation,
+  setEmissionAllocationInputSchema,
   trackSharesConfirmation,
 } from './admin.schemas'
 
@@ -5445,5 +5447,54 @@ describe('track share settings', () => {
     expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
     expect(parse({ memory: 0 })).toBe(false)
     expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
+  })
+})
+
+describe('emission allocation', () => {
+  const live = [
+    { kind: 'burn' as const, bps: 5000 },
+    { kind: 'track' as const, id: 'memory', bps: 3500 },
+    { kind: 'track' as const, id: 'generator', bps: 1500 },
+  ]
+
+  it('spells every nonzero entry in canonical order', () => {
+    expect(emissionAllocationConfirmation([live[2], { kind: 'gamma', bucket: 'gm', bps: 0 }, live[0], live[1]])).toBe(
+      'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+    )
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'gamma', bucket: 'gm', bps: 500 },
+        { kind: 'burn', bps: 4500 },
+        live[1],
+        live[2],
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500')
+  })
+
+  it.each([
+    ['sum short of 10000', [live[0], live[1], { kind: 'track', id: 'generator', bps: 1400 }]],
+    ['duplicate', [...live, { kind: 'track', id: 'memory', bps: 0 }]],
+    ['unpaid coding', [{ kind: 'burn', bps: 4000 }, live[1], live[2], { kind: 'track', id: 'coding', bps: 1000 }]],
+    ['missing generator', [{ kind: 'burn', bps: 6500 }, live[1], { kind: 'track', id: 'router', bps: 0 }]],
+    ['burn with an id', [{ kind: 'burn', id: 'memory', bps: 5000 }, live[1], live[2]]],
+  ])('refuses %s', (_label, entries) => {
+    const parsed = setEmissionAllocationInputSchema.safeParse({
+      expectedRevision: 0,
+      entries,
+      reason: 'operator split change',
+      confirmation: emissionAllocationConfirmation(entries as typeof live),
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('accepts the live split with its phrase', () => {
+    expect(
+      setEmissionAllocationInputSchema.safeParse({
+        expectedRevision: 0,
+        entries: live,
+        reason: 'operator split change',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      }).success,
+    ).toBe(true)
   })
 })

@@ -44,6 +44,9 @@ from ditto.api_server.endpoints.admin_database_backup import (
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
+from ditto.api_server.endpoints.admin_emission_allocation import (
+    router as admin_emission_allocation_router,
+)
 from ditto.api_server.endpoints.admin_emission_eligibility import (
     router as admin_emission_eligibility_router,
 )
@@ -206,6 +209,7 @@ __all__ = [
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
     "admin_track_share_settings_router",
+    "admin_emission_allocation_router",
     "admin_emission_eligibility_router",
     "admin_treasury_settings_router",
     "admin_treasury_receipts_router",

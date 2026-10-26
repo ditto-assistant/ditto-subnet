@@ -1566,6 +1566,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/emission-allocation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Emission Allocation */
+        get: operations["get_emission_allocation_api_v1_admin_emission_allocation_get"];
+        put?: never;
+        /** Create Emission Allocation */
+        post: operations["create_emission_allocation_api_v1_admin_emission_allocation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/emission-eligibility": {
         parameters: {
             query?: never;
@@ -11232,6 +11250,21 @@ export interface components {
             /** History */
             history: components["schemas"]["EfficiencyBonusSettingsRevision"][];
             seed_default: components["schemas"]["EfficiencyBonusSettings"];
+        };
+        /** AdminEmissionAllocationRequest */
+        AdminEmissionAllocationRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["EmissionAllocation"];
         };
         /** AdminEmissionEligibilitySettingsRequest */
         AdminEmissionEligibilitySettingsRequest: {
@@ -20914,6 +20947,95 @@ export interface components {
             quality_floor: number;
         };
         /**
+         * EmissionAllocation
+         * @description A complete allocation, stored in canonical order.
+         */
+        EmissionAllocation: {
+            /** Entries */
+            entries: components["schemas"]["EmissionAllocationEntry"][];
+        };
+        /** EmissionAllocationControl */
+        EmissionAllocationControl: {
+            configured: components["schemas"]["EmissionSplitView"];
+            /** Confirmation Hint */
+            confirmation_hint: string | null;
+            current: components["schemas"]["EmissionAllocationRevision"] | null;
+            /** Gamma Buckets */
+            gamma_buckets: string[];
+            /** Gamma Mode */
+            gamma_mode: string | null;
+            /** Gamma Ranges */
+            gamma_ranges: {
+                [key: string]: [
+                    number,
+                    number
+                ];
+            } | null;
+            /** History */
+            history: components["schemas"]["EmissionAllocationRevision"][];
+            in_force: components["schemas"]["EmissionSplitView"] | null;
+            /** In Sync */
+            in_sync: boolean | null;
+            legacy_equivalent: components["schemas"]["EmissionLegacyEquivalent"] | null;
+            /** Max Age Seconds */
+            max_age_seconds: number;
+            pinned: components["schemas"]["EmissionPinnedSplit"] | null;
+            /** Rank Shares */
+            rank_shares: number[] | null;
+            /** Revision */
+            revision: number;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "allocation" | "legacy_settings";
+            /** Track Shares Served */
+            track_shares_served: boolean | null;
+        };
+        /**
+         * EmissionAllocationEntry
+         * @description One destination of total miner emission.
+         */
+        EmissionAllocationEntry: {
+            /** Bps */
+            bps: number;
+            /** Bucket */
+            bucket?: string | null;
+            /** Id */
+            id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "burn" | "track" | "gamma";
+        };
+        /** EmissionAllocationRevision */
+        EmissionAllocationRevision: {
+            /** Actor */
+            actor: string;
+            allocation: components["schemas"]["EmissionAllocation"];
+            /** Burn Settings Revision */
+            burn_settings_revision: number;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            served: components["schemas"]["EmissionServedFields"];
+            /** Track Share Settings Revision */
+            track_share_settings_revision: number;
+            /** Treasury Settings Revision */
+            treasury_settings_revision: number;
+        };
+        /**
          * EmissionEligibilitySettings
          * @description Complete subnet-global reward-eligibility posture, stored per revision.
          */
@@ -20981,6 +21103,86 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["EmissionEligibilitySettings"];
+        };
+        /**
+         * EmissionLegacyEquivalent
+         * @description The allocation that reproduces the split the three settings fold now.
+         */
+        EmissionLegacyEquivalent: {
+            allocation: components["schemas"]["EmissionAllocation"];
+            /** Byte Identical */
+            byte_identical: boolean;
+            /** Confirmation */
+            confirmation: string;
+        };
+        /** EmissionPinnedSplit */
+        EmissionPinnedSplit: {
+            /** Burn Share */
+            burn_share: number;
+            /** Epoch Index */
+            epoch_index: number;
+            /** Gamma Bps */
+            gamma_bps: {
+                [key: string]: number;
+            };
+            /** Pinned Block */
+            pinned_block: number;
+            /** Split */
+            split: components["schemas"]["EmissionShare"][];
+            /** Track Shares Bps */
+            track_shares_bps: {
+                [key: string]: number;
+            } | null;
+        };
+        /**
+         * EmissionServedFields
+         * @description The three fields validators fold, as one allocation derives them.
+         */
+        EmissionServedFields: {
+            /** Burn Share */
+            burn_share: number;
+            /** Gamma Bps */
+            gamma_bps: {
+                [key: string]: number;
+            };
+            /** Track Shares Bps */
+            track_shares_bps: {
+                [key: string]: number;
+            } | null;
+        };
+        /**
+         * EmissionShare
+         * @description One destination as a share of total miner emission.
+         */
+        EmissionShare: {
+            /** Bps */
+            bps: number;
+            /** Bucket */
+            bucket?: string | null;
+            /** Id */
+            id?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "burn" | "track" | "gamma";
+            /** Percent */
+            percent: number;
+        };
+        /** EmissionSplitView */
+        EmissionSplitView: {
+            /** Burn Share */
+            burn_share: number;
+            /** Gamma Bps */
+            gamma_bps: {
+                [key: string]: number;
+            };
+            /** Split */
+            split: components["schemas"]["EmissionShare"][];
+            /** Track Shares Bps */
+            track_shares_bps: {
+                [key: string]: number;
+            } | null;
         };
         /** EnforcingTreasuryPin */
         EnforcingTreasuryPin: {
@@ -28617,6 +28819,23 @@ export interface components {
             shared_seed_confirmations: number;
         };
         /**
+         * PublicEmissionShare
+         * @description One recipient's share of total miner emission.
+         */
+        PublicEmissionShare: {
+            /** Bps */
+            bps: number;
+            /** Id */
+            id: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "burn" | "track" | "gamma";
+            /** Share */
+            share: number;
+        };
+        /**
          * PublicFeedbackTrackResponse
          * @description Counts only. Never the account, the email, or the report text.
          */
@@ -31001,12 +31220,29 @@ export interface components {
              * @default 0
              */
             effective_service_share: number;
+            /**
+             * Emission Allocation Revision
+             * @default 0
+             */
+            emission_allocation_revision: number;
+            /** Emission Split */
+            emission_split?: components["schemas"]["PublicEmissionShare"][];
+            /** Emission Split Epoch */
+            emission_split_epoch?: number | null;
+            /**
+             * Emission Split Source
+             * @default unavailable
+             * @enum {string}
+             */
+            emission_split_source: "epoch_pin" | "settings" | "unavailable";
             /** Forecast Burn Share */
             forecast_burn_share: number;
             /** Forecast Miner Share */
             forecast_miner_share: number;
             /** Forecast Service Share */
             forecast_service_share: number;
+            /** Forecast Split */
+            forecast_split?: components["schemas"]["PublicEmissionShare"][];
             /**
              * Mode
              * @default shadow
@@ -44142,6 +44378,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EfficiencyBonusSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_emission_allocation_api_v1_admin_emission_allocation_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmissionAllocationControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_emission_allocation_api_v1_admin_emission_allocation_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminEmissionAllocationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EmissionAllocationRevision"];
                 };
             };
             /** @description Validation Error */

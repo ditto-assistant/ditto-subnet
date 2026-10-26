@@ -72,6 +72,7 @@ from ditto.api_server.efficiency_projection import (
     FrozenEfficiencyProjection,
     project_frozen_efficiency,
 )
+from ditto.api_server.emission_allocation import overlay_served
 from ditto.api_server.emission_eligibility import (
     DEFAULT_POLICY,
     ResolvedEligibilityPolicy,
@@ -286,6 +287,10 @@ class _LedgerPolicy:
     whole resolved policy, not just the settings, so the revision and checksum a
     withheld artifact's record is bound to come from the same read."""
     track_shares: TrackShareSettings = TrackShareSettings()
+    allocation_revision: int = 0
+    """The emission allocation that supplied ``burn_share`` and the track map
+    (0: the legacy settings did). The epoch pin refuses to insert if it moved,
+    so a pin never pairs an old burn share with a new Gamma bucket."""
 
 
 @dataclass(frozen=True)
@@ -444,6 +449,18 @@ async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
         if track_share_resolver is not None
         else TrackShareSettings()
     )
+    # Once an emission allocation exists, burn_share and the track map come
+    # from its single cached row, so a live read never pairs the halves of two
+    # different splits. Until then the legacy settings pass through untouched.
+    allocation_resolver = getattr(app_state, "emission_allocation", None)
+    allocation = (
+        await allocation_resolver.resolve(session_maker)
+        if allocation_resolver is not None
+        else None
+    )
+    burn, track_shares = overlay_served(
+        allocation, burn=burn, track_shares=track_shares
+    )
     resolver = getattr(app_state, "emission_eligibility", None)
     eligibility = (
         await resolver.resolve(session_maker)
@@ -456,6 +473,7 @@ async def _resolve_ledger_policy(app_state: Any) -> _LedgerPolicy:
         burn=burn,
         reward_eligibility=eligibility,
         track_shares=track_shares,
+        allocation_revision=allocation.revision if allocation is not None else 0,
     )
 
 

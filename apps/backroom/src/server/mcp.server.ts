@@ -188,6 +188,7 @@ import {
   agentEmissionEligibilityInputSchema,
   setBurnSettingsInputSchema,
   setTrackShareSettingsInputSchema,
+  setEmissionAllocationInputSchema,
   setEfficiencyBonusSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
@@ -384,6 +385,8 @@ import {
   setBurnSettings,
   fetchTrackShareSettings,
   setTrackShareSettings,
+  fetchEmissionAllocation,
+  setEmissionAllocation,
   fetchSubmissionSettingsControl,
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
@@ -551,6 +554,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'decide_bounty_evaluation',
   'set_burn_settings',
   'set_track_share_settings',
+  'set_emission_allocation',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
 ])
@@ -1055,13 +1059,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_source_release_evidence:
     'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
   set_burn_settings:
-    'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
+    'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
   get_track_share_settings:
     'Read per-track emission split, what validators fold now, v33 gate, generator mode; history opt-in.',
   set_track_share_settings:
-    'Set memory/generator emission split with CAS and exact split phrase. MOVES TAO. See tool help.',
+    'Legacy track split; refused once an allocation exists. MOVES TAO. See tool help.',
+  get_emission_allocation:
+    'Read burn/track/Gamma split as % of emission: in force, pinned, history.',
+  set_emission_allocation:
+    'Set burn, tracks and Gamma in bps summing to 10000. MOVES TAO. See tool help.',
   get_emission_eligibility_policy:
     'Read emission gates, fleet fold, revision, windows and shadow withheld count; optional history.',
   get_treasury_settings: 'Read shadow buckets/history; no weights or funds.',
@@ -3932,7 +3940,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set emission burn',
       description:
-        'Apply one append-only revision of the SN118 emission burn live, with no validator release. Supply burn_share (0 releases the full miner emission through KOTH, 1 burns all of it — the same all-to-burn vector the fold already submits when no agent holds a positive score), expectedRevision exactly as get_burn_settings reports it (0 when no revision has ever been written) as an optimistic-concurrency guard, an operator reason, and the confirmation string "APPLY BURN SETTINGS". This is the one control here that moves TAO directly, which is why the revision log records who set it and why. Optionally supply rank_shares, the KOTH payout curve for the champion then the four tail slots (five positive, non-increasing shares summing to 1, e.g. [0.5, 0.2, 0.13, 0.1, 0.07]). Omitting rank_shares keeps the current curve; null clears it to the frozen 65/14/10/7/4. Platform serves a curve to validators only once every recently-live weight setter reports protocol 31, so a mixed fleet never folds two curves; get_burn_settings reports effective.rank_shares_served, and until it is true the leaderboard keeps the frozen curve. Resend the current burn_share when changing only the curve. It scales the competitive vector without re-ordering it: the remainder is normalized across the eligible miner weights, so no miner share of what miners receive changes. It is not instantaneous — a validator that already submitted weights this epoch keeps that vector until its next one, so budget roughly an epoch for the subnet-wide effect. Requires backroom:write.',
+        'Apply one append-only revision of the SN118 emission burn live, with no validator release. Supply burn_share (0 releases the full miner emission through KOTH, 1 burns all of it — the same all-to-burn vector the fold already submits when no agent holds a positive score), expectedRevision exactly as get_burn_settings reports it (0 when no revision has ever been written) as an optimistic-concurrency guard, an operator reason, and the confirmation string "APPLY BURN SETTINGS". This is the one control here that moves TAO directly, which is why the revision log records who set it and why. Optionally supply rank_shares, the KOTH payout curve for the champion then the four tail slots (five positive, non-increasing shares summing to 1, e.g. [0.5, 0.2, 0.13, 0.1, 0.07]). Omitting rank_shares keeps the current curve; null clears it to the frozen 65/14/10/7/4. Platform serves a curve to validators only once every recently-live weight setter reports protocol 31, so a mixed fleet never folds two curves; get_burn_settings reports effective.rank_shares_served, and until it is true the leaderboard keeps the frozen curve. Resend the current burn_share when changing only the curve. Once an emission allocation revision exists (set_emission_allocation, SN-350) it owns burn_share: Platform refuses any other value here, so change the burn there. It scales the competitive vector without re-ordering it: the remainder is normalized across the eligible miner weights, so no miner share of what miners receive changes. It is not instantaneous — a validator that already submitted weights this epoch keeps that vector until its next one, so budget roughly an epoch for the subnet-wide effect. Requires backroom:write.',
       inputSchema: setBurnSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3940,11 +3948,41 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_emission_allocation',
+    {
+      title: 'Get emission allocation',
+      description:
+        'Read the one typed-weights split of SN118 miner emission (SN-350): every destination (burn, each competition track, each Gamma service bucket) as basis points and percent of total emission. source is legacy_settings until the first set_emission_allocation write (revision 0): the split then comes from get_burn_settings, get_track_share_settings and the Gamma treasury bucket, and legacy_equivalent gives the exact allocation and confirmation that reproduce it (byte_identical=true means writing it changes no served byte). configured is what the current settings fold to (Gamma counts only while it enforces), in_force applies the protocol-33 track-map fleet gate (track_shares_served), and pinned is what the newest epoch pin froze for every validator. served on the current revision is the burn_share, track_shares_bps and Gamma bucket validators are served. in_sync=false means the settings no longer match the current allocation. gamma_buckets lists the buckets an allocation must name and gamma_ranges the coldkey-signed ranges while Gamma enforces. rank_shares (the KOTH payout curve) stays its own setting in set_burn_settings. History is newest-first and opt-in with historyLimit (default 0). Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchEmissionAllocation(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'set_emission_allocation',
+    {
+      title: 'Set emission allocation',
+      description:
+        'Apply one atomic revision of the whole SN118 emission split, with no validator release. entries names every destination in integer basis points of total miner emission summing to exactly 10000: {kind: "burn", bps}, {kind: "track", id: "memory"|"generator", bps} (coding and router only at 0) and one {kind: "gamma", bucket, bps} per Gamma service bucket get_emission_allocation lists in gamma_buckets, e.g. [{kind: "burn", bps: 5000}, {kind: "track", id: "memory", bps: 3500}, {kind: "track", id: "generator", bps: 1500}]. Platform derives what validators fold (burn_share = burn / (10000 - Gamma), a track map claiming the whole pool, the Gamma bucket) and writes any changed burn, track-share or treasury revision in the same transaction, so no ordering hazard remains. It refuses sums other than 10000, unknown kinds or tracks, duplicates, unnamed paid tracks or Gamma buckets, nonzero coding or router shares, nonzero Gamma unless Gamma enforces and its activation epoch has been pinned, Gamma outside the coldkey-signed range, and any split whose track bps do not divide the pool into integer bps (for example memory 4000 / generator 2000 of a 6000 pool); it never rounds. Burn 5000 makes any integer track split exact. Supply expectedRevision exactly as get_emission_allocation reports it (0 before the first write), a reason, and the confirmation spelling every nonzero entry in order (burn, tracks in registry order, Gamma buckets as gamma:<bucket>): "APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500". Once a revision exists, set_track_share_settings is refused, set_burn_settings accepts only the current burn_share (to change rank_shares), and enforcing Gamma bucket changes in record_treasury_settings are refused. Takes effect at the next ledger read or epoch pin; budget roughly an epoch subnet-wide. Requires backroom:write.',
+      inputSchema: setEmissionAllocationInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setEmissionAllocation(input, props.session.email)),
+  )
+
+  registerTool(
     'set_track_share_settings',
     {
       title: 'Set track share settings',
       description:
-        'Apply one append-only revision of the per-track emission split validators fold, with no validator release. settings.track_shares_bps is a map of basis points, e.g. {memory: 9000, generator: 1000}, or null to clear it (validators return to their compiled memory-only split). Platform refuses unknown track ids, a map without memory (validators would read a missing memory share as the full pool), a nonzero share for coding or router (no shipped validator pays them), and a sum above 10000 (anything short of 10000 burns). Supply expectedRevision exactly as get_track_share_settings reports it, a reason, and the confirmation that spells out every nonzero share in track order: "APPLY TRACK SHARES memory=9000 generator=1000", or "CLEAR TRACK SHARES" for null. Platform serves the map only once every recently-live weight setter reports protocol 33; check effective.served. A generator share pays only ledger entries the generator competition marks weight_eligible (set_generator_competition_settings mode=enforce); until then validators hand it back to memory. Takes effect at the next ledger read or epoch pin, so budget roughly an epoch subnet-wide. Requires backroom:write.',
+        'Legacy writer, refused once an emission allocation revision exists: set the split with set_emission_allocation instead. Apply one append-only revision of the per-track emission split validators fold, with no validator release. settings.track_shares_bps is a map of basis points, e.g. {memory: 9000, generator: 1000}, or null to clear it (validators return to their compiled memory-only split). Platform refuses unknown track ids, a map without memory (validators would read a missing memory share as the full pool), a nonzero share for coding or router (no shipped validator pays them), and a sum above 10000 (anything short of 10000 burns). Supply expectedRevision exactly as get_track_share_settings reports it, a reason, and the confirmation that spells out every nonzero share in track order: "APPLY TRACK SHARES memory=9000 generator=1000", or "CLEAR TRACK SHARES" for null. Platform serves the map only once every recently-live weight setter reports protocol 33; check effective.served. A generator share pays only ledger entries the generator competition marks weight_eligible (set_generator_competition_settings mode=enforce); until then validators hand it back to memory. Takes effect at the next ledger read or epoch pin, so budget roughly an epoch subnet-wide. Requires backroom:write.',
       inputSchema: setTrackShareSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

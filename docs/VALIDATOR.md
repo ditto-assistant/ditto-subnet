@@ -825,7 +825,12 @@ switches gate every payment:
   gives memory the whole pool and the generator nothing. Platform withholds the
   field until every recently-live weight-setting validator reports protocol 33,
   because a protocol-32 validator folds the generator in shadow and would burn
-  its share.
+  its share. Operators set the map, `burn_share` and the Gamma service bucket
+  together through one Platform emission allocation (Backroom
+  `set_emission_allocation`, SN-350): basis points of total emission for burn,
+  each track and each Gamma bucket, summing to 10000. Platform derives
+  `burn_share = burn / (10000 - Gamma)` and a map that claims the whole pool,
+  so validators fold the same three fields as before and need no release.
 - **Eligible entries.** The fold pays only generator ledger entries Platform
   marked `weight_eligible`, which it does only under generator settings
   `mode=enforce`, for qualified miner generators. The public default generator

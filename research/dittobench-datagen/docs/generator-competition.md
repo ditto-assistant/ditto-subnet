@@ -516,9 +516,14 @@ operator ruling.
      ENFORCE`) runs the lane exactly like shadow but marks each qualified miner
      generator's ledger entry `weight_eligible: true`. The public default
      generator never appears on the ledger.
-   - The share is the revisioned Platform setting `track_shares_bps` (Backroom
-     `set_track_share_settings`, confirmation spelling out the split, for
-     example `APPLY TRACK SHARES memory=9000 generator=1000`). The scoring
+   - The share is the served Platform field `track_shares_bps`. Operators set
+     it through one emission allocation (Backroom `set_emission_allocation`,
+     SN-350), which names burn, every track and Gamma as basis points of
+     total emission and derives the track map, for example
+     `APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500` serves
+     `{memory: 7000, generator: 3000}` with `burn_share=0.5`. The legacy
+     `set_track_share_settings` writer is refused once an allocation exists.
+     The scoring
      ledger serves it to validators only once every recently-live weight
      setter reports protocol 33, and an epoch pin freezes it.
    - Validators (protocol 33) pay the generator track its share, split by the

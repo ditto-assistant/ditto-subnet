@@ -265,7 +265,7 @@ Three scopes, in ascending sensitivity:
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
 | `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
-| `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
+| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
 
 Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through

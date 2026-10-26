@@ -36,6 +36,7 @@ from ditto.api_server.burn_settings import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.treasury_runtime import lock_runtime
 from ditto.db.models import BurnSettingsRevision as RevisionRow
 from ditto.db.queries.burn_settings import (
     GLOBAL_SCOPE,
@@ -43,6 +44,7 @@ from ditto.db.queries.burn_settings import (
     latest_burn_settings_revision,
     list_burn_settings_revisions,
 )
+from ditto.db.queries.emission_allocation import latest_emission_allocation_number
 from ditto.db.queries.heartbeats import (
     count_live_validators,
     live_weight_setter_fleet_supports_protocol,
@@ -163,8 +165,22 @@ async def create_settings_revision(
             status_code=409,
             detail=f"confirmation must be exactly {CONFIRMATION}",
         )
+    # Serialize with the emission-allocation writer (same advisory lock).
+    await lock_runtime(session)
     latest = await latest_burn_settings_revision(session)
     actual_revision = latest.revision if latest is not None else 0
+    owner = await latest_emission_allocation_number(session)
+    if owner:
+        current_share = settings_from_row(latest).burn_share
+        if payload.settings.burn_share != current_share:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"emission allocation revision {owner} owns burn_share "
+                    f"({current_share}); change it with set_emission_allocation, "
+                    "or resend the current burn_share to change only rank_shares"
+                ),
+            )
     if payload.expected_revision != actual_revision:
         raise HTTPException(
             status_code=409,

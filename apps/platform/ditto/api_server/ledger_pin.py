@@ -54,6 +54,7 @@ from ditto.chain.errors import (
     ChainTreasuryActivationReadError,
     ChainTreasuryReadTimeoutError,
 )
+from ditto.db.queries.emission_allocation import latest_emission_allocation_number
 from ditto.db.queries.ledger_epochs import (
     LedgerPinDraft,
     get_pin,
@@ -885,6 +886,15 @@ class LedgerPinMaterializer:
                     ):
                         raise ValueError(
                             "Gamma allocation changed during epoch materialization"
+                        )
+                    if await latest_emission_allocation_number(session) != getattr(
+                        context.policy, "allocation_revision", 0
+                    ):
+                        # Serialized with the allocation writer by the lock
+                        # above: the burn share and track map in this draft
+                        # must come from the allocation in force at insert.
+                        raise ValueError(
+                            "emission allocation changed during epoch materialization"
                         )
                     row = await insert_pin(session, draft)
                 await session.refresh(row)

@@ -9213,6 +9213,62 @@ class TrackShareSettingsRevision(Base):
     )
 
 
+class EmissionAllocationRevision(Base):
+    """Append-only typed-weights split of total miner emission (SN-350).
+
+    One revision names burn, every paid track and every Gamma bucket as integer
+    basis points summing to 10000. Platform derives the burn share, track map
+    and Gamma bucket allocation validators fold and writes any that changed as
+    revisions of their own settings in the same transaction; the three
+    ``*_settings_revision`` columns record which of those revisions were in
+    force after the write. See :mod:`ditto.api_models.emission_allocation`.
+    """
+
+    __tablename__ = "emission_allocation_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    served: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    burn_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    track_share_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    treasury_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="emission_allocation_parent_revision_check",
+        ),
+        CheckConstraint(
+            "burn_settings_revision >= 0 AND track_share_settings_revision >= 0 "
+            "AND treasury_settings_revision >= 0",
+            name="emission_allocation_settings_revision_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="emission_allocation_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="emission_allocation_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="emission_allocation_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="emission_allocation_parent_key",
+        ),
+    )
+
+
 class EmissionEligibilitySettingsRevision(Base):
     """Append-only operator posture binding emissions to a terminal review.
 

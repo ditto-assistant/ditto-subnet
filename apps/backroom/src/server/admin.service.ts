@@ -441,6 +441,9 @@ import {
   trackShareSettingsControlSchema,
   trackShareSettingsRevisionSchema,
   setTrackShareSettingsInputSchema,
+  emissionAllocationControlSchema,
+  emissionAllocationRevisionSchema,
+  setEmissionAllocationInputSchema,
   emissionEligibilityControlSchema,
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
@@ -1487,6 +1490,46 @@ export async function setTrackShareSettings(rawInput: unknown, actor: string) {
     throw trackShareSettingsConflict(cause) ?? cause
   }
   return fetchTrackShareSettings()
+}
+
+const EMISSION_ALLOCATION_PATH = '/api/v1/admin/emission-allocation'
+
+export async function fetchEmissionAllocation() {
+  const payload = await platformAdminRequest(EMISSION_ALLOCATION_PATH)
+  return emissionAllocationControlSchema.parse(payload)
+}
+
+// Platform names the revision now current on a stale write; keep its message
+// verbatim and only append the recovery.
+function emissionAllocationConflict(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  if (/emission allocation changed/i.test(message)) {
+    return new Error(
+      `${message}. Nothing was applied: re-read get_emission_allocation and resubmit with the revision it reports.`,
+    )
+  }
+  return null
+}
+
+export async function setEmissionAllocation(rawInput: unknown, actor: string) {
+  const input = setEmissionAllocationInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(EMISSION_ALLOCATION_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        expected_revision: input.expectedRevision,
+        settings: { entries: input.entries },
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    emissionAllocationRevisionSchema.parse(payload)
+  } catch (cause) {
+    throw emissionAllocationConflict(cause) ?? cause
+  }
+  return fetchEmissionAllocation()
 }
 
 const CONFIRMATION_BUNDLE_SETTINGS_PATH = '/api/v1/admin/confirmation-bundle-settings'
