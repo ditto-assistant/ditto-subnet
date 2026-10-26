@@ -414,10 +414,11 @@ def reassign_unclaimed_shares(
     name a fallback (``fallbacks[track_id]``, e.g. ``generator -> memory``):
     when the track produced no positive weight and the fallback is itself a
     paying track with a positive share, the track's bps are added to the
-    fallback's and the track drops out of the map. The generator track declares memory so a governed
-    generator share with no weight-eligible generator (Platform still in
-    shadow, an empty round window) pays agent miners rather than burning,
-    which also keeps that state byte-identical to the memory-only fold: with
+    fallback's and the track drops out of the map. The generator track
+    declares memory so a governed generator share with no weight-eligible
+    generator (Platform still in shadow, an empty round window) pays agent
+    miners rather than burning, which also keeps that state byte-identical
+    to the memory-only fold: with
     ``{memory: 9000, generator: 1000}`` and no eligible generator, memory
     folds at the full ``BASIS_POINT_SCALE`` and passes through unchanged.
 
