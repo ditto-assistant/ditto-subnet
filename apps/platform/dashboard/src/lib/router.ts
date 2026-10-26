@@ -20,6 +20,7 @@ export type PageName =
   | "reviews"
   | "ath"
   | "bounties"
+  | "generators"
   | "benchmark";
 
 export type OperationsView = "validators" | "screeners" | "builds";
@@ -66,6 +67,10 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   bounties: {
     title: "Bounties",
     sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
+  },
+  generators: {
+    title: "Generator competition",
+    sub: "Case-generator rounds · committed seeds, case outcomes, and projected payouts",
   },
   benchmark: {
     title: "Benchmark",

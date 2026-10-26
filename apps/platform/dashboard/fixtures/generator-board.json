@@ -1,0 +1,52 @@
+{
+  "entries": [
+    {
+      "miner_hotkey": "5CXEMm6u6onoMpFPbpSqFLdeDzkG68nyTirSg3SVQfiMVhJa",
+      "submission_id": "7241781f-99d0-4d96-a908-ac1281cca36f",
+      "round_index": 25963,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.3473368326822916,
+      "discriminating_cases": 26,
+      "first_seen": "2026-10-26T05:12:23.222328Z",
+      "scored_at": "2026-10-26T20:11:42.097284Z"
+    },
+    {
+      "miner_hotkey": "5HKmBL1H6aC3u7jwDShSV9Np1oDuNaq1Bzer2wSi4EFzh9Xv",
+      "submission_id": "46bb9b61-0531-4d6e-bb3a-f51a65717c6e",
+      "round_index": 25963,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.0826992367513021,
+      "discriminating_cases": 12,
+      "first_seen": "2026-10-24T19:12:05.537858Z",
+      "scored_at": "2026-10-26T20:11:42.097284Z"
+    },
+    {
+      "miner_hotkey": "5HDmNaBQNVQoyApQbFQdSx6pD4ajcJdaYDJePufpWvoxCsrq",
+      "submission_id": "7d78a131-2870-4531-aecf-20557c7dc161",
+      "round_index": 25963,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.045703125,
+      "discriminating_cases": 9,
+      "first_seen": "2026-10-26T18:22:00.286172Z",
+      "scored_at": "2026-10-26T20:11:42.097284Z"
+    },
+    {
+      "miner_hotkey": "5FZcghokSYXnskXjzYT7bcEn4nYLuqkskEAz82dUb6AXeu7T",
+      "submission_id": "c3cb1b6b-840d-420e-9e1a-072a5f46d252",
+      "round_index": 25963,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.022916666666666665,
+      "discriminating_cases": 2,
+      "first_seen": "2026-10-26T16:39:45.903568Z",
+      "scored_at": "2026-10-26T20:11:42.097284Z"
+    }
+  ],
+  "count": 4,
+  "window_days": 7,
+  "mode": "enforce",
+  "generated_at": "2026-10-26T20:28:54.555032Z"
+}
