@@ -267,6 +267,24 @@ def test_local_rehearsal_range_tracks_the_supported_set() -> None:
     assert values["LIVE_SCORING_BENCH_VERSION"] in golden["supported_bench_versions"]
 
 
+def test_miner_docs_quote_the_rehearsal_live_fallback() -> None:
+    """The mine skill states the live bench; it must match the rehearsal's
+    offline fallback so an activation PR that bumps one bumps the other."""
+    fallback = int(
+        re.search(  # type: ignore[union-attr]
+            r"^LIVE_SCORING_BENCH_VERSION = (\d+)$", LOCAL_REHEARSAL.read_text(), re.M
+        ).group(1)
+    )
+    skill = (ROOT / ".agents/skills/mine/SKILL.md").read_text()
+    quoted = re.search(r"Live scoring is \*\*bench (\d+)\*\*", skill)
+    assert quoted, "mine SKILL.md no longer states 'Live scoring is **bench N**'"
+    assert int(quoted.group(1)) == fallback, (
+        "mine SKILL.md live bench and local-rehearsal.py "
+        "LIVE_SCORING_BENCH_VERSION disagree; bump both on activation"
+    )
+
+
+
 # --- generator rounds ----------------------------------------------------------
 
 

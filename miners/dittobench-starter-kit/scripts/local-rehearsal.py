@@ -30,21 +30,25 @@ DEFAULT_KIT_DIR = SCRIPT_DIR.parent
 REPO_ROOT = DEFAULT_KIT_DIR.parents[1]
 API_DIR = REPO_ROOT / "services" / "dittobench-api"
 LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
-# Live SN118 scoring contract. Update with Platform active_version activation
+# Live SN118 scoring contract. Without --bench-version the rehearsal reads
+# Platform's active_version from the public rollout endpoint at run time; this
+# constant is only the offline fallback. Keep it at the activated version
 # (Backroom get_benchmark_rollout_control); do not confuse with research
-# CurrentBenchVersion (still v8). Bench 13 is executable below but is NOT live
-# until the owner activates it after the v13 qualification report.
-LIVE_SCORING_BENCH_VERSION = 12
+# CurrentBenchVersion (still v8).
+LIVE_SCORING_BENCH_VERSION = 13
+PUBLIC_ROLLOUT_URL = "https://dittobench.ai/api/v1/public/bench/rollout"
+# Override (or set to "off" to skip the lookup) for air-gapped rehearsals.
+PUBLIC_ROLLOUT_URL_ENV = "DITTOBENCH_PUBLIC_ROLLOUT_URL"
 MIN_BENCH_VERSION = 8
-# Bench 14 is an explicit preactivation rehearsal target; the live default
-# above is unchanged. The harness wire stays 9.
+# Bench 14 is an explicit preactivation rehearsal target; it is not the live
+# default until Platform activates it. The harness wire stays 9.
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
 MAX_BENCH_VERSION = 14
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
 # The kit's `answer` slot is off by default (the wire stays at bench 9, so a
-# default-on slot would change live v12 grading); `--gates` turns it on so the
+# default-on slot would change grading); `--gates` turns it on so the
 # v13 slot rules are exercised locally. Mirrors src/v13.rs ANSWER_SLOT_ENV.
 ANSWER_SLOT_ENV = "DITTOBENCH_ANSWER_SLOT"
 LONGMEM_DATASET_SHA256 = (
@@ -93,10 +97,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--bench-version",
         type=int,
-        default=LIVE_SCORING_BENCH_VERSION,
+        default=None,
         help=(
-            "DittoBench contract to generate and score "
-            f"(default: {LIVE_SCORING_BENCH_VERSION}, live SN118 scoring)"
+            "DittoBench contract to generate and score (default: the live SN118 "
+            "scoring version from the public rollout endpoint, falling back to "
+            f"{LIVE_SCORING_BENCH_VERSION} offline)"
         ),
     )
     parser.add_argument(
@@ -158,7 +163,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--longmem-limit must be between 1 and 500")
     if args.longmem_limit is not None and not args.longmem_eval:
         parser.error("--longmem-limit requires --longmem-eval")
-    if not MIN_BENCH_VERSION <= args.bench_version <= MAX_BENCH_VERSION:
+    if args.bench_version is not None and not (
+        MIN_BENCH_VERSION <= args.bench_version <= MAX_BENCH_VERSION
+    ):
         parser.error(
             f"--bench-version must be between {MIN_BENCH_VERSION} and "
             f"{MAX_BENCH_VERSION}"
@@ -217,6 +224,58 @@ def request_json(
     if not isinstance(decoded, dict):
         raise RehearsalError(f"{method} {url} returned a non-object JSON response")
     return decoded
+
+
+def fetch_live_bench_version(url: str, *, timeout: float = 5) -> int | None:
+    """Platform's activated scoring version from the public rollout endpoint,
+    or None when it cannot be read (offline, CDN error, malformed body)."""
+    request = urllib.request.Request(
+        url,
+        # An explicit User-Agent: the CDN refuses urllib's default one.
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "ditto-local-rehearsal/1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            decoded = json.load(response)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    version = decoded.get("active_version") if isinstance(decoded, dict) else None
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    return version
+
+
+def resolve_bench_version(requested: int | None) -> int:
+    """The contract to rehearse: an explicit --bench-version, else the live
+    scoring version, else the offline fallback. A live version newer than this
+    checkout can run fails loudly instead of rehearsing an older contract."""
+    if requested is not None:
+        return requested
+    url = os.environ.get(PUBLIC_ROLLOUT_URL_ENV, PUBLIC_ROLLOUT_URL).strip()
+    live = None if url.lower() in ("", "off") else fetch_live_bench_version(url)
+    if live is None:
+        print(
+            "could not read the live scoring bench version; using the offline "
+            f"fallback {LIVE_SCORING_BENCH_VERSION} (pass --bench-version to pin)",
+            file=sys.stderr,
+        )
+        return LIVE_SCORING_BENCH_VERSION
+    if not MIN_BENCH_VERSION <= live <= MAX_BENCH_VERSION:
+        raise RehearsalError(
+            f"live SN118 scoring is bench {live}, but this checkout rehearses "
+            f"bench {MIN_BENCH_VERSION}-{MAX_BENCH_VERSION}; update ditto-subnet "
+            "or pass --bench-version explicitly"
+        )
+    if live != LIVE_SCORING_BENCH_VERSION:
+        print(
+            f"live scoring is bench {live} (this checkout's offline fallback is "
+            f"{LIVE_SCORING_BENCH_VERSION}); rehearsing bench {live}",
+            file=sys.stderr,
+        )
+    return live
 
 
 def write_report(path: Path, payload: dict[str, Any]) -> None:
@@ -872,6 +931,8 @@ def run(args: argparse.Namespace) -> int:
             "local rehearsal needs the ditto-subnet monorepo checkout; "
             f"missing {API_DIR}"
         )
+    args.bench_version = resolve_bench_version(args.bench_version)
+    print(f"rehearsing bench_version {args.bench_version}", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="dittobench-local-rehearsal-") as raw_tmp:
         tmp = Path(raw_tmp)

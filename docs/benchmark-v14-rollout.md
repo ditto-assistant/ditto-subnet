@@ -289,11 +289,12 @@ Open, and requiring an operator, release-owner or paid run:
    - Until then, rounds depend on a staffed v13 cohort after v14 activates. A
      round with no validator able to run v13 is void at opening with the
      reason.
-6. **Miner rehearsal default.** Since v13 activated,
-   `local-rehearsal.py` `LIVE_SCORING_BENCH_VERSION` (still 12) and
-   `.agents/skills/mine/SKILL.md` have lagged the live bench. Update both
-   with the activation PR (bump checklist step 8). Otherwise miners rehearse
-   an older contract by default.
+6. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
+   now reads `active_version` from the public rollout endpoint, so the
+   default follows activation without a code change. The activation PR still
+   bumps the offline fallback `LIVE_SCORING_BENCH_VERSION` (now 13) and the
+   bench number quoted in `.agents/skills/mine/SKILL.md` (bump checklist
+   step 8).
 
 Work in progress elsewhere that also changes the v14 vector:
 
