@@ -21,7 +21,7 @@ func TestV14KnownVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa"
+	const want = "e0af7f233311d84c6d07039a684a42c27998dee318ecfe2f95ed58f1bcd87673"
 	if digest != want {
 		t.Fatalf("v14 known vector: got %s, want %s", digest, want)
 	}

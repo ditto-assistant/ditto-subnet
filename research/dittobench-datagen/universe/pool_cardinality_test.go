@@ -89,6 +89,9 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			{Name: "enterpriseReferenceFields", Size: len(enterpriseReferenceFields), Role: "question cue (enterprise join field)"},
 			{Name: "enterpriseSetFields", Size: len(enterpriseSetFields), Role: "question cue (enterprise set field)"},
 
+			// v14 temporal business families (v14_temporal_families.go).
+			{Name: "V14SequenceEventClasses", Size: len(V14SequenceEventClasses), Role: "answer (event class)"},
+
 			// Story arcs (story_events.go, story_v2.go, story.go).
 			{Name: "storyStatusVocabulary", Size: len(storyStatusVocabulary), Role: "answer (story status)"},
 			{Name: "storyChannels", Size: len(storyChannels), Role: "answer (contact channel)"},
@@ -206,6 +209,8 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"V13AbsenceFamilies":   poolcanary.Schema,
 			"v13PersonalRenderers": poolcanary.Schema,
 			"v10Renderers":         poolcanary.Schema,
+			"v14TemporalFamilies":  poolcanary.Schema,
+			"v14Ordinals":          "ordinal words for sequence positions 1-8: the closed number set an event-sequence question counts in, not a vocabulary a table could key on",
 			"storyEventCatalog":    poolcanary.Schema,
 			"personalThemes":       poolcanary.Schema,
 

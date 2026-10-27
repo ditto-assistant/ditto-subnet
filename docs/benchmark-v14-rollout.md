@@ -36,14 +36,15 @@ that value is also a correction cue. "better safe than sorry" is published as
 `sorry`. V14 credits both. A sentence that carries anything beyond the value
 ("Sorry, I mean safe.") is still a correction, and v13 grading is unchanged.
 The v14 full/public vector at seed 123456789 is
-`36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa`,
+`e0af7f233311d84c6d07039a684a42c27998dee318ecfe2f95ed58f1bcd87673`,
 with epoch `2027-06-01T00:00:00Z`. The grader (apart from the claim-set
 correction above, the #2734 hyphen fold and matchers, and the answer-normalization
 contract below), v13 gate postures,
 LongMem instrument and public harness wire (9) carry forward. The surface carries
 forward apart from case-file records, which v14 files in story order instead of
-shuffled-presentation order (#3088), and the supersession chains of SN-353/354
-below. Both move the v14 vector and leave every v13 seed untouched. There is no private
+shuffled-presentation order (#3088), the supersession chains of SN-353/354, and
+the generator-competition families below (SN-361); each moves the v14 vector and
+leaves every v13 seed untouched. There is no private
 surface expansion or screening policy v14 activation in this change.
 
 ## Anti-template work remains unqualified
@@ -165,7 +166,8 @@ These change v14 generation only. V13 generation and grading stay
 byte-identical. Each change that moves the v14 vector makes the earlier
 v14 qualification evidence stale, including the 40-seed GIH diagnostic at
 `8f1005957` (#3179: quality 0.9501 over 14,000 cases). Rerun it on the new
-source before citing it.
+source before citing it. Contributors are credited by generator letter in
+[the credits ledger](../research/dittobench-datagen/docs/v14-generator-credits.md).
 
 ### SN-351 family-mix admission gate
 
@@ -266,6 +268,39 @@ Next-action, school list, latest-event and client-vs-vendor are left to
 SN-356 to SN-360. The v14 known vector moves; v13 stays byte-identical. The
 chained families are listed in `universe.V14FamilyMix` as v14-structural,
 pending a 3-round `familygate` panel measurement.
+
+### SN-355 point-in-time questions and SN-358 relative event sequences
+
+From the generator competition (generator C's dated-status, range-lookup,
+long-order and relative-trips shapes, rounds 25946-25963; generator G's
+single-hop as-of lookups are the trivial control). The mechanics are
+re-implemented in the v14 contract; no generator code is copied.
+
+- **Channel as of a date (SN-355)** replaces v13's current-channel family at
+  v14. The case file holds four dated channel changes. The question names a
+  date strictly inside an interval that is neither the first nor the last,
+  never on a change date, so the latest value and the first value are both
+  wrong (and both are distractors). The counterfactual moves one change
+  across the question date.
+- **Relative event sequence (SN-358)** replaces v13's latest-of-three family
+  at v14. The case file holds five to eight dated events, one or two of them
+  dated only as "N days after/before" an absolutely dated event within four
+  weeks (one hop). The question asks for the nth event in date order, or the
+  event immediately before or after a named one. The answer is never the
+  first or last event by date, and its record is never the first or last
+  filed. The counterfactual moves the answer event's date across a
+  neighbour. The pair count varies with the event count, so the case length
+  is no longer a constant six.
+- **Temporal slot rotation.** The full profile scores four business groups,
+  so v13 families 4-6 never reach a scored run. From v14 each seed draws which
+  of latest-event (now the event sequence), next-action-responsible and
+  current-channel (now as-of) fills cycle position 2; the other two take
+  positions 4 and 5.
+- **Run-contract stamp.** The v13 slot table stamped the business, personal,
+  enterprise, record-quantity and injection cases with bench version 13 even
+  in a v14 run, so the grader read them under the v13 policy and no v14
+  grading correction (#2734, #2769) reached them. V14 runs now stamp every
+  memory case 14. V13 keeps the builders' stamps.
 
 ## Ticket boundary and rollback
 

@@ -1211,8 +1211,8 @@ change. The enterprise case files already instruct the model to apply events by
 untouched.
 
 V14 replaces the single announced correction with a short supersession chain
-(SN-353, SN-354) in the owner, standing-status and current-channel business
-families and in the household, appointment, milestone, subscription, travel
+(SN-353, SN-354) in the owner and standing-status business families (a
+current-channel group renders as channel-as-of, below) and in the household, appointment, milestone, subscription, travel
 and hobby personal domains. After the initial record come two or three more
 state records. Every chain has a revert, a proposed change that was turned
 down, or an entry logged in error, and the counterfactual twin flips one link
@@ -1225,17 +1225,43 @@ ported from a generator-competition miner (generator D in
 model-free shortcut (last cued record, the second record, or the latest
 record naming a value) solves both readings of more than 16% of chained
 groups. On v13 the second-record shortcut is exact.
+V14 also replaces two business families with temporal shapes that the
+generator competition measured as discriminating (SN-355, SN-358; credits in
+[v14-generator-credits.md](v14-generator-credits.md)). Every v13 family asks
+for the state in force now over a fixed three-record history, so reading the
+latest record answers it. `universe/v14_temporal_families.go` adds:
+
+- **Channel as of a date** (SN-355, in place of current-channel): four dated
+  channel changes and a question date strictly inside an interval that is
+  neither the first nor the last, never on a change date. The latest and the
+  first value are both wrong and both distractors. Program `as_of`.
+- **Relative event sequence** (SN-358, in place of latest-event): five to
+  eight dated events from the 24-class `V14SequenceEventClasses` bank, one or
+  two dated only as "N days after/before" an absolutely dated event within
+  four weeks. The question asks for the nth event in date order or the event
+  immediately before or after a named one (programs `nth_by_date`,
+  `before_by_date`, `after_by_date`). The answer is never the first or last
+  event by date nor the first or last record filed, and the pair count varies
+  with the event count.
+
+The full profile scores four business groups, so v13's families 4-6 never
+reached a scored run. From v14 each seed draws which of latest-event,
+next-action-responsible and current-channel fills cycle position 2; the other
+two take positions 4 and 5. A v14 run also stamps every memory case with its
+own contract: the v13 slot table left business, personal, enterprise,
+record-quantity and injection cases at 13, so the grader read them under the
+v13 policy.
 
 Question-family identifiers, the envelope, the rest of the grader policy, v13
 gate postures, the LongMem instrument, and public harness wire version (9)
 carry forward. The generated surface carries forward apart from the case-file
-filing dates and the supersession chains above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+filing dates, the supersession chains and the temporal families above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa`.
+`e0af7f233311d84c6d07039a684a42c27998dee318ecfe2f95ed58f1bcd87673`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.

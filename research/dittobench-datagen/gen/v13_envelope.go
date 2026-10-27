@@ -348,6 +348,16 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 		}
 	}
 	suite.WorldCases = len(suite.Cases) - suite.ConversationalCases
+	if benchVersion >= protocol.BenchVersionV14 {
+		// The program, enterprise, record-quantity and injection builders stamp
+		// the version that introduced them (13). The grader dispatches its policy
+		// on MemoryCase.BenchVersion, so without this a v14 run graded those
+		// cases under the v13 policy and no v14 grading correction reached them.
+		// v13 keeps the builders' stamps byte for byte.
+		for i := range suite.Cases {
+			suite.Cases[i].Case.BenchVersion = benchVersion
+		}
+	}
 	if len(suite.Cases)+envelope.Isolation != envelope.Total() {
 		return MemorySuite{}, fmt.Errorf("v13 memory budget: %d plus %d isolation, want %d", len(suite.Cases), envelope.Isolation, envelope.Total())
 	}

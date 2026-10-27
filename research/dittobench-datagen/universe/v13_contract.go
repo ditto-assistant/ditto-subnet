@@ -453,6 +453,9 @@ type v13Group struct {
 	// to. ExtraPerson serves person families, ExtraClass term families.
 	ExtraPerson string
 	ExtraClass  int
+	// T14 holds the draws of the v14 temporal families
+	// (v14_temporal_families.go). v13 groups leave it nil.
+	T14 *v14TemporalDraw
 }
 
 // v13Draws holds the per-seed draw state shared across groups.
@@ -516,6 +519,9 @@ func (d *v13Draws) distinctClasses(salt string, size, n int) [4]int {
 
 func (d *v13Draws) drawGroup(group int) v13Group {
 	g := v13Group{Family: V13Families[group%len(V13Families)]}
+	if d.benchVersion >= protocol.BenchVersionV14 {
+		g.Family = V14TemporalFamily(d.seed, g.Family)
+	}
 	g.Alias = v12Label(d.seed, fmt.Sprintf("v13-scenario-%d", group))
 	g.DecoyAlias = v12Label(d.seed, fmt.Sprintf("v13-decoy-%d", group))
 	g.Purpose = v13Purpose(d.seed, fmt.Sprintf("remit-%d", group), d.usedPurp)
@@ -559,6 +565,9 @@ func (d *v13Draws) drawGroup(group int) v13Group {
 	}
 	if v14ChainUsesChains(d.benchVersion) {
 		d.drawV14BusinessChainValues(group, &g)
+	}
+	if d.benchVersion >= protocol.BenchVersionV14 {
+		d.drawV14Temporal(&g, group)
 	}
 	return g
 }
@@ -609,7 +618,10 @@ func v13GroupTimestamp(seed int64, salt string, i int, g v13Group) string {
 // MemoryCase: the three state records, the decoy clause, the question, and
 // the typed answer specification.
 type v13Member struct {
-	Records     [3]string
+	Records [3]string
+	// Extra holds further state records after Records, in story order. Only
+	// the v14 temporal families fill it; v13 members render exactly three.
+	Extra       []string
 	DecoyClause string
 	Question    string
 	Kind        string
@@ -740,6 +752,10 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Operations = []string{"induce schema", "resolve subject by remit", "select latest status", "map alias term to plain status", "return the status"}
 
 	case V13FamilyLatestEvent:
+		if g.T14 != nil {
+			renderV14EventSequence(d, schema, group, variant, g, counter, subject, &m)
+			break
+		}
 		events := g.Events
 		if counter {
 			events[g.CounterEvent].Date = g.CounterDate
@@ -852,6 +868,10 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Operations = []string{"induce schema", "resolve subject by remit", "read the standing action", "select latest responsible party", "return both"}
 
 	case V13FamilyCurrentChannel:
+		if g.T14 != nil {
+			renderV14ChannelAsOf(d, schema, group, variant, g, counter, subject, &m)
+			break
+		}
 		first, current, decoy := g.Classes[0], g.Classes[1], g.Classes[3]
 		if counter {
 			current = g.Classes[2]
@@ -1085,7 +1105,12 @@ func materializeV13Case(
 	if includeDistractor {
 		binding += fmt.Sprintf(" Separately, an unrelated workstream %s=%s handles %s.%s", schema.Entity, g.DecoyAlias, g.DecoyPurpose, m.DecoyClause)
 	}
-	movable := append(append([]string{binding, m.Records[0], m.Records[1]}, m.ChainExtra...), m.Records[2])
+	// A member carries either supersession-chain rows (ChainExtra, before
+	// the neutral record) or temporal-family rows (Extra, after it).
+	movable := append(append(append([]string{binding, m.Records[0], m.Records[1]}, m.ChainExtra...), m.Records[2]), m.Extra...)
+	for k := range m.Extra {
+		pairIDs = append(pairIDs, protocol.OpaqueCaseID(seed, prefix+"-state-extra", k))
+	}
 	perm := v13Perm(seed, fmt.Sprintf("rows-%d", group), len(movable))
 	rows := []string{glossary[0], glossary[1]}
 	fixedRows := len(rows)

@@ -9,13 +9,14 @@ import (
 // V14 supersession-chain family adapters (SN-353 / SN-354).
 //
 // SN-356 (next-action), SN-357 (school list), SN-358 (latest event) and SN-360
-// (client vs vendor) own the other families, so only these chain.
+// (client vs vendor) own the other families, so only these chain. Every v14
+// current-channel group renders as channel-as-of (SN-355,
+// v14_temporal_families.go), so that family does not chain either.
 
 // v14ChainBusinessFamilies are the business families that render chains.
 var v14ChainBusinessFamilies = map[V13Family]bool{
 	V13FamilyOwnerAfterCorrection: true,
 	V13FamilyStandingStatus:       true,
-	V13FamilyCurrentChannel:       true,
 }
 
 // v14ChainPersonalDomains are the personal domains that render chains.
@@ -51,7 +52,7 @@ func v14ChainSteps(plan v14ChainPlan, counter bool) []v14ChainStep {
 // applyV14BusinessChain replaces a business member's single correction with a
 // supersession chain. The decoy, question and neutral record are unchanged.
 func applyV14BusinessChain(d *v13Draws, m *v13Member, schema v13Schema, group int, g v13Group, counter bool) {
-	if !v14ChainBusinessFamilies[g.Family] {
+	if !v14ChainBusinessFamilies[g.Family] || g.T14 != nil {
 		return
 	}
 	seed := d.seed
