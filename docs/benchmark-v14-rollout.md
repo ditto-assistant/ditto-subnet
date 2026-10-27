@@ -331,6 +331,9 @@ in the v14 contract; no generator code is copied.
   share, while a stale (replaced) item, the no-op item or the decoy list's
   item zeroes the list. The first list scores 0. The counterfactual changes
   only the replacement record.
+- **Admission ledger (SN-351).** Both are `v14-structural`, `pending-panel`
+  in `universe.V14FamilyMix` (shapes `multi-step-process-fold` and
+  `membership-fold`) and must be measured by qualification gate 4.
 
 ## Ticket boundary and rollback
 
