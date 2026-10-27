@@ -920,6 +920,122 @@ class TestRoundLifecycle:
             rnd = await get_round(session, 1)
             assert rnd is not None and set(rnd.column_cases or {}) == {"c1"}
 
+    async def test_a_stale_scorer_refusing_the_case_count_never_rejects(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Round 25968: a scorer older than cases_per_column refused every
+        column. That is an infrastructure fault: the round voids with an infra
+        reason and no miner generator is rejected, whether the scorer reports
+        it as a fault or (legacy) as each column's error."""
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=2, challenger_columns=0)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        miner = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        generated = _generation(work, failing=frozenset({"c0", "c1"}))
+        refusal = "request cases must be in 8..64"
+        for column in generated["columns"]:
+            column["error"] = refusal
+            column["seed"]["error"] = refusal
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code == 200 and resp.json()["status"] == "void"
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, miner)
+            assert row is not None and row.status == "active"
+            assert row.status_reason is None
+            rnd = await get_round(session, 1)
+            assert rnd is not None and rnd.status == "void"
+            assert (rnd.void_reason or "").startswith("infra: scorer")
+            assert refusal in (rnd.void_reason or "")
+            assert (rnd.generation or {})["scorer_fault"]["error_kind"] == (
+                "unsupported_request"
+            )
+
+    async def test_scorer_round_faults_void_or_release(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        await _apply_settings(client, counted_columns=2, challenger_columns=0)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        miner = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        fault = {
+            "work": "round",
+            "lease_id": work["lease_id"],
+            "round_index": work["round_index"],
+            "error_kind": "sandbox",
+            "detail": "generator sandbox failure: docker daemon unavailable",
+            "scorer_version": "challenge-scorer/4",
+        }
+        stale = {**fault, "lease_id": str(uuid4())}
+        assert (
+            await client.post(
+                "/api/v1/generator-scorer/fault", headers=_SCORER, json=stale
+            )
+        ).status_code == 409
+        resp = await client.post(
+            "/api/v1/generator-scorer/fault", headers=_SCORER, json=fault
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["action"] == "released"
+        # Released, so the round re-leases at once rather than after the TTL.
+        again = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert again is not None and again["round_index"] == work["round_index"]
+        resp = await client.post(
+            "/api/v1/generator-scorer/fault",
+            headers=_SCORER,
+            json={
+                **fault,
+                "lease_id": again["lease_id"],
+                "error_kind": "unsupported_request",
+                "detail": "generator request outside this scorer's contract: "
+                "request cases must be in 8..64",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {
+            "work": "round",
+            "action": "voided",
+            "submission_status": None,
+            "round_status": "void",
+        }
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, miner)
+            assert row is not None and row.status == "active"
+            rnd = await get_round(session, work["round_index"])
+            assert rnd is not None and (rnd.void_reason or "").startswith("infra:")
+            assert len((rnd.generation or {})["scorer_faults"]) == 1
+
     async def test_round_end_without_enough_results_voids_and_frees_leases(
         self,
         app: FastAPI,

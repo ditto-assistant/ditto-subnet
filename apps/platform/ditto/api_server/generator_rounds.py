@@ -60,7 +60,7 @@ from uuid import UUID, uuid4
 from pydantic import ValidationError
 from sqlalchemy import and_, func, select, true, update
 
-from ditto.api_models.generator import PanelCaseResult
+from ditto.api_models.generator import GeneratorScorerFault, PanelCaseResult
 from ditto.api_models.generator_ledger import (
     GeneratorLedgerEntry,
     GeneratorLedgerResponse,
@@ -95,6 +95,7 @@ from ditto.api_models.generator_rounds import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
+from ditto.api_server.generator_competition import scorer_request_error
 from ditto.db.models import (
     Agent,
     BannedHotkey,
@@ -1168,6 +1169,27 @@ async def record_generation(
     frozen = {column["column_id"]: column for column in row.columns or ()}
     if {c.column_id for c in payload.columns} != set(frozen):
         raise RoundResultRejected("result columns do not match the round's columns")
+    refused = next(
+        (
+            c.error or (c.seed.error if c.seed else None)
+            for c in payload.columns
+            if scorer_request_error(c.error)
+            or (c.seed is not None and scorer_request_error(c.seed.error))
+        ),
+        None,
+    )
+    if refused is not None:
+        # A scorer older than this round's request refused it for every
+        # column alike: an infrastructure fault, never a column's failure.
+        _void_for_scorer_fault(
+            row,
+            kind="unsupported_request",
+            detail=refused,
+            scorer_version=payload.scorer_version,
+            now=now,
+        )
+        await session.flush()
+        return row
     column_cases: dict[str, list[dict[str, str]]] = {}
     summary: list[dict[str, Any]] = []
     for result in payload.columns:
@@ -1248,6 +1270,76 @@ async def record_generation(
     row.dataset_sha256 = payload.dataset_sha256
     row.column_cases = column_cases
     row.status = "running"
+    await session.flush()
+    return row
+
+
+def _void_for_scorer_fault(
+    row: GeneratorRound,
+    *,
+    kind: str,
+    detail: str,
+    scorer_version: str,
+    now: datetime,
+) -> None:
+    generation = dict(row.generation or {})
+    generation["scorer_fault"] = {
+        "error_kind": kind,
+        "detail": detail[:2000],
+        "scorer_version": scorer_version,
+        "at": now.isoformat(),
+    }
+    row.generation = generation
+    row.lease_id = None
+    row.lease_expires_at = None
+    void_round(
+        row,
+        f"infra: scorer {scorer_version} could not generate this round "
+        f"({kind}): {detail}"[:1000],
+        now=now,
+    )
+
+
+async def record_round_fault(
+    session: AsyncSession, payload: GeneratorScorerFault, *, now: datetime
+) -> GeneratorRound:
+    """Apply a scorer-reported fault to a round's current lease (caller commits).
+
+    No column is blamed. A request the scorer cannot serve voids the round
+    with an infrastructure reason (re-leasing it to the same scorer cannot
+    help); a sandbox failure releases the lease so the round is re-leased,
+    bounded by ``MAX_GENERATION_ATTEMPTS``.
+    """
+    if payload.round_index is None:
+        raise RoundResultRejected("round fault names no round")
+    row = await get_round(session, payload.round_index, for_update=True)
+    if row is None:
+        raise RoundResultRejected("round not found")
+    if row.lease_id != payload.lease_id or row.status not in ("generating", "scoring"):
+        raise RoundResultRejected(f"round is {row.status}; lease is not current")
+    if payload.error_kind == "unsupported_request":
+        _void_for_scorer_fault(
+            row,
+            kind=payload.error_kind,
+            detail=payload.detail,
+            scorer_version=payload.scorer_version,
+            now=now,
+        )
+    else:
+        generation = dict(row.generation or {})
+        faults = list(generation.get("scorer_faults") or [])[-4:]
+        faults.append(
+            {
+                "error_kind": payload.error_kind,
+                "detail": payload.detail[:500],
+                "scorer_version": payload.scorer_version,
+                "at": now.isoformat(),
+            }
+        )
+        generation["scorer_faults"] = faults
+        row.generation = generation
+        row.lease_id = None
+        row.lease_expires_at = None
     await session.flush()
     return row
 

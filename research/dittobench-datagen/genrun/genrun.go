@@ -88,6 +88,13 @@ func (l Limits) withDefaults() Limits {
 // missing, host I/O). It is never the generator's fault.
 var ErrSandbox = errors.New("generator sandbox failure")
 
+// ErrInvalidRequest wraps a plan this build of the pack contract cannot
+// serve: a case count outside challenge.MinCases..MaxCases, a malformed seed
+// or hotkey. It is detected before anything is built or run, and it is never
+// the generator's fault: a scorer older than the requested case count fails
+// here, not inside a generator run.
+var ErrInvalidRequest = errors.New("generator request outside this scorer's contract")
+
 // GeneratorError is a failure the generator caused.
 type GeneratorError struct {
 	Phase  string // "build" or "generate"

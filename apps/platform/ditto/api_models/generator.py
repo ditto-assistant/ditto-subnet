@@ -457,6 +457,37 @@ class GeneratorResultRequest(GeneratorModel):
     probe: GeneratorSeedOutput | None = None
 
 
+ScorerFaultKind = Literal["unsupported_request", "sandbox"]
+
+
+class GeneratorScorerFault(GeneratorModel):
+    """The scorer could not do a leased work item, and it is not the generator's fault.
+
+    ``unsupported_request``: the lease asks for something this scorer build's
+    pack contract refuses (for example a case count above its
+    ``challenge.MaxCases``), detected before any generator ran.
+    ``sandbox``: the sandbox itself failed (docker, image, host I/O).
+    Neither ever rejects a submission: a qualification backs off and a round
+    is voided (unsupported request) or re-leased (sandbox).
+    """
+
+    work: Literal["qualification", "round"]
+    lease_id: UUID
+    run_id: UUID | None = None
+    submission_id: UUID | None = None
+    round_index: int | None = None
+    error_kind: ScorerFaultKind
+    detail: Annotated[str, Field(max_length=4000)] = ""
+    scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class GeneratorScorerFaultAck(GeneratorModel):
+    work: Literal["qualification", "round"]
+    action: Literal["backed_off", "voided", "released"]
+    submission_status: SubmissionStatus | None = None
+    round_status: str | None = None
+
+
 class GeneratorResultResponse(GeneratorModel):
     run_id: UUID
     status: RunStatus

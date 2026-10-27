@@ -65,7 +65,7 @@ import (
 
 // ScorerVersion is reported with every result so Platform can audit which
 // executor produced it.
-const ScorerVersion = "challenge-scorer/3"
+const ScorerVersion = "challenge-scorer/4"
 
 const tokenEnv = "DITTO_GENERATOR_SCORER_TOKEN"
 
@@ -389,6 +389,57 @@ type resultRequest struct {
 	Probe         *genrun.SeedOutput  `json:"probe"`
 }
 
+// faultReport tells Platform a leased item could not be done through no
+// fault of the generator. Mirrors GeneratorScorerFault in
+// apps/platform/ditto/api_models/generator.py.
+type faultReport struct {
+	Work          string `json:"work"` // "qualification" | "round"
+	LeaseID       string `json:"lease_id"`
+	RunID         string `json:"run_id,omitempty"`
+	SubmissionID  string `json:"submission_id,omitempty"`
+	RoundIndex    *int64 `json:"round_index,omitempty"`
+	ErrorKind     string `json:"error_kind"` // "unsupported_request" | "sandbox"
+	Detail        string `json:"detail"`
+	ScorerVersion string `json:"scorer_version"`
+}
+
+const maxFaultDetail = 2000
+
+// faultKind classifies a scorer-side evaluation error for Platform, or ""
+// when it is not reportable (a cancelled context: the scorer is stopping, and
+// the lease expiring is the right outcome).
+func faultKind(ctx context.Context, err error) string {
+	switch {
+	case err == nil || ctx.Err() != nil:
+		return ""
+	case errors.Is(err, genrun.ErrInvalidRequest):
+		return "unsupported_request"
+	case errors.Is(err, genrun.ErrSandbox):
+		return "sandbox"
+	}
+	return ""
+}
+
+// reportFault posts f when err is a reportable scorer fault and returns err
+// (joined with any report failure). A Platform without /fault answers 404 and
+// the lease simply expires, the pre-fault behaviour.
+func reportFault(ctx context.Context, client *platformClient, f faultReport, err error) error {
+	kind := faultKind(ctx, err)
+	if kind == "" {
+		return err
+	}
+	f.ErrorKind, f.ScorerVersion = kind, ScorerVersion
+	f.Detail = err.Error()
+	if len(f.Detail) > maxFaultDetail {
+		f.Detail = f.Detail[:maxFaultDetail]
+	}
+	if perr := client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/fault", f, nil); perr != nil {
+		return errors.Join(err, fmt.Errorf("report fault: %w", perr))
+	}
+	log.Printf("%s %s: reported %s fault to Platform", f.Work, f.LeaseID, kind)
+	return err
+}
+
 type platformClient struct {
 	base  string
 	token string
@@ -513,7 +564,12 @@ func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox) 
 	}
 	ev, err := evaluateArchive(ctx, sb, raw, plan)
 	if err != nil {
-		return true, fmt.Errorf("run %s: %w", item.RunID, err)
+		// Never posted as a result: a request this build refuses or a sandbox
+		// failure is the scorer's problem, reported as a fault so Platform
+		// backs the submission off instead of rejecting it.
+		return true, reportFault(ctx, client, faultReport{
+			Work: "qualification", LeaseID: item.LeaseID, RunID: item.RunID, SubmissionID: item.SubmissionID,
+		}, fmt.Errorf("run %s: %w", item.RunID, err))
 	}
 	if ctx.Err() != nil {
 		return true, ctx.Err()

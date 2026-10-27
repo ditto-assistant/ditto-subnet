@@ -121,6 +121,32 @@ func TestLocalEvaluate(t *testing.T) {
 	}
 }
 
+func TestEvaluateRefusesRequestsOutsideTheContract(t *testing.T) {
+	// A plan the pack contract refuses is the scorer's problem, reported
+	// before anything is built, never as a generator's seed error.
+	for name, mutate := range map[string]func(*Plan){
+		"too many cases": func(p *Plan) { p.Cases = challenge.MaxCases + 1 },
+		"too few cases":  func(p *Plan) { p.Cases = challenge.MinCases - 1 },
+		"bad probe seed": func(p *Plan) { p.ProbeSeed = "nope" },
+		"no seeds":       func(p *Plan) { p.Seeds = nil },
+	} {
+		p := plan()
+		mutate(&p)
+		ev, err := Evaluate(context.Background(), Docker{Binary: "/nonexistent/docker"}, t.TempDir(), p)
+		if !errors.Is(err, ErrInvalidRequest) || errors.Is(err, ErrSandbox) {
+			t.Fatalf("%s: want ErrInvalidRequest before any build, got %v", name, err)
+		}
+		if ev.Build.OK || ev.Build.Error != "" || len(ev.Seeds) != 0 {
+			t.Fatalf("%s: nothing should have run: %+v", name, ev)
+		}
+	}
+	p := plan()
+	p.Cases = challenge.MaxCases
+	if err := p.Validate(); err != nil {
+		t.Fatalf("the contract cap must be accepted: %v", err)
+	}
+}
+
 func TestEvaluateSurfacesSandboxFailures(t *testing.T) {
 	_, err := Evaluate(context.Background(), Docker{Binary: "/nonexistent/docker"}, fixture(t, "ok", false), plan())
 	if !errors.Is(err, ErrSandbox) {

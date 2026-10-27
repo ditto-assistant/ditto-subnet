@@ -5402,6 +5402,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/generator-scorer/fault": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Fault
+         * @description Record a scorer-side fault for the current lease; never blames a generator.
+         */
+        post: operations["post_fault_api_v1_generator_scorer_fault_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/generator-scorer/results": {
         parameters: {
             query?: never;
@@ -22841,6 +22861,64 @@ export interface components {
              * @enum {string}
              */
             status: "leased" | "scored" | "qualified" | "invalid" | "insufficient_panel" | "copy" | "abandoned";
+        };
+        /**
+         * GeneratorScorerFault
+         * @description The scorer could not do a leased work item, and it is not the generator's fault.
+         *
+         *     ``unsupported_request``: the lease asks for something this scorer build's
+         *     pack contract refuses (for example a case count above its
+         *     ``challenge.MaxCases``), detected before any generator ran.
+         *     ``sandbox``: the sandbox itself failed (docker, image, host I/O).
+         *     Neither ever rejects a submission: a qualification backs off and a round
+         *     is voided (unsupported request) or re-leased (sandbox).
+         */
+        GeneratorScorerFault: {
+            /**
+             * Detail
+             * @default
+             */
+            detail: string;
+            /**
+             * Error Kind
+             * @enum {string}
+             */
+            error_kind: "unsupported_request" | "sandbox";
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Round Index */
+            round_index?: number | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Submission Id */
+            submission_id?: string | null;
+            /**
+             * Work
+             * @enum {string}
+             */
+            work: "qualification" | "round";
+        };
+        /** GeneratorScorerFaultAck */
+        GeneratorScorerFaultAck: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "backed_off" | "voided" | "released";
+            /** Round Status */
+            round_status?: string | null;
+            /** Submission Status */
+            submission_status?: ("active" | "superseded" | "rejected") | null;
+            /**
+             * Work
+             * @enum {string}
+             */
+            work: "qualification" | "round";
         };
         /**
          * GeneratorSeedOutput
@@ -52024,6 +52102,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FeedbackTrackContributionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_fault_api_v1_generator_scorer_fault_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GeneratorScorerFault"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeneratorScorerFaultAck"];
                 };
             };
             /** @description Validation Error */

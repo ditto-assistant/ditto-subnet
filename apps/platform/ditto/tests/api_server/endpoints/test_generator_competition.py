@@ -639,6 +639,80 @@ class TestScorer:
             assert row.status_reason.startswith(outcome)
         assert (await _lease(client)) is None
 
+    async def test_scorer_faults_never_reject_the_generator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Run d62c9ab8: a stale scorer refused cases_per_seed and Platform
+        rejected the generator. A fault, reported or legacy, backs off."""
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        sub_id = accepted["submission_id"]
+        work = await _lease(client)
+        fault = {
+            "work": "qualification",
+            "lease_id": work["lease_id"],
+            "run_id": work["run_id"],
+            "submission_id": sub_id,
+            "error_kind": "unsupported_request",
+            "detail": "generator request outside this scorer's contract: "
+            "request cases must be in 8..64",
+            "scorer_version": "challenge-scorer/4",
+        }
+        wrong = {**fault, "lease_id": str(uuid4())}
+        assert (
+            await client.post("/api/v1/generator-scorer/fault", json=fault)
+        ).status_code == 401
+        assert (
+            await client.post(
+                "/api/v1/generator-scorer/fault", headers=_SCORER, json=wrong
+            )
+        ).status_code == 409
+        resp = await client.post(
+            "/api/v1/generator-scorer/fault", headers=_SCORER, json=fault
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["action"] == "backed_off"
+        assert resp.json()["submission_status"] == "active"
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(sub_id))
+            run = await session.get(GeneratorRun, UUID(work["run_id"]))
+            assert row is not None and run is not None
+            assert row.status == "active" and row.lease_id is None
+            assert (row.status_reason or "").startswith("scorer fault")
+            assert row.next_run_at > datetime.now(UTC)
+            assert run.status == "abandoned"
+            assert run.outcome == "scorer_unsupported_request"
+            assert run.scorer_version == "challenge-scorer/4"
+        # Backing off: nothing to lease until the backoff passes.
+        assert (await _lease(client)) is None
+        # The run's result can no longer report.
+        assert (await _post(client, _result(work, tag="x"))).status_code == 409
+
+        # A legacy scorer reports its refusal as each seed's error.
+        await _make_due(session_maker, sub_id)
+        work = await _lease(client)
+        refusal = "request cases must be in 8..64"
+        legacy = _result(
+            work, tag="x", deterministic=None, seed_overrides={"error": refusal}
+        )
+        legacy["probe"]["error"] = refusal
+        resp = await _post(client, legacy)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "abandoned"
+        assert resp.json()["outcome"] == "scorer_unsupported_request"
+        assert resp.json()["submission_status"] == "active"
+
+        # Once a capable scorer runs it, it qualifies.
+        await _make_due(session_maker, sub_id)
+        work = await _lease(client)
+        assert (await _post(client, _result(work, tag="ok"))).json()[
+            "status"
+        ] == "qualified"
+
     async def test_results_must_match_the_lease(
         self,
         app: FastAPI,

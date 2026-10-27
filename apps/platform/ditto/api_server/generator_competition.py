@@ -26,6 +26,7 @@ import binascii
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,7 @@ from ditto.api_models.generator import (
     GeneratorCompetitionSettings,
     GeneratorResultRequest,
     GeneratorRunSummary,
+    GeneratorScorerFault,
     GeneratorSeedOutput,
     GeneratorSubmissionSummary,
 )
@@ -303,6 +305,31 @@ def _generator_failure(payload: GeneratorResultRequest) -> tuple[str, str] | Non
     return None
 
 
+# The messages challenge.GenerateRequest.Validate returns. A scorer before
+# genrun.ErrInvalidRequest wrote them into a seed's error as if the generator
+# had failed; they are the scorer refusing the request it was leased, never
+# the generator's output (generator failures are prefixed "generator ").
+_SCORER_REQUEST_ERROR = re.compile(
+    r"^request (contract|seed|miner_hotkey|cases|grading_bench_version) must "
+)
+
+
+def scorer_request_error(error: str | None) -> bool:
+    """Whether a reported generation error is the scorer refusing its request."""
+    return bool(error) and _SCORER_REQUEST_ERROR.match(error or "") is not None
+
+
+def _scorer_request_failure(payload: GeneratorResultRequest) -> str | None:
+    """A legacy scorer's request refusal reported as a seed error, if any."""
+    outputs = list(payload.seeds or ())
+    if payload.probe is not None:
+        outputs.append(payload.probe)
+    for output in outputs:
+        if scorer_request_error(output.error):
+            return output.error
+    return None
+
+
 def _reject(row: GeneratorSubmission, reason: str, *, now: datetime) -> None:
     row.status = "rejected"
     row.status_reason = reason[:1000]
@@ -358,6 +385,20 @@ async def record_result(
             else None
         ),
     }
+
+    refused = _scorer_request_failure(payload) if payload.build.ok else None
+    if refused is not None:
+        _back_off_for_scorer_fault(
+            row,
+            run,
+            settings=settings,
+            kind="unsupported_request",
+            detail=refused,
+            now=now,
+        )
+        return RecordedResult(
+            "abandoned", "scorer_unsupported_request", None, row.status
+        )
 
     failure = _generator_failure(payload)
     if failure is not None:
@@ -443,6 +484,66 @@ async def record_result(
         ) <= leased.replace(tzinfo=leased.tzinfo or UTC):
             row.qualified_at = now
     return RecordedResult("qualified", "qualified", None, row.status)
+
+
+def _back_off_for_scorer_fault(
+    row: GeneratorSubmission,
+    run: GeneratorRun,
+    *,
+    settings: GeneratorCompetitionSettings,
+    kind: str,
+    detail: str,
+    now: datetime,
+) -> None:
+    """Retire a run the scorer could not do, without blaming the generator.
+
+    The run's seeds were exposed, so it is abandoned, and the submission
+    stays active and backs off for ``retry_backoff_seconds`` (a stale scorer
+    would otherwise fail every lease in a tight loop).
+    """
+    finish_run(run, status="abandoned", outcome=f"scorer_{kind}", now=now)
+    clear_lease(row, now=now)
+    row.next_run_at = now + timedelta(seconds=settings.retry_backoff_seconds)
+    if row.status == "active":
+        row.status_reason = f"scorer fault ({kind}); retrying: {detail}"[:1000]
+    row.updated_at = now
+
+
+async def record_scorer_fault(
+    session: AsyncSession,
+    row: GeneratorSubmission,
+    run: GeneratorRun,
+    payload: GeneratorScorerFault,
+    *,
+    now: datetime,
+) -> RecordedResult:
+    """Apply a scorer-reported fault to a row-locked, leased run (caller commits)."""
+    if (
+        run.status != "leased"
+        or row.lease_id != payload.lease_id
+        or row.lease_run_id != run.run_id
+    ):
+        raise ResultRejected("lease is not current for this run")
+    expires = row.lease_expires_at
+    if expires is not None and expires.replace(tzinfo=expires.tzinfo or UTC) <= now:
+        raise ResultRejected("lease expired before the fault arrived")
+    settings = await settings_at(session, run.settings_revision)
+    run.scorer_version = payload.scorer_version
+    run.evaluation = {
+        "scorer_fault": {
+            "error_kind": payload.error_kind,
+            "detail": payload.detail[:2000],
+        }
+    }
+    _back_off_for_scorer_fault(
+        row,
+        run,
+        settings=settings,
+        kind=payload.error_kind,
+        detail=payload.detail,
+        now=now,
+    )
+    return RecordedResult("abandoned", f"scorer_{payload.error_kind}", None, row.status)
 
 
 def run_summary(
