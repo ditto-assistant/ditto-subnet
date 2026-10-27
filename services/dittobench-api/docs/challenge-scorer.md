@@ -24,7 +24,7 @@ Adoption requires the candidate executable to stay active with the same PID
 for ten seconds. The old process has up to 70 minutes to drain; after it exits,
 the candidate has one minute to start. A failed adoption restores `last-good`
 and requests another graceful restart. The exact failed digest is suppressed
-until a new descriptor is published or an operator removes
+for up to 24 hours, until a new descriptor is published, or until an operator removes
 `/opt/ditto-generator-scorer/failed-candidate`. The updater retains prior releases and refreshes
 itself only after successful adoption; an interrupted update keeps `last-good`
 available for the next attempt.

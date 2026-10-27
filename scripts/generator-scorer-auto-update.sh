@@ -16,7 +16,7 @@ cosign verify --certificate-identity 'https://github.com/ditto-assistant/ditto-s
 revision="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")"
 [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
 test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.generator-scorer.update-protocol" }}' "$exact")" = 1
-if [ -f "$ROOT/failed-candidate" ] && [ "$(cat "$ROOT/failed-candidate")" = "$exact" ]; then
+if [ -f "$ROOT/failed-candidate" ] && [ "$(cat "$ROOT/failed-candidate")" = "$exact" ] && [ -n "$(find "$ROOT/failed-candidate" -mmin -1440 -print -quit)" ]; then
   echo "generator-scorer-auto-update: failed candidate suppressed: $exact"
   exit 0
 fi
@@ -92,14 +92,17 @@ for ((attempt=0; attempt<${GENERATOR_SCORER_ADOPTION_POLLS:-840}; attempt++)); d
   sleep 5
 done
 if [ "$adopted" != true ]; then
-  printf '%s\n' "$exact" >"$ROOT/failed-candidate.next"
-  mv -f "$ROOT/failed-candidate.next" "$ROOT/failed-candidate"
   if [ -n "$previous" ]; then
     activate "$previous"
     systemctl kill --kill-whom=main --signal=SIGUSR1 "$UNIT" || true
     systemctl start "$UNIT" || true
   fi
-  echo 'generator-scorer-auto-update: activation failed; rollback requested and candidate suppressed' >&2
+  # Recording diagnostics must never prevent recovery (for example when the
+  # marker path is unwritable or the filesystem is full).
+  if ! { printf '%s\n' "$exact" >"$ROOT/failed-candidate.next" && mv -f "$ROOT/failed-candidate.next" "$ROOT/failed-candidate"; }; then
+    echo 'generator-scorer-auto-update: could not record failed candidate' >&2
+  fi
+  echo 'generator-scorer-auto-update: activation failed; rollback requested' >&2
   exit 1
 fi
 # Preserve the previous version for recovery; self-refresh only after adoption.

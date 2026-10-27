@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -13,7 +14,9 @@ OLD = "b" * 40
 DIGEST = "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "c" * 64
 
 
-@pytest.mark.parametrize("fault", ["none", "signature", "identity", "startup"])
+@pytest.mark.parametrize(
+    "fault", ["none", "signature", "identity", "startup", "marker"]
+)
 def test_signed_activation_and_failure_preserve_last_good(
     tmp_path: Path, fault: str
 ) -> None:
@@ -61,13 +64,14 @@ def test_signed_activation_and_failure_preserve_last_good(
         + " sys.exit(0)\n"
         + "if name=='systemctl':\n"
         + " if args[0]=='show':\n"
-        + "  print('0' if (root/'signaled').exists() and fault=='startup' else '42')\n"
+        + "  failed=(root/'signaled').exists() and fault in ('startup','marker')\n"
+        + "  print('0' if failed else '42')\n"
         + " if args[0]=='kill': (root/'signaled').touch()\n"
         + " sys.exit(0)\n"
         + "if name=='readlink':\n"
         + " if args[-1].startswith('/proc/'):\n"
         + f"  revision={REVISION!r}; old={OLD!r}\n"
-        + "  ready=(root/'signaled').exists() and fault!='startup'\n"
+        + "  ready=(root/'signaled').exists() and fault not in ('startup','marker')\n"
         + "  directory=root/'releases'/(revision if ready else old)\n"
         + "  print(directory/'challenge-scorer')\n"
         + " else: print(pathlib.Path(args[-1]).resolve())\n"
@@ -95,6 +99,8 @@ def test_signed_activation_and_failure_preserve_last_good(
         "TEST_FAULT": fault,
         "TEST_LOG": str(tmp_path / "calls"),
     }
+    if fault == "marker":
+        (release_root / "failed-candidate.next").mkdir()
     result = subprocess.run(
         ["bash", str(ROOT / "scripts/generator-scorer-auto-update.sh")],
         env=env,
@@ -131,4 +137,23 @@ def test_signed_activation_and_failure_preserve_last_good(
         )
         assert retry.returncode == 0, retry.stderr
         assert "systemctl" not in (tmp_path / "calls").read_text()
+        assert (release_root / "current").resolve() == previous
+
+        # A transient failure can be retried after the bounded suppression.
+        expired = time.time() - 25 * 3600
+        os.utime(release_root / "failed-candidate", (expired, expired))
+        (tmp_path / "calls").write_text("")
+        expired_retry = subprocess.run(
+            ["bash", str(ROOT / "scripts/generator-scorer-auto-update.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert expired_retry.returncode == 1, expired_retry.stderr
+        assert "SIGUSR1" in (tmp_path / "calls").read_text()
+        assert (release_root / "current").resolve() == previous
+    if fault == "marker":
+        assert not (release_root / "failed-candidate").exists()
+        assert "could not record failed candidate" in result.stderr
         assert (release_root / "current").resolve() == previous
