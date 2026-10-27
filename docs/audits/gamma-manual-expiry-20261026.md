@@ -88,6 +88,12 @@ After separately authorized custody adoption:
 4. A replacement transfer still needs a new preview and exact operator
    confirmation. Recovery itself grants no replacement payment authority.
 
+After recovery, keep a custody runtime that understands unsigned-expiry
+history. An older runtime can refuse a new intent at the reused operation
+cursor. Do not restore a stale backup to bypass that refusal: later signed
+claims may already exist. Stop manual dispatch and use a reviewed forward fix
+if runtime rollback is needed.
+
 ## Missing GM accounting
 
 The collector signs `transfer_stake`: collector SN118 alpha → GM holding
