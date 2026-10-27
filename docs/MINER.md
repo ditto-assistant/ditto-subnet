@@ -70,6 +70,17 @@ exposed to the public internet. LongMemEval remains a separately labeled
 offline score and is never folded into the Bench composite, KOTH rank,
 confirmation, or payout.
 
+The LongMemEval judge is `deepseek/deepseek-v4.1-flash` pinned to Together,
+the same judge the validator lane scores with, so a rehearsal number is
+comparable with the one production would produce. It is **not** LongMemEval's
+official `gpt-4o` judge, which is hard-coded upstream and retires on
+2027-01-14 (OpenAI API) and 2027-04-14 (Azure); the evaluator is Ditto's fork,
+whose recorded delta leaves the official prompts byte-identical
+(`docs/longmemeval-benchmark/judge-evaluator/`). A number from this path is a
+LongMemEval-S score under the Ditto judge profile, not an official-protocol
+LongMemEval score, and should not be compared with published LongMemEval
+results.
+
 Coding agents should load `/mine` (`.agents/skills/mine`) instead of treating
 `cargo run -- evaluate` as on-chain scoring.
 

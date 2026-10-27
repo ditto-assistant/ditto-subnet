@@ -214,6 +214,14 @@ jobs:
         working-directory: ${{ env.SERVICE_DIR }}
       - run: go test ./...
         working-directory: ${{ env.SERVICE_DIR }}
+      # The LongMemEval judge identity is shared by the Go scoring lane, the
+      # Python judge proxy, the result summariser and the miner rehearsal.
+      # These tests are what keep those from drifting -- they parse the Go
+      # lane's own constants and provider block -- and no other workflow ran
+      # them. Standard library only, so no dependency install.
+      - name: LongMemEval judge integration tests
+        working-directory: ${{ env.SERVICE_DIR }}/integrations/longmemeval
+        run: python3 -m unittest discover -s . -p 'test_*.py'
 
   docker-build:
     name: docker image builds (${{ matrix.target }})

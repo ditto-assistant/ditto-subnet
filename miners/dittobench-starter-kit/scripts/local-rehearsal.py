@@ -55,8 +55,6 @@ LONGMEM_DATASET_URL = (
     "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/"
     f"{LONGMEM_DATASET_REVISION}/longmemeval_s_cleaned.json"
 )
-LONGMEM_SOURCE_REVISION = "9e0b455f4ef0e2ab8f2e582289761153549043fc"
-LONGMEM_JUDGE_IMAGE = f"ditto-longmemeval-judge:{LONGMEM_SOURCE_REVISION[:12]}"
 LONGMEM_CONDITION = "longmemeval-s-cleaned-native-memory-tools-v2"
 TERMINAL_STATUSES = {"done", "failed"}
 SECRET_PATTERNS = (
@@ -67,6 +65,45 @@ SECRET_PATTERNS = (
 
 class RehearsalError(RuntimeError):
     """An actionable local-rehearsal failure."""
+
+
+_JUDGE_EVALUATOR: Any = None
+
+
+def judge_evaluator() -> Any:
+    """Load the judge identity shared with the production LongMemEval lane.
+
+    The evaluator is Ditto's fork of LongMemEval, not upstream. Upstream
+    hard-codes the retiring gpt-4o judge and pins max_tokens=10, which makes a
+    reasoning judge return an empty completion that upstream silently scores
+    "no" on every question. The fork raises the bound, refuses an empty
+    completion, and leaves the five prompt templates byte-identical. See
+    services/dittobench-api/integrations/longmemeval/judge_evaluator.py and
+    docs/longmemeval-benchmark/judge-evaluator/.
+
+    Loaded lazily: that module lives in the monorepo under
+    services/dittobench-api, which a standalone starter-kit checkout does not
+    have. Imported at module scope it would fail before ``parse_args`` ran, so
+    even ``--help`` would die with a traceback instead of reaching the
+    actionable ``API_DIR`` check in ``run``.
+    """
+    global _JUDGE_EVALUATOR
+    if _JUDGE_EVALUATOR is None:
+        if str(LONGMEM_DIR) not in sys.path:
+            sys.path.insert(0, str(LONGMEM_DIR))
+        try:
+            import judge_evaluator as module
+        except ImportError as exc:
+            raise RehearsalError(
+                "the LongMemEval judge identity ships with the ditto-subnet "
+                f"monorepo; missing {LONGMEM_DIR / 'judge_evaluator.py'}"
+            ) from exc
+        _JUDGE_EVALUATOR = module
+    return _JUDGE_EVALUATOR
+
+
+def longmem_judge_image() -> str:
+    return f"ditto-longmemeval-judge:{judge_evaluator().FORK_REVISION[:12]}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -320,22 +357,24 @@ def format_summary(run: dict[str, Any]) -> str:
 
 
 def format_longmem_summary(result: dict[str, Any]) -> str:
-    scope = (
-        "official full condition"
-        if result["official_full_condition"]
-        else "partial practice"
-    )
+    scope = "full condition" if result["full_condition"] else "partial practice"
     return "\n".join(
         [
             "",
             f"=== LongMemEval-S ({scope}) ===",
             f"condition: {result['condition']}",
+            f"judge:     {result['judge_model']} @{result['judge_route_provider']}",
             f"correct:   {result['correct']}/{result['n']}",
             f"accuracy:  {result['accuracy']:.6f}",
             f"abstention:{result['abstention_correct']}/{result['abstention_n']}",
             "",
             "LongMemEval is a separate offline adapter score. It is not folded",
             "into the Bench composite, KOTH rank, confirmation, or payout.",
+            "",
+            "This judge matches the one SN118 scores with in production. It is",
+            "NOT LongMemEval's official gpt-4o judge, so this number is not an",
+            "official-protocol LongMemEval score and must not be compared with",
+            "published LongMemEval results.",
         ]
     )
 
@@ -450,13 +489,53 @@ def scorer_environment(tmp: Path, broker_port: int) -> dict[str, str]:
 
 
 def longmem_judge_context() -> str:
+    judge = judge_evaluator()
     return (
-        "https://github.com/xiaowu0162/LongMemEval.git"
-        f"?ref=refs/heads/main&checksum={LONGMEM_SOURCE_REVISION}"
+        f"{judge.FORK_REPOSITORY}"
+        f"?ref={judge.FORK_REF}&checksum={judge.FORK_REVISION}"
     )
 
 
+def verify_longmem_judge_evaluator() -> None:
+    """Assert the evaluator inside the judge image is the recorded fork file.
+
+    The build context is already content-pinned by ``checksum=``, so this does
+    not guard the network. It guards this repository: if the recorded fork
+    revision and the recorded evaluator digest ever disagree -- a constant
+    bumped without the digest, or a digest bumped without the constant -- the
+    rehearsal must stop rather than score 500 questions with an evaluator whose
+    behaviour nobody reviewed.
+    """
+    judge = judge_evaluator()
+    completed = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "sha256sum",
+            longmem_judge_image(),
+            judge.EVALUATOR_PATH,
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=sanitized_build_env(),
+        check=True,
+    )
+    fields = completed.stdout.split()
+    observed = fields[0] if fields else ""
+    if observed != judge.FORK_EVALUATOR_SHA256:
+        raise RehearsalError(
+            "judge image carries evaluator sha256 "
+            f"{observed or '<unreadable>'}, expected "
+            f"{judge.FORK_EVALUATOR_SHA256} for fork revision "
+            f"{judge.FORK_REVISION}"
+        )
+
+
 def ensure_longmem_judge_image() -> None:
+    judge = judge_evaluator()
+    image = longmem_judge_image()
     inspected = subprocess.run(
         [
             "docker",
@@ -464,36 +543,40 @@ def ensure_longmem_judge_image() -> None:
             "inspect",
             "--format",
             '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
-            LONGMEM_JUDGE_IMAGE,
+            image,
         ],
         stdout=subprocess.PIPE,
         text=True,
         stderr=subprocess.DEVNULL,
         check=False,
     )
-    if (
-        inspected.returncode == 0
-        and inspected.stdout.strip() == LONGMEM_SOURCE_REVISION
-    ):
-        return
-    dockerfile = (LONGMEM_DIR / "Dockerfile.judge").read_bytes()
-    print("building the pinned official LongMemEval judge image...", flush=True)
-    subprocess.run(
-        [
-            "docker",
-            "build",
-            "--file",
-            "-",
-            "--label",
-            f"org.opencontainers.image.revision={LONGMEM_SOURCE_REVISION}",
-            "--tag",
-            LONGMEM_JUDGE_IMAGE,
-            longmem_judge_context(),
-        ],
-        input=dockerfile,
-        env=sanitized_build_env(),
-        check=True,
-    )
+    if inspected.returncode != 0 or inspected.stdout.strip() != judge.FORK_REVISION:
+        dockerfile = (LONGMEM_DIR / "Dockerfile.judge").read_bytes()
+        print(
+            "building the pinned LongMemEval judge image "
+            f"(Ditto fork {judge.FORK_REVISION[:12]} of upstream "
+            f"{judge.UPSTREAM_REVISION[:12]})...",
+            flush=True,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "build",
+                "--file",
+                "-",
+                "--label",
+                f"org.opencontainers.image.revision={judge.FORK_REVISION}",
+                "--label",
+                f"ai.heyditto.longmemeval.upstream={judge.UPSTREAM_REVISION}",
+                "--tag",
+                image,
+                longmem_judge_context(),
+            ],
+            input=dockerfile,
+            env=sanitized_build_env(),
+            check=True,
+        )
+    verify_longmem_judge_evaluator()
 
 
 def start_process(
@@ -535,19 +618,22 @@ def summarize_longmem(
         or not all(isinstance(value, str) and value for value in ids)
     ):
         raise RehearsalError(
-            "official LongMemEval judge returned "
+            "LongMemEval judge returned "
             f"{len(rows)} unique rows; expected {expected}"
         )
+    judge = judge_evaluator()
     labels: list[bool] = []
     abstention: list[bool] = []
     for row in rows:
         autoeval = row.get("autoeval_label")
         if (
             not isinstance(autoeval, dict)
-            or autoeval.get("model") != "gpt-4o-2024-08-06"
+            or autoeval.get("model") != judge.JUDGE_MODEL
         ):
+            recorded = autoeval.get("model") if isinstance(autoeval, dict) else None
             raise RehearsalError(
-                "LongMemEval output is not from the pinned official judge"
+                f"LongMemEval output was judged by {recorded!r}, not the pinned "
+                f"judge {judge.JUDGE_MODEL!r}"
             )
         label = autoeval.get("label")
         if not isinstance(label, bool):
@@ -556,22 +642,31 @@ def summarize_longmem(
         if str(row["question_id"]).endswith("_abs"):
             abstention.append(label)
     return {
-        "schema_version": 1,
+        # 2: the judge is no longer the official gpt-4o, so
+        # `official_full_condition` was renamed to `full_condition` and
+        # `official_protocol` added. A 500-question run is still a full
+        # condition; it is not an official-protocol LongMemEval score.
+        "schema_version": 2,
         "condition": LONGMEM_CONDITION,
         "bench_version": bench_version,
         "dataset_sha256": LONGMEM_DATASET_SHA256,
         "dataset_revision": LONGMEM_DATASET_REVISION,
-        "source_revision": LONGMEM_SOURCE_REVISION,
+        "source_revision": judge.FORK_REVISION,
+        "upstream_revision": judge.UPSTREAM_REVISION,
+        "evaluator_sha256": judge.FORK_EVALUATOR_SHA256,
         "reader_model": "openai/gpt-4.1",
         "reader_profile": "longmemeval-openrouter-gpt41-reader-v1",
-        "judge_model": "gpt-4o-2024-08-06",
-        "judge_profile": "longmemeval-official-gpt4o-openrouter-v1",
+        "judge_model": judge.JUDGE_MODEL,
+        "judge_profile": judge.JUDGE_PROFILE_REVISION,
+        "judge_max_completion_tokens": judge.JUDGE_MAX_COMPLETION_TOKENS,
+        "judge_route_provider": judge.JUDGE_ROUTE_PROVIDER,
+        "official_protocol": judge.OFFICIAL_PROTOCOL,
         "n": len(labels),
         "correct": sum(labels),
         "accuracy": round(sum(labels) / len(labels), 6),
         "abstention_n": len(abstention),
         "abstention_correct": sum(abstention),
-        "official_full_condition": limit is None and len(labels) == 500,
+        "full_condition": limit is None and len(labels) == 500,
         "evaluation_sha256": sha256_file(evaluation_path),
     }
 
@@ -718,15 +813,20 @@ def run_longmem(
                 f"type=bind,src={tmp},dst=/results",
                 "--mount",
                 f"type=bind,src={dataset},dst=/data/longmemeval_s_cleaned.json,readonly",
-                LONGMEM_JUDGE_IMAGE,
-                "gpt-4o",
+                longmem_judge_image(),
+                judge_evaluator().JUDGE_SHORT_NAME,
                 "/results/longmemeval-hypotheses.jsonl",
                 "/data/longmemeval_s_cleaned.json",
             ],
             env=sanitized_build_env(),
             check=True,
         )
-        evaluation = tmp / "longmemeval-hypotheses.jsonl.eval-results-gpt-4o"
+        evaluation = tmp / (
+            "longmemeval-hypotheses.jsonl"
+            + judge_evaluator().evaluation_suffix(
+                judge_evaluator().JUDGE_SHORT_NAME
+            )
+        )
         result = summarize_longmem(
             evaluation,
             limit=args.longmem_limit,
