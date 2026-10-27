@@ -111,7 +111,7 @@ describe('Backroom MCP tools', () => {
 
   it('gates funding reconciliation writes and preserves the authenticated actor', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
-    const fetchMock = vi.fn().mockResolvedValue(Response.json({ confirmation_digest: 'a'.repeat(64), confirmation: 'RECORD GM FUNDING HISTORY ' + 'a'.repeat(64), purchases: 1, credited_usd_cents: 25000, verification_level: 'operator_reconciled', spending_authority: 'none', inserted: 1, replayed: 0 }))
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ confirmation_digest: 'a'.repeat(64), confirmation: 'RECORD GM FUNDING HISTORY ' + 'a'.repeat(64), purchases: 1, credited_usd_cents: 25000, verification_level: 'operator_reconciled', spending_authority: 'none', inserted: 1, replayed: 0 }))
     vi.stubGlobal('fetch', fetchMock)
     const batch = { holding_wallet: '5' + 'a'.repeat(47), reason: 'Reconcile historical funding', records: [{ purchase: { purchase_id: '11111111-2222-4333-8444-555555555555', occurred_at: '2026-01-01T00:00:30Z', credited_usd_cents: 25000 }, payment: { reference: '9000000-3', kind: 'payment', occurred_at: '2026-01-01T00:00:00Z', input_asset: 'TAO', input_amount_atomic: '2000000000' } }] }
     const input = { batchJson: JSON.stringify(batch), confirmation_digest: 'a'.repeat(64), confirmation: 'RECORD GM FUNDING HISTORY ' + 'a'.repeat(64) }
@@ -124,6 +124,12 @@ describe('Backroom MCP tools', () => {
     try {
       expect((await writer.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: { ...input, confirmation: 'yes' } })).isError).toBe(true)
       expect(fetchMock).not.toHaveBeenCalled()
+      const forged = await writer.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: { ...input, actor: 'forged@example.com' } })
+      if (!forged.isError) {
+        const [, forgedInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(new Headers(forgedInit.headers).get('X-Admin-Actor')).toBe(session.email)
+      }
+      fetchMock.mockClear()
       expect((await writer.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: input })).isError).not.toBe(true)
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/admin/treasury-funding')

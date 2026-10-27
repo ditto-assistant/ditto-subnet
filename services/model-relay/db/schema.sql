@@ -13282,6 +13282,13 @@ CREATE TRIGGER treasury_funding_immutable BEFORE DELETE OR UPDATE ON public.trea
 
 
 --
+-- Name: treasury_funding_reconciliations treasury_funding_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_funding_no_truncate BEFORE TRUNCATE ON public.treasury_funding_reconciliations FOR EACH STATEMENT EXECUTE FUNCTION public.reject_treasury_funding_mutation();
+
+
+--
 -- Name: treasury_public_events treasury_public_events_immutable; Type: TRIGGER; Schema: public; Owner: -
 --
 

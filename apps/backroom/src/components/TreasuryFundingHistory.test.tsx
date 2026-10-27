@@ -27,3 +27,17 @@ it('shows completed credits with explicit evidence limits and existing TAO', () 
   expect(screen.getByText(/GM has not supplied a transaction attestation/)).toBeTruthy()
   expect(screen.getByRole('link', { name: /9000000-3/ }).getAttribute('href')).toBe('https://bittensor.ai/explorer/extrinsic/9000000-3')
 })
+
+it('renders repeated conversion references without duplicate React keys', () => {
+  const conversion = { reference: '8999990-1', kind: 'swap', occurred_at: '2025-12-31T23:58:00Z', input_asset: 'SN118_ALPHA', input_amount_atomic: '1000000000', output_asset: 'SN28_ALPHA', output_amount_atomic: '200000000' }
+  const state = fundingHistorySchema.parse({ ...empty, items: [{
+    holding_wallet: '5' + 'a'.repeat(47), actor: 'operator@example.com', recorded_at: '2026-01-01T00:01:00Z', verification_level: 'operator_reconciled',
+    record: { purchase: { purchase_id: '11111111-2222-4333-8444-555555555555', occurred_at: '2026-01-01T00:00:30Z', credited_usd_cents: 25000 }, payment: { reference: '9000000-3', kind: 'payment', occurred_at: '2026-01-01T00:00:00Z', input_asset: 'TAO', input_amount_atomic: '2000000000' }, earlier_conversions: [conversion, conversion] },
+  }] })
+  const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+  try {
+    render(<TreasuryFundingHistory initialState={state} />)
+    expect(screen.getAllByRole('link', { name: /8999990-1/ })).toHaveLength(2)
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key|unique.*key/i)
+  } finally { errors.mockRestore() }
+})

@@ -139,6 +139,7 @@ async def test_exact_confirmation_and_wallet_required(session_maker):
     "sql",
     [
         "DELETE FROM treasury_funding_reconciliations",
+        "TRUNCATE treasury_funding_reconciliations",
         "UPDATE treasury_funding_reconciliations SET actor='changed'",
     ],
 )
@@ -147,6 +148,8 @@ async def test_database_prevents_audit_mutation(session_maker, sql):
     with pytest.raises(DBAPIError, match="append only"):
         async with session_maker() as session, session.begin():
             await session.execute(text(sql))
+    async with session_maker() as session:
+        assert await session.scalar(select(TreasuryFundingReconciliation.purchase_id))
 
 
 @pytest.mark.parametrize("field,value", [("status", "pending"), ("method", "stripe")])
@@ -163,3 +166,71 @@ async def test_unknown_fields_do_not_change_digest():
     raw["untrusted_proof"] = "verified"
     raw["records"][0]["purchase"]["unknown"] = True
     assert FundingBatch.model_validate(raw).digest == value.digest
+
+
+async def test_endpoint_requires_service_auth_and_preserves_operator_header(
+    app, client, session_maker
+):
+    from dataclasses import replace
+
+    from ditto.api_server.dependencies import get_session
+
+    token = "funding-test-service-token-at-least-32-characters"
+    app.state.config = replace(app.state.config, admin_api_token=token)
+
+    async def sessions():
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = sessions
+    payload = submit(batch()).model_dump(mode="json")
+    payload["actor"] = "forged@example.com"
+    url = "/api/v1/admin/treasury-funding"
+    assert (
+        await client.post(
+            url, headers={"X-Admin-Actor": "forged@example.com"}, json=payload
+        )
+    ).status_code == 401
+    headers = {"Authorization": f"Bearer {token}"}
+    assert (await client.post(url, headers=headers, json=payload)).status_code == 422
+    response = await client.post(
+        url, headers={**headers, "X-Admin-Actor": "signed-in@example.com"}, json=payload
+    )
+    assert response.status_code == 200, response.text
+    assert response.headers["cache-control"] == "no-store"
+    async with session_maker() as session:
+        row = await session.scalar(select(TreasuryFundingReconciliation))
+        assert row.actor == "signed-in@example.com"
+
+
+async def test_empty_migration_downgrade_and_upgrade_roundtrip(engine):
+    import importlib.util
+    from pathlib import Path
+
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "alembic/versions/2026_10_27_zzzzzz_add_treasury_funding_reconciliations.py"
+    )
+    spec = importlib.util.spec_from_file_location("funding_migration", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def roundtrip(connection):
+        with Operations.context(MigrationContext.configure(connection)):
+            module.downgrade()
+            assert (
+                connection.scalar(
+                    text("SELECT to_regclass('treasury_funding_reconciliations')")
+                )
+                is None
+            )
+            module.upgrade()
+            assert connection.scalar(
+                text("SELECT to_regclass('treasury_funding_reconciliations')")
+            )
+
+    async with engine.begin() as connection:
+        await connection.run_sync(roundtrip)

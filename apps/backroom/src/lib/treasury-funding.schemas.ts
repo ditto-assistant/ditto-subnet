@@ -35,18 +35,18 @@ export const fundingSubmitSchema = z.object({
 })
 export const fundingPreviewSchema = z.object({
   confirmation_digest: z.string().regex(/^[0-9a-f]{64}$/), confirmation: z.string(),
-  purchases: z.number().int(), credited_usd_cents: z.number().int(),
+  purchases: z.number().int().nonnegative(), credited_usd_cents: z.number().int().nonnegative(),
   verification_level: z.literal('operator_reconciled'), spending_authority: z.literal('none'),
 })
-export const fundingResultSchema = fundingPreviewSchema.extend({ inserted: z.number().int(), replayed: z.number().int() })
+export const fundingResultSchema = fundingPreviewSchema.extend({ inserted: z.number().int().nonnegative(), replayed: z.number().int().nonnegative() })
 export const fundingHistorySchema = z.object({
   items: z.array(z.object({
     holding_wallet: z.string(), record: fundingRecordSchema, actor: z.string(), recorded_at: z.string(),
     verification_level: z.literal('operator_reconciled'),
   })).max(500),
   truncated: z.boolean(), totals_scope: z.literal('returned_records'),
-  credited_usd_cents: z.number().int(), tao_paid_rao: z.string().regex(/^[0-9]+$/),
-  distinct_conversions: z.number().int(), automatic_topups_enabled: z.literal(false),
+  credited_usd_cents: z.number().int().nonnegative(), tao_paid_rao: z.string().regex(/^[0-9]+$/),
+  distinct_conversions: z.number().int().nonnegative(), automatic_topups_enabled: z.literal(false),
   spending_authority: z.literal('none'),
 })
 export type FundingHistory = z.infer<typeof fundingHistorySchema>

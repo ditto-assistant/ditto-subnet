@@ -35,6 +35,12 @@ def upgrade():
       BEFORE UPDATE OR DELETE ON treasury_funding_reconciliations
       FOR EACH ROW EXECUTE FUNCTION reject_treasury_funding_mutation()""")
 
+    op.execute(
+        "CREATE TRIGGER treasury_funding_no_truncate BEFORE TRUNCATE "
+        "ON treasury_funding_reconciliations FOR EACH STATEMENT "
+        "EXECUTE FUNCTION reject_treasury_funding_mutation()"
+    )
+
 
 def downgrade():
     if op.get_bind().scalar(
@@ -43,6 +49,9 @@ def downgrade():
         raise RuntimeError("Funding audit history prevents downgrade")
     op.execute(
         "DROP TRIGGER treasury_funding_immutable ON treasury_funding_reconciliations"
+    )
+    op.execute(
+        "DROP TRIGGER treasury_funding_no_truncate ON treasury_funding_reconciliations"
     )
     op.execute("DROP FUNCTION reject_treasury_funding_mutation()")
     op.drop_table("treasury_funding_reconciliations")

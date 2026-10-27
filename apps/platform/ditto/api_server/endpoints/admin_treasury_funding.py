@@ -43,6 +43,9 @@ async def record_history(
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> dict[str, Any]:
     response.headers["Cache-Control"] = "no-store"
+    # require_admin authenticates the trusted Backroom service bearer, not
+    # an end-user token. Backroom supplies this header from its live session;
+    # deriving an operator from the shared bearer would lose attribution.
     actor = (x_admin_actor or "").strip()
     if not actor or len(actor) > 254 or not actor.isprintable():
         raise HTTPException(422, "Backroom operator audit actor required")
