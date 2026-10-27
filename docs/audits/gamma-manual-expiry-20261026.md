@@ -105,6 +105,12 @@ rows and no conversion, vendor-payment, or GM-credit rows. The later manual
 transfers have independent wallet-movement receipts with incomplete source
 attribution. Neither store proves the downstream GM funding flow.
 
+The live Backroom settings read also shows empty GM `payee_rules` in every
+retained revision (1–5). Existing vendor-payment ingestion requires a matching
+historical rule. Holding-wallet receipts therefore cannot automatically become
+classified GM payments. Do not rewrite those historical policies or change
+emission allocation to paper over missing payment classifications.
+
 For existing manual funding, link each independently decoded SN118 sale and
 TAO proceeds to the holding wallet, each finalized TAO transfer to GM's current
 account instructions, and the corresponding authenticated GM credited deposit.
@@ -113,8 +119,19 @@ double-count a holding transfer, sale and payment as three purchases.
 
 GM's current [top-up documentation](https://saygm.com/topup.md) and
 [Account API](https://account.saygm.com/v1/openapi.json) expose authenticated
-`GET /v1/wallet-deposits` and `GET /v1/balance`. The billing browser was signed
-out during diagnosis, so provider receipts were not verified. Account access
-and the operator's confirmation of which downstream steps already occurred
-are needed to backfill truthful purchase records. No sale, TAO payment,
-provider-credit publication or account-linking action was performed here.
+`GET /v1/wallet-deposits` and `GET /v1/balance`. Authenticated billing inspection
+shows that completed `x402-relayed` purchases can exist while the wallet-deposit
+receipt list is empty. That list alone is therefore insufficient for this
+accounting path. The purchase summaries include IDs, credited amounts and
+timestamps but no chain transaction reference. Keep time-correlated payment
+candidates distinct from provider-attested links; do not infer payment failure
+from the empty CLI deposit list.
+
+Public holding-wallet activity also includes an SN118 → SN28 conversion before
+SN28 unstaking, split payments after one sale, payments using an existing TAO
+balance, and failed `batch_all` attempts. Preserve those distinct effects;
+never copy an entire sale amount onto every nearby payment or count failed
+swaps as completed conversions. Source attribution and opening cash remain
+separate reconciliation items. Private purchase IDs and billing evidence are
+kept out of repository history. No sale, TAO payment, provider-credit
+publication or account-linking action was performed here.
