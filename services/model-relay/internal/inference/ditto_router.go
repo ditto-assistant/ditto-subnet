@@ -132,7 +132,7 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 	if _, _, providerError := providerErrorEnvelope(decodedMap); providerError {
 		return nil, exhausted("provider_unavailable", result.attempts, false)
 	}
-	if m, isString := decodedMap["model"].(string); !isString || m == "" {
+	if m, isString := decodedMap["model"].(string); !isString || m != model {
 		return nil, exhausted("provider_identity_mismatch", result.attempts, false)
 	}
 	prompt, completion, usageOk := boundedUsage(decodedMap)

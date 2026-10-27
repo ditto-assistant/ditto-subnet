@@ -99,3 +99,16 @@ func TestCompleteChatViaDittoRouterRejectsAResponseWithoutUsage(t *testing.T) {
 		t.Fatalf("exhausted: %+v", exhausted)
 	}
 }
+
+func TestCompleteChatViaDittoRouterRejectsDifferentFrozenModel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"different-model","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":3,"cost":0.0004}}`))
+	}))
+	defer srv.Close()
+	cfg, router := dittoRouterTestConfig(srv.URL)
+	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
+		map[string]any{"model": "frozen-model"}, "frozen-model", "u", nil, func(context.Context, time.Duration) {})
+	if result != nil || exhausted == nil || exhausted.terminalErrorCode != "provider_identity_mismatch" {
+		t.Fatalf("a different endpoint model must not be accepted: %+v / %+v", result, exhausted)
+	}
+}
