@@ -6,7 +6,7 @@ ROOT = Path(__file__).parents[2]
 
 
 def test_datagen_full_suite_has_same_bounded_timeout_everywhere() -> None:
-    command = "go test -timeout 20m ./..."
+    command = "go test -timeout 40m ./..."
     ci = yaml.safe_load((ROOT / ".github/workflows/datagen-ci.yml").read_text())
     assert (
         next(s for s in ci["jobs"]["build-test"]["steps"] if s.get("name") == "Test")[
