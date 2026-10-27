@@ -4356,9 +4356,11 @@ CREATE TABLE public.generator_submissions (
     public_default boolean DEFAULT false NOT NULL,
     round_score double precision,
     round_scored_index bigint,
+    name text,
     CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_name_check CHECK (((name IS NULL) OR ((char_length(name) >= 1) AND (char_length(name) <= 64)))),
     CONSTRAINT ck_generator_submissions_generator_submissions_size_check CHECK (((size_bytes > 0) AND (size_bytes = octet_length(source_bytes)) AND (size_bytes <= 4194304))),
     CONSTRAINT ck_generator_submissions_generator_submissions_status_check CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'rejected'::text])))
 );
