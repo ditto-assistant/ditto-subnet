@@ -41,7 +41,7 @@ func TestCompleteChatViaDittoRouterShapesASuccess(t *testing.T) {
 	cfg, router := dittoRouterTestConfig(srv.URL)
 	payload := map[string]any{"model": "dittobench-competition", "messages": []any{map[string]any{"role": "user", "content": "hello"}}}
 	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router, payload,
-		"dittobench-competition", "ditto-user-1", func(context.Context, time.Duration) {})
+		"dittobench-competition", "ditto-user-1", nil, func(context.Context, time.Duration) {})
 	if exhausted != nil {
 		t.Fatalf("exhausted: %+v", exhausted)
 	}
@@ -72,7 +72,7 @@ func TestCompleteChatViaDittoRouterReportsPaymentRequiredDistinctly(t *testing.T
 	defer srv.Close()
 	cfg, router := dittoRouterTestConfig(srv.URL)
 	result, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
-		map[string]any{"model": "m"}, "m", "ditto-user-2", func(context.Context, time.Duration) {})
+		map[string]any{"model": "m"}, "m", "ditto-user-2", nil, func(context.Context, time.Duration) {})
 	if result != nil || exhausted == nil {
 		t.Fatalf("expected an exhausted outcome, got %+v / %+v", result, exhausted)
 	}
@@ -94,7 +94,7 @@ func TestCompleteChatViaDittoRouterRejectsAResponseWithoutUsage(t *testing.T) {
 	defer srv.Close()
 	cfg, router := dittoRouterTestConfig(srv.URL)
 	_, exhausted := completeChatViaDittoRouter(context.Background(), srv.Client(), cfg, router,
-		map[string]any{"model": "m"}, "m", "u", func(context.Context, time.Duration) {})
+		map[string]any{"model": "m"}, "m", "u", nil, func(context.Context, time.Duration) {})
 	if exhausted == nil || exhausted.terminalErrorCode != "invalid_provider_response" {
 		t.Fatalf("exhausted: %+v", exhausted)
 	}

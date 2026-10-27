@@ -946,6 +946,20 @@ def parse_treasury_shadow_approval(
 def parse_ditto_link_config_from_env() -> DittoLinkConfig:
     """``DITTO_LINK_*``: Sign in with Ditto as a relying party. Off by default."""
     enabled = os.environ.get("DITTO_LINK_ENABLED", "false").strip().lower() in _TRUTHY
+    require_competition_account = (
+        os.environ.get("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", "false")
+        .strip()
+        .lower()
+        in _TRUTHY
+    )
+    if require_competition_account and not enabled:
+        raise ApiServerConfigError(
+            "DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT requires DITTO_LINK_ENABLED"
+        )
+    scopes = os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
+    scopes = scopes or "openid email"
+    if require_competition_account and "credits:spend" not in scopes.split():
+        scopes += " credits:spend"
     try:
         timeout_seconds = float(os.environ.get("DITTO_LINK_TIMEOUT_SECONDS", "10"))
     except ValueError as error:
@@ -963,8 +977,7 @@ def parse_ditto_link_config_from_env() -> DittoLinkConfig:
         return_url=os.environ.get(
             "DITTO_LINK_RETURN_URL", "https://dittobench.ai/#/reviews"
         ).strip(),
-        scopes=os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
-        or "openid email",
+        scopes=scopes,
         timeout_seconds=timeout_seconds,
         callback_challenge_token=os.environ.get(
             "DITTO_CALLBACK_CHALLENGE_TOKEN", ""

@@ -489,7 +489,7 @@ func TestDittoRouterDefaultsOffAndFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.DittoRouter.Enabled || cfg.DittoRouter.RoutesLane(DittoRouterLaneCompetition) || cfg.DittoRouter.RoutesLane(DittoRouterLaneScreener) {
+	if cfg.DittoRouter.Enabled || cfg.DittoRouter.RequireCompetitionAccount || cfg.DittoRouter.RoutesLane(DittoRouterLaneCompetition) || cfg.DittoRouter.RoutesLane(DittoRouterLaneScreener) {
 		t.Fatalf("ditto router must default off: %+v", cfg.DittoRouter)
 	}
 	if cfg.DittoRouter.URL != "https://inference.heyditto.ai/v1/chat/completions" || cfg.DittoRouter.OnBehalfOfHeader != "X-Ditto-On-Behalf-Of" {
@@ -523,6 +523,30 @@ func TestDittoRouterDefaultsOffAndFailsClosed(t *testing.T) {
 	env["DITTO_ROUTER_LANES"] = "everything"
 	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "unknown lane") {
 		t.Fatalf("unknown lane must fail boot, got %v", err)
+	}
+}
+
+func TestDittoRouterRequiredAccountNeedsCompetitionRouting(t *testing.T) {
+	env := minimalEnv()
+	env["DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT"] = "true"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT") {
+		t.Fatalf("requiring accounts with the upstream off must fail boot: %v", err)
+	}
+	env["DITTO_ROUTER_UPSTREAM_ENABLED"] = "true"
+	env["DITTO_ROUTER_API_KEY"] = "dk_test"
+	env["DITTO_ROUTER_LANES"] = "screener"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "competition lane") {
+		t.Fatalf("requiring accounts without competition routing must fail boot: %v", err)
+	}
+	env["DITTO_ROUTER_LANES"] = "competition"
+	env["DITTO_ROUTER_COMPETITION_ACK"] = CompetitionAckValue
+	cfg, err := Load(MapLookup(env))
+	if err != nil || !cfg.DittoRouter.RequireCompetitionAccount {
+		t.Fatalf("valid account-required config: %+v %v", cfg, err)
+	}
+	env["DITTO_ROUTER_ON_BEHALF_OF_HEADER"] = "Authorization"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "identity header") {
+		t.Fatalf("account identity must not replace the Router credential: %v", err)
 	}
 }
 

@@ -26,6 +26,16 @@ import (
 
 const dittoRouterRoute = "ditto-router"
 
+// dittoRouterAttribution comes from the verified grant and signed request,
+// never caller-supplied headers. The grant identifies this evaluation attempt;
+// the nonce identifies one operation within it.
+type dittoRouterAttribution struct {
+	GrantID string
+	Nonce   string
+	AgentID string
+	Stage   string
+}
+
 // dittoRouterOnBehalfOf resolves the consenting Ditto account for an agent.
 // A missing link, a revoked link, or a lookup error all mean "not routed" —
 // attribution can fail closed without failing the request.
@@ -56,6 +66,17 @@ func dittoRouterHeaders(cfg config.DittoRouterConfig, onBehalfOf string) map[str
 	}
 }
 
+func dittoRouterAttributedHeaders(cfg config.DittoRouterConfig, onBehalfOf string, attribution *dittoRouterAttribution) map[string]string {
+	headers := dittoRouterHeaders(cfg, onBehalfOf)
+	if attribution != nil {
+		headers["X-Ditto-Evaluation-Grant"] = attribution.GrantID
+		headers["X-Ditto-Evaluation-Request"] = attribution.Nonce
+		headers["X-Ditto-Evaluation-Agent"] = attribution.AgentID
+		headers["X-Ditto-Evaluation-Stage"] = attribution.Stage
+	}
+	return headers
+}
+
 // completeChatViaDittoRouter performs one Router call and shapes the result
 // like the OpenRouter path so settlement, tracing and the wire response stay
 // identical. Provider preferences and the OpenRouter-only recovery ladder do
@@ -63,6 +84,7 @@ func dittoRouterHeaders(cfg config.DittoRouterConfig, onBehalfOf string) map[str
 // (the endpoint's locked model on the competition lane).
 func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	router config.DittoRouterConfig, payload map[string]any, model, onBehalfOf string,
+	attribution *dittoRouterAttribution,
 	sleep sleepFunc) (*chatCompletionResult, *chatProviderExhausted) {
 
 	sent, _ := json.Marshal(payload)
@@ -78,7 +100,7 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 			phases:            []phaseTrace{trace},
 		}
 	}
-	result, callErr := postProviderWithRetry(ctx, client, router.URL, payload, dittoRouterHeaders(router, onBehalfOf),
+	result, callErr := postProviderWithRetry(ctx, client, router.URL, payload, dittoRouterAttributedHeaders(router, onBehalfOf, attribution),
 		cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
 	if callErr != nil {
 		code := "provider_transport"
