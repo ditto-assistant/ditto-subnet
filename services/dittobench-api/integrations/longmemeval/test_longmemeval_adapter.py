@@ -34,7 +34,11 @@ from openrouter_reader_proxy import (
 from openrouter_reader_proxy import (
     rewrite_request as rewrite_reader_request,
 )
-from summarize_results import resolve_judge, summarize_agent
+from summarize_results import (
+    is_official_protocol,
+    resolve_judge,
+    summarize_agent,
+)
 
 
 def fixture_entry():
@@ -372,6 +376,35 @@ class JudgeMetadataTests(unittest.TestCase):
                 "some/unreviewed-judge",
             )
 
+
+    def test_an_explicitly_empty_override_does_not_borrow_a_known_identity(self):
+        """`--judge-short-name ''` means "I have no value", not "use theirs".
+
+        Falling back would publish a known judge's short name, and that name
+        selects the .eval-results-* artifact the numbers are read from.
+        """
+        with self.assertRaises(ValueError) as caught:
+            resolve_judge(
+                judge_evaluator.OFFICIAL_JUDGE_MODEL, short_name=""
+            )
+        self.assertIn("--judge-short-name", str(caught.exception))
+
+    def test_official_protocol_requires_the_official_short_name(self):
+        """The short name is part of the identity, and picks the artifact."""
+        judge = resolve_judge(
+            judge_evaluator.OFFICIAL_JUDGE_MODEL, short_name="substituted"
+        )
+        self.assertFalse(
+            is_official_protocol(judge),
+            "a run reading .eval-results-substituted must not be stamped "
+            "official_protocol",
+        )
+        self.assertTrue(
+            is_official_protocol(
+                resolve_judge(judge_evaluator.OFFICIAL_JUDGE_MODEL)
+            ),
+            "the unmodified official identity must still mark official_protocol",
+        )
 
 class RecordingHandler(BaseHTTPRequestHandler):
     requests = []

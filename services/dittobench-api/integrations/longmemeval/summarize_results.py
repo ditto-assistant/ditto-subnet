@@ -104,11 +104,25 @@ def resolve_judge(
     report carrying someone else's provenance.
     """
     known = KNOWN_JUDGES.get(judge_model, {})
+    # `is None` rather than `or`: an explicitly empty --judge-short-name is a
+    # caller saying "I have no value for this", and silently substituting the
+    # known judge's would publish an identity nobody asked for. Only an omitted
+    # field defaults; an empty one falls through to the missing-field error.
     resolved = {
         "model": judge_model,
-        "short_name": short_name or known.get("short_name"),
-        "openrouter_model": openrouter_model or known.get("openrouter_model"),
-        "profile_revision": profile_revision or known.get("profile_revision"),
+        "short_name": (
+            known.get("short_name") if short_name is None else short_name
+        ),
+        "openrouter_model": (
+            known.get("openrouter_model")
+            if openrouter_model is None
+            else openrouter_model
+        ),
+        "profile_revision": (
+            known.get("profile_revision")
+            if profile_revision is None
+            else profile_revision
+        ),
     }
     missing = sorted(key for key, value in resolved.items() if not value)
     if missing:
@@ -119,6 +133,23 @@ def resolve_judge(
             "judge's identity"
         )
     return resolved
+
+
+def is_official_protocol(judge: dict[str, str]) -> bool:
+    """True only when every field of the identity is the official judge's.
+
+    Not the model alone: the official model served through another OpenRouter
+    route or profile revision is not the official protocol either, and the
+    short name selects which .eval-results-* artifact the numbers were read
+    from -- a report stamped from `.eval-results-substituted` would be claiming
+    provenance it does not have.
+    """
+    return (
+        judge["model"] == OFFICIAL_JUDGE_MODEL
+        and judge["short_name"] == OFFICIAL_JUDGE_SHORT_NAME
+        and judge["openrouter_model"] == OFFICIAL_JUDGE_OPENROUTER_MODEL
+        and judge["profile_revision"] == OFFICIAL_JUDGE_PROFILE_REVISION
+    )
 
 
 def sha256(path: Path) -> str:
@@ -291,11 +322,7 @@ def main() -> None:
             "official_model": judge["model"],
             "openrouter_model": judge["openrouter_model"],
             "profile_revision": judge["profile_revision"],
-            "official_protocol": (
-                judge["model"] == OFFICIAL_JUDGE_MODEL
-                and judge["openrouter_model"] == OFFICIAL_JUDGE_OPENROUTER_MODEL
-                and judge["profile_revision"] == OFFICIAL_JUDGE_PROFILE_REVISION
-            ),
+            "official_protocol": is_official_protocol(judge),
         },
         "agents": agents,
     }

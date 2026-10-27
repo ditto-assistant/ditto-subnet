@@ -125,13 +125,22 @@ def judge_provider_routing() -> dict[str, object]:
 
 
 def judge_identity() -> dict[str, object]:
-    """Judge identity for a report, health response or provenance manifest."""
+    """Judge identity for a report, health response or provenance manifest.
+
+    Carries the whole routing contract, not just the provider pin. A consumer
+    comparing two runs has to be able to tell the production lane from one that
+    allowed fallbacks, skipped ``require_parameters`` or permitted data
+    collection -- those change which endpoint answered, so a report that omits
+    them describes a judge it cannot actually identify.
+    """
     return {
         "short_name": JUDGE_SHORT_NAME,
         "model": JUDGE_MODEL,
         "profile_revision": JUDGE_PROFILE_REVISION,
         "max_completion_tokens": JUDGE_MAX_COMPLETION_TOKENS,
         "route_provider": JUDGE_ROUTE_PROVIDER,
+        "receipt_provider": JUDGE_RECEIPT_PROVIDER,
+        "provider_routing": judge_provider_routing(),
         "zero_data_retention": JUDGE_ZERO_DATA_RETENTION,
         "official_protocol": OFFICIAL_PROTOCOL,
         "evaluator": {

@@ -332,6 +332,25 @@ class ProductionParityTests(unittest.TestCase):
             "miners would rehearse against a grader that does not score them",
         )
 
+    def test_judge_identity_carries_the_whole_routing_contract(self):
+        """A report must be able to identify the lane that produced it.
+
+        route_provider alone does not: two runs pinned to the same provider but
+        differing on fallbacks, require_parameters or data collection reached
+        different endpoints and would serialize identically.
+        """
+        identity = judge_evaluator.judge_identity()
+        self.assertEqual(
+            identity["receipt_provider"], judge_evaluator.JUDGE_RECEIPT_PROVIDER
+        )
+        self.assertEqual(
+            identity["provider_routing"],
+            judge_evaluator.judge_provider_routing(),
+        )
+        self.assertEqual(
+            identity["provider_routing"], go_provider_block(identity["route_provider"])
+        )
+
     def test_the_provider_block_matches_the_production_lane(self):
         """A subset of the production block is rejected, not widened.
 
