@@ -60,7 +60,8 @@ def test_signed_activation_and_failure_preserve_last_good(
         + "  shutil.copytree(os.environ['TEST_BUNDLE'],args[2],dirs_exist_ok=True)\n"
         + " sys.exit(0)\n"
         + "if name=='systemctl':\n"
-        + " if args[0]=='show': print('42')\n"
+        + " if args[0]=='show':\n"
+        + "  print('0' if (root/'signaled').exists() and fault=='startup' else '42')\n"
         + " if args[0]=='kill': (root/'signaled').touch()\n"
         + " sys.exit(0)\n"
         + "if name=='readlink':\n"
@@ -88,7 +89,8 @@ def test_signed_activation_and_failure_preserve_last_good(
         "PATH": str(tools) + os.pathsep + os.environ["PATH"],
         "GENERATOR_SCORER_RELEASE_ROOT": str(release_root),
         "GENERATOR_SCORER_UPDATER_PATH": str(tmp_path / "installed-updater"),
-        "GENERATOR_SCORER_ADOPTION_POLLS": "2",
+        "GENERATOR_SCORER_ADOPTION_POLLS": "5",
+        "GENERATOR_SCORER_STARTUP_SECONDS": "0",
         "TEST_BUNDLE": str(bundle),
         "TEST_FAULT": fault,
         "TEST_LOG": str(tmp_path / "calls"),
@@ -115,3 +117,18 @@ def test_signed_activation_and_failure_preserve_last_good(
         assert (tmp_path / "installed-updater").exists()
     if fault == "signature":
         assert "create" not in calls
+
+    if fault == "startup":
+        assert (release_root / "failed-candidate").read_text().strip() == DIGEST
+        assert calls.count("sleep ['5']") < 5
+        (tmp_path / "calls").write_text("")
+        retry = subprocess.run(
+            ["bash", str(ROOT / "scripts/generator-scorer-auto-update.sh")],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert retry.returncode == 0, retry.stderr
+        assert "systemctl" not in (tmp_path / "calls").read_text()
+        assert (release_root / "current").resolve() == previous

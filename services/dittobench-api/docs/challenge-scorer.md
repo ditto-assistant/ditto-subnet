@@ -21,8 +21,11 @@ Activation switches `/opt/ditto-generator-scorer/current` atomically, then sends
 SIGUSR1 to the scorer's main process. It finishes the current lease and exits
 before claiming more work. Systemd starts the candidate through `current`.
 Adoption requires the candidate executable to stay active with the same PID
-for ten seconds. A failed 70-minute adoption restores `last-good` and requests
-another graceful restart. The updater retains prior releases and refreshes
+for ten seconds. The old process has up to 70 minutes to drain; after it exits,
+the candidate has one minute to start. A failed adoption restores `last-good`
+and requests another graceful restart. The exact failed digest is suppressed
+until a new descriptor is published or an operator removes
+`/opt/ditto-generator-scorer/failed-candidate`. The updater retains prior releases and refreshes
 itself only after successful adoption; an interrupted update keeps `last-good`
 available for the next attempt.
 
@@ -31,7 +34,7 @@ Inspect with `systemctl status ditto-generator-scorer-auto-update.timer`,
 `/opt/ditto-generator-scorer/current/challenge-scorer version`. Confirm the
 running executable through `/proc/<MainPID>/exe`; a symlink target alone is
 not proof of adoption. To hold or roll back, stop the update timer, point
-`current` at the retained `last-good` release, and send SIGUSR1 to the scorer.
+`current` at a retained prior release under `releases/`, and send SIGUSR1 to the scorer.
 SIGTERM remains immediate cancellation and is not used by the updater.
 
 `cmd/challenge-scorer` does the generator competition's CPU-only work. It
