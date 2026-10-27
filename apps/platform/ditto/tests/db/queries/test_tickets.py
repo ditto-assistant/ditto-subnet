@@ -4466,3 +4466,51 @@ async def test_scoring_retry_ticket_sql_matches_python(
         in_sql
     )
     assert in_sql == {"5PredCanonical", "5PredRetest", "5PredRoundHistory"}
+
+
+async def test_canonical_lease_skips_an_agent_live_at_another_version(
+    session: AsyncSession,
+) -> None:
+    """A v13 round lease beside a v14 scoring lease made the artifact fetch
+    ambiguous (2026-10-27, canary b5d1c2b0...0004). Identity is
+    (agent, version, validator), so the guard must ignore the version."""
+    agent_id = await _seed_evaluating(session, name="cross-version-live")
+    async with session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="5CrossVersion",
+                slot_id="slot-1",
+                status=TicketStatus.ISSUED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=_NOW - timedelta(minutes=1),
+                deadline=_NOW + timedelta(minutes=89),
+                bench_version=_BENCH + 1,
+                attempt_count=0,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+    async with session.begin():
+        blocked = await issue_ticket(
+            session,
+            validator_hotkey="5CrossVersion",
+            now=_NOW,
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert blocked is None
+    async with session.begin():
+        # Another validator holds nothing on the agent and is served normally.
+        other = await issue_ticket(
+            session,
+            validator_hotkey="5OtherValidator",
+            now=_NOW,
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert other is not None
+        assert other.agent_id == agent_id

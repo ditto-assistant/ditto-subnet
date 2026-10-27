@@ -500,6 +500,37 @@ async def expire_overdue_tickets(session: AsyncSession, *, now: datetime) -> int
     return len(overdue)
 
 
+async def live_ticket_for_agent_on_validator(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    now: datetime,
+    other_than_bench_version: int | None = None,
+) -> ValidatorTicket | None:
+    """A live lease this validator already holds on this agent, at any version.
+
+    Ticket identity is ``(agent, bench_version, validator)``, so two lanes at
+    different versions (a v13 generator round and a v14 rollout or canary
+    lease) could both be live for one agent on one validator. The validator's
+    ``GET /agent/{id}/artifact`` names only the agent, so it would get either
+    lease's version and refuse the other run as a version mismatch. Every
+    issuer calls this under the agent row lock and leases nothing while one
+    exists.
+    """
+    statement = select(ValidatorTicket).where(
+        ValidatorTicket.agent_id == agent_id,
+        ValidatorTicket.validator_hotkey == validator_hotkey,
+        ValidatorTicket.status == TicketStatus.ISSUED,
+        ValidatorTicket.deadline > now,
+    )
+    if other_than_bench_version is not None:
+        statement = statement.where(
+            ValidatorTicket.bench_version != other_than_bench_version
+        )
+    return await session.scalar(statement.limit(1))
+
+
 async def issue_ticket(
     session: AsyncSession,
     *,
@@ -1006,6 +1037,21 @@ async def issue_ticket(
                 # queue one validator (or one miner) can hold at once.
                 skipped.append(agent_id)
                 continue
+        # Under the agent row lock: a live lease at another bench version (a
+        # generator round, a canary, a rollout era) would make this agent's
+        # artifact fetch on this validator ambiguous. Serve other work.
+        if (
+            await live_ticket_for_agent_on_validator(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=validator_hotkey,
+                now=now,
+                other_than_bench_version=bench_version,
+            )
+            is not None
+        ):
+            skipped.append(agent_id)
+            continue
         break
 
     ticket = await session.get(
@@ -1201,6 +1247,13 @@ async def issue_confirmation_ticket(
     )
     if agent is None or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}:
         return None
+    if (
+        await live_ticket_for_agent_on_validator(
+            session, agent_id=agent_id, validator_hotkey=validator_hotkey, now=now
+        )
+        is not None
+    ):
+        return None
     # Confirmation evidence is append-only and never changes the canonical k=3
     # Score rows, so any permitted validator may contribute the shared wave.
     # Restricting this to the original three scorers strands healthy validators
@@ -1346,11 +1399,12 @@ async def issue_generator_round_ticket(
             ValidatorTicket.validator_hotkey == validator_hotkey,
             ValidatorTicket.status == TicketStatus.ISSUED,
             ValidatorTicket.deadline > now,
+            # Any live lease on this agent, whatever its version: a v14
+            # rollout or canary lease beside a v13 round run makes the
+            # validator's artifact fetch ambiguous
+            # (live_ticket_for_agent_on_validator).
             (ValidatorTicket.slot_id == slot_id)
-            | (
-                (ValidatorTicket.agent_id == agent_id)
-                & (ValidatorTicket.bench_version == bench_version)
-            ),
+            | (ValidatorTicket.agent_id == agent_id),
         )
         .limit(1)
         .with_for_update()

@@ -5046,3 +5046,50 @@ async def test_rollout_start_honors_a_narrowed_cohort_size(
     assert result["target"] == 5
     assert result["cohort_size"] == 5
     assert len(result["state"]["members"]) == 5
+
+
+async def test_rollout_ticket_skips_a_member_live_at_the_source_version(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """2026-10-27: a source-version generator round lease live beside a
+    target-version lease made the validator's artifact fetch ambiguous, and the
+    target run failed as a version mismatch. The rollout lane must serve
+    another member instead."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _inherited_era_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_ids[0],
+                bench_version=rollout.from_version,
+                validator_hotkey="validator-a",
+                slot_id="slot-1",
+                status=TicketStatus.ISSUED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=89),
+                attempt_count=0,
+                manual_retry_grants=0,
+            )
+        )
+        await session.flush()
+        ticket = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert ticket is not None
+        assert ticket.agent_id != agent_ids[0]
+        # Another validator holds nothing on the first member and gets it.
+        other = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-b",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert other is not None and other.agent_id == agent_ids[0]

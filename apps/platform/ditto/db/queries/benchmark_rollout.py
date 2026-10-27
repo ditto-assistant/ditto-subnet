@@ -1823,6 +1823,21 @@ async def issue_rollout_ticket(
         )
         .exists()
     )
+    # A live lease this validator holds on the member at another version (a
+    # source-version generator round or canary) would make the validator's
+    # artifact fetch ambiguous: identity is (agent, version, validator) and the
+    # fetch names only the agent. Serve another member instead.
+    live_at_other_version = (
+        select(ValidatorTicket.agent_id)
+        .where(
+            ValidatorTicket.agent_id == BenchmarkRolloutMember.agent_id,
+            ValidatorTicket.bench_version != rollout.desired_version,
+            ValidatorTicket.validator_hotkey == validator_hotkey,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+            ValidatorTicket.deadline > now,
+        )
+        .exists()
+    )
     # This rollout's frozen gate width, so retuning the live policy never
     # changes which members an in-flight rollout prioritises.
     priority_target = rollout.priority_cohort_target
@@ -1841,6 +1856,7 @@ async def issue_rollout_ticket(
             complete_screened_image,
             ~already_scored,
             ~already_ticketed,
+            ~live_at_other_version,
             score_count + occupied_count < SCORING_QUORUM,
         )
     )
@@ -1886,6 +1902,27 @@ async def issue_rollout_ticket(
                 )
             )
     if member is None:
+        return None
+    # Re-check under the agent row lock every other issuer takes, so a
+    # generator round leased between the candidate read and here cannot end
+    # up live beside this lease.
+    await session.scalar(
+        select(Agent.agent_id)
+        .where(Agent.agent_id == member.agent_id)
+        .with_for_update()
+    )
+    from ditto.db.queries.tickets import live_ticket_for_agent_on_validator
+
+    if (
+        await live_ticket_for_agent_on_validator(
+            session,
+            agent_id=member.agent_id,
+            validator_hotkey=validator_hotkey,
+            now=now,
+            other_than_bench_version=rollout.desired_version,
+        )
+        is not None
+    ):
         return None
     # A rollout can open while this validator still owns an ordinary source-
     # version lease. Preserve genuinely running work, but an idle/polling

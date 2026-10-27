@@ -1832,6 +1832,59 @@ class TestOperatorControls:
             )
 
 
+class TestRoundLeaseNeverSitsBesideAnotherVersion:
+    """2026-10-27: a v13 round lease was issued beside a live v14 canary lease
+    for the same agent and validator; the validator's artifact fetch returned
+    the round's version and the v14 run failed as a version mismatch."""
+
+    async def test_no_round_lease_while_a_v14_lease_is_live(
+        self, session_maker: async_sessionmaker[AsyncSession], monkeypatch
+    ) -> None:
+        async def _allowed(*_a: Any, **_k: Any) -> bool:
+            return True
+
+        import ditto.api_server.v13_scorer_cohort as cohort_mod
+
+        monkeypatch.setattr(cohort_mod, "pinned_validator_allowed", _allowed)
+        agent_id = await _seed_agent(session_maker, 0)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    slot_id="slot-1",
+                    status=TicketStatus.ISSUED,
+                    purpose=TicketPurpose.BENCHMARK_CANARY,
+                    purpose_revision=1,
+                    issued_at=now - timedelta(minutes=1),
+                    deadline=now + timedelta(hours=3),
+                    bench_version=14,
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                    legacy_completion_allowed=False,
+                )
+            )
+
+        async def lease(at: datetime) -> ValidatorTicket | None:
+            async with session_maker() as session, session.begin():
+                return await tickets_mod.issue_generator_round_ticket(
+                    session,
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    now=at,
+                    ttl=timedelta(minutes=90),
+                    seed=5,
+                    dataset_sha256="ef" * 32,
+                    slot_id="slot-0",
+                    bench_version=13,
+                )
+
+        assert await lease(now) is None
+        # Once the v14 lease has lapsed the round may run on the agent.
+        assert await lease(now + timedelta(hours=4)) is not None
+
+
 class TestRoundRunsNeverSpendScoringAttempts:
     """SN-334: a round run never counts toward canonical scoring retries."""
 

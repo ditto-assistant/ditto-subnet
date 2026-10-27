@@ -4277,6 +4277,43 @@ class TestArtifactFetchAudit:
         assert row.bench_version == _BENCH_VERSION
         assert row.fetched_at is not None
 
+    async def test_two_live_leases_at_different_versions_fail_closed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A v13 round lease beside a v14 lease: the request names only the
+        agent, so serving either version would mislabel the other run."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCORED)
+        await _seed_ticket(
+            session_maker,
+            agent_id,
+            bench_version=13,
+            slot_id="slot-0",
+            purpose=TicketPurpose.GENERATOR_ROUND,
+        )
+        await _seed_ticket(
+            session_maker,
+            agent_id,
+            bench_version=14,
+            slot_id="slot-1",
+            purpose=TicketPurpose.BENCHMARK_CANARY,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _install_storage(app)
+
+        response = await client.get(
+            f"/api/v1/validator/agent/{agent_id}/artifact",
+            headers=_artifact_headers(agent_id),
+        )
+
+        assert response.status_code == 409, response.text
+        assert "more than one live lease" in response.text
+        async with session_maker() as s:
+            assert (await s.scalars(select(ArtifactFetchAudit))).all() == []
+
     async def test_each_fetch_appends_its_own_row(
         self,
         app: FastAPI,
