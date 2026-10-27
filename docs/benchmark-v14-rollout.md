@@ -195,6 +195,102 @@ image/source**, which may differ from this baseline.
 5. The operator reviews the shadow report, fleet capacity and rollback evidence
    before issuing any activation. Keep missing evidence as a blocker.
 
+## Qualification evidence (October 27)
+
+Recorded on `main` after every v14 generation change landed (SN-351 to SN-360,
+answer normalization #3189, weight-fold fix #3184). Nothing here activates v14
+or changes a production setting.
+
+**Gate 1 (source).** At `0b46da26f` (v0.397.0), the scorer source every online
+validator runs:
+
+- `go test -count=1 ./...` in `research/dittobench-datagen`: every package
+  passes. `genrun` `TestLocalEvaluate` hit its 3 s generator timeout once while
+  both suites shared the host, and passed alone.
+- `go test -count=1 ./...` in `services/dittobench-api`, run in a
+  `golang:1.27.3` Linux container because the coding packages are Linux-only:
+  all 75 packages pass. `cmd/updater-bootstrap` read-only-tree tests fail only
+  as container root and pass as uid 1000.
+- `go run ./cmd/graderaudit -release-gate`: clean for v9 to v14, with v14 on
+  audit bank `v14-2`.
+- Old golden vectors verified without regenerating them: `TestV14KnownVector`,
+  the v13 vector docs test and the scorer's v2 to v13 historical replay
+  (`internal/scorer/v14_historical_replay_test.go`) pass. `cmd/generate -sha`
+  reproduces the v13 vector
+  `59bd8592ff8b820b2e0bb49ceb992940c9a45a2935a47ba8062b80707f85766a`.
+- v14 determinism: two `cmd/generate -bench-version 14 -seed 123456789
+  -run-size full -sha` runs both print
+  `760d155a9f192b635d3f5a19ef58ebba211576dd9ae2bccf5ae89135ff8492d9`, the
+  vector above.
+
+**Public adversary.** #3210 adds the public wire parser for the holder-vs-actor
+and identity-join role families. Before it, the 40-seed GIH diagnostic failed
+`-require-public-control` (programs 0.8313 < 0.90), because the adversary had
+no grammar for those families, not because they resist it. With it, the wire-only
+program count is 398/400 and every v14 business family is at 100%.
+
+| Source | Quality | Memory | Tools | Public control | Report SHA-256 |
+| --- | --- | --- | --- | --- | --- |
+| `8f1005957` (stale vector) | 0.9501 | 0.9242 | 0.9760 | pass | `6243cd79...363d3` |
+| `0b46da26f` | 0.9445 | 0.9129 | 0.9760 | fail (programs) | `8fbd48c5...a57a3` |
+| `7852c80c3` (#3210) | 0.9498 | 0.9237 | 0.9760 | pass | `cb59080a...58574` |
+
+Slice means at `7852c80c3`: story 0.9681, programs 1.0000, personal 0.9590,
+quantity 0.9274, tool prompts 0.9760, business 0.5455 (22 cases), integrity
+0.3205 (560 cases). No family is unclassified. The full SHAs are in the #1832
+comment. The public v14 candidate is still inverted at about its earlier
+strength, so anti-template qualification stays open.
+
+**Gate 2 (fleet capability).** The Backroom rollout control reports v14
+`start_ready=true` with 4 capable validators. Platform counts a validator as
+v14-capable only with a fresh verified scorer, deterministic v13 datasets and a
+`v14_scored_runtime_env` packet. All four online validators run the signed
+v0.397.0 stack (descriptor
+`sha256:8f2af963cd0abec114792dafa2eb3617ba8426cf7be85f141665c9c2947aa0f5`,
+scorer image
+`sha256:33ec9c72fa0c037d3b30c1db2703e32464c78083a6423e223b99af6bfba009c6`,
+source `0b46da26f`). They are the same validators that serve v13; no separate
+v14 cohort exists. `start_ready` is a mechanical check, not qualification.
+
+**Gate 3 (diagnostic canaries).** Isolated, non-authoritative full-profile v14
+canaries on the exact scored artifact and screened image, validator
+`5HT9U1J8...`, scorer `0b46da26f`. The v13 column is the agent's accepted
+3-score composite on different seeds, so the delta mixes the v14 grading
+change with generation variance.
+
+| Canary | Agent (v13 raw rank) | v13 composite | v14 composite | v14 memory | v14 tools | Run time |
+| --- | --- | --- | --- | --- | --- | --- |
+| `b91b551d` | 1 | 0.9308 | 0.8850 | 0.8240 | 0.9500 | 9 min |
+| `f7884ad9` | 2 | 0.9164 | 0.8459 | 0.8860 | 0.9480 | 9 min |
+| `11d45359` | 3 | 0.9043 | 0.8597 | 0.8653 | 0.9267 | 10 min |
+
+All three are lower at v14, by 0.046, 0.071 and 0.045, and the order changes
+(rank 3 passes rank 2). Three single-seed runs cannot separate the stricter
+over-call rule from seed variance (v13 stderr is about 0.013 to 0.015). The
+gate 5 shadow replay must measure the rank impact.
+
+Each run completed with signed evidence and no scorer error. These are clean
+runs of honest, top-ranked agents. Known-benign and adversarial control
+harnesses, the persistence and over-call probes, and LongMem confirmation at
+subject version 14 have not been exercised. Gate 3 is therefore partly met.
+
+**Gate 4 (family admission).** `universe.V14FamiliesAwaitingPanel` now returns
+14 families. The SN-359 and SN-360 role families were missing from
+`universe.V14FamilyMix`, because the coverage test only enumerated the v13
+cycle. They are now listed as pending panel. No `familygate` table exists for
+any of the 14. Generator rounds (70 cases per round since 25969) grade miner
+packs at bench 13 under the pack-v1 contract. Their cases carry no v14 family
+label: the public round view gives per-column aggregates only, and Backroom's
+promotion candidates give case and column ids. No round contains v14 benchmark
+cases. The doc's other two sources are an operator column of v14 datagen cases
+in live rounds, which is a production setting change, and an offline panel of
+at least 2 independently owned agent harnesses, which means running miner code
+with paid inference. Neither was authorized here. The only offline per-family
+evidence is the public parser above: each of the seven business families
+awaiting the panel is solved 100% wire-only (seeds 1 to 10). That shows a
+template matcher can invert them; it is not the trivial/unsolved panel the gate
+requires.
+
 ## Generator-competition changes (SN-361)
 
 These change v14 generation only. V13 generation and grading stay
@@ -225,6 +321,10 @@ family that is generated before admission. Applied to the SN-351 evidence
 needle/as-of shapes as trivial, holds conditional, alias-reroute,
 owner-alias-email and revised-cheapest as unsolved, and admits
 revert-to-original. This change adds no generation bytes.
+The role-slot families SN-359 (identity-join) and SN-360 (holder-vs-actor) are
+ledger entries too. They are v14-structural re-implementations of generator C,
+D and J shapes, pending their own panel. Identity-join sits next to the
+excluded owner-alias-email shape, so its panel row decides whether it ships.
 
 Qualification gate 4 must include the `familygate` table for every family
 `universe.V14FamiliesAwaitingPanel` returns, measured over at least 3 rounds.
@@ -402,7 +502,7 @@ required for this compatibility change.
 
 ## Open activation blockers
 
-This is the October 26 readiness audit. V13 is active and confirmation runs in
+This is the October 27 readiness audit. V13 is active and confirmation runs in
 `shadow`. Each item below must be closed with evidence, or explicitly waived
 by the operator, before anyone calls `start_benchmark_rollout` for v14. An
 item listed here is a blocker. It is not a claim that the work has started.
@@ -419,6 +519,12 @@ Closed in code:
   is served on any v10+ ledger.
 - **Public v14 adversary control.** #3179 lets `parserprobe
   -require-public-control` validate a v14 report.
+- **Public parser for the v14 role families.** #3210 restores the
+  `-require-public-control` pass on the final v14 vector (see *Qualification
+  evidence* above).
+- **Fleet v14 capability.** Four validators on v0.397.0 advertise verified
+  v14 capability with `v14_scored_runtime_env`. Three v14 diagnostic canaries
+  completed cleanly.
 
 Open, and requiring an operator, release-owner or paid run:
 
@@ -435,18 +541,34 @@ Open, and requiring an operator, release-owner or paid run:
 
    These need private producer runs, provider spend and owner design
    decisions, so no code is merged for them here. The latest offline public
-   GIH diagnostic still inverts v14 at a quality of 0.9501. Comments on #1832
-   give the report SHA.
-2. **Release packet and fleet readiness (#2508).** This document already
-   describes it: the exact merge SHA, scorer image and descriptor digests,
-   `v14_scored_runtime_env` heartbeats from a separate cohort, and the
-   archived v13 cohort packet.
-3. **Accepted diagnostic canaries and the shadow report.** These are gates 3
-   to 5 above. No measured v14 shadow results exist yet.
-4. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
+   GIH diagnostic, at `7852c80c3` on the final vector, still inverts v14 at a
+   quality of 0.9498. Comments on #1832 give the report SHA.
+2. **Release packet and a separate v14 cohort (#2508).** The capability is
+   live (gate 2 evidence above), but the packet is not recorded. It needs a
+   reviewed merge SHA and its release (v0.398.0 or later, so it includes
+   #3210; #3210 changes no scored bytes), its scorer image and descriptor
+   digests, and the archived v13 cohort packet. The four capable validators
+   also serve the pinned v13 cohort. Either stand up a separate v14 cohort, or
+   have the operator explicitly waive that requirement and hold automatic stack
+   updates on the v13 members.
+3. **Gate 3 controls.** The honest-agent canaries pass. Still missing:
+   known-benign and adversarial harness canaries, the persistence, no-call,
+   unrelated and mixed action and non-declarative write probes, and a LongMem
+   confirmation run at subject version 14.
+4. **Gate 4 family admission (SN-351).** There is no `familygate` table for
+   any of the 14 families in `universe.V14FamiliesAwaitingPanel`. Generator
+   rounds cannot supply one (bench 13 packs, no v14 family labels). The
+   operator must choose one of: a private operator column of v14 datagen cases
+   in at least 3 live rounds, a funded offline panel of at least 2
+   independently owned harnesses, or a recorded waiver for the structural
+   families. Identity-join should not ship on a waiver alone.
+5. **Shadow replay report (gates 4 and 5).** No measured v14 shadow results
+   exist yet: no consented-corpus replay into separate v14 rows, no rank-impact
+   report, no operator review.
+6. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
    recorded separately.
-5. **Generator-competition rounds stay on v13 at activation (explicit
+7. **Generator-competition rounds stay on v13 at activation (explicit
    fallback).** Rounds now freeze a bench version when they open and follow
    the active version where a round contract exists. The Platform lane,
    tickets, capability routing, V13 pin and the validator all run at the
@@ -466,17 +588,15 @@ Open, and requiring an operator, release-owner or paid run:
    - Until then, rounds depend on a staffed v13 cohort after v14 activates. A
      round with no validator able to run v13 is void at opening with the
      reason.
-6. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
+8. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
    now reads `active_version` from the public rollout endpoint, so the
    default follows activation without a code change. The activation PR still
    bumps the offline fallback `LIVE_SCORING_BENCH_VERSION` (now 13) and the
    bench number quoted in `.agents/skills/mine/SKILL.md` (bump checklist
    step 8).
 
-Work in progress elsewhere that also changes the v14 vector:
-
-- SN-351 to SN-360 (generator-derived datagen families)
-- the answer-checker normalization and markdown-tolerance work
-
-The vector and the replay evidence must be re-pinned after the last of these
-lands, and before the release packet is cut.
+All v14 vector work has landed (SN-351 to SN-360, answer normalization
+#3189). The final vector is
+`760d155a9f192b635d3f5a19ef58ebba211576dd9ae2bccf5ae89135ff8492d9`, and gate 1
+was rerun against it (see *Qualification evidence*). Any further change that
+moves the vector reopens gate 1 and the GIH diagnostic.
