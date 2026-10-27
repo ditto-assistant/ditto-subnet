@@ -301,6 +301,12 @@ re-implemented in the v14 contract; no generator code is copied.
   in a v14 run, so the grader read them under the v13 policy and no v14
   grading correction (#2734, #2769) reached them. V14 runs now stamp every
   memory case 14. V13 keeps the builders' stamps.
+- **Admission ledger (SN-351).** Both families are recorded in
+  `universe.V14FamilyMix` as `v14-structural`, `pending-panel` (shapes
+  `dated-interval-as-of` and `relative-dated-sequence`), so they appear in
+  `V14FamiliesAwaitingPanel` and qualification gate 4 must measure them with
+  `familygate` before activation. Generator C's panel evidence motivated them;
+  the v14 renderings themselves have not been panel-measured yet.
 
 ## Ticket boundary and rollback
 
