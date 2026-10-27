@@ -51,6 +51,10 @@ func TestV14FamilyMixCoversEveryProgramFamily(t *testing.T) {
 	for _, d := range V13PersonalDomains {
 		emitted[string(d)] = true
 	}
+	// The v14 role slot draws families v13 never emits (SN-359, SN-360).
+	for _, f := range V14Families {
+		emitted[string(f)] = true
+	}
 	seen := map[string]bool{}
 	for _, e := range V14FamilyMix {
 		if seen[e.Family] {
