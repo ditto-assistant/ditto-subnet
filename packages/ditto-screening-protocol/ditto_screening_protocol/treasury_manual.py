@@ -117,7 +117,18 @@ class ManualSource(Wire):
     remaining: Annotated[list[ManualPart], Field(max_length=20)]
 
 
+class ManualUnsignedIntent(Wire):
+    request_id: str
+    after_operation: Positive
+    expires_block: Positive
+
+    _canonical_uuid = field_validator("request_id")(
+        ManualRequest.canonical_uuid.__func__
+    )
+
+
 class ManualReadiness(Wire):
+    unsigned_intent: ManualUnsignedIntent | None = None
     policy: Digest
     after_operation: Nonnegative
     previous_state: str | None
@@ -162,9 +173,12 @@ class ManualReport(Wire):
     status: Literal["readiness", "blocked", "pending", "finalized", "failed", "refused"]
     settlement: ManualSettlement | None = None
     blocker: ManualBlocker | None = None
+    failure_code: Literal["signing_window_elapsed", "expired_unsigned"] | None = None
 
     @model_validator(mode="after")
     def report_shape(self):
+        if self.failure_code is not None and self.status != "failed":
+            raise ValueError("Only failed requests carry failure diagnostics")
         if self.status == "blocked":
             if self.blocker is None or any(
                 x is not None

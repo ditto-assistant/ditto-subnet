@@ -20,7 +20,32 @@ from ditto.treasury.manual_worker import (
 from ditto_screening_protocol.treasury_pubsub import TreasuryMailbox
 
 
+def consume_queued(mailbox, journal, policy, chain):
+    """Consume at most one request; unknown delivery remains unacknowledged."""
+    message = mailbox.pull()
+    if message:
+        try:
+            consume_manual(mailbox, journal, policy, chain, *message)
+        except Exception as error:
+            print(
+                json.dumps(
+                    {
+                        "status": "manual_request_processing_failed",
+                        "error_type": type(error).__name__,
+                    }
+                ),
+                flush=True,
+            )
+        publish_current_readiness(mailbox, journal, policy, chain)
+        return True
+    return False
+
+
 def consume_iteration(mailbox, journal, policy, chain):
+    # A confirmed request has a finite signing window. Check between bounded
+    # archive chunks too, so a new arrival does not wait for the whole sweep.
+    if consume_queued(mailbox, journal, policy, chain):
+        return
     recent = 0
     if getattr(chain, "manual_approval", None) is not None:
         try:
@@ -36,6 +61,8 @@ def consume_iteration(mailbox, journal, policy, chain):
             for block in chain.recent_earning_candidates(policy):
                 if block in proved or block in probed:
                     continue
+                if consume_queued(mailbox, journal, policy, chain):
+                    return
                 observe_earning_source(journal, policy, chain, block)
                 recent += 1
                 publish_current_readiness(mailbox, journal, policy, chain)
@@ -53,9 +80,11 @@ def consume_iteration(mailbox, journal, policy, chain):
             )
     # Keep the existing total bound of 32 proved blocks, committing eight at
     # a time so current custody readiness is not starved by archive catch-up.
-    # No automatic money tick; still pull only one manual message below.
+    # No automatic money tick; consume at most one manual request per iteration.
     remaining = 32 - recent
-    for _ in range(4):
+    for index in range(4):
+        if index and consume_queued(mailbox, journal, policy, chain):
+            return
         cursor = journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
         chunk = min(8, remaining)
         try:
@@ -83,22 +112,6 @@ def consume_iteration(mailbox, journal, policy, chain):
             or remaining == 0
         ):
             break
-    message = mailbox.pull()
-    if message:
-        try:
-            consume_manual(mailbox, journal, policy, chain, *message)
-        except Exception as error:
-            # Leave the exact message unacknowledged for normal reconciliation;
-            # a per-request failure does not invalidate the observed readiness.
-            print(
-                json.dumps(
-                    {
-                        "status": "manual_request_processing_failed",
-                        "error_type": type(error).__name__,
-                    }
-                ),
-                flush=True,
-            )
 
 
 def publish_current_readiness(mailbox, journal, policy, chain):

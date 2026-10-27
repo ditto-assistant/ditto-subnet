@@ -84,6 +84,7 @@ def delivery_verified(row) -> bool:
 
 
 def transfer_result(row):
+    report = ManualReport.model_validate(row.report) if row.report else None
     return {
         "request_id": row.request_id,
         "envelope": row.envelope,
@@ -93,6 +94,14 @@ def transfer_result(row):
         "updated_at": row.updated_at,
         "last_error": row.last_error,
         "receipt": row.receipt,
+        "custody_result": {
+            "status": report.status,
+            "observed_at": report.observed_at,
+            "failure_code": report.failure_code,
+            "settlement": report.settlement.model_dump() if report.settlement else None,
+        }
+        if report
+        else None,
     }
 
 
