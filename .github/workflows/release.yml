@@ -637,8 +637,10 @@ jobs:
         id: datagen_gate
         # Match datagen PR CI: v13's complete seed sweeps exceed Go's default
         # ten-minute package timeout. Keep all tests and a bounded deadline.
+        # With the v14 families and parser probe, gen alone measured 1,195 s
+        # on main, so 20m no longer leaves headroom.
         run: |
-          go test -timeout 20m ./...
+          go test -timeout 40m ./...
           echo "verified_sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
   verify-dittobench-coding-datagen:
