@@ -10,7 +10,7 @@ upload), so a nullable add with no default is metadata-only and the check
 constraint's validation scan is brief.
 
 Revision ID: 3d8f1a6c2e57
-Revises: 5b7e1c9d3a42
+Revises: 3e8a5c1f7b94
 Create Date: 2026-10-27
 """
 
@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "3d8f1a6c2e57"
-down_revision: str | Sequence[str] | None = "5b7e1c9d3a42"
+down_revision: str | Sequence[str] | None = "3e8a5c1f7b94"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
