@@ -125,7 +125,7 @@ class FundingBatch(FundingWire):
     version: Literal[1] = 1
     holding_wallet: Address
     records: Annotated[list[FundingRecord], Field(min_length=1, max_length=100)]
-    reason: Annotated[str, Field(min_length=8, max_length=240)]
+    reason: Annotated[str, Field(min_length=8)]
 
     @property
     def digest(self):

@@ -24,7 +24,7 @@ export const fundingRecordSchema = z.object({
 })
 export const fundingBatchSchema = z.object({
   version: z.literal(1).default(1), holding_wallet: z.string().min(40).max(64),
-  records: z.array(fundingRecordSchema).min(1).max(100), reason: z.string().min(8).max(240),
+  records: z.array(fundingRecordSchema).min(1).max(100), reason: z.string().min(8),
 })
 export const fundingSubmitSchema = z.object({
   batch: fundingBatchSchema,

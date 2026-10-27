@@ -22,7 +22,7 @@ same JSON, the preview's `confirmation_digest`, and its exact `confirmation`.
 Both preview and record require `backroom:write` and a live write-level account.
 The server supplies the authenticated operator's audit identity.
 
-A batch contains `holding_wallet`, an 8–240 character `reason`, and 1–100
+A batch contains `holding_wallet`, an audit `reason` of at least eight characters, and 1–100
 `records`. Each record contains:
 
 - `purchase`: canonical GM `purchase_id` UUID, timezone-aware `occurred_at`,
