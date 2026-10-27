@@ -35,13 +35,13 @@ that value is also a correction cue. "better safe than sorry" is published as
 `sorry`. V14 credits both. A sentence that carries anything beyond the value
 ("Sorry, I mean safe.") is still a correction, and v13 grading is unchanged.
 The v14 full/public vector at seed 123456789 is
-`cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432`,
+`36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa`,
 with epoch `2027-06-01T00:00:00Z`. The grader (apart from the claim-set
 correction above and the #2734 hyphen fold and matchers), v13 gate postures,
 LongMem instrument and public harness wire (9) carry forward. The surface carries
 forward apart from case-file records, which v14 files in story order instead of
-shuffled-presentation order (#3088); that moves the v14 vector and leaves every
-v13 seed untouched. There is no private
+shuffled-presentation order (#3088), and the supersession chains of SN-353/354
+below. Both move the v14 vector and leave every v13 seed untouched. There is no private
 surface expansion or screening policy v14 activation in this change.
 
 ## Anti-template work remains unqualified
@@ -192,6 +192,36 @@ evidence over 3 rounds, for example a single-value nickname hop scored 0 or 1. C
 half-credit-only case does not count as solvable is recorded as a follow-up
 for the generator competition owners. It changes live rewards, not v14, so
 it is not part of this change. No v14 generation bytes change.
+### SN-353 / SN-354 supersession chains without announcing cues
+
+In v13, each correction family has one superseding record, and that record
+announces itself ("the newest entry governs", "replacing ..."). With v14's
+story-order stamps, the cue sentence, the second record and the latest filing
+all point to the answer. V14 renders a 2-3 hop chain in the owner,
+standing-status and current-channel business families and in six personal
+domains (household, appointments, milestones, subscriptions, travel,
+hobbies). Every chain has one of:
+
+- a revert (A, then B, then A again, or A, B, C, then B);
+- a declined proposal, optionally after a real change;
+- an entry logged in error, so the value before it stands.
+
+The counterfactual flips exactly one link: the proposal is adopted, the entry
+is confirmed, or the last change names a different value. Cue placement is
+seeded per group: half announce every adopted change, a quarter are cue-free
+(state the change plainly, with precedence only from filing order), and a
+quarter misplace the cue onto a non-governing record. Half of the reverts do
+not restate the value ("back to the original entry"). That idea is ported from
+generator D's revert family (`research/dittobench-datagen/docs/v14-generator-credits.md`).
+`universe/v14_supersession_test.go` proves the counterfactual changes exactly
+one record. It also proves that the last-cue, second-record and latest-named
+shortcuts each solve both readings of at most 16% of chained groups (0.08,
+0.00 and 0.16 over 120 seeds). On v13, the second-record shortcut is exact.
+The oracle scores 1 under the v14 grader.
+Next-action, school list, latest-event and client-vs-vendor are left to
+SN-356 to SN-360. The v14 known vector moves; v13 stays byte-identical. The
+chained families are listed in `universe.V14FamilyMix` as v14-structural,
+pending a 3-round `familygate` panel measurement.
 
 ## Ticket boundary and rollback
 

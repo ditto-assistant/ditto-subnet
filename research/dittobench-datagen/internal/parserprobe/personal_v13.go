@@ -79,6 +79,9 @@ func answerV13(st *store, question string) derived {
 	if d := answerStoryV13(st, question); d.ok {
 		return d
 	}
+	if d := answerChainV14(st, question); d.ok {
+		return d
+	}
 	if d := answerBusinessV13(st, question); d.ok {
 		return d
 	}

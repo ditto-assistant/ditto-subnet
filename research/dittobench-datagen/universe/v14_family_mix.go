@@ -83,20 +83,20 @@ var V14ExcludedShapes = []V14ExcludedShape{
 // V14FamilyMix is the admission ledger. Keep one entry per business family
 // and personal domain the v14 generator emits.
 var V14FamilyMix = []V14FamilyMixEntry{
-	{Family: string(V13FamilyOwnerAfterCorrection), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
-	{Family: string(V13FamilyStandingStatus), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
+	{Family: string(V13FamilyOwnerAfterCorrection), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
+	{Family: string(V13FamilyStandingStatus), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
 	{Family: string(V13FamilyLatestEvent), Shape: "latest-of-three-dated", Origin: V14OriginCarried, Status: V14StatusCarried},
 	{Family: string(V13FamilyClientVsVendor), Shape: "role-mapping", Origin: V14OriginCarried, Status: V14StatusCarried},
 	{Family: string(V13FamilyNextActionResponsible), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
-	{Family: string(V13FamilyCurrentChannel), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
+	{Family: string(V13FamilyCurrentChannel), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
 	{Family: string(V13FamilyRecordsDisagree), Shape: "conflict-report", Origin: V14OriginCarried, Status: V14StatusCarried},
-	{Family: string(V13PersonalHousehold), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
-	{Family: string(V13PersonalAppointments), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
+	{Family: string(V13PersonalHousehold), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
+	{Family: string(V13PersonalAppointments), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
 	{Family: string(V13PersonalSchool), Shape: "single-revision-set", Origin: V14OriginCarried, Status: V14StatusCarried},
-	{Family: string(V13PersonalMilestones), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
-	{Family: string(V13PersonalSubscriptions), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
-	{Family: string(V13PersonalTravel), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
-	{Family: string(V13PersonalHobbies), Shape: "simple-update-chain", Origin: V14OriginCarried, Status: V14StatusCarried, Tracking: "SN-353, SN-354"},
+	{Family: string(V13PersonalMilestones), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
+	{Family: string(V13PersonalSubscriptions), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
+	{Family: string(V13PersonalTravel), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
+	{Family: string(V13PersonalHobbies), Shape: "supersession-chain", Origin: V14OriginStructural, Status: V14StatusPendingPanel, Evidence: "SN-353/354: revert, declined-proposal and logged-in-error chains, seeded cue placement; unnamed revert ported from generator D"},
 }
 
 // V14FamilyMixFor returns the ledger entry for a family or domain key.

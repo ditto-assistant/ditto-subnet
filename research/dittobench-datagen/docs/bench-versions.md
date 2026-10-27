@@ -1184,16 +1184,32 @@ change. The enterprise case files already instruct the model to apply events by
 `effective_step` rather than document order and are unchanged. Every v13 seed is
 untouched.
 
+V14 replaces the single announced correction with a short supersession chain
+(SN-353, SN-354) in the owner, standing-status and current-channel business
+families and in the household, appointment, milestone, subscription, travel
+and hobby personal domains. After the initial record come two or three more
+state records. Every chain has a revert, a proposed change that was turned
+down, or an entry logged in error, and the counterfactual twin flips one link
+of the same chain. A seeded quarter of groups state every change plainly, so
+precedence comes only from story-order filing. Another quarter put the change
+vocabulary on records that do not govern. Half of the reverts say "back to the
+original" or "back to the previous entry" without restating the value, an idea
+ported from a generator-competition miner (generator D in
+[v14-generator-credits.md](v14-generator-credits.md)). Over 120 seeds, no
+model-free shortcut (last cued record, the second record, or the latest
+record naming a value) solves both readings of more than 16% of chained
+groups. On v13 the second-record shortcut is exact.
+
 Question-family identifiers, the envelope, the rest of the grader policy, v13
 gate postures, the LongMem instrument, and public harness wire version (9)
 carry forward. The generated surface carries forward apart from the case-file
-filing dates above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+filing dates and the supersession chains above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432`.
+`36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.
