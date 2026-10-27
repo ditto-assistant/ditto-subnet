@@ -811,6 +811,20 @@ class TestRoundLifecycle:
             assert a is not None
             a.qualified_at = qualified_at
             await session.commit()
+        # A round scored before the freshness window stops counting.
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None and row.scored_at is not None
+            scored_at = row.scored_at
+            row.scored_at = scored_at - timedelta(days=ledger["window_days"] + 1)
+            await session.commit()
+        stale = (await client.get("/api/v1/generator/board")).json()
+        assert stale["entries"] == [] and stale["count"] == 0
+        async with session_maker() as session:
+            row = await get_round(session, 3)
+            assert row is not None
+            row.scored_at = scored_at
+            await session.commit()
         await _apply_settings(client, mode="shadow")
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert len(public["standings"]) == 3
