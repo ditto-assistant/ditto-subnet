@@ -25,10 +25,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.generator import (
     GeneratorBuildResult,
     GeneratorSeedOutput,
+    GeneratorSubmissionSummary,
     PanelCaseResult,
     SubmissionStatus,
 )
+from ditto.api_models.generator_ledger import (
+    GeneratorLedgerEntry,
+    GeneratorLedgerResponse,
+)
 from ditto.api_models.generator_round_validator import round_commitment_payload
+from ditto.api_models.name_claim import PublicNameHandle
 
 RoundStatus = Literal["committed", "generating", "running", "scoring", "scored", "void"]
 CommitmentPublication = Literal["pending", "published", "failed", "disabled"]
@@ -95,6 +101,11 @@ class GeneratorRoundColumnView(RoundModel):
     trivial: int | None = None
     unsolved: int | None = None
     duplicate: int | None = None
+    name: str | None = None
+    """The generator's public display name (``None`` when unnamed)."""
+    name_handle: PublicNameHandle | None = None
+    avatar_url: str | None = None
+    version: int | None = None
 
 
 class GeneratorRoundStandingView(RoundModel):
@@ -108,6 +119,10 @@ class GeneratorRoundStandingView(RoundModel):
     common_mean: float
     common_cases: int
     reference: bool = False
+    agent_name: str | None = None
+    agent_version: int | None = None
+    miner_hotkey: str | None = None
+    avatar_url: str | None = None
 
 
 class GeneratorRoundSummary(RoundModel):
@@ -155,6 +170,73 @@ class GeneratorRoundDetail(RoundModel):
 class GeneratorRoundListResponse(RoundModel):
     schedule: GeneratorRoundSchedule
     rounds: list[GeneratorRoundSummary]
+
+
+# --- public board and submission detail ----------------------------------------
+
+
+class GeneratorRoundPoint(RoundModel):
+    """One scored round column a hotkey's generator held."""
+
+    round_index: int
+    submission_id: UUID
+    score: float
+    rank: int
+    """Position among the round's scored columns (1 = best score)."""
+    columns: int
+    scored_at: datetime | None = None
+
+
+class PublicGeneratorBoardEntry(GeneratorLedgerEntry):
+    """A ledger entry with the public identity and recent form the dashboard
+    shows. Validators read the plain ledger (``/scoring/generator-ledger``)."""
+
+    name: str | None = None
+    name_handle: PublicNameHandle | None = None
+    avatar_url: str | None = None
+    version: int | None = None
+    status: SubmissionStatus | None = None
+    qualified_at: datetime | None = None
+    rounds_in_window: int = 0
+    """Scored rounds in the freshness window where this hotkey held a column."""
+    recent: list[GeneratorRoundPoint] = Field(default_factory=list)
+    """The hotkey's latest scored columns in the window, oldest first (at
+    most ``PUBLIC_BOARD_RECENT_ROUNDS``)."""
+
+
+class PublicGeneratorBoardResponse(GeneratorLedgerResponse):
+    entries: list[PublicGeneratorBoardEntry] = Field(  # type: ignore[assignment]
+        default_factory=list
+    )
+
+
+class GeneratorSubmissionRoundView(RoundModel):
+    """One scored round a generator held a column in."""
+
+    round_index: int
+    scored_at: datetime | None
+    column_id: str
+    counted: bool
+    score: float
+    rank: int
+    columns: int
+    discriminating: int
+    trivial: int
+    unsolved: int
+    duplicate: int
+    panel_size: int
+
+
+class PublicGeneratorSubmissionDetail(RoundModel):
+    """Everything public about one generator: identity, lifecycle, the
+    hotkey's other versions, and its round-by-round results. Never source,
+    seeds, or case content."""
+
+    submission: GeneratorSubmissionSummary
+    versions: list[GeneratorSubmissionSummary]
+    """The hotkey's generators, newest first (this one included)."""
+    rounds: list[GeneratorSubmissionRoundView]
+    """Scored rounds with a column for this generator, newest first."""
 
 
 # --- admin ------------------------------------------------------------------

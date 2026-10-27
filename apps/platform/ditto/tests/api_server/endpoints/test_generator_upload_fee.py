@@ -153,6 +153,7 @@ class TestFeeOff:
             "tree_sha256",
             "status",
             "superseded",
+            "name",
         }
         # A proof sent while the fee is off is ignored, not verified or spent.
         await _skip_cooldown(session_maker)

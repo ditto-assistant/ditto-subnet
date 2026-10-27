@@ -28,8 +28,10 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, cast
+from uuid import UUID
 
 import bittensor
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -38,17 +40,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
     GeneratorSubmissionListResponse,
+    GeneratorSubmissionSummary,
     GeneratorSubmissionUploadRequest,
     GeneratorSubmissionUploadResponse,
     GeneratorUploadTerms,
     SubmissionStatus,
+    normalize_generator_name,
     source_signature_payload,
 )
-from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_rounds import (
     GeneratorRoundDetail,
     GeneratorRoundListResponse,
     GeneratorRoundSchedule,
+    PublicGeneratorBoardEntry,
+    PublicGeneratorBoardResponse,
+    PublicGeneratorSubmissionDetail,
 )
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -62,13 +68,19 @@ from ditto.api_server.generator_competition import (
     load_settings,
     submission_summary,
 )
+from ditto.api_server.generator_identity import (
+    agent_identities,
+    generator_identities,
+)
 from ditto.api_server.generator_rounds import (
     column_views,
     get_round,
+    hotkey_round_points,
     list_rounds,
     round_summaries,
     round_summary,
     standing_views,
+    submission_round_views,
 )
 from ditto.api_server.payment_verifier import (
     PaymentProof,
@@ -78,12 +90,14 @@ from ditto.api_server.payment_verifier import (
     VerifiedPayment,
 )
 from ditto.chain.errors import ChainError
+from ditto.db.queries.attestation import get_bound_coldkey_for_hotkey
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.generator import (
     case_status_counts,
     get_submission,
     get_submission_by_sha,
     get_submission_by_tree,
+    get_submission_without_source,
     insert_submission,
     latest_runs,
     latest_submitted_at,
@@ -93,6 +107,7 @@ from ditto.db.queries.generator import (
     supersede_active,
     superseded_by,
 )
+from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     get_evaluation_payment_for_proof,
     get_generator_payment_for_proof,
@@ -119,6 +134,8 @@ _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 # them for 30s and then answers from the last snapshot while one background
 # read rebuilds it, so a dashboard poll never waits on the ledger query.
 _PUBLIC_READ_CACHE = "public, max-age=30, stale-while-revalidate=120"
+# Each board entry carries the hotkey's latest scored columns for a sparkline.
+PUBLIC_BOARD_RECENT_ROUNDS = 24
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ChainDep = Annotated["ChainClient", Depends(get_chain_client)]
@@ -193,6 +210,7 @@ async def _replayed_or_retry(
                 superseded=await superseded_by(
                     session, miner_hotkey=row.miner_hotkey, keep=row.submission_id
                 ),
+                name=row.name,
             )
         raise PaymentReplayedError("payment proof already funded another upload")
     if await get_evaluation_payment_for_proof(
@@ -230,6 +248,7 @@ async def upload_terms(
     response: Response,
     hotkey: Annotated[str | None, Query(pattern=_SS58)] = None,
     source_sha256: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
+    name: Annotated[str | None, Query(max_length=256)] = None,
 ) -> GeneratorUploadTerms:
     """What an upload needs now; read it before paying any fee."""
     response.headers["Cache-Control"] = "no-store"
@@ -263,6 +282,12 @@ async def upload_terms(
                 blockers.append(
                     f"generator upload cooldown until {retry_at.isoformat()}"
                 )
+    if name is not None:
+        blocker = await _name_blocker(
+            session, request, name=name, hotkey=hotkey, coldkey=None
+        )
+        if blocker is not None:
+            blockers.append(blocker)
     if source_sha256 is not None:
         existing = await get_submission_by_sha(session, source_sha256)
         if existing is not None:
@@ -278,6 +303,39 @@ async def upload_terms(
         upload_cooldown_seconds=settings.upload_cooldown_seconds,
         retry_at=retry_at,
         blockers=blockers,
+    )
+
+
+async def _name_blocker(
+    session: AsyncSession,
+    request: Request,
+    *,
+    name: str,
+    hotkey: str | None,
+    coldkey: str | None,
+) -> str | None:
+    """Why ``name`` cannot name this hotkey's generator, or ``None``.
+
+    The rules are the agent-name rules: 1-64 characters (here also no control
+    or invisible characters), and never a handle another miner family holds
+    a signed, endorsed reservation on. Without a hotkey only the shape is
+    checked. ``coldkey`` is the uploading coldkey; the terms read, which has
+    no chain lookup, uses the coldkey the hotkey last paid an upload from.
+    """
+    try:
+        normalized = normalize_generator_name(name)
+    except ValueError as exc:
+        return str(exc)
+    if hotkey is None:
+        return None
+    if coldkey is None:
+        coldkey = await get_bound_coldkey_for_hotkey(session, hotkey=hotkey)
+    return await upload_name_is_reserved(
+        session,
+        netuid=request.app.state.config.chain.netuid,
+        agent_name=normalized,
+        miner_hotkey=hotkey,
+        miner_coldkey=coldkey,
     )
 
 
@@ -336,6 +394,17 @@ async def upload_submission(
         )
     except UploadRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if payload.name is not None:
+        refused = await _name_blocker(
+            session,
+            request,
+            name=payload.name,
+            hotkey=payload.hotkey,
+            coldkey=neuron.coldkey or None,
+        )
+        if refused is not None:
+            raise HTTPException(status_code=409, detail=refused)
 
     verified: VerifiedPayment | None = None
     if fee_required:
@@ -402,6 +471,7 @@ async def upload_submission(
             go_version=upload.info.go_version,
             file_count=upload.info.files,
             now=now,
+            name=payload.name,
         )
         if verified is not None:
             await insert_generator_payment(
@@ -434,6 +504,7 @@ async def upload_submission(
         tree_sha256=row.tree_sha256,
         status="active",
         superseded=superseded,
+        name=row.name,
     )
 
 
@@ -482,28 +553,103 @@ async def list_hotkey_submissions(
 ) -> GeneratorSubmissionListResponse:
     """A hotkey's recent generators: lifecycle and aggregate outcome only."""
     rows = await list_submissions(session, miner_hotkey=hotkey, limit=limit)
-    latest = await latest_runs(session, [row.submission_id for row in rows])
-    counts = await case_status_counts(session, [run.run_id for run in latest.values()])
     return GeneratorSubmissionListResponse(
-        submissions=[
-            submission_summary(
-                row,
-                latest.get(row.submission_id),
-                counts.get(latest[row.submission_id].run_id)
-                if row.submission_id in latest
-                else None,
-            )
-            for row in rows
-        ]
+        submissions=await _public_summaries(session, rows)
     )
 
 
-@router.get("/board", response_model=GeneratorLedgerResponse)
-async def board(session: SessionDep, response: Response) -> GeneratorLedgerResponse:
-    """The shadow generator ledger (each hotkey's latest scored run)."""
+async def _public_summaries(
+    session: AsyncSession, rows: Sequence[GeneratorSubmission]
+) -> list[GeneratorSubmissionSummary]:
+    ids = [row.submission_id for row in rows]
+    latest = await latest_runs(session, ids)
+    counts = await case_status_counts(session, [run.run_id for run in latest.values()])
+    identities = await generator_identities(session, ids)
+    return [
+        submission_summary(
+            row,
+            latest.get(row.submission_id),
+            counts.get(latest[row.submission_id].run_id)
+            if row.submission_id in latest
+            else None,
+            identities.get(row.submission_id),
+        )
+        for row in rows
+    ]
+
+
+@router.get(
+    "/submissions/{submission_id}", response_model=PublicGeneratorSubmissionDetail
+)
+async def public_submission(
+    submission_id: UUID, session: SessionDep, response: Response
+) -> PublicGeneratorSubmissionDetail:
+    """One generator: identity, lifecycle, the hotkey's other versions, and
+    its round-by-round results. Never source, seeds, or case content."""
+    response.headers["Cache-Control"] = _PUBLIC_READ_CACHE
+    row = await get_submission_without_source(session, submission_id)
+    if row is None or row.public_default:
+        raise HTTPException(status_code=404, detail="unknown generator submission")
+    versions = list(
+        await list_submissions(session, miner_hotkey=row.miner_hotkey, limit=25)
+    )
+    if all(other.submission_id != row.submission_id for other in versions):
+        versions.append(row)
+    summaries = await _public_summaries(session, versions)
+    return PublicGeneratorSubmissionDetail(
+        submission=next(
+            summary
+            for summary in summaries
+            if summary.submission_id == row.submission_id
+        ),
+        versions=summaries,
+        rounds=await submission_round_views(session, submission_id),
+    )
+
+
+@router.get("/board", response_model=PublicGeneratorBoardResponse)
+async def board(
+    session: SessionDep, response: Response
+) -> PublicGeneratorBoardResponse:
+    """The generator ledger validators fold, with each entry's public
+    identity (name, avatar, version) and recent round form."""
     response.headers["Cache-Control"] = _PUBLIC_READ_CACHE
     resolved = await load_settings(session)
-    return await build_ledger(session, resolved=resolved, now=datetime.now(UTC))
+    now = datetime.now(UTC)
+    ledger = await build_ledger(session, resolved=resolved, now=now)
+    identities = await generator_identities(
+        session, [entry.submission_id for entry in ledger.entries]
+    )
+    form = await hotkey_round_points(
+        session,
+        [entry.miner_hotkey for entry in ledger.entries],
+        since=now - timedelta(days=resolved.settings.window_days),
+        limit=PUBLIC_BOARD_RECENT_ROUNDS,
+    )
+    entries = []
+    for entry in ledger.entries:
+        identity = identities.get(entry.submission_id)
+        held, recent = form.get(entry.miner_hotkey, (0, []))
+        entries.append(
+            PublicGeneratorBoardEntry(
+                **entry.model_dump(),
+                name=identity.name if identity else None,
+                name_handle=identity.name_handle if identity else None,
+                avatar_url=identity.avatar_url if identity else None,
+                version=identity.version if identity else None,
+                status=cast("SubmissionStatus", identity.status) if identity else None,
+                qualified_at=identity.qualified_at if identity else None,
+                rounds_in_window=held,
+                recent=recent,
+            )
+        )
+    return PublicGeneratorBoardResponse(
+        entries=entries,
+        count=ledger.count,
+        window_days=ledger.window_days,
+        mode=ledger.mode,
+        generated_at=ledger.generated_at,
+    )
 
 
 @router.get("/rounds", response_model=GeneratorRoundListResponse)
@@ -549,8 +695,40 @@ async def public_round(
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
     scored = row.status == "scored"
+    columns = column_views(row) if row.status != "committed" else []
+    generators = await generator_identities(
+        session,
+        [column.submission_id for column in columns if not column.public_default],
+    )
+    standings = standing_views(row) if scored else []
+    agents = await agent_identities(session, [s.agent_id for s in standings])
     return GeneratorRoundDetail(
         summary=await round_summary(session, row),
-        columns=column_views(row) if row.status != "committed" else [],
-        standings=standing_views(row) if scored else [],
+        columns=[
+            column.model_copy(
+                update={
+                    "name": identity.name,
+                    "name_handle": identity.name_handle,
+                    "avatar_url": identity.avatar_url,
+                    "version": identity.version,
+                }
+            )
+            if (identity := generators.get(column.submission_id)) is not None
+            and not column.public_default
+            else column
+            for column in columns
+        ],
+        standings=[
+            standing.model_copy(
+                update={
+                    "agent_name": agent.name,
+                    "agent_version": agent.version,
+                    "miner_hotkey": agent.miner_hotkey,
+                    "avatar_url": agent.avatar_url,
+                }
+            )
+            if (agent := agents.get(standing.agent_id)) is not None
+            else standing
+            for standing in standings
+        ],
     )

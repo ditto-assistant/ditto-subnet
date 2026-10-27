@@ -82,12 +82,14 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundCommitmentPublicationView,
     GeneratorRoundGenerateResult,
     GeneratorRoundLoopStatus,
+    GeneratorRoundPoint,
     GeneratorRoundResultView,
     GeneratorRoundSchedule,
     GeneratorRoundScoreResult,
     GeneratorRoundStandingView,
     GeneratorRoundSummary,
     GeneratorRoundWork,
+    GeneratorSubmissionRoundView,
     RoundCaseRef,
     RoundMatrix,
     RoundMatrixAgent,
@@ -1752,6 +1754,124 @@ async def list_rounds(
             .offset(offset)
         )
     )
+
+
+def _column_ranks(row: Any) -> tuple[dict[str, dict[str, Any]], dict[str, int]]:
+    """A scored round's column packs by id and each column's rank (1 = best)."""
+    packs = {
+        column["column_id"]: column["pack"]
+        for column in (row.score or {}).get("columns", ())
+    }
+    scores = [float(pack["score"]) for pack in packs.values()]
+    ranks = {
+        column_id: 1 + sum(1 for other in scores if other > float(pack["score"]))
+        for column_id, pack in packs.items()
+    }
+    return packs, ranks
+
+
+async def hotkey_round_points(
+    session: AsyncSession, hotkeys: Iterable[str], *, since: datetime, limit: int
+) -> dict[str, tuple[int, list[GeneratorRoundPoint]]]:
+    """Per hotkey: how many scored rounds since ``since`` held one of its
+    generators, and the latest ``limit`` of those columns, oldest first.
+
+    Reads the rounds' column and score documents only (never datasets), one
+    pass over the window.
+    """
+    wanted = set(hotkeys)
+    if not wanted:
+        return {}
+    rows = await session.execute(
+        select(
+            GeneratorRound.round_index,
+            GeneratorRound.columns,
+            GeneratorRound.score,
+            GeneratorRound.scored_at,
+        )
+        .where(GeneratorRound.status == "scored", GeneratorRound.scored_at >= since)
+        .order_by(GeneratorRound.round_index)
+    )
+    points: dict[str, list[GeneratorRoundPoint]] = {}
+    for row in rows:
+        packs, ranks = _column_ranks(row)
+        for column in row.columns or ():
+            hotkey = column.get("miner_hotkey")
+            pack = packs.get(column["column_id"])
+            if column.get("public_default") or hotkey not in wanted or pack is None:
+                continue
+            points.setdefault(hotkey, []).append(
+                GeneratorRoundPoint(
+                    round_index=row.round_index,
+                    submission_id=UUID(column["submission_id"]),
+                    score=float(pack["score"]),
+                    rank=ranks[column["column_id"]],
+                    columns=len(packs),
+                    scored_at=row.scored_at,
+                )
+            )
+    return {hotkey: (len(held), held[-limit:]) for hotkey, held in points.items()}
+
+
+async def submission_round_views(
+    session: AsyncSession, submission_id: UUID, *, limit: int = 50
+) -> list[GeneratorSubmissionRoundView]:
+    """The scored rounds one generator held a column in, newest first."""
+    indexes = (
+        select(GeneratorRoundCaseVerdict.round_index)
+        .where(GeneratorRoundCaseVerdict.submission_id == submission_id)
+        .distinct()
+        .order_by(GeneratorRoundCaseVerdict.round_index.desc())
+        .limit(limit)
+        .scalar_subquery()
+    )
+    rows = await session.execute(
+        select(
+            GeneratorRound.round_index,
+            GeneratorRound.columns,
+            GeneratorRound.score,
+            GeneratorRound.scored_at,
+            GeneratorRound.panel,
+        )
+        .where(
+            GeneratorRound.status == "scored",
+            GeneratorRound.round_index.in_(indexes),
+        )
+        .order_by(GeneratorRound.round_index.desc())
+    )
+    out: list[GeneratorSubmissionRoundView] = []
+    for row in rows:
+        packs, ranks = _column_ranks(row)
+        column = next(
+            (
+                c
+                for c in row.columns or ()
+                if c["submission_id"] == str(submission_id) and c["column_id"] in packs
+            ),
+            None,
+        )
+        if column is None:
+            continue
+        pack = packs[column["column_id"]]
+        out.append(
+            GeneratorSubmissionRoundView(
+                round_index=row.round_index,
+                scored_at=row.scored_at,
+                column_id=column["column_id"],
+                counted=bool(column.get("counted")),
+                score=float(pack["score"]),
+                rank=ranks[column["column_id"]],
+                columns=len(packs),
+                discriminating=int(pack["discriminating"]),
+                trivial=int(pack["trivial"]),
+                unsolved=int(pack["unsolved"]),
+                duplicate=int(pack["duplicate"]),
+                panel_size=sum(
+                    1 for slot in row.panel or () if not slot.get("dropped_reason")
+                ),
+            )
+        )
+    return out
 
 
 async def round_counts_by_status(session: AsyncSession) -> dict[str, int]:

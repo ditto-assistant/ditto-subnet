@@ -383,9 +383,12 @@ def test_generator_public_reads_are_cacheable() -> None:
     assert is_cacheable_path("/api/v1/generator/board")
     assert is_cacheable_path("/api/v1/generator/rounds")
     assert is_cacheable_path("/api/v1/generator/rounds/42")
-    # Miner-specific or no-store generator routes stay uncached.
+    assert is_cacheable_path("/api/v1/generator/submissions")
+    assert is_cacheable_path(
+        "/api/v1/generator/submissions/00000000-0000-4000-8000-000000000001"
+    )
+    # Upload terms are per-miner and no-store; the cache never holds them.
     assert not is_cacheable_path("/api/v1/generator/upload-terms")
-    assert not is_cacheable_path("/api/v1/generator/submissions")
     assert not is_cacheable_path("/api/v1/generator/boardx")
     assert not is_cacheable_path("/api/v1/admin/generator-rounds/rounds")
 

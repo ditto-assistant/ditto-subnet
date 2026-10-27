@@ -13382,9 +13382,17 @@ class GeneratorSubmission(Base):
     round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
     """The latest scored round this generator had a column in, and its column
     score there; columns are filled best-first from these."""
+    name: Mapped[str | None] = mapped_column(Text)
+    """Optional miner-chosen display name (1-64 characters), shown with the
+    miner's profile on the public generator pages. ``None`` renders a short
+    submission id."""
 
     __table_args__ = (
         UniqueConstraint("source_sha256", name="generator_submissions_sha256_key"),
+        CheckConstraint(
+            "name IS NULL OR char_length(name) BETWEEN 1 AND 64",
+            name="generator_submissions_name_check",
+        ),
         CheckConstraint(
             "source_sha256 ~ '^[0-9a-f]{64}$' AND tree_sha256 ~ '^[0-9a-f]{64}$'",
             name="generator_submissions_digest_check",

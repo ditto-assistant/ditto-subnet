@@ -22,11 +22,14 @@ lane is identical in ``shadow`` and ``enforce``.
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ditto.api_models.name_claim import PublicNameHandle
 
 GENERATOR_SETTINGS_SCOPE = "*"
 GENERATOR_CONTRACT_V1 = "dittobench-generator/v1"
@@ -55,6 +58,28 @@ CaseStatus = Literal["discriminating", "trivial", "unsolved", "duplicate"]
 _SHA256 = r"^[0-9a-f]{64}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _BLOCK_HASH = r"^0x[0-9a-fA-F]{64}$"
+# The agent-name cap (``agents.name``): long enough for a real name, short
+# enough that no name can flood a table cell or a log line.
+MAX_GENERATOR_NAME_LENGTH = 64
+# Control, format, surrogate, private-use and unassigned code points, plus
+# line and paragraph separators: none can be part of a name a reader sees.
+_FORBIDDEN_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+
+def normalize_generator_name(value: str) -> str:
+    """The stored form of a miner-chosen generator name, or ``ValueError``.
+
+    Surrounding whitespace is dropped; the rest must be 1-64 characters with
+    no control or invisible formatting characters.
+    """
+    name = unicodedata.normalize("NFC", value).strip()
+    if not 1 <= len(name) <= MAX_GENERATOR_NAME_LENGTH:
+        raise ValueError(
+            f"generator name must be 1-{MAX_GENERATOR_NAME_LENGTH} characters"
+        )
+    if any(unicodedata.category(char) in _FORBIDDEN_NAME_CATEGORIES for char in name):
+        raise ValueError("generator name contains a control or invisible character")
+    return name
 
 
 def generator_settings_confirmation(mode: str) -> str:
@@ -254,6 +279,15 @@ class GeneratorSubmissionUploadRequest(BaseModel):
     """The finalized ``Balances.transfer_keep_alive`` that pays the upload
     fee, required only while the generator fee is required (see
     ``GeneratorUploadTerms``). All three or none."""
+    name: Annotated[str | None, Field(max_length=256)] = None
+    """Optional display name for this generator (1-64 characters after
+    trimming). A name another miner family holds a reserved handle on is
+    refused, as for agent uploads. Older clients omit it."""
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_generator_name(value)
 
     @model_validator(mode="after")
     def _payment_all_or_none(self) -> GeneratorSubmissionUploadRequest:
@@ -309,6 +343,7 @@ class GeneratorSubmissionUploadResponse(GeneratorModel):
     tree_sha256: str
     status: SubmissionStatus
     superseded: list[UUID] = Field(default_factory=list)
+    name: str | None = None
 
 
 class GeneratorCaseStatusCounts(GeneratorModel):
@@ -354,6 +389,14 @@ class GeneratorSubmissionSummary(GeneratorModel):
     public_default: bool = False
     round_score: float | None = None
     round_scored_index: int | None = None
+    name: str | None = None
+    """Public display name: the miner's chosen name, struck when another
+    family holds an upheld handle claim on it; ``None`` when unnamed."""
+    name_handle: PublicNameHandle | None = None
+    avatar_url: str | None = None
+    """Same-origin path of the miner's profile picture, when they set one."""
+    version: int | None = None
+    """This generator's position among the hotkey's uploads (1 = first)."""
 
 
 class GeneratorSubmissionListResponse(GeneratorModel):

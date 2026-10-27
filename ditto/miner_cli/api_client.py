@@ -427,18 +427,19 @@ class ApiClient:
         return result
 
     def get_generator_upload_terms(
-        self, *, hotkey: str, source_sha256: str
+        self, *, hotkey: str, source_sha256: str, name: str | None = None
     ) -> dict[str, Any] | None:
         """What a generator upload needs now, or ``None`` on an older Platform.
 
         A Platform without the endpoint predates generator upload fees, so it
-        never requires one.
+        never requires one. ``name`` asks Platform whether that display name
+        would be refused (a handle reserved to another miner family) before
+        anything is paid.
         """
-        response = self._request(
-            "GET",
-            "/api/v1/generator/upload-terms",
-            params={"hotkey": hotkey, "source_sha256": source_sha256},
-        )
+        params = {"hotkey": hotkey, "source_sha256": source_sha256}
+        if name is not None:
+            params["name"] = name
+        response = self._request("GET", "/api/v1/generator/upload-terms", params=params)
         if response.status_code == 404:
             return None
         if response.status_code != 200:

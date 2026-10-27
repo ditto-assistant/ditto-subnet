@@ -188,6 +188,7 @@ async def _seed_generator(
     owner: str,
     salt: str,
     qualified: bool = True,
+    name: str | None = None,
 ) -> UUID:
     raw = _archive(salt)
     now = datetime.now(UTC)
@@ -208,6 +209,7 @@ async def _seed_generator(
         submitted_at=now - timedelta(hours=1),
         updated_at=now,
         qualified_at=now if qualified else None,
+        name=name,
     )
     async with maker() as session, session.begin():
         session.add(row)
@@ -597,7 +599,11 @@ class TestRoundLifecycle:
         _patch_lane(monkeypatch)
         default_id = await _register_default(client)
         miner_a = await _seed_generator(
-            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+            session_maker,
+            hotkey="5GenMinerA",
+            owner="coldkey:ga",
+            salt="a",
+            name="Alpha gen",
         )
         miner_b = await _seed_generator(
             session_maker, hotkey="5GenMinerB", owner="coldkey:gb", salt="b"
@@ -802,6 +808,24 @@ class TestRoundLifecycle:
         }
         assert all(e["round_index"] == 3 for e in ledger["entries"])
         assert all(e["weight_eligible"] is False for e in ledger["entries"])
+        # The public board adds identity and recent form; the validator
+        # ledger keeps its plain shape.
+        board = {e["miner_hotkey"]: e for e in ledger["entries"]}
+        assert board["5GenMinerA"]["name"] == "Alpha gen"
+        assert board["5GenMinerA"]["version"] == 1
+        assert board["5GenMinerB"]["name"] is None
+        for entry in board.values():
+            assert entry["rounds_in_window"] == 1
+            assert [p["round_index"] for p in entry["recent"]] == [3]
+            assert entry["recent"][0]["score"] == entry["score"]
+            assert 1 <= entry["recent"][0]["rank"] <= entry["recent"][0]["columns"]
+        detail_a = (await client.get(f"/api/v1/generator/submissions/{miner_a}")).json()
+        assert detail_a["submission"]["name"] == "Alpha gen"
+        [held] = detail_a["rounds"]
+        assert held["round_index"] == 3 and held["counted"] is True
+        assert held["score"] == board["5GenMinerA"]["score"]
+        assert held["columns"] == 5 and held["panel_size"] == 3
+        assert held["discriminating"] == board["5GenMinerA"]["discriminating_cases"]
         # ``enforce`` marks the same qualified miner generators eligible and
         # changes nothing else about the ledger.
         await _apply_settings(client, mode="enforce")
@@ -844,6 +868,14 @@ class TestRoundLifecycle:
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert len(public["standings"]) == 3
         assert public["columns"][2]["miner_hotkey"] is None
+        named = {c["miner_hotkey"]: c["name"] for c in public["columns"]}
+        assert named["5GenMinerA"] == "Alpha gen" and named[None] is None
+        assert {s["agent_name"] for s in public["standings"]} == {
+            "panel-0",
+            "panel-1",
+            "panel-2",
+        }
+        assert all(s["miner_hotkey"] for s in public["standings"])
         candidates = (
             await client.get(
                 "/api/v1/admin/generator-competition/promotion-candidates",

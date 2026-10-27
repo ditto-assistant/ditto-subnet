@@ -99,6 +99,7 @@ class _FakeClient:
     submission_terms: dict[str, Any] | None = None
     reject: Exception | None = None
     malformed = False
+    terms_queries: list[dict[str, Any]] = []
 
     def __init__(self, **_kwargs: Any) -> None:
         pass
@@ -107,8 +108,9 @@ class _FakeClient:
         assert competition == "generator"
         return _FakeClient.submission_terms
 
-    def get_generator_upload_terms(self, **query: str) -> dict[str, Any] | None:
-        assert set(query) == {"hotkey", "source_sha256"}
+    def get_generator_upload_terms(self, **query: Any) -> dict[str, Any] | None:
+        assert set(query) == {"hotkey", "source_sha256", "name"}
+        _FakeClient.terms_queries.append(query)
         return _FakeClient.terms
 
     def __enter__(self) -> _FakeClient:
@@ -129,6 +131,7 @@ class _FakeClient:
             "source_sha256": body["source_sha256"],
             "tree_sha256": "cd" * 32,
             "superseded": [],
+            "name": body.get("name"),
         }
 
 
@@ -156,6 +159,7 @@ def _install_wallet(monkeypatch: pytest.MonkeyPatch, key: bittensor.Keypair) -> 
     _FakeClient.terms = None
     _FakeClient.reject = None
     _FakeClient.malformed = False
+    _FakeClient.terms_queries = []
 
 
 def test_upload_signs_the_exact_bytes(
@@ -200,6 +204,56 @@ def test_upload_refuses_an_archive_the_contract_rejects(
     with pytest.raises(gen_cmd.GeneratorToolError, match="no go.mod"):
         gen_cmd.run(_upload_args(archive))
     assert _FakeClient.posted == []
+
+
+def test_upload_sends_the_trimmed_name_to_terms_and_upload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = {**_FEE_TERMS, "payment_required": False}
+    args = _upload_args(archive)
+    args.name = "  Needle Forge "
+    assert gen_cmd.run(args) == 0
+    assert _FakeClient.terms_queries[0]["name"] == "Needle Forge"
+    assert _FakeClient.posted[0]["name"] == "Needle Forge"
+    assert "generator 'Needle Forge' active" in capsys.readouterr().err
+
+
+def test_an_unnamed_upload_sends_no_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = {**_FEE_TERMS, "payment_required": False}
+    assert gen_cmd.run(_upload_args(archive)) == 0
+    assert _FakeClient.terms_queries[0]["name"] is None
+    assert "name" not in _FakeClient.posted[0]
+
+
+@pytest.mark.parametrize("name", ["", "   ", "x" * 65, "bad\tname", "zero\u200bwidth"])
+def test_an_invalid_name_is_refused_before_paying(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_wallet(monkeypatch, _KEY)
+    calls = _install_payment(monkeypatch)
+    archive = _fake_archive(tmp_path, monkeypatch)
+    _FakeClient.terms = dict(_FEE_TERMS)
+    args = _upload_args(archive)
+    args.name = name
+    with pytest.raises(MinerCliError, match="--name"):
+        gen_cmd.run(args)
+    assert calls == [] and _FakeClient.posted == []
+    assert _FakeClient.terms_queries == []
+
+
+def test_the_upload_parser_accepts_a_name() -> None:
+    parser = argparse.ArgumentParser()
+    gen_cmd.add_subparser(parser.add_subparsers(dest="command"))
+    args = parser.parse_args(["generator", "upload", "--dir", "x", "--name", "My gen"])
+    assert args.name == "My gen"
 
 
 def test_upload_needs_exactly_one_source(tmp_path: Path) -> None:

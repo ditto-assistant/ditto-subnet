@@ -49,7 +49,11 @@ _PREFIX = "/api/v1/public/"
 # World-readable reads outside ``/public/``: the generator board and rounds
 # serve every viewer the same body and declare ``max-age``, but without the
 # cache each dashboard poll recomputed the ledger against Postgres.
-_EXTRA_PREFIXES = ("/api/v1/generator/board", "/api/v1/generator/rounds")
+_EXTRA_PREFIXES = (
+    "/api/v1/generator/board",
+    "/api/v1/generator/rounds",
+    "/api/v1/generator/submissions",
+)
 
 
 def is_cacheable_path(path: str) -> bool:

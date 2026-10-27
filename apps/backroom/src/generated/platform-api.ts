@@ -5511,7 +5511,8 @@ export interface paths {
         };
         /**
          * Board
-         * @description The shadow generator ledger (each hotkey's latest scored run).
+         * @description The generator ledger validators fold, with each entry's public
+         *     identity (name, avatar, version) and recent round form.
          */
         get: operations["board_api_v1_generator_board_get"];
         put?: never;
@@ -5585,6 +5586,27 @@ export interface paths {
          *     active generator.
          */
         post: operations["upload_submission_api_v1_generator_submissions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator/submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Submission
+         * @description One generator: identity, lifecycle, the hotkey's other versions, and
+         *     its round-by-round results. Never source, seeds, or case content.
+         */
+        get: operations["public_submission_api_v1_generator_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -22139,6 +22161,8 @@ export interface components {
         };
         /** GeneratorRoundColumnView */
         GeneratorRoundColumnView: {
+            /** Avatar Url */
+            avatar_url?: string | null;
             /** Column Id */
             column_id: string;
             /** Counted */
@@ -22151,6 +22175,9 @@ export interface components {
             generated?: boolean | null;
             /** Miner Hotkey */
             miner_hotkey: string | null;
+            /** Name */
+            name?: string | null;
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Public Default */
             public_default: boolean;
             /** Score */
@@ -22164,6 +22191,8 @@ export interface components {
             trivial?: number | null;
             /** Unsolved */
             unsolved?: number | null;
+            /** Version */
+            version?: number | null;
         };
         /**
          * GeneratorRoundCommitmentJobRequest
@@ -22539,6 +22568,27 @@ export interface components {
              */
             reference: boolean;
         };
+        /**
+         * GeneratorRoundPoint
+         * @description One scored round column a hotkey's generator held.
+         */
+        GeneratorRoundPoint: {
+            /** Columns */
+            columns: number;
+            /** Rank */
+            rank: number;
+            /** Round Index */
+            round_index: number;
+            /** Score */
+            score: number;
+            /** Scored At */
+            scored_at?: string | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
         /** GeneratorRoundResultView */
         GeneratorRoundResultView: {
             /**
@@ -22669,12 +22719,20 @@ export interface components {
              * Format: uuid
              */
             agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Avatar Url */
+            avatar_url?: string | null;
             /** Common Cases */
             common_cases: number;
             /** Common Mean */
             common_mean: number;
             /** Losses */
             losses: number;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
             /** Opponents */
             opponents: number;
             /** Pairwise Score */
@@ -22892,10 +22950,42 @@ export interface components {
             submissions: components["schemas"]["GeneratorSubmissionSummary"][];
         };
         /**
+         * GeneratorSubmissionRoundView
+         * @description One scored round a generator held a column in.
+         */
+        GeneratorSubmissionRoundView: {
+            /** Column Id */
+            column_id: string;
+            /** Columns */
+            columns: number;
+            /** Counted */
+            counted: boolean;
+            /** Discriminating */
+            discriminating: number;
+            /** Duplicate */
+            duplicate: number;
+            /** Panel Size */
+            panel_size: number;
+            /** Rank */
+            rank: number;
+            /** Round Index */
+            round_index: number;
+            /** Score */
+            score: number;
+            /** Scored At */
+            scored_at: string | null;
+            /** Trivial */
+            trivial: number;
+            /** Unsolved */
+            unsolved: number;
+        };
+        /**
          * GeneratorSubmissionSummary
          * @description Public-safe view of one submission. Never includes source.
          */
         GeneratorSubmissionSummary: {
+            /** Avatar Url */
+            avatar_url?: string | null;
             /** File Count */
             file_count: number;
             /** Go Version */
@@ -22905,6 +22995,9 @@ export interface components {
             miner_hotkey: string;
             /** Module */
             module: string;
+            /** Name */
+            name?: string | null;
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Next Run At */
             next_run_at: string | null;
             /**
@@ -22941,6 +23034,8 @@ export interface components {
             submitted_at: string;
             /** Tree Sha256 */
             tree_sha256: string;
+            /** Version */
+            version?: number | null;
         };
         /**
          * GeneratorSubmissionUploadRequest
@@ -22949,6 +23044,8 @@ export interface components {
         GeneratorSubmissionUploadRequest: {
             /** Hotkey */
             hotkey: string;
+            /** Name */
+            name?: string | null;
             /** Payment Block Hash */
             payment_block_hash?: string | null;
             /** Payment Block Number */
@@ -22971,6 +23068,8 @@ export interface components {
         };
         /** GeneratorSubmissionUploadResponse */
         GeneratorSubmissionUploadResponse: {
+            /** Name */
+            name?: string | null;
             /** Source Sha256 */
             source_sha256: string;
             /**
@@ -29052,6 +29151,105 @@ export interface components {
              */
             posture?: ("off" | "shadow" | "observe" | "enforce") | null;
             twin_post_pass?: components["schemas"]["TwinPostPassSummary"] | null;
+        };
+        /**
+         * PublicGeneratorBoardEntry
+         * @description A ledger entry with the public identity and recent form the dashboard
+         *     shows. Validators read the plain ledger (``/scoring/generator-ledger``).
+         */
+        PublicGeneratorBoardEntry: {
+            /** Avatar Url */
+            avatar_url?: string | null;
+            /**
+             * Discriminating Cases
+             * @default 0
+             */
+            discriminating_cases: number;
+            /**
+             * First Seen
+             * Format: date-time
+             */
+            first_seen: string;
+            /**
+             * Generator Contract Version
+             * @default 1
+             * @constant
+             */
+            generator_contract_version: 1;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Name */
+            name?: string | null;
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
+            /** Qualified At */
+            qualified_at?: string | null;
+            /** Recent */
+            recent?: components["schemas"]["GeneratorRoundPoint"][];
+            /** Round Index */
+            round_index?: number | null;
+            /**
+             * Rounds In Window
+             * @default 0
+             */
+            rounds_in_window: number;
+            /** Score */
+            score: number;
+            /**
+             * Scored At
+             * Format: date-time
+             */
+            scored_at: string;
+            /** Status */
+            status?: ("active" | "superseded" | "rejected") | null;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Version */
+            version?: number | null;
+            /**
+             * Weight Eligible
+             * @description Whether this result may contribute emissions. False in ``shadow``; under ``enforce``, True for qualified miner generators. Validators pay only eligible entries, and only from a governed generator track share.
+             * @default false
+             */
+            weight_eligible: boolean;
+        };
+        /** PublicGeneratorBoardResponse */
+        PublicGeneratorBoardResponse: {
+            /** Count */
+            count: number;
+            /** Entries */
+            entries?: components["schemas"]["PublicGeneratorBoardEntry"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at?: string;
+            /**
+             * Mode
+             * @default off
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /**
+             * Window Days
+             * @default 0
+             */
+            window_days: number;
+        };
+        /**
+         * PublicGeneratorSubmissionDetail
+         * @description Everything public about one generator: identity, lifecycle, the
+         *     hotkey's other versions, and its round-by-round results. Never source,
+         *     seeds, or case content.
+         */
+        PublicGeneratorSubmissionDetail: {
+            /** Rounds */
+            rounds: components["schemas"]["GeneratorSubmissionRoundView"][];
+            submission: components["schemas"]["GeneratorSubmissionSummary"];
+            /** Versions */
+            versions: components["schemas"]["GeneratorSubmissionSummary"][];
         };
         /**
          * PublicHealthResponse
@@ -52219,7 +52417,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["GeneratorLedgerResponse"];
+                    "application/json": components["schemas"]["PublicGeneratorBoardResponse"];
                 };
             };
         };
@@ -52352,11 +52550,43 @@ export interface operations {
             };
         };
     };
+    public_submission_api_v1_generator_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     upload_terms_api_v1_generator_upload_terms_get: {
         parameters: {
             query?: {
                 hotkey?: string | null;
                 source_sha256?: string | null;
+                name?: string | null;
             };
             header?: never;
             path?: never;

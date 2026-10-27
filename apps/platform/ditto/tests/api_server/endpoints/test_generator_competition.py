@@ -47,6 +47,7 @@ from ditto.db.models import (
     GeneratorProbeEpoch,
     GeneratorRun,
     GeneratorSubmission,
+    MinerAvatar,
 )
 from ditto.tests.api_server.endpoints.test_scoring import (
     _install_chain,
@@ -424,6 +425,166 @@ class TestUpload:
                 GeneratorSubmission, UUID(accepted["submission_id"])
             )
             assert first is not None and first.status == "superseded"
+
+    async def test_named_upload_shows_name_version_and_avatar(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        body = {**_upload_body(_MINER, _archive("named")), "name": "  Needle Forge  "}
+        resp = await client.post("/api/v1/generator/submissions", json=body)
+        assert resp.status_code == 200, resp.text
+        accepted = resp.json()
+        # Surrounding whitespace is trimmed, as the miner CLI also does.
+        assert accepted["name"] == "Needle Forge"
+        async with session_maker() as session:
+            session.add(
+                MinerAvatar(
+                    miner_hotkey=_MINER.ss58_address,
+                    object_key="avatars/test.png",
+                    content_type="image/png",
+                    sha256="ab" * 32,
+                    nonce=uuid4(),
+                )
+            )
+            await session.commit()
+        await _skip_cooldown(session_maker)
+        second = await _upload(client, _archive("unnamed"))
+        assert second["name"] is None
+
+        listing = (
+            await client.get(
+                "/api/v1/generator/submissions",
+                params={"hotkey": _MINER.ss58_address},
+            )
+        ).json()["submissions"]
+        by_id = {item["submission_id"]: item for item in listing}
+        named = by_id[accepted["submission_id"]]
+        unnamed = by_id[second["submission_id"]]
+        assert (named["name"], named["version"]) == ("Needle Forge", 1)
+        assert (unnamed["name"], unnamed["version"]) == (None, 2)
+        avatar = f"/api/v1/public/miners/{_MINER.ss58_address}/avatar"
+        assert named["avatar_url"] == unnamed["avatar_url"] == avatar
+
+        detail = await client.get(
+            f"/api/v1/generator/submissions/{accepted['submission_id']}"
+        )
+        assert detail.status_code == 200, detail.text
+        payload = detail.json()
+        assert payload["submission"]["name"] == "Needle Forge"
+        assert payload["submission"]["status"] == "superseded"
+        assert [v["submission_id"] for v in payload["versions"]] == [
+            second["submission_id"],
+            accepted["submission_id"],
+        ]
+        # No round has scored this generator yet, and source never leaves.
+        assert payload["rounds"] == []
+        assert "source_base64" not in detail.text
+        assert detail.headers["cache-control"].startswith("public, max-age=30")
+        missing = await client.get(f"/api/v1/generator/submissions/{uuid4()}")
+        assert missing.status_code == 404
+
+    @pytest.mark.parametrize(
+        "name", ["", "   ", "x" * 65, "tab\there", "zero\u200bwidth", "line\u2028break"]
+    )
+    async def test_invalid_names_are_refused_before_anything_is_stored(
+        self,
+        name: str,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        body = {**_upload_body(_MINER, _archive("bad-name")), "name": name}
+        resp = await client.post("/api/v1/generator/submissions", json=body)
+        assert resp.status_code == 422, resp.text
+        terms = (
+            await client.get(
+                "/api/v1/generator/upload-terms",
+                params={"hotkey": _MINER.ss58_address, "name": name},
+            )
+        ).json()
+        assert any("generator name" in blocker for blocker in terms["blockers"])
+        async with session_maker() as session:
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(GeneratorSubmission)
+                )
+                == 0
+            )
+
+    async def test_a_reserved_handle_is_refused_in_terms_and_upload(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ditto.api_server.endpoints.generator as endpoint
+
+        seen: list[tuple[str, str, str | None]] = []
+
+        async def _reserved(
+            _session: AsyncSession,
+            *,
+            netuid: int,
+            agent_name: str,
+            miner_hotkey: str,
+            miner_coldkey: str | None,
+        ) -> str | None:
+            assert netuid > 0
+            seen.append((agent_name, miner_hotkey, miner_coldkey))
+            if agent_name.lower().startswith("taken"):
+                return "handle 'taken' is reserved to another miner family"
+            return None
+
+        monkeypatch.setattr(endpoint, "upload_name_is_reserved", _reserved)
+        _install(app, session_maker)
+        await _open_lane(client)
+        terms = (
+            await client.get(
+                "/api/v1/generator/upload-terms",
+                params={"hotkey": _MINER.ss58_address, "name": "Taken v2"},
+            )
+        ).json()
+        assert terms["blockers"] == [
+            "handle 'taken' is reserved to another miner family"
+        ]
+        body = {**_upload_body(_MINER, _archive("taken")), "name": "Taken v2"}
+        refused = await client.post("/api/v1/generator/submissions", json=body)
+        assert refused.status_code == 409
+        assert "reserved" in refused.text
+        # The upload checks against the coldkey that owns the hotkey on chain.
+        assert seen[-1] == ("Taken v2", _MINER.ss58_address, f"{_MINER_COLDKEY[:-2]}00")
+        free = {**_upload_body(_MINER, _archive("free")), "name": "Free name"}
+        assert (
+            await client.post("/api/v1/generator/submissions", json=free)
+        ).status_code == 200
+
+    async def test_the_public_default_has_no_public_detail(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive("default"))
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(accepted["submission_id"])
+            )
+            assert row is not None
+            row.public_default = True
+            await session.commit()
+        resp = await client.get(
+            f"/api/v1/generator/submissions/{accepted['submission_id']}"
+        )
+        assert resp.status_code == 404
 
     async def test_repacked_tree_is_a_duplicate_for_anyone(
         self,

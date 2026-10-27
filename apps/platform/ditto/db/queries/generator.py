@@ -84,6 +84,17 @@ async def insert_generator_settings_revision(
 # --- submissions ---------------------------------------------------------
 
 
+async def get_submission_without_source(
+    session: AsyncSession, submission_id: UUID
+) -> GeneratorSubmission | None:
+    """One submission for a public view: the archive bytes are never loaded."""
+    return await session.scalar(
+        select(GeneratorSubmission)
+        .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
+        .where(GeneratorSubmission.submission_id == submission_id)
+    )
+
+
 async def get_submission(
     session: AsyncSession, submission_id: UUID, *, for_update: bool = False
 ) -> GeneratorSubmission | None:
@@ -182,9 +193,11 @@ async def insert_submission(
     go_version: str,
     file_count: int,
     now: datetime,
+    name: str | None = None,
 ) -> GeneratorSubmission:
     row = GeneratorSubmission(
         submission_id=uuid4(),
+        name=name,
         miner_hotkey=miner_hotkey,
         owner_key=owner_key,
         source_sha256=source_sha256,

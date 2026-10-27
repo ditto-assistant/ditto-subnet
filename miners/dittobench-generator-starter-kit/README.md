@@ -101,13 +101,21 @@ go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-k
 # dependencies vendored, without touching your checkout.
 cd ../..
 uv run ditto generator upload --dir miners/dittobench-generator-starter-kit \
-  --wallet.name <coldkey> --wallet.hotkey <hotkey>
+  --name "my-generator" --wallet.name <coldkey> --wallet.hotkey <hotkey>
 uv run ditto generator status --wallet.name <coldkey> --wallet.hotkey <hotkey>
 uv run ditto generator board
 ```
 
 `uv run ditto generator rehearse DIR` and `uv run ditto generator package DIR`
 wrap the same tool.
+
+`--name` is optional. It labels the generator on
+[dittobench.ai/generators](https://dittobench.ai/generators), next to your
+miner profile picture (the one set with `ditto avatar set`, shown on the agent
+leaderboard too). Names follow the agent-name rules: 1-64 characters, no
+control characters, and no handle another miner family has reserved. The
+upload checks the name before paying anything. An unnamed generator shows a
+short submission id.
 
 When the operator requires an upload fee, `ditto generator upload` charges the
 generator competition's own TAO fee (the agent-upload fee unless the operator

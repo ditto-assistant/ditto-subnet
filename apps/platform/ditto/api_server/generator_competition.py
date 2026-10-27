@@ -64,6 +64,7 @@ from ditto.score_order import rank_submissions
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from ditto.api_server.generator_identity import GeneratorIdentity
     from ditto.db.models import GeneratorRun, GeneratorSubmission
 
 logger = logging.getLogger(__name__)
@@ -466,7 +467,10 @@ def submission_summary(
     row: GeneratorSubmission,
     latest: GeneratorRun | None,
     counts: dict[str, int] | None,
+    identity: GeneratorIdentity | None = None,
 ) -> GeneratorSubmissionSummary:
+    """A submission's public summary; ``identity`` adds its public name,
+    avatar and version (operator views may omit it)."""
     return GeneratorSubmissionSummary(
         submission_id=row.submission_id,
         miner_hotkey=row.miner_hotkey,
@@ -489,6 +493,10 @@ def submission_summary(
         public_default=row.public_default,
         round_score=row.round_score,
         round_scored_index=row.round_scored_index,
+        name=identity.name if identity is not None else row.name,
+        name_handle=identity.name_handle if identity is not None else None,
+        avatar_url=identity.avatar_url if identity is not None else None,
+        version=identity.version if identity is not None else None,
     )
 
 

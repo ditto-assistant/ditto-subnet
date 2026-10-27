@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -133,6 +134,14 @@ def add_subparser(
     )
     upload.add_argument("archive", type=Path, nargs="?")
     upload.add_argument("--dir", type=Path, help="Package this directory first.")
+    upload.add_argument(
+        "--name",
+        help=(
+            "Display name for this generator on dittobench.ai/generators "
+            f"(1-{MAX_GENERATOR_NAME_LENGTH} characters). Shown with your miner "
+            "profile picture. Unnamed generators show a short submission id."
+        ),
+    )
     _tool_flag(upload)
     _wallet_flags(upload)
     recovery = upload.add_argument_group(
@@ -334,7 +343,27 @@ def _recovery_hint(receipt: PaymentReceipt) -> str:
     )
 
 
+MAX_GENERATOR_NAME_LENGTH = 64
+# Platform refuses these too (``normalize_generator_name``): control, format,
+# surrogate, private-use and unassigned code points, and line separators.
+_FORBIDDEN_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+
+def normalize_generator_name(value: str) -> str:
+    """The name Platform will store, or :class:`MinerCliError` before paying."""
+    name = unicodedata.normalize("NFC", value).strip()
+    if not 1 <= len(name) <= MAX_GENERATOR_NAME_LENGTH:
+        raise MinerCliError(
+            f"--name must be 1-{MAX_GENERATOR_NAME_LENGTH} characters after trimming"
+        )
+    if any(unicodedata.category(char) in _FORBIDDEN_NAME_CATEGORIES for char in name):
+        raise MinerCliError("--name contains a control or invisible character")
+    return name
+
+
 def _upload(args: argparse.Namespace, archive: Path) -> int:
+    raw_name = getattr(args, "name", None)
+    name = None if raw_name is None else normalize_generator_name(raw_name)
     recovery = _recovery_receipt_from_args(args)
     with archive.open("rb") as source:
         raw = source.read(MAX_ARCHIVE_BYTES + 1)
@@ -378,7 +407,7 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
             # Read the terms before paying anything. An older Platform has no
             # terms endpoint and never charges for generator uploads.
             terms = client.get_generator_upload_terms(
-                hotkey=handle.hotkey_ss58, source_sha256=digest
+                hotkey=handle.hotkey_ss58, source_sha256=digest, name=name
             )
             if terms is not None:
                 blockers = terms.get("blockers") or []
@@ -428,6 +457,8 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
             "signature_timestamp": timestamp,
             "signature_nonce": nonce,
         }
+        if name is not None:
+            body["name"] = name
         if receipt is not None:
             body.update(
                 payment_block_hash=receipt.block_hash,
@@ -459,8 +490,17 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
             raise
     print(submission_id)
     superseded = result.get("superseded") or []
+    stored_name = result.get("name")
+    if name is not None and stored_name is None:
+        # A Platform without generator names accepted the upload unnamed.
+        print(
+            "note: this Platform does not store generator names yet; the "
+            "generator was uploaded unnamed",
+            file=sys.stderr,
+        )
     print(
-        f"generator {status}: {info.get('files')} files, module "
+        (f"generator {stored_name!r} " if stored_name else "generator ")
+        + f"{status}: {info.get('files')} files, module "
         f"{info.get('module')}, sha256 {source_sha256}"
         + (
             f"; superseded {len(superseded)} earlier generator(s)" if superseded else ""
