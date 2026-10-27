@@ -177,12 +177,12 @@ func TestAtThresholdFlagsHalfCreditSolves(t *testing.T) {
 }
 
 func TestMarkdownEscapesFamilyLabels(t *testing.T) {
-	rows, err := Evaluate([]CaseRow{{Round: 1, Family: "a|b\nc", Status: challenge.CaseTrivial}}, DefaultParams())
+	rows, err := Evaluate([]CaseRow{{Round: 1, Family: `a\|b` + "\nc", Status: challenge.CaseTrivial}}, DefaultParams())
 	if err != nil {
 		t.Fatal(err)
 	}
 	md := Markdown(rows, DefaultParams())
-	if !strings.Contains(md, `| a\|b c |`) || strings.Count(md, "\n") != 5 {
+	if !strings.Contains(md, `| a\\\|b c |`) || strings.Count(md, "\n") != 5 {
 		t.Fatalf("label broke the table:\n%s", md)
 	}
 }

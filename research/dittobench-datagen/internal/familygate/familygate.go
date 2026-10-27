@@ -290,7 +290,7 @@ func verdict(row FamilyRow, p Params) (string, []string) {
 
 // markdownCell keeps a label inside one table cell.
 func markdownCell(s string) string {
-	return strings.NewReplacer("|", `\|`, "\r", " ", "\n", " ").Replace(s)
+	return strings.NewReplacer(`\`, `\\`, "|", `\|`, "\r", " ", "\n", " ").Replace(s)
 }
 
 // Markdown renders the per-family table for the v14 qualification report.
