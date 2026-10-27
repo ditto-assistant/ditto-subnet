@@ -144,3 +144,71 @@ Database score/ticket versions already have no upper bound. The equality-to-13
 constraints belong to private v13 screening, canary or scorer-cohort records;
 those remain version-specific. No schema migration or production write is
 required for this compatibility change.
+
+## Open activation blockers
+
+This is the October 26 readiness audit. V13 is active and confirmation runs in
+`shadow`. Each item below must be closed with evidence, or explicitly waived
+by the operator, before anyone calls `start_benchmark_rollout` for v14. An
+item listed here is a blocker. It is not a claim that the work has started.
+
+Closed in code:
+
+- **Weight fold receipt parity.** Issue #2989 was fixed by #3184. The
+  validator fold and the enforce ledger check now read the full-confirmation
+  receipt for every confirmation-capable version, matching Platform's crown.
+  Before the fix, enabling confirmation enforce on a v14 ledger could crown a
+  different champion than the Platform pin. Every weight receipt would then
+  fail `ledger_pin_mismatch`. The fix does not change live v13 shadow
+  behavior. Validators must run a release that includes #3184 before enforce
+  is served on any v10+ ledger.
+- **Public v14 adversary control.** #3179 lets `parserprobe
+  -require-public-control` validate a v14 report.
+
+Open, and requiring an operator, release-owner or paid run:
+
+1. **Anti-template qualification (#1832).** The steps are in
+   [the handoff](benchmark-v14-template-resistance.md):
+   - an advisory-guidance carrier run
+   - paired cases with fresh phrasing and misleading cues, plus paired cases
+     where the stored decision differs
+   - a coordinated v14 contract for the private producer and its delivery,
+     replacing the private base, surface and artifact decoders that are still
+     bound to v13
+   - clean honest-agent and adversary controls against the documented 0.02
+     and 0.05 limits
+
+   These need private producer runs, provider spend and owner design
+   decisions, so no code is merged for them here. The latest offline public
+   GIH diagnostic still inverts v14 at a quality of 0.9501. Comments on #1832
+   give the report SHA.
+2. **Release packet and fleet readiness (#2508).** This document already
+   describes it: the exact merge SHA, scorer image and descriptor digests,
+   `v14_scored_runtime_env` heartbeats from a separate cohort, and the
+   archived v13 cohort packet.
+3. **Accepted diagnostic canaries and the shadow report.** These are gates 3
+   to 5 above. No measured v14 shadow results exist yet.
+4. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
+   bundles exist. Enforce stays off at activation unless that evidence is
+   recorded separately.
+5. **Generator-competition rounds stay on the v13 contract.**
+   - `validator_generator_round.py` issues `benchmark_contract(13)` jobs.
+   - `issue_generator_round_ticket` keys the ticket `(agent, 13, validator)`
+     and applies the v13 scorer-cohort pin.
+   - Activating v14 does not move rounds. They keep depending on a live v13
+     cohort.
+   - Before activation, the owner must decide whether rounds stay on v13
+     (and keep that cohort staffed) or get their own versioned migration.
+6. **Miner rehearsal default.** Since v13 activated,
+   `local-rehearsal.py` `LIVE_SCORING_BENCH_VERSION` (still 12) and
+   `.agents/skills/mine/SKILL.md` have lagged the live bench. Update both
+   with the activation PR (bump checklist step 8). Otherwise miners rehearse
+   an older contract by default.
+
+Work in progress elsewhere that also changes the v14 vector:
+
+- SN-351 to SN-360 (generator-derived datagen families)
+- the answer-checker normalization and markdown-tolerance work
+
+The vector and the replay evidence must be re-pinned after the last of these
+lands, and before the release packet is cut.
