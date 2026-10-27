@@ -46,7 +46,7 @@ non-goal). The v15 contract therefore splits the run into two halves:
 | Half | Cases | Inside the half |
 |---|---:|---|
 | Datagen | 175 | 50 tool + about 125 memory, from the inherited contract (v14 if it activates first, else v13) at a new "dueling" profile. Graded and gated exactly as that contract. |
-| Generator slice | 175 | 5 columns x 35 cases, graded by the pack grader (`challenge.GradingBenchVersion`, v13 policy). |
+| Generator slice | 175 | 5 columns x 35 cases, each graded at its pack's declared policy (`grading_bench_version`, pinned per season; see [tandem-upgrades.md](tandem-upgrades.md)). |
 
 ```
 datagen   = 0.5 x tool_mean + 0.5 x memory_mean      (datagen cases only)
@@ -378,8 +378,10 @@ a `rounds_per_season` below 2.
 ## 4. Scoring
 
 - **Grading.** Slice cases are graded by `scorer.GradeMemory` at the pack's
-  `grading_bench_version` (13). That is the grader rounds use, so a column's
-  measured round solvability carries over to canonical runs. Datagen cases are
+  declared `grading_bench_version` (13 or 14 today), which the season pins per
+  column ([tandem-upgrades.md](tandem-upgrades.md)). That is the grader rounds
+  use, so a column's measured round solvability carries over to canonical
+  runs. Datagen cases are
   graded by the inherited contract, unchanged.
 - **Composite.** As in section 1. `composite_stderr` treats columns as strata:
   `SE_G^2 = (1/k^2) x sum_c(s_c^2 / n_c)` over the k unmasked columns, and
