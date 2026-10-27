@@ -51,7 +51,7 @@ import hashlib
 import logging
 import secrets
 import struct
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -59,6 +59,7 @@ from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 from sqlalchemy import and_, func, select, true, update
+from sqlalchemy.orm import defer
 
 from ditto.api_models.generator import PanelCaseResult
 from ditto.api_models.generator_ledger import (
@@ -419,10 +420,28 @@ async def select_round_panel(
 # --- lifecycle --------------------------------------------------------------
 
 
+# A round row carries its whole generated dataset (``dataset_bytes``, often
+# megabytes) and every column's case refs. Read views never need either, so
+# they defer them: loading them on every public poll pulled the dataset through
+# the event loop for each request. ``raiseload`` makes a view that does touch
+# them fail loudly in tests instead of lazy-loading under the async session.
+_READ_VIEW_DEFERRED = (
+    defer(GeneratorRound.dataset_bytes, raiseload=True),
+    defer(GeneratorRound.column_cases, raiseload=True),
+)
+
+
 async def get_round(
-    session: AsyncSession, round_index: int, *, for_update: bool = False
+    session: AsyncSession,
+    round_index: int,
+    *,
+    for_update: bool = False,
+    read_view: bool = False,
 ) -> GeneratorRound | None:
+    """One round. ``read_view`` skips the dataset and case refs (see above)."""
     stmt = select(GeneratorRound).where(GeneratorRound.round_index == round_index)
+    if read_view:
+        stmt = stmt.options(*_READ_VIEW_DEFERRED)
     if for_update:
         stmt = stmt.with_for_update()
     return await session.scalar(stmt)
@@ -457,15 +476,6 @@ def void_round(row: GeneratorRound, reason: str, *, now: datetime) -> None:
     row.closed_at = row.closed_at or now
 
 
-async def _result_count(session: AsyncSession, round_index: int) -> int:
-    return int(
-        await session.scalar(
-            select(func.count()).where(GeneratorRoundResult.round_index == round_index)
-        )
-        or 0
-    )
-
-
 def active_panel(row: GeneratorRound) -> list[dict[str, Any]]:
     """The round's frozen panel minus agents dropped while it ran."""
     return [slot for slot in row.panel or () if not slot.get("dropped_reason")]
@@ -487,13 +497,17 @@ class PanelTally:
 
 
 async def panel_tally(session: AsyncSession, row: GeneratorRound) -> PanelTally:
-    seated = {slot["agent_id"] for slot in active_panel(row)}
     rows = await session.execute(
         select(GeneratorRoundResult.agent_id, GeneratorRoundResult.answered).where(
             GeneratorRoundResult.round_index == row.round_index
         )
     )
-    reported = [answered for agent_id, answered in rows if str(agent_id) in seated]
+    return _tally(row, [(str(agent_id), int(answered)) for agent_id, answered in rows])
+
+
+def _tally(row: GeneratorRound, results: Iterable[tuple[str, int]]) -> PanelTally:
+    seated = {slot["agent_id"] for slot in active_panel(row)}
+    reported = [answered for agent_id, answered in results if agent_id in seated]
     return PanelTally(
         seated=len(seated),
         reported=len(reported),
@@ -1520,17 +1534,72 @@ def _revealed(row: GeneratorRound) -> bool:
 async def round_summary(
     session: AsyncSession, row: GeneratorRound, *, operator: bool = False
 ) -> GeneratorRoundSummary:
+    return (await round_summaries(session, [row], operator=operator))[0]
+
+
+async def round_summaries(
+    session: AsyncSession,
+    rows: Sequence[GeneratorRound],
+    *,
+    operator: bool = False,
+) -> list[GeneratorRoundSummary]:
+    """Summaries for ``rows`` in two queries, whatever their number.
+
+    Each summary needs the round's reported results and confirmed commitment
+    publications; reading those per round made a page of ten rounds thirty
+    queries deep.
+    """
+    indexes = [row.round_index for row in rows]
+    if not indexes:
+        return []
+    reported: dict[int, list[tuple[str, int]]] = {index: [] for index in indexes}
+    for index, agent_id, answered in await session.execute(
+        select(
+            GeneratorRoundResult.round_index,
+            GeneratorRoundResult.agent_id,
+            GeneratorRoundResult.answered,
+        ).where(GeneratorRoundResult.round_index.in_(indexes))
+    ):
+        reported[int(index)].append((str(agent_id), int(answered)))
+    confirmed = {
+        int(index): int(count)
+        for index, count in await session.execute(
+            select(GeneratorRoundCommitmentPublication.round_index, func.count())
+            .where(
+                GeneratorRoundCommitmentPublication.round_index.in_(indexes),
+                GeneratorRoundCommitmentPublication.status == "confirmed",
+            )
+            .group_by(GeneratorRoundCommitmentPublication.round_index)
+        )
+    }
+    return [
+        _summary(
+            row,
+            tally=_tally(row, reported[row.round_index]),
+            results=len(reported[row.round_index]),
+            confirmations=confirmed.get(row.round_index, 0),
+            operator=operator,
+        )
+        for row in rows
+    ]
+
+
+def _summary(
+    row: GeneratorRound,
+    *,
+    tally: PanelTally,
+    results: int,
+    confirmations: int,
+    operator: bool,
+) -> GeneratorRoundSummary:
     revealed = _revealed(row)
-    tally = await panel_tally(session, row)
     return GeneratorRoundSummary(
         round_index=row.round_index,
         status=row.status,  # type: ignore[arg-type]
         epochs_per_round=row.epochs_per_round,
         commitment=row.commitment,
         commitment_publication=row.commitment_publication,  # type: ignore[arg-type]
-        commitment_confirmations=await commitment_confirmations(
-            session, row.round_index
-        ),
+        commitment_confirmations=confirmations,
         committed_at=row.committed_at,
         open_epoch_index=row.open_epoch_index,
         open_block=row.open_block,
@@ -1539,7 +1608,7 @@ async def round_summary(
         column_count=len(row.columns or ()),
         panel_size=len(row.panel or ()),
         panel_dropped=len(row.panel or ()) - tally.seated,
-        results=await _result_count(session, row.round_index),
+        results=results,
         answered_results=tally.answered,
         closed_at=row.closed_at,
         scored_at=row.scored_at,
@@ -1670,9 +1739,14 @@ async def result_views(
 async def list_rounds(
     session: AsyncSession, *, limit: int = 20, offset: int = 0
 ) -> list[GeneratorRound]:
+    """A page of rounds for listing: no dataset, case refs, or generation log."""
     return list(
         await session.scalars(
             select(GeneratorRound)
+            .options(
+                *_READ_VIEW_DEFERRED,
+                defer(GeneratorRound.generation, raiseload=True),
+            )
             .order_by(GeneratorRound.round_index.desc())
             .limit(limit)
             .offset(offset)
@@ -1710,34 +1784,73 @@ async def build_round_ledger(
             count=0, mode="off", window_days=settings.window_days
         )
     since = now - timedelta(days=settings.window_days)
-    # The latest *scored* round: a void round never credits or replaces a
-    # generator's column score, even if it holds verdicts.
-    latest = (
-        select(
-            GeneratorRoundCaseVerdict.submission_id,
-            func.max(GeneratorRoundCaseVerdict.round_index).label("round_index"),
-        )
-        .join(
-            GeneratorRound,
-            GeneratorRound.round_index == GeneratorRoundCaseVerdict.round_index,
-        )
-        .where(GeneratorRound.status == "scored")
-        .group_by(GeneratorRoundCaseVerdict.submission_id)
-        .subquery()
-    )
-    rows = await session.execute(
-        select(GeneratorSubmission, GeneratorRound)
-        .join(latest, latest.c.submission_id == GeneratorSubmission.submission_id)
-        .join(GeneratorRound, GeneratorRound.round_index == latest.c.round_index)
-        .where(
-            GeneratorSubmission.public_default.is_(False),
-            GeneratorSubmission.status != "rejected",
-            GeneratorRound.status == "scored",
-            GeneratorRound.scored_at >= since,
+    # Only the columns the fold reads. Loading whole rows pulled every
+    # ledgered generator's source archive and, once per submission, its
+    # round's full dataset through the event loop on each read; aggregating
+    # every verdict ever recorded made the cost grow with the round history.
+    first = await session.scalar(
+        select(func.min(GeneratorRound.round_index)).where(
+            GeneratorRound.status == "scored", GeneratorRound.scored_at >= since
         )
     )
-    best: dict[str, tuple[GeneratorSubmission, GeneratorRound]] = {}
-    for sub, rnd in rows.tuples():
+    if first is None:
+        return _ledger_response([], settings=settings, now=now)
+    # Every scored round from the window's first on: a generator whose latest
+    # scored round is older than ``first`` cannot be inside the window, so its
+    # latest round is never needed.
+    rounds = {
+        int(row.round_index): row
+        for row in await session.execute(
+            select(
+                GeneratorRound.round_index,
+                GeneratorRound.columns,
+                GeneratorRound.score,
+                GeneratorRound.scored_at,
+            ).where(
+                GeneratorRound.status == "scored",
+                GeneratorRound.round_index >= first,
+            )
+        )
+    }
+    # The latest *scored* round per generator: a void round never credits or
+    # replaces a generator's column score, even if it holds verdicts.
+    latest = {
+        submission_id: int(round_index)
+        for submission_id, round_index in await session.execute(
+            select(
+                GeneratorRoundCaseVerdict.submission_id,
+                func.max(GeneratorRoundCaseVerdict.round_index),
+            )
+            .where(GeneratorRoundCaseVerdict.round_index.in_(list(rounds)))
+            .group_by(GeneratorRoundCaseVerdict.submission_id)
+        )
+    }
+    latest = {
+        submission_id: index
+        for submission_id, index in latest.items()
+        if rounds[index].scored_at is not None and rounds[index].scored_at >= since
+    }
+    subs: Sequence[Any] = (
+        (
+            await session.execute(
+                select(
+                    GeneratorSubmission.submission_id,
+                    GeneratorSubmission.miner_hotkey,
+                    GeneratorSubmission.submitted_at,
+                    GeneratorSubmission.qualified_at,
+                ).where(
+                    GeneratorSubmission.submission_id.in_(list(latest)),
+                    GeneratorSubmission.public_default.is_(False),
+                    GeneratorSubmission.status != "rejected",
+                )
+            )
+        ).all()
+        if latest
+        else []
+    )
+    best: dict[str, tuple[Any, Any]] = {}
+    for sub in subs:
+        rnd = rounds[latest[sub.submission_id]]
         prior = best.get(sub.miner_hotkey)
         if prior is None or rnd.round_index > prior[1].round_index:
             best[sub.miner_hotkey] = (sub, rnd)
@@ -1771,6 +1884,15 @@ async def build_round_ledger(
                 scored_at=rnd.scored_at or now,
             )
         )
+    return _ledger_response(entries, settings=settings, now=now)
+
+
+def _ledger_response(
+    entries: list[GeneratorLedgerEntry],
+    *,
+    settings: GeneratorCompetitionSettings,
+    now: datetime,
+) -> GeneratorLedgerResponse:
     entries.sort(key=lambda e: (-e.score, e.first_seen, e.miner_hotkey))
     return GeneratorLedgerResponse(
         entries=entries,

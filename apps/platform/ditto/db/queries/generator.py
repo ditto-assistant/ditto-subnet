@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy.orm import defer
 
 from ditto.db.models import (
     GeneratorCaseVerdict,
@@ -553,8 +554,10 @@ async def list_submissions(
     limit: int = 50,
     offset: int = 0,
 ) -> Sequence[GeneratorSubmission]:
+    # Listings never serve source; skip the archive bytes (up to 4 MiB a row).
     stmt = (
         select(GeneratorSubmission)
+        .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
         .order_by(
             GeneratorSubmission.submitted_at.desc(),
             GeneratorSubmission.submission_id,

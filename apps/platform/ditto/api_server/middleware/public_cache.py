@@ -9,7 +9,8 @@ poll ran its queries against Postgres.
 
 This middleware enforces the endpoints' own declared TTLs in-process:
 
-- Only ``GET`` requests under ``/api/v1/public/`` are considered.
+- Only ``GET`` requests under ``/api/v1/public/`` and the generator
+  competition's public board and rounds are considered.
 - A response is cached only when it is a 200 whose ``Cache-Control`` carries
   a positive ``max-age``; ``no-store``/``private`` responses pass through.
 - Concurrent misses on one key are single-flighted: one request computes,
@@ -45,6 +46,19 @@ if TYPE_CHECKING:
     from starlette.requests import Request
 
 _PREFIX = "/api/v1/public/"
+# World-readable reads outside ``/public/``: the generator board and rounds
+# serve every viewer the same body and declare ``max-age``, but without the
+# cache each dashboard poll recomputed the ledger against Postgres.
+_EXTRA_PREFIXES = ("/api/v1/generator/board", "/api/v1/generator/rounds")
+
+
+def is_cacheable_path(path: str) -> bool:
+    """Whether a GET on ``path`` may be served from the shared cache."""
+    return path.startswith(_PREFIX) or any(
+        path == prefix or path.startswith(prefix + "/") for prefix in _EXTRA_PREFIXES
+    )
+
+
 _MAX_ENTRIES = 512
 _REFRESH_FAILURE_BACKOFF_SECONDS = 5.0
 
@@ -404,7 +418,7 @@ class PublicCacheMiddleware(BaseHTTPMiddleware):
         if (
             self._disabled
             or request.method != "GET"
-            or not request.url.path.startswith(_PREFIX)
+            or not is_cacheable_path(request.url.path)
         ):
             return await call_next(request)
 

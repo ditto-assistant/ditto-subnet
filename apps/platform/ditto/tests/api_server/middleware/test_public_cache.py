@@ -377,6 +377,19 @@ async def test_no_store_post_and_non_public_paths_bypass(clock: _Clock) -> None:
     assert calls["outside"] == 2
 
 
+def test_generator_public_reads_are_cacheable() -> None:
+    from ditto.api_server.middleware.public_cache import is_cacheable_path
+
+    assert is_cacheable_path("/api/v1/generator/board")
+    assert is_cacheable_path("/api/v1/generator/rounds")
+    assert is_cacheable_path("/api/v1/generator/rounds/42")
+    # Miner-specific or no-store generator routes stay uncached.
+    assert not is_cacheable_path("/api/v1/generator/upload-terms")
+    assert not is_cacheable_path("/api/v1/generator/submissions")
+    assert not is_cacheable_path("/api/v1/generator/boardx")
+    assert not is_cacheable_path("/api/v1/admin/generator-rounds/rounds")
+
+
 async def test_query_string_is_part_of_the_key(clock: _Clock) -> None:
     app, calls = _build(clock)
     async with _client(app) as client:

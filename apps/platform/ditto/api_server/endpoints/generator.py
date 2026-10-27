@@ -66,6 +66,7 @@ from ditto.api_server.generator_rounds import (
     column_views,
     get_round,
     list_rounds,
+    round_summaries,
     round_summary,
     standing_views,
 )
@@ -114,6 +115,10 @@ router = APIRouter(prefix="/generator", tags=["generator"])
 
 SIGNATURE_MAX_SKEW_SECONDS = 300
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+# The board and rounds are the same for every viewer. The public cache serves
+# them for 30s and then answers from the last snapshot while one background
+# read rebuilds it, so a dashboard poll never waits on the ledger query.
+_PUBLIC_READ_CACHE = "public, max-age=30, stale-while-revalidate=120"
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ChainDep = Annotated["ChainClient", Depends(get_chain_client)]
@@ -496,7 +501,7 @@ async def list_hotkey_submissions(
 @router.get("/board", response_model=GeneratorLedgerResponse)
 async def board(session: SessionDep, response: Response) -> GeneratorLedgerResponse:
     """The shadow generator ledger (each hotkey's latest scored run)."""
-    response.headers["Cache-Control"] = "public, max-age=30"
+    response.headers["Cache-Control"] = _PUBLIC_READ_CACHE
     resolved = await load_settings(session)
     return await build_ledger(session, resolved=resolved, now=datetime.now(UTC))
 
@@ -515,7 +520,7 @@ async def public_rounds(
     window, so anyone can then check the secret against the commitment
     published before the round opened and recompute every case.
     """
-    response.headers["Cache-Control"] = "public, max-age=30"
+    response.headers["Cache-Control"] = _PUBLIC_READ_CACHE
     resolved = await load_settings(session)
     loop = getattr(request.app.state, "generator_round_loop", None)
     schedule = (
@@ -528,10 +533,9 @@ async def public_rounds(
     )
     return GeneratorRoundListResponse(
         schedule=schedule.model_copy(update={"last_error": None}),
-        rounds=[
-            await round_summary(session, row)
-            for row in await list_rounds(session, limit=limit, offset=offset)
-        ],
+        rounds=await round_summaries(
+            session, await list_rounds(session, limit=limit, offset=offset)
+        ),
     )
 
 
@@ -540,8 +544,8 @@ async def public_round(
     round_index: int, session: SessionDep, response: Response
 ) -> GeneratorRoundDetail:
     """One round: columns and their scores, and agent standings once scored."""
-    response.headers["Cache-Control"] = "public, max-age=30"
-    row = await get_round(session, round_index)
+    response.headers["Cache-Control"] = _PUBLIC_READ_CACHE
+    row = await get_round(session, round_index, read_view=True)
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
     scored = row.status == "scored"

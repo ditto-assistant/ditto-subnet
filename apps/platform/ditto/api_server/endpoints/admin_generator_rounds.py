@@ -72,6 +72,7 @@ from ditto.api_server.generator_rounds import (
     public_default_generator,
     result_views,
     round_counts_by_status,
+    round_summaries,
     round_summary,
     select_columns,
     select_round_panel,
@@ -165,7 +166,7 @@ async def admin_list_rounds(
         schedule=_schedule(
             request, resolved.settings.mode, resolved.settings.epochs_per_round
         ),
-        rounds=[await round_summary(session, row, operator=True) for row in rows],
+        rounds=await round_summaries(session, rows, operator=True),
         counts_by_status=await round_counts_by_status(session),
     )
 
