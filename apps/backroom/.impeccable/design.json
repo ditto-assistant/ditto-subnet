@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-27T04:04:24.222739+00:00",
+  "title": "Design System: SN118 Backroom funding surface",
+  "extensions": {
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      }
+    ],
+    "shadows": [
+      {
+        "name": "control-focus",
+        "value": "0 0 0 2px var(--ink), 0 0 0 4px var(--acid)",
+        "purpose": "Existing global control keyboard focus"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Funding refresh",
+      "kind": "button",
+      "description": "Refreshes historical reconciliation records.",
+      "html": "<button class=\"ds-refresh\">Refresh history</button>",
+      "css": ".ds-refresh { color: #f3f6f1; background: transparent; border: 1px solid var(--line, #303631); border-radius: 8px; min-height: 40px; padding: 0 12px; font: 14px Inter, sans-serif; cursor: pointer; } .ds-refresh:focus-visible { outline: 2px solid var(--acid, #ccf56a); outline-offset: 2px; } .ds-refresh:disabled { opacity: .5; cursor: not-allowed; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Operate",
+    "keyCharacteristics": [
+      "Dark surfaces with visible borders.",
+      "Compact labels and tabular numeric amounts.",
+      "Expandable provenance beside linked source records."
+    ]
+  }
+}

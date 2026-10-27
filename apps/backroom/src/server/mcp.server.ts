@@ -1,3 +1,4 @@
+import { fetchTreasuryFundingHistory, previewTreasuryFunding, recordTreasuryFunding } from './treasury-funding.service'
 import {
   contributorHotkeyInputSchema, githubAccountInputSchema, claPolicyReadInputSchema,
   claPolicyWriteInputSchema, claPublishInputSchema,
@@ -480,6 +481,8 @@ export const WRITE_TOOL_NAMES = new Set([
   // functions already require a write-level session.
   'preview_treasury_manual_transfer',
   'queue_treasury_manual_transfer',
+  'preview_treasury_funding_reconciliation',
+  'record_treasury_funding_reconciliation',
   'schedule_l2_report_canary',
   'register_canonical_starter_fixture',
   'review_canonical_starter_fixture',
@@ -1087,6 +1090,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   record_treasury_settings: 'Record buckets with CAS; in-range Gamma % under signed range moves next epoch.',
   get_treasury_receipts: 'Read treasury receipt history/publication.',
   get_treasury_ledger: 'Read per-epoch Gamma earnings, balance, lock and unreceipted outflow.',
+  get_treasury_funding_history: 'Read GM funding.',
+  preview_treasury_funding_reconciliation: 'Preview GM funding.',
+  record_treasury_funding_reconciliation: 'Record GM funding.',
   get_treasury_manual_transfers: 'Read manual custody readiness, requests and public receipts; no funds.',
   preview_treasury_manual_transfer: 'Preview one Gamma collector transfer: envelope, digest and the exact confirmation to echo. not_queued; nothing moves.',
   queue_treasury_manual_transfer: "Queues a real on-chain SN118 alpha transfer from the Gamma collector to the named bucket's holding coldkey. Call preview first; exact confirmation. Custody re-verifies everything; one unresolved claim blocks another.",
@@ -3841,6 +3847,21 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchTreasuryLedger(input.limit ?? 72)),
+  )
+  registerTool(
+    'get_treasury_funding_history',
+    { title: 'Read reconciled GM funding history', description: 'Read private operator-reconciled DITTO sales, TAO payments and completed GM credits, with provenance and deduplicated conversion counts. Time correlation is not provider transaction attestation. No fund movement. Requires backroom:read.', annotations: toolAnnotations('read') },
+    async () => result(await fetchTreasuryFundingHistory()),
+  )
+  registerTool(
+    'preview_treasury_funding_reconciliation',
+    { title: 'Preview GM funding reconciliation', description: 'Validate historical observations against the GM holding wallet and immutable history. Returns an exact digest and confirmation. Does not record or move funds. Requires backroom:write.', inputSchema: { batchJson: z.string().min(2).max(131072).describe('FundingBatch JSON: holding_wallet, reason (8-240 chars), records (1-100). Each record: purchase {purchase_id UUID, occurred_at ISO timezone, credited_usd_cents integer, method x402-relayed, status completed}; payment {reference block-index, kind payment, occurred_at, input_asset TAO, input_amount_atomic positive integer string, recipient exact GM address}; optional preceding_sale and earlier_conversions with kind sale/swap, explicit input/output assets and atomic amounts. See docs/gamma-manual-funding.md. No keys.') }, annotations: toolAnnotations('read') },
+    async (input) => write(() => previewTreasuryFunding(JSON.parse(input.batchJson), props.session.email)),
+  )
+  registerTool(
+    'record_treasury_funding_reconciliation',
+    { title: 'Record historical GM funding reconciliation', description: 'Append operator-observed historical DITTO conversions, TAO payments and completed GM purchases to private Backroom accounting. Preview first, echo its digest and exact confirmation. Idempotent; conflicts refuse. The signed-in operator is the audit actor. Time correlation is not provider transaction attestation. No sale, transfer, payment, public proof or automatic top-up. Requires backroom:write.', inputSchema: { batchJson: z.string().min(2).max(131072), confirmation_digest: z.string().regex(/^[0-9a-f]{64}$/), confirmation: z.string().max(100) }, annotations: toolAnnotations('write') },
+    async (input) => write(() => recordTreasuryFunding({ batch: JSON.parse(input.batchJson), confirmation_digest: input.confirmation_digest, confirmation: input.confirmation }, props.session.email)),
   )
   registerTool(
     'get_treasury_manual_transfers',

@@ -4292,6 +4292,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/treasury-funding": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get History */
+        get: operations["get_history_api_v1_admin_treasury_funding_get"];
+        put?: never;
+        /** Record History */
+        post: operations["record_history_api_v1_admin_treasury_funding_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/treasury-funding/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview History */
+        post: operations["preview_history_api_v1_admin_treasury_funding_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/treasury-ledger": {
         parameters: {
             query?: never;
@@ -21768,6 +21803,100 @@ export interface components {
             source_fixture_v1: boolean;
             /** Version */
             version?: string | null;
+        };
+        /** FundingBatch */
+        FundingBatch: {
+            /** Holding Wallet */
+            holding_wallet: string;
+            /** Reason */
+            reason: string;
+            /** Records */
+            records: components["schemas"]["FundingRecord"][];
+            /**
+             * Version
+             * @default 1
+             * @constant
+             */
+            version: 1;
+        };
+        /** FundingMovement */
+        FundingMovement: {
+            /** Block Hash */
+            block_hash?: string | null;
+            /** Input Amount Atomic */
+            input_amount_atomic: string;
+            /**
+             * Input Asset
+             * @enum {string}
+             */
+            input_asset: "TAO" | "SN118_ALPHA" | "SN28_ALPHA";
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "sale" | "swap" | "payment";
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Output Amount Atomic */
+            output_amount_atomic?: string | null;
+            /** Output Asset */
+            output_asset?: ("TAO" | "SN118_ALPHA" | "SN28_ALPHA") | null;
+            /** Recipient */
+            recipient?: string | null;
+            /** Reference */
+            reference: string;
+        };
+        /** FundingPurchase */
+        FundingPurchase: {
+            /** Credited Usd Cents */
+            credited_usd_cents: number;
+            /**
+             * Method
+             * @default x402-relayed
+             * @constant
+             */
+            method: "x402-relayed";
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Purchase Id */
+            purchase_id: string;
+            /**
+             * Status
+             * @default completed
+             * @constant
+             */
+            status: "completed";
+        };
+        /** FundingRecord */
+        FundingRecord: {
+            /**
+             * Earlier Conversions
+             * @default []
+             */
+            earlier_conversions: components["schemas"]["FundingMovement"][];
+            /**
+             * Link Basis
+             * @default operator_time_correlation
+             * @constant
+             */
+            link_basis: "operator_time_correlation";
+            payment: components["schemas"]["FundingMovement"];
+            preceding_sale?: components["schemas"]["FundingMovement"] | null;
+            purchase: components["schemas"]["FundingPurchase"];
+        };
+        /** FundingSubmit */
+        FundingSubmit: {
+            batch: components["schemas"]["FundingBatch"];
+            /** Confirmation */
+            confirmation: string;
+            /** Confirmation Digest */
+            confirmation_digest: string;
         };
         /**
          * GeneratorBuildResult
@@ -49971,6 +50100,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TranscriptMirrorSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_history_api_v1_admin_treasury_funding_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_history_api_v1_admin_treasury_funding_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FundingSubmit"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_history_api_v1_admin_treasury_funding_preview_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FundingBatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */

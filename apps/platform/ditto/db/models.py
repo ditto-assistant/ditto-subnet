@@ -9021,6 +9021,21 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class TreasuryFundingReconciliation(Base):
+    """Private immutable operator observations, never spend/public-proof authority."""
+
+    __tablename__ = "treasury_funding_reconciliations"
+    purchase_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    payment_reference: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+
+
 class TreasuryManualBridgeState(Base):
     __tablename__ = "treasury_manual_bridge_state"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

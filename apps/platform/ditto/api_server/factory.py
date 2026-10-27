@@ -810,6 +810,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     from ditto.api_server.endpoints.admin_treasury_manual import router as manual_router
 
     app.include_router(manual_router, prefix="/api/v1")
+    from ditto.api_server.endpoints.admin_treasury_funding import (
+        router as funding_router,
+    )
+
+    app.include_router(funding_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
     app.include_router(admin_conversation_router, prefix="/api/v1")
     app.include_router(screener_conversation_router, prefix="/api/v1")
