@@ -377,6 +377,29 @@ The operator's choices are unchanged:
   panel it would need a code change that holds it out of v14 generation,
   which moves the v14 vector and reopens gate 1 and the GIH diagnostic.
 
+**Gate 5 (partial, no spend): the v14 composite rule on accepted v13 cases.**
+Platform keeps each accepted score's per-case rows (`details.per_case`: kind,
+category, score, correct, called and observed tools), but not the reply text.
+So the v14 *composite* rule (the declarative over-call change) can be replayed
+on the exact observed cases. The v14 *grading* changes (rendered-text reading,
+the claim-set correction, the #2734 matchers) and the new v14 cases cannot.
+Method: every accepted v13 score of every `scored` or `live` agent with at
+least 3 of them (684 scores, 228 agents), decoded into
+`[]protocol.CaseScore`, then `scorer.AggregateForVersion` at 13 and 14.
+`AggregateForVersion(…, 13)` reproduces all 684 stored composites exactly.
+
+- v14 minus v13 per score: mean -0.0100, range -0.208 to +0.086; 535 of 684
+  scores move.
+- Ranked by mean composite, the top six keep their places and places 7 and 8
+  swap. 188 of 228 agents move somewhere.
+- The current hybrid top five lose 0 to 0.0025 each.
+
+So the over-call rule moves top agents very little. It mainly hits agents
+that take unrelated actions on declarative cases, by up to 0.21. The 0.045
+to 0.111 canary losses above come almost entirely from the new v14 cases and
+the v14 grading, which only executed runs can measure. Gate 5 is still open:
+the replay of executed transcripts into separate v14 rows has not been run.
+
 ## Generator-competition changes (SN-361)
 
 These change v14 generation only. V13 generation and grading stay
@@ -657,8 +680,10 @@ Open, and requiring an operator, release-owner or paid run:
    (`5HEouuDa...`) went offline with a live v13 ticket, leaving three. That
    equals the three-validator quorum, so one more outage stalls every v14
    rollout member. Restore it, or add a capable validator, before the start.
-6. **Shadow replay report (gates 4 and 5).** No measured v14 shadow results
-   exist yet: no consented-corpus replay into separate v14 rows, no rank-impact
+6. **Shadow replay report (gates 4 and 5).** The no-spend part is measured:
+   the v14 composite rule replayed on 684 accepted v13 per-case rows (see
+   *Gate 5 (partial)* above), and five same-seed top-five canaries. Still no
+   executed-transcript replay into separate v14 rows, no full rank-impact
    report, no operator review.
 7. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
