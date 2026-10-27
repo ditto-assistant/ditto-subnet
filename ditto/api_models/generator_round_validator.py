@@ -55,19 +55,38 @@ GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX = "generator-round-max-cases-"
 # when it opens (the active version when it is listed, else the newest listed
 # version below it) and keeps it until it is scored. The set is the pack
 # contract's grading policies (``challenge.SupportedGradingBenchVersions``): a
-# round at version N accepts packs graded at any listed version <= N, each
-# column at the policy its pack declares, so a generator that predates v14
-# keeps its v13 column in a v14 round. dittobench-api's ``generator-round-v1``
-# mode runs a round at every listed version and advertises each as
-# ``generator-round-bench-<n>``. ``ditto/tests/test_bench_version_pins.py``
-# diffs this tuple against the Go pack contract.
+# round at version N accepts packs graded at the listed versions in its window
+# (``accepted_grading_versions``: N-1 and N), each column at the policy its
+# pack declares, so a generator that predates v14 keeps its v13 column in a
+# v14 round. Every activatable bench version from the first round version on
+# has an entry: one number for both competitions, and
+# ``test_bench_version_pins`` fails on a shipped benchmark contract without
+# one. dittobench-api's ``generator-round-v1`` mode runs a round at every
+# listed version and advertises each as ``generator-round-bench-<n>``.
+# ``ditto/tests/test_bench_version_pins.py`` diffs this tuple against the Go
+# pack contract.
 GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14)
 # The scorer feature naming one round bench version, and the versions a scorer
 # that advertises none runs (the original v13-only round mode).
 GENERATOR_ROUND_BENCH_FEATURE_PREFIX = "generator-round-bench-"
 LEGACY_SCORER_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13,)
+# How many grading policies a round accepts: its own version and the one
+# before it (``challenge.GradingPolicyWindow``). With {13, 14} that is every
+# policy; once a third exists a round at N accepts only N-1 and N.
+GRADING_POLICY_WINDOW = 2
 # The version every round opened before rounds recorded one ran at.
 LEGACY_ROUND_BENCH_VERSION = 13
+
+
+def accepted_grading_versions(round_bench_version: int) -> tuple[int, ...]:
+    """The pack grading policies a round frozen at ``round_bench_version``
+    accepts, oldest first (``challenge.GradingBenchVersionsThrough``)."""
+    return tuple(
+        version
+        for version in GENERATOR_ROUND_BENCH_VERSIONS
+        if round_bench_version - GRADING_POLICY_WINDOW < version <= round_bench_version
+    )
+
 
 GeneratorRoundFailReason = Literal["scoring_error", "infrastructure"]
 GeneratorRoundCommitmentOutcome = Literal["confirmed", "failed"]

@@ -33,9 +33,12 @@ func TestWorkPollsAdvertiseCapability(t *testing.T) {
 	for _, q := range queries {
 		if q.Get("scorer_id") != "scorer-prod.1" || q.Get("scorer_version") != ScorerVersion ||
 			q.Get("min_cases") != strconv.Itoa(challenge.MinCases) || q.Get("max_cases") != strconv.Itoa(challenge.MaxCases) ||
-			q.Get("sandbox") != "docker" {
+			q.Get("sandbox") != "docker" || q.Get("grading_bench_versions") != gradingVersionsParam(challenge.SupportedGradingBenchVersions()) {
 			t.Fatalf("advertisement = %v", q)
 		}
+	}
+	if got := gradingVersionsParam([]int{13, 14}); got != "13,14" {
+		t.Fatalf("grading versions param = %q", got)
 	}
 	saved := releaseRevision
 	t.Cleanup(func() { releaseRevision = saved })

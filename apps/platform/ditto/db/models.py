@@ -13552,6 +13552,12 @@ class GeneratorScorerHeartbeat(Base):
     contract accepts (``challenge.MinCases``/``MaxCases``); both are NULL for a
     scorer that predates advertising. Platform refuses qualification and round
     work, and settings writes, outside the live scorer's bounds.
+
+    ``grading_bench_versions`` is the ascending list of pack grading policies
+    the build advertises (``challenge.SupportedGradingBenchVersions``); NULL for
+    a scorer that predates the list, which Platform treats as v13-only. A round
+    opens and leases at version N, and a qualification requests N, only for a
+    scorer listing N.
     """
 
     __tablename__ = "generator_scorer_heartbeats"
@@ -13562,6 +13568,9 @@ class GeneratorScorerHeartbeat(Base):
     max_cases: Mapped[int | None] = mapped_column(Integer)
     sandbox: Mapped[str | None] = mapped_column(Text)
     build_revision: Mapped[str | None] = mapped_column(Text)
+    grading_bench_versions: Mapped[list[int] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
     last_poll: Mapped[str] = mapped_column(Text, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -13571,6 +13580,12 @@ class GeneratorScorerHeartbeat(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "grading_bench_versions IS NULL "
+            "OR (jsonb_typeof(grading_bench_versions) = 'array' "
+            "AND jsonb_array_length(grading_bench_versions) BETWEEN 1 AND 16)",
+            name="generator_scorer_heartbeats_grading_versions_check",
+        ),
         CheckConstraint(
             "(min_cases IS NULL) = (max_cases IS NULL) "
             "AND (min_cases IS NULL OR (min_cases >= 1 AND max_cases >= min_cases))",

@@ -84,13 +84,21 @@ func SupportsGradingBenchVersion(v int) bool {
 	return false
 }
 
+// GradingPolicyWindow is how many grading policies a round accepts: its own
+// version and the one before it (operator decision, 2026-10-27; see
+// docs/tandem-upgrades.md "Support window"). With policies {13, 14} that is
+// every policy; once a third exists, a round at N accepts only N-1 and N, so a
+// v15 round no longer accepts v13 packs while a v14 round still does.
+const GradingPolicyWindow = 2
+
 // GradingBenchVersionsThrough returns the grading policies a round frozen at
-// roundBenchVersion accepts: every supported version at or below it, oldest
-// first. It is empty when roundBenchVersion predates every supported policy.
+// roundBenchVersion accepts: the supported versions in the window
+// (roundBenchVersion-GradingPolicyWindow, roundBenchVersion], oldest first. It
+// is empty when roundBenchVersion predates every supported policy.
 func GradingBenchVersionsThrough(roundBenchVersion int) []int {
 	var out []int
 	for _, s := range supportedGradingBenchVersions {
-		if s <= roundBenchVersion {
+		if s <= roundBenchVersion && s > roundBenchVersion-GradingPolicyWindow {
 			out = append(out, s)
 		}
 	}

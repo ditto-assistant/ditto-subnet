@@ -110,10 +110,24 @@ def advertised_capability(
     build_revision: Annotated[
         str | None, Query(max_length=64, pattern=r"^[0-9a-f]{7,64}$")
     ] = None,
+    grading_bench_versions: Annotated[
+        str | None, Query(max_length=64, pattern=r"^[0-9]{1,3}(,[0-9]{1,3}){0,15}$")
+    ] = None,
 ) -> ScorerCapability | None:
-    """The capability a poll advertised, or ``None`` for a scorer predating it."""
+    """The capability a poll advertised, or ``None`` for a scorer predating it.
+
+    ``grading_bench_versions`` is a strictly ascending comma list ("13,14");
+    absent is a scorer that predates the list (treated as v13-only)."""
     if not scorer_version:
         return None
+    versions: tuple[int, ...] | None = None
+    if grading_bench_versions:
+        versions = tuple(int(v) for v in grading_bench_versions.split(","))
+        if any(b <= a for a, b in zip(versions, versions[1:], strict=False)):
+            raise HTTPException(
+                status_code=422,
+                detail="grading_bench_versions must be strictly ascending",
+            )
     if (min_cases is None) != (max_cases is None) or (
         min_cases is not None and max_cases is not None and max_cases < min_cases
     ):
@@ -127,6 +141,7 @@ def advertised_capability(
         max_cases=max_cases,
         sandbox=sandbox or None,
         build_revision=build_revision,
+        grading_bench_versions=versions,
     )
 
 
@@ -181,7 +196,7 @@ async def lease_work(
         probe_seed=lease.probe_seed,
         cases_per_seed=run.cases_per_seed,
         lease_expires_at=row.lease_expires_at,  # type: ignore[arg-type]
-        bench_version=await qualification_bench_version(session),
+        bench_version=await qualification_bench_version(session, capability),
     )
     await session.commit()
     logger.info(

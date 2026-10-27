@@ -122,7 +122,8 @@ adds the grading policies it accepts:
  "grading_bench_versions": [13, 14]}
 ```
 
-`grading_bench_version` stays the baseline policy (13). A version-aware
+`grading_bench_version` is the oldest policy the request accepts: the baseline
+(13) while the round's two-version window holds it. A version-aware
 generator declares the newest accepted policy it supports in the pack
 (`req.NewestAccepted(supported)`). A generator built before v14 ignores the new
 field and emits a v13 pack, which a v14 round accepts. If the v14-offering
@@ -287,21 +288,34 @@ version activates mid-round.
 
 At opening, Platform (`choose_round_bench_version`) picks:
 
-1. the active benchmark version, when it is a **round contract** and at least
-   one validator can run a round at it;
-2. otherwise the newest round contract below the active version that a
-   validator can run, recording why on the round (`generation.bench_contract`);
+1. the active benchmark version, when it is a **round contract**, the live
+   generator scorer lists it in its advertised `grading_bench_versions` (none
+   advertised is v13-only), and enough validators can run a round at it: at
+   least `min_round_validators` (default 3) when it is newer than the version
+   the previous round froze, else one;
+2. otherwise the newest round contract below the active version that passes
+   the same checks, recording why on the round (`generation.bench_contract`;
+   below quorum, rounds stay on the previous round's version);
 3. otherwise nothing: the round is void with the reason.
+
+The quorum mirrors the agent competition: a bench version takes emission
+authority only once each priority-cohort position holds `SCORING_QUORUM` (3)
+desired-version scores, one per distinct validator
+(`apps/platform/ditto/db/queries/benchmark_rollout.py`,
+`rollout_cohort_score_complete`). See
+[tandem-upgrades.md](tandem-upgrades.md) "Round switch quorum".
 
 The round contracts are `GENERATOR_ROUND_BENCH_VERSIONS` (Platform and
 validator `api_models/generator_round_validator.py`): 13 and 14, the pack
 grading policies `challenge.SupportedGradingBenchVersions`. The round version
 is the agents' runtime contract; the grading policy is per column:
 
-- A round at version N accepts packs graded at any supported policy at or
-  below N (`challenge.GradingBenchVersionsThrough`). Each column's request
-  lists them, each column's pack declares one, and the validator grades every
-  case at its pack's declared policy. A v13 round accepts only v13, so its
+- A round at version N accepts packs graded at the supported policies in its
+  two-version window, N and N-1 (`challenge.GradingBenchVersionsThrough`,
+  `challenge.GradingPolicyWindow`; Platform `accepted_grading_versions`). With
+  policies {13, 14} that is both; once policy 15 exists a v15 round accepts 14
+  and 15 only. Each column's request lists them, each column's pack declares
+  one, and the validator grades every case at its pack's declared policy. A v13 round accepts only v13, so its
   requests, packs and grading are byte-identical to the original contract.
 - In a v14 round, a v14-aware generator's column grades at v14 and a generator
   built before v14 keeps a v13 column. Neither is excluded. Credit is
@@ -312,9 +326,10 @@ is the agents' runtime contract; the grading policy is per column:
   `legacy_retry`) in `generation.columns`. dittobench-api refuses a round
   dataset with such a column (`challenge.CheckRoundGradingVersions`).
 - Qualification requests the round contract rounds open at now (the active
-  version's round contract, before validator capacity), so a generator
-  qualifies on the policy it will emit in rounds. Before v14 activates that is
-  v13 and qualification is unchanged.
+  version's round contract, before validator capacity), capped at the newest
+  one the polling scorer advertises, so a generator qualifies on the policy it
+  will emit in rounds. Before v14 activates that is v13 and qualification is
+  unchanged.
 
 Capability routing. dittobench-api's `generator-round-v1` mode advertises
 `generator-round-bench-<n>` for every supported policy. The validator forwards
@@ -322,11 +337,14 @@ the set (capped at its own round contracts and its scorer's verified versions)
 as `scorer_benchmarks.generator_round_bench_versions`. Platform leases a round
 at version N only to a validator whose set contains N; a scorer without any of
 these features is treated as the original v13-only round mode. The generator
-scorer needs no new capability: one that predates `bench_version` on its work
-sends the original v13 request, and v13 packs are valid in a v14 round.
+scorer advertises its grading policies the same way, explicitly
+(`grading_bench_versions` on every work poll, `challenge-scorer/6`); one that
+advertises none is matched as v13-only, never inferred from its version
+string, so rounds stay at v13 until a scorer that lists 14 is live.
 
-So when v14 activates, rounds open at v14 as soon as a validator can run a
-v14 round, and fall back to v13 (with the reason) until then. A version joins
+So when v14 activates, rounds open at v14 as soon as `min_round_validators`
+validators can run a v14 round and the generator scorer grades v14, and fall
+back to v13 (with the reason) until then. A version joins
 the round contracts only with all three of:
 
 - a pack grading policy at it (`supportedGradingBenchVersions` in
@@ -336,7 +354,10 @@ the round contracts only with all three of:
 - the version added to `GENERATOR_ROUND_BENCH_VERSIONS`.
 
 `ditto/tests/test_bench_version_pins.py` fails if the tuple and the Go pack
-policies disagree.
+policies disagree, and (operator policy: one number for both competitions) if
+any bench version a rollout can target from v13 on, a shipped Platform
+benchmark contract or a validator-supported version, has no pack policy of the
+same number.
 
 ### Execution
 
@@ -419,6 +440,7 @@ The shipped parameters are:
 | `counted_columns` | 5 |
 | `challenger_columns` | 1 |
 | `privacy_window_rounds` | 6 |
+| `min_round_validators` | 3 (validators able to run a newer bench version before rounds switch to it) |
 
 ### Round size and timing
 

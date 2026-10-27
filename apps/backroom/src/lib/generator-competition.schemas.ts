@@ -62,6 +62,11 @@ export const generatorCompetitionSettingsSchema = z.object({
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
   validator_rounds_enabled: z.boolean(),
+  // Validators that must be able to run a round at a newer bench version
+  // before rounds switch to it (the agent rollout's SCORING_QUORUM of 3
+  // distinct validators, mirrored). Below it rounds stay on the previous
+  // round's version and preview_generator_round says why.
+  min_round_validators: z.number().int().min(1).max(32),
   // Require a finalized TAO payment proof on every generator upload, priced by
   // the generator competition's fee in the submission settings (inheriting
   // the default fee until set_submission_cooldown competitionFees prices it).
@@ -76,6 +81,9 @@ export const generatorCompetitionSettingsSchema = z.object({
 // (setGeneratorSettings checks the stored revision).
 const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
   upload_fee_required: z.boolean().default(false),
+  // A revision written before the field reads as the shipped 3, as Platform
+  // reads it.
+  min_round_validators: z.number().int().min(1).max(32).default(3),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
@@ -507,6 +515,12 @@ export const roundBenchContractPreviewSchema = z.object({
   reason: z.string().nullable().optional().default(null),
   round_contracts: z.array(z.number().int()),
   capable_validators: z.record(z.string(), z.number().int()),
+  // The version the newest opened round froze; a newer one needs
+  // min_round_validators capable validators before rounds switch to it.
+  previous_version: z.number().int().nullable().optional().default(null),
+  min_round_validators: z.number().int().nullable().optional().default(null),
+  // What the live generator scorer grades: its advertised list, else v13.
+  scorer_grading_versions: z.array(z.number().int()).nullable().optional().default(null),
 })
 
 export const generatorRoundPreviewSchema = z.object({
@@ -545,6 +559,10 @@ const generatorScorerHeartbeatSchema = z.object({
   first_seen_at: z.string(),
   last_seen_at: z.string(),
   live: z.boolean(),
+  // Advertised pack grading policies; null predates the explicit list.
+  grading_bench_versions: z.array(z.number().int()).nullable().optional().default(null),
+  // What Platform matches against: the advertised list, else v13 only.
+  effective_grading_bench_versions: z.array(z.number().int()).optional(),
 })
 
 export const generatorScorerStatusSchema = z.object({
@@ -554,6 +572,8 @@ export const generatorScorerStatusSchema = z.object({
   cases_per_seed: z.number().int(),
   supports_cases_per_seed: z.boolean().nullable(),
   refusal: z.string().nullable(),
+  round_contract: z.number().int().nullable().optional().default(null),
+  supports_round_contract: z.boolean().nullable().optional().default(null),
 })
 
 export const generatorRoundTickSchema = z.object({

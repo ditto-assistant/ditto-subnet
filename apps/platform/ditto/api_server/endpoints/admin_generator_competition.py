@@ -56,9 +56,10 @@ from ditto.api_server.generator_competition import (
 from ditto.api_server.generator_round_reservation import (
     invalidate_round_reservation,
 )
-from ditto.api_server.generator_rounds import void_round
+from ditto.api_server.generator_rounds import active_round_contract, void_round
 from ditto.api_server.generator_scorer_capability import (
     SCORER_CAPABILITY_TTL,
+    grading_versions,
     is_live,
     list_heartbeats,
     live_scorer,
@@ -276,6 +277,7 @@ async def get_scorer_status(
     live = await live_scorer(session, now=now)
     cases = (await load_settings(session)).settings.cases_per_seed
     refused = refusal(live, cases)
+    contract = await active_round_contract(session)
     known = (
         live is not None and live.min_cases is not None and live.max_cases is not None
     )
@@ -292,6 +294,8 @@ async def get_scorer_status(
                 first_seen_at=row.first_seen_at,
                 last_seen_at=row.last_seen_at,
                 live=is_live(row, now=now),
+                grading_bench_versions=row.grading_bench_versions,
+                effective_grading_bench_versions=list(grading_versions(row)),
             )
             for row in rows
         ],
@@ -300,6 +304,10 @@ async def get_scorer_status(
         cases_per_seed=cases,
         supports_cases_per_seed=(refused is None) if known else None,
         refusal=refused,
+        round_contract=contract,
+        supports_round_contract=(
+            contract in grading_versions(live) if live is not None else None
+        ),
     )
 
 

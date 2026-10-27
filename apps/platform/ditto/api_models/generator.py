@@ -164,6 +164,13 @@ class GeneratorCompetitionSettings(BaseModel):
     validator_rounds_enabled: bool = False
     """Issue round panel runs to validators. Off, rounds generate and wait
     without consuming validator capacity."""
+    min_round_validators: Annotated[int, Field(ge=1, le=32)] = 3
+    """Validators that must be able to run a round at a newer bench version
+    before rounds switch to it; below it rounds stay on the previous round's
+    version (``preview_generator_round`` says why). Mirrors the agent rollout,
+    where a version takes authority only once its priority cohort holds a
+    ``SCORING_QUORUM`` (3) of desired-version scores from distinct validators.
+    A revision written before this field existed reads as 3."""
     copy_overlap_threshold: Annotated[float, Field(ge=0.2, le=1.0)] = 0.5
     """Share of a new submission's probe fingerprints that may match an earlier
     submission from another owner before it is rejected as a copy."""
@@ -274,6 +281,11 @@ class GeneratorScorerHeartbeatView(GeneratorModel):
     first_seen_at: datetime
     last_seen_at: datetime
     live: bool
+    grading_bench_versions: list[int] | None = None
+    """The pack grading policies it advertised; ``None`` predates the list."""
+    effective_grading_bench_versions: list[int]
+    """What Platform matches rounds and qualifications against: the advertised
+    list, or v13 only when none was advertised."""
 
 
 class AdminGeneratorScorerStatus(GeneratorModel):
@@ -287,6 +299,12 @@ class AdminGeneratorScorerStatus(GeneratorModel):
     supports_cases_per_seed: bool | None
     """``None`` when no live scorer advertised its case bounds."""
     refusal: str | None
+    round_contract: int | None = None
+    """The round contract qualifications and rounds target under the active
+    bench version (before scorer and validator matching)."""
+    supports_round_contract: bool | None = None
+    """Whether the live scorer grades ``round_contract``; ``None`` with no
+    live scorer."""
 
 
 # --- miner upload --------------------------------------------------------

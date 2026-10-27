@@ -85,18 +85,31 @@ scorer's fault.
 Every work poll (`/work` and `/round-work`) also advertises this build's
 capability as query parameters: `scorer_id` (`-scorer-id`, default the
 hostname), `scorer_version`, `min_cases` and `max_cases`
-(`challenge.MinCases`/`MaxCases`), `sandbox` and, when the binary knows its
-commit, `build_revision`. Platform records the latest per scorer and uses it
-before any fault can happen:
+(`challenge.MinCases`/`MaxCases`), `grading_bench_versions` (the pack grading
+policies this build requests and grades, `challenge.SupportedGradingBenchVersions`,
+as `13,14`), `sandbox` and, when the binary knows its commit,
+`build_revision`. Platform records the latest per scorer and uses it before
+any fault can happen:
 
 - it leases no qualification whose `cases_per_seed` the polling scorer refuses;
 - it voids with an `infra:` reason a round the scorer cannot generate, at lease
   (the polling scorer) and at open (the live scorer);
 - it refuses a generator settings write whose `cases_per_seed` the live scorer
-  refuses, unless the operator passes `override_scorer_capability`.
+  refuses, unless the operator passes `override_scorer_capability`;
+- it opens a round at bench version N only when the live scorer lists N, voids
+  with an `infra:` reason a round at N leased by a scorer that does not list
+  it, and requests a qualification at the newest round contract the polling
+  scorer lists.
 
-Backroom `get_generator_scorer` shows each scorer's version, bounds, build and
-last poll. A scorer that predates advertising sends nothing and is not gated.
+The grading versions are explicit, the way a validator advertises
+`generator-round-bench-<n>`: Platform never infers them from `scorer_version`.
+A scorer that sends no `grading_bench_versions` (`challenge-scorer/5` and
+older) is treated as v13-only. `challenge-scorer/6` is the first build that
+sends them.
+
+Backroom `get_generator_scorer` shows each scorer's version, bounds, grading
+versions (advertised and effective), build and last poll. A scorer that
+predates advertising sends nothing and is not gated on case bounds.
 
 `-unsafe-local-sandbox` builds and runs on the host with no isolation. It
 exists for local stacks only.

@@ -176,6 +176,26 @@ retries that seed once on the original v13 request (recorded as
 5. Re-upload. Declaring v14 is worth it only where the v14 policy changes
    what your cases measure; it never earns credit by itself.
 
+### Support window
+
+A round accepts packs at its own bench version and the one before it. v14
+rounds accept v13 and v14 packs; v15 rounds will accept v14 and v15 only, so a
+generator that still emits v13 loses its v15 columns (announced at least 14
+days before v15 activates). Rebuilding against the current
+`research/dittobench-datagen` is enough: from this release on, the `challenge`
+package ignores grading policies it does not know yet, so a rebuilt generator
+keeps working when a newer round offers one, as long as the request still
+accepts a policy it supports. A generator built before this release must
+rebuild before v15 rounds.
+
+### How this kit improves
+
+Every starter kit is improved continuously. An improvement learned from a
+miner's submission ships here only after that submission's source has been
+made public under the subnet's source-disclosure policy (Backroom
+`get_source_release_policy`). Generator source has no public release path yet,
+so nothing derived from a miner generator ships in this kit until it does.
+
 ## Rehearse against agents locally
 
 Run three or more agent harnesses, for example the

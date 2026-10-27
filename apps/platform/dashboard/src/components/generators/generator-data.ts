@@ -114,6 +114,9 @@ export interface GeneratorRoundColumn extends GeneratorIdentity {
   trivial: number;
   unsolved: number;
   duplicate: number;
+  /** The pack grading policy this column's pack declared (13 when it declared
+   * none); absent on an older Platform or before generation. */
+  grading_bench_version?: number | null;
 }
 
 export interface GeneratorRoundStanding {
@@ -186,6 +189,8 @@ export interface GeneratorSubmissionRound extends GeneratorCaseCounts {
   rank: number;
   columns: number;
   panel_size: number;
+  /** The pack grading policy the column's pack declared (13 when none). */
+  grading_bench_version?: number | null;
 }
 
 export interface GeneratorSubmissionDetail {

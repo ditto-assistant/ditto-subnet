@@ -268,7 +268,10 @@ async def admin_round_preview(
         )
     now = datetime.now(UTC)
     contract = await choose_round_bench_version(
-        session, cases_per_column=settings.cases_per_seed, now=now
+        session,
+        cases_per_column=settings.cases_per_seed,
+        now=now,
+        min_round_validators=settings.min_round_validators,
     )
     if contract.bench_version is None:
         blockers.append(f"no generator-round contract can run: {contract.reason}")
@@ -291,6 +294,9 @@ async def admin_round_preview(
             reason=contract.reason,
             round_contracts=list(GENERATOR_ROUND_BENCH_VERSIONS),
             capable_validators=capable,
+            previous_version=contract.previous_version,
+            min_round_validators=contract.min_round_validators,
+            scorer_grading_versions=list(contract.scorer_grading_versions),
         ),
     )
 

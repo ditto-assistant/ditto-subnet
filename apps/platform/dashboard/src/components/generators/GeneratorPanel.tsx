@@ -19,7 +19,13 @@ import type {
 } from "./generator-data";
 import { generatorLabel } from "./generator-data";
 import { GeneratorLink } from "./GeneratorIdentity";
-import { CaseBar, SectionError, SubmissionStatusChip } from "./GeneratorParts";
+import {
+  CaseBar,
+  GradingBadge,
+  SectionError,
+  SubmissionStatusChip,
+  hasGradingVersions,
+} from "./GeneratorParts";
 import { GeneratorRoundChart } from "./GeneratorRoundChart";
 
 const share = (value: number) =>
@@ -213,6 +219,15 @@ export function GeneratorPanel(props: {
                           <th scope="col" class="hide-sm">
                             Scored
                           </th>
+                          <Show when={hasGradingVersions(rounds())}>
+                            <th
+                              scope="col"
+                              class="hide-sm"
+                              title="The grading policy this generator's pack declared"
+                            >
+                              Grading
+                            </th>
+                          </Show>
                         </tr>
                       </thead>
                       <tbody>
@@ -238,6 +253,11 @@ export function GeneratorPanel(props: {
                               </td>
                               <td class="num hide-sm">{round.discriminating}</td>
                               <td class="hide-sm">{relTime(round.scored_at)}</td>
+                              <Show when={hasGradingVersions(rounds())}>
+                                <td class="hide-sm">
+                                  <GradingBadge version={round.grading_bench_version} />
+                                </td>
+                              </Show>
                             </tr>
                           )}
                         </For>

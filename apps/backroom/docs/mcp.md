@@ -167,10 +167,16 @@ Each round's secret is revealed after `privacy_window_rounds`.
     only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
   - `get_generator_scorer` returns what each generator scorer advertised on
-    its last work poll (version, min/max cases, build revision, last seen)
-    and whether the live one accepts the governing `cases_per_seed`. Platform
-    refuses a settings write outside it unless `overrideScorerCapability` is
-    set.
+    its last work poll (version, min/max cases, grading versions, build
+    revision, last seen) and whether the live one accepts the governing
+    `cases_per_seed` and grades the active round contract
+    (`supports_round_contract`). A scorer that advertises no grading versions
+    is matched as v13-only. Platform refuses a settings write outside the case
+    bounds unless `overrideScorerCapability` is set.
+  - `preview_generator_round` `bench_contract` also reports `previous_version`,
+    `min_round_validators` (the switch quorum, default 3) and the live
+    scorer's `scorer_grading_versions`; `reason` names a quorum or scorer
+    shortfall that keeps rounds on the previous version.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
     and `get_generator_round_loop` expose the following:
     - the schedule;

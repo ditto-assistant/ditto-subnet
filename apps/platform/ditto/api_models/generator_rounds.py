@@ -106,6 +106,9 @@ class GeneratorRoundColumnView(RoundModel):
     name_handle: PublicNameHandle | None = None
     avatar_url: str | None = None
     version: int | None = None
+    grading_bench_version: int | None = None
+    """The pack grading policy this column's pack declared (13 for a pack
+    that declared none); ``None`` until the column is generated."""
 
 
 class GeneratorRoundStandingView(RoundModel):
@@ -225,6 +228,8 @@ class GeneratorSubmissionRoundView(RoundModel):
     unsolved: int
     duplicate: int
     panel_size: int
+    grading_bench_version: int | None = None
+    """The pack grading policy the column's pack declared (13 when none)."""
 
 
 class PublicGeneratorSubmissionDetail(RoundModel):
@@ -440,6 +445,13 @@ class GeneratorRoundBenchContractPreview(RoundModel):
     """``GENERATOR_ROUND_BENCH_VERSIONS``: the pack grading policies."""
     capable_validators: dict[str, int]
     """Validators that could run a round of this column size, per contract."""
+    previous_version: int | None = None
+    """The version the newest opened round froze. Rounds switch to a newer
+    version only with ``min_round_validators`` capable validators."""
+    min_round_validators: int | None = None
+    scorer_grading_versions: list[int] | None = None
+    """The pack grading policies the live generator scorer grades (its
+    advertised list, or v13 only when it advertised none)."""
 
 
 class AdminGeneratorRoundPreview(RoundModel):

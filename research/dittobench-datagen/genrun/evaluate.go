@@ -167,7 +167,9 @@ func Evaluate(ctx context.Context, sb Sandbox, srcDir string, plan Plan) (Evalua
 	run := func(seed string) (SeedOutput, challenge.GenerateRequest, error) {
 		req := plan.request(seed)
 		out, err := attempt(req)
-		if err != nil || out.Valid() || len(req.GradingBenchVersions) == 0 {
+		// The retry requests only the baseline, so it runs only when the
+		// round's window still accepts the baseline (GradingPolicyWindow).
+		if err != nil || out.Valid() || len(req.GradingBenchVersions) == 0 || !req.AcceptsBaseline() {
 			return out, req, err
 		}
 		legacy := challenge.NewGenerateRequest(seed, plan.MinerHotkey, plan.Cases)

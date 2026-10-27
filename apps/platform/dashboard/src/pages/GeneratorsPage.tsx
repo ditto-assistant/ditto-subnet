@@ -52,8 +52,10 @@ import { GeneratorPanel } from "../components/generators/GeneratorPanel";
 import {
   CaseBar,
   CaseLegend,
+  GradingBadge,
   SectionError,
   SkeletonRows,
+  hasGradingVersions,
 } from "../components/generators/GeneratorParts";
 
 const GUIDE_URL =
@@ -386,6 +388,7 @@ function RoundDetail(props: {
     return counts.length && counts.every((count) => count === counts[0]) ? counts[0] : null;
   };
   const columns = () => [...(props.detail?.columns ?? [])].sort((a, b) => b.score - a.score);
+  const grading = () => hasGradingVersions(props.detail?.columns ?? []);
   return (
     <section class="gen-section" aria-labelledby="gen-round-title">
       <div class="gen-section-title">
@@ -432,6 +435,15 @@ function RoundDetail(props: {
                 <th scope="col" class="num hide-sm">
                   Duplicate
                 </th>
+                <Show when={grading()}>
+                  <th
+                    scope="col"
+                    class="hide-sm"
+                    title="The grading policy each generator's pack declared"
+                  >
+                    Grading
+                  </th>
+                </Show>
               </tr>
             </thead>
             <tbody>
@@ -457,6 +469,11 @@ function RoundDetail(props: {
                       <td class="num hide-sm">{column.trivial}</td>
                       <td class="num hide-sm">{column.unsolved}</td>
                       <td class="num hide-sm">{column.duplicate}</td>
+                      <Show when={grading()}>
+                        <td class="hide-sm">
+                          <GradingBadge version={column.grading_bench_version} />
+                        </td>
+                      </Show>
                     </tr>
                   )}
                 </For>

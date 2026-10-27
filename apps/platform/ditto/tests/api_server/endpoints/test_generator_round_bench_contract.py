@@ -64,11 +64,23 @@ _PREVIEW_URL = f"{_ROUNDS_URL}/preview"
 
 
 class _Fleet:
-    """The active version and which round versions a validator can run."""
+    """The active version, which round versions a validator can run, how many
+    validators can, and which grading policies the generator scorer grades
+    (``scorer_versions``; the explicit advertisement is covered on its own
+    below)."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, active: int) -> None:
+    def __init__(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        active: int,
+        validators: int = 3,
+        scorer_versions: tuple[int, ...] = (13, 14),
+    ) -> None:
         self.active = active
         self.capable: set[int] = {13, 14}
+        self.validators = validators
+        self.scorer_versions = scorer_versions
         self.capacity_versions: list[int] = []
         self.pin_calls = 0
 
@@ -78,7 +90,17 @@ class _Fleet:
         async def _capable(
             _session: AsyncSession, *, bench_version: int, **_: Any
         ) -> int:
-            return 1 if bench_version in self.capable else 0
+            return self.validators if bench_version in self.capable else 0
+
+        def _scorer_refusal(_scorer: Any, bench_version: int) -> str | None:
+            if bench_version in self.scorer_versions:
+                return None
+            return f"generator scorer grades {self.scorer_versions}"
+
+        monkeypatch.setattr(rounds_mod, "version_refusal", _scorer_refusal)
+        monkeypatch.setattr(
+            rounds_mod, "grading_versions", lambda _scorer: self.scorer_versions
+        )
 
         def _capacity(_heartbeat: Any, *, now: datetime, bench_version: int) -> Any:
             del now
@@ -321,6 +343,11 @@ class TestRoundBenchContract:
         assert summary[0]["grading_bench_version"] == 14
         assert summary[1]["grading_bench_version"] == 13
         assert summary[1]["legacy_retry"] == "retried on v13"
+        # The public round view shows each column's declared policy.
+        public = (await client.get("/api/v1/generator/rounds/3")).json()
+        shown = {c["column_id"]: c["grading_bench_version"] for c in public["columns"]}
+        assert shown[summary[0]["column_id"]] == 14
+        assert shown[summary[1]["column_id"]] == 13
 
     async def test_v13_round_refuses_a_v14_pack(
         self,
@@ -425,6 +452,134 @@ class TestRoundPreviewBenchContract:
         preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
         assert preview["bench_contract"]["bench_version"] is None
         assert any("no generator-round contract" in b for b in preview["blockers"])
+
+
+class TestRoundSwitchQuorum:
+    """Rounds switch to a newer bench version only once
+    ``min_round_validators`` validators can run it, mirroring the agent
+    rollout's ``SCORING_QUORUM`` of distinct desired-version validators."""
+
+    async def test_below_quorum_rounds_stay_on_the_previous_version(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=14, validators=2)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        contract = preview["bench_contract"]
+        assert contract["bench_version"] == 13
+        assert contract["previous_version"] == 13
+        assert contract["min_round_validators"] == 3
+        assert contract["scorer_grading_versions"] == [13, 14]
+        assert "below min_round_validators 3" in contract["reason"]
+        assert "rounds stay on v13" in contract["reason"]
+        await _open_round(client, session_maker, monkeypatch)
+        row = await _round(session_maker)
+        assert row.status == "generating" and row.bench_version == 13
+        assert (
+            "below min_round_validators 3"
+            in ((row.generation or {})["bench_contract"]["reason"])
+        )
+        fleet.validators = 3
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        assert preview["bench_contract"]["bench_version"] == 14
+        assert preview["bench_contract"]["reason"] is None
+
+    async def test_the_quorum_is_an_operator_setting(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        _Fleet(monkeypatch, active=14, validators=1)
+        await _apply_settings(
+            client, validator_rounds_enabled=True, min_round_validators=1
+        )
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        assert preview["bench_contract"]["bench_version"] == 14
+        assert preview["bench_contract"]["min_round_validators"] == 1
+
+    async def test_once_switched_a_dip_below_quorum_does_not_switch_back(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The quorum gates only a switch up: a version at or below the
+        previous round's needs one capable validator, as before."""
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=14, validators=3)
+        await _open_round(client, session_maker, monkeypatch)
+        assert (await _round(session_maker)).bench_version == 14
+        fleet.validators = 1
+        contract = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()[
+            "bench_contract"
+        ]
+        assert contract["previous_version"] == 14
+        assert contract["bench_version"] == 14 and contract["reason"] is None
+        fleet.validators = 0
+        contract = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()[
+            "bench_contract"
+        ]
+        assert contract["bench_version"] is None
+
+    async def test_rounds_never_open_at_a_version_the_scorer_does_not_grade(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A generator scorer that grades only v13 keeps rounds on v13 even
+        with a full v14 validator quorum, and the preview says why."""
+        _install(app, session_maker)
+        _Fleet(monkeypatch, active=14, scorer_versions=(13,))
+        await _apply_settings(client, validator_rounds_enabled=True)
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        contract = preview["bench_contract"]
+        assert contract["bench_version"] == 13
+        assert contract["scorer_grading_versions"] == [13]
+        assert "generator scorer grades" in contract["reason"]
+
+
+class TestScorerGradingVersionLease:
+    async def test_a_v14_round_voids_for_a_scorer_that_grades_only_v13(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """At lease, the polling scorer's own advertisement decides: one that
+        lists no grading versions is v13-only, so a v14 round voids with an
+        infra reason rather than being generated on the wrong policies."""
+        _install(app, session_maker)
+        _Fleet(monkeypatch, active=14)
+        await _open_round(client, session_maker, monkeypatch)
+        assert (await _round(session_maker)).bench_version == 14
+        # Real matching at lease (the fleet stubbed it for the open).
+        from ditto.api_server import generator_scorer_capability as capability_mod
+
+        monkeypatch.setattr(
+            rounds_mod, "version_refusal", capability_mod.version_refusal
+        )
+        resp = await client.get(
+            "/api/v1/generator-scorer/round-work",
+            headers=_SCORER,
+            params={"scorer_id": "scorer-old", "scorer_version": "challenge-scorer/5"},
+        )
+        assert resp.status_code == 200 and resp.json()["work"] is None
+        row = await _round(session_maker)
+        assert row.status == "void"
+        assert (row.void_reason or "").startswith("infra: generator scorer scorer-old")
+        assert "treated as v13-only" in (row.void_reason or "")
 
 
 async def test_choose_keeps_v13_when_the_active_version_predates_rounds(
@@ -534,3 +689,53 @@ async def test_capable_validators_count_by_version_and_v13_pin(
         )
         == 0
     )
+
+
+@pytest.mark.parametrize(
+    ("error", "scorer"),
+    [
+        ("request grading_bench_version must be at least 13", True),
+        (
+            "request accepts grading policies [15 16], none of which this "
+            "package supports [13 14]; rebuild against the current dittobench-datagen",
+            True,
+        ),
+        ("generator exited 1: request accepts grading policies [15 16]", False),
+    ],
+)
+def test_request_refusals_from_the_window_are_scorer_faults(
+    error: str, scorer: bool
+) -> None:
+    """The scorer refusing a request outside its own grading policies is an
+    infrastructure fault, never the generator's failure."""
+    from ditto.api_server.generator_competition import scorer_request_error
+
+    assert scorer_request_error(error) is scorer
+
+
+@pytest.mark.parametrize(
+    ("round_version", "accepted"),
+    [(13, (13,)), (14, (13, 14)), (15, (14,))],
+)
+def test_a_round_accepts_its_version_and_the_one_before(
+    round_version: int, accepted: tuple[int, ...]
+) -> None:
+    from ditto.api_models.generator_round_validator import accepted_grading_versions
+
+    assert accepted_grading_versions(round_version) == accepted
+
+
+def test_round_switch_quorum_mirrors_the_agent_rollout_quorum() -> None:
+    """Rounds switch to a new bench version at the same quorum the agent
+    rollout needs before the version takes authority: ``SCORING_QUORUM``
+    desired-version scores per cohort position, one per distinct validator
+    (``rollout_cohort_score_complete``). Resizing one without the other fails
+    here. A revision written before the setting existed reads as it too."""
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.db.queries.benchmark_rollout import SCORING_QUORUM as ROLLOUT_QUORUM
+    from ditto.db.queries.scores import SCORING_QUORUM
+
+    assert ROLLOUT_QUORUM == SCORING_QUORUM == 3
+    assert GeneratorCompetitionSettings().min_round_validators == SCORING_QUORUM
+    legacy = GeneratorCompetitionSettings.model_validate({"mode": "shadow"})
+    assert legacy.min_round_validators == SCORING_QUORUM

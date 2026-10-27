@@ -178,6 +178,36 @@ it("names generators and panel agents in the latest round", async () => {
   expect(within(panel).getByText("v7")).toBeTruthy();
 });
 
+it("shows each round column's declared grading policy as a quiet badge", async () => {
+  const detail = roundDetail();
+  detail.columns.forEach((column, i) => {
+    column.grading_bench_version = i === 0 ? 14 : 13;
+  });
+  const generator = submissionDetail();
+  generator.rounds.forEach((round, i) => {
+    round.grading_bench_version = i === 0 ? 14 : 13;
+  });
+  serve({ "/generator/rounds/25967": detail, ["/generator/submissions/" + TOP]: generator });
+  render(() => <GeneratorsPage />);
+  const results = await screen.findByRole("table", { name: "Generators in this round" });
+  expect(await within(results).findByRole("columnheader", { name: "Grading" })).toBeTruthy();
+  const badges = results.querySelectorAll(".gen-policy");
+  expect(badges).toHaveLength(detail.columns.length);
+  expect([...badges].map((badge) => badge.textContent)).toContain("v14");
+  showGenerator(TOP);
+  const rounds = await screen.findByRole("table", { name: "Results in each scored round" });
+  expect(within(rounds).getByRole("columnheader", { name: "Grading" })).toBeTruthy();
+  expect(within(rounds).getAllByText("v13")).toHaveLength(2);
+});
+
+it("leaves the grading column out for a Platform that reports none", async () => {
+  serve();
+  render(() => <GeneratorsPage />);
+  const results = await screen.findByRole("table", { name: "Generators in this round" });
+  await within(results).findByRole("link", { name: "Needle Forge" });
+  expect(within(results).queryByRole("columnheader", { name: "Grading" })).toBeNull();
+});
+
 it("loads the latest round from the board before the round list answers", async () => {
   serve({ "/generator/rounds": new Promise(() => undefined) });
   render(() => <GeneratorsPage />);

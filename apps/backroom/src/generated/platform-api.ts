@@ -11943,10 +11943,14 @@ export interface components {
             live_scorer_id: string | null;
             /** Refusal */
             refusal: string | null;
+            /** Round Contract */
+            round_contract?: number | null;
             /** Scorers */
             scorers: components["schemas"]["GeneratorScorerHeartbeatView"][];
             /** Supports Cases Per Seed */
             supports_cases_per_seed: boolean | null;
+            /** Supports Round Contract */
+            supports_round_contract?: boolean | null;
         };
         /** AdminGeneratorSettingsRequest */
         AdminGeneratorSettingsRequest: {
@@ -22097,6 +22101,11 @@ export interface components {
              */
             min_panel: number;
             /**
+             * Min Round Validators
+             * @default 3
+             */
+            min_round_validators: number;
+            /**
              * Min Solver Owners
              * @default 2
              */
@@ -22400,10 +22409,16 @@ export interface components {
             capable_validators: {
                 [key: string]: number;
             };
+            /** Min Round Validators */
+            min_round_validators?: number | null;
+            /** Previous Version */
+            previous_version?: number | null;
             /** Reason */
             reason?: string | null;
             /** Round Contracts */
             round_contracts: number[];
+            /** Scorer Grading Versions */
+            scorer_grading_versions?: number[] | null;
         };
         /** GeneratorRoundCaseResult */
         GeneratorRoundCaseResult: {
@@ -23251,11 +23266,15 @@ export interface components {
         GeneratorScorerHeartbeatView: {
             /** Build Revision */
             build_revision: string | null;
+            /** Effective Grading Bench Versions */
+            effective_grading_bench_versions: number[];
             /**
              * First Seen At
              * Format: date-time
              */
             first_seen_at: string;
+            /** Grading Bench Versions */
+            grading_bench_versions?: number[] | null;
             /** Last Poll */
             last_poll: string;
             /**
@@ -52944,6 +52963,7 @@ export interface operations {
                 max_cases?: number | null;
                 sandbox?: string | null;
                 build_revision?: string | null;
+                grading_bench_versions?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -52982,6 +53002,7 @@ export interface operations {
                 max_cases?: number | null;
                 sandbox?: string | null;
                 build_revision?: string | null;
+                grading_bench_versions?: string | null;
             };
             header?: {
                 authorization?: string | null;

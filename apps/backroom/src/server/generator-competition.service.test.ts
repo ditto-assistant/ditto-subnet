@@ -49,11 +49,12 @@ const settings = {
   window_days: 7, copy_overlap_threshold: 0.5, upload_cooldown_seconds: 3600,
   lease_ttl_seconds: 7200, max_attempts: 6, retry_backoff_seconds: 3600,
   epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
-  privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false,
+  privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false, min_round_validators: 3,
   upload_fee_required: false,
 }
-// What a Platform that predates the generator upload fee returns.
-const { upload_fee_required: _absent, ...olderSettings } = settings
+// What a Platform that predates the generator upload fee (and the round
+// switch quorum) returns.
+const { upload_fee_required: _absent, min_round_validators: _noQuorum, ...olderSettings } = settings
 const runSummary = {
   run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,
   case_counts: null,
@@ -111,10 +112,11 @@ describe('generator competition MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
       const control = json(await client.callTool({ name: 'get_generator_competition_settings', arguments: {} })) as {
-        effective: { settings: { mode: string, upload_fee_required: boolean } }
+        effective: { settings: { mode: string, upload_fee_required: boolean, min_round_validators: number } }
       }
       expect(control.effective.settings.mode).toBe('off')
       expect(control.effective.settings.upload_fee_required).toBe(false)
+      expect(control.effective.settings.min_round_validators).toBe(3)
       const listing = json(await client.callTool({ name: 'list_generator_submissions', arguments: { status: 'active' } }))
       expect(JSON.stringify(listing)).not.toContain('must-not-pass')
       expect(json(await client.callTool({ name: 'get_generator_submission', arguments: { submissionId: SUBMISSION } })))
@@ -297,9 +299,15 @@ describe('generator competition MCP tools', () => {
             scorer_id: 'prod', scorer_version: 'challenge-scorer/4', min_cases: 8, max_cases: 64,
             sandbox: 'docker', build_revision: null, last_poll: 'round',
             first_seen_at: '2026-10-27T00:00:00Z', last_seen_at: '2026-10-27T01:00:00Z', live: true,
+            grading_bench_versions: null, effective_grading_bench_versions: [13],
+          }, {
+            // A Platform that predates explicit grading versions omits them.
+            scorer_id: 'old', scorer_version: 'challenge-scorer/3', min_cases: null, max_cases: null,
+            sandbox: null, build_revision: null, last_poll: 'qualification',
+            first_seen_at: '2026-10-26T00:00:00Z', last_seen_at: '2026-10-26T01:00:00Z', live: false,
           }],
           live_scorer_id: 'prod', capability_ttl_seconds: 21600, cases_per_seed: 70,
-          supports_cases_per_seed: false, refusal: refusalText,
+          supports_cases_per_seed: false, refusal: refusalText, round_contract: 14, supports_round_contract: false,
         })
       }
       const body = JSON.parse(String(init?.body ?? '{}')) as { override_scorer_capability?: boolean }
@@ -315,7 +323,10 @@ describe('generator competition MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
     try {
       expect(json(await client.callTool({ name: 'get_generator_scorer', arguments: {} })))
-        .toMatchObject({ live_scorer_id: 'prod', supports_cases_per_seed: false, scorers: [{ max_cases: 64 }] })
+        .toMatchObject({
+          live_scorer_id: 'prod', supports_cases_per_seed: false, round_contract: 14, supports_round_contract: false,
+          scorers: [{ max_cases: 64, grading_bench_versions: null, effective_grading_bench_versions: [13] }, { grading_bench_versions: null }],
+        })
       const write = {
         expectedRevision: 1, settings, reason: 'raise the case count', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
       }
@@ -404,7 +415,10 @@ describe('generator competition MCP tools', () => {
       if (path.endsWith('/rounds/preview')) {
         return Response.json({
           schedule, columns: [], panel: [], qualified_generators: 0, awaiting_qualification: 1, blockers: ['validator_rounds_enabled is false'],
-          bench_contract: { active_version: 14, bench_version: 13, reason: 'no validator can run a 70-case round column at bench v14', round_contracts: [13, 14], capable_validators: { 13: 2, 14: 0 } },
+          bench_contract: {
+            active_version: 14, bench_version: 13, reason: '2 validator(s) can run a 70-case round column at bench v14, below min_round_validators 3: rounds stay on v13 until a quorum can run v14',
+            round_contracts: [13, 14], capable_validators: { 13: 3, 14: 2 }, previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
+          },
         })
       }
       if (path.endsWith('/rounds/loop')) {
@@ -474,7 +488,10 @@ describe('generator competition MCP tools', () => {
       expect(json(await reader.client.callTool({ name: 'preview_generator_round', arguments: {} })))
         .toMatchObject({
           blockers: ['validator_rounds_enabled is false'],
-          bench_contract: { active_version: 14, bench_version: 13, round_contracts: [13, 14], capable_validators: { 13: 2, 14: 0 } },
+          bench_contract: {
+            active_version: 14, bench_version: 13, round_contracts: [13, 14], capable_validators: { 13: 3, 14: 2 },
+            previous_version: 13, min_round_validators: 3, scorer_grading_versions: [13, 14],
+          },
         })
       expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
         .toMatchObject({ available: true, status: { ticks: 3 } })

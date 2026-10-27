@@ -311,7 +311,8 @@ def _generator_failure(payload: GeneratorResultRequest) -> tuple[str, str] | Non
 # had failed; they are the scorer refusing the request it was leased, never
 # the generator's output (generator failures are prefixed "generator ").
 _SCORER_REQUEST_ERROR = re.compile(
-    r"^request (contract|seed|miner_hotkey|cases|grading_bench_version) must "
+    r"^request (?:(?:contract|seed|miner_hotkey|cases|grading_bench_version) must "
+    r"|accepts grading policies )"
 )
 
 

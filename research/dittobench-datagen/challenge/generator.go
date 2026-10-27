@@ -68,15 +68,33 @@ func NewGenerateRequest(seed, minerHotkey string, cases int) GenerateRequest {
 }
 
 // NewGenerateRequestFor builds the request for a round (or a qualification)
-// frozen at roundBenchVersion: it accepts every supported grading policy at or
-// below that version. Zero, or a version that accepts only the baseline,
+// frozen at roundBenchVersion: it accepts the supported grading policies in the
+// round's window (GradingBenchVersionsThrough). Zero, or a version that accepts only the baseline,
 // yields NewGenerateRequest exactly.
+//
+// The request's grading_bench_version is the oldest policy the round accepts.
+// While the window still holds the baseline that is GradingBenchVersion, the
+// value every generator built before v14 requires; once the window moves past
+// it (a round two versions above the baseline), the request floor moves with
+// it and a baseline-only generator refuses the request, which is exactly the
+// policy's retirement for that round.
 func NewGenerateRequestFor(seed, minerHotkey string, cases, roundBenchVersion int) GenerateRequest {
 	req := NewGenerateRequest(seed, minerHotkey, cases)
-	if accepted := GradingBenchVersionsThrough(roundBenchVersion); len(accepted) > 1 {
+	accepted := GradingBenchVersionsThrough(roundBenchVersion)
+	if len(accepted) == 0 || (len(accepted) == 1 && accepted[0] == GradingBenchVersion) {
+		return req
+	}
+	req.GradingBenchVersion = accepted[0]
+	if len(accepted) > 1 {
 		req.GradingBenchVersions = accepted
 	}
 	return req
+}
+
+// AcceptsBaseline reports whether the request accepts the baseline policy
+// (GradingBenchVersion), the only one a legacy retry can request.
+func (r GenerateRequest) AcceptsBaseline() bool {
+	return r.Accepts(GradingBenchVersion)
 }
 
 // Accepted returns the grading policies this request accepts, ascending.
@@ -127,23 +145,31 @@ func (r GenerateRequest) Validate() error {
 		return errors.New("request miner_hotkey must be an SS58 hotkey")
 	case r.Cases < MinCases || r.Cases > MaxCases:
 		return fmt.Errorf("request cases must be in %d..%d", MinCases, MaxCases)
-	case r.GradingBenchVersion != GradingBenchVersion:
-		return fmt.Errorf("request grading_bench_version must be %d", GradingBenchVersion)
+	case r.GradingBenchVersion < GradingBenchVersion:
+		return fmt.Errorf("request grading_bench_version must be at least %d", GradingBenchVersion)
 	}
 	if len(r.GradingBenchVersions) > 0 {
 		if r.GradingBenchVersions[0] != r.GradingBenchVersion {
 			return errors.New("request grading_bench_versions must start at grading_bench_version")
 		}
 		for i, v := range r.GradingBenchVersions {
-			if !SupportsGradingBenchVersion(v) {
-				return fmt.Errorf("request grading_bench_versions must be drawn from %v", supportedGradingBenchVersions)
-			}
 			if i > 0 && v <= r.GradingBenchVersions[i-1] {
 				return errors.New("request grading_bench_versions must be strictly ascending")
 			}
 		}
 	}
-	return nil
+	// Versions this package does not know (a newer scorer offering a policy
+	// released after this generator was built) are ignored, not refused:
+	// every component matches versions, so a generator keeps working across
+	// an upgrade while the request still accepts a policy it supports. A
+	// request accepting none of them (the window moved past this build) is
+	// refused: rebuild against the current package.
+	for _, v := range r.Accepted() {
+		if SupportsGradingBenchVersion(v) {
+			return nil
+		}
+	}
+	return fmt.Errorf("request accepts grading policies %v, none of which this package supports %v; rebuild against the current dittobench-datagen", r.Accepted(), supportedGradingBenchVersions)
 }
 
 // Bytes is the request as the generator reads it on stdin.

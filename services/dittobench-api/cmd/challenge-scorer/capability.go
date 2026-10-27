@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"runtime/debug"
 	"strconv"
+	"strings"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/genrun"
@@ -58,6 +59,12 @@ func advertisement(scorerID string, sb genrun.Sandbox) url.Values {
 	q.Set("scorer_version", ScorerVersion)
 	q.Set("min_cases", strconv.Itoa(challenge.MinCases))
 	q.Set("max_cases", strconv.Itoa(challenge.MaxCases))
+	// The pack grading policies this build requests and grades, explicitly,
+	// the way validators advertise generator-round-bench-<n>: Platform opens
+	// and leases a round at N (and requests a qualification at N) only to a
+	// scorer listing N. A scorer that predates this list is treated as
+	// v13-only.
+	q.Set("grading_bench_versions", gradingVersionsParam(challenge.SupportedGradingBenchVersions()))
 	if sb != nil {
 		q.Set("sandbox", sb.Name())
 	}
@@ -65,6 +72,15 @@ func advertisement(scorerID string, sb genrun.Sandbox) url.Values {
 		q.Set("build_revision", rev)
 	}
 	return q
+}
+
+// gradingVersionsParam encodes the policy list as "13,14".
+func gradingVersionsParam(versions []int) string {
+	parts := make([]string, len(versions))
+	for i, v := range versions {
+		parts[i] = strconv.Itoa(v)
+	}
+	return strings.Join(parts, ",")
 }
 
 // pollPath appends the advertisement to a work-poll path.

@@ -88,6 +88,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "privacy_window_rounds": 6,
         "onchain_commitment": False,
         "validator_rounds_enabled": False,
+        "min_round_validators": 3,
         "upload_fee_required": False,
     }
     base.update(overrides)
@@ -712,8 +713,80 @@ class TestScorer:
         _install(app, session_maker)
         await _open_lane(client)
         await _upload(client, _archive("gen14"))
-        work = await _lease(client)
-        assert work["bench_version"] == 14
+        resp = await client.get(
+            "/api/v1/generator-scorer/work",
+            headers=_SCORER,
+            params={
+                "scorer_id": "scorer-1",
+                "scorer_version": "challenge-scorer/6",
+                "grading_bench_versions": "13,14",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["work"]["bench_version"] == 14
+
+    async def test_qualification_matches_the_scorers_advertised_versions(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A scorer that advertises no grading versions is v13-only, never
+        inferred from its version string, so it qualifies at v13 even with
+        v14 active; the advertised list is stored and shown in Backroom."""
+        import ditto.api_server.generator_rounds as rounds_mod
+
+        async def _active(_session: AsyncSession, **_: Any) -> int:
+            return 14
+
+        monkeypatch.setattr(rounds_mod, "active_bench_version", _active)
+        _install(app, session_maker)
+        await _open_lane(client)
+        await _upload(client, _archive("legacy"))
+        legacy = {"scorer_id": "scorer-old", "scorer_version": "challenge-scorer/5"}
+        resp = await client.get(
+            "/api/v1/generator-scorer/work", headers=_SCORER, params=legacy
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["work"]["bench_version"] == 13
+        status = (
+            await client.get(
+                "/api/v1/admin/generator-competition/scorer", headers=_ADMIN
+            )
+        ).json()
+        (scorer,) = status["scorers"]
+        assert scorer["grading_bench_versions"] is None
+        assert scorer["effective_grading_bench_versions"] == [13]
+        assert status["round_contract"] == 14
+        assert status["supports_round_contract"] is False
+
+        current = {
+            "scorer_id": "scorer-new",
+            "scorer_version": "challenge-scorer/6",
+            "grading_bench_versions": "13,14",
+        }
+        resp = await client.get(
+            "/api/v1/generator-scorer/work", headers=_SCORER, params=current
+        )
+        assert resp.status_code == 200, resp.text
+        status = (
+            await client.get(
+                "/api/v1/admin/generator-competition/scorer", headers=_ADMIN
+            )
+        ).json()
+        assert status["live_scorer_id"] == "scorer-new"
+        assert status["supports_round_contract"] is True
+        newest = next(s for s in status["scorers"] if s["scorer_id"] == "scorer-new")
+        assert newest["grading_bench_versions"] == [13, 14]
+        assert newest["effective_grading_bench_versions"] == [13, 14]
+        for bad in ("14,13", "13,,14", "x"):
+            resp = await client.get(
+                "/api/v1/generator-scorer/work",
+                headers=_SCORER,
+                params={**current, "grading_bench_versions": bad},
+            )
+            assert resp.status_code == 422, bad
 
     async def test_qualification_loop(
         self,

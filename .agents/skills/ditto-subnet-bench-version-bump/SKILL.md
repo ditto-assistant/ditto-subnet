@@ -172,24 +172,30 @@ so policy N grades like N-1). Detail and rationale:
 - dittobench-api `generator-round-v1` advertises `generator-round-bench-N`; Platform leases a
   round at N only to validators forwarding N in `scorer_benchmarks.generator_round_bench_versions`.
 - Generator scorer (`challenge-scorer`) carries `bench_version` on round and qualification work.
-  It must **advertise its supported policies explicitly** (being implemented; until then Platform
-  infers from `scorer_version`). A scorer that advertises nothing is treated as **v13-only**.
+  It **advertises its supported policies explicitly** (`grading_bench_versions` on every poll,
+  `challenge-scorer/6`; derived from `challenge.SupportedGradingBenchVersions`, so adding N to
+  the pack contract advertises it). A scorer that advertises nothing is treated as **v13-only**,
+  never inferred from `scorer_version`; Backroom `get_generator_scorer` shows
+  `supports_round_contract`.
 - `miners/dittobench-generator-starter-kit` declares N when offered
   (`req.NewestAccepted(...)`, rehearse `-round-bench N-1` and `-round-bench N`); bump its
   version, keep the N-1 output byte-identical apart from the version string, add a README
   migration note, and re-register the public default generator after release.
-- Do **not** move the request baseline (`challenge.GradingBenchVersion`) in the same release.
-  Retiring N-1 is its own later release with 14 days' notice.
+- Do **not** move the request baseline (`challenge.GradingBenchVersion`). The two-version window
+  (`challenge.GradingPolicyWindow`, Platform `accepted_grading_versions`) retires N-2 for rounds
+  at N on its own; announce that 14 days before N activates.
+- `test_every_activatable_bench_version_has_a_generator_pack_version` fails while a shipped
+  `benchmark_contract.py` entry N has no pack policy N and round contract.
 
 Standing decisions (operator, 2026-10-27):
 
 | Decision | Rule |
 |---|---|
 | Pack version per bench version | Every activated bench version gets a matching pack policy, grader changed or not. |
-| Support window | Two policies: the active version and the previous one. Today {13, 14}, baseline 13. |
+| Support window | Two policies: a round at N accepts N and N-1 (`GradingPolicyWindow = 2`, enforced and pinned). Today {13, 14}, baseline 13. |
 | Who picks a column's policy | The generator, from the request. Platform never forces one. |
 | Legacy retry | Keep the once-only retry on the baseline request (`legacy_retry`) for now. |
-| Round switch | Rounds move to N only once a **validator quorum** can run N, symmetrical with the agent rollout quorum. The quorum gate is `min_round_validators` (being implemented); read the live value from Backroom `preview_generator_round` before assuming it. Until the quorum is met, rounds fall back to N-1 with a recorded reason. |
+| Round switch | Rounds move to N only once a **validator quorum** can run N, symmetrical with the agent rollout quorum. The quorum gate is the generator setting `min_round_validators` (default 3 = the agent rollout's `SCORING_QUORUM`); read the live value from Backroom `preview_generator_round` before assuming it. Until the quorum is met, rounds stay on the previous round's version with a recorded reason. |
 | During an open rollout | Rounds and qualification stay on the active version; they pay generators. |
 | Qualification probes at N during rollout | **Open.** The agent side lets the top agents retest into the new version so a board exists at activation; the generator migration story is undecided. Do not build or assume one without an operator decision. |
 

@@ -195,8 +195,9 @@ it runs a round at: the pack grading policies
 `challenge.SupportedGradingBenchVersions` (13 and 14). A round request's
 `bench_version` must be one of them. The harness is seeded and run at that
 version, and each case is graded at the `grading_bench_version` its pack
-declares, which must be at or below the round's version
-(`challenge.CheckRoundGradingVersions`; a dataset with any other column fails
+declares, which must be the round's version or the one before it (the
+two-version window, `challenge.GradingPolicyWindow`;
+`challenge.CheckRoundGradingVersions`; a dataset with any other column fails
 the run). The validator forwards the set as
 `scorer_benchmarks.generator_round_bench_versions`; a scorer without the
 features is treated as running only v13 rounds.

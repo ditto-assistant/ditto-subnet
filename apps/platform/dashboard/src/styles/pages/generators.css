@@ -333,6 +333,21 @@
   font-family: var(--mono);
   font-size: 11px;
 }
+/* A column's declared pack grading policy: quiet, outlined, never a status. */
+.gen-policy {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+.gen-policy-none {
+  color: var(--text-dim);
+}
 .gen-identity .gen-miner {
   white-space: nowrap;
   color: var(--text-dim);

@@ -14,6 +14,25 @@ The version number is **15**. v13 is the live contract and v14 is in
 qualification (`protocol.BenchVersionV14`, [benchmark-v14-rollout.md](../../../docs/benchmark-v14-rollout.md)).
 Version numbers are immutable, so v15 is next even if v14 never activates.
 
+## Accepted amendments (2026-10-27)
+
+The operator accepted sections 1 to 4 of the v15 list in
+[tandem-upgrades.md](tandem-upgrades.md) ("v15: generator cases inside agent
+runs across a version boundary") as amendments to this design:
+
+1. Slices are graded at each column's declared pack policy
+   (`grading_bench_version`), never at a fixed 13 or the run's bench version
+   (section 4 below).
+2. The season freezes each column's declared policy; the 32-seed battery must
+   agree, and a slice that declares another policy fails like a digest
+   mismatch.
+3. A season belongs to one bench version and never spans an activation.
+4. While a v15 rollout is open, Platform runs non-authoritative shadow seasons
+   at 15 for the cohort's desired-version runs.
+
+With the two-version window (also decided 2026-10-27), a v15 season accepts
+columns declaring 14 or 15 only.
+
 ## Summary of the proposal
 
 | Question | Proposal |

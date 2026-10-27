@@ -54,6 +54,26 @@ export function CaseLegend(): JSX.Element {
   );
 }
 
+/** Whether any row reports a declared grading policy (an older Platform
+ * reports none, and then the column is left out). */
+export function hasGradingVersions(rows: { grading_bench_version?: number | null }[]): boolean {
+  return rows.some((row) => row.grading_bench_version != null);
+}
+
+/** A quiet badge naming the pack grading policy a column declared. */
+export function GradingBadge(props: { version: number | null | undefined }): JSX.Element {
+  return (
+    <Show when={props.version != null} fallback={<span class="gen-policy-none">—</span>}>
+      <span
+        class="gen-policy"
+        title={"This pack's cases are graded under the bench v" + props.version + " grading policy"}
+      >
+        v{props.version}
+      </span>
+    </Show>
+  );
+}
+
 /** Placeholder rows shaped like the table they stand in for. */
 export function SkeletonRows(props: { rows: number; cols: number; label: string }): JSX.Element {
   return (

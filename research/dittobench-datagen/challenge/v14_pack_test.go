@@ -32,13 +32,46 @@ func TestSupportedGradingBenchVersions(t *testing.T) {
 	if GradingBenchVersion != protocol.BenchVersionV13 {
 		t.Fatal("the baseline policy must stay v13: every pre-v14 generator emits it")
 	}
-	for round, want := range map[int][]int{12: nil, 13: {13}, 14: {13, 14}, 15: {13, 14}} {
+	for round, want := range map[int][]int{12: nil, 13: {13}, 14: {13, 14}, 15: {14}} {
 		if got := GradingBenchVersionsThrough(round); !reflect.DeepEqual(got, want) {
 			t.Errorf("through(%d) = %v, want %v", round, got, want)
 		}
 	}
 	if SupportsGradingBenchVersion(12) || SupportsGradingBenchVersion(15) || !SupportsGradingBenchVersion(14) {
 		t.Fatal("support set is wrong")
+	}
+}
+
+// TestGradingPolicyWindowIsTwoVersions pins the operator's support window: a
+// round at N accepts packs at N and N-1 only, so a third policy retires the
+// oldest for rounds above it while an older round keeps it.
+func TestGradingPolicyWindowIsTwoVersions(t *testing.T) {
+	if GradingPolicyWindow != 2 {
+		t.Fatalf("GradingPolicyWindow = %d; the operator fixed the window at two versions", GradingPolicyWindow)
+	}
+	saved := supportedGradingBenchVersions
+	t.Cleanup(func() { supportedGradingBenchVersions = saved })
+	supportedGradingBenchVersions = []int{13, 14, 15}
+	for round, want := range map[int][]int{13: {13}, 14: {13, 14}, 15: {14, 15}} {
+		if got := GradingBenchVersionsThrough(round); !reflect.DeepEqual(got, want) {
+			t.Errorf("with a third policy, through(%d) = %v, want %v", round, got, want)
+		}
+	}
+	v15 := NewGenerateRequestFor(SeedFromInt64(7), testHotkey, 16, 15)
+	if err := v15.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if v15.GradingBenchVersion != 14 || !reflect.DeepEqual(v15.Accepted(), []int{14, 15}) {
+		t.Fatalf("v15 request = %+v, want floor 14 accepting [14 15]", v15)
+	}
+	if v15.Accepts(13) || v15.AcceptsBaseline() {
+		t.Fatal("a v15 round must not accept a v13 pack (no legacy retry either)")
+	}
+	if v14 := NewGenerateRequestFor(SeedFromInt64(7), testHotkey, 16, 14); !v14.AcceptsBaseline() || v14.GradingBenchVersion != 13 {
+		t.Fatalf("a v14 round keeps the v13 baseline and its retry: %+v", v14)
+	}
+	if err := CheckRoundGradingVersions([]RoundColumnPack{{ColumnID: "c0", Pack: ReferencePack(3, testHotkey)}}, 15); err == nil {
+		t.Fatal("a v15 round dataset must refuse a v13 column")
 	}
 }
 
@@ -90,7 +123,6 @@ func TestV14RequestAcceptsBothPolicies(t *testing.T) {
 	}
 	for name, list := range map[string][]int{
 		"not from baseline": {14},
-		"unsupported":       {13, 15},
 		"not ascending":     {13, 13},
 	} {
 		bad := req
@@ -98,6 +130,25 @@ func TestV14RequestAcceptsBothPolicies(t *testing.T) {
 		if bad.Validate() == nil {
 			t.Errorf("%s: %v accepted", name, list)
 		}
+	}
+	// A policy this package does not know yet is ignored, not refused, so a
+	// generator built now keeps working when a newer scorer offers it.
+	future := req
+	future.GradingBenchVersions = []int{13, 14, 15}
+	if err := future.Validate(); err != nil || future.NewestAccepted(nil) != 14 {
+		t.Fatalf("a request offering an unknown v15 must validate and pick 14: %v", err)
+	}
+	// A request whose window moved past every policy this package knows is
+	// refused: the generator must be rebuilt.
+	moved := NewGenerateRequest(req.Seed, testHotkey, 16)
+	moved.GradingBenchVersion, moved.GradingBenchVersions = 15, []int{15, 16}
+	if moved.Validate() == nil {
+		t.Fatal("a request accepting only unknown policies must be refused")
+	}
+	below := req
+	below.GradingBenchVersion, below.GradingBenchVersions = 12, nil
+	if below.Validate() == nil {
+		t.Fatal("a request floor below the baseline must be refused")
 	}
 }
 

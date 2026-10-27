@@ -75,6 +75,7 @@ from ditto.api_models.generator_round_validator import (
     GeneratorRoundCommitmentJobResponse,
     GeneratorRoundCommitmentReportRequest,
     GeneratorRoundCommitmentReportResponse,
+    accepted_grading_versions,
     round_commitment_payload,
 )
 from ditto.api_models.generator_rounds import (
@@ -102,7 +103,9 @@ from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.api_server.generator_competition import scorer_request_error
 from ditto.api_server.generator_scorer_capability import (
     ScorerCapability,
+    grading_versions,
     live_scorer,
+    version_refusal,
 )
 from ditto.api_server.generator_scorer_capability import (
     refusal as capability_refusal,
@@ -938,10 +941,21 @@ def round_contract_for(active: int) -> int:
     return max(below) if below else min(GENERATOR_ROUND_BENCH_VERSIONS)
 
 
-async def qualification_bench_version(session: AsyncSession) -> int:
-    """The round contract a qualification run requests now
-    (:func:`round_contract_for` the active benchmark version)."""
+async def active_round_contract(session: AsyncSession) -> int:
+    """:func:`round_contract_for` the active benchmark version."""
     return round_contract_for(await active_bench_version(session))
+
+
+async def qualification_bench_version(
+    session: AsyncSession, scorer: ScorerCapability | None = None
+) -> int:
+    """The round contract a qualification run requests now: the one rounds
+    would open at under the active benchmark version (:func:`round_contract_for`),
+    capped to the newest one the polling scorer advertises it grades. A
+    scorer that advertises none is v13-only, so it qualifies at v13."""
+    contract = await active_round_contract(session)
+    supported = [v for v in grading_versions(scorer) if v <= contract]
+    return max(supported) if supported else LEGACY_ROUND_BENCH_VERSION
 
 
 @dataclass(frozen=True)
@@ -952,22 +966,55 @@ class RoundContract:
     active_version: int
     bench_version: int | None
     reason: str | None = None
+    previous_version: int = LEGACY_ROUND_BENCH_VERSION
+    """The version the newest opened round froze: rounds switch to a newer
+    one only at ``min_round_validators``."""
+    min_round_validators: int = 1
+    scorer_grading_versions: tuple[int, ...] = LEGACY_SCORER_ROUND_BENCH_VERSIONS
+    """What the live generator scorer advertises it grades (v13 when none)."""
+
+
+async def previous_round_bench_version(session: AsyncSession) -> int:
+    """The bench version the newest opened round froze, or the legacy v13
+    for a lane whose rounds never recorded one."""
+    version = await session.scalar(
+        select(GeneratorRound.bench_version)
+        .where(GeneratorRound.bench_version.is_not(None))
+        .order_by(GeneratorRound.round_index.desc())
+        .limit(1)
+    )
+    return int(version) if version is not None else LEGACY_ROUND_BENCH_VERSION
 
 
 async def choose_round_bench_version(
-    session: AsyncSession, *, cases_per_column: int, now: datetime
+    session: AsyncSession,
+    *,
+    cases_per_column: int,
+    now: datetime,
+    min_round_validators: int = 1,
 ) -> RoundContract:
     """Pick the bench contract a round opening now freezes.
 
     It follows the active benchmark version. When that version has no round
     contract (``GENERATOR_ROUND_BENCH_VERSIONS``: the pack grading policy and
-    the scorer's round mode), or no validator can run a round at it, the round
-    falls back to the newest round contract below it that a validator can
-    run, and records why. An active version older than every round contract
-    keeps the oldest one, the contract rounds have always run at. With no
-    validator able to run any candidate, the round cannot run and is voided.
+    the scorer's round mode), the live generator scorer does not advertise it
+    (``grading_bench_versions``; none advertised is v13-only), or too few
+    validators can run a round at it, the round falls back to the newest
+    round contract below it that can run, and records why. An active version
+    older than every round contract keeps the oldest one, the contract rounds
+    have always run at. With no candidate able to run, the round is voided.
+
+    Quorum: a version newer than the one the previous round froze needs
+    ``min_round_validators`` capable validators before rounds switch to it,
+    mirroring the agent rollout, where a version takes authority only once
+    each priority-cohort position holds ``SCORING_QUORUM`` (3) desired-version
+    scores, one per distinct validator. Below quorum, rounds stay on the
+    previous version. A version at or below the previous one needs one.
     """
     active = await active_bench_version(session)
+    previous = await previous_round_bench_version(session)
+    scorer = await live_scorer(session, now=now)
+    scorer_versions = grading_versions(scorer)
     candidates = sorted(
         (version for version in GENERATOR_ROUND_BENCH_VERSIONS if version <= active),
         reverse=True,
@@ -989,20 +1036,42 @@ async def choose_round_bench_version(
             "mode runs only those)"
         )
     for version in candidates:
-        if await round_capable_validators(
+        refused = version_refusal(scorer, version)
+        if refused is not None:
+            notes.append(refused)
+            continue
+        capable = await round_capable_validators(
             session, bench_version=version, cases_per_column=cases_per_column, now=now
-        ):
+        )
+        required = min_round_validators if version > previous else 1
+        if capable >= required:
             return RoundContract(
                 active_version=active,
                 bench_version=version,
                 reason="; ".join(notes) or None,
+                previous_version=previous,
+                min_round_validators=min_round_validators,
+                scorer_grading_versions=scorer_versions,
             )
-        notes.append(
-            f"no validator can run a {cases_per_column}-case round column at "
-            f"bench v{version}"
-        )
+        if capable == 0:
+            notes.append(
+                f"no validator can run a {cases_per_column}-case round column "
+                f"at bench v{version}"
+            )
+        else:
+            notes.append(
+                f"{capable} validator(s) can run a {cases_per_column}-case round "
+                f"column at bench v{version}, below min_round_validators "
+                f"{required}: rounds stay on v{previous} until a quorum can "
+                f"run v{version}"
+            )
     return RoundContract(
-        active_version=active, bench_version=None, reason="; ".join(notes)
+        active_version=active,
+        bench_version=None,
+        reason="; ".join(notes),
+        previous_version=previous,
+        min_round_validators=min_round_validators,
+        scorer_grading_versions=scorer_versions,
     )
 
 
@@ -1027,7 +1096,10 @@ async def open_round(
     # Frozen for the round's life: an activation mid-round must not move its
     # panel runs, tickets, or capability routing to another contract.
     contract = await choose_round_bench_version(
-        session, cases_per_column=settings.cases_per_seed, now=now
+        session,
+        cases_per_column=settings.cases_per_seed,
+        now=now,
+        min_round_validators=settings.min_round_validators,
     )
     row.bench_version = contract.bench_version
     columns = await select_columns(session, settings)
@@ -1172,8 +1244,9 @@ async def lease_round_work(
     """Lease the oldest round needing scorer work (caller commits).
 
     A generating round the polling scorer cannot run (its advertised case
-    bounds exclude ``cases_per_column``) is voided with an infrastructure
-    reason rather than leased to fail.
+    bounds exclude ``cases_per_column``, or its advertised grading policies
+    exclude the round's version; none advertised is v13-only) is voided with
+    an infrastructure reason rather than leased to fail.
     """
     if resolved.settings.mode == "off":
         return None
@@ -1201,6 +1274,10 @@ async def lease_round_work(
         if row.status == "generating" and row.cases_per_column is not None
         else None
     )
+    if refused is None and row.status == "generating":
+        # The polling scorer must grade the round's version (none advertised
+        # is v13-only); generating it anyway would request policies it lacks.
+        refused = version_refusal(capability, round_bench_version(row))
     if refused is not None:
         void_round(row, f"infra: {refused}", now=now)
         await session.flush()
@@ -1289,11 +1366,9 @@ async def record_generation(
     bench = round_bench_version(row)
     for result in payload.columns:
         declared = result.seed.grading_bench_version if result.seed else None
-        if declared is not None and (
-            declared not in GENERATOR_ROUND_BENCH_VERSIONS or declared > bench
-        ):
-            # The scorer requested only policies through the round's version,
-            # so a pack outside them is a scorer inconsistency.
+        if declared is not None and declared not in accepted_grading_versions(bench):
+            # The scorer requested only the policies in the round's window
+            # (N-1 and N), so a pack outside them is a scorer inconsistency.
             raise RoundResultRejected(
                 f"column {result.column_id} pack grades at v{declared}, which "
                 f"a v{bench} round does not accept"
@@ -1809,7 +1884,21 @@ def _summary(
     )
 
 
+def declared_grading_versions(generation: dict[str, Any] | None) -> dict[str, int]:
+    """Each generated column's declared pack grading policy, by column id. A
+    column whose pack declared none (every v13 round, and generators that
+    predate v14) graded at the baseline, v13."""
+    return {
+        column["column_id"]: int(
+            column.get("grading_bench_version") or LEGACY_ROUND_BENCH_VERSION
+        )
+        for column in (generation or {}).get("columns", ())
+        if column.get("ok")
+    }
+
+
 def column_views(row: GeneratorRound) -> list[GeneratorRoundColumnView]:
+    declared = declared_grading_versions(row.generation)
     scores = {
         column["column_id"]: column["pack"]
         for column in (row.score or {}).get("columns", ())
@@ -1836,6 +1925,7 @@ def column_views(row: GeneratorRound) -> list[GeneratorRoundColumnView]:
                 trivial=pack["trivial"] if pack else None,
                 unsolved=pack["unsolved"] if pack else None,
                 duplicate=pack["duplicate"] if pack else None,
+                grading_bench_version=declared.get(column["column_id"]),
             )
         )
     return out
@@ -2019,6 +2109,7 @@ async def submission_round_views(
             GeneratorRound.score,
             GeneratorRound.scored_at,
             GeneratorRound.panel,
+            GeneratorRound.generation,
         )
         .where(
             GeneratorRound.status == "scored",
@@ -2055,6 +2146,9 @@ async def submission_round_views(
                 duplicate=int(pack["duplicate"]),
                 panel_size=sum(
                     1 for slot in row.panel or () if not slot.get("dropped_reason")
+                ),
+                grading_bench_version=declared_grading_versions(row.generation).get(
+                    column["column_id"]
                 ),
             )
         )

@@ -64,8 +64,9 @@ import (
 )
 
 // ScorerVersion is reported with every result so Platform can audit which
-// executor produced it.
-const ScorerVersion = "challenge-scorer/5"
+// executor produced it. /6 advertises its grading policies explicitly
+// (grading_bench_versions); Platform reads the list, never this string.
+const ScorerVersion = "challenge-scorer/6"
 
 var releaseRevision = "development"
 

@@ -826,6 +826,8 @@ class TestRoundLifecycle:
         assert held["score"] == board["5GenMinerA"]["score"]
         assert held["columns"] == 5 and held["panel_size"] == 3
         assert held["discriminating"] == board["5GenMinerA"]["discriminating_cases"]
+        # A v13 round's packs declare no policy: each column graded at v13.
+        assert held["grading_bench_version"] == 13
         # ``enforce`` marks the same qualified miner generators eligible and
         # changes nothing else about the ledger.
         await _apply_settings(client, mode="enforce")

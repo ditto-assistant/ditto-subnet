@@ -243,9 +243,10 @@ and the kit README's migration note):
 - **When rounds switch:** after the agent bench activates N and a validator
   quorum can run N rounds. Until then rounds stay on N-1. An in-flight round
   finishes on its frozen version.
-- **Notice:** a new policy is announced at least 7 days before activation;
-  retiring the old one (the only step that can strand a generator) gets 14
-  days and its own release. `cases_per_seed` changes are announced before
+- **Notice:** a new policy is announced at least 7 days before activation.
+  A round at N accepts N and N-1 only, so activating N+1 retires N-1 for new
+  rounds (the only step that can strand a generator); that gets 14 days'
+  notice. `cases_per_seed` changes are announced before
   they apply.
 - Starter kits (agent and generator) improve continuously. An improvement
   learned from another miner's submission ships only after that submission is
