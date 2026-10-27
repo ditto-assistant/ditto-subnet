@@ -71,7 +71,7 @@ else
   systemctl start "$UNIT" || true
 fi
 adopted=false
-for ((attempt=0; attempt<${GENERATOR_SCORER_ADOPTION_POLLS:-360}; attempt++)); do
+for ((attempt=0; attempt<${GENERATOR_SCORER_ADOPTION_POLLS:-840}; attempt++)); do
   if systemctl is-active --quiet "$UNIT" && [ "$(running_binary || true)" = "$destination/challenge-scorer" ]; then
     adopted_pid="$(systemctl show "$UNIT" --property MainPID --value)"
     sleep 10

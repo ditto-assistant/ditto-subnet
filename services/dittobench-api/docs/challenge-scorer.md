@@ -21,7 +21,7 @@ Activation switches `/opt/ditto-generator-scorer/current` atomically, then sends
 SIGUSR1 to the scorer's main process. It finishes the current lease and exits
 before claiming more work. Systemd starts the candidate through `current`.
 Adoption requires the candidate executable to stay active with the same PID
-for ten seconds. A failed 30-minute adoption restores `last-good` and requests
+for ten seconds. A failed 70-minute adoption restores `last-good` and requests
 another graceful restart. The updater retains prior releases and refreshes
 itself only after successful adoption; an interrupted update keeps `last-good`
 available for the next attempt.
