@@ -166,18 +166,22 @@ func Evaluate(rows []CaseRow, p Params) ([]FamilyRow, error) {
 		if r.Count < 0 {
 			return nil, fmt.Errorf("row %d (%s): negative count", i, family)
 		}
+		if r.Round <= 0 {
+			return nil, fmt.Errorf("row %d (%s): missing or invalid round", i, family)
+		}
 		n := max(r.Count, 1)
 		a.row.Cases += n
 		a.rounds[r.Round] = true
 		if r.Source != "" {
 			a.sources[r.Source] = true
 		}
-		if r.SolverOwners > a.row.SolverOwners {
-			a.row.SolverOwners = r.SolverOwners
-		}
 		status, err := caseStatus(r, p)
 		if err != nil {
 			return nil, fmt.Errorf("row %d (%s): %w", i, family, err)
+		}
+		// caseStatus has validated the counts; a status-only row carries none.
+		if r.PanelSize > 0 && r.SolverOwners > a.row.SolverOwners {
+			a.row.SolverOwners = r.SolverOwners
 		}
 		switch status {
 		case challenge.CaseDiscriminating:
@@ -216,6 +220,13 @@ func Evaluate(rows []CaseRow, p Params) ([]FamilyRow, error) {
 }
 
 func caseStatus(r CaseRow, p Params) (string, error) {
+	// Counts are validated whenever present, including on rows that carry a
+	// status, so a malformed row never reaches the report.
+	if r.PanelSize < 0 || r.Solvers < 0 || r.SolverOwners < 0 ||
+		(r.PanelSize > 0 && (r.Solvers > r.PanelSize || r.SolverOwners > r.Solvers)) ||
+		(r.PanelSize == 0 && (r.Solvers > 0 || r.SolverOwners > 0)) {
+		return "", fmt.Errorf("inconsistent counts: panel %d, solvers %d, solver owners %d", r.PanelSize, r.Solvers, r.SolverOwners)
+	}
 	switch r.Status {
 	case challenge.CaseDiscriminating, challenge.CaseTrivial, challenge.CaseUnsolved,
 		challenge.CaseDuplicate, challenge.CaseInsufficientPanel:
@@ -224,8 +235,8 @@ func caseStatus(r CaseRow, p Params) (string, error) {
 	default:
 		return "", fmt.Errorf("%s %q", statusUnknownReason, r.Status)
 	}
-	if r.PanelSize <= 0 || r.Solvers < 0 || r.Solvers > r.PanelSize || r.SolverOwners > r.Solvers {
-		return "", fmt.Errorf("inconsistent counts: panel %d, solvers %d, solver owners %d", r.PanelSize, r.Solvers, r.SolverOwners)
+	if r.PanelSize == 0 {
+		return "", fmt.Errorf("a row without a status needs panel_size, solvers and solver_owners")
 	}
 	switch {
 	case r.SolverOwners < p.MinSolverOwners:

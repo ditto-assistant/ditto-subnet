@@ -66,6 +66,9 @@ func run(args []string, stdin io.Reader, stdout io.Writer) error {
 	if err := dec.Decode(&rows); err != nil {
 		return fmt.Errorf("decode case rows: %w", err)
 	}
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return fmt.Errorf("trailing data after the case rows (were two files concatenated?)")
+	}
 	report, err := familygate.Evaluate(rows, p)
 	if err != nil {
 		return err

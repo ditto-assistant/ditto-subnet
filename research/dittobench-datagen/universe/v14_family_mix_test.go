@@ -1,9 +1,44 @@
 package universe
 
 import (
-	"strings"
+	"regexp"
+	"strconv"
 	"testing"
 )
+
+// v14RoundRef matches a five-digit round index or a range of them
+// ("25944-25963").
+var v14RoundRef = regexp.MustCompile(`\b(\d{5})(?:-(\d{5}))?\b`)
+
+// v14CitedRounds returns the distinct round indexes an evidence string
+// cites. A range counts every round in it.
+func v14CitedRounds(evidence string) map[int]bool {
+	out := map[int]bool{}
+	for _, m := range v14RoundRef.FindAllStringSubmatch(evidence, -1) {
+		lo, _ := strconv.Atoi(m[1])
+		hi := lo
+		if m[2] != "" {
+			hi, _ = strconv.Atoi(m[2])
+		}
+		for r := lo; r <= hi && r-lo < 1000; r++ {
+			out[r] = true
+		}
+	}
+	return out
+}
+
+func TestV14CitedRoundsCountsDistinctRounds(t *testing.T) {
+	for evidence, want := range map[string]int{
+		"round, round, round":                         0,
+		"rounds 25946, 25955 and 25963":               3,
+		"round 25955; round 25955 again; round 25963": 2,
+		"rounds 25944-25946":                          3,
+	} {
+		if got := len(v14CitedRounds(evidence)); got != want {
+			t.Errorf("%q: %d rounds, want %d", evidence, got, want)
+		}
+	}
+}
 
 // TestV14FamilyMixCoversEveryProgramFamily keeps the SN-351 ledger complete:
 // every business family and personal domain the v14 program generators can
@@ -66,8 +101,8 @@ func TestV14FamilyMixPortsNoExcludedShape(t *testing.T) {
 			if e.Status != V14StatusAdmitted {
 				t.Fatalf("%s: generator-derived mechanic is generated before it was admitted (status %s)", e.Family, e.Status)
 			}
-			if strings.Count(e.Evidence, "round") < 3 {
-				t.Fatalf("%s: generator-derived admission cites fewer than three rounds: %q", e.Family, e.Evidence)
+			if n := len(v14CitedRounds(e.Evidence)); n < 3 {
+				t.Fatalf("%s: generator-derived admission cites %d distinct rounds, want at least 3: %q", e.Family, n, e.Evidence)
 			}
 		default:
 			t.Fatalf("%s: unknown origin %q", e.Family, e.Origin)

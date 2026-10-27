@@ -41,4 +41,10 @@ func TestRunReadsStdinAsJSON(t *testing.T) {
 	if err := run(nil, strings.NewReader(`[{"round":1,"family":"x","bogus":1}]`), &out); err == nil {
 		t.Fatal("accepted an unknown field")
 	}
+	if err := run(nil, strings.NewReader(`[{"round":1,"family":"x","status":"trivial"}] [{"round":2,"family":"x","status":"trivial"}]`), &out); err == nil {
+		t.Fatal("accepted trailing JSON after the rows")
+	}
+	if err := run(nil, strings.NewReader("[{\"round\":1,\"family\":\"x\",\"status\":\"trivial\"}]\n\n"), &out); err != nil {
+		t.Fatalf("rejected trailing whitespace: %v", err)
+	}
 }

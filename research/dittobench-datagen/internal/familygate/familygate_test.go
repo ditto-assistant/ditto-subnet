@@ -133,12 +133,16 @@ func TestGateExcludesDuplicatesFromRates(t *testing.T) {
 
 func TestGateRejectsBadRows(t *testing.T) {
 	for name, row := range map[string]CaseRow{
-		"no family":      {Round: 1, PanelSize: 5},
-		"unknown status": {Round: 1, Family: "x", Status: "easy"},
-		"too many":       {Round: 1, Family: "x", PanelSize: 5, Solvers: 6, SolverOwners: 2},
-		"owners>solvers": {Round: 1, Family: "x", PanelSize: 5, Solvers: 1, SolverOwners: 2},
-		"no panel":       {Round: 1, Family: "x"},
-		"negative count": {Round: 1, Family: "x", Status: challenge.CaseTrivial, Count: -1},
+		"no family":                    {Round: 1, PanelSize: 5},
+		"unknown status":               {Round: 1, Family: "x", Status: "easy"},
+		"too many":                     {Round: 1, Family: "x", PanelSize: 5, Solvers: 6, SolverOwners: 2},
+		"owners>solvers":               {Round: 1, Family: "x", PanelSize: 5, Solvers: 1, SolverOwners: 2},
+		"no panel":                     {Round: 1, Family: "x"},
+		"negative count":               {Round: 1, Family: "x", Status: challenge.CaseTrivial, Count: -1},
+		"no round":                     {Family: "x", PanelSize: 5, Solvers: 2, SolverOwners: 2},
+		"status, bad counts":           {Round: 1, Family: "x", Status: challenge.CaseTrivial, PanelSize: 5, Solvers: 9, SolverOwners: 2},
+		"status, owners without panel": {Round: 1, Family: "x", Status: challenge.CaseTrivial, SolverOwners: 99},
+		"status, negative owners":      {Round: 1, Family: "x", Status: challenge.CaseTrivial, PanelSize: 5, Solvers: 1, SolverOwners: -1},
 	} {
 		if _, err := Evaluate([]CaseRow{row}, DefaultParams()); err == nil {
 			t.Errorf("%s: accepted", name)
