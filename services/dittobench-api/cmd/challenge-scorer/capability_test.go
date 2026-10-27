@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
@@ -35,6 +36,12 @@ func TestWorkPollsAdvertiseCapability(t *testing.T) {
 			q.Get("sandbox") != "docker" {
 			t.Fatalf("advertisement = %v", q)
 		}
+	}
+	saved := releaseRevision
+	t.Cleanup(func() { releaseRevision = saved })
+	releaseRevision = strings.Repeat("ab", 20)
+	if got := advertisement("s", nil).Get("build_revision"); got != releaseRevision {
+		t.Fatalf("release revision advertised as %q", got)
 	}
 	if got := advertisement("bad id/with slash", nil).Get("scorer_id"); got != "default" {
 		t.Fatalf("invalid scorer id advertised as %q", got)

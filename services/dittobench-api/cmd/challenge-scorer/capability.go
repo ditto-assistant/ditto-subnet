@@ -29,8 +29,12 @@ func defaultScorerID() string {
 	return "default"
 }
 
-// buildRevision is the VCS commit the binary was built from, when known.
+// buildRevision is the commit the binary was built from, when known: the
+// release stamp (-X main.releaseRevision), else Go's VCS build info.
 func buildRevision() string {
+	if revisionPattern.MatchString(releaseRevision) {
+		return releaseRevision
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ""
