@@ -109,6 +109,7 @@ export const setGeneratorSettingsInputSchema = z
     settings: generatorCompetitionSettingsSchema,
     reason: auditReasonSchema(8),
     confirmation: z.string(),
+    overrideScorerCapability: z.boolean().default(false),
   })
   .superRefine((input, context) => {
     const expected = generatorSettingsConfirmation(input.settings.mode)
@@ -520,6 +521,28 @@ export const generatorRoundLoopSchema = z.object({
     })
     .nullable(),
   schedule: roundScheduleSchema.nullable(),
+})
+
+const generatorScorerHeartbeatSchema = z.object({
+  scorer_id: z.string(),
+  scorer_version: z.string(),
+  min_cases: z.number().int().nullable(),
+  max_cases: z.number().int().nullable(),
+  sandbox: z.string().nullable(),
+  build_revision: z.string().nullable(),
+  last_poll: z.string(),
+  first_seen_at: z.string(),
+  last_seen_at: z.string(),
+  live: z.boolean(),
+})
+
+export const generatorScorerStatusSchema = z.object({
+  scorers: z.array(generatorScorerHeartbeatSchema),
+  live_scorer_id: z.string().nullable(),
+  capability_ttl_seconds: z.number().int(),
+  cases_per_seed: z.number().int(),
+  supports_cases_per_seed: z.boolean().nullable(),
+  refusal: z.string().nullable(),
 })
 
 export const generatorRoundTickSchema = z.object({

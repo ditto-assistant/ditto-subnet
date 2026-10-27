@@ -1082,6 +1082,55 @@ class TestRoundLifecycle:
             assert rnd is not None and (rnd.void_reason or "").startswith("infra:")
             assert len((rnd.generation or {})["scorer_faults"]) == 1
 
+    async def test_rounds_the_scorer_cannot_run_void_as_infra(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A 70-case round is voided with an infra reason when the polling
+        scorer advertises MaxCases 64 (at lease) and when the live scorer does
+        (at open), and no generator is rejected."""
+        _install(app, session_maker)
+        await _apply_settings(
+            client, counted_columns=2, challenger_columns=0, cases_per_seed=70
+        )
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        miner = await _seed_generator(
+            session_maker, hotkey="5GenMinerA", owner="coldkey:ga", salt="a"
+        )
+        await _qualify_all(session_maker)
+        await _advance(session_maker, 3)
+        await _advance(session_maker, 4)
+        stale: dict[str, str | int] = {
+            "scorer_id": "scorer-1",
+            "scorer_version": "challenge-scorer/4",
+            "min_cases": 8,
+            "max_cases": 64,
+        }
+        resp = await client.get(
+            "/api/v1/generator-scorer/round-work", headers=_SCORER, params=stale
+        )
+        assert resp.status_code == 200 and resp.json()["work"] is None
+        async with session_maker() as session:
+            rnd = await get_round(session, 1)
+            assert rnd is not None and rnd.status == "void"
+            assert (rnd.void_reason or "").startswith("infra: generator scorer")
+            assert "8..64" in (rnd.void_reason or "")
+            row = await session.get(GeneratorSubmission, miner)
+            assert row is not None and row.status == "active"
+
+        # The heartbeat is now live, so the next round voids at open.
+        await _advance(session_maker, 7)
+        await _advance(session_maker, 8)
+        async with session_maker() as session:
+            rnd = await get_round(session, 2)
+            assert rnd is not None and rnd.status == "void"
+            assert (rnd.void_reason or "").startswith("infra: generator scorer")
+
     async def test_round_end_without_enough_results_voids_and_frees_leases(
         self,
         app: FastAPI,

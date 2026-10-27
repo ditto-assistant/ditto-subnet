@@ -1944,6 +1944,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/scorer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Scorer Status
+         * @description What each generator scorer last advertised, and whether the live one
+         *     can run the governing ``cases_per_seed``.
+         */
+        get: operations["get_scorer_status_api_v1_admin_generator_competition_scorer_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/settings": {
         parameters: {
             query?: never;
@@ -5554,6 +5575,9 @@ export interface paths {
         /**
          * Lease Round
          * @description Lease the oldest round needing generation or scoring, if any.
+         *
+         *     A generating round whose ``cases_per_column`` the polling scorer refuses
+         *     is voided with an ``infra:`` reason instead of leased.
          */
         get: operations["lease_round_api_v1_generator_scorer_round_work_get"];
         put?: never;
@@ -5574,6 +5598,9 @@ export interface paths {
         /**
          * Lease Work
          * @description Lease the most overdue qualification run, or return ``{"work": null}``.
+         *
+         *     Nothing is leased while ``cases_per_seed`` is outside the polling scorer's
+         *     advertised bounds: a stale scorer would only fail it.
          */
         get: operations["lease_work_api_v1_generator_scorer_work_get"];
         put?: never;
@@ -11901,6 +11928,25 @@ export interface components {
             /** Verdicts */
             verdicts: components["schemas"]["GeneratorCaseVerdictView"][];
         };
+        /**
+         * AdminGeneratorScorerStatus
+         * @description Every scorer that has polled, the live one, and whether it can run the
+         *     governing ``cases_per_seed``.
+         */
+        AdminGeneratorScorerStatus: {
+            /** Capability Ttl Seconds */
+            capability_ttl_seconds: number;
+            /** Cases Per Seed */
+            cases_per_seed: number;
+            /** Live Scorer Id */
+            live_scorer_id: string | null;
+            /** Refusal */
+            refusal: string | null;
+            /** Scorers */
+            scorers: components["schemas"]["GeneratorScorerHeartbeatView"][];
+            /** Supports Cases Per Seed */
+            supports_cases_per_seed: boolean | null;
+        };
         /** AdminGeneratorSettingsRequest */
         AdminGeneratorSettingsRequest: {
             /**
@@ -11912,6 +11958,11 @@ export interface components {
             confirmation: string;
             /** Expected Revision */
             expected_revision: number;
+            /**
+             * Override Scorer Capability
+             * @default false
+             */
+            override_scorer_capability: boolean;
             /** Reason */
             reason: string;
             /**
@@ -23171,6 +23222,38 @@ export interface components {
              * @enum {string}
              */
             work: "qualification" | "round";
+        };
+        /**
+         * GeneratorScorerHeartbeatView
+         * @description The latest capability one generator scorer advertised on a work poll.
+         */
+        GeneratorScorerHeartbeatView: {
+            /** Build Revision */
+            build_revision: string | null;
+            /**
+             * First Seen At
+             * Format: date-time
+             */
+            first_seen_at: string;
+            /** Last Poll */
+            last_poll: string;
+            /**
+             * Last Seen At
+             * Format: date-time
+             */
+            last_seen_at: string;
+            /** Live */
+            live: boolean;
+            /** Max Cases */
+            max_cases: number | null;
+            /** Min Cases */
+            min_cases: number | null;
+            /** Sandbox */
+            sandbox: string | null;
+            /** Scorer Id */
+            scorer_id: string;
+            /** Scorer Version */
+            scorer_version: string;
         };
         /**
          * GeneratorSeedOutput
@@ -45748,6 +45831,37 @@ export interface operations {
             };
         };
     };
+    get_scorer_status_api_v1_admin_generator_competition_scorer_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorScorerStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_settings_api_v1_admin_generator_competition_settings_get: {
         parameters: {
             query?: never;
@@ -52794,7 +52908,14 @@ export interface operations {
     };
     lease_round_api_v1_generator_scorer_round_work_get: {
         parameters: {
-            query?: never;
+            query?: {
+                scorer_id?: string | null;
+                scorer_version?: string | null;
+                min_cases?: number | null;
+                max_cases?: number | null;
+                sandbox?: string | null;
+                build_revision?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };
@@ -52825,7 +52946,14 @@ export interface operations {
     };
     lease_work_api_v1_generator_scorer_work_get: {
         parameters: {
-            query?: never;
+            query?: {
+                scorer_id?: string | null;
+                scorer_version?: string | null;
+                min_cases?: number | null;
+                max_cases?: number | null;
+                sandbox?: string | null;
+                build_revision?: string | null;
+            };
             header?: {
                 authorization?: string | null;
             };

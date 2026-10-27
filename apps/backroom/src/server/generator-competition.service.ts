@@ -8,6 +8,7 @@ import {
   generatorRoundLoopSchema,
   generatorRoundPreviewSchema,
   generatorRoundTickSchema,
+  generatorScorerStatusSchema,
   listGeneratorRoundsInputSchema,
   registerDefaultGeneratorInputSchema,
   defaultGeneratorUploadResponseSchema,
@@ -55,7 +56,9 @@ function settingsRefusal(cause: unknown) {
   if (cause.status !== 409 && cause.status !== 422) return null
   const recovery = /confirmation/i.test(cause.message)
     ? 'Nothing was applied: the confirmation must be "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies.'
-    : cause.status === 422
+    : /generator scorer/i.test(cause.message)
+      ? 'Nothing was applied: the live generator scorer (get_generator_scorer) refuses that cases_per_seed. Redeploy the scorer first, or resubmit with overrideScorerCapability=true to apply it anyway (rounds void with an infra reason and qualifications wait until a capable scorer polls).'
+      : cause.status === 422
       ? 'Nothing was applied: correct the refused settings (min_solver_owners <= min_panel <= panel_size, every field inside its bound) and resubmit with the same expectedRevision.'
       : 'Nothing was applied: re-read get_generator_competition_settings and resubmit with the revision it reports.'
   return new Error(`${cause.message}. ${recovery}`)
@@ -93,6 +96,7 @@ export async function setGeneratorSettings(rawInput: unknown, actor: string) {
         reason: input.reason,
         actor,
         confirmation: input.confirmation,
+        ...(input.overrideScorerCapability ? { override_scorer_capability: true } : {}),
       },
     })
   } catch (cause) {
@@ -265,6 +269,10 @@ export async function fetchGeneratorRound(rawInput: unknown) {
 
 export async function fetchGeneratorRoundPreview() {
   return generatorRoundPreviewSchema.parse(await platformAdminRequest(`${BASE}/rounds/preview`))
+}
+
+export async function fetchGeneratorScorer() {
+  return generatorScorerStatusSchema.parse(await platformAdminRequest(`${BASE}/scorer`))
 }
 
 export async function fetchGeneratorRoundLoop() {

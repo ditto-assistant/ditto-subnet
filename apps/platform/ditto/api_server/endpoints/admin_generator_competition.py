@@ -29,6 +29,7 @@ from ditto.api_models.generator import (
     AdminGeneratorPromotionCandidatesResponse,
     AdminGeneratorReinstateRequest,
     AdminGeneratorRunDetail,
+    AdminGeneratorScorerStatus,
     AdminGeneratorSettingsRequest,
     AdminGeneratorSettingsResponse,
     AdminGeneratorSubmissionActionRequest,
@@ -38,6 +39,7 @@ from ditto.api_models.generator import (
     GeneratorCaseVerdictView,
     GeneratorProbeEpochView,
     GeneratorPromotionCandidate,
+    GeneratorScorerHeartbeatView,
     GeneratorSettingsRevision,
     generator_settings_confirmation,
 )
@@ -55,6 +57,13 @@ from ditto.api_server.generator_round_reservation import (
     invalidate_round_reservation,
 )
 from ditto.api_server.generator_rounds import void_round
+from ditto.api_server.generator_scorer_capability import (
+    SCORER_CAPABILITY_TTL,
+    is_live,
+    list_heartbeats,
+    live_scorer,
+    refusal,
+)
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
 from ditto.db.models import (
     GeneratorOperatorAction,
@@ -210,6 +219,20 @@ async def create_settings_revision(
                 f"(expected {payload.expected_revision}, current {actual})"
             ),
         )
+    if payload.settings.mode != "off" and not payload.override_scorer_capability:
+        refused = refusal(
+            await live_scorer(session, now=datetime.now(UTC)),
+            payload.settings.cases_per_seed,
+        )
+        if refused is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{refused}: redeploy the scorer first, or pass "
+                    "override_scorer_capability to apply it anyway (its rounds "
+                    "void and its qualifications wait until a capable scorer polls)"
+                ),
+            )
     current = (await load_settings(session)).settings
     if payload.settings.epochs_per_round != current.epochs_per_round:
         await _retire_rounds_for_interval_change(
@@ -240,6 +263,44 @@ async def create_settings_revision(
     # change on this worker now, the others within the resolver TTL.
     invalidate_round_reservation(request.app.state)
     return _revision(row)
+
+
+@router.get("/scorer", response_model=AdminGeneratorScorerStatus)
+async def get_scorer_status(
+    _admin: AdminDep, session: SessionDep
+) -> AdminGeneratorScorerStatus:
+    """What each generator scorer last advertised, and whether the live one
+    can run the governing ``cases_per_seed``."""
+    now = datetime.now(UTC)
+    rows = await list_heartbeats(session)
+    live = await live_scorer(session, now=now)
+    cases = (await load_settings(session)).settings.cases_per_seed
+    refused = refusal(live, cases)
+    known = (
+        live is not None and live.min_cases is not None and live.max_cases is not None
+    )
+    return AdminGeneratorScorerStatus(
+        scorers=[
+            GeneratorScorerHeartbeatView(
+                scorer_id=row.scorer_id,
+                scorer_version=row.scorer_version,
+                min_cases=row.min_cases,
+                max_cases=row.max_cases,
+                sandbox=row.sandbox,
+                build_revision=row.build_revision,
+                last_poll=row.last_poll,
+                first_seen_at=row.first_seen_at,
+                last_seen_at=row.last_seen_at,
+                live=is_live(row, now=now),
+            )
+            for row in rows
+        ],
+        live_scorer_id=live.scorer_id if live is not None else None,
+        capability_ttl_seconds=int(SCORER_CAPABILITY_TTL.total_seconds()),
+        cases_per_seed=cases,
+        supports_cases_per_seed=(refused is None) if known else None,
+        refusal=refused,
+    )
 
 
 SubmissionStatusFilter = Literal["active", "superseded", "rejected"]

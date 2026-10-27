@@ -99,6 +99,13 @@ from ditto.api_models.generator_rounds import (
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_capabilities import ValidatorCapabilities
 from ditto.api_server.generator_competition import scorer_request_error
+from ditto.api_server.generator_scorer_capability import (
+    ScorerCapability,
+    live_scorer,
+)
+from ditto.api_server.generator_scorer_capability import (
+    refusal as capability_refusal,
+)
 from ditto.db.models import (
     Agent,
     BannedHotkey,
@@ -1008,6 +1015,14 @@ async def open_round(
             now=now,
         )
         return
+    refused = capability_refusal(
+        await live_scorer(session, now=now),
+        settings.cases_per_seed,
+        what="the round's cases_per_column",
+    )
+    if refused is not None:
+        void_round(row, f"infra: {refused}", now=now)
+        return
     if not any(column["counted"] for column in columns):
         void_round(
             row,
@@ -1106,9 +1121,18 @@ async def build_matrix(session: AsyncSession, row: GeneratorRound) -> RoundMatri
 
 
 async def lease_round_work(
-    session: AsyncSession, *, resolved: ResolvedSettings, now: datetime
+    session: AsyncSession,
+    *,
+    resolved: ResolvedSettings,
+    now: datetime,
+    capability: ScorerCapability | None = None,
 ) -> RoundLease | None:
-    """Lease the oldest round needing scorer work (caller commits)."""
+    """Lease the oldest round needing scorer work (caller commits).
+
+    A generating round the polling scorer cannot run (its advertised case
+    bounds exclude ``cases_per_column``) is voided with an infrastructure
+    reason rather than leased to fail.
+    """
     if resolved.settings.mode == "off":
         return None
     row = await session.scalar(
@@ -1126,6 +1150,17 @@ async def lease_round_work(
         return None
     if row.status == "generating" and row.lease_attempts >= MAX_GENERATION_ATTEMPTS:
         void_round(row, "round generation lease expired repeatedly", now=now)
+        await session.flush()
+        return None
+    refused = (
+        capability_refusal(
+            capability, row.cases_per_column, what="the round's cases_per_column"
+        )
+        if row.status == "generating" and row.cases_per_column is not None
+        else None
+    )
+    if refused is not None:
+        void_round(row, f"infra: {refused}", now=now)
         await session.flush()
         return None
     row.lease_id = uuid4()

@@ -452,6 +452,8 @@ type platformClient struct {
 	base  string
 	token string
 	http  *http.Client
+	// advertise is this build's capability, sent on every work poll.
+	advertise neturl.Values
 }
 
 func (c *platformClient) do(ctx context.Context, method, path string, body, out any) error {
@@ -502,6 +504,7 @@ func serveWithDrain(ctx, drain context.Context, args []string) error {
 	interval := fs.Duration("interval", 30*time.Second, "idle poll interval")
 	once := fs.Bool("once", false, "process at most one work item of each kind and exit")
 	unsandboxed := fs.Bool("unsafe-local-sandbox", false, "build and run generators on the host with no isolation (local stacks only)")
+	scorerID := fs.String("scorer-id", defaultScorerID(), "name this scorer advertises to Platform (default: hostname)")
 	insecure := fs.Bool("insecure-platform", false, "allow an http:// Platform URL (local stacks only; the token travels in clear text)")
 	_ = fs.Parse(args)
 	token := strings.TrimSpace(os.Getenv(tokenEnv))
@@ -521,6 +524,7 @@ func serveWithDrain(ctx, drain context.Context, args []string) error {
 	}
 	log.Printf("scorer started revision=%s max_cases=%d", releaseRevision, challenge.MaxCases)
 	client := &platformClient{base: strings.TrimRight(*platform, "/"), token: token, http: &http.Client{Timeout: 120 * time.Second}}
+	client.advertise = advertisement(*scorerID, sb)
 	for {
 		if drain.Err() != nil {
 			return nil
@@ -563,7 +567,7 @@ func serveWithDrain(ctx, drain context.Context, args []string) error {
 // expire, which is the only correct response to a scorer-side failure.
 func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox) (bool, error) {
 	var work workResponse
-	if err := client.do(ctx, http.MethodGet, "/api/v1/generator-scorer/work", nil, &work); err != nil {
+	if err := client.do(ctx, http.MethodGet, client.pollPath("/api/v1/generator-scorer/work"), nil, &work); err != nil {
 		return false, err
 	}
 	if work.Work == nil {

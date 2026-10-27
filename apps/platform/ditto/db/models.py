@@ -13545,6 +13545,44 @@ class GeneratorProbeEpoch(Base):
     )
 
 
+class GeneratorScorerHeartbeat(Base):
+    """The latest capability one generator scorer advertised on a work poll.
+
+    ``min_cases``/``max_cases`` are the case bounds the scorer build's pack
+    contract accepts (``challenge.MinCases``/``MaxCases``); both are NULL for a
+    scorer that predates advertising. Platform refuses qualification and round
+    work, and settings writes, outside the live scorer's bounds.
+    """
+
+    __tablename__ = "generator_scorer_heartbeats"
+
+    scorer_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    scorer_version: Mapped[str] = mapped_column(Text, nullable=False)
+    min_cases: Mapped[int | None] = mapped_column(Integer)
+    max_cases: Mapped[int | None] = mapped_column(Integer)
+    sandbox: Mapped[str | None] = mapped_column(Text)
+    build_revision: Mapped[str | None] = mapped_column(Text)
+    last_poll: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "(min_cases IS NULL) = (max_cases IS NULL) "
+            "AND (min_cases IS NULL OR (min_cases >= 1 AND max_cases >= min_cases))",
+            name="generator_scorer_heartbeats_cases_check",
+        ),
+        CheckConstraint(
+            "last_poll IN ('qualification', 'round')",
+            name="generator_scorer_heartbeats_poll_check",
+        ),
+    )
+
+
 class GeneratorOperatorAction(Base):
     """Append-only audit of operator actions on the generator competition.
 

@@ -287,6 +287,55 @@ describe('generator competition MCP tools', () => {
     }
   })
 
+  it('shows the live scorer and passes the capability override through', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const refusalText = 'generator scorer prod (challenge-scorer/4) supports 8..64 cases per pack; cases_per_seed is 70'
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/scorer')) {
+        return Response.json({
+          scorers: [{
+            scorer_id: 'prod', scorer_version: 'challenge-scorer/4', min_cases: 8, max_cases: 64,
+            sandbox: 'docker', build_revision: null, last_poll: 'round',
+            first_seen_at: '2026-10-27T00:00:00Z', last_seen_at: '2026-10-27T01:00:00Z', live: true,
+          }],
+          live_scorer_id: 'prod', capability_ttl_seconds: 21600, cases_per_seed: 70,
+          supports_cases_per_seed: false, refusal: refusalText,
+        })
+      }
+      const body = JSON.parse(String(init?.body ?? '{}')) as { override_scorer_capability?: boolean }
+      if (!body.override_scorer_capability) {
+        return Response.json({ detail: `${refusalText}: redeploy the scorer first` }, { status: 409 })
+      }
+      return Response.json({
+        revision: 2, parent_revision: 1, scope: '*', settings, reason: 'raise the case count',
+        actor: session.email, created_at: '2026-10-27T00:00:00Z', checksum: 'b'.repeat(64),
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      expect(json(await client.callTool({ name: 'get_generator_scorer', arguments: {} })))
+        .toMatchObject({ live_scorer_id: 'prod', supports_cases_per_seed: false, scorers: [{ max_cases: 64 }] })
+      const write = {
+        expectedRevision: 1, settings, reason: 'raise the case count', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+      }
+      const refused = await client.callTool({ name: 'set_generator_competition_settings', arguments: write })
+      expect(refused.isError).toBe(true)
+      expect((refused.content as Array<{ text: string }>)[0].text).toContain('overrideScorerCapability=true')
+      const sent = JSON.parse(String((fetchMock.mock.calls.at(-1) as [string, RequestInit])[1].body))
+      expect(sent).not.toHaveProperty('override_scorer_capability')
+      const applied = await client.callTool({
+        name: 'set_generator_competition_settings', arguments: { ...write, overrideScorerCapability: true },
+      })
+      expect(applied.isError).toBeFalsy()
+      expect(JSON.parse(String((fetchMock.mock.calls.at(-1) as [string, RequestInit])[1].body)))
+        .toMatchObject({ override_scorer_capability: true })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('refuses to report a settings write an older Platform silently dropped', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     // An older Platform ignores the unknown field and stores the revision without it.

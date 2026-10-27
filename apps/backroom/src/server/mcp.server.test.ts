@@ -558,6 +558,7 @@ describe('Backroom MCP tools', () => {
         'list_generator_rounds',
         'get_generator_round',
         'preview_generator_round',
+        'get_generator_scorer',
         'get_generator_round_loop',
         'tick_generator_rounds',
         'get_generator_round_dataset',

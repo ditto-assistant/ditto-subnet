@@ -234,6 +234,9 @@ class AdminGeneratorSettingsRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+    override_scorer_capability: bool = False
+    """Apply a ``cases_per_seed`` the live generator scorer refuses (for
+    example ahead of a scorer redeploy). Refused without it."""
 
     @model_validator(mode="after")
     def _require_complete_policy(self) -> AdminGeneratorSettingsRequest:
@@ -256,6 +259,34 @@ class AdminGeneratorSettingsResponse(GeneratorModel):
     history: list[GeneratorSettingsRevision]
     default: GeneratorCompetitionSettings
     effective: EffectiveGeneratorSettings
+
+
+class GeneratorScorerHeartbeatView(GeneratorModel):
+    """The latest capability one generator scorer advertised on a work poll."""
+
+    scorer_id: str
+    scorer_version: str
+    min_cases: int | None
+    max_cases: int | None
+    sandbox: str | None
+    build_revision: str | None
+    last_poll: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+    live: bool
+
+
+class AdminGeneratorScorerStatus(GeneratorModel):
+    """Every scorer that has polled, the live one, and whether it can run the
+    governing ``cases_per_seed``."""
+
+    scorers: list[GeneratorScorerHeartbeatView]
+    live_scorer_id: str | None
+    capability_ttl_seconds: int
+    cases_per_seed: int
+    supports_cases_per_seed: bool | None
+    """``None`` when no live scorer advertised its case bounds."""
+    refusal: str | None
 
 
 # --- miner upload --------------------------------------------------------

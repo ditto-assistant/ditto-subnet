@@ -166,6 +166,11 @@ Each round's secret is revealed after `privacy_window_rounds`.
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
     only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
+  - `get_generator_scorer` returns what each generator scorer advertised on
+    its last work poll (version, min/max cases, build revision, last seen)
+    and whether the live one accepts the governing `cases_per_seed`. Platform
+    refuses a settings write outside it unless `overrideScorerCapability` is
+    set.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
     and `get_generator_round_loop` expose the following:
     - the schedule;

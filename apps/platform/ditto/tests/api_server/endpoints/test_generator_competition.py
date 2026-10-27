@@ -881,6 +881,92 @@ class TestScorer:
             "status"
         ] == "qualified"
 
+    async def test_scorer_capability_gates_leases_and_settings(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A scorer advertising MaxCases 64 is never leased a 70-case run, and
+        an operator cannot raise cases_per_seed past it without overriding."""
+        _install(app, session_maker)
+        await _open_lane(client, cases_per_seed=70)
+        await _upload(client, _archive())
+        stale: dict[str, str | int] = {
+            "scorer_id": "ditto-generator-scorer-prod",
+            "scorer_version": "challenge-scorer/4",
+            "min_cases": 8,
+            "max_cases": 64,
+            "sandbox": "docker",
+            "build_revision": "a" * 40,
+        }
+        resp = await client.get(
+            "/api/v1/generator-scorer/work", headers=_SCORER, params=stale
+        )
+        assert resp.status_code == 200 and resp.json()["work"] is None
+        status = (
+            await client.get(
+                "/api/v1/admin/generator-competition/scorer", headers=_ADMIN
+            )
+        ).json()
+        assert status["live_scorer_id"] == "ditto-generator-scorer-prod"
+        assert status["cases_per_seed"] == 70
+        assert status["supports_cases_per_seed"] is False
+        assert "8..64" in status["refusal"]
+        (scorer,) = status["scorers"]
+        assert scorer["max_cases"] == 64 and scorer["live"] is True
+        assert scorer["build_revision"] == "a" * 40
+        assert scorer["last_poll"] == "qualification"
+
+        # Raising (or keeping) cases_per_seed above the live scorer is refused.
+        current = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
+        settings = _settings(cases_per_seed=72)
+        body = {
+            "expected_revision": current["effective"]["revision"],
+            "settings": settings,
+            "reason": "raise the case count",
+            "actor": "backroom:test",
+            "confirmation": generator_settings_confirmation(settings["mode"]),
+        }
+        refused = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert refused.status_code == 409 and "8..64" in refused.text
+        allowed = await client.post(
+            _SETTINGS_URL,
+            headers=_ADMIN,
+            json={**body, "override_scorer_capability": True},
+        )
+        assert allowed.status_code == 200, allowed.text
+
+        # A capable scorer polls: it leases, and the status flips.
+        capable: dict[str, str | int] = {
+            **stale,
+            "max_cases": 80,
+            "build_revision": "b" * 40,
+        }
+        resp = await client.get(
+            "/api/v1/generator-scorer/work", headers=_SCORER, params=capable
+        )
+        assert resp.status_code == 200
+        work = resp.json()["work"]
+        assert work is not None and work["cases_per_seed"] == 72
+        status = (
+            await client.get(
+                "/api/v1/admin/generator-competition/scorer", headers=_ADMIN
+            )
+        ).json()
+        assert status["supports_cases_per_seed"] is True and status["refusal"] is None
+        assert status["scorers"][0]["build_revision"] == "b" * 40
+
+        # Half-advertised bounds are malformed; a legacy poll (no version)
+        # leaves the heartbeat alone and is not gated.
+        bad: dict[str, str | int] = {**capable}
+        del bad["max_cases"]
+        assert (
+            await client.get(
+                "/api/v1/generator-scorer/work", headers=_SCORER, params=bad
+            )
+        ).status_code == 422
+
     async def test_results_must_match_the_lease(
         self,
         app: FastAPI,

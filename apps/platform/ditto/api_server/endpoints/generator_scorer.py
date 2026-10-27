@@ -32,7 +32,7 @@ import secrets
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
@@ -64,6 +64,12 @@ from ditto.api_server.generator_rounds import (
     record_round_fault,
     record_round_score,
 )
+from ditto.api_server.generator_scorer_capability import (
+    Poll,
+    ScorerCapability,
+    record_heartbeat,
+    refusal,
+)
 from ditto.db.models import GeneratorProbeEpoch
 from ditto.db.queries.generator import get_run, get_submission
 
@@ -92,13 +98,72 @@ async def require_generator_scorer(
 ScorerDep = Annotated[None, Depends(require_generator_scorer)]
 
 
+def advertised_capability(
+    scorer_id: Annotated[
+        str | None, Query(max_length=120, pattern=r"^[A-Za-z0-9._:-]+$")
+    ] = None,
+    scorer_version: Annotated[str | None, Query(max_length=64)] = None,
+    min_cases: Annotated[int | None, Query(ge=1, le=100_000)] = None,
+    max_cases: Annotated[int | None, Query(ge=1, le=100_000)] = None,
+    sandbox: Annotated[str | None, Query(max_length=32)] = None,
+    build_revision: Annotated[
+        str | None, Query(max_length=64, pattern=r"^[0-9a-f]{7,64}$")
+    ] = None,
+) -> ScorerCapability | None:
+    """The capability a poll advertised, or ``None`` for a scorer predating it."""
+    if not scorer_version:
+        return None
+    if (min_cases is None) != (max_cases is None) or (
+        min_cases is not None and max_cases is not None and max_cases < min_cases
+    ):
+        raise HTTPException(
+            status_code=422, detail="min_cases and max_cases go together, min <= max"
+        )
+    return ScorerCapability(
+        scorer_id=scorer_id or "default",
+        scorer_version=scorer_version,
+        min_cases=min_cases,
+        max_cases=max_cases,
+        sandbox=sandbox or None,
+        build_revision=build_revision,
+    )
+
+
+CapabilityDep = Annotated[ScorerCapability | None, Depends(advertised_capability)]
+
+
+async def _heartbeat(
+    session: AsyncSession,
+    capability: ScorerCapability | None,
+    *,
+    poll: Poll,
+    now: datetime,
+) -> None:
+    if capability is not None:
+        await record_heartbeat(session, capability, poll=poll, now=now)
+
+
 @router.get("/work", response_model=GeneratorWorkResponse)
-async def lease_work(_scorer: ScorerDep, session: SessionDep) -> GeneratorWorkResponse:
-    """Lease the most overdue qualification run, or return ``{"work": null}``."""
+async def lease_work(
+    _scorer: ScorerDep, session: SessionDep, capability: CapabilityDep
+) -> GeneratorWorkResponse:
+    """Lease the most overdue qualification run, or return ``{"work": null}``.
+
+    Nothing is leased while ``cases_per_seed`` is outside the polling scorer's
+    advertised bounds: a stale scorer would only fail it.
+    """
+    now = datetime.now(UTC)
+    await _heartbeat(session, capability, poll="qualification", now=now)
     resolved = await load_settings(session)
     if resolved.settings.mode == "off":
+        await session.commit()
         return GeneratorWorkResponse()
-    lease = await lease_next(session, resolved=resolved, now=datetime.now(UTC))
+    refused = refusal(capability, resolved.settings.cases_per_seed)
+    if refused is not None:
+        await session.commit()
+        logger.warning("generator qualification not leased: %s", refused)
+        return GeneratorWorkResponse()
+    lease = await lease_next(session, resolved=resolved, now=now)
     if lease is None:
         # A backoff may have been written while scanning; keep it.
         await session.commit()
@@ -230,13 +295,19 @@ async def post_fault(
 
 @router.get("/round-work", response_model=GeneratorRoundWorkResponse)
 async def lease_round(
-    _scorer: ScorerDep, session: SessionDep
+    _scorer: ScorerDep, session: SessionDep, capability: CapabilityDep
 ) -> GeneratorRoundWorkResponse:
-    """Lease the oldest round needing generation or scoring, if any."""
+    """Lease the oldest round needing generation or scoring, if any.
+
+    A generating round whose ``cases_per_column`` the polling scorer refuses
+    is voided with an ``infra:`` reason instead of leased.
+    """
+    now = datetime.now(UTC)
+    await _heartbeat(session, capability, poll="round", now=now)
     resolved = await load_settings(session)
     try:
         lease = await lease_round_work(
-            session, resolved=resolved, now=datetime.now(UTC)
+            session, resolved=resolved, now=now, capability=capability
         )
     except RoundResultRejected as exc:
         await session.rollback()

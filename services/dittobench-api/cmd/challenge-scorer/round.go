@@ -86,7 +86,7 @@ type roundScoreResult struct {
 // posted as that column's result.
 func processRound(ctx context.Context, client *platformClient, sb genrun.Sandbox) (bool, error) {
 	var resp roundWorkResponse
-	if err := client.do(ctx, http.MethodGet, "/api/v1/generator-scorer/round-work", nil, &resp); err != nil {
+	if err := client.do(ctx, http.MethodGet, client.pollPath("/api/v1/generator-scorer/round-work"), nil, &resp); err != nil {
 		return false, err
 	}
 	w := resp.Work

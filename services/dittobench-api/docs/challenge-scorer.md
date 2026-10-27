@@ -82,6 +82,22 @@ Older scorers wrote request refusals (`request cases must be in 8..64`) into
 seed and column errors. Platform still recognises those messages as the
 scorer's fault.
 
+Every work poll (`/work` and `/round-work`) also advertises this build's
+capability as query parameters: `scorer_id` (`-scorer-id`, default the
+hostname), `scorer_version`, `min_cases` and `max_cases`
+(`challenge.MinCases`/`MaxCases`), `sandbox` and, when the binary knows its
+commit, `build_revision`. Platform records the latest per scorer and uses it
+before any fault can happen:
+
+- it leases no qualification whose `cases_per_seed` the polling scorer refuses;
+- it voids with an `infra:` reason a round the scorer cannot generate, at lease
+  (the polling scorer) and at open (the live scorer);
+- it refuses a generator settings write whose `cases_per_seed` the live scorer
+  refuses, unless the operator passes `override_scorer_capability`.
+
+Backroom `get_generator_scorer` shows each scorer's version, bounds, build and
+last poll. A scorer that predates advertising sends nothing and is not gated.
+
 `-unsafe-local-sandbox` builds and runs on the host with no isolation. It
 exists for local stacks only.
 
