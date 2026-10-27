@@ -1990,6 +1990,15 @@ async def proxy_chat_completions(
     config = request.app.state.config.inference_proxy
     if not config.enabled or config.openrouter_api_key is None:
         raise HTTPException(status_code=404, detail="inference proxy is disabled")
+    if request.app.state.config.ditto_router_require_competition_account:
+        # Caddy may send requests here when relay ports are unset or during a
+        # rollback. This Python route has no account-billed Router upstream:
+        # refuse every request, linked or not, before reading a grant or
+        # reserving capacity rather than falling back to sponsor funds.
+        raise HTTPException(
+            status_code=503,
+            detail="Ditto-billed competition chat requires the configured relay",
+        )
     if None in {
         x_ditto_grant,
         x_ditto_generation,

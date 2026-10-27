@@ -34,6 +34,11 @@ caller-supplied `uid` as a substitute for authentication.
   capacity, the relay resolves the agent's active account link from Postgres.
   Missing/revoked links return 402; lookup failures return 503. Neither invokes
   OpenRouter as a sponsor fallback.
+- The Python competition-chat route, which Caddy can reach when relay ports
+  are unset or rolled back, returns 503 for **every** identity when the flag
+  is enabled. It has no account-billed upstream and refuses before account,
+  grant, reservation or provider access. Losing the Go route cannot silently
+  revert to sponsor spending.
 - Linked requests go to Ditto Router, which remains responsible for verifying
   the live app spending grant, account funds, caps, and the app endpoint's
   billing mode. The flag alone cannot turn a sponsor-billed endpoint into a
@@ -90,6 +95,20 @@ without falling back to Platform funds. Replays, uncertain outcomes,
 concurrent evaluations and account unlinking need their own failure tests.
 Code-level routing fixtures do not establish real provider charges or account
 debits.
+
+## Submission access and inference are separate charges
+
+The submission fee remains a separate, low admission/spam fee. Inference and
+evaluation usage are metered against the miner's Ditto credits in addition to
+that fee. This checkpoint does not change the live submission amount, remove
+payment-proof checks, or waive the fee when an account is linked or funded.
+No new numeric admission fee has been selected.
+
+Complete miner-paid evaluation must show an upfront usage estimate and an
+enforced spending cap. Receipts and economic reporting must distinguish
+submission access fees from actual inference debits; a top-up is prepaid
+credit, not proof that an evaluation consumed it. This distinction is needed
+to compare predictable per-run operating costs with the separate access fee.
 
 ## Treasury boundary
 

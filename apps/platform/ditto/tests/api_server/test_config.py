@@ -685,14 +685,16 @@ def test_paid_competition_link_requests_spend_only_when_enabled(
     monkeypatch.setenv("DITTO_LINK_ENABLED", "false")
     monkeypatch.setenv("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", "false")
     monkeypatch.delenv("DITTO_LINK_SCOPES", raising=False)
-    assert parse_api_server_config_from_env("c").ditto_link.scopes == "openid email"
+    config = parse_api_server_config_from_env("c")
+    assert config.ditto_link.scopes == "openid email"
+    assert config.ditto_router_require_competition_account is False
     monkeypatch.setenv("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", "true")
     with pytest.raises(ApiServerConfigError, match="requires DITTO_LINK_ENABLED"):
         parse_api_server_config_from_env("c")
     monkeypatch.setenv("DITTO_LINK_ENABLED", "true")
-    assert parse_api_server_config_from_env("c").ditto_link.scopes == (
-        "openid email credits:spend"
-    )
+    config = parse_api_server_config_from_env("c")
+    assert config.ditto_link.scopes == "openid email credits:spend"
+    assert config.ditto_router_require_competition_account is True
     monkeypatch.setenv("DITTO_LINK_SCOPES", "openid email credits:spend")
     assert (
         parse_api_server_config_from_env("c")

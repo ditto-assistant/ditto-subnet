@@ -399,6 +399,9 @@ class ApiServerConfig:
     )
     """Sign in with Ditto relying-party settings; disabled until configured."""
 
+    ditto_router_require_competition_account: bool = False
+    """Require the account-billed Go relay; Python chat fails closed when set."""
+
     github_link: GithubLinkConfig = field(default_factory=GithubLinkConfig)
     """Server-side GitHub OAuth; disabled until an identity-only app is configured."""
 
@@ -879,6 +882,12 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
         generator_scorer_token=os.environ.get("DITTO_GENERATOR_SCORER_TOKEN") or None,
         ditto_link=parse_ditto_link_config_from_env(),
+        ditto_router_require_competition_account=(
+            os.environ.get("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", "false")
+            .strip()
+            .lower()
+            in _TRUTHY
+        ),
         github_link=parse_github_link_config_from_env(),
         dashboard_enabled=dashboard_enabled,
         dashboard_wandb_url=dashboard_wandb_url,
