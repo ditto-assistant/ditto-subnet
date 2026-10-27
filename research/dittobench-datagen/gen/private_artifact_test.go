@@ -15,6 +15,7 @@ func privateArtifactDigest(raw []byte) string {
 }
 
 func TestDecodePrivateArtifactRejectsUnboundContextsWithFreshDigest(t *testing.T) {
+	t.Parallel()
 	profile, _ := ProfileForVersion("full", 13)
 	base, err := GenerateDatasetWithSurface(1, profile, 13, SurfaceOptions{Salt: 91})
 	if err != nil {
@@ -58,6 +59,7 @@ func TestDecodePrivateArtifactRejectsUnboundContextsWithFreshDigest(t *testing.T
 }
 
 func TestDecodePrivateArtifactPinsBytesAndContract(t *testing.T) {
+	t.Parallel()
 	profile, _ := ProfileForVersion("small", 13)
 	base, err := GenerateDatasetWithSurface(4242, profile, 13, SurfaceOptions{Salt: 91})
 	if err != nil {
@@ -113,6 +115,7 @@ func TestDecodePrivateArtifactPinsBytesAndContract(t *testing.T) {
 }
 
 func TestDecodePrivateArtifactRestoresFullPrivateGradingContract(t *testing.T) {
+	t.Parallel()
 	profile, _ := ProfileForVersion("full", 13)
 	base, err := GenerateDatasetWithSurface(1, profile, 13, SurfaceOptions{Salt: 91})
 	if err != nil {

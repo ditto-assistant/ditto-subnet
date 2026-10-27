@@ -12,6 +12,7 @@ import (
 )
 
 func TestV13EnterpriseScoredGroups(t *testing.T) {
+	t.Parallel()
 	formats := map[string]bool{}
 	ops := map[string]bool{}
 	for seed := int64(-3); seed < 15; seed++ {

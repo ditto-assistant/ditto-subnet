@@ -23,7 +23,7 @@ import (
 // change that moves a count is a new contract, not a drift.
 //
 // All dedicated v13 generators are integrated. The interim registries are
-// empty, so TestV13MixAuditGateAcrossFortySeeds enforces the complete gate.
+// empty, so TestV13QualificationSeeds/MixAuditGate enforces the complete gate.
 
 // V13MemoryEnvelope is the memory-case slot table for one v13 run size.
 type V13MemoryEnvelope struct {
@@ -119,7 +119,7 @@ var V13SlotOrder = []string{
 // v13InterimSlots are the slots whose dedicated generator has not landed. Remove
 // a slot from this list in the same change that wires its generator into
 // generateV13WorldMemorySuite; TestV13InterimSlotsArePinned keeps the list
-// honest and TestV13MixAuditGateAcrossFortySeeds arms the full #1529 gate once
+// honest and TestV13QualificationSeeds/MixAuditGate arms the full #1529 gate once
 // it is empty.
 var v13InterimSlots = []string{}
 

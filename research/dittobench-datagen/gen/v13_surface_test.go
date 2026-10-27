@@ -79,14 +79,14 @@ func TestV13SaltZeroIsByteIdenticalToUnsaltedPath(t *testing.T) {
 // TestV13SaltChangesOnlySurfaces is the contract behind both owner options: a
 // non-zero salt re-renders surfaces (prompts, questions, seeded prompts) and
 // nothing the grader compares against, apart from the deliberate regeneration
-// canary rotation, whose stale public nonce becomes a distractor.
+// canary rotation, whose stale public nonce becomes a distractor. Every salt
+// drives the same keyed surface pass, so one non-zero salt (plus the salt-91
+// private-surface tests) covers it.
 func TestV13SaltChangesOnlySurfaces(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
-	base, err := GenerateDataset(123456789, prof, protocol.BenchVersionV13)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, salt := range []uint64{1, 7, 0xdeadbeef} {
+	base := cachedDataset(t, 123456789, "full", protocol.BenchVersionV13, 0)
+	for _, salt := range []uint64{0xdeadbeef} {
 		salted, err := GenerateDatasetWithSurface(123456789, prof, protocol.BenchVersionV13, SurfaceOptions{Salt: salt})
 		if err != nil {
 			t.Fatalf("salt %d: %v", salt, err)
@@ -317,14 +317,11 @@ func TestV13TranslationHookCoversEverySurface(t *testing.T) {
 // the three chitchat probes are distinct, injection probes name their project,
 // and the surfaces vary across seeds.
 func TestV13IntegrityQuestionsAreGrammarDrawn(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
+	t.Parallel()
 	behaviorFrames := map[string]bool{}
 	chitchatFrames := map[string]bool{}
-	for seed := int64(1); seed <= 12; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range v13FortySeeds(t)[:12] {
+		seed := artifact.Seed
 		chitchat := map[string]bool{}
 		for _, c := range artifact.MemoryCases {
 			switch c.QuestionType {
@@ -362,8 +359,7 @@ func TestV13IntegrityQuestionsAreGrammarDrawn(t *testing.T) {
 	}
 }
 
-func TestV13FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
+func checkV13FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T, seeds []DatasetArtifact) {
 	freeForm := map[string]bool{
 		"agent_job": true, "workflow_not_job": true, "agent_workflow": true,
 		"feedback": true, "set_tool_prefs": true, "automation_not_job": true,
@@ -371,11 +367,7 @@ func TestV13FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
 		"calendar_search": true,
 	}
 	seen := map[string]bool{}
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range seeds {
 		for _, tc := range artifact.ToolCases {
 			if !freeForm[tc.Category] {
 				continue

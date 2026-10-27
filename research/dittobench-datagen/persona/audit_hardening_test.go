@@ -20,6 +20,7 @@ func fullOpts() Opts {
 // its expected answer or any accepted item, because a fully correct response
 // would surface that distractor by construction and be zeroed.
 func TestNoDistractorOverlapsAcceptedAnswer(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 200; seed++ {
 		p := BuildPlan(seed, fullOpts())
 		for _, q := range DeriveQuestions(p) {

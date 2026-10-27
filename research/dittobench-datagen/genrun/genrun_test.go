@@ -56,9 +56,12 @@ func plan() Plan {
 	}
 }
 
+// testLimits keeps the generate deadline short so the never-exiting sleep
+// fixture times out quickly, but wide enough that a legitimate fixture does not
+// trip it while the rest of the suite saturates the runner's CPUs.
 func testLimits() Limits {
 	l := DefaultLimits()
-	l.GenerateTimeout = 3 * time.Second
+	l.GenerateTimeout = 10 * time.Second
 	return l
 }
 

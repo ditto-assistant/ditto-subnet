@@ -20,6 +20,7 @@ func hasRule(r Report, caseID, rule string) bool {
 // Each mutation breaks exactly one property a valid case must have; the
 // validator must name the rule that caught it.
 func TestValidateRejectsBrokenCases(t *testing.T) {
+	t.Parallel()
 	type mutation struct {
 		name   string
 		rule   string

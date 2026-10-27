@@ -17,15 +17,12 @@ import (
 // family is public, so a full inverse parser is expected to solve each of
 // them; the SN-354 shortcuts the chains replace are measured in universe.
 func TestChainV14WireParser(t *testing.T) {
-	prof, _ := gen.ProfileForVersion("full", protocol.BenchVersionV14)
+	t.Parallel()
 	type tally struct{ total, solved int }
 	total, solved, logged := 0, 0, 0
 	byFamily := map[universe.V13Family]*tally{}
-	for seed := int64(1); seed <= 10; seed++ {
-		a, err := gen.GenerateDataset(seed, prof, protocol.BenchVersionV14)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, a := range probeArtifacts(t, protocol.BenchVersionV14, seedRange(1, 10)...) {
+		seed := a.Seed
 		stores := buildStores(a)
 		families := v14BusinessFamilyByCaseID(t, seed)
 		for _, c := range a.MemoryCases {

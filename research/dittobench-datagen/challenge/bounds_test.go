@@ -34,6 +34,7 @@ func widePack(t *testing.T, seed int64, n int) Pack {
 // MaxCases is the most cases_per_seed Platform can set (80), so a pack, a
 // request, and the score's target must all accept it, and nothing above it.
 func TestPackContractAcceptsMaxCasesAndNoMore(t *testing.T) {
+	t.Parallel()
 	if MaxCases != 80 {
 		t.Fatalf("MaxCases = %d; Platform's MAX_CASES_PER_SEED and the starter kit pin 80", MaxCases)
 	}
@@ -98,6 +99,7 @@ func TestScoreCasesAtMaxCases(t *testing.T) {
 // within MaxRoundDatasetBytes and decode with every case intact, so a
 // validator can run it.
 func TestRoundDatasetAtMaxCases(t *testing.T) {
+	t.Parallel()
 	seed := SeedFromInt64(77)
 	packs := map[string][]byte{}
 	for i := 0; i < MaxRoundColumns; i++ {

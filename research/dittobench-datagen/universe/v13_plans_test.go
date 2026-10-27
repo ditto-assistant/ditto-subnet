@@ -19,6 +19,7 @@ func v13Selection(interim int) WorldPlanSelection {
 // oracle dropped in arc rotation), a capped ordinary slot, and a non-monetary
 // interim fill, on twenty seeds of the full-scale world.
 func TestV13SelectionFillsPublishedSlots(t *testing.T) {
+	t.Parallel()
 	for seed := int64(101); seed <= 120; seed++ {
 		w := Generate(seed, 3)
 		plans, counts, err := w.SelectQuestionPlans(v13Selection(61))

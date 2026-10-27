@@ -20,6 +20,7 @@ var v14TemporalOps = map[string]bool{"as_of": true, "nth_by_date": true, "before
 // the case's evidence and the honest reply still scores 1. v13 artifacts
 // carry neither family.
 func TestV14TemporalFamiliesReachTheScoredArtifact(t *testing.T) {
+	t.Parallel()
 	seen := map[string]int{}
 	for seed := int64(1); seed <= 12; seed++ {
 		prof, _ := ProfileForVersion("full", protocol.BenchVersionV14)

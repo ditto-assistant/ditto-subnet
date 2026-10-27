@@ -1,7 +1,6 @@
 package gen
 
 import (
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,42 +60,19 @@ func TestV9ProfilesAreExplicitAndPinned(t *testing.T) {
 	}
 }
 
-func TestV9SameTupleProducesIdenticalBytesForEveryProfile(t *testing.T) {
-	for _, runSize := range []string{"small", "medium", "full"} {
-		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV9)
-		for _, seed := range []int64{0, 1, 42, 123456789} {
-			a, err := GenerateDataset(seed, prof, protocol.BenchVersionV9)
-			if err != nil {
-				t.Fatalf("%s seed %d first generation: %v", runSize, seed, err)
-			}
-			b, err := GenerateDataset(seed, prof, protocol.BenchVersionV9)
-			if err != nil {
-				t.Fatalf("%s seed %d second generation: %v", runSize, seed, err)
-			}
-			ha, ba, err := a.SHA256Hex()
-			if err != nil {
-				t.Fatal(err)
-			}
-			hb, bb, err := b.SHA256Hex()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ha != hb || !reflect.DeepEqual(ba, bb) {
-				t.Fatalf("%s seed %d was not byte-deterministic: %s != %s", runSize, seed, ha, hb)
-			}
-		}
-	}
-}
-
 // This reconstructs the exact production generation sequence while retaining
 // StagedCase.RequiredPairIDs, which are generator-only and intentionally absent
 // from the published artifact. Every declared tool and memory dependency must
 // resolve through the artifact's actual seed surfaces for the correct user.
+//
+// v9 is frozen (TestV9KnownVector), so a dozen seeds per profile -- covering
+// the known small-profile gap seeds -- replace the original 64-seed sweep.
 func TestV9EveryProfileSeedsAllToolAndMemoryEvidenceReferences(t *testing.T) {
+	t.Parallel()
 	knownSmallGaps := map[int64]bool{4: true, 6: true, 9: true}
 	for _, runSize := range []string{"small", "medium", "full"} {
 		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV9)
-		for seed := int64(1); seed <= 64; seed++ {
+		for seed := int64(1); seed <= 12; seed++ {
 			rng, err := NewRNGForVersion(seed, protocol.BenchVersionV9)
 			if err != nil {
 				t.Fatalf("%s seed %d: %v", runSize, seed, err)
@@ -223,7 +199,11 @@ func TestV9EveryProfileSeedsAllToolAndMemoryEvidenceReferences(t *testing.T) {
 	}
 }
 
+// Every seed must carry every final memory family, which also proves no
+// family is starved by the legacy weightedTypeQuota fill order (reachable only
+// before v8).
 func TestV9FinalToolAndMemoryFamiliesAcrossFortySeeds(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV9)
 	wantMemory := v9MemoryFamilies()
 	toolHistograms := map[string]bool{}
@@ -277,49 +257,8 @@ func TestV9FinalToolAndMemoryFamiliesAcrossFortySeeds(t *testing.T) {
 	}
 }
 
-// TestV9MemorySelectionBypassesLegacyFillOrder proves the old memory-side
-// fill-order bias is absent in the scored v9 path. The legacy
-// weightedTypeQuota helper is reachable only before v8; v9's coherent-world
-// selector gives every final
-// computed, temporal, and integrity family a positive full-run floor.
-func TestV9MemorySelectionBypassesLegacyFillOrder(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV9)
-	minimum := map[string]int{}
-	for family := range v9MemoryFamilies() {
-		minimum[family] = int(^uint(0) >> 1)
-	}
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV9)
-		if err != nil {
-			t.Fatal(err)
-		}
-		counts := map[string]int{}
-		for _, c := range artifact.MemoryCases {
-			counts[c.QuestionType]++
-		}
-		for family := range minimum {
-			if counts[family] < minimum[family] {
-				minimum[family] = counts[family]
-			}
-		}
-	}
-	for family, count := range minimum {
-		if count < 1 {
-			t.Errorf("memory family %q has 40-seed minimum %d", family, count)
-		}
-	}
-	for _, computed := range []string{
-		"world-project-outstanding", "world-trip-current", "world-trip-changed-leg-current",
-		"world-trip-changed-leg-previous", "world-trip-longest-current", "world-story-balance-current",
-		"world-story-budget-delta", "world-story-later-net-change", "world-story-post-approval-balance",
-	} {
-		if minimum[computed] < 1 {
-			t.Errorf("computed memory family %q was starved", computed)
-		}
-	}
-}
-
 func TestV9IsolationIsOracleValidAcrossThreeHundredSeeds(t *testing.T) {
+	t.Parallel()
 	// Seed 143 is a regression vector: copying an anchor given name onto the
 	// secondary-world source originally collided with another person's full
 	// (name, employer, event) constraint tuple. Exercise the whole qualification

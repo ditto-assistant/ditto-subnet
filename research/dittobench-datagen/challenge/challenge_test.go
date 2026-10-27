@@ -9,6 +9,7 @@ import (
 const testHotkey = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
 func TestReferencePackValidates(t *testing.T) {
+	t.Parallel()
 	for _, seed := range []int64{1, 2, 42, 1337, 99991} {
 		r := Validate(ReferencePack(seed, testHotkey))
 		if !r.Valid {

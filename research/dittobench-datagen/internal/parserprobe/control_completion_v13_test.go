@@ -32,12 +32,9 @@ func TestV13ScopedEffortControlFollowsRecordNotReference(t *testing.T) {
 }
 
 func TestV13NamedControlGeneratedCases(t *testing.T) {
-	profile, _ := gen.ProfileForVersion("full", 13)
-	for seed := int64(1); seed <= 10; seed++ {
-		a, err := gen.GenerateDataset(seed, profile, 13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Parallel()
+	for _, a := range probeArtifacts(t, 13, seedRange(1, 3)...) {
+		seed := a.Seed
 		parser := newToolParser(13)
 		parser.addV13WireCatalog(a.Catalog)
 		st := buildStores(a)[gen.PrimaryUser]

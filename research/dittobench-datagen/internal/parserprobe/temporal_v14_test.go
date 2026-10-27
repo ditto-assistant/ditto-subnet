@@ -15,13 +15,10 @@ import (
 // public prose. A family the
 // probe cannot read would score as a silent zero that looks like hardening.
 func TestTemporalV14GrammarInvertsEveryShape(t *testing.T) {
+	t.Parallel()
 	seen := map[string]int{}
-	prof, _ := gen.ProfileForVersion("full", protocol.BenchVersionV14)
-	for seed := int64(1); seed <= 30; seed++ {
-		a, err := gen.GenerateDataset(seed, prof, protocol.BenchVersionV14)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, a := range probeArtifacts(t, protocol.BenchVersionV14, seedRange(1, 30)...) {
+		seed := a.Seed
 		stores := buildStores(a)
 		for _, c := range a.MemoryCases {
 			if c.V10Provenance == nil {

@@ -26,22 +26,21 @@ var v13MisleadingFamilies = map[string]bool{
 	universe.V13FamilyCrossUser: true, universe.V13FamilyInsufficient: true,
 }
 
-// TestV13AbstentionBudgetAndFamilyMixAcrossFortySeeds is the coverage half of
-// #1530: 25 unanswerable cases per full seed (8 per medium seed), at least half
-// from misleading-evidence families, pure absence at most a quarter, every
-// family present, every case carrying a grounding token and a tempting value,
-// and every case paired with an answerable decision twin.
-func TestV13AbstentionBudgetAndFamilyMixAcrossFortySeeds(t *testing.T) {
+// checkV13AbstentionBudgetAndFamilyMix is the coverage half of #1530: 25
+// unanswerable cases per full seed (8 per medium seed), at least half from
+// misleading-evidence families, pure absence at most a quarter, every family
+// present, every case carrying a grounding token and a tempting value, and
+// every case paired with an answerable decision twin. Full runs on the 40
+// qualification seeds; medium shares the allocator and is checked on the
+// first v13MediumSeeds.
+func checkV13AbstentionBudgetAndFamilyMix(t *testing.T, full []DatasetArtifact) {
 	for _, tc := range []struct {
-		runSize string
-		want    int
-	}{{"full", 25}, {"medium", 8}} {
-		prof, _ := ProfileForVersion(tc.runSize, protocol.BenchVersionV13)
-		for seed := int64(1); seed <= 40; seed++ {
-			artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-			if err != nil {
-				t.Fatalf("%s seed %d: %v", tc.runSize, seed, err)
-			}
+		runSize   string
+		want      int
+		artifacts []DatasetArtifact
+	}{{"full", 25, full}, {"medium", 8, v13MediumSeeds(t)}} {
+		for _, artifact := range tc.artifacts {
+			seed := artifact.Seed
 			families := map[string]int{}
 			twins := map[string][]ArtifactCase{}
 			unanswerable := 0
@@ -112,17 +111,13 @@ func TestV13AbstentionBudgetAndFamilyMixAcrossFortySeeds(t *testing.T) {
 	}
 }
 
-// TestV13RelationTwinsAreSpacedAndNeverAdjacent checks the placement rule for
+// checkV13RelationTwinsAreSpacedAndNeverAdjacent checks the placement rule for
 // every relation pair (decision and as-of): within the wave-0 run order the two
 // members are at least twenty cases apart.
-func TestV13RelationTwinsAreSpacedAndNeverAdjacent(t *testing.T) {
-	for _, runSize := range []string{"medium", "full"} {
-		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV13)
-		for seed := int64(1); seed <= 20; seed++ {
-			artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-			if err != nil {
-				t.Fatalf("%s seed %d: %v", runSize, seed, err)
-			}
+func checkV13RelationTwinsAreSpacedAndNeverAdjacent(t *testing.T, full []DatasetArtifact) {
+	for runSize, artifacts := range map[string][]DatasetArtifact{"medium": v13MediumSeeds(t), "full": full} {
+		for _, artifact := range artifacts {
+			seed := artifact.Seed
 			position := map[string][]int{}
 			wave0 := 0
 			for _, mc := range artifact.MemoryCases {
@@ -158,12 +153,9 @@ func TestV13RelationTwinsAreSpacedAndNeverAdjacent(t *testing.T) {
 // an always-answer policy (asserting the tempting value) scores 0 on every
 // unanswerable case; an always-abstain policy scores 0 on every twin.
 func TestV13AbstentionOracleAndBaselinesThroughTheArtifact(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
-	for seed := int64(1); seed <= 10; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatalf("seed %d: %v", seed, err)
-		}
+	t.Parallel()
+	for _, artifact := range v13FortySeeds(t)[:10] {
+		seed := artifact.Seed
 		for _, mc := range artifact.MemoryCases {
 			switch {
 			case strings.HasPrefix(mc.QuestionType, QTAbsence) && !strings.HasPrefix(mc.QuestionType, QTAbsenceTwin):

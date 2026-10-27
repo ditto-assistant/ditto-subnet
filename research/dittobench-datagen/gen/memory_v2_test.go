@@ -152,9 +152,11 @@ func TestInjectionTwinFamilyEmitted(t *testing.T) {
 // fingerprint and a free consistency point. The broad loop now skips the twin
 // attribute; assert no two injection cases in a run share exact text.
 func TestNoDuplicateInjectionText(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileFor("full")
+	const seeds = 60 // frozen v2-v7 memory path; bytes pinned by the v3-v7 vectors
 	dupSeeds := 0
-	for seed := int64(1); seed <= 500; seed++ {
+	for seed := int64(1); seed <= seeds; seed++ {
 		_, cases, _, err := GenerateMemoryV2(NewRNG(seed), seed, prof.Mem)
 		if err != nil {
 			t.Fatalf("gen: %v", err)
@@ -173,6 +175,6 @@ func TestNoDuplicateInjectionText(t *testing.T) {
 		}
 	}
 	if dupSeeds == 0 {
-		t.Logf("no-duplicate-injection gate: 500 seeds, no byte-identical injection text")
+		t.Logf("no-duplicate-injection gate: %d seeds, no byte-identical injection text", seeds)
 	}
 }

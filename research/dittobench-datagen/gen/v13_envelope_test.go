@@ -1,9 +1,7 @@
 package gen
 
 import (
-	"fmt"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -71,13 +69,10 @@ func TestV13EnvelopeTablesArePublished(t *testing.T) {
 // TestV13ReferenceRunHasFixedCaseEnvelope: every public run size has a fixed
 // tool + memory case count at v13, like the v8 envelope test.
 func TestV13ReferenceRunHasFixedCaseEnvelope(t *testing.T) {
+	t.Parallel()
 	for _, seed := range []int64{1, 2, 3, 7, 11, 42, 123456789, 3058240546919425205} {
 		for runSize, want := range map[string]int{"small": 33, "medium": 143, "full": 350} {
-			prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV13)
-			artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-			if err != nil {
-				t.Fatalf("v13 seed %d %s: %v", seed, runSize, err)
-			}
+			artifact := cachedDataset(t, seed, runSize, protocol.BenchVersionV13, 0)
 			got := len(artifact.ToolCases) + len(artifact.MemoryCases)
 			if got != want {
 				t.Fatalf("v13 seed %d %s run has %d cases, want fixed envelope %d", seed, runSize, got, want)
@@ -90,38 +85,11 @@ func TestV13ReferenceRunHasFixedCaseEnvelope(t *testing.T) {
 	}
 }
 
-// v13FortySeeds generates the pinned 40 full-profile qualification seeds once
-// per test binary; every v13 40-seed assertion reads this cache, so adding an
-// assertion costs no generation time.
-var (
-	v13FortySeedsOnce sync.Once
-	v13FortySeedsOut  []DatasetArtifact
-	v13FortySeedsErr  error
-)
-
-func v13FortySeeds(t *testing.T) []DatasetArtifact {
-	t.Helper()
-	v13FortySeedsOnce.Do(func() {
-		prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
-		for seed := int64(1); seed <= 40; seed++ {
-			artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-			if err != nil {
-				v13FortySeedsErr = fmt.Errorf("seed %d: %w", seed, err)
-				return
-			}
-			v13FortySeedsOut = append(v13FortySeedsOut, artifact)
-		}
-	})
-	if v13FortySeedsErr != nil {
-		t.Fatal(v13FortySeedsErr)
-	}
-	return v13FortySeedsOut
-}
-
 // TestV13SuiteTelemetryReportsPublishedSlots: the suite's own slot telemetry
 // matches the published table (a few seeds; the artifact-level check below
 // covers all forty).
 func TestV13SuiteTelemetryReportsPublishedSlots(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
 	envelope := V13FullEnvelope
 	for _, seed := range []int64{1, 42, 123456789} {
@@ -152,12 +120,12 @@ func TestV13SuiteTelemetryReportsPublishedSlots(t *testing.T) {
 	}
 }
 
-// TestV13EnvelopeSlotsAcrossFortySeeds checks every pinned full seed fills the
+// checkV13EnvelopeSlots checks every pinned full seed fills the
 // published slots exactly: the artifact family counts, the integrity
 // composition, the project-outstanding cap, and the case version.
-func TestV13EnvelopeSlotsAcrossFortySeeds(t *testing.T) {
+func checkV13EnvelopeSlots(t *testing.T, seeds []DatasetArtifact) {
 	env := V13FullEnvelope
-	for _, artifact := range v13FortySeeds(t) {
+	for _, artifact := range seeds {
 		hist := map[string]int{}
 		questions := map[string]bool{}
 		for _, c := range artifact.MemoryCases {
@@ -200,9 +168,9 @@ func TestV13EnvelopeSlotsAcrossFortySeeds(t *testing.T) {
 	}
 }
 
-// TestV13ComposedMemoryFloor mirrors the v8 composed/indirect floor at v13.
-func TestV13ComposedMemoryFloor(t *testing.T) {
-	for _, artifact := range v13FortySeeds(t) {
+// checkV13ComposedMemoryFloor mirrors the v8 composed/indirect floor at v13.
+func checkV13ComposedMemoryFloor(t *testing.T, seeds []DatasetArtifact) {
+	for _, artifact := range seeds {
 		seed := artifact.Seed
 		composed := 0
 		for _, mc := range artifact.MemoryCases {
@@ -220,13 +188,10 @@ func TestV13ComposedMemoryFloor(t *testing.T) {
 // TestV13EveryDeclaredEvidencePairIsSeeded: like the v8/v9 answerability tests,
 // every memory case's declared evidence is present in the seeded world or wave.
 func TestV13EveryDeclaredEvidencePairIsSeeded(t *testing.T) {
+	t.Parallel()
 	for _, runSize := range []string{"small", "medium", "full"} {
-		prof, _ := ProfileForVersion(runSize, protocol.BenchVersionV13)
 		for _, seed := range []int64{1, 42, 123456789} {
-			artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-			if err != nil {
-				t.Fatalf("%s seed %d: %v", runSize, seed, err)
-			}
+			artifact := cachedDataset(t, seed, runSize, protocol.BenchVersionV13, 0)
 			available := map[string]map[string]int{}
 			add := func(user string, pairs []protocol.MemoryPair, wave int) {
 				if user == "" {
@@ -295,6 +260,7 @@ func TestV13DoesNotMoveEarlierContracts(t *testing.T) {
 // TestV13ReviewAnnotatesEveryWorldCase: the local review path regenerates the
 // v13 plan selection and annotates every shared-world, program-free case.
 func TestV13ReviewAnnotatesEveryWorldCase(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
 	review, err := GenerateDatasetReview(5, prof, protocol.BenchVersionV13)
 	if err != nil {

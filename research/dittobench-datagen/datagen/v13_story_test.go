@@ -14,6 +14,7 @@ import (
 // no "story-" prefix) and the writing-noise pass leaves them byte-identical to
 // the world render, exactly as it leaves the v8 script memories alone.
 func TestV13ToolWorldSeedsStoryV2Unnoised(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 3; seed++ {
 		// The seed rotation for v13 lands with the plumbing PR; the tool RNG only
 		// needs a deterministic source here.

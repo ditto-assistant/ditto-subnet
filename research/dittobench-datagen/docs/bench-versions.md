@@ -642,7 +642,7 @@ honest error never costs more than ~4% of memory weight). The classifier is
 pinned to the v12 diagnosis (`TestMixAuditReproducesV12MoneyExposure` (#1830):
 117 direct money cases / 143 money-bearing / 50.9% of weight on seed
 `123456789`); the gate over the pinned 40 seeds is
-`TestV13MixAuditGateAcrossFortySeeds` (#1848). All dedicated slot generators
+`TestV13QualificationSeeds/MixAuditGate` (#1848). All dedicated slot generators
 are integrated: `gen.V13InterimSlots` and `gen.V13InterimGenerators` are empty,
 so the complete mix gate is asserted. Medium is 95 memory
 cases (36 · 12 · 4 · 4 · 8 · 4 · 4 · 4 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
@@ -696,7 +696,7 @@ technically ready.
   beat a shuffled null on v13 (`TestV13SeedWireCarriesNoFamilyArcOrSlotLabel`
   (#1827), `TestLeakProbeDetectsTheFrozenV12Labels` (#1827)); `/seed` subject
   links do not enumerate the story join
-  (`TestV13SeedSubjectLinksDoNotEnumerateTheStoryJoin` (#1827)).
+  (`TestV13QualificationSeeds/SeedSubjectLinksDoNotEnumerateTheStoryJoin` (#1827)).
 - *Grammars for every surface and typo v2.* Every tool category, world tool
   prompt, settings intent, chitchat/declarative bank and question frame
   renders from a `persona.Grammar` with a per-(seed, surface) two-thirds bank
@@ -920,7 +920,7 @@ not secret defences; an adversary can read every one.
 | Memory exposure audit | `go run ./cmd/memoryprobe -bench-version 13 -seed 41 -run-size full` | ≥ half of evidence-bound answers computed; correction/join families count as computed from v13 | `TestMemoryExposureAuditIsVersionExplicit` (#1824) |
 | Generator-inverse harness (GIH, N13) and 10k-seed router (N14) | `go run ./cmd/parserprobe -bench-version 13 -seeds 40 -run-size full -json` | pass-off (salt 0) baseline ≈ oracle (v12: 0.992 composite over seeds 1–40) — **the published baseline, not a failure**; ceiling on a surface-passed artifact: GIH and router composite ≤ starter-kit − 0.05 overall and on every slice (story, programs, personal, quantity, tool prompts) | `TestParserprobeBaselineOnPublicSeed` (#1829); `TestParserprobeCeilingOnSurfacePassedArtifacts` (#1829), armed by `DITTOBENCH_SURFACE_PASSED_ARTIFACTS`, report-only until the #1832 owner decision |
 | Grader robustness audit | `go run ./cmd/graderaudit -bench-version 13 -seeds 40 -run-size full`, `-release-gate` | no hard negative passes, no reviewed positive fails, public-question-only passable share < 5% per claim kind | `TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind` (#1522), `TestCannedAuditV13RegradesTheNewestGeneratableCorpus` (#1522) |
-| Mix audit | `go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate` | the `MixGateV13` caps and floors above | `TestV13MixAuditGateAcrossFortySeeds` (#1848) |
+| Mix audit | `go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate` | the `MixGateV13` caps and floors above | `TestV13QualificationSeeds/MixAuditGate` (#1848) |
 | `/seed` label-leak probe | `go test ./gen -run LabelLeak` | family / arc / slot at chance on 10 held-out seeds (v12: 94% from the session prefix) | `TestV13SeedWireCarriesNoFamilyArcOrSlotLabel` (#1827) |
 | Story arc recovery | `go test ./universe -run StoryV2ArcRecovery` | raw pre-pass ceiling reported per seed; the enforced ceiling is parserprobe's after the surface pass | `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic` (#1839) |
 
