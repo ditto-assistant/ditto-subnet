@@ -632,6 +632,48 @@ def test_bench_version_bump_query_selects_the_bump_skill() -> None:
         assert "ditto-subnet-bench-version-bump" in topic_list(topics[0], "skills")
 
 
+TANDEM_UPGRADES_DOC = "research/dittobench-datagen/docs/tandem-upgrades.md"
+
+
+def test_bench_activation_queries_surface_the_tandem_upgrade_runbook() -> None:
+    for query in ("activate v14", "bench version bump", "tandem upgrade"):
+        topics = lookup(query)
+        assert str(topics[0]["id"]) == "bench-version-bump", query
+        assert TANDEM_UPGRADES_DOC in topic_list(topics[0], "read"), query
+    activation = [str(topic["id"]) for topic in lookup("activate v14")]
+    assert "generator-competition" in activation
+
+
+def test_generator_round_queries_route_to_generator_competition() -> None:
+    for query in (
+        "generator round version",
+        "raise generator cases_per_seed",
+        "reinstate generator submission after stale scorer",
+    ):
+        topics = lookup(query)
+        assert str(topics[0]["id"]) == "generator-competition", query
+        assert TANDEM_UPGRADES_DOC in topic_list(topics[0], "read"), query
+        assert "ditto-subnet-bench-version-bump" in topic_list(topics[0], "skills")
+
+
+def test_skills_point_at_the_tandem_upgrade_runbook() -> None:
+    doc = TANDEM_UPGRADES_DOC.rsplit("/", 1)[1]
+    for skill in (
+        "ditto-subnet-bench-version-bump",
+        "ditto-subnet-benchmark",
+        "ditto-subnet-release-ops",
+        "mine",
+        "subnet-status",
+    ):
+        text = (ROOT / ".agents" / "skills" / skill / "SKILL.md").read_text()
+        assert doc in text, skill
+    bump = (
+        ROOT / ".agents/skills/ditto-subnet-bench-version-bump/SKILL.md"
+    ).read_text()
+    assert "Generator pack version N" in bump
+    assert "explicit operator approval" in bump
+
+
 def test_longmem_confirmation_rollout_query_selects_the_rollout_skill() -> None:
     topic_ids = [
         str(topic["id"])

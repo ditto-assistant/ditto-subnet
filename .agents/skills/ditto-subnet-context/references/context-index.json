@@ -303,15 +303,28 @@
     {
       "id": "bench-version-bump",
       "title": "Bench version bump across every layer",
-      "keywords": ["bench version", "bench_version", "version pin", "supported_bench_versions", "currentbenchversion", "scoregates", "strand a new bench", "literal"],
-      "summary": "A bench_version is an immutable generation and scoring contract. Bump it on every layer in one stack; a leftover equality pin strands the new version.",
+      "keywords": ["bench version", "bench_version", "version pin", "supported_bench_versions", "currentbenchversion", "scoregates", "strand a new bench", "literal", "activate v14", "activate v15", "bench activation", "activate bench version", "start_benchmark_rollout", "tandem upgrade", "dual activation", "generator pack version"],
+      "summary": "A bench_version is an immutable generation and scoring contract. Bump it on every layer in one stack; a leftover equality pin strands the new version. Every activated bench version also ships a matching generator pack grading policy (tandem upgrade), and activation needs explicit operator approval.",
       "skills": ["ditto-subnet-bench-version-bump", "ditto-subnet-benchmark"],
       "owns": [".agents/skills/ditto-subnet-bench-version-bump", "research/dittobench-datagen"],
-      "read": [".agents/skills/ditto-subnet-bench-version-bump/SKILL.md", "research/dittobench-datagen/docs/bench-versions.md"],
-      "search": ["rg -n 'BenchVersionV|SUPPORTED_BENCH_VERSIONS|CONFIRMATION_BENCH_VERSIONS|CurrentBenchVersion' ditto services apps packages research", "rg -n 'bench_version ==|Literal\\[9\\]|z.literal\\(9\\)' ditto apps services packages"],
-      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "cd research/dittobench-datagen && go test ./..."],
-      "invariants": ["Use floors and shared constants, never per-version enumerations.", "Change every producer, consumer, generated artifact, and gate in one monorepo stack."],
-      "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery"]
+      "read": [".agents/skills/ditto-subnet-bench-version-bump/SKILL.md", "research/dittobench-datagen/docs/bench-versions.md", "research/dittobench-datagen/docs/tandem-upgrades.md", "docs/benchmark-v14-rollout.md"],
+      "search": ["rg -n 'BenchVersionV|SUPPORTED_BENCH_VERSIONS|CONFIRMATION_BENCH_VERSIONS|CurrentBenchVersion' ditto services apps packages research", "rg -n 'bench_version ==|Literal\\[9\\]|z.literal\\(9\\)' ditto apps services packages", "rg -n 'GENERATOR_ROUND_BENCH_VERSIONS|supportedGradingBenchVersions|GradingBenchVersion' ditto apps research services"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "cd research/dittobench-datagen && go test ./...", "uv run pytest ditto/tests/test_bench_version_pins.py -q"],
+      "invariants": ["Use floors and shared constants, never per-version enumerations.", "Change every producer, consumer, generated artifact, and gate in one monorepo stack.", "Every activated bench version gets a generator pack policy of the same number; the window is the active and previous policy.", "Never call start_benchmark_rollout without explicit operator approval."],
+      "related": ["dittobench-scoring", "research-adapters", "contracts", "platform-api", "release-delivery", "generator-competition"]
+    },
+    {
+      "id": "generator-competition",
+      "title": "Generator competition rounds, pack grading policies, and the generator scorer",
+      "keywords": ["generator competition", "generator round", "generator round version", "round version", "generator rounds", "generator pack", "pack grading policy", "grading_bench_version", "generator pack version", "tandem upgrade", "activate v14", "activate v15", "bench activation", "dual activation", "challenge scorer", "challenge-scorer", "generator scorer", "cases_per_seed", "legacy_retry", "reinstate generator", "generator starter kit", "default generator", "min_round_validators", "round contract"],
+      "summary": "Generators emit challenge packs; each round freezes one bench version for the panel and grades each column at its pack's declared grading_bench_version. Agent bench versions and pack policies move together (one number, active plus previous policy, rounds switch behind a validator quorum). Verify the deployed generator scorer build before changing cases_per_seed or activating.",
+      "skills": ["ditto-subnet-bench-version-bump", "ditto-subnet-benchmark", "ditto-subnet-release-ops"],
+      "owns": ["research/dittobench-datagen/challenge", "research/dittobench-datagen/genrun", "services/dittobench-api/cmd/challenge-scorer", "miners/dittobench-generator-starter-kit"],
+      "read": ["research/dittobench-datagen/docs/tandem-upgrades.md", "research/dittobench-datagen/docs/generator-competition.md", "services/dittobench-api/docs/challenge-scorer.md", "research/dittobench-datagen/docs/dueling-bench.md", "apps/backroom/docs/mcp.md"],
+      "search": ["rg -n 'GENERATOR_ROUND_BENCH_VERSIONS|choose_round_bench_version|round_contract_for' apps/platform ditto", "rg -n 'supportedGradingBenchVersions|NewestAccepted|legacy_retry' research/dittobench-datagen services/dittobench-api"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "uv run pytest ditto/tests/test_bench_version_pins.py -q", "cd research/dittobench-datagen && go test ./challenge/... ./genrun/..."],
+      "invariants": ["One version number for both competitions: every activated bench version gets a matching pack policy, even with an unchanged grader.", "Support window is the active and previous policy; retiring one is its own announced release.", "Rounds switch to a new version only behind the validator quorum gate; check preview_generator_round for the live setting.", "A generator scorer that advertises no versions is v13-only; confirm the deployed build with get_generator_scorer before raising cases_per_seed.", "Never call start_benchmark_rollout without explicit operator approval."],
+      "related": ["bench-version-bump", "dittobench-scoring", "release-delivery", "mine"]
     },
     {
       "id": "coding-hippius-custody",

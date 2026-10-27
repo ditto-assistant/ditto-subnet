@@ -95,6 +95,15 @@ Add `--json` for the raw snapshot to script against.
 Send an explicit `User-Agent` header: the CDN refuses some default client
 agents with HTTP 403.
 
+## Bench version changes and the generator competition
+
+The scoring `bench_version` above also sets the generator competition's round
+version: rounds switch to a newly activated version at their next opening,
+once a validator quorum can run it, and accept packs at the active and
+previous grading policies. What a generator miner should do at a version
+change is in `$mine` ("Generator miners at a bench version change") and
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md).
+
 ## Out of scope
 
 - This skill does not change anything and does not read private data.

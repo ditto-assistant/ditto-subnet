@@ -46,6 +46,9 @@
 | Local simulator (sessionless + phase-1) | `localstack/`, `.agents/skills/ditto-subnet-preview/references/localstack.md` |
 | Foundry overlay / fault proxy | `ditto/preview/`, `preview/`, `.agents/skills/ditto-subnet-preview/references/cheatcodes.md` |
 | New or stranded `bench_version` | `.agents/skills/ditto-subnet-bench-version-bump/SKILL.md` |
+| Generator competition contract and rounds | `research/dittobench-datagen/docs/generator-competition.md`, `research/dittobench-datagen/challenge/`, `research/dittobench-datagen/genrun/` |
+| Generator scorer (`challenge-scorer`) | `services/dittobench-api/cmd/challenge-scorer/`, `services/dittobench-api/docs/challenge-scorer.md` |
+| Agent bench + generator pack versions (tandem upgrade) | `research/dittobench-datagen/docs/tandem-upgrades.md` |
 | LongMem confirmation rollout | `.agents/skills/longmem-confirmation-rollout/SKILL.md` |
 
 ## Start with these contracts

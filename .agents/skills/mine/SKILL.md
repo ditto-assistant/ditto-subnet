@@ -221,6 +221,36 @@ uv run ditto --network finney upload --path ... --name ... --coldkey ... --hotke
 Do not put keys, `.env`, or host Docker sockets in the image. Follow
 [`docs/MINER.md`](../../../docs/MINER.md) for wallet, fee, and status.
 
+## Generator miners at a bench version change
+
+The generator competition (`miners/dittobench-generator-starter-kit`) follows the
+agent bench. What a version bump means for a generator miner (operator policy;
+full detail in
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md)
+and the kit README's migration note):
+
+- **Every activated bench version N has a matching pack grading policy N.**
+  Two policies are accepted at once: the active version and the previous one
+  (today v13 and v14).
+- **No forced migration.** A generator that keeps emitting the previous policy
+  keeps its columns and is graded exactly as before. If a request offering N
+  breaks it, the scorer retries that seed once on the baseline request
+  (`legacy_retry`) instead of rejecting it.
+- **Opting in:** rebuild against the current `research/dittobench-datagen`,
+  declare `req.NewestAccepted(...)`, and rehearse with `-round-bench N-1` and
+  `-round-bench N`. Declaring N earns nothing by itself; do it where the new
+  policy changes what your cases measure.
+- **When rounds switch:** after the agent bench activates N and a validator
+  quorum can run N rounds. Until then rounds stay on N-1. An in-flight round
+  finishes on its frozen version.
+- **Notice:** a new policy is announced at least 7 days before activation;
+  retiring the old one (the only step that can strand a generator) gets 14
+  days and its own release. `cases_per_seed` changes are announced before
+  they apply.
+- Starter kits (agent and generator) improve continuously. An improvement
+  learned from another miner's submission ships only after that submission is
+  public under the source-disclosure policy, so pull before rebuilding.
+
 ## Do not
 
 - Treat `evaluate` / hosted rehearsal as on-chain certification

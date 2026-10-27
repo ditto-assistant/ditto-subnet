@@ -96,6 +96,29 @@ It falls back to the whole-fleet drain (`stop_fleet` plus the lease-bound hold f
 
 The journal says `draining every worker before activation: <reason>`. Inspect `/var/lib/ditto-screener-fleet/updater/drain-status.env` (`PHASE=rolling|active|rolled_back|draining|held|aborted`) and `held-workers` for workers still finishing on the previous release. Mixed worker `release` values in Backroom during a roll are expected; a target-revision field is not yet published. Details: `docs/hetzner-screener-fleet.md` § Rolling activation.
 
+## Generator scorer releases and bench activations
+
+`publish-generator-scorer` ships a signed native `challenge-scorer` bundle that the generator
+scorer VM pulls and activates itself (`scripts/generator-scorer-auto-update.sh`;
+`docs/MONOREPO-RELEASES.md` "Generator scorer pull updates";
+`services/dittobench-api/docs/challenge-scorer.md`). A merged or released scorer change is not
+live until Backroom `get_generator_scorer` shows the new `scorer_version`, `build_revision` and
+case bounds on its last poll.
+
+- **Verify the deployed build before relying on it.** Before raising generator `cases_per_seed`
+  or activating a bench version, confirm `get_generator_scorer` accepts the setting and the new
+  version. On 2026-10-27 a stale scorer capped at 64 cases voided a round and wrongly rejected
+  six generators; the fix was redeploy, then `reinstate_generator_submission` (blocked when the
+  hotkey has a newer upload; see `reinstate_blockers` on `get_generator_submission`).
+- The generator scorer will advertise its supported pack policies explicitly (being
+  implemented). A scorer that advertises none is treated as v13-only.
+- A bench version activation is two competitions moving together. The release-side
+  checks (Platform round contracts, generator scorer version, validators forwarding
+  `generator_round_bench_versions`) are step 1 of "Activate (both competitions)" in
+  `$ditto-subnet-bench-version-bump`; the runbook is
+  `research/dittobench-datagen/docs/tandem-upgrades.md`. Never call `start_benchmark_rollout`
+  without explicit operator approval.
+
 ## Capacity invariants
 
 The enrolled Hetzner worker is primary. GCE normally targets zero and supplies bounded backlog or outage capacity. The controller must be fenced and count pending workers; an independent GCP watchdog may add fallback capacity only when backlog exists, controller authority is missing, expired, or unready, and current Platform policy confirms positive primary admission. Fail closed when provider isolation cannot be proven.
