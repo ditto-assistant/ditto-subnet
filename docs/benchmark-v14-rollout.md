@@ -253,26 +253,70 @@ source `0b46da26f`). They are the same validators that serve v13; no separate
 v14 cohort exists. `start_ready` is a mechanical check, not qualification.
 
 **Gate 3 (diagnostic canaries).** Isolated, non-authoritative full-profile v14
-canaries on the exact scored artifact and screened image, validator
-`5HT9U1J8...`, scorer `0b46da26f`. The v13 column is the agent's accepted
-3-score composite on different seeds, so the delta mixes the v14 grading
-change with generation variance.
+canaries on the exact scored artifact and screened image of each agent in the
+current hybrid top five, all on validator `5HT9U1J8...` (the first three on
+scorer `0b46da26f`, the last two on v0.398.0 `b96737ea7`, which changes no
+scored bytes). A canary's seed is derived from the agent's seed block, the
+agent and the validator, never the bench version, so each v14 canary ran on
+the same seed as that validator's own canonical v13 score. The v13 column is
+that score, not the 3-validator mean. Every v14 dataset digest below was
+reproduced offline with `cmd/generate -bench-version 14 -seed <seed> -run-size
+full`.
 
-| Canary | Agent (v13 raw rank) | v13 composite | v14 composite | v14 memory | v14 tools | Run time |
-| --- | --- | --- | --- | --- | --- | --- |
-| `b91b551d` | 1 | 0.9308 | 0.8850 | 0.8240 | 0.9500 | 9 min |
-| `f7884ad9` | 2 | 0.9164 | 0.8459 | 0.8860 | 0.9480 | 9 min |
-| `11d45359` | 3 | 0.9043 | 0.8597 | 0.8653 | 0.9267 | 10 min |
+The same seed is only partly the same test. Regenerating v13 and v14 at these
+five seeds, 195 to 212 of 250 memory cases (78% to 85%) keep the same
+question and expected answer, while the histories, epoch dates and 93% to 98%
+of tool prompts change (case-file story order #3088, the SN-353 to SN-360
+families, the v14 epoch). The delta therefore mixes the grading change with
+the new cases, but much less seed variance than the earlier "different seeds"
+reading assumed.
 
-All three are lower at v14, by 0.046, 0.071 and 0.045, and the order changes
-(rank 3 passes rank 2). Three single-seed runs cannot separate the stricter
-over-call rule from seed variance (v13 stderr is about 0.013 to 0.015). The
-gate 5 shadow replay must measure the rank impact.
+| Canary | Agent (v13 raw rank) | v13 composite (same seed) | v14 composite | Delta | v13 memory | v14 memory | v13 tools | v14 tools | v14 inference |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `b91b551d` | 1 | 0.9308 | 0.8850 | -0.046 | 0.9040 | 0.8240 | 0.9700 | 0.9500 | $1.09 |
+| `f7884ad9` | 2 | 0.9164 | 0.8459 | -0.071 | 0.9120 | 0.8860 | 0.9413 | 0.9480 | $1.09 |
+| `11d45359` | 3 | 0.9043 | 0.8597 | -0.045 | 0.8527 | 0.8653 | 0.9600 | 0.9267 | $1.09 |
+| `0e84f29a` | top five | 0.9064 | 0.7957 | -0.111 | 0.8567 | 0.7907 | 0.9600 | 0.9700 | $0.34 |
+| `1bcc87ee` | top five | 0.9231 | 0.8439 | -0.079 | 0.8847 | 0.8440 | 0.9700 | 0.9287 | $1.10 |
+
+All five are lower at v14 (mean -0.070). The leader stays first on both
+versions; the other four reorder (on this validator's seeds the v13 fifth
+rises to second and the v13 second falls to fourth). The memory axis carries most of
+the loss; tools move by at most 0.041. The v13 `memory_over_call` factors on
+these agents' accepted scores are 0.993 to 1.0, which suggests the v14
+over-call rule is a small part of the loss and that the new cases and the
+rendered-text grading carry the rest. The fourth agent's 0.111 drop
+is more than twice the v13 cross-validator spread for that agent (0.853 to
+0.914). These are five single-seed runs, so they bound the rank impact but do
+not measure it: gate 5 must. Per-case reports are not retained by Platform
+for canaries (only composite, means and `n`), so the loss cannot yet be split
+by family or by grading rule from this evidence.
 
 Each run completed with signed evidence and no scorer error. These are clean
 runs of honest, top-ranked agents. Known-benign and adversarial control
 harnesses, the persistence and over-call probes, and LongMem confirmation at
-subject version 14 have not been exercised. Gate 3 is therefore partly met.
+subject version 14 have not been exercised:
+
+- *Control harnesses.* `issue_benchmark_canary` accepts only a `scored` or
+  `live` agent row with a verified screened image. The canonical starter
+  fixture (`get_v13_official_controls`) is a screener control identity, not an
+  agent row, and no adversarial harness is registered as one. Running either
+  needs a control agent row (an upload, or a Platform path that admits an
+  official control image as a canary target) or the local phase-1 stack.
+  The local stack does not build on macOS (the coding packages are
+  Linux-only), so run it in a Linux container.
+- *Probes.* The persistence, no-call, unrelated, mixed-action and
+  non-declarative-write behaviours are pinned at unit level
+  (`internal/scorer/v14_overcall_test.go`, `TestV14DeclarativeOverCallContract`,
+  `TestV14DenominatorAndHistoricalScoring`), not by an executed harness.
+- *LongMem at subject version 14.* Confirmation bundles are selected from the
+  live leaderboard and a retest keeps its source bundle's subject version, so
+  no v14-subject bundle can exist before v14 canonical scores do, which needs
+  `start_benchmark_rollout`. This item cannot precede the start. Either accept
+  it as a during-rollout check (confirmation stays `shadow`, so it cannot move
+  weights) or waive it.
+
+Gate 3 is therefore partly met.
 
 **Gate 4 (family admission).** `universe.V14FamiliesAwaitingPanel` now returns
 14 families. The SN-359 and SN-360 role families were missing from
@@ -290,6 +334,48 @@ evidence is the public parser above: each of the seven business families
 awaiting the panel is solved 100% wire-only (seeds 1 to 10). That shows a
 template matcher can invert them; it is not the trivial/unsolved panel the gate
 requires.
+
+**Can the v14 pack contract (#3212) supply gate 4 before activation?** No,
+for three independent reasons, checked against `main` and live Backroom state
+on October 27:
+
+1. *Rounds cannot open at v14 yet.* `choose_round_bench_version` only
+   considers round contracts at or below the active version, so every round
+   opens at v13 while v13 is active, and a column can only declare a policy at
+   or below its round. A v14 pack column needs v14 active first.
+2. *The default generator holds no column.* `select_columns` gives the public
+   default only counted columns that miners leave empty. Fifteen miner
+   generators are qualified and fill all five counted columns plus the
+   challenger column (`preview_generator_round`). Making room for it means
+   changing `counted_columns` or `challenger_columns`, which reshapes the
+   generator track's paid columns (the generator share is 30% of
+   non-burn emission).
+3. *Wrong cases and no labels.* Starter kit version 4 emits its own
+   competition families, not the `universe.V14FamilyMix` program families,
+   and a round's per-case verdicts carry no family label.
+
+So re-registering the default generator from kit version 4 is still right
+(it keeps the default ready for v14 rounds), but it produces no gate 4 rows.
+The operator's choices are unchanged:
+
+- *Operator column (new code plus a setting).* An uncounted operator column
+  whose pack is v14 datagen program cases with a family label on each case,
+  outside generator scoring. Because of point 1, before activation it would
+  have to run in v13 rounds with v14 cases graded at policy 13. That measures
+  family difficulty but not the v14 grading. Cost: about one sixth more panel
+  inference per round. Blast radius: adds no paid column, but changes
+  round composition and needs a Platform change before any setting.
+- *Offline panel (spend).* Run at least two independently owned harnesses
+  (the top five are five owners) on the same v14 seeds and join per-case
+  results to `V14FamilyMix` labels. One full-profile v14 run cost $0.34 to
+  $1.09 of locked-model inference in the canaries above. About 3 to 4
+  program cases per family per full seed means roughly 10 seeds for 3+
+  rounds of 30+ judged cases per family: about 5 x 10 x $1.09, or $55,
+  plus a Linux host. The per-case-to-family join tool does not exist yet.
+- *Waiver.* Waive gate 4 for the structural families (SN-353 to SN-358 and
+  SN-360). Identity-join (SN-359) should not ship on a waiver. Without a
+  panel it would need a code change that holds it out of v14 generation,
+  which moves the v14 vector and reopens gate 1 and the GIH diagnostic.
 
 ## Generator-competition changes (SN-361)
 
@@ -551,24 +637,33 @@ Open, and requiring an operator, release-owner or paid run:
    also serve the pinned v13 cohort. Either stand up a separate v14 cohort, or
    have the operator explicitly waive that requirement and hold automatic stack
    updates on the v13 members.
-3. **Gate 3 controls.** The honest-agent canaries pass. Still missing:
-   known-benign and adversarial harness canaries, the persistence, no-call,
-   unrelated and mixed action and non-declarative write probes, and a LongMem
-   confirmation run at subject version 14.
+3. **Gate 3 controls.** The honest-agent canaries pass on all five of the
+   current hybrid top five. Still missing: known-benign and adversarial
+   harness canaries (no control agent row exists to canary), and the
+   persistence, no-call, unrelated and mixed action and non-declarative write
+   probes as executed runs (unit-pinned only). LongMem confirmation at subject
+   version 14 cannot run before `start_benchmark_rollout` (see gate 3 above).
+   Accept it as a during-rollout shadow check or waive it.
 4. **Gate 4 family admission (SN-351).** There is no `familygate` table for
    any of the 14 families in `universe.V14FamiliesAwaitingPanel`. Generator
-   rounds cannot supply one (bench 13 packs, no v14 family labels). The
+   rounds cannot supply one before activation, even with the v14 pack contract
+   and the kit version 4 default generator (see *Can the v14 pack contract
+   supply gate 4 before activation?* above). The
    operator must choose one of: a private operator column of v14 datagen cases
    in at least 3 live rounds, a funded offline panel of at least 2
    independently owned harnesses, or a recorded waiver for the structural
    families. Identity-join should not ship on a waiver alone.
-5. **Shadow replay report (gates 4 and 5).** No measured v14 shadow results
+5. **Fleet depth.** On October 27 one of the four v14-capable validators
+   (`5HEouuDa...`) went offline with a live v13 ticket, leaving three. That
+   equals the three-validator quorum, so one more outage stalls every v14
+   rollout member. Restore it, or add a capable validator, before the start.
+6. **Shadow replay report (gates 4 and 5).** No measured v14 shadow results
    exist yet: no consented-corpus replay into separate v14 rows, no rank-impact
    report, no operator review.
-6. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
+7. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
    recorded separately.
-7. **Generator-competition rounds follow activation (resolved in code).**
+8. **Generator-competition rounds follow activation (resolved in code).**
    Rounds freeze a bench version when they open and follow the active version
    where a round contract exists. The v14 pack contract adds v14 to the round
    contracts (`GENERATOR_ROUND_BENCH_VERSIONS = (13, 14)`).
@@ -591,7 +686,7 @@ Open, and requiring an operator, release-owner or paid run:
    - Rollback: deactivating v14 sends new rounds back to v13 at the next
      opening; a round already frozen at v14 finishes at v14.
 
-8. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
+9. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
    now reads `active_version` from the public rollout endpoint, so the
    default follows activation without a code change. The activation PR still
    bumps the offline fallback `LIVE_SCORING_BENCH_VERSION` (now 13) and the
