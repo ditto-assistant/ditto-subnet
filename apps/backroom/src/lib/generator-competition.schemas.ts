@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { auditReasonSchema } from './admin.schemas'
 
-// Shadow DittoBench generator competition. Miners submit CPU-only Go generator
+// DittoBench generator competition. Miners submit CPU-only Go generator
 // source; the scorer qualifies it (build, valid packs on secret seeds,
 // determinism, probe copy check), and qualified generators compete in
 // chain-epoch rounds whose cases validators run against the top agents. These
@@ -16,6 +16,7 @@ const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 export const GENERATOR_SETTINGS_SCOPE = '*'
 export const PROBE_ROTATION_CONFIRMATION = 'ROTATE GENERATOR PROBE SEED'
 export const REJECT_GENERATOR_CONFIRMATION = 'REJECT GENERATOR SUBMISSION'
+export const REINSTATE_GENERATOR_CONFIRMATION = 'REINSTATE GENERATOR SUBMISSION'
 export const REGISTER_DEFAULT_GENERATOR_CONFIRMATION = 'REGISTER DEFAULT GENERATOR'
 export const REPUBLISH_COMMITMENT_CONFIRMATION = 'REPUBLISH GENERATOR ROUND COMMITMENT'
 export const RELEASE_ROUND_LEASE_CONFIRMATION = 'RELEASE GENERATOR ROUND LEASE'
@@ -32,16 +33,22 @@ export function generatorSettingsConfirmation(mode: string) {
   return `APPLY GENERATOR COMPETITION ${mode.toUpperCase()}`
 }
 
+// off | shadow | enforce. enforce marks qualified miner generators
+// weight_eligible on the ledger; it pays nothing until track-share governance
+// also serves a generator share (get_track_share_settings).
+export const GENERATOR_MODES = ['off', 'shadow', 'enforce'] as const
+
 // Required, never defaulted: a revision stores the whole policy.
 export const generatorCompetitionSettingsSchema = z.object({
-  mode: z.enum(['off', 'shadow']),
+  mode: z.enum(GENERATOR_MODES),
   panel_size: z.number().int().min(3).max(16),
   min_panel: z.number().int().min(2).max(32),
   min_solver_owners: z.number().int().min(1).max(32),
   solve_threshold: z.number().gt(0).max(1),
   champion_bonus: z.number().min(0).max(2),
   seeds_per_run: z.number().int().min(1).max(4),
-  cases_per_seed: z.number().int().min(8).max(32),
+  // Platform MAX_CASES_PER_SEED, the Go pack contract's challenge.MaxCases.
+  cases_per_seed: z.number().int().min(8).max(80),
   window_days: z.number().int().min(1).max(30),
   copy_overlap_threshold: z.number().min(0.2).max(1),
   upload_cooldown_seconds: z.number().int().min(60).max(86_400),
@@ -55,13 +62,27 @@ export const generatorCompetitionSettingsSchema = z.object({
   privacy_window_rounds: z.number().int().min(1).max(180),
   onchain_commitment: z.boolean(),
   validator_rounds_enabled: z.boolean(),
+  // Require a finalized TAO payment proof on every generator upload, priced by
+  // the generator competition's fee in the submission settings (inheriting
+  // the default fee until set_submission_cooldown competitionFees prices it).
+  // A competitionFees generator fee_required override decides instead when
+  // set. Ships off.
+  upload_fee_required: z.boolean(),
+})
+
+// Reads tolerate a Platform that predates a field: an older Platform never
+// charged generator uploads, so a missing upload_fee_required reads as off.
+// A write still refuses to report success when Platform drops the field
+// (setGeneratorSettings checks the stored revision).
+const generatorSettingsReadSchema = generatorCompetitionSettingsSchema.extend({
+  upload_fee_required: z.boolean().default(false),
 })
 
 export const generatorSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
   scope: z.string(),
-  settings: generatorCompetitionSettingsSchema,
+  settings: generatorSettingsReadSchema,
   reason: z.string(),
   actor: z.string(),
   created_at: z.string(),
@@ -72,10 +93,10 @@ export const generatorSettingsRevisionSchema = z.object({
 export const generatorSettingsControlSchema = z.object({
   current: z.array(generatorSettingsRevisionSchema),
   history: z.array(generatorSettingsRevisionSchema),
-  default: generatorCompetitionSettingsSchema,
+  default: generatorSettingsReadSchema,
   effective: z.object({
     revision: z.number().int().nonnegative(),
-    settings: generatorCompetitionSettingsSchema,
+    settings: generatorSettingsReadSchema,
     checksum: z.string(),
     source: z.enum(['revision', 'default']),
     settings_valid: z.boolean().optional(),
@@ -161,6 +182,9 @@ export const generatorSubmissionDetailSchema = z.object({
   lease_run_id: uuid.nullable(),
   lease_expires_at: z.string().nullable(),
   runs: z.array(runSummarySchema),
+  // Older Platforms omit both; a missing field reads as "not computed".
+  operator_ruling: z.boolean().optional(),
+  reinstate_blockers: z.array(z.string()).optional(),
 })
 
 const panelSlotSchema = z.object({
@@ -253,7 +277,7 @@ export const generatorBoardSchema = z.object({
   ),
   count: z.number().int(),
   window_days: z.number().int(),
-  mode: z.enum(['off', 'shadow']),
+  mode: z.enum(GENERATOR_MODES),
   generated_at: z.string(),
 })
 
@@ -288,6 +312,16 @@ export const rejectGeneratorInputSchema = z.object({
   confirmation: z.literal(REJECT_GENERATOR_CONFIRMATION),
 })
 
+export const reinstateGeneratorInputSchema = z.object({
+  submissionId: uuid,
+  expectedStatus: z.literal('rejected'),
+  // The exact status_reason read from get_generator_submission (null when none).
+  expectedStatusReason: z.string().nullable(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(REINSTATE_GENERATOR_CONFIRMATION),
+  overrideOperatorRuling: z.boolean().default(false),
+})
+
 // --- rounds ----------------------------------------------------------------
 
 const roundStatus = z.enum(['committed', 'generating', 'running', 'scoring', 'scored', 'void'])
@@ -320,7 +354,11 @@ const roundSummarySchema = z.object({
   opened_at: z.string().nullable().optional(),
   column_count: z.number().int(),
   panel_size: z.number().int(),
+  // Older Platforms omit these. They never drop panel agents, so that count
+  // is zero; their answered-result count is unknown and stays absent.
+  panel_dropped: z.number().int().optional().default(0),
   results: z.number().int(),
+  answered_results: z.number().int().optional(),
   closed_at: z.string().nullable().optional(),
   scored_at: z.string().nullable().optional(),
   void_reason: z.string().nullable().optional(),
@@ -356,6 +394,16 @@ const roundPanelSlotSchema = z.object({
   miner_hotkey: z.string().nullable().optional(),
   champion: z.boolean(),
   reference: z.boolean(),
+  // Set when the agent became ineligible while the round ran.
+  dropped_reason: z.string().nullable().optional().default(null),
+  dropped_at: z.string().nullable().optional().default(null),
+})
+
+const skippedPanelAgentSchema = z.object({
+  agent_id: uuid,
+  owner_key: z.string(),
+  miner_hotkey: z.string().nullable().optional(),
+  reason: z.string(),
 })
 
 const standingSchema = z.object({
@@ -389,6 +437,8 @@ export const generatorRoundDetailSchema = z.object({
   summary: roundSummarySchema,
   settings_revision: z.number().int().nullable(),
   cases_per_column: z.number().int().nullable(),
+  // Frozen bench contract of the round. Optional so an older Platform parses.
+  bench_version: z.number().int().nullable().optional(),
   seed: z.string().nullable(),
   columns: z.array(columnSlotSchema),
   panel: z.array(roundPanelSlotSchema),
@@ -437,9 +487,11 @@ export const generatorRoundDetailSchema = z.object({
       faulted: z.number().int(),
       mean_score: z.number().nullable(),
       recorded_at: z.string(),
+      excluded_reason: z.string().nullable().optional().default(null),
     }),
   ),
   pending_agents: z.array(uuid),
+  skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
   score: z.record(z.string(), z.unknown()).nullable(),
   scorer_version: z.string().nullable(),
   standings: z.array(standingSchema),
@@ -453,6 +505,7 @@ export const generatorRoundPreviewSchema = z.object({
   qualified_generators: z.number().int(),
   awaiting_qualification: z.number().int(),
   blockers: z.array(z.string()),
+  skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
 })
 
 export const generatorRoundLoopSchema = z.object({

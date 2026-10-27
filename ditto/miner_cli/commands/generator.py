@@ -11,7 +11,8 @@ credit for cases strong agents split on. The lane is weight-zero in shadow.
 * ``rehearse DIR``: build and run the generator as the scorer does
   (``challenge rehearse``; ``--sandbox docker`` uses the scorer's images).
 * ``package DIR``: write the deterministic, vendored source archive.
-* ``upload [ARCHIVE | --dir DIR]``: check, sign ``ditto-generator-v1``, upload.
+* ``upload [ARCHIVE | --dir DIR]``: check, pay the upload fee when Platform
+  requires one, sign ``ditto-generator-v1``, upload.
 * ``status``: list your generators, their qualification, and latest round score.
 * ``board``: the shadow generator ledger.
 
@@ -31,16 +32,34 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
+import bittensor
+
 from ditto.miner_cli.api_client import ApiClient
-from ditto.miner_cli.errors import MinerCliError
+from ditto.miner_cli.commands.upload import _recovery_receipt_from_args
+from ditto.miner_cli.confirm import confirm_payment
+from ditto.miner_cli.errors import GeneratorPaymentRejectedError, MinerCliError
+from ditto.miner_cli.models import PaymentReceipt, WalletHandle
 from ditto.miner_cli.network import resolve_network
+from ditto.miner_cli.payment import preflight_payment_signer, submit_eval_payment
+from ditto.miner_cli.preferences import (
+    GENERATOR_PAYMENTS_BUCKET,
+    clear_pending_payment,
+    load_pending_payment,
+    save_pending_payment,
+)
+from ditto.miner_cli.submission_terms import show_submission_terms
 from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 MAX_ARCHIVE_BYTES = 4 << 20
 SIGNATURE_DOMAIN = "ditto-generator-v1"
+# Local key for a saved generator fee proof (kept apart from agent proofs).
+PENDING_PAYMENT_NAME = "generator"
+GENERATOR_COMPETITION = "generator"
 _DATAGEN_DIR = Path(__file__).resolve().parents[3] / "research" / "dittobench-datagen"
 
 
@@ -80,7 +99,16 @@ def add_subparser(
     rehearse.add_argument("dir", type=Path)
     rehearse.add_argument("--ss58", dest="ss58", help="Hotkey the packs bind to.")
     rehearse.add_argument("--seeds", type=int, default=3)
-    rehearse.add_argument("--cases", type=int, default=16)
+    rehearse.add_argument(
+        "--cases",
+        type=int,
+        default=80,
+        help=(
+            "Cases per pack. Platform's cases_per_seed can be raised to 80 "
+            "between rounds, and a generator that cannot fill it is rejected, "
+            "so rehearse at the cap (the default)."
+        ),
+    )
     rehearse.add_argument(
         "--sandbox",
         choices=("local", "docker"),
@@ -100,11 +128,30 @@ def add_subparser(
     _tool_flag(package)
     package.set_defaults(func=run)
 
-    upload = subs.add_parser("upload", help="Check, sign, and upload generator source.")
+    upload = subs.add_parser(
+        "upload",
+        help="Check, pay the fee if required, sign, and upload generator source.",
+    )
     upload.add_argument("archive", type=Path, nargs="?")
     upload.add_argument("--dir", type=Path, help="Package this directory first.")
+    upload.add_argument(
+        "--name",
+        help=(
+            "Display name for this generator on dittobench.ai/generators "
+            f"(1-{MAX_GENERATOR_NAME_LENGTH} characters). Shown with your miner "
+            "profile picture. Unnamed generators show a short submission id."
+        ),
+    )
     _tool_flag(upload)
     _wallet_flags(upload)
+    recovery = upload.add_argument_group(
+        "payment recovery",
+        "Reuse a finalized fee payment after an upload failed or its response "
+        "was lost. All three are required together; no new transfer is sent.",
+    )
+    recovery.add_argument("--payment-block-hash")
+    recovery.add_argument("--payment-block-number", type=int)
+    recovery.add_argument("--payment-extrinsic-index", type=int)
     upload.set_defaults(func=run)
 
     status = subs.add_parser("status", help="List a hotkey's generators.")
@@ -203,7 +250,121 @@ def _resolve_hotkey(args: argparse.Namespace) -> str:
     return str(handle.hotkey_ss58)
 
 
+def _pay_fee(
+    *,
+    args: argparse.Namespace,
+    terms: dict[str, Any],
+    handle: WalletHandle,
+    wallet: bittensor.Wallet,
+    coldkey_name: str,
+    subtensor_network: str,
+) -> PaymentReceipt:
+    """Pay the generator competition's quoted fee.
+
+    Each competition has its own price, so the amount comes only from these
+    generator terms, never from the agent-upload quote, and terms that name
+    another competition are refused before anything is sent. A Platform that
+    predates per-competition fees omits ``competition``; its terms are the
+    generator's.
+    """
+    competition = terms.get("competition", GENERATOR_COMPETITION)
+    if competition != GENERATOR_COMPETITION:
+        raise MinerCliError(
+            f"platform quoted the {competition!r} competition's fee for a "
+            "generator upload; no payment was sent"
+        )
+    amount_rao = terms.get("payment_amount_rao")
+    send_address = terms.get("payment_send_address")
+    if (
+        not isinstance(amount_rao, int)
+        or isinstance(amount_rao, bool)
+        or amount_rao <= 0
+        or not isinstance(send_address, str)
+    ):
+        raise MinerCliError("platform requires a fee but did not quote one")
+    source = terms.get("payment_amount_source")
+    purpose = "generator competition upload fee" + (
+        " (generator price)"
+        if source == "override"
+        else " (default submission fee)"
+        if source == "default"
+        else ""
+    )
+    hotkey_ss58 = handle.hotkey_ss58
+    chain_endpoint = getattr(args, "chain_endpoint", None) or None
+    preflight_payment_signer(
+        live_wallet=wallet,
+        hotkey_ss58=hotkey_ss58,
+        subtensor_network=subtensor_network,
+        chain_endpoint=chain_endpoint,
+    )
+    confirm_payment(
+        amount_rao=amount_rao,
+        dest_address=send_address,
+        hotkey_ss58=hotkey_ss58,
+        coldkey_name=coldkey_name,
+        skip=args.yes,
+        purpose=purpose,
+    )
+    print(f"submitting payment on subtensor={subtensor_network}...", file=sys.stderr)
+    receipt = submit_eval_payment(
+        live_wallet=wallet,
+        subtensor_network=subtensor_network,
+        amount_rao=amount_rao,
+        dest_address=send_address,
+        chain_endpoint=chain_endpoint,
+    )
+    print(
+        # The whole proof, so the recovery flags can be rebuilt from this line
+        # alone even if saving it locally fails and the process then dies.
+        f"payment finalised: block_hash={receipt.block_hash} "
+        f"block={receipt.block_number} ext_idx={receipt.extrinsic_index}",
+        file=sys.stderr,
+    )
+    return receipt
+
+
+def _recovery_flags(receipt: PaymentReceipt) -> str:
+    return (
+        f"--payment-block-hash {receipt.block_hash} "
+        f"--payment-block-number {receipt.block_number} "
+        f"--payment-extrinsic-index {receipt.extrinsic_index}"
+    )
+
+
+def _recovery_hint(receipt: PaymentReceipt) -> str:
+    return (
+        "\nupload could not be confirmed after payment. The fee is not spent "
+        "until an upload is accepted. Within 24 hours, rerunning upload with the "
+        "same archive reuses the saved proof; for another archive, or if the "
+        "saved proof is gone, rerun with:\n"
+        f"  {_recovery_flags(receipt)}\n"
+        "and no new transfer is sent."
+    )
+
+
+MAX_GENERATOR_NAME_LENGTH = 64
+# Platform refuses these too (``normalize_generator_name``): control, format,
+# surrogate, private-use and unassigned code points, and line separators.
+_FORBIDDEN_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+
+def normalize_generator_name(value: str) -> str:
+    """The name Platform will store, or :class:`MinerCliError` before paying."""
+    name = unicodedata.normalize("NFC", value).strip()
+    if not 1 <= len(name) <= MAX_GENERATOR_NAME_LENGTH:
+        raise MinerCliError(
+            f"--name must be 1-{MAX_GENERATOR_NAME_LENGTH} characters after trimming"
+        )
+    if any(unicodedata.category(char) in _FORBIDDEN_NAME_CATEGORIES for char in name):
+        raise MinerCliError("--name contains a control or invisible character")
+    return name
+
+
 def _upload(args: argparse.Namespace, archive: Path) -> int:
+    raw_name = getattr(args, "name", None)
+    name = None if raw_name is None else normalize_generator_name(raw_name)
+    recovery = _recovery_receipt_from_args(args)
     with archive.open("rb") as source:
         raw = source.read(MAX_ARCHIVE_BYTES + 1)
     if not raw or len(raw) > MAX_ARCHIVE_BYTES:
@@ -218,37 +379,147 @@ def _upload(args: argparse.Namespace, archive: Path) -> int:
         interactive=sys.stdin.isatty() and not args.yes,
     )
     handle, wallet = load_wallet(coldkey_name=coldkey_name, hotkey_name=hotkey_name)
-    nonce = str(uuid4())
-    timestamp = int(time.time())
-    signature = wallet.hotkey.sign(
-        build_source_payload(
-            hotkey_ss58=handle.hotkey_ss58,
-            source_sha256=digest,
-            signature_timestamp=timestamp,
-            nonce=nonce,
-        )
-    ).hex()
-    body = {
-        "hotkey": handle.hotkey_ss58,
-        "source_sha256": digest,
-        "source_base64": base64.b64encode(raw).decode("ascii"),
-        "signature": signature,
-        "signature_timestamp": timestamp,
-        "signature_nonce": nonce,
-    }
     network = resolve_network(args.network)
+    pending = {
+        "network": network.name,
+        "hotkey": handle.hotkey_ss58,
+        "name": PENDING_PAYMENT_NAME,
+        "sha256": digest,
+        "bucket": GENERATOR_PAYMENTS_BUCKET,
+    }
     with ApiClient(base_url=network.api_url) as client:
-        result = client.post_generator_submission(body)
-    print(result["submission_id"])
+        # The deliverable and the generator competition's own fee, shown
+        # before anything is paid. Informational; Platform enforces it.
+        show_submission_terms(client, GENERATOR_COMPETITION)
+        receipt = recovery
+        if receipt is None:
+            # A finalized fee saved by an earlier attempt at this exact archive
+            # is reused instead of paying again (a lost response returns the
+            # submission that proof already funded).
+            receipt = load_pending_payment(**pending)
+            if receipt is not None:
+                print(
+                    "found a saved finalized payment for this exact archive; "
+                    "no new transfer will be sent",
+                    file=sys.stderr,
+                )
+        if receipt is None:
+            # Read the terms before paying anything. An older Platform has no
+            # terms endpoint and never charges for generator uploads.
+            terms = client.get_generator_upload_terms(
+                hotkey=handle.hotkey_ss58, source_sha256=digest, name=name
+            )
+            if terms is not None:
+                blockers = terms.get("blockers") or []
+                if blockers:
+                    raise MinerCliError(
+                        "platform would refuse this upload"
+                        + (
+                            " (no payment was sent)"
+                            if terms.get("payment_required")
+                            else ""
+                        )
+                        + ": "
+                        + "; ".join(str(b) for b in blockers)
+                    )
+                if terms.get("payment_required"):
+                    receipt = _pay_fee(
+                        args=args,
+                        terms=terms,
+                        handle=handle,
+                        wallet=wallet,
+                        coldkey_name=coldkey_name,
+                        subtensor_network=network.subtensor_network,
+                    )
+                    # Saved before any upload attempt, so a crash or a lost
+                    # response never strands the proof.
+                    if not save_pending_payment(**pending, payment=receipt):
+                        print(
+                            "warning: could not save the finalized payment proof "
+                            "locally; keep the printed proof if upload fails",
+                            file=sys.stderr,
+                        )
+        nonce = str(uuid4())
+        timestamp = int(time.time())
+        signature = wallet.hotkey.sign(
+            build_source_payload(
+                hotkey_ss58=handle.hotkey_ss58,
+                source_sha256=digest,
+                signature_timestamp=timestamp,
+                nonce=nonce,
+            )
+        ).hex()
+        body: dict[str, object] = {
+            "hotkey": handle.hotkey_ss58,
+            "source_sha256": digest,
+            "source_base64": base64.b64encode(raw).decode("ascii"),
+            "signature": signature,
+            "signature_timestamp": timestamp,
+            "signature_nonce": nonce,
+        }
+        if name is not None:
+            body["name"] = name
+        if receipt is not None:
+            body.update(
+                payment_block_hash=receipt.block_hash,
+                payment_block_number=receipt.block_number,
+                payment_extrinsic_index=receipt.extrinsic_index,
+            )
+        try:
+            result = client.post_generator_submission(body)
+            submission_id = result["submission_id"]
+            status = result["status"]
+            source_sha256 = result["source_sha256"]
+        except GeneratorPaymentRejectedError:
+            # This proof can never fund the upload. Forget the saved copy so a
+            # rerun reads current terms and pays again instead of resending it.
+            if receipt is not None and recovery is None:
+                clear_pending_payment(**pending, payment=receipt)
+                print(
+                    "\nplatform refused the payment proof; it was removed from "
+                    "local storage. Rerunning upload reads the current fee and "
+                    "asks before paying again.",
+                    file=sys.stderr,
+                )
+            raise
+        except BaseException:
+            # Any other failure after paying (transport, server error, a
+            # malformed response, an interrupt) keeps the proof for a retry.
+            if receipt is not None:
+                print(_recovery_hint(receipt), file=sys.stderr)
+            raise
+    print(submission_id)
     superseded = result.get("superseded") or []
+    stored_name = result.get("name")
+    if name is not None and stored_name is None:
+        # A Platform without generator names accepted the upload unnamed.
+        print(
+            "note: this Platform does not store generator names yet; the "
+            "generator was uploaded unnamed",
+            file=sys.stderr,
+        )
     print(
-        f"generator {result['status']}: {info.get('files')} files, module "
-        f"{info.get('module')}, sha256 {result['source_sha256']}"
+        (f"generator {stored_name!r} " if stored_name else "generator ")
+        + f"{status}: {info.get('files')} files, module "
+        f"{info.get('module')}, sha256 {source_sha256}"
         + (
             f"; superseded {len(superseded)} earlier generator(s)" if superseded else ""
         ),
         file=sys.stderr,
     )
+    # This archive is uploaded, so nothing saved for it is needed any more.
+    # A different saved proof (recovery flags used another one) may be unspent:
+    # say so instead of dropping it silently.
+    saved = load_pending_payment(**pending)
+    if saved is not None:
+        clear_pending_payment(**pending, payment=saved)
+        if saved != receipt:
+            print(
+                "note: removed a different saved payment proof for this archive. "
+                "It may be unspent; within 24 hours of payment you can use it for "
+                "another archive with:\n  " + _recovery_flags(saved),
+                file=sys.stderr,
+            )
     return 0
 
 

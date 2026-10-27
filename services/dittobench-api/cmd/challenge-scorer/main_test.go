@@ -82,6 +82,7 @@ func main() {
 type fakePlatform struct {
 	*httptest.Server
 	posted []resultRequest
+	faults []faultReport
 	work   []*workItem
 }
 
@@ -104,6 +105,10 @@ func newFakePlatform(t *testing.T, work ...*workItem) *fakePlatform {
 			var res resultRequest
 			_ = json.NewDecoder(r.Body).Decode(&res)
 			fp.posted = append(fp.posted, res)
+		case "/api/v1/generator-scorer/fault":
+			var f faultReport
+			_ = json.NewDecoder(r.Body).Decode(&f)
+			fp.faults = append(fp.faults, f)
 		default:
 			http.NotFound(w, r)
 		}
@@ -188,11 +193,43 @@ func TestProcessOneReportsBadArchivesAsBuildFailures(t *testing.T) {
 	}
 }
 
-func TestProcessOneLeavesSandboxFailuresUnposted(t *testing.T) {
+func TestProcessOneReportsSandboxFailuresAsFaults(t *testing.T) {
 	raw := generatorArchive(t, false)
 	fp := newFakePlatform(t, work(raw, challenge.SeedFromInt64(1)))
 	_, err := processOne(context.Background(), fp.client(), genrun.Docker{Binary: "/nonexistent/docker"})
 	if !errors.Is(err, genrun.ErrSandbox) || len(fp.posted) != 0 {
 		t.Fatalf("sandbox failure: err=%v posted=%d", err, len(fp.posted))
+	}
+	if len(fp.faults) != 1 || fp.faults[0].ErrorKind != "sandbox" || fp.faults[0].RunID != "run-1" || fp.faults[0].Work != "qualification" {
+		t.Fatalf("sandbox fault report: %+v", fp.faults)
+	}
+}
+
+// A lease asking for more cases than this build's pack contract allows (the
+// 2026-10-27 stale-scorer incident) is the scorer's fault: it is reported as
+// an unsupported request before any generator runs, never as a seed error.
+func TestProcessOneReportsUnsupportedCaseCountsAsFaults(t *testing.T) {
+	raw := generatorArchive(t, false)
+	item := work(raw, challenge.SeedFromInt64(1))
+	item.CasesPerSeed = challenge.MaxCases + 1
+	fp := newFakePlatform(t, item)
+	_, err := processOne(context.Background(), fp.client(), genrun.Local{})
+	if !errors.Is(err, genrun.ErrInvalidRequest) || len(fp.posted) != 0 {
+		t.Fatalf("unsupported request: err=%v posted=%d", err, len(fp.posted))
+	}
+	f := fp.faults
+	if len(f) != 1 || f[0].ErrorKind != "unsupported_request" || f[0].LeaseID != "lease-1" || f[0].SubmissionID != "sub-1" ||
+		f[0].ScorerVersion != ScorerVersion || !strings.Contains(f[0].Detail, "request cases must be in") {
+		t.Fatalf("fault report: %+v", f)
+	}
+}
+
+func TestProcessOneDoesNotReportCancellation(t *testing.T) {
+	fp := newFakePlatform(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := reportFault(ctx, fp.client(), faultReport{Work: "qualification", LeaseID: "lease-1"}, genrun.ErrSandbox)
+	if !errors.Is(err, genrun.ErrSandbox) || len(fp.faults) != 0 {
+		t.Fatalf("a stopping scorer must not report: err=%v faults=%d", err, len(fp.faults))
 	}
 }

@@ -21,22 +21,22 @@ The numbers below drift. For the live scoring bench, emission split, payout
 curve, champion, next epoch, and your own agents' status, run `$subnet-status`
 (`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
 
-Live scoring is **bench 12**, `run_size=full`, observed tools, locked
-`openai/gpt-oss-20b`. Update `LIVE_SCORING_BENCH_VERSION` in
-`miners/dittobench-starter-kit/scripts/local-rehearsal.py` when Platform
-activates a new version. The kit and the rehearsal script also *accept*
-bench 13 (`MAX_SUPPORTED_BENCH_VERSION` / `MAX_BENCH_VERSION`) so a submitted
-image does not 400 `/run` when validators rehearse it; 13 is not live until
-the owner activates it after the v13 qualification report. **Bench 13** is
-generated and scored locally ahead of activation (`--bench-version 13`) as soon
-as the local scorer build advertises it; its gates are shadow and replayed
+Live scoring is **bench 13**, `run_size=full`, observed tools, locked
+`openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
+the live scoring version (`active_version`) from the public rollout endpoint
+(`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the
+default follows Platform activation. `LIVE_SCORING_BENCH_VERSION` in
+`miners/dittobench-starter-kit/scripts/local-rehearsal.py` is only the offline
+fallback (also used when `DITTOBENCH_PUBLIC_ROLLOUT_URL=off`); bump it with
+each activation. A live version newer than the checkout's `MAX_BENCH_VERSION`
+fails loudly: update ditto-subnet. Bench 13's gates are shadow and replayed
 locally with `--gates` (below). The wire `bench_version` a harness receives
 stays 9 in every contract.
 
-Bench 14 is also accepted for explicit preactivation rehearsal
+Bench 14 is accepted for explicit preactivation rehearsal
 (`--bench-version 14 --gates`) when the local scorer advertises it. It carries
-the v13 surface and gates with action-scoped declarative over-call scoring.
-Adding this support does not change the live rehearsal default. See
+the v13 surface and gates with action-scoped declarative over-call scoring. It
+is not the default until Platform activates it. See
 [`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md).
 
 ## Practice loops (do not collapse these)
@@ -46,10 +46,10 @@ Adding this support does not change the live rehearsal default. See
 | `cargo run -- mem-eval --k 10` | Retrieval only, no chat model | Retrieval/reranker iteration |
 | `cargo run -- evaluate` | Fixed local subset, **name-only** tool scorer, **no** `tool_endpoint` | Fast prompt/tool-name iteration |
 | `cargo run -- practice --n 20` | Rotating kit templates, still name-only, still no observer | Slightly less overfit than `evaluate` |
-| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, bench 12 | Smoke after a harness change |
+| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, live bench (13) | Smoke after a harness change |
 | `uv run ditto practice --run-size medium` | Same path, deeper seeding and isolation | Development once small is healthy |
 | `uv run ditto practice --run-size full` | Same path, **on-chain envelope** | Required before upload |
-| `uv run ditto practice --bench-version 13 --gates` | Same path on the v13 contract + shadow replay of the public v13 gates with per-case notes | Before upload; after any answer, prompt, catalog, or tool-execution change |
+| `uv run ditto practice --gates` | Same path on the live contract + shadow replay of the public v13 gates with per-case notes | Before upload; after any answer, prompt, catalog, or tool-execution change |
 | Hosted `/v1/submit` | Remote rehearsal, tools **self-report-capped**, often defaults to bench 9 | Reachability only |
 | On-chain | Screened image + ticket-bound chat/embeddings | The only payout score |
 
@@ -64,14 +64,14 @@ is ~0.7 is expected. Name-only local scoring plus a tiny template pool is not
 
 ## Run sizes (teach these; do not skip full)
 
-From the **repository root**. All three use live bench 12 and a validator-visible
-`tool_endpoint`. Only the envelope changes.
+From the **repository root**. All three use the live bench (13) and a
+validator-visible `tool_endpoint`. Only the envelope changes.
 
-| `--run-size` | Bench 12 envelope | When the agent should run it |
+| `--run-size` | Bench 13 envelope | When the agent should run it |
 |---|---|---|
-| `small` | 6 tool + 6 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
-| `medium` | 48 tool + 64 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
-| `full` | 100 tool + 225 memory, 5 waves, isolation (on-chain n≈351 with audit cases) | **Before upload**, and before telling the miner a local score will transfer. Hours. |
+| `small` | 6 tool + 27 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
+| `medium` | 48 tool + 95 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
+| `full` | 100 tool + 250 memory (the published mix: 227 primary, 9 isolation, 14 integrity), 5 waves | **Before upload**, and before telling the miner a local score will transfer. Hours. |
 
 ```bash
 uv run ditto practice --run-size small
@@ -151,7 +151,7 @@ Go + Ollama `embeddinggemma`. Chat uses `.env`; on-chain ignores that key.
 3. Confirm observed tools still work → `uv run ditto practice --run-size small`
 4. After small is healthy, catch seeding/isolation misses → `--run-size medium`
 5. After any answer, prompt, tool, or routing change → walk the served path
-   and run `uv run ditto practice --bench-version 13 --gates`; every would-zero
+   and run `uv run ditto practice --gates`; every would-zero
    note names a served-path defect (see *Bench v13 gates*)
 6. Before upload or quoting a transferrable score → served-path review must
    pass, then `--run-size full --report /tmp/dittobench-report.json`
@@ -164,9 +164,9 @@ would fail `$backroom-review`.
 
 Require all of:
 
-- `bench_version` is 12 (the live version in the rehearsal constant; 13 only
-  when you passed `--bench-version 13 --gates` to rehearse the pre-activation
-  contract)
+- `bench_version` is the live scoring version (13; the rehearsal prints
+  `rehearsing bench_version N` up front), or 14 only when you passed
+  `--bench-version 14` to rehearse the pre-activation contract
 - `run_size` is the one you asked for
 - `capped_tool_cases` is 0 (or explain why)
 - `observed_tool_cases` is > 0 on a tool-heavy run
@@ -184,7 +184,7 @@ what the kit offered and emitted per case and replays every public rule against
 the public (salt 0) pass-off artifact:
 
 ```bash
-uv run ditto practice --bench-version 13 --gates --keep-artifacts /tmp/v13-gates
+uv run ditto practice --gates --keep-artifacts /tmp/v13-gates
 python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
   --dataset /tmp/v13-gates/dataset.json --transcript /tmp/v13-gates/transcript.json \
   --completions /tmp/v13-gates/completions.jsonl \

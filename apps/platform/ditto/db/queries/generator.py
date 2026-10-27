@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, func, or_, select, text, update
+from sqlalchemy.orm import defer
 
 from ditto.db.models import (
     GeneratorCaseVerdict,
@@ -81,6 +82,17 @@ async def insert_generator_settings_revision(
 
 
 # --- submissions ---------------------------------------------------------
+
+
+async def get_submission_without_source(
+    session: AsyncSession, submission_id: UUID
+) -> GeneratorSubmission | None:
+    """One submission for a public view: the archive bytes are never loaded."""
+    return await session.scalar(
+        select(GeneratorSubmission)
+        .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
+        .where(GeneratorSubmission.submission_id == submission_id)
+    )
 
 
 async def get_submission(
@@ -181,9 +193,11 @@ async def insert_submission(
     go_version: str,
     file_count: int,
     now: datetime,
+    name: str | None = None,
 ) -> GeneratorSubmission:
     row = GeneratorSubmission(
         submission_id=uuid4(),
+        name=name,
         miner_hotkey=miner_hotkey,
         owner_key=owner_key,
         source_sha256=source_sha256,
@@ -220,6 +234,27 @@ async def supersede_active(
             status="superseded", status_reason=f"superseded by {keep}", updated_at=now
         )
         .returning(GeneratorSubmission.submission_id)
+    )
+    return list(rows)
+
+
+async def superseded_by(
+    session: AsyncSession, *, miner_hotkey: str, keep: UUID
+) -> list[UUID]:
+    """The hotkey's submissions that uploading ``keep`` superseded.
+
+    Reconstructs :func:`supersede_active`'s result for an exact upload retry
+    from the reason it stamps; a submission an operator later re-ruled no
+    longer carries that reason and is not listed.
+    """
+    rows = await session.scalars(
+        select(GeneratorSubmission.submission_id)
+        .where(
+            GeneratorSubmission.miner_hotkey == miner_hotkey,
+            GeneratorSubmission.status == "superseded",
+            GeneratorSubmission.status_reason == f"superseded by {keep}",
+        )
+        .order_by(GeneratorSubmission.submitted_at, GeneratorSubmission.submission_id)
     )
     return list(rows)
 
@@ -532,8 +567,10 @@ async def list_submissions(
     limit: int = 50,
     offset: int = 0,
 ) -> Sequence[GeneratorSubmission]:
+    # Listings never serve source; skip the archive bytes (up to 4 MiB a row).
     stmt = (
         select(GeneratorSubmission)
+        .options(defer(GeneratorSubmission.source_bytes, raiseload=True))
         .order_by(
             GeneratorSubmission.submitted_at.desc(),
             GeneratorSubmission.submission_id,

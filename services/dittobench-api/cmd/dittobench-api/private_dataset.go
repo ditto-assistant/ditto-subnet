@@ -17,7 +17,7 @@ func (s *server) datasetFeatures() []string {
 		features = append(features, privateDatasetMode)
 	}
 	if s.allowGeneratorRounds {
-		features = append(features, generatorRoundMode)
+		features = append(features, generatorRoundMode, generatorRoundMaxCasesFeature())
 	}
 	return features
 }

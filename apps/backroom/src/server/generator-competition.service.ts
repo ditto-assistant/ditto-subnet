@@ -28,6 +28,7 @@ import {
   generatorPromotionInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
+  reinstateGeneratorInputSchema,
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
@@ -60,12 +61,29 @@ function settingsRefusal(cause: unknown) {
   return new Error(`${cause.message}. ${recovery}`)
 }
 
+// Reads default a field an older Platform omits. A write must not use that
+// default to report a setting Platform silently dropped: an older Platform
+// ignores unknown fields and stores the revision without them. A dropped field
+// whose requested value equals that default changed nothing and is fine.
+function droppedSettings(
+  raw: unknown,
+  requested: Record<string, unknown>,
+  stored: Record<string, unknown>,
+) {
+  const returned = (raw as { settings?: unknown } | null)?.settings
+  const returnedFields = returned !== null && typeof returned === 'object' ? returned : {}
+  return Object.keys(requested).filter(
+    (field) => !(field in returnedFields) && requested[field] !== stored[field],
+  )
+}
+
 export async function setGeneratorSettings(rawInput: unknown, actor: string) {
   const input = setGeneratorSettingsInputSchema.parse(rawInput)
+  let raw: unknown
   try {
     // The POST's own response is the revision this write created; a re-read
     // could report a concurrent write as if it were this one.
-    return generatorSettingsRevisionSchema.parse(await platformAdminRequest(`${BASE}/settings`, {
+    raw = await platformAdminRequest(`${BASE}/settings`, {
       method: 'POST',
       actor,
       body: {
@@ -76,10 +94,21 @@ export async function setGeneratorSettings(rawInput: unknown, actor: string) {
         actor,
         confirmation: input.confirmation,
       },
-    }))
+    })
   } catch (cause) {
     throw settingsRefusal(cause) ?? cause
   }
+  const created = generatorSettingsRevisionSchema.parse(raw)
+  const dropped = droppedSettings(raw, input.settings, created.settings)
+  if (dropped.length > 0) {
+    throw new Error(
+      `Platform stored revision ${created.revision} without ${dropped.join(', ')}: it predates `
+      + 'that setting, so the stored revision uses the default rather than the value you sent '
+      + '(for upload_fee_required, generator uploads stay free). Deploy the Platform release '
+      + 'that supports it, then re-read get_generator_competition_settings and write again.',
+    )
+  }
+  return created
 }
 
 export async function listGeneratorSubmissions(rawInput: unknown) {
@@ -162,6 +191,27 @@ export async function rejectGenerator(rawInput: unknown, actor: string) {
           reason: input.reason,
           actor,
           confirmation: input.confirmation,
+        },
+      },
+    ),
+  )
+}
+
+export async function reinstateGenerator(rawInput: unknown, actor: string) {
+  const input = reinstateGeneratorInputSchema.parse(rawInput)
+  return generatorSubmissionDetailSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/reinstate`,
+      {
+        method: 'POST',
+        actor,
+        body: {
+          expected_status: input.expectedStatus,
+          expected_status_reason: input.expectedStatusReason,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+          override_operator_ruling: input.overrideOperatorRuling,
         },
       },
     ),

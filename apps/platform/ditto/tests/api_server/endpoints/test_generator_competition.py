@@ -28,12 +28,16 @@ import bittensor
 import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.generator import (
+    MAX_CASES_PER_SEED,
     PROBE_ROTATION_CONFIRMATION,
+    REINSTATE_SUBMISSION_CONFIRMATION,
     REJECT_SUBMISSION_CONFIRMATION,
+    GeneratorCompetitionSettings,
     generator_settings_confirmation,
     source_signature_payload,
 )
@@ -44,6 +48,7 @@ from ditto.db.models import (
     GeneratorProbeEpoch,
     GeneratorRun,
     GeneratorSubmission,
+    MinerAvatar,
 )
 from ditto.tests.api_server.endpoints.test_scoring import (
     _install_chain,
@@ -83,6 +88,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "privacy_window_rounds": 6,
         "onchain_commitment": False,
         "validator_rounds_enabled": False,
+        "upload_fee_required": False,
     }
     base.update(overrides)
     return base
@@ -284,6 +290,18 @@ def test_signature_payload_is_the_pinned_wire_format() -> None:
     assert payload == f"{expected}:1700000000:{nonce}".encode()
 
 
+def test_cases_per_seed_reaches_the_pack_contract_cap() -> None:
+    """``cases_per_seed`` may be set to the Go pack contract's ``MaxCases``
+    (80, enough for ~350 cases over five counted columns) and no higher."""
+    assert MAX_CASES_PER_SEED == 80
+    settings = GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=80))
+    assert settings.score_params()["target_cases"] == 80
+    GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=70))
+    for bad in (7, 81):
+        with pytest.raises(ValidationError):
+            GeneratorCompetitionSettings.model_validate(_settings(cases_per_seed=bad))
+
+
 class TestSettings:
     async def test_lane_ships_closed_and_writes_are_guarded(
         self,
@@ -326,6 +344,31 @@ class TestSettings:
         assert (
             await client.post(_SETTINGS_URL, headers=_ADMIN, json=incoherent)
         ).status_code == 422
+
+    async def test_enforce_needs_its_own_confirmation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        assert generator_settings_confirmation("enforce") == (
+            "APPLY GENERATOR COMPETITION ENFORCE"
+        )
+        body = {
+            "expected_revision": 0,
+            "settings": _settings(mode="enforce"),
+            "reason": "mark qualified generators weight-eligible",
+            "confirmation": generator_settings_confirmation("shadow"),
+        }
+        refused = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert refused.status_code == 409
+        assert "APPLY GENERATOR COMPETITION ENFORCE" in refused.text
+        body["confirmation"] = generator_settings_confirmation("enforce")
+        ok = await client.post(_SETTINGS_URL, headers=_ADMIN, json=body)
+        assert ok.status_code == 200, ok.text
+        board = (await client.get(_SETTINGS_URL, headers=_ADMIN)).json()
+        assert board["effective"]["settings"]["mode"] == "enforce"
 
 
 class TestUpload:
@@ -383,6 +426,172 @@ class TestUpload:
                 GeneratorSubmission, UUID(accepted["submission_id"])
             )
             assert first is not None and first.status == "superseded"
+
+    async def test_named_upload_shows_name_version_and_avatar(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        body = {**_upload_body(_MINER, _archive("named")), "name": "  Needle Forge  "}
+        resp = await client.post("/api/v1/generator/submissions", json=body)
+        assert resp.status_code == 200, resp.text
+        accepted = resp.json()
+        # Surrounding whitespace is trimmed, as the miner CLI also does.
+        assert accepted["name"] == "Needle Forge"
+        async with session_maker() as session:
+            session.add(
+                MinerAvatar(
+                    miner_hotkey=_MINER.ss58_address,
+                    object_key="avatars/test.png",
+                    content_type="image/png",
+                    sha256="ab" * 32,
+                    nonce=uuid4(),
+                )
+            )
+            await session.commit()
+        await _skip_cooldown(session_maker)
+        second = await _upload(client, _archive("unnamed"))
+        assert second["name"] is None
+
+        listing = (
+            await client.get(
+                "/api/v1/generator/submissions",
+                params={"hotkey": _MINER.ss58_address},
+            )
+        ).json()["submissions"]
+        by_id = {item["submission_id"]: item for item in listing}
+        named = by_id[accepted["submission_id"]]
+        unnamed = by_id[second["submission_id"]]
+        assert (named["name"], named["version"]) == ("Needle Forge", 1)
+        assert (unnamed["name"], unnamed["version"]) == (None, 2)
+        avatar = f"/api/v1/public/miners/{_MINER.ss58_address}/avatar"
+        assert named["avatar_url"] == unnamed["avatar_url"] == avatar
+
+        detail = await client.get(
+            f"/api/v1/generator/submissions/{accepted['submission_id']}"
+        )
+        assert detail.status_code == 200, detail.text
+        payload = detail.json()
+        assert payload["submission"]["name"] == "Needle Forge"
+        assert payload["submission"]["status"] == "superseded"
+        assert [v["submission_id"] for v in payload["versions"]] == [
+            second["submission_id"],
+            accepted["submission_id"],
+        ]
+        # No round has scored this generator yet, and source never leaves.
+        assert payload["rounds"] == []
+        assert "source_base64" not in detail.text
+        assert detail.headers["cache-control"].startswith("public, max-age=30")
+        missing = await client.get(f"/api/v1/generator/submissions/{uuid4()}")
+        assert missing.status_code == 404
+
+    @pytest.mark.parametrize(
+        "name", ["", "   ", "x" * 65, "tab\there", "zero\u200bwidth", "line\u2028break"]
+    )
+    async def test_invalid_names_are_refused_before_anything_is_stored(
+        self,
+        name: str,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        body = {**_upload_body(_MINER, _archive("bad-name")), "name": name}
+        resp = await client.post("/api/v1/generator/submissions", json=body)
+        assert resp.status_code == 422, resp.text
+        terms = (
+            await client.get(
+                "/api/v1/generator/upload-terms",
+                params={"hotkey": _MINER.ss58_address, "name": name},
+            )
+        ).json()
+        assert any("generator name" in blocker for blocker in terms["blockers"])
+        async with session_maker() as session:
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(GeneratorSubmission)
+                )
+                == 0
+            )
+
+    async def test_a_reserved_handle_is_refused_in_terms_and_upload(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        import ditto.api_server.endpoints.generator as endpoint
+
+        seen: list[tuple[str, str, str | None]] = []
+
+        async def _reserved(
+            _session: AsyncSession,
+            *,
+            netuid: int,
+            agent_name: str,
+            miner_hotkey: str,
+            miner_coldkey: str | None,
+        ) -> str | None:
+            assert netuid > 0
+            seen.append((agent_name, miner_hotkey, miner_coldkey))
+            if agent_name.lower().startswith("taken"):
+                return "handle 'taken' is reserved to another miner family"
+            return None
+
+        monkeypatch.setattr(endpoint, "upload_name_is_reserved", _reserved)
+        _install(app, session_maker)
+        await _open_lane(client)
+        terms = (
+            await client.get(
+                "/api/v1/generator/upload-terms",
+                params={"hotkey": _MINER.ss58_address, "name": "Taken v2"},
+            )
+        ).json()
+        assert terms["blockers"] == [
+            "handle 'taken' is reserved to another miner family"
+        ]
+        # Terms check the same on-chain coldkey the upload will.
+        assert seen[-1] == (
+            "Taken v2",
+            _MINER.ss58_address,
+            f"{_MINER_COLDKEY[:-2]}00",
+        )
+        body = {**_upload_body(_MINER, _archive("taken")), "name": "Taken v2"}
+        refused = await client.post("/api/v1/generator/submissions", json=body)
+        assert refused.status_code == 409
+        assert "reserved" in refused.text
+        # The upload checks against the coldkey that owns the hotkey on chain.
+        assert seen[-1] == ("Taken v2", _MINER.ss58_address, f"{_MINER_COLDKEY[:-2]}00")
+        free = {**_upload_body(_MINER, _archive("free")), "name": "Free name"}
+        assert (
+            await client.post("/api/v1/generator/submissions", json=free)
+        ).status_code == 200
+
+    async def test_the_public_default_has_no_public_detail(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive("default"))
+        async with session_maker() as session:
+            row = await session.get(
+                GeneratorSubmission, UUID(accepted["submission_id"])
+            )
+            assert row is not None
+            row.public_default = True
+            await session.commit()
+        resp = await client.get(
+            f"/api/v1/generator/submissions/{accepted['submission_id']}"
+        )
+        assert resp.status_code == 404
 
     async def test_repacked_tree_is_a_duplicate_for_anyone(
         self,
@@ -597,6 +806,80 @@ class TestScorer:
             assert row is not None and row.status_reason is not None
             assert row.status_reason.startswith(outcome)
         assert (await _lease(client)) is None
+
+    async def test_scorer_faults_never_reject_the_generator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Run d62c9ab8: a stale scorer refused cases_per_seed and Platform
+        rejected the generator. A fault, reported or legacy, backs off."""
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        sub_id = accepted["submission_id"]
+        work = await _lease(client)
+        fault = {
+            "work": "qualification",
+            "lease_id": work["lease_id"],
+            "run_id": work["run_id"],
+            "submission_id": sub_id,
+            "error_kind": "unsupported_request",
+            "detail": "generator request outside this scorer's contract: "
+            "request cases must be in 8..64",
+            "scorer_version": "challenge-scorer/4",
+        }
+        wrong = {**fault, "lease_id": str(uuid4())}
+        assert (
+            await client.post("/api/v1/generator-scorer/fault", json=fault)
+        ).status_code == 401
+        assert (
+            await client.post(
+                "/api/v1/generator-scorer/fault", headers=_SCORER, json=wrong
+            )
+        ).status_code == 409
+        resp = await client.post(
+            "/api/v1/generator-scorer/fault", headers=_SCORER, json=fault
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["action"] == "backed_off"
+        assert resp.json()["submission_status"] == "active"
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(sub_id))
+            run = await session.get(GeneratorRun, UUID(work["run_id"]))
+            assert row is not None and run is not None
+            assert row.status == "active" and row.lease_id is None
+            assert (row.status_reason or "").startswith("scorer fault")
+            assert row.next_run_at > datetime.now(UTC)
+            assert run.status == "abandoned"
+            assert run.outcome == "scorer_unsupported_request"
+            assert run.scorer_version == "challenge-scorer/4"
+        # Backing off: nothing to lease until the backoff passes.
+        assert (await _lease(client)) is None
+        # The run's result can no longer report.
+        assert (await _post(client, _result(work, tag="x"))).status_code == 409
+
+        # A legacy scorer reports its refusal as each seed's error.
+        await _make_due(session_maker, sub_id)
+        work = await _lease(client)
+        refusal = "request cases must be in 8..64"
+        legacy = _result(
+            work, tag="x", deterministic=None, seed_overrides={"error": refusal}
+        )
+        legacy["probe"]["error"] = refusal
+        resp = await _post(client, legacy)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["status"] == "abandoned"
+        assert resp.json()["outcome"] == "scorer_unsupported_request"
+        assert resp.json()["submission_status"] == "active"
+
+        # Once a capable scorer runs it, it qualifies.
+        await _make_due(session_maker, sub_id)
+        work = await _lease(client)
+        assert (await _post(client, _result(work, tag="ok"))).json()[
+            "status"
+        ] == "qualified"
 
     async def test_results_must_match_the_lease(
         self,
@@ -868,3 +1151,173 @@ class TestOperatorActions:
                 json={**reject, "expected_status": "rejected"},
             )
         ).status_code == 409
+
+    async def _rejected_by_scorer(
+        self, client: httpx.AsyncClient, raw: bytes, key=_MINER
+    ) -> dict[str, Any]:
+        accepted = await _upload(client, raw, key)
+        work = await _lease(client)
+        result = _result(work, tag="x", build_ok=False)
+        assert (await _post(client, result)).json()["submission_status"] == "rejected"
+        detail = await client.get(
+            "/api/v1/admin/generator-competition/submissions/"
+            f"{accepted['submission_id']}",
+            headers=_ADMIN,
+        )
+        assert detail.status_code == 200, detail.text
+        return detail.json()
+
+    async def test_reinstate_returns_a_rejection_to_qualification(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        detail = await self._rejected_by_scorer(client, _archive())
+        sub_id = detail["summary"]["submission_id"]
+        assert detail["operator_ruling"] is False
+        assert detail["reinstate_blockers"] == []
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        body = {
+            "expected_status": "rejected",
+            "expected_status_reason": detail["summary"]["status_reason"],
+            "reason": "scorer was stale; not the miner's fault",
+            "actor": "backroom:test",
+            "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+        }
+        assert (await client.post(f"{base}/reinstate", json=body)).status_code == 401
+        wrong = {**body, "confirmation": "REINSTATE"}
+        assert (
+            await client.post(f"{base}/reinstate", headers=_ADMIN, json=wrong)
+        ).status_code == 409
+        stale = {**body, "expected_status_reason": "something else"}
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=stale)
+        assert resp.status_code == 409 and "status_reason" in resp.text
+
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert resp.status_code == 200, resp.text
+        out = resp.json()
+        assert out["summary"]["status"] == "active"
+        assert out["summary"]["status_reason"] is None
+        assert out["summary"]["qualified_at"] is None
+        assert out["reinstate_blockers"] == []
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction).where(
+                        GeneratorOperatorAction.subject == sub_id
+                    )
+                )
+            ).all()
+            assert [a.action for a in audit] == ["reinstate"]
+            assert audit[0].actor == "backroom:test"
+            assert audit[0].detail is not None
+            assert (
+                audit[0].detail["previous_status_reason"]
+                == (detail["summary"]["status_reason"])
+            )
+        # A fresh qualification run on fresh seeds.
+        rerun = await _lease(client)
+        assert rerun is not None and rerun["submission_id"] == sub_id
+        assert (await _post(client, _result(rerun, tag="ok"))).json()[
+            "status"
+        ] == "qualified"
+        # Replaying the same request is refused: it is no longer rejected.
+        again = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert again.status_code == 409
+
+    async def test_reinstate_refuses_an_operator_ruling_without_override(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        sub_id = accepted["submission_id"]
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        resp = await client.post(
+            f"{base}/reject",
+            headers=_ADMIN,
+            json={
+                "expected_status": "active",
+                "reason": "copy of another miner's generator",
+                "confirmation": REJECT_SUBMISSION_CONFIRMATION,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        detail = resp.json()
+        assert detail["operator_ruling"] is True
+        assert any("operator ruling" in b for b in detail["reinstate_blockers"])
+        body = {
+            "expected_status": "rejected",
+            "expected_status_reason": detail["summary"]["status_reason"],
+            "reason": "ruling was a mistake after review",
+            "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+        }
+        refused = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert refused.status_code == 409 and "operator ruling" in refused.text
+        resp = await client.post(
+            f"{base}/reinstate",
+            headers=_ADMIN,
+            json={**body, "override_operator_ruling": True},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["summary"]["status"] == "active"
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction)
+                    .where(GeneratorOperatorAction.subject == sub_id)
+                    .order_by(GeneratorOperatorAction.id)
+                )
+            ).all()
+            assert [a.action for a in audit] == ["reject", "reinstate"]
+            assert audit[1].detail is not None
+            assert audit[1].detail["operator_ruling"] is True
+            assert audit[1].detail["override_operator_ruling"] is True
+
+    async def test_reinstate_never_resurrects_a_superseded_choice(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        detail = await self._rejected_by_scorer(client, _archive("one"))
+        sub_id = detail["summary"]["submission_id"]
+        await _skip_cooldown(session_maker)
+        newer = await _upload(client, _archive("two"))
+        # The rejected row is not active, so the upload superseded nothing.
+        assert newer["superseded"] == []
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        detail = (await client.get(base, headers=_ADMIN)).json()
+        assert detail["reinstate_blockers"], detail
+        body = {
+            "expected_status": "rejected",
+            "expected_status_reason": detail["summary"]["status_reason"],
+            "reason": "scorer was stale; not the miner's fault",
+            "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+            "override_operator_ruling": True,
+        }
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert resp.status_code == 409
+        assert "active submission" in resp.text
+        assert newer["submission_id"] in resp.text
+        # Even once the newer upload is itself rejected, it is still the
+        # miner's latest choice.
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(newer["submission_id"]))
+            assert row is not None
+            row.status = "rejected"
+            row.status_reason = "build_failed: x"
+            await session.commit()
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert resp.status_code == 409 and "newer submission" in resp.text
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(sub_id))
+            assert row is not None and row.status == "rejected"

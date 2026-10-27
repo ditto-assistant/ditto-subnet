@@ -27,8 +27,26 @@ wall-time limits.
 
 A timed-out container is killed by name, so no container outlives its run.
 Docker CLI failures (exit 125–127, daemon errors) are sandbox failures. They are
-never reported to Platform as the generator's fault: the scorer logs them and
-lets the lease expire.
+never reported to Platform as the generator's fault. The scorer posts them to
+`POST /api/v1/generator-scorer/fault` with `error_kind=sandbox`.
+
+A lease this build cannot serve is a fault too, never a generator failure. For
+example, a stale scorer may be asked for more cases than its
+`challenge.MaxCases`. `genrun.Evaluate` checks every request before it builds
+anything and returns `genrun.ErrInvalidRequest`. The scorer then posts
+`error_kind=unsupported_request`.
+
+Platform handles a fault in one of these ways, and never rejects a generator:
+
+- A qualification run is abandoned (`scorer_<kind>`). The submission stays
+  active and backs off for `retry_backoff_seconds`.
+- An unsupported round is voided with an `infra:` reason.
+- A sandbox failure on a round releases the lease for an immediate re-lease.
+  `MAX_GENERATION_ATTEMPTS` still bounds the retries.
+
+Older scorers wrote request refusals (`request cases must be in 8..64`) into
+seed and column errors. Platform still recognises those messages as the
+scorer's fault.
 
 `-unsafe-local-sandbox` builds and runs on the host with no isolation. It
 exists for local stacks only.
@@ -49,7 +67,7 @@ this case".
 
 ```bash
 go run ./cmd/challenge-scorer run -dir ../../miners/dittobench-generator-starter-kit \
-  -hotkey 5Grw... -seeds 2 -cases 16 -sandbox docker \
+  -hotkey 5Grw... -seeds 2 -cases 80 -sandbox docker \
   -agent mine=http://127.0.0.1:7070,owner=me \
   -agent baseline=http://127.0.0.1:7071,owner=ops,champion \
   -agent other=http://127.0.0.1:7072,owner=other \

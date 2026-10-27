@@ -460,6 +460,55 @@ async def test_current_scorer_preserves_versions_and_run_capacity(
     assert client.full_run_capacity == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "features,rounds,max_cases",
+    [
+        # A scorer that predates the column-size feature: Platform assumes 32.
+        (["generator-round-v1"], True, None),
+        (["generator-round-v1", "generator-round-max-cases-80"], True, 80),
+        # Never above what this validator's own job model accepts.
+        (["generator-round-v1", "generator-round-max-cases-120"], True, 80),
+        (["generator-round-v1", "generator-round-max-cases-64"], True, 64),
+        # Malformed sizes and a size without round support are ignored.
+        (["generator-round-v1", "generator-round-max-cases-08"], True, None),
+        (["generator-round-v1", "generator-round-max-cases-x"], True, None),
+        (["generator-round-max-cases-80"], False, None),
+    ],
+)
+async def test_scorer_round_column_size_is_forwarded(
+    features, rounds, max_cases
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.generator_rounds is rounds
+    assert observed.generator_round_max_cases == max_cases
+    # Absent from the signed bytes unless advertised, so an older validator's
+    # heartbeat keeps its exact encoding.
+    dumped = observed.model_dump(mode="json")
+    assert ("generator_round_max_cases" in dumped) is (max_cases is not None)
+
+
 # A still-supported v8-only scorer capability shape used for rolling-upgrade tests.
 _LIVE_CAPABILITIES: dict[str, Any] = {
     "software_version": "0.29.4",

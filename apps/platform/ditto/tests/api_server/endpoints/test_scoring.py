@@ -2314,3 +2314,122 @@ class TestLedgerRankShares:
                     session, _VALIDATOR_HOTKEY, ledger, now=now
                 )
                 assert served.rank_shares == [0.5, 0.2, 0.13, 0.1, 0.07]
+
+
+class TestLedgerTrackShares:
+    """The governed track split rides the ledger only to a protocol-33 fleet."""
+
+    async def test_split_is_unset_by_default_and_withheld_until_v33(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.db.models import TrackShareSettingsRevision
+
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=33,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.track_share_settings.invalidate()
+
+        # Unset: the field is empty even to a v33 fleet, so validators fold
+        # their compiled memory-only split byte for byte.
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json()["track_shares_bps"] == {}
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 32
+            session.add(
+                TrackShareSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={"track_shares_bps": {"memory": 9000, "generator": 1000}},
+                    checksum="ab" * 32,
+                    reason="pay the generator competition",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.track_share_settings.invalidate()
+
+        # A v32 weight setter folds the generator in shadow and would burn it.
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json()["track_shares_bps"] == {}
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 33
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["track_shares_bps"] == {"memory": 9000, "generator": 1000}
+
+    @pytest.mark.parametrize(
+        ("protocol", "refused"), [(None, True), (32, True), (33, False)]
+    )
+    async def test_a_served_split_refuses_a_sub_33_requester(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        protocol: int | None,
+        refused: bool,
+    ) -> None:
+        from fastapi import HTTPException
+
+        from ditto.api_models.validator import LedgerResponse
+        from ditto.api_server.endpoints.scoring import (
+            _require_statistical_cap_requester,
+        )
+
+        now = datetime.now(UTC)
+        if protocol is not None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        software_version="0.55.0",
+                        protocol_version=protocol,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                )
+        split = {"memory": 9000, "generator": 1000}
+        ledger = LedgerResponse(entries=[], count=0, track_shares_bps=split)
+        async with session_maker() as session:
+            if refused:
+                with pytest.raises(HTTPException) as caught:
+                    await _require_statistical_cap_requester(
+                        session, _VALIDATOR_HOTKEY, ledger, now=now
+                    )
+                assert caught.value.status_code == 428
+                assert "protocol 33" in str(caught.value.detail)
+            else:
+                served = await _require_statistical_cap_requester(
+                    session, _VALIDATOR_HOTKEY, ledger, now=now
+                )
+                assert served.track_shares_bps == split

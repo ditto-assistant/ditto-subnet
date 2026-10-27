@@ -184,6 +184,13 @@ CRAWLABLE_PAGES += (
         "Paid build work on Ditto repositories: signed terms, open slots, "
         "claims, review decisions, awards, and payments.",
     ),
+    (
+        "/generators",
+        "generators",
+        "Generator competition · Ditto SN118",
+        "Case-generator rounds: committed seeds, per-generator case outcomes, "
+        "panel standings, projected payouts, and the emission split.",
+    ),
 )
 
 CRAWLABLE_PAGE_PATHS: tuple[str, ...] = tuple(
@@ -366,6 +373,7 @@ def llms_txt(origin: str) -> str:
             f"- ATH reviews: {origin}/ath",
             f"- Gamma service treasury: {origin}/gamma",
             f"- Build bounties: {origin}/bounties",
+            f"- Generator competition: {origin}/generators",
             f"- Miner profile: {origin}/miner/{{hotkey}}",
             f"  or {origin}/h/{{handle}}",
             f"- Agent evidence: {origin}/agent/{{agent_id}}",
@@ -487,6 +495,7 @@ def sitemap_xml(origin: str, snapshot: SeoSnapshot | None) -> str:
         (origin + "/ath", "0.4", "hourly"),
         (origin + "/gamma", "0.4", "hourly"),
         (origin + "/bounties", "0.4", "hourly"),
+        (origin + "/generators", "0.4", "hourly"),
     ]
     if snapshot is not None:
         seen: set[str] = set()

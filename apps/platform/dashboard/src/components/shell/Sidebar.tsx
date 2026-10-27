@@ -124,6 +124,18 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    page: "generators",
+    label: "Generators",
+    desc: () => "Case-generator competition",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
+        <circle cx="12" cy="12" r="3" />
+        <path d="m5.6 5.6 2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+      </svg>
+    ),
+  },
+  {
     page: "activity",
     label: "Admin activity",
     desc: () => "Backroom action history",

@@ -44,6 +44,7 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _advance,
     _apply_settings,
     _install,
+    round_capable_fleet,  # noqa: F401  (autouse fixture: a round-capable fleet)
 )
 from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
 

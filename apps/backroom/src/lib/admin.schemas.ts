@@ -24,6 +24,7 @@ type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewF
 type GeneratedSourceReviewNote = PlatformComponents['schemas']['SourceReviewNote']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 type GeneratedAdminActiveHotkeyBan = PlatformComponents['schemas']['AdminActiveHotkeyBan']
+type GeneratedEffectiveCompetitionFee = PlatformComponents['schemas']['EffectiveCompetitionFee']
 type GeneratedAdminHotkeyBanAuditEntry =
   PlatformComponents['schemas']['AdminHotkeyBanAuditEntry']
 type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkeyBanControl']
@@ -1420,6 +1421,38 @@ export const SUBMISSION_FEE_MIN_RAO = 1
 export const SUBMISSION_FEE_MAX_RAO = 1_000_000_000_000
 export const RAO_PER_TAO = 1_000_000_000
 
+// Competitions that may carry a fee override. memory (agent uploads) is
+// priced by fee_amount_rao itself, the default every other competition
+// inherits; only generator has an upload lane today.
+export const OVERRIDABLE_FEE_COMPETITIONS = ['generator', 'coding', 'router'] as const
+export type OverridableFeeCompetition = (typeof OVERRIDABLE_FEE_COMPETITIONS)[number]
+
+export const competitionFeePolicySchema = z
+  .object({
+    // null charges the default fee_amount_rao.
+    fee_amount_rao: z
+      .number()
+      .int()
+      .min(SUBMISSION_FEE_MIN_RAO)
+      .max(SUBMISSION_FEE_MAX_RAO)
+      .nullable()
+      .default(null),
+    // null leaves it to the competition's own switch (generator:
+    // upload_fee_required); true charges, false makes uploads free.
+    fee_required: z.boolean().nullable().default(null),
+  })
+
+export type CompetitionFeePolicy = z.infer<typeof competitionFeePolicySchema>
+
+// Operator input rejects unknown fields; the read side (below) tolerates
+// additive Platform fields so a newer Platform does not break reads.
+export const competitionFeesInputSchema = z.partialRecord(
+  z.enum(OVERRIDABLE_FEE_COMPETITIONS),
+  competitionFeePolicySchema.strict(),
+)
+
+export type CompetitionFeesInput = z.infer<typeof competitionFeesInputSchema>
+
 export const submissionSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
@@ -1429,14 +1462,32 @@ export const submissionSettingsRevisionSchema = z.object({
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
   fee_amount_rao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // Per-competition overrides as written. A Platform that predates
+  // per-competition fees omits the map; every competition then inherits.
+  competition_fees: z.record(z.string(), competitionFeePolicySchema).default({}),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string().nullable(),
 })
 
+export const effectiveCompetitionFeeSchema = z.object({
+  competition: z.string().min(1),
+  fee_amount_rao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  amount_source: z.enum(['default', 'override']),
+  fee_required: z.boolean(),
+  required_source: z.enum(['always', 'competition_settings', 'override']),
+} satisfies PlatformResponseShape<GeneratedEffectiveCompetitionFee>)
+
 export const submissionSettingsControlSchema = z.object({
   current: submissionSettingsRevisionSchema,
   history: z.array(submissionSettingsRevisionSchema).max(100),
+  // null: Platform predates per-competition fees (every upload lane charges
+  // fee_amount_rao, and generator uploads only while upload_fee_required).
+  effective_competition_fees: z
+    .array(effectiveCompetitionFeeSchema)
+    .max(16)
+    .nullable()
+    .default(null),
 })
 
 export const updateSubmissionSettingsInputSchema = z.object({
@@ -1447,12 +1498,47 @@ export const updateSubmissionSettingsInputSchema = z.object({
     .min(SUBMISSION_COOLDOWN_MIN_SECONDS)
     .max(SUBMISSION_COOLDOWN_MAX_SECONDS),
   feeAmountRao: z.number().int().min(SUBMISSION_FEE_MIN_RAO).max(SUBMISSION_FEE_MAX_RAO),
+  // The WHOLE per-competition override map, or omitted to carry the current
+  // one forward unchanged; {} clears every override. Sending it appends the
+  // overrides to the confirmation phrase.
+  competitionFees: competitionFeesInputSchema.optional(),
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
 
-export function submissionSettingsConfirmation(seconds: number, feeAmountRao: number) {
-  return `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
+/** Overrides that set at least one field, in Platform's canonical order. */
+export function canonicalCompetitionFees(competitionFees: CompetitionFeesInput) {
+  const out: Partial<Record<OverridableFeeCompetition, CompetitionFeePolicy>> = {}
+  for (const competition of OVERRIDABLE_FEE_COMPETITIONS) {
+    const policy = competitionFees[competition]
+    if (!policy) continue
+    const parsed = competitionFeePolicySchema.parse(policy)
+    if (parsed.fee_amount_rao === null && parsed.fee_required === null) continue
+    out[competition] = parsed
+  }
+  return out
+}
+
+/**
+ * The exact phrase Platform requires. Omitting competitionFees keeps the
+ * phrase every client used before per-competition fees.
+ */
+export function submissionSettingsConfirmation(
+  seconds: number,
+  feeAmountRao: number,
+  competitionFees?: CompetitionFeesInput,
+) {
+  const base = `SET SUBMISSION COOLDOWN ${seconds} SECONDS FEE ${feeAmountRao} RAO`
+  if (competitionFees === undefined) return base
+  const parts = Object.entries(canonicalCompetitionFees(competitionFees)).map(
+    ([competition, policy]) => {
+      const amount = policy.fee_amount_rao === null ? 'INHERIT' : `${policy.fee_amount_rao} RAO`
+      const required =
+        policy.fee_required === null ? 'INHERIT' : policy.fee_required ? 'YES' : 'NO'
+      return `${competition.toUpperCase()} FEE ${amount} REQUIRED ${required}`
+    },
+  )
+  return `${base}; ${parts.length ? parts.join('; ') : 'ALL COMPETITIONS INHERIT'}`
 }
 
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>
@@ -1788,6 +1874,314 @@ export const setBurnSettingsInputSchema = z.object({
 export type BurnSettings = z.infer<typeof burnSettingsSchema>
 export type BurnSettingsWrite = z.infer<typeof burnSettingsWriteSchema>
 export type BurnSettingsControl = z.infer<typeof burnSettingsControlSchema>
+
+// ─── Track-share governance (generator competition activation) ──────────────
+// The per-track emission split Platform serves on the scoring ledger as
+// track_shares_bps. Unset (null) is the default and leaves every validator on
+// its compiled memory-only split. Mirrors
+// apps/platform/ditto/api_models/track_share_settings.py; Platform stays the
+// authority on every refusal.
+export const TRACK_SHARE_TRACKS = ['memory', 'coding', 'router', 'generator'] as const
+export const TRACK_SHARE_PAYABLE = new Set<string>(['memory', 'generator'])
+export const TRACK_SHARE_BASIS_POINTS = 10_000
+export const TRACK_SHARES_CLEAR_CONFIRMATION = 'CLEAR TRACK SHARES'
+
+export function trackSharesConfirmation(shares: Record<string, number> | null | undefined) {
+  if (!shares || Object.keys(shares).length === 0) return TRACK_SHARES_CLEAR_CONFIRMATION
+  const parts = TRACK_SHARE_TRACKS.filter((track) => (shares[track] ?? 0) > 0).map(
+    (track) => `${track}=${shares[track]}`,
+  )
+  return ['APPLY TRACK SHARES', ...parts].join(' ')
+}
+
+const trackSharesMapSchema = z.record(
+  z.string(),
+  z.number().int().min(0).max(TRACK_SHARE_BASIS_POINTS),
+)
+
+// Reads stay permissive so a stored revision always renders.
+export const trackShareSettingsSchema = z.object({
+  track_shares_bps: trackSharesMapSchema.nullable().default(null),
+})
+
+export const trackShareSettingsWriteSchema = z
+  .object({ track_shares_bps: trackSharesMapSchema.nullable() })
+  .superRefine((settings, ctx) => {
+    const shares = settings.track_shares_bps
+    if (shares === null) return
+    const issue = (message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['track_shares_bps'], message })
+    const unknown = Object.keys(shares).filter(
+      (track) => !(TRACK_SHARE_TRACKS as readonly string[]).includes(track),
+    )
+    if (unknown.length > 0) issue(`unknown track ids ${unknown.join(', ')}`)
+    if (!('memory' in shares)) {
+      issue('track_shares_bps must name memory: validators read a missing memory share as the full pool')
+    }
+    const unpaid = Object.entries(shares)
+      .filter(([track, bps]) => bps > 0 && !TRACK_SHARE_PAYABLE.has(track))
+      .map(([track]) => track)
+    if (unpaid.length > 0) {
+      issue(`no shipped validator pays ${unpaid.join(', ')}; only memory and generator may hold a nonzero share`)
+    }
+    const total = Object.values(shares).reduce((sum, bps) => sum + bps, 0)
+    if (total <= 0) issue('an all-zero split pays no miner; stop emissions with the burn settings instead')
+    if (total > TRACK_SHARE_BASIS_POINTS) issue(`track shares sum to ${total} bps, above 10000`)
+  })
+
+export const trackShareSettingsRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: trackShareSettingsSchema,
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const effectiveTrackShareSettingsSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  settings: trackShareSettingsSchema,
+  checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
+  source: z.enum(['revision', 'default']),
+  max_age_seconds: z.number().nonnegative(),
+  // The split validators fold now: the served map, or memory-only while
+  // nothing is served (unset, or the protocol-33 fleet gate).
+  // null when Platform could not read fleet readiness: unknown, not memory-only.
+  in_force_bps: trackSharesMapSchema.nullable(),
+  unallocated_bps: z.number().int().nullable(),
+  served: z.boolean().nullable().default(null),
+  required_protocol: z.number().int().default(33),
+  live_validator_count: z.number().int().nonnegative().nullable().default(null),
+  generator_mode: z.string().nullable().default(null),
+  confirmation_hint: z.string().nullable().default(null),
+})
+
+export const trackShareSettingsControlSchema = z.object({
+  current: z.array(trackShareSettingsRevisionSchema),
+  history: z.array(trackShareSettingsRevisionSchema),
+  default: trackShareSettingsSchema,
+  effective: effectiveTrackShareSettingsSchema,
+})
+
+export const setTrackShareSettingsInputSchema = z
+  .object({
+    scope: z.literal('*').default('*'),
+    expectedRevision: z.number().int().nonnegative(),
+    settings: trackShareSettingsWriteSchema,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, ctx) => {
+    const expected = trackSharesConfirmation(input.settings.track_shares_bps)
+    if (input.confirmation !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}, naming the split this revision applies`,
+      })
+    }
+  })
+
+export type TrackShareSettingsControl = z.infer<typeof trackShareSettingsControlSchema>
+
+// ─── Emission allocation (SN-350) ───────────────────────────────────────────
+// One typed-weights split of total miner emission: burn, every paid track and
+// every Gamma service bucket in integer basis points summing to exactly 10000.
+// Platform derives burn_share, track_shares_bps and the Gamma bucket that
+// validators already fold, refuses splits it cannot express exactly, and is the
+// authority on every refusal. Mirrors
+// apps/platform/ditto/api_models/emission_allocation_math.py.
+export const EMISSION_ALLOCATION_BASIS_POINTS = 10_000
+export const EMISSION_ALLOCATION_KINDS = ['burn', 'track', 'gamma'] as const
+export const EMISSION_ALLOCATION_CONFIRMATION_PREFIX = 'APPLY EMISSION ALLOCATION'
+
+const emissionAllocationEntrySchema = z
+  .object({
+    kind: z.enum(EMISSION_ALLOCATION_KINDS),
+    id: z.string().min(1).optional(),
+    bucket: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{1,47}$/)
+      .optional(),
+    bps: z.number().int().min(0).max(EMISSION_ALLOCATION_BASIS_POINTS),
+  })
+  .strict()
+  .superRefine((entry, ctx) => {
+    const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, message })
+    if (entry.kind === 'burn' && (entry.id !== undefined || entry.bucket !== undefined)) {
+      issue('the burn entry takes no id or bucket')
+    }
+    if (entry.kind === 'track' && (entry.id === undefined || entry.bucket !== undefined)) {
+      issue('a track entry takes an id and no bucket')
+    }
+    if (entry.kind === 'gamma' && (entry.bucket === undefined || entry.id !== undefined)) {
+      issue('a gamma entry takes a bucket and no id')
+    }
+  })
+
+export type EmissionAllocationEntry = z.infer<typeof emissionAllocationEntrySchema>
+
+function emissionEntryLabel(entry: EmissionAllocationEntry) {
+  if (entry.kind === 'burn') return 'burn'
+  if (entry.kind === 'gamma') return `gamma:${entry.bucket}`
+  return entry.id ?? ''
+}
+
+function emissionEntryOrder(entry: EmissionAllocationEntry): [number, number, string] {
+  const kind = EMISSION_ALLOCATION_KINDS.indexOf(entry.kind)
+  if (entry.kind === 'track') {
+    const track = (TRACK_SHARE_TRACKS as readonly string[]).indexOf(entry.id ?? '')
+    return [kind, track < 0 ? TRACK_SHARE_TRACKS.length : track, entry.id ?? '']
+  }
+  return [kind, 0, entry.bucket ?? '']
+}
+
+export function canonicalEmissionEntries(entries: EmissionAllocationEntry[]) {
+  return [...entries].sort((left, right) => {
+    const a = emissionEntryOrder(left)
+    const b = emissionEntryOrder(right)
+    // Codepoint order, like Platform's sorted(): locale collation can put
+    // gm_2 and gm2 the other way round and break the exact phrase.
+    return a[0] - b[0] || a[1] - b[1] || (a[2] < b[2] ? -1 : a[2] > b[2] ? 1 : 0)
+  })
+}
+
+// The exact phrase Platform requires: every nonzero entry in canonical order
+// (burn, tracks in registry order, Gamma buckets by id), e.g.
+// "APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500".
+export function emissionAllocationConfirmation(entries: EmissionAllocationEntry[]) {
+  const parts = canonicalEmissionEntries(entries)
+    .filter((entry) => entry.bps > 0)
+    .map((entry) => `${emissionEntryLabel(entry)}=${entry.bps}`)
+  return [EMISSION_ALLOCATION_CONFIRMATION_PREFIX, ...parts].join(' ')
+}
+
+// Reads stay permissive so a stored revision always renders.
+const emissionAllocationSchema = z.object({ entries: z.array(emissionAllocationEntrySchema) })
+
+function checkEmissionEntries(
+  entries: EmissionAllocationEntry[],
+  ctx: z.RefinementCtx,
+  path: (string | number)[],
+) {
+  const issue = (message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message })
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    const key = `${entry.kind}:${entry.id ?? entry.bucket ?? ''}`
+    if (seen.has(key)) issue(`duplicate entry ${emissionEntryLabel(entry)}`)
+    seen.add(key)
+    if (entry.kind === 'track') {
+      if (!(TRACK_SHARE_TRACKS as readonly string[]).includes(entry.id ?? '')) {
+        issue(`unknown track ${entry.id}`)
+      } else if (entry.bps > 0 && !TRACK_SHARE_PAYABLE.has(entry.id ?? '')) {
+        issue(`no shipped validator pays track ${entry.id}; only memory and generator may hold a nonzero share`)
+      }
+    }
+  }
+  if (!seen.has('burn:')) issue('name the burn entry, at 0 if nothing burns')
+  for (const track of TRACK_SHARE_PAYABLE) {
+    if (!seen.has(`track:${track}`)) issue(`name every paid track, at 0 if it takes nothing; missing ${track}`)
+  }
+  const total = entries.reduce((sum, entry) => sum + entry.bps, 0)
+  if (total !== EMISSION_ALLOCATION_BASIS_POINTS) {
+    issue(`entries sum to ${total} bps; an allocation accounts for exactly 10000`)
+  }
+}
+
+const emissionAllocationEntriesWriteSchema = z.array(emissionAllocationEntrySchema).min(3).max(32)
+
+export const emissionAllocationWriteSchema = z
+  .object({ entries: emissionAllocationEntriesWriteSchema })
+  .superRefine((settings, ctx) => {
+    checkEmissionEntries(settings.entries, ctx, ['entries'])
+  })
+
+const emissionServedFieldsSchema = z.object({
+  burn_share: z.number().min(0).max(1),
+  track_shares_bps: trackSharesMapSchema.nullable(),
+  gamma_bps: z.record(z.string(), z.number().int()),
+})
+
+export const emissionAllocationRevisionSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  parent_revision: z.number().int().nonnegative(),
+  allocation: emissionAllocationSchema,
+  served: emissionServedFieldsSchema,
+  burn_settings_revision: z.number().int().nonnegative(),
+  track_share_settings_revision: z.number().int().nonnegative(),
+  treasury_settings_revision: z.number().int().nonnegative(),
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+})
+
+const emissionShareSchema = z.object({
+  kind: z.enum(EMISSION_ALLOCATION_KINDS),
+  id: z.string().nullable().default(null),
+  bucket: z.string().nullable().default(null),
+  bps: z.number(),
+  percent: z.number(),
+})
+
+const emissionSplitViewSchema = z.object({
+  burn_share: z.number().min(0).max(1),
+  track_shares_bps: trackSharesMapSchema.nullable(),
+  gamma_bps: z.record(z.string(), z.number().int()),
+  split: z.array(emissionShareSchema),
+})
+
+export const emissionAllocationControlSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  source: z.enum(['allocation', 'legacy_settings']),
+  current: emissionAllocationRevisionSchema.nullable(),
+  history: z.array(emissionAllocationRevisionSchema),
+  confirmation_hint: z.string().nullable(),
+  configured: emissionSplitViewSchema,
+  track_shares_served: z.boolean().nullable(),
+  in_force: emissionSplitViewSchema.nullable(),
+  pinned: emissionSplitViewSchema
+    .extend({ epoch_index: z.number().int(), pinned_block: z.number().int() })
+    .nullable(),
+  in_sync: z.boolean().nullable(),
+  gamma_mode: z.string().nullable(),
+  gamma_buckets: z.array(z.string()),
+  gamma_ranges: z.record(z.string(), z.tuple([z.number().int(), z.number().int()])).nullable(),
+  legacy_equivalent: z
+    .object({
+      allocation: emissionAllocationSchema,
+      confirmation: z.string(),
+      byte_identical: z.boolean(),
+    })
+    .nullable(),
+  rank_shares: z.array(z.number()).nullable(),
+  max_age_seconds: z.number().nonnegative(),
+})
+
+
+export const setEmissionAllocationInputSchema = z
+  .object({
+    expectedRevision: z.number().int().nonnegative(),
+    entries: emissionAllocationEntriesWriteSchema,
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, ctx) => {
+    checkEmissionEntries(input.entries, ctx, ['entries'])
+    const expected = emissionAllocationConfirmation(input.entries)
+    if (input.confirmation !== expected) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}, naming every nonzero entry in order`,
+      })
+    }
+  })
+
+export type EmissionAllocationControl = z.infer<typeof emissionAllocationControlSchema>
 
 // ─── Terminal-review emission eligibility (ditto-subnet #2041) ──────────────
 // Read-only here. The gate decides which scored artifacts the validator fold may
@@ -8272,20 +8666,37 @@ export type BenchmarkRolloutControl = z.infer<typeof benchmarkRolloutControlSche
 // (case_results, per_category, token_usage) so MCP responses stay compact;
 // zod strips the unlisted keys.
 
+function requireExactlyOneAgentKey(
+  input: { agentId?: string; minerHotkey?: string },
+  context: z.RefinementCtx,
+) {
+  if (Boolean(input.agentId) === Boolean(input.minerHotkey)) {
+    context.addIssue({
+      code: 'custom',
+      path: ['agentId'],
+      message: 'Provide exactly one of agentId or minerHotkey',
+    })
+  }
+}
+
+const agentScoresLookupFields = {
+  agentId: z.string().uuid().optional(),
+  minerHotkey: z.string().trim().min(1).max(64).optional(),
+}
+
 export const agentScoresLookupInputSchema = z
+  .object(agentScoresLookupFields)
+  .superRefine(requireExactlyOneAgentKey)
+
+// get_agent_scores reports one benchmark version at a time: composites from
+// different benchmark versions measure different benchmarks and are never
+// pooled. Omitting benchVersion selects the board's active bench version.
+export const agentScoresInputSchema = z
   .object({
-    agentId: z.string().uuid().optional(),
-    minerHotkey: z.string().trim().min(1).max(64).optional(),
+    ...agentScoresLookupFields,
+    benchVersion: z.number().int().positive().optional(),
   })
-  .superRefine((input, context) => {
-    if (Boolean(input.agentId) === Boolean(input.minerHotkey)) {
-      context.addIssue({
-        code: 'custom',
-        path: ['agentId'],
-        message: 'Provide exactly one of agentId or minerHotkey',
-      })
-    }
-  })
+  .superRefine(requireExactlyOneAgentKey)
 
 export const continualRetestDiagnosticInputSchema = z.object({
   agentId: z.string().uuid(),
@@ -8730,6 +9141,10 @@ export const publicValidatorScoreSchema = z.object({
   memory_over_call: z.number().min(0).max(1).nullable().optional(),
   conversational_sanity: z.number().min(0).max(1).nullable().optional(),
   transcript_sha256: z.string().nullable().optional(),
+  // The validator's sr25519 signature over the score payload, verbatim, so a
+  // row is self-verifying against the published validator key. Null for rows
+  // written before the ledger migration.
+  signature: z.string().nullable().optional(),
   // Null below bench v13 and for a scorer that emitted no gate telemetry.
   gate_evidence: publicGateEvidenceSchema.nullable().optional(),
 })
@@ -8739,7 +9154,13 @@ export const publicAgentScoresSchema = z.object({
   miner_hotkey: z.string(),
   status: z.string(),
   quorum: z.number().int().positive(),
+  // The benchmark version Platform scoped `score_count` and
+  // `median_composite` to. Absent on a Platform that predates SN-348, whose
+  // median and count pooled every version's rows; Backroom never trusts that
+  // pooled aggregate and recomputes per version instead.
+  bench_version: z.number().int().positive().nullable().optional(),
   score_count: z.number().int().nonnegative(),
+  total_score_count: z.number().int().nonnegative().optional(),
   median_composite: z.number().min(0).max(1).nullable(),
   dataset_seed: seedSchema.nullable(),
   dataset_sha256: z.string().nullable(),
@@ -8779,24 +9200,62 @@ export const agentScoreRowSchema = publicValidatorScoreSchema.extend({
   n: z.number().int().nonnegative().nullable(),
 })
 
-export const agentScoresDetailSchema = publicAgentScoresSchema.extend({
-  // False while the submission is below quorum (or held for copy review): the
-  // scores below are accepted and real, but `median_composite` is not yet the
-  // canonical number and the submission holds no finalized rank. Same word,
-  // same meaning as `finalized` on a leaderboard entry.
-  finalized: z.boolean(),
+// Where a per-benchmark median came from. `platform_ledger` is the median
+// Platform itself published for exactly that bench version. Anything else is
+// `per_benchmark_statistic`: the median of that version's accepted rows,
+// computed here. It follows the rule Platform finalizes with, but it is not a
+// value the ledger asserted, and an older Platform's pooled median is never
+// reused. Null when the version holds fewer accepted rows than quorum.
+export const agentScoreMedianAuthoritySchema = z.enum([
+  'platform_ledger',
+  'per_benchmark_statistic',
+])
+
+// Every accepted row for one bench version other than the selected one, kept
+// whole: exact seed strings, signatures, gate evidence, transcript hashes.
+export const agentScoreVersionGroupSchema = z.object({
+  // Null groups legacy scores recorded before benchmark versioning.
+  bench_version: z.number().int().positive().nullable(),
+  score_count: z.number().int().nonnegative(),
+  quorum_reached: z.boolean(),
+  median_composite: z.number().min(0).max(1).nullable(),
+  median_composite_authority: agentScoreMedianAuthoritySchema.nullable(),
   scores: z.array(agentScoreRowSchema),
-  // Null on the pre-quorum surface, which is keyed by agent id and publishes
-  // no miner hotkey; the leaderboard row below carries it when the submission
-  // holds one.
-  miner_hotkey: z.string().nullable(),
-  active_bench_version: z.number().int().positive(),
-  desired_bench_version: z.number().int().positive(),
-  // Null when this exact submission is not the miner's current leaderboard
-  // row (for example a superseded earlier upload): the k=3 record above is
-  // still authoritative for the submission itself.
-  leaderboard: publicLeaderboardEntrySchema.nullable(),
 })
+
+export const agentScoresDetailSchema = publicAgentScoresSchema
+  .omit({ bench_version: true, total_score_count: true })
+  .extend({
+    // False while the submission is below quorum (or held for copy review): the
+    // scores below are accepted and real, but `median_composite` is not yet the
+    // canonical number and the submission holds no finalized rank. Same word,
+    // same meaning as `finalized` on a leaderboard entry.
+    finalized: z.boolean(),
+    // The one bench version `score_count`, `median_composite` and `scores`
+    // describe, and why: `requested` (the benchVersion input) or `active` (the
+    // board's active bench version, the default).
+    selected_bench_version: z.number().int().positive(),
+    selected_bench_version_source: z.enum(['requested', 'active']),
+    // Accepted rows across every bench version; score_count is the selected
+    // version's alone.
+    total_score_count: z.number().int().nonnegative(),
+    selected_quorum_reached: z.boolean(),
+    median_composite_authority: agentScoreMedianAuthoritySchema.nullable(),
+    // Selected-version rows only. Every other version's rows are in
+    // other_bench_versions, never pooled into this median.
+    scores: z.array(agentScoreRowSchema),
+    other_bench_versions: z.array(agentScoreVersionGroupSchema),
+    // Null on the pre-quorum surface, which is keyed by agent id and publishes
+    // no miner hotkey; the leaderboard row below carries it when the submission
+    // holds one.
+    miner_hotkey: z.string().nullable(),
+    active_bench_version: z.number().int().positive(),
+    desired_bench_version: z.number().int().positive(),
+    // Null when this exact submission is not the miner's current leaderboard
+    // row (for example a superseded earlier upload): the k=3 record above is
+    // still authoritative for the submission itself.
+    leaderboard: publicLeaderboardEntrySchema.nullable(),
+  })
 
 /**
  * The pre-quorum view of one submission (`/api/v1/public/agent/{id}/pipeline`).

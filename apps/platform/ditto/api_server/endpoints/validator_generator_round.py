@@ -6,11 +6,14 @@ run on its round dataset. Validators that advertise the scorer's
 with a free slot. Platform picks the next panel agent with no result and no
 live lease, re-leases that agent's own ``validator_tickets`` row with purpose
 ``generator_round`` (the continual-retest re-lease rails: one lease per slot,
-the V13 scorer pin, finalized agents only, the agent's retry budget
-untouched), and returns the job with the round dataset's digest and the
-ticket's inference capability. The validator downloads the dataset through the
-private-dataset route, runs it with dittobench-api's ``generator-round-v1``
-mode, and posts signed per-case results to
+the V13 scorer pin for a v13 round, finalized agents only, the agent's retry
+budget untouched), and returns the job with the round dataset's digest and the
+ticket's inference capability. Every lease runs at the round's frozen bench
+version (``generator_rounds.round_bench_version``) and goes only to a
+validator whose scorer is verified for that version, so an activation
+mid-round never moves a round to another contract. The validator downloads
+the dataset through the private-dataset route, runs it with dittobench-api's
+``generator-round-v1`` mode, and posts signed per-case results to
 ``/validator/agent/{id}/generator-round-score``. The results enter only the
 round matrix; no agent score row is ever written by this lane.
 
@@ -32,11 +35,11 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
-from pydantic import ValidationError
 from sqlalchemy import select
 
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.generator_round_validator import (
+    LEGACY_ROUND_BENCH_VERSION,
     GeneratorRoundCommitmentJobRequest,
     GeneratorRoundCommitmentJobResponse,
     GeneratorRoundCommitmentReportRequest,
@@ -49,19 +52,23 @@ from ditto.api_models.generator_round_validator import (
     GeneratorRoundScoreResponse,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
-from ditto.api_models.validator import ValidatorCapabilities
 from ditto.api_server.endpoints import validator as v
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
-    ROUND_LEASE_CUTOFF,
     CommitmentReportRejected,
     RoundSubmissionRejected,
+    active_panel,
     claim_commitment_publication,
+    drop_ineligible_panel_agents,
     pending_panel_agents,
     record_commitment_report,
     record_panel_result,
+    round_bench_version,
     round_case_ids,
+    round_column_capacity,
+    round_column_cases,
     round_for_dataset,
+    round_lease_cutoff,
     round_seconds_left,
     running_round,
     validate_round_results,
@@ -74,7 +81,6 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorTicket,
 )
-from ditto.db.queries.benchmark_rollout import heartbeat_supports_version
 from ditto.db.queries.inference import ensure_inference_grant, revoke_ticket_inference
 from ditto.db.queries.tickets import (
     finish_generator_round_ticket,
@@ -102,25 +108,15 @@ def _no_work() -> Response:
     return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
-def _round_capable(heartbeat: ValidatorHeartbeat | None, *, now: datetime) -> bool:
-    if heartbeat is None or not heartbeat_supports_version(
-        heartbeat, now=now, version=13
-    ):
-        return False
-    try:
-        capabilities = ValidatorCapabilities.model_validate(heartbeat.capabilities)
-    except ValidationError:
-        return False
-    scorer = capabilities.scorer_benchmarks
-    # Round runs carry their own dataset bytes; they do not need the private
-    # V13 transport (``private_datasets``), which stays off fleet-wide.
-    return bool(
-        capabilities.ticket_inference
-        and capabilities.sandbox_memory_limit
-        and scorer is not None
-        and scorer.status == "fresh_verified"
-        and scorer.generator_rounds
-    )
+def _round_column_capacity(
+    heartbeat: ValidatorHeartbeat | None,
+    *,
+    now: datetime,
+    bench_version: int = LEGACY_ROUND_BENCH_VERSION,
+) -> int | None:
+    """The largest round column this validator can run at ``bench_version``
+    (see :func:`generator_rounds.round_column_capacity`)."""
+    return round_column_capacity(heartbeat, now=now, bench_version=bench_version)
 
 
 async def _verify_signed(
@@ -209,8 +205,16 @@ async def request_generator_round_job(
         settings = resolved.settings
         if settings.mode == "off" or not settings.validator_rounds_enabled:
             return _no_work()
+        current = await running_round(session)
+        if current is None:
+            return _no_work()
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
-        if not _round_capable(heartbeat, now=now):
+        if (
+            _round_column_capacity(
+                heartbeat, now=now, bench_version=round_bench_version(current)
+            )
+            is None
+        ):
             return _no_work()
     # The nonce is consumed and committed above. Read the chain head for the
     # lease cutoff only for a request that passed the cheap rejections, and
@@ -231,13 +235,29 @@ async def request_generator_round_job(
         if settings.mode == "off" or not settings.validator_rounds_enabled:
             return _no_work()
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
-        if not _round_capable(heartbeat, now=now):
-            return _no_work()
         # Locked so concurrent polls pick pending agents one at a time: the
         # second sees the first's committed attempt instead of leasing the
         # same panel agent.
         row = await running_round(session, for_update=True)
         if row is None or row.dataset_sha256 is None:
+            return _no_work()
+        # The round's frozen contract, not the active one: a round opened
+        # under one version finishes under it.
+        bench_version = round_bench_version(row)
+        capacity = _round_column_capacity(
+            heartbeat, now=now, bench_version=bench_version
+        )
+        if capacity is None:
+            return _no_work()
+        if round_column_cases(row) > capacity:
+            # A validator (or scorer) released before this column size would
+            # refuse the job; leasing it would strand the panel agent until
+            # the ticket expired.
+            return _no_work()
+        # A panel agent banned or held since the round opened is dropped
+        # (never leased), which may void or close the round outright.
+        await drop_ineligible_panel_agents(session, row, now=now)
+        if row.status != "running":
             return _no_work()
         slot = await v._idle_retest_slot(
             session,
@@ -255,7 +275,8 @@ async def request_generator_round_job(
             return _no_work()
         left = round_seconds_left(row, head)
         # A head the round cannot place (before it opened) declines too.
-        if left is None or left < ROUND_LEASE_CUTOFF.total_seconds():
+        cutoff = round_lease_cutoff(len(round_case_ids(row)))
+        if left is None or left < cutoff.total_seconds():
             return _no_work()
         ticket: ValidatorTicket | None = None
         for agent_id in await pending_panel_agents(session, row, now=now):
@@ -268,6 +289,7 @@ async def request_generator_round_job(
                 seed=round_ticket_seed(row),
                 dataset_sha256=row.dataset_sha256,
                 slot_id=slot,
+                bench_version=bench_version,
             )
             if ticket is not None:
                 break
@@ -291,7 +313,7 @@ async def request_generator_round_job(
                 issued_at=now,
             )
         )
-        contract = benchmark_contract(13)
+        contract = benchmark_contract(bench_version)
         job = GeneratorRoundJobResponse(
             round_index=row.round_index,
             agent_id=agent.agent_id,
@@ -299,7 +321,7 @@ async def request_generator_round_job(
             miner_hotkey=agent.miner_hotkey,
             sha256=agent.sha256,
             deadline=ticket.deadline,
-            bench_version=13,
+            bench_version=bench_version,
             dataset_sha256=row.dataset_sha256,
             seed=round_ticket_seed(row),
             run_size="full",
@@ -310,15 +332,17 @@ async def request_generator_round_job(
                 mode="json"
             ),
             inference=v._inference_grant_offer(
-                request=request, grant=grant, bench_version=13
+                request=request, grant=grant, bench_version=bench_version
             ),
         )
     logger.info(
-        "issued generator round job round=%s agent=%s validator=%s slot=%s",
+        "issued generator round job round=%s agent=%s validator=%s slot=%s "
+        "bench_version=%s",
         job.round_index,
         job.agent_id,
         payload.validator_hotkey,
         job.slot_id,
+        job.bench_version,
     )
     return job
 
@@ -331,12 +355,14 @@ async def _open_round_ticket(
     deadline: datetime,
     now: datetime,
 ) -> ValidatorTicket:
+    """The open round lease the signed deadline names, at any bench version.
+    Callers check the version against the round (:func:`_require_round_version`).
+    """
     ticket = await session.scalar(
         select(ValidatorTicket)
         .where(
             ValidatorTicket.agent_id == agent_id,
             ValidatorTicket.validator_hotkey == validator_hotkey,
-            ValidatorTicket.bench_version == 13,
             ValidatorTicket.status == TicketStatus.ISSUED,
             ValidatorTicket.purpose == TicketPurpose.GENERATOR_ROUND,
             ValidatorTicket.deadline == deadline,
@@ -347,6 +373,12 @@ async def _open_round_ticket(
     if ticket is None:
         raise HTTPException(409, "round lease is not open")
     return ticket
+
+
+def _require_round_version(ticket: ValidatorTicket, row: GeneratorRound) -> None:
+    """A round lease is only ever issued at its round's frozen version."""
+    if ticket.bench_version != round_bench_version(row):
+        raise HTTPException(409, "round lease names another bench version")
 
 
 @router.post(
@@ -389,8 +421,11 @@ async def submit_generator_round_score(
         assert row is not None
         if row.status != "running":
             raise HTTPException(409, f"round is {row.status}; results are closed")
+        _require_round_version(ticket, row)
         if agent_id not in {UUID(slot["agent_id"]) for slot in row.panel or ()}:
             raise HTTPException(409, "agent is not on this round's panel")
+        if agent_id not in {UUID(slot["agent_id"]) for slot in active_panel(row)}:
+            raise HTTPException(409, "agent was dropped from this round's panel")
         try:
             validate_round_results(row, payload.results)
         except RoundSubmissionRejected as exc:
@@ -482,6 +517,7 @@ async def fail_generator_round_job(
         )
         if row is None or row.round_index != payload.round_index:
             raise HTTPException(409, "round failure names another round")
+        _require_round_version(ticket, row)
         attempt = await session.get(
             GeneratorRoundAttempt,
             (

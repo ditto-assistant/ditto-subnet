@@ -44,14 +44,14 @@ func TestPrivateDatasetAdmission(t *testing.T) {
 	// Every validator stack runs in screened-image mode, so it serves rounds
 	// without opening the private V13 transport.
 	s.allowGeneratorRounds = true
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", generatorRoundMode}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", generatorRoundMode, generatorRoundMaxCasesFeature()}) {
 		t.Fatal("round capability not independent of private datasets")
 	}
 	if s.privateBodyBytes() != challenge.MaxRoundDatasetBytes {
 		t.Fatal("round-only scorer must admit a full round dataset body")
 	}
 	s.allowPrivateDatasets = true
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode, generatorRoundMode}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode, generatorRoundMode, generatorRoundMaxCasesFeature()}) {
 		t.Fatal("enabled capability missing")
 	}
 }

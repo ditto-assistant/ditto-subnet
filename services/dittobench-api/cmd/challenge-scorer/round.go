@@ -80,9 +80,10 @@ type roundScoreResult struct {
 }
 
 // processRound leases and completes one round work item. It reports whether
-// work was leased. A sandbox failure is returned without posting, so the
-// lease expires and the round is re-leased; a column's own failure (build,
-// crash, invalid pack) is posted as that column's result.
+// work was leased. A request this scorer cannot serve or a sandbox failure is
+// reported as a fault (Platform voids the round or re-leases it) and never as
+// a column result; a column's own failure (build, crash, invalid pack) is
+// posted as that column's result.
 func processRound(ctx context.Context, client *platformClient, sb genrun.Sandbox) (bool, error) {
 	var resp roundWorkResponse
 	if err := client.do(ctx, http.MethodGet, "/api/v1/generator-scorer/round-work", nil, &resp); err != nil {
@@ -96,7 +97,10 @@ func processRound(ctx context.Context, client *platformClient, sb genrun.Sandbox
 	case "generate":
 		result, err := generateRound(ctx, sb, w)
 		if err != nil {
-			return true, fmt.Errorf("round %d: %w", w.RoundIndex, err)
+			idx := w.RoundIndex
+			return true, reportFault(ctx, client, faultReport{
+				Work: "round", LeaseID: w.LeaseID, RoundIndex: &idx,
+			}, fmt.Errorf("round %d: %w", w.RoundIndex, err))
 		}
 		return true, client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/round-results", result, nil)
 	case "score":

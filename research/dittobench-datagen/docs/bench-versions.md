@@ -1127,8 +1127,75 @@ NFKC turns a completion's U+2011 into U+2010, a separator. So from v14
 (every ASCII/U+2010 mix up to four hyphens), and an honest completion that
 wrote U+2011 is not flagged `served_text_not_model_emitted`. The twin
 post-pass compares asserted answers and the result-usage check reads the reply
-after the same fold, so a hyphen variant cannot make two credited answers
-compare unequal.
+after the same fold (memory twins also after the hyphen-joined-value rewrite
+below), so a hyphen variant cannot make two credited answers compare unequal.
+
+The same v14 floor adds three memory-axis matcher changes from #2734; v13 and
+older grade byte-identically:
+
+- **Hyphen-joined multi-word values.** A hyphen (after the fold) that joins
+  two letter-ended words of a known multi-word value reads as the space it
+  replaces, so `blue‑purple` grades as `blue purple` and `true‑blue accent`
+  as `true blue accent` on every rule, including the
+  `conversational-declarative` acknowledgement. Known values are every hidden
+  value (expected, accepted, list items, claim values, distractors, forbidden,
+  dump guard), so a joined distractor or forbidden value is still caught. The
+  words must match (`blue‑green` stays a miss for `bluey green`), values
+  without a space are unaffected, and a join is not undone where it would
+  break a known value that itself contains a hyphen.
+- **Set removal with a place phrase.** A set-membership clause ending in
+  ` has been removed` / ` was removed` / ` is removed` followed only by a
+  preposition (`from`, `in`, `off`) and at most three plain words
+  (`from the list`, `from it`, `from your packing list`) reads as removal, as
+  does the bare form with trailing punctuation. A phrase that names a case
+  value, names a time (`is removed on Friday`, `in two weeks`; `on` is not a
+  place preposition at all), runs longer, or sits in a hedged clause does not:
+  a scheduled removal is a plan. An item asserted in another clause is still
+  asserted.
+- **Progressive action claims.** An `action` claim also accepts the -ing form
+  of the first word of each accepted form (`pausing` for `pause`,
+  `upgrading`, `stopping`, `canceling`/`cancelling`; a multisyllabic verb
+  doubles its final consonant only as a listed exception such as `admitting`
+  or `cancelling`, so `open` gives `opening`), and the case's
+  distractors get the same forms so a progressive distractor is caught. Past
+  -ed forms stay misses. Because the -ing form makes gerund negation
+  natural, an action claim also reads a gerund-taking negator (`avoid`,
+  `against`, `stop`, `quit` and their inflections) immediately before a
+  reviewed action value, and a post-posed predicate (`isn't possible`,
+  `is not an option`, `isn't allowed`) right after one, as rejecting that
+  value: `I'd avoid pausing it`, `we decided against pausing it`,
+  `we stopped pausing it` and `pausing isn't possible` are misses. The
+  negator must govern the value directly (`to stop the charges, we are
+  pausing it` still states the action), and the post-posed predicate rejects
+  only the value before it, not the rest of its clause.
+
+Audit bank `v14-1` carries reviewed positives and negatives for each.
+
+The same floor reads every graded reply as rendered text (SN-342). Top v13
+agents strip paired `**` in their final writer so a bolded date or a value
+split by emphasis grades; operators accepted that as W8 typography. From v14
+the grader does it instead, in the memory grader and in every scorer path that
+reads reply text (`grade.ReplyAsRead`), and v13 and older grade
+byte-identically:
+
+- **Rendered markdown** (`PlainReplyTextV14`): word-bounded paired emphasis,
+  inline code and fence lines, ATX headings, blockquote markers, bullets and
+  task boxes, table outer pipes and delimiter rows, thematic breaks, and link
+  or image syntax are removed, keeping the text they mark up. Ordinals are
+  removed only from a real numbered list (two or more items numbered 1, 2,
+  ...). Strikethrough is kept, so a struck distractor is still named.
+  Non-ASCII spaces read as a space, zero-width characters are dropped, and
+  U+2212 reads as `-`.
+- **Sentence punctuation ends a number**: a `.` or `,` that no digit follows
+  ends a number token (`Your PIN is 4471, as saved` names `4471`), on every
+  rule, so a forbidden, dump-guard or result-usage decoy number followed by
+  punctuation is caught too. Decimal and grouping separators still attach.
+- **Percent claims**: a `percent` / `percentage points` quantity claim reads
+  `15%` as `15 percent`; a count still ignores percentages.
+
+Audit bank `v14-2` extends `v14-1` with reviewed positives for these rules and
+negatives for a bolded distractor, a markdown hedge, strikethrough, a decimal
+tail, a comma hedge, a punctuated forbidden value, and a percent distractor.
 
 V14 also files case-file records in story order (#3088). V13 stamped each
 case-file row from where it landed after the presentation shuffle, so a plain
@@ -1143,16 +1210,32 @@ change. The enterprise case files already instruct the model to apply events by
 `effective_step` rather than document order and are unchanged. Every v13 seed is
 untouched.
 
+V14 replaces the single announced correction with a short supersession chain
+(SN-353, SN-354) in the owner, standing-status and current-channel business
+families and in the household, appointment, milestone, subscription, travel
+and hobby personal domains. After the initial record come two or three more
+state records. Every chain has a revert, a proposed change that was turned
+down, or an entry logged in error, and the counterfactual twin flips one link
+of the same chain. A seeded quarter of groups state every change plainly, so
+precedence comes only from story-order filing. Another quarter put the change
+vocabulary on records that do not govern. Half of the reverts say "back to the
+original" or "back to the previous entry" without restating the value, an idea
+ported from a generator-competition miner (generator D in
+[v14-generator-credits.md](v14-generator-credits.md)). Over 120 seeds, no
+model-free shortcut (last cued record, the second record, or the latest
+record naming a value) solves both readings of more than 16% of chained
+groups. On v13 the second-record shortcut is exact.
+
 Question-family identifiers, the envelope, the rest of the grader policy, v13
 gate postures, the LongMem instrument, and public harness wire version (9)
 carry forward. The generated surface carries forward apart from the case-file
-filing dates above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+filing dates and the supersession chains above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432`.
+`36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.

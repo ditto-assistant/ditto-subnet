@@ -1,4 +1,4 @@
-"""Wire models for the shadow DittoBench generator competition.
+"""Wire models for the DittoBench generator competition.
 
 Generator miners upload the Go source of a CPU-only **generator**: a program
 that reads a ``GenerateRequest`` (a secret seed, the miner hotkey, a case
@@ -12,26 +12,37 @@ chain-epoch **rounds** (:mod:`ditto.api_models.generator_rounds`): the top
 generators' cases are run by validators against the top agents, and the
 weight-zero ledger publishes each generator's latest round score.
 
-Everything here is shadow: ledger entries are ``weight_eligible=False`` and the
-settings ``mode`` has no enforcing value yet.
+Settings ``mode`` is ``off``, ``shadow`` or ``enforce``. In ``shadow`` every
+ledger entry is ``weight_eligible=False``. In ``enforce`` the ledger marks
+qualified miner generators eligible, which still pays nothing until the
+operator also serves a generator track share through track-share governance
+(:mod:`ditto.api_models.track_share_settings`). Every other behavior of the
+lane is identical in ``shadow`` and ``enforce``.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ditto.api_models.name_claim import PublicNameHandle
 
 GENERATOR_SETTINGS_SCOPE = "*"
 GENERATOR_CONTRACT_V1 = "dittobench-generator/v1"
 MAX_SOURCE_ARCHIVE_BYTES = 4 << 20
 MIN_PACK_CASES = 8
-MAX_CASES_PER_SEED = 32
+# The pack contract's challenge.MaxCases. 80 lets a round reach ~70 cases per
+# column, so five counted columns give about the 350 memory cases of a bench
+# v13 run. A validator runs a round only when its scorer advertises at least
+# the round's column size (see ``generator_round_validator``).
+MAX_CASES_PER_SEED = 80
 SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 
-GeneratorMode = Literal["off", "shadow"]
+GeneratorMode = Literal["off", "shadow", "enforce"]
 SubmissionStatus = Literal["active", "superseded", "rejected"]
 RunStatus = Literal[
     "leased",
@@ -46,6 +57,29 @@ CaseStatus = Literal["discriminating", "trivial", "unsolved", "duplicate"]
 
 _SHA256 = r"^[0-9a-f]{64}$"
 _SS58 = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+_BLOCK_HASH = r"^0x[0-9a-fA-F]{64}$"
+# The agent-name cap (``agents.name``): long enough for a real name, short
+# enough that no name can flood a table cell or a log line.
+MAX_GENERATOR_NAME_LENGTH = 64
+# Control, format, surrogate, private-use and unassigned code points, plus
+# line and paragraph separators: none can be part of a name a reader sees.
+_FORBIDDEN_NAME_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
+
+
+def normalize_generator_name(value: str) -> str:
+    """The stored form of a miner-chosen generator name, or ``ValueError``.
+
+    Surrounding whitespace is dropped; the rest must be 1-64 characters with
+    no control or invisible formatting characters.
+    """
+    name = unicodedata.normalize("NFC", value).strip()
+    if not 1 <= len(name) <= MAX_GENERATOR_NAME_LENGTH:
+        raise ValueError(
+            f"generator name must be 1-{MAX_GENERATOR_NAME_LENGTH} characters"
+        )
+    if any(unicodedata.category(char) in _FORBIDDEN_NAME_CATEGORIES for char in name):
+        raise ValueError("generator name contains a control or invisible character")
+    return name
 
 
 def generator_settings_confirmation(mode: str) -> str:
@@ -55,6 +89,7 @@ def generator_settings_confirmation(mode: str) -> str:
 
 PROBE_ROTATION_CONFIRMATION = "ROTATE GENERATOR PROBE SEED"
 REJECT_SUBMISSION_CONFIRMATION = "REJECT GENERATOR SUBMISSION"
+REINSTATE_SUBMISSION_CONFIRMATION = "REINSTATE GENERATOR SUBMISSION"
 
 
 def source_signature_payload(
@@ -87,7 +122,10 @@ class GeneratorCompetitionSettings(BaseModel):
 
     mode: GeneratorMode = "off"
     """``off`` refuses uploads, leases nothing, and opens no rounds; ``shadow``
-    runs the lane with zero emission."""
+    runs the lane with every ledger entry ``weight_eligible=False``;
+    ``enforce`` runs it identically but marks qualified miner generators
+    ``weight_eligible``. Validators pay those entries only from a governed
+    generator track share, so ``enforce`` alone moves no emission."""
     panel_size: Annotated[int, Field(ge=3, le=16)] = 5
     """Top-ranked agent owners (one agent each) every round runs."""
     min_panel: Annotated[int, Field(ge=2, le=32)] = 3
@@ -134,6 +172,15 @@ class GeneratorCompetitionSettings(BaseModel):
     max_attempts: Annotated[int, Field(ge=1, le=20)] = 6
     """Consecutive unfinished leases before a run backs off."""
     retry_backoff_seconds: Annotated[int, Field(ge=60, le=86_400)] = 3_600
+    upload_fee_required: bool = False
+    """Require a finalized TAO payment proof on every miner upload. The
+    amount is the generator competition's fee in the submission settings
+    (``competition_fees.generator.fee_amount_rao``, inheriting the default
+    agent-upload fee while unset), paid to the submission deposit address; a
+    proof funds exactly one upload across the agent and generator lanes. A
+    ``competition_fees.generator.fee_required`` override, when set, decides
+    instead of this switch. Off by default, and a revision written before
+    this field existed reads as off."""
 
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
@@ -227,6 +274,68 @@ class GeneratorSubmissionUploadRequest(BaseModel):
     signature: Annotated[str, Field(pattern=r"^(0x)?[0-9a-fA-F]{128}$")]
     signature_timestamp: Annotated[int, Field(ge=1)]
     signature_nonce: UUID
+    payment_block_hash: Annotated[str | None, Field(pattern=_BLOCK_HASH)] = None
+    payment_block_number: Annotated[int | None, Field(ge=1)] = None
+    payment_extrinsic_index: Annotated[int | None, Field(ge=0)] = None
+    """The finalized ``Balances.transfer_keep_alive`` that pays the upload
+    fee, required only while the generator fee is required (see
+    ``GeneratorUploadTerms``). All three or none."""
+    name: Annotated[str | None, Field(max_length=256)] = None
+    """Optional display name for this generator (1-64 characters after
+    trimming). A name another miner family holds a reserved handle on is
+    refused, as for agent uploads. Older clients omit it."""
+
+    @field_validator("name")
+    @classmethod
+    def _normalize_name(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_generator_name(value)
+
+    @model_validator(mode="after")
+    def _payment_all_or_none(self) -> GeneratorSubmissionUploadRequest:
+        supplied = {
+            self.payment_block_hash is not None,
+            self.payment_block_number is not None,
+            self.payment_extrinsic_index is not None,
+        }
+        if len(supplied) != 1:
+            raise ValueError(
+                "payment_block_hash, payment_block_number and "
+                "payment_extrinsic_index are required together"
+            )
+        return self
+
+    @property
+    def has_payment(self) -> bool:
+        return self.payment_block_hash is not None
+
+
+class GeneratorUploadTerms(GeneratorModel):
+    """What an upload must satisfy right now, read before paying anything.
+
+    ``blockers`` lists every refusal Platform can decide without the archive
+    (lane closed, banned hotkey, upload cooldown, an archive already
+    uploaded); a client must not pay while it is non-empty. Registration,
+    archive structure and duplicate source trees are only checked on upload,
+    and an unspent fee stays reusable for 24 hours after a refused upload.
+    """
+
+    accepting: bool
+    competition: Literal["generator"] = "generator"
+    """The competition these terms price. A client checks it before paying,
+    so a quote for another lane can never be paid as a generator fee."""
+    payment_required: bool
+    payment_amount_rao: int | None = None
+    """The generator competition's own price, exact: an upload whose proof
+    pays any other amount (less or more) is refused, and the transfer does
+    not become a credit."""
+    payment_send_address: str | None = None
+    payment_amount_source: Literal["default", "override"] | None = None
+    """``override`` when the generator competition has its own price,
+    ``default`` when it inherits the agent-upload fee; null when no payment
+    is required."""
+    upload_cooldown_seconds: int
+    retry_at: datetime | None = None
+    blockers: list[str] = Field(default_factory=list)
 
 
 class GeneratorSubmissionUploadResponse(GeneratorModel):
@@ -235,6 +344,7 @@ class GeneratorSubmissionUploadResponse(GeneratorModel):
     tree_sha256: str
     status: SubmissionStatus
     superseded: list[UUID] = Field(default_factory=list)
+    name: str | None = None
 
 
 class GeneratorCaseStatusCounts(GeneratorModel):
@@ -280,6 +390,14 @@ class GeneratorSubmissionSummary(GeneratorModel):
     public_default: bool = False
     round_score: float | None = None
     round_scored_index: int | None = None
+    name: str | None = None
+    """Public display name: the miner's chosen name, struck when another
+    family holds an upheld handle claim on it; ``None`` when unnamed."""
+    name_handle: PublicNameHandle | None = None
+    avatar_url: str | None = None
+    """Same-origin path of the miner's profile picture, when they set one."""
+    version: int | None = None
+    """This generator's position among the hotkey's uploads (1 = first)."""
 
 
 class GeneratorSubmissionListResponse(GeneratorModel):
@@ -383,6 +501,37 @@ class GeneratorResultRequest(GeneratorModel):
     probe: GeneratorSeedOutput | None = None
 
 
+ScorerFaultKind = Literal["unsupported_request", "sandbox"]
+
+
+class GeneratorScorerFault(GeneratorModel):
+    """The scorer could not do a leased work item, and it is not the generator's fault.
+
+    ``unsupported_request``: the lease asks for something this scorer build's
+    pack contract refuses (for example a case count above its
+    ``challenge.MaxCases``), detected before any generator ran.
+    ``sandbox``: the sandbox itself failed (docker, image, host I/O).
+    Neither ever rejects a submission: a qualification backs off and a round
+    is voided (unsupported request) or re-leased (sandbox).
+    """
+
+    work: Literal["qualification", "round"]
+    lease_id: UUID
+    run_id: UUID | None = None
+    submission_id: UUID | None = None
+    round_index: int | None = None
+    error_kind: ScorerFaultKind
+    detail: Annotated[str, Field(max_length=4000)] = ""
+    scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
+
+
+class GeneratorScorerFaultAck(GeneratorModel):
+    work: Literal["qualification", "round"]
+    action: Literal["backed_off", "voided", "released"]
+    submission_status: SubmissionStatus | None = None
+    round_status: str | None = None
+
+
 class GeneratorResultResponse(GeneratorModel):
     run_id: UUID
     status: RunStatus
@@ -434,6 +583,13 @@ class AdminGeneratorSubmissionDetail(GeneratorModel):
     lease_run_id: UUID | None
     lease_expires_at: datetime | None
     runs: list[GeneratorRunSummary]
+    operator_ruling: bool = False
+    """The rejection was an operator ruling (``reject_generator_submission``),
+    not a qualification or round verdict."""
+    reinstate_blockers: list[str] = Field(default_factory=list)
+    """Why ``reinstate`` would refuse right now without
+    ``override_operator_ruling`` (empty when it would proceed). Only computed
+    for a rejected submission; the write re-checks the same predicate."""
 
 
 class AdminGeneratorSubmissionListResponse(GeneratorModel):
@@ -478,6 +634,24 @@ class AdminGeneratorSubmissionActionRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str | None = None
+
+
+class AdminGeneratorReinstateRequest(BaseModel):
+    """Return one rejected generator to ``active`` for a fresh qualification.
+
+    ``expected_status_reason`` must equal the stored status_reason exactly, so
+    the operator reinstates the rejection they read, not a newer one.
+    ``override_operator_ruling`` is required to undo an operator ruling.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    expected_status: Literal["rejected"]
+    expected_status_reason: str | None
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    override_operator_ruling: bool = False
 
 
 class GeneratorPromotionCandidate(GeneratorModel):

@@ -2210,12 +2210,17 @@ class PlatformClient:
             if ledger.provisional_incumbent is not None
             else ledger.entries
         )
+        # Enforce is fail-closed for every confirmation-capable version, the
+        # same population Platform's ranked predicate gates on, not only v9
+        # (#2989). A v13 row served under enforce without a receipt would
+        # otherwise be withheld silently by ``filter_weight_confirmed`` instead
+        # of rejecting a ledger that cannot match the Platform pin.
         if ledger.v9_confirmation_mode == "enforce" and any(
-            entry.bench_version == 9 and entry.v9_confirmation is None
+            supports_confirmation(entry.bench_version) and entry.v9_confirmation is None
             for entry in served
         ):
             raise PlatformError(
-                "v9 enforce ledger contained a row without full confirmation"
+                "confirmation enforce ledger contained a row without full confirmation"
             )
         if ledger.v9_confirmation_mode is None and any(
             entry.v9_confirmation is not None for entry in served

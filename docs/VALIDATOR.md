@@ -807,3 +807,43 @@ Platform only filters a held incumbent out of `entries` after every
 recently-live weight-setting validator reports protocol 28; until then
 `enforce` behaves exactly like `shadow`, because a protocol-27 validator would
 ignore the field and crown and pay the runner-up.
+
+### Generator track (protocol 33)
+
+The weight vector is folded per competition track and blended by basis-point
+share. Protocol 33 ships the DittoBench generator competition's track as
+`active` and weight-eligible, and reads the generator ledger
+(`GET /scoring/generator-ledger`) by default. Setting
+`VALIDATOR_GENERATOR_LEDGER_READ_ENABLED=false` now refuses to boot, because a
+validator that skips the read would fold a different vector from the fleet.
+
+Shipping the track active changes no emission by itself. Two Platform-owned
+switches gate every payment:
+
+- **A governed share.** The scoring ledger may serve `track_shares_bps`, for
+  example `{"memory": 9000, "generator": 1000}`. Without it the compiled split
+  gives memory the whole pool and the generator nothing. Platform withholds the
+  field until every recently-live weight-setting validator reports protocol 33,
+  because a protocol-32 validator folds the generator in shadow and would burn
+  its share. Operators set the map, `burn_share` and the Gamma service bucket
+  together through one Platform emission allocation (Backroom
+  `set_emission_allocation`, SN-350): basis points of total emission for burn,
+  each track and each Gamma bucket, summing to 10000. Platform derives
+  `burn_share = burn / (10000 - Gamma)` and a map that claims the whole pool,
+  so validators fold the same three fields as before and need no release.
+- **Eligible entries.** The fold pays only generator ledger entries Platform
+  marked `weight_eligible`, which it does only under generator settings
+  `mode=enforce`, for qualified miner generators. The public default generator
+  never appears on the ledger.
+
+When the generator track holds a share but folds no payable entry, its share
+moves to the memory track instead of burning. The served example above with no
+eligible generator therefore folds exactly as memory alone. Other tracks keep
+the original rule: an eligible track with no payable miner burns its share.
+When the generator ledger cannot be read while the generator holds a share,
+the validator leaves its weights unchanged for that epoch. Without a share, an
+unreadable generator ledger changes nothing.
+
+Generators split their share by the generator rank curve
+(`40% / 25% / 15% / 12% / 8%` of the generator share), best latest round score
+first, one slot per hotkey, and only currently registered hotkeys.

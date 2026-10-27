@@ -292,6 +292,7 @@ from ditto.api_server.koth import (
 from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_shares,
+    pin_generator_fraction,
     pin_provisional_incumbent,
     served_rank_shares,
 )
@@ -847,6 +848,11 @@ def _decorate_vectors_with_pins(
             )
             return None, True
 
+    def generator_fraction(pin: LedgerEpochSnapshot | None) -> float:
+        context = getattr(pin, "context", None) if pin is not None else None
+        served = context.get("served") if isinstance(context, dict) else None
+        return pin_generator_fraction(served) if isinstance(served, dict) else 0.0
+
     expected_current, invalid_current = expected(current)
     expected_previous, invalid_previous = expected(previous)
     decorated: list[PublicValidatorWeightVector] = []
@@ -857,6 +863,8 @@ def _decorate_vectors_with_pins(
             expected_current=expected_current,
             expected_previous=expected_previous,
             burn_hotkey=burn_hotkey,
+            generator_current=generator_fraction(current),
+            generator_previous=generator_fraction(previous),
         )
         if invalid_current or invalid_previous and verdict != "current":
             # A valid current match is independently meaningful. A failed
@@ -5702,11 +5710,56 @@ async def screeners(
     )
 
 
-def _median_composite(row: SubmissionRow) -> float | None:
-    """Median of the reported composites: the canonical score, or None if unscored."""
-    if not row.scores:
-        return None
-    return statistics.median(s.composite for s in row.scores)
+@dataclass(frozen=True)
+class _SubmissionEra:
+    """The one benchmark version a public score aggregate is reported against."""
+
+    bench_version: int | None
+    scores: list[Score]
+    median_composite: float | None
+
+
+def _submission_era(row: SubmissionRow, *, active_version: int) -> _SubmissionEra:
+    """Pick the benchmark version whose rows the public aggregate summarizes.
+
+    A re-scored agent carries rows from more than one benchmark version, and
+    composites from different versions measure different benchmarks. Pooling
+    them published a median that matched neither: an agent finalized at v12
+    around 0.79 and re-scored at v13 around 0.13 read as 0.54 with "6 scores".
+
+    So the aggregate names exactly one version, chosen the way a reader means
+    "this agent's score": the active version once it holds a quorum there, else
+    the newest version it was finalized in, else the newest version it has any
+    accepted row in (median null, no quorum to finalize on). The version is the
+    first-class ``bench_version`` column the ticket and signature are bound to,
+    not the advisory JSON detail. Every row stays published in ``scores``.
+    """
+    by_version: dict[int, list[Score]] = {}
+    for score in row.scores:
+        by_version.setdefault(score.bench_version, []).append(score)
+    if not by_version:
+        return _SubmissionEra(bench_version=None, scores=[], median_composite=None)
+    settled = sorted(
+        version
+        for version, scores in by_version.items()
+        if len(scores) >= SCORING_QUORUM
+    )
+    if active_version in settled:
+        version = active_version
+    elif settled:
+        version = settled[-1]
+    else:
+        version = max(by_version)
+    scores = by_version[version]
+    return _SubmissionEra(
+        bench_version=version,
+        scores=scores,
+        median_composite=(
+            float(statistics.median(s.composite for s in scores))
+            if len(scores) >= SCORING_QUORUM
+            else None
+        ),
+    )
 
 
 def _ticket_deadline(score: Score) -> datetime | None:
@@ -5785,18 +5838,22 @@ def _dataset_command(
 def _submission_scores(
     row: SubmissionRow,
     *,
+    active_version: int,
     artifact_release: PublicArtifactRelease,
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
 ) -> PublicSubmissionScores:
     """Map a submission row to the full public k=3 record."""
+    era = _submission_era(row, active_version=active_version)
     return PublicSubmissionScores(
         agent_id=row.agent_id,
         miner_hotkey=row.miner_hotkey,
         status=row.status.value,
         artifact_release=artifact_release,
         quorum=SCORING_QUORUM,
-        score_count=len(row.scores),
-        median_composite=_median_composite(row),
+        bench_version=era.bench_version,
+        score_count=len(era.scores),
+        total_score_count=len(row.scores),
+        median_composite=era.median_composite,
         v9_confirmation_status=(
             v9_confirmation.result_status
             if v9_confirmation is not None
@@ -5880,16 +5937,22 @@ def _public_validator_score(s) -> PublicValidatorScore:
 
 
 def _submission_summary(
-    row: SubmissionRow, *, artifact_release: PublicArtifactRelease
+    row: SubmissionRow,
+    *,
+    active_version: int,
+    artifact_release: PublicArtifactRelease,
 ) -> PublicSubmissionSummary:
     """Map a submission row to the compact index entry."""
+    era = _submission_era(row, active_version=active_version)
     return PublicSubmissionSummary(
         agent_id=row.agent_id,
         miner_hotkey=row.miner_hotkey,
         status=row.status.value,
         artifact_release=artifact_release,
-        score_count=len(row.scores),
-        median_composite=_median_composite(row),
+        bench_version=era.bench_version,
+        score_count=len(era.scores),
+        total_score_count=len(row.scores),
+        median_composite=era.median_composite,
         dataset_seed=row.dataset_seed,
         dataset_sha256=row.dataset_sha256,
         last_scored_at=row.last_scored_at,
@@ -8499,6 +8562,7 @@ async def submissions(
     """
     response.headers["Cache-Control"] = _CACHE_CONTROL
     rows = await list_public_submissions(session, limit=limit)
+    canonical_version = await active_bench_version(session)
     now = datetime.now(UTC)
     artifact_releases = await _artifact_release_snapshot(
         session,
@@ -8510,7 +8574,11 @@ async def submissions(
         count=len(rows),
         quorum=SCORING_QUORUM,
         submissions=[
-            _submission_summary(row, artifact_release=artifact_releases[row.agent_id])
+            _submission_summary(
+                row,
+                active_version=canonical_version,
+                artifact_release=artifact_releases[row.agent_id],
+            )
             for row in rows
         ],
     )
@@ -8545,6 +8613,7 @@ async def agent_scores(
     ).get(agent_id)
     return _submission_scores(
         row,
+        active_version=await active_bench_version(session),
         artifact_release=artifact_release,
         v9_confirmation=v9_confirmation,
     )

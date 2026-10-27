@@ -109,7 +109,7 @@ It writes one `GenerateRequest` to stdin:
 
 ```json
 {"contract": "dittobench-generator/v1", "seed": "<64 hex>",
- "miner_hotkey": "<ss58>", "cases": 16, "grading_bench_version": 13}
+ "miner_hotkey": "<ss58>", "cases": 32, "grading_bench_version": 13}
 ```
 
 and reads one pack from stdout (at most 4 MiB). Stderr is diagnostic only. The
@@ -132,8 +132,11 @@ A generator's output, defined in `challenge/pack.go`. A pack contains:
 - `generator`: name, version, and `seed`, which must echo the request's seed.
 - `memory_waves`: the haystack. These are ordinary `protocol.SeedRequest` waves
   (up to 4 users, 8 waves, 2,000 pairs).
-- `cases`: exactly the request's `cases` count of `protocol.MemoryCase` values.
-  Each case adds `user_id`, `run_after_wave`, and `evidence_pair_ids`.
+- `cases`: exactly the request's `cases` count of `protocol.MemoryCase` values,
+  8 to 80 (`challenge.MaxCases`). Each case adds `user_id`, `run_after_wave`,
+  and `evidence_pair_ids`. The request's count is Platform's `cases_per_seed`,
+  which operators can raise between rounds; a generator that cannot fill it
+  fails its next seed and is rejected, so a generator should fill 80.
 
 A case's identity across packs is its **fingerprint**: the SHA-256 of its
 normalized question, gold answer, and list items.
@@ -242,7 +245,51 @@ When a round opens it freezes:
   without affecting them.
 - **The panel.** This is the top `panel_size` agent owners from the ledger
   validators fold, plus `reference_agent_ids`: subnet-run baselines, each
-  counted as its own independent solver.
+  counted as its own independent solver. An agent the round lane could not
+  run (not `scored` or `live`, so banned, rejected, quarantined or held for
+  review; a banned miner hotkey; no screened image) is skipped, and the next
+  eligible ledger owner takes its seat, still one agent per owner.
+
+### Bench contract
+
+Each round freezes one bench version when it opens, recorded on the round row
+(`generator_rounds.bench_version`, like `cases_per_column`). Every later step
+runs at that version: the panel tickets are the agents' `(agent, version,
+validator)` rows, leases go only to validators whose scorer is verified for
+that version and runs `generator_rounds` at the round's column size, the job
+and the scorer run carry it, and a v13 round keeps the V13 scorer-cohort pin.
+A round opened under one version finishes and is scored under it even if
+another version activates mid-round.
+
+At opening, Platform (`choose_round_bench_version`) picks:
+
+1. the active benchmark version, when it is a **round contract** and at least
+   one validator can run a round at it;
+2. otherwise the newest round contract below the active version that a
+   validator can run, recording why on the round (`generation.bench_contract`);
+3. otherwise nothing: the round is void with the reason.
+
+The round contracts are `GENERATOR_ROUND_BENCH_VERSIONS` (Platform and
+validator `api_models/generator_round_validator.py`). Today that is only 13,
+because the round contract is the pack's grading policy, not the agent
+benchmark. Every v1 pack case is graded at `challenge.GradingBenchVersion`
+(13), the generator scorer validates packs at it, and dittobench-api's
+`generator-round-v1` mode refuses any other `bench_version`. Generator cases
+are never mixed into agent benchmark runs: a round run executes only the
+round dataset. So when v14 activates, rounds keep running at v13 and record
+that the active version has no round contract.
+
+A version joins the round contracts only with all three of:
+
+- a pack contract that grades at it (generator request, validation and
+  `ScoreCases` at that `grading_bench_version`, which miners' generators
+  must emit);
+- a scorer round mode that accepts it, advertised as a scorer feature so
+  Platform does not lease it to older scorers;
+- the version added to `GENERATOR_ROUND_BENCH_VERSIONS`.
+
+`ditto/tests/test_bench_version_pins.py` fails if the tuple and the Go pins
+disagree. Rounds then follow activation with no further change.
 
 ### Execution
 
@@ -253,15 +300,27 @@ When a round opens it freezes:
    generators must work on every seed. A failed default-generator column is
    only dropped.
 3. Validators run each panel agent on the round dataset. Platform re-leases the
-   agent's own ticket row with purpose `generator_round`, on idle capacity
-   left after canonical work and continual retests.
+   agent's own ticket row at the round's bench version with purpose
+   `generator_round`, on idle capacity left after canonical work and
+   continual retests.
 4. The validator runs dittobench-api's `generator-round-v1` mode: the screened
    image, ticket inference, and the production memory grader, one column at a
    time.
 5. The validator posts signed per-case results. A failed run is handed back
    without charging the agent anything.
-6. The round closes when every panel agent reported, or when its last epoch
-   ends. With fewer than `min_panel` results it is void.
+6. A panel agent that becomes ineligible while the round runs is dropped:
+   its live lease is expired, it is never leased again, and its result, if
+   any, is left out of scoring. Nobody takes its seat, so the panel stays
+   frozen. The round is void as soon as fewer than `min_panel` agents remain
+   seated.
+7. The round closes when every seated panel agent reported, or when its last
+   epoch ends. It is void with fewer than `min_panel` results from seated
+   agents (`insufficient_panel`), or with fewer than `min_panel` results that
+   answered at least one case (`insufficient_answered_results`). A run that
+   faulted every case is an infrastructure failure, not an answer: with only
+   such results every case would be unsolved and every column would score 0.
+   A void round is never scored and never replaces a generator's ledger
+   score.
 
 ## Scoring (`challenge.ScoreCases`, `challenge.ScoreRound`)
 
@@ -289,8 +348,8 @@ cases:
 column score = Σ credit / ((1 + champion_bonus) · max(n, cases_per_seed)) × (1 − u / (n − dup))²
 ```
 
-A generator's ledger score is its latest round column score within
-`window_days`.
+A generator's ledger score is its latest *scored* round column score within
+`window_days`; void rounds never count.
 
 **Agents.** Agents are ranked **pairwise-neutral**. Agents A and B are
 compared only on cases of counted columns owned by neither A's owner nor B's
@@ -308,11 +367,57 @@ The shipped parameters are:
 | `min_solver_owners` | 2 |
 | `solve_threshold` | 0.5 |
 | `champion_bonus` | 0.5 |
-| `cases_per_seed` | 16 |
+| `cases_per_seed` | 16 (8..80; production runs 32) |
 | `epochs_per_round` | 4 |
 | `counted_columns` | 5 |
 | `challenger_columns` | 1 |
 | `privacy_window_rounds` | 6 |
+
+### Round size and timing
+
+`cases_per_seed` is the exact case count of every qualification seed and every
+round column, and the score's `target_cases`. Its cap is 80 so that about 70
+per column over 5 counted columns gives a round the ~350 memory cases a
+canonical bench v13 run has. The limits that bound a round at that size:
+
+| Limit | Value | Where |
+|---|---|---|
+| Cases per pack | 8..80 | `challenge.MaxCases`; Platform `MAX_CASES_PER_SEED`; Backroom schema |
+| Columns per round | 8 | `challenge.MaxRoundColumns`; Platform `MAX_COLUMNS` |
+| Cases per round job | 640 (8 x 80) | `MAX_ROUND_CASES` in the validator and Platform round models |
+| Round dataset | 32 MiB | `challenge.MaxRoundDatasetBytes`, the validator's private dataset fetch |
+| Pack | 4 MiB, 2,000 pairs | `challenge.MaxPackBytes`, `challenge.MaxPairs` |
+| Generation | 60 s, 1 GiB, 1 CPU per seed | `challenge.GenerateTimeoutSeconds`, `genrun.DefaultLimits` |
+| Round ticket | 90 minutes | Platform `ROUND_TICKET_TTL` |
+| Lease cutoff | 20 min, or 5 min + 4 s per round case | Platform `round_lease_cutoff` |
+
+A panel run is one sandboxed agent answering every column in turn. Measured
+lease-to-result times: about 3.3 minutes for 80 cases (5 x 16), and 4.3 to 6.0
+minutes for the five panel runs of a 128-case round (4 x 32). That fits about
+80 s of fixed work plus 1.5 s per case, with the slowest run at 2.8 s per case
+all-in. A 350-case round (5 x 70) therefore takes about 10 to 16 minutes per
+panel run. That is well inside the 90-minute ticket and the validator's
+15-minute no-progress guard, since progress advances after each column (~70
+cases, 2 to 3 minutes). Its lease cutoff is 5 min + 350 x 4 s ≈ 28 minutes. A
+one-epoch round (~72 minutes) spends ~2.5 minutes generating, so it still leases
+panel runs for about 40 minutes. Round 25948's packs were ~5.8 KB per case, so a
+350-case dataset is ~2 MB, far below the 32 MiB cap.
+
+Two gates protect a rollout of a larger size:
+
+- **Validators.** The scorer advertises `generator-round-max-cases-80` and the
+  validator forwards it as `generator_round_max_cases`. Platform leases a round
+  only to validators whose value covers its largest column. A validator from
+  before this change advertises nothing and is treated as 32, the column its
+  job model accepts, so it is offered no larger round instead of stranding the
+  panel agent on a job it refuses.
+- **Generators.** Raising `cases_per_seed` rejects, at its next round seed,
+  every miner generator that cannot fill the new size. Forks of the starter kit
+  from before this change stop at 32 (or less), and generators vendor the
+  `challenge` package, so one built against the old 64-case contract refuses a
+  larger request. Announce the change before applying it. The current starter
+  kit (version 3) fills 80, so the public default generator keeps its columns
+  once it is re-registered.
 
 Why each term is there:
 
@@ -374,6 +479,64 @@ generator. Earnings therefore need a generator that keeps finding blind spots.
 Uploading a new generator supersedes the hotkey's previous one. The previous
 one's last round score keeps counting until the new one is scored.
 
+## Upload fee
+
+Generator uploads can carry an anti-spam TAO fee. Each competition has its
+own fee in the Platform submission settings, and the generator competition is
+priced separately from agent uploads. The generator setting
+`upload_fee_required` ships `false`, so uploads are free until an operator
+turns it on in Backroom (`set_generator_competition_settings`).
+
+- **Price.** The generator fee is the submission settings'
+  `competition_fees.generator.fee_amount_rao` (Backroom
+  `set_submission_cooldown` `competitionFees`). While that is unset (the
+  default) it inherits the default fee, `feeAmountRao`, which is also what
+  agent (memory competition) uploads pay. Setting a generator price never
+  changes the agent fee. `get_submission_cooldown` reports every lane's
+  resolved fee in `effective_competition_fees`.
+- **Whether it is charged.** `competition_fees.generator.fee_required`, when
+  set, decides: `true` charges, `false` makes uploads free. While it is unset
+  (the default), `upload_fee_required` decides, exactly as before.
+- **Address and verifier.** The fee is paid to the submission deposit address
+  and verified by the agent-upload payment verifier.
+- **Exact amount.** A proof must pay the generator fee exactly. Less is
+  refused; so is more (an overpayment is not a credit, and a transfer sized
+  for the agent fee cannot fund a differently priced generator upload). A
+  refused proof is not spent. A fee change between paying and uploading makes
+  the proof's amount mismatch; pay again at the new price.
+- **One payment, one upload.** A finalized `transfer_keep_alive` funds exactly
+  one upload across both lanes: a proof spent on (or credited to) an agent
+  cannot fund a generator, and a proof spent on a generator cannot fund an
+  agent, whatever the two prices are.
+- **Before paying.** `GET /generator/upload-terms?hotkey=...&source_sha256=...`
+  reports whether a fee is required, its amount (`payment_amount_source`:
+  `override` for the generator's own price, `default` when inherited) and
+  address, and every refusal Platform can decide without the archive (lane
+  closed, ban, cooldown, an already uploaded archive). `ditto generator
+  upload` shows the generator submission terms, reads the upload terms,
+  refuses to pay while anything blocks or when the quote is not a generator
+  quote, pays through the agent-upload payment path, and attaches the proof.
+- **Refused or lost uploads.** A refused upload does not spend the proof. It
+  can be reused for 24 hours with `--payment-block-hash`,
+  `--payment-block-number` and `--payment-extrinsic-index`. Resending the same
+  archive with the same proof after a lost response returns the submission
+  that proof already funded.
+- **Older CLIs.** A CLI that predates the fee sends no proof and gets
+  `402` telling the miner to upgrade.
+
+## Submission terms
+
+`GET /api/v1/public/submission-terms` (and `/{competition}`) states what each
+competition accepts in one place: the deliverable (artifact kind, format,
+contract version such as `dittobench-generator/v1`, required files, and every
+upload-time limit with its source: `code` for a release constant, `setting`
+for an operator setting such as `cases_per_seed`), the upload cooldown and its
+scope, and the competition's own fee. The values come from the same constants
+and settings the upload path enforces. Backroom reads it with
+`get_competition_submission_terms`, and both `ditto upload` and `ditto
+generator upload` print it before anything is paid. This is the miner
+submission contract only; build bounties have their own terms.
+
 ## Privacy
 
 Generator source, an open round's secret, seed, and dataset, probe seeds, and
@@ -402,13 +565,13 @@ operator ruling.
 | Scorer | `services/dittobench-api/cmd/challenge-scorer` | Qualification runs; round dataset generation; round matrix scoring |
 | Round execution | `services/dittobench-api/cmd/dittobench-api` (`generator-round-v1`) | Run a round dataset against one screened agent image with ticket inference and the production grader |
 | Platform | `apps/platform` | Signed uploads, private storage, settings, qualification, chain-epoch rounds (commit, open, close, reveal, on-chain commitment), validator round leases, copy detection, generator ledger |
-| Validator | `ditto/validator` | Run round panel runs on idle slots; `generator` track in `SHADOW` at 0 bps folding the generator ledger |
+| Validator | `ditto/validator` | Run round panel runs on idle slots; `generator` track `ACTIVE` since protocol 33, paying only a governed `track_shares_bps` share to `weight_eligible` ledger entries (an unclaimed share falls back to memory) |
 | Backroom | `apps/backroom` | Read and drive every part of the lane: settings, submissions, qualification runs, rounds, leases, results, the matrix, the round driver; activation and debugging writes with revision and confirmation |
 | Miner | `ditto generator`, `miners/dittobench-generator-starter-kit` | Rehearse, package, sign, and upload generators; reference generator to fork |
 
 ## Rollout
 
-1. **Shadow (now).**
+1. **Shadow** (2026-10-23 to 2026-10-26).
    - Settings `mode=shadow`. Register the public default generator and let it
      qualify. Set `validator_rounds_enabled=true`.
    - Every ledger entry is `weight_eligible: false` and the validator track is
@@ -417,9 +580,30 @@ operator ruling.
 2. **Compare.** Run the matrix in shadow alongside the canonical benchmark.
    Compare crown stability, copy and collusion signals, and how agents rank on
    the matrix versus the benchmark.
-3. **Enforce.**
+3. **Enforce** (live since epoch 25962, 2026-10-26: generator settings
+   revision 6, track shares `memory=7000 generator=3000` of the post-burn pool,
+   burn 0.5, so burn 50% / memory 35% / generator 15% of total emission).
    - Operators set a generator track share through governance, and the ledger
-     marks entries eligible. An upload fee is added at the same time.
+     marks entries eligible. The upload fee (`upload_fee_required`, see
+     "Upload fee") is switched on at the same time.
+   - Settings `mode=enforce` (confirmation `APPLY GENERATOR COMPETITION
+     ENFORCE`) runs the lane exactly like shadow but marks each qualified miner
+     generator's ledger entry `weight_eligible: true`. The public default
+     generator never appears on the ledger.
+   - The share is the served Platform field `track_shares_bps`. Operators set
+     it through one emission allocation (Backroom `set_emission_allocation`,
+     SN-350), which names burn, every track and Gamma as basis points of
+     total emission and derives the track map, for example
+     `APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500` serves
+     `{memory: 7000, generator: 3000}` with `burn_share=0.5`. The legacy
+     `set_track_share_settings` writer is refused once an allocation exists.
+     The scoring
+     ledger serves it to validators only once every recently-live weight
+     setter reports protocol 33, and an epoch pin freezes it.
+   - Validators (protocol 33) pay the generator track its share, split by the
+     generator rank curve, only to eligible entries. A generator share with no
+     eligible entry falls back to the memory track, so either switch alone
+     leaves weights byte-identical to the memory-only fold.
    - A new bench version draws its memory cases from the round matrix, so the
      agent competition is judged on the generators' cases.
      The design is [dueling-bench.md](dueling-bench.md): bench_version 15

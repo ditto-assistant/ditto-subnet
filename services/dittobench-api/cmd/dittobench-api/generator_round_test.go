@@ -36,6 +36,15 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 	}
 }
 
+// The validator parses this feature into generator_round_max_cases, and
+// Platform leases a round only when it covers the round's column size; the
+// spelling and the number are a cross-component contract.
+func TestGeneratorRoundMaxCasesFeatureNamesThePackContractBound(t *testing.T) {
+	if got := generatorRoundMaxCasesFeature(); got != "generator-round-max-cases-80" || challenge.MaxCases != 80 {
+		t.Fatalf("feature %q for challenge.MaxCases %d", got, challenge.MaxCases)
+	}
+}
+
 func TestGeneratorRoundReportExcludesFaultsFromTheMean(t *testing.T) {
 	req := submitRequest{BenchVersion: 13, RunSize: "full", ExpectedDatasetSHA256: strings.Repeat("b", 64)}
 	perCase := []protocol.CaseScore{

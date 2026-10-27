@@ -141,6 +141,35 @@ type gradingPolicy struct {
 	// copies from an ASCII record, so "VK‑48HJXP6A63" missed "VK-48HJXP6A63".
 	// V13 is a frozen scored contract and keeps the unfolded match.
 	foldTypographicHyphens bool
+	// hyphenJoinedValues (v14) reads a hyphen that joins the words of a known
+	// multi-word value as the space it replaces, so "blue-purple" grades as
+	// "blue purple" (#2734). It applies to every hidden value alike (expected,
+	// accepted, distractor, forbidden), so a hyphen-joined distractor is still
+	// caught. A changed word ("blue-green" for "bluey green") stays a miss.
+	hyphenJoinedValues bool
+	// setRemovalPlace (v14) lets a set-membership clause that ends in completed
+	// passive removal carry a short trailing place phrase ("PE kit has been
+	// removed from the list") and still read as removal (#2734).
+	setRemovalPlace bool
+	// progressiveActions (v14) accepts the progressive -ing form of an action
+	// claim's verb ("pausing" for "pause"), for accepted and distractor forms
+	// alike (#2734). Past -ed forms describe an earlier action and stay misses.
+	progressiveActions bool
+	// plainReplyText (v14) reads the reply as rendered text before grading:
+	// markdown emphasis, inline code, links, headings, blockquotes, bullets,
+	// numbered-list ordinals and table pipes are removed and the characters
+	// they mark up are kept; non-ASCII spaces read as a space
+	// (PlainReplyTextV14). Top agents stripped `**` in their final writer so a
+	// bolded date or a value split by emphasis would grade (SN-342).
+	plainReplyText bool
+	// numberPunctuationBounds (v14) lets a "." or "," that is not followed by
+	// a digit end a number token in the reply: "Your PIN is 4471, as saved"
+	// names 4471, and a forbidden or dump-guard number followed by sentence
+	// punctuation is caught. A decimal or grouping separator still attaches.
+	numberPunctuationBounds bool
+	// percentClaims (v14) lets a quantity claim whose unit is a percentage
+	// read "15%" as "15 percent". Counts keep ignoring percentages.
+	percentClaims bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
@@ -156,6 +185,12 @@ func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 			claimProvenance:              true,
 			claimValuesAreNotCorrections: true,
 			foldTypographicHyphens:       true,
+			hyphenJoinedValues:           true,
+			setRemovalPlace:              true,
+			progressiveActions:           true,
+			plainReplyText:               true,
+			numberPunctuationBounds:      true,
+			percentClaims:                true,
 		}
 	case benchVersion >= protocol.BenchVersionV13:
 		return gradingPolicy{

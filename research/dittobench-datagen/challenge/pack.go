@@ -54,10 +54,17 @@ const GradingBenchVersion = protocol.BenchVersionV13
 
 // Bounds. They keep validation and execution cheap enough to run on every
 // upload and keep one pack from monopolizing a panel run.
+//
+// MaxCases is the most cases one pack (one round column or qualification
+// seed) may hold. 80 lets Platform's cases_per_seed reach ~70 per column, so
+// five counted columns give a round about the 350 memory cases a canonical
+// bench v13 run has. Raising it is not free for miners: a generator vendors
+// this package, so one built against an older bound refuses a larger request
+// in GenerateRequest.Validate until it is re-vendored and re-uploaded.
 const (
 	MaxPackBytes        = 4 << 20
 	MinCases            = 8
-	MaxCases            = 64
+	MaxCases            = 80
 	MaxWaves            = 8
 	MaxUsers            = 4
 	MaxPairs            = 2000

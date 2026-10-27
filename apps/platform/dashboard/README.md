@@ -190,4 +190,5 @@ read never substitutes sample ranks — the static shell is served instead.
 
 Hash routes (`/#/leaderboard`) still work. Crawlable path aliases
 (`/leaderboard`, `/benchmark`, `/pipeline`, `/operations`, `/submissions`,
-`/ath`, `/overview`) are what the sitemap advertises.
+`/ath`, `/gamma`, `/bounties`, `/generators`, `/overview`) are what the sitemap
+advertises.

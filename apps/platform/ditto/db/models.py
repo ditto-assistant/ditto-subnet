@@ -6693,6 +6693,15 @@ class SubmissionSettingsRevision(Base):
     parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """The default submission fee: what the memory (agent) lane charges and
+    what every other competition inherits unless ``competition_fees``
+    overrides it."""
+    competition_fees: Mapped[dict] = mapped_column(
+        _JSON_VARIANT, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    """Per-competition overrides, ``{competition: {"fee_amount_rao": int |
+    null, "fee_required": bool | null}}``; ``null`` (or a missing entry)
+    inherits. See :mod:`ditto.db.queries.submission_settings`."""
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6703,6 +6712,10 @@ class SubmissionSettingsRevision(Base):
         CheckConstraint(
             "cooldown_seconds BETWEEN 60 AND 86400",
             name="submission_settings_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(competition_fees) = 'object'",
+            name="submission_settings_competition_fees_check",
         ),
         CheckConstraint(
             "fee_amount_rao BETWEEN 1 AND 1000000000000",
@@ -9155,6 +9168,116 @@ class BurnSettingsRevision(Base):
             "scope",
             "parent_revision",
             name="burn_settings_scope_parent_key",
+        ),
+    )
+
+
+class TrackShareSettingsRevision(Base):
+    """Append-only operator split of emission across competition tracks.
+
+    Shaped exactly like :class:`BurnSettingsRevision`: one policy object the
+    scoring ledger serves to every validator as ``track_shares_bps``. Unset
+    (no row, or a row whose map is null) leaves validators on their compiled
+    memory-only split. See :mod:`ditto.api_models.track_share_settings`.
+    """
+
+    __tablename__ = "track_share_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="track_share_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="track_share_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="track_share_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="track_share_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="track_share_settings_actor_check",
+        ),
+        Index(
+            "track_share_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="track_share_settings_scope_parent_key",
+        ),
+    )
+
+
+class EmissionAllocationRevision(Base):
+    """Append-only typed-weights split of total miner emission (SN-350).
+
+    One revision names burn, every paid track and every Gamma bucket as integer
+    basis points summing to 10000. Platform derives the burn share, track map
+    and Gamma bucket allocation validators fold and writes any that changed as
+    revisions of their own settings in the same transaction; the three
+    ``*_settings_revision`` columns record which of those revisions were in
+    force after the write. See :mod:`ditto.api_models.emission_allocation`.
+    """
+
+    __tablename__ = "emission_allocation_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    served: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    burn_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    track_share_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    treasury_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="emission_allocation_parent_revision_check",
+        ),
+        CheckConstraint(
+            "burn_settings_revision >= 0 AND track_share_settings_revision >= 0 "
+            "AND treasury_settings_revision >= 0",
+            name="emission_allocation_settings_revision_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="emission_allocation_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="emission_allocation_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="emission_allocation_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="emission_allocation_parent_key",
         ),
     )
 
@@ -13259,9 +13382,17 @@ class GeneratorSubmission(Base):
     round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
     """The latest scored round this generator had a column in, and its column
     score there; columns are filled best-first from these."""
+    name: Mapped[str | None] = mapped_column(Text)
+    """Optional miner-chosen display name (1-64 characters), shown with the
+    miner's profile on the public generator pages. ``None`` renders a short
+    submission id."""
 
     __table_args__ = (
         UniqueConstraint("source_sha256", name="generator_submissions_sha256_key"),
+        CheckConstraint(
+            "name IS NULL OR char_length(name) BETWEEN 1 AND 64",
+            name="generator_submissions_name_check",
+        ),
         CheckConstraint(
             "source_sha256 ~ '^[0-9a-f]{64}$' AND tree_sha256 ~ '^[0-9a-f]{64}$'",
             name="generator_submissions_digest_check",
@@ -13298,6 +13429,70 @@ class GeneratorSubmission(Base):
             unique=True,
             postgresql_where=text("public_default AND status = 'active'"),
         ),
+    )
+
+
+class GeneratorSubmissionPayment(Base):
+    """The finalized TAO transfer that funded one generator upload.
+
+    Written only while the generator setting ``upload_fee_required`` is on.
+    The primary key ``(block_hash, extrinsic_index)`` stops one proof funding
+    two generator uploads; the upload paths refuse a proof already recorded in
+    :class:`EvaluationPayment` (and agent uploads one recorded here) under a
+    shared per-proof advisory lock, so a transfer funds exactly one upload
+    across both lanes. Columns mirror :class:`EvaluationPayment`.
+    """
+
+    __tablename__ = "generator_submission_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the transfer at payment time."""
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash",
+            "extrinsic_index",
+            name="generator_submission_payments_pkey",
+        ),
+        UniqueConstraint(
+            "submission_id", name="generator_submission_payments_submission_key"
+        ),
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="RESTRICT",
+            name="generator_submission_payments_submission_fkey",
+        ),
+        CheckConstraint(
+            "block_hash = lower(block_hash)",
+            name="generator_submission_payments_block_hash_check",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="generator_submission_payments_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "amount_rao > 0", name="generator_submission_payments_amount_rao_check"
+        ),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="generator_submission_payments_tao_usd_rate_check",
+        ),
+        Index("generator_submission_payments_miner_coldkey_idx", "miner_coldkey"),
     )
 
 
@@ -13418,7 +13613,7 @@ class GeneratorRun(Base):
             name="generator_runs_score_check",
         ),
         CheckConstraint(
-            "cases_per_seed BETWEEN 8 AND 64", name="generator_runs_cases_check"
+            "cases_per_seed BETWEEN 8 AND 80", name="generator_runs_cases_check"
         ),
         Index("generator_runs_submission_idx", "submission_id", text("leased_at DESC")),
         Index(
@@ -13536,6 +13731,9 @@ class GeneratorRound(Base):
     seed: Mapped[str | None] = mapped_column(Text)
     settings_revision: Mapped[int | None] = mapped_column(Integer)
     cases_per_column: Mapped[int | None] = mapped_column(Integer)
+    # The bench contract the round runs at, frozen when it opens (NULL before,
+    # or for a round voided at opening). See generator_rounds.round_bench_version.
+    bench_version: Mapped[int | None] = mapped_column(Integer)
     columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
     panel: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
     lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
@@ -13586,6 +13784,10 @@ class GeneratorRound(Base):
         CheckConstraint(
             "(status = 'void') = (void_reason IS NOT NULL)",
             name="generator_rounds_void_check",
+        ),
+        CheckConstraint(
+            "bench_version IS NULL OR bench_version >= 13",
+            name="generator_rounds_bench_version_check",
         ),
         Index(
             "generator_rounds_dataset_idx",

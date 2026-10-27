@@ -44,6 +44,7 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundLoopStatus,
     GeneratorRoundPanelSlot,
     GeneratorRoundSchedule,
+    GeneratorRoundSkippedAgent,
     void_round_confirmation,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -71,6 +72,7 @@ from ditto.api_server.generator_rounds import (
     public_default_generator,
     result_views,
     round_counts_by_status,
+    round_summaries,
     round_summary,
     select_columns,
     select_round_panel,
@@ -164,7 +166,7 @@ async def admin_list_rounds(
         schedule=_schedule(
             request, resolved.settings.mode, resolved.settings.epochs_per_round
         ),
-        rounds=[await round_summary(session, row, operator=True) for row in rows],
+        rounds=await round_summaries(session, rows, operator=True),
         counts_by_status=await round_counts_by_status(session),
     )
 
@@ -215,7 +217,8 @@ async def admin_round_preview(
     resolved = await load_settings(session)
     settings = resolved.settings
     columns = await select_columns(session, settings)
-    panel, skipped = await select_round_panel(session, settings)
+    frozen = await select_round_panel(session, settings)
+    panel, skipped = frozen.panel, frozen.skipped_references
     qualified = int(
         await session.scalar(
             select(func.count()).where(
@@ -266,6 +269,9 @@ async def admin_round_preview(
         qualified_generators=qualified,
         awaiting_qualification=awaiting,
         blockers=blockers,
+        skipped_panel_agents=[
+            GeneratorRoundSkippedAgent(**slot) for slot in frozen.skipped_agents
+        ],
     )
 
 
@@ -283,6 +289,7 @@ async def admin_round_detail(
         summary=await round_summary(session, row, operator=True),
         settings_revision=row.settings_revision,
         cases_per_column=row.cases_per_column,
+        bench_version=row.bench_version,
         seed=row.seed if closed else None,
         columns=[GeneratorRoundColumnSlot(**c) for c in row.columns or ()],
         panel=[GeneratorRoundPanelSlot(**p) for p in row.panel or ()],
@@ -298,12 +305,16 @@ async def admin_round_detail(
         commitment_publications=publications,
         commitment_elected=elected,
         attempts=await attempt_views(session, round_index),
-        results=await result_views(session, round_index),
+        results=await result_views(session, row),
         pending_agents=(
             await pending_panel_agents(session, row, now=now)
             if row.status == "running"
             else []
         ),
+        skipped_panel_agents=[
+            GeneratorRoundSkippedAgent(**slot)
+            for slot in (row.generation or {}).get("skipped_panel_agents", ())
+        ],
         score=row.score,
         scorer_version=row.scorer_version,
         standings=standing_views(row),

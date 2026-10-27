@@ -27,6 +27,12 @@ readiness and v14 canary issuance. No scorer image or version is
 activated by capability advertisement. See
 [the rollout plan](../../docs/benchmark-v14-rollout.md).
 
+V14 graders also read every graded reply field (`answer`, `final_text`) as
+rendered text before matching (`grade.ReplyAsRead`): markdown markup is removed
+and the text it marks up is kept, non-ASCII spaces read as a space, and a `.`
+or `,` that no digit follows ends a number token. The wire is unchanged; see
+the rollout plan's *V14 answer-normalization contract*.
+
 ## Benchmark-version negotiation (validator control plane)
 
 The benchmark contract is a deliberate input, never inferred from a dataset
@@ -175,6 +181,14 @@ operator kill switch. A round request carries the exact round dataset bytes
 (at most `challenge.MaxRoundDatasetBytes` decoded) and their canonical SHA-256.
 Its report goes to Platform's round endpoint and never enters the agent score
 ledger.
+
+Alongside it the scorer advertises `generator-round-max-cases-<n>`, the
+largest column (cases per pack) it runs: the pack contract's
+`challenge.MaxCases`, currently 80. The validator forwards it as
+`scorer_benchmarks.generator_round_max_cases`, and Platform leases a round only
+to a validator whose value covers the round's largest column. A scorer without
+the feature is treated as running 32-case columns, the bound earlier
+validators enforce on a round job.
 
 ### Private V13 control-plane transport (default off)
 

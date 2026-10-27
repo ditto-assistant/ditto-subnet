@@ -83,7 +83,12 @@ async def test_heartbeat_during_build_does_not_block_epoch_pin(
         )
 
     monkeypatch.setattr(
-        "ditto.api_server.endpoints.scoring.resolve_ledger_context", AsyncMock()
+        "ditto.api_server.endpoints.scoring.resolve_ledger_context",
+        # The pin insert checks the emission allocation revision the context
+        # was built from (SN-350); none exists in this test.
+        AsyncMock(
+            return_value=SimpleNamespace(policy=SimpleNamespace(allocation_revision=0))
+        ),
     )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.scoring.materialize_ledger_snapshot", materialize

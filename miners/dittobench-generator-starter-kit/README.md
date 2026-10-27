@@ -6,9 +6,13 @@ that answer DittoBench cases. Generator miners are paid for **generators**:
 CPU-only programs whose cases the best agents still get wrong. Those cases must
 be valid, solvable, and discriminating, on seeds nobody sees in advance.
 
-The generator competition is **shadow-only** for now. Every ledger entry is
-`weight_eligible=false`, and the validator registers the `generator` track at
-0 bps. Generators are scored and published, but they do not move weights yet.
+The generator competition is **paid**. Since epoch 25962 (2026-10-26) the
+generator track earns a governed share of emission: 15% of total emission,
+next to 35% for the agent competition and 50% burn. Qualified generators' ledger
+entries are `weight_eligible=true`, and validators split the generator share by
+rank on the latest round score (40/25/15/12/8%, renormalized when fewer than
+five generators qualify). The live split is in Platform's track-share settings
+and may change by governance.
 
 The full design is in
 [`research/dittobench-datagen/docs/generator-competition.md`](../../research/dittobench-datagen/docs/generator-competition.md).
@@ -32,7 +36,8 @@ The full design is in
 3. **Validation.** Every pack must pass `challenge.ValidateGenerated`, which
    you can run locally:
    - The pack echoes the request's seed and hotkey and has exactly the
-     requested number of cases.
+     requested number of cases: the competition's `cases_per_seed`, which
+     Platform can set anywhere from 8 to 80 and may raise between rounds.
    - Every accepted answer appears in the case's named evidence pairs.
    - No answer appears in the question.
    - The production v13 memory grader gives the gold answer full credit.
@@ -40,9 +45,12 @@ The full design is in
      question, every distractor, and a dump of the user's entire memory.
 
    One failed seed, a crash, a timeout, or nondeterministic output rejects the
-   upload. A generator that passes is qualified.
+   upload. A generator that passes is qualified. A qualified generator that
+   later fails its round seed is rejected too, including when it cannot fill a
+   raised `cases_per_seed`, so make sure yours fills 80 cases on every seed.
 4. **Rounds.** Qualified generators compete in rounds on the chain's epoch
-   counter (one round per 4 subnet epochs). Each round:
+   counter (`epochs_per_round` subnet epochs per round; one epoch, about 72
+   minutes, today). Each round:
    - opens on a seed nobody could know in advance. It comes from a secret
      Platform committed a round earlier, on Platform and on chain, and the
      block the round opened at.
@@ -84,7 +92,7 @@ Copying does not pay:
 cd research/dittobench-datagen
 # Build and run exactly as the scorer does: three seeds, validation, determinism.
 go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
-  -hotkey "$MY_HOTKEY" -seeds 3 -cases 16
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 80
 # The scorer's actual sandbox: pinned images, no network, the same limits (needs Docker).
 go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
   -hotkey "$MY_HOTKEY" -sandbox docker -out-dir /tmp/packs
@@ -93,13 +101,30 @@ go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-k
 # dependencies vendored, without touching your checkout.
 cd ../..
 uv run ditto generator upload --dir miners/dittobench-generator-starter-kit \
-  --wallet.name <coldkey> --wallet.hotkey <hotkey>
+  --name "my-generator" --wallet.name <coldkey> --wallet.hotkey <hotkey>
 uv run ditto generator status --wallet.name <coldkey> --wallet.hotkey <hotkey>
 uv run ditto generator board
 ```
 
 `uv run ditto generator rehearse DIR` and `uv run ditto generator package DIR`
 wrap the same tool.
+
+`--name` is optional. It labels the generator on
+[dittobench.ai/generators](https://dittobench.ai/generators), next to your
+miner profile picture (the one set with `ditto avatar set`, shown on the agent
+leaderboard too). Names follow the agent-name rules: 1-64 characters, no
+control characters, and no handle another miner family has reserved. The
+upload checks the name before paying anything. An unnamed generator shows a
+short submission id.
+
+When the operator requires an upload fee, `ditto generator upload` charges the
+generator competition's own TAO fee (the agent-upload fee unless the operator
+sets a separate generator price). It prints the generator submission terms
+(archive limits, cooldown, fee), shows the amount and asks before paying
+(`-y` skips the prompt), then attaches the payment proof. If the upload fails
+after payment, it prints `--payment-block-*` flags. Rerun with them within 24
+hours to reuse the payment without paying again. See "Upload fee" in
+[generator-competition.md](../../research/dittobench-datagen/docs/generator-competition.md).
 
 ## Rehearse against agents locally
 
@@ -110,7 +135,7 @@ settings, and score your generator against them:
 ```bash
 cd services/dittobench-api
 go run ./cmd/challenge-scorer run -dir ../../miners/dittobench-generator-starter-kit \
-  -hotkey "$MY_HOTKEY" -seeds 2 -cases 16 \
+  -hotkey "$MY_HOTKEY" -seeds 2 -cases 80 \
   -agent a=http://127.0.0.1:7070,owner=alice,champion \
   -agent b=http://127.0.0.1:7071,owner=bob \
   -agent c=http://127.0.0.1:7072,owner=carol \
@@ -127,7 +152,7 @@ discriminate and which are trivial.
 | `main.go` | Reads the request, builds the pack from the family mix, and refuses to write an invalid one |
 | `families/builder.go` | Haystack builder: waves, pair IDs, timestamps, collision-free value picks, all seeded by the request |
 | `families/families.go` | The case families and the `Default` mix |
-| `families/pools.go` | Value pools (their sizes cap `MaxCases` at 32) |
+| `families/pools.go` | Value pools (sized so `MaxCases` reaches the contract's 80) |
 
 The four starter families are:
 
@@ -147,7 +172,8 @@ The four starter families are:
   range over a Go map into your output. Any of these breaks the determinism
   check.
 - **Work on every seed.** The scorer picks seeds you never saw. Test many seeds:
-  `TestEverySeedValidates` here checks 16 seeds at several pack sizes.
+  `TestEverySizeFills` here fills every pack size from 8 to 80 on 16 seeds,
+  and `TestEverySeedValidates` validates the sizes up to the cap.
 - **Ground everything.** In v1 every accepted answer form must appear in the
   evidence text. Hard cases come from resolution, joins, supersession,
   aggregation, and interference, not from answers the haystack never states.

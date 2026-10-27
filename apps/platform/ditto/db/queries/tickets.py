@@ -1296,13 +1296,17 @@ async def issue_generator_round_ticket(
     seed: int,
     dataset_sha256: str,
     slot_id: str,
+    bench_version: int,
 ) -> ValidatorTicket | None:
     """Lease a generator-round panel run on the agent's existing ticket row.
 
-    Same rails as :func:`issue_confirmation_ticket`: one live lease per
-    ``(validator, slot)``, the immutable V13 scorer pin, never repurposing an
-    operator-authorized replacement, and only finalized (scored or live)
-    agents, whose canonical quorum is already complete. The purpose is
+    ``bench_version`` is the round's frozen contract; the lease uses the
+    agent's ``(agent, bench_version, validator)`` row. Same rails as
+    :func:`issue_confirmation_ticket`: one live lease per ``(validator,
+    slot)``, the immutable V13 scorer pin for a v13 round (as every other v13
+    lane applies it), never repurposing an operator-authorized replacement,
+    and only finalized (scored or live) agents, whose canonical quorum is
+    already complete. The purpose is
     ``generator_round``, so no agent-score endpoint will accept the lease.
     ``attempt_count`` and the retry grants are left untouched: a round run is
     not a scoring attempt and must never consume the agent's retry budget. A
@@ -1314,10 +1318,13 @@ async def issue_generator_round_ticket(
         session, validator_hotkey=validator_hotkey, slot_id=slot_id
     )
     await expire_overdue_tickets(session, now=now)
-    from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+    if bench_version == 13:
+        from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
 
-    if not await pinned_validator_allowed(session, hotkey=validator_hotkey, now=now):
-        return None
+        if not await pinned_validator_allowed(
+            session, hotkey=validator_hotkey, now=now
+        ):
+            return None
     if (
         await live_v9_confirmation_slot_ticket(
             session, validator_hotkey=validator_hotkey, slot_id=slot_id, now=now
@@ -1342,7 +1349,7 @@ async def issue_generator_round_ticket(
             (ValidatorTicket.slot_id == slot_id)
             | (
                 (ValidatorTicket.agent_id == agent_id)
-                & (ValidatorTicket.bench_version == 13)
+                & (ValidatorTicket.bench_version == bench_version)
             ),
         )
         .limit(1)
@@ -1358,7 +1365,9 @@ async def issue_generator_round_ticket(
         and latest_retest.event == EVENT_SCORE_RETEST_REQUESTED
     ):
         return None
-    ticket = await session.get(ValidatorTicket, (agent_id, 13, validator_hotkey))
+    ticket = await session.get(
+        ValidatorTicket, (agent_id, bench_version, validator_hotkey)
+    )
     if ticket is not None and ticket.retry_after is not None:
         retry_after = ticket.retry_after
         if retry_after.tzinfo is None:
@@ -1375,7 +1384,7 @@ async def issue_generator_round_ticket(
             purpose_revision=1,
             issued_at=now,
             deadline=now + ttl,
-            bench_version=13,
+            bench_version=bench_version,
             seed=seed,
             dataset_sha256=dataset_sha256,
             # ``attempt_count`` counts scoring leases only. This row has had

@@ -255,16 +255,45 @@ def manual_transfer_history(journal, policy):
     from ditto.treasury.manual_batch import ManualBatchTransfer, manual_maximum
 
     requests = []
+    expired = {}
+    for row in journal.db.execute(
+        "SELECT id,payload FROM events WHERE event='manual_unsigned_expired' "
+        "ORDER BY id"
+    ):
+        body = json.loads(row["payload"])
+        if (
+            not isinstance(body, dict)
+            or not all(
+                isinstance(body.get(k), str)
+                for k in ("request_id", "policy", "request_digest")
+            )
+            or not all(
+                type(body.get(k)) is int for k in ("after_operation", "finalized_block")
+            )
+        ):
+            raise ValueError("malformed unsigned expiry payload")
+        request_id = body["request_id"]
+        if request_id in expired:
+            raise ValueError("duplicate unsigned expiry")
+        expired[request_id] = (body, row["id"])
     ids = set()
     previous = 0
+    previous_expired = False
+    closed_before = 0
     for body, event_id in records:
+        if event_id <= closed_before:
+            raise ValueError("manual intent advanced before unsigned expiry")
         digest = body.pop("policy", None)
         if digest not in limits or (
             limits[digest] is not None and event_id >= limits[digest]
         ):
             raise ValueError("manual transfer policy changed")
         request = (ManualBatchTransfer if "sources" in body else ManualTransfer)(**body)
-        if request.request_id in ids or request.after_operation <= previous:
+        if (
+            request.request_id in ids
+            or request.after_operation < previous
+            or (request.after_operation == previous and not previous_expired)
+        ):
             raise ValueError("manual transfer history reset or reused")
         if (
             request.amount_rao
@@ -278,7 +307,28 @@ def manual_transfer_history(journal, policy):
             raise ValueError("manual intent exceeds signed policy")
         ids.add(request.request_id)
         previous = request.after_operation
+        previous_expired = request.request_id in expired
+        if previous_expired:
+            closure, closed_at = expired.pop(request.request_id)
+            if (
+                closure["policy"] != digest
+                or closure["request_digest"]
+                != hashlib.sha256(canonical(asdict(request)).encode()).hexdigest()
+                or closure["after_operation"] != request.after_operation
+                or closure["finalized_block"] < request.expires_block
+                or closed_at <= event_id
+                or journal.db.execute(
+                    "SELECT 1 FROM events WHERE event='dispatch_reserved' "
+                    "AND id>? AND id<? LIMIT 1",
+                    (event_id, closed_at),
+                ).fetchone()
+            ):
+                raise ValueError("unsigned expiry differs from unspent exact intent")
+            closed_before = closed_at
+            continue
         requests.append(request)
+    if expired:
+        raise ValueError("unsigned expiry lacks its original manual intent")
     for index, request in enumerate(requests):
         end = (
             requests[index + 1].after_operation
@@ -340,6 +390,12 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
     db = journal.db
     db.execute("BEGIN IMMEDIATE" if record else "BEGIN")
     try:
+        if db.execute(
+            "SELECT 1 FROM events WHERE event='manual_unsigned_expired' "
+            "AND json_extract(payload,'$.request_id')=?",
+            (requested.request_id,),
+        ).fetchone():
+            raise ManualIntentRefused("expired unsigned request cannot be rearmed")
         if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
             policy.digest,
             "transfer",
@@ -472,6 +528,10 @@ def manual_transfer_readiness(journal, policy, chain):
         ).fetchone()
         observed = chain.observe(policy, "transfer")
         sources = []
+        history = manual_transfer_history(journal, policy)
+        unsigned = (
+            history[-1] if history and maximum == history[-1].after_operation else None
+        )
         approval = getattr(chain, "manual_approval", None)
         if approval is not None:
             approval.verify(policy.digest, policy.collector_coldkey)
@@ -497,6 +557,13 @@ def manual_transfer_readiness(journal, policy, chain):
             "policy": policy.digest,
             "after_operation": maximum,
             "previous_state": previous[0] if previous else None,
+            "unsigned_intent": {
+                "request_id": unsigned.request_id,
+                "after_operation": unsigned.after_operation,
+                "expires_block": unsigned.expires_block,
+            }
+            if unsigned
+            else None,
             "bounded_claim_available": bound is not None
             and maximum == bound.after_operation + 1
             and previous is not None

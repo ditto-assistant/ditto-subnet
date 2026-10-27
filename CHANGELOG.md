@@ -2,6 +2,186 @@
 
 <!-- version list -->
 
+## v0.395.1 (2026-10-27)
+
+### Bug Fixes
+
+- **platform,scorer**: Never reject generators for scorer faults
+  ([#3201](https://github.com/ditto-assistant/ditto-subnet/pull/3201),
+  [`2622f3a`](https://github.com/ditto-assistant/ditto-subnet/commit/2622f3ad85a9cef5ca38ecc348a02dc87c5fadd6))
+
+
+## v0.395.0 (2026-10-27)
+
+### Bug Fixes
+
+- **infra**: Parse base role go version without regex_search
+  ([#3199](https://github.com/ditto-assistant/ditto-subnet/pull/3199),
+  [`bac8b63`](https://github.com/ditto-assistant/ditto-subnet/commit/bac8b630eab8c2ad73ca4136639380af2d147824))
+
+- **miner**: Default local rehearsal to the live scoring bench
+  ([#3191](https://github.com/ditto-assistant/ditto-subnet/pull/3191),
+  [`5ce1c5e`](https://github.com/ditto-assistant/ditto-subnet/commit/5ce1c5e7ca79051f95c176c9d66d2d6b24a49a55))
+
+- **treasury**: Recover expired unsigned Gamma intents
+  ([#3192](https://github.com/ditto-assistant/ditto-subnet/pull/3192),
+  [`d6a9df4`](https://github.com/ditto-assistant/ditto-subnet/commit/d6a9df4cd17359adf7a03091370a9f8f9d1831f7))
+
+### Features
+
+- **datagen**: Explain the generator 0.5 ceiling and hold half-credit families (SN-352)
+  ([#3194](https://github.com/ditto-assistant/ditto-subnet/pull/3194),
+  [`0b9a021`](https://github.com/ditto-assistant/ditto-subnet/commit/0b9a02193266e129963c748c83b6a4518078221f))
+
+- **datagen**: V14 supersession chains without announcing cues (SN-353, SN-354)
+  ([#3193](https://github.com/ditto-assistant/ditto-subnet/pull/3193),
+  [`ffd6df1`](https://github.com/ditto-assistant/ditto-subnet/commit/ffd6df120b3eb52b53271f0364dc1ddbc77a3332))
+
+- **dittobench**: Read v14 replies as rendered text
+  ([#3189](https://github.com/ditto-assistant/ditto-subnet/pull/3189),
+  [`19ff329`](https://github.com/ditto-assistant/ditto-subnet/commit/19ff329d5a67f24a6a558e7b59af47d16fca5194))
+
+- **platform,backroom**: Reinstate a wrongly rejected generator submission
+  ([#3200](https://github.com/ditto-assistant/ditto-subnet/pull/3200),
+  [`3402ad4`](https://github.com/ditto-assistant/ditto-subnet/commit/3402ad49879ee4feb384f2eb9482e94b6e74e87c))
+
+- **platform,miner**: Fast generator board, generator names and miner profiles
+  ([#3190](https://github.com/ditto-assistant/ditto-subnet/pull/3190),
+  [`eee000e`](https://github.com/ditto-assistant/ditto-subnet/commit/eee000ec6599b8bd3b6bb11004f889a56be081ae))
+
+- **platform,validator**: Freeze each generator round's bench contract at open
+  ([#3197](https://github.com/ditto-assistant/ditto-subnet/pull/3197),
+  [`30e1e7d`](https://github.com/ditto-assistant/ditto-subnet/commit/30e1e7d60a2996420e59c777f66db0246d07b495))
+
+
+## v0.394.0 (2026-10-27)
+
+### Features
+
+- **datagen**: Gate v14 families on generator panel evidence (SN-351)
+  ([#3185](https://github.com/ditto-assistant/ditto-subnet/pull/3185),
+  [`ce1da3a`](https://github.com/ditto-assistant/ditto-subnet/commit/ce1da3a3445f27ea3eb60ace172a916feeb3db9e))
+
+
+## v0.393.0 (2026-10-27)
+
+### Bug Fixes
+
+- **validator**: Read the confirmation receipt for every receipt version
+  ([#3184](https://github.com/ditto-assistant/ditto-subnet/pull/3184),
+  [`2f9a7e3`](https://github.com/ditto-assistant/ditto-subnet/commit/2f9a7e3d276dfeaa477e1cbffe4bf55570168562))
+
+### Documentation
+
+- **benchmark**: List the open v14 activation blockers
+  ([#3186](https://github.com/ditto-assistant/ditto-subnet/pull/3186),
+  [`d3e37ff`](https://github.com/ditto-assistant/ditto-subnet/commit/d3e37ffbf6e5cb8ae67c7ca4dac539f3018e2a79))
+
+### Features
+
+- **datagen**: Qualify v14 public adversary controls
+  ([#3179](https://github.com/ditto-assistant/ditto-subnet/pull/3179),
+  [`079285c`](https://github.com/ditto-assistant/ditto-subnet/commit/079285c58c68ac1773088cdcacbd202024003e7a))
+
+
+## v0.392.0 (2026-10-26)
+
+### Documentation
+
+- **generator**: Describe the paid generator competition
+  ([#3181](https://github.com/ditto-assistant/ditto-subnet/pull/3181),
+  [`5790355`](https://github.com/ditto-assistant/ditto-subnet/commit/57903552c35176e9abf0b246936b2ff2a1d87897))
+
+### Features
+
+- **platform**: Generator competition dashboard page
+  ([#3183](https://github.com/ditto-assistant/ditto-subnet/pull/3183),
+  [`eed33a1`](https://github.com/ditto-assistant/ditto-subnet/commit/eed33a1689cde237b6f9d82f57e7976512a82093))
+
+- **platform**: One typed-weights emission allocation (SN-350)
+  ([#3182](https://github.com/ditto-assistant/ditto-subnet/pull/3182),
+  [`9d08966`](https://github.com/ditto-assistant/ditto-subnet/commit/9d0896668186be50f2c78daf4e7e8eef01eac514))
+
+- **platform,miner**: Per-competition submission fees and terms
+  ([#3180](https://github.com/ditto-assistant/ditto-subnet/pull/3180),
+  [`774d73a`](https://github.com/ditto-assistant/ditto-subnet/commit/774d73a46755df742a34c48ea86cc9955b934ba3))
+
+
+## v0.391.1 (2026-10-26)
+
+### Bug Fixes
+
+- **platform,backroom**: Keep agent score medians per benchmark
+  ([#3178](https://github.com/ditto-assistant/ditto-subnet/pull/3178),
+  [`6ca3e84`](https://github.com/ditto-assistant/ditto-subnet/commit/6ca3e847d50c83bcdd13a58db95369c5136364ae))
+
+
+## v0.391.0 (2026-10-26)
+
+### Features
+
+- **platform,miner**: Optional TAO fee for generator uploads
+  ([#3173](https://github.com/ditto-assistant/ditto-subnet/pull/3173),
+  [`1b4973c`](https://github.com/ditto-assistant/ditto-subnet/commit/1b4973cda79a805c6ca2a7cc4b6df66429e871c8))
+
+
+## v0.390.0 (2026-10-26)
+
+### Bug Fixes
+
+- **bench**: Accept hyphen-joined values, place-qualified removals and progressive actions at v14
+  ([#2839](https://github.com/ditto-assistant/ditto-subnet/pull/2839),
+  [`74f0e65`](https://github.com/ditto-assistant/ditto-subnet/commit/74f0e65b7b1a88da4cd9730bcbff1c0c3b3e11ef))
+
+- **bench**: Fold typographic hyphens in v14 reply text
+  ([#2827](https://github.com/ditto-assistant/ditto-subnet/pull/2827),
+  [`f750628`](https://github.com/ditto-assistant/ditto-subnet/commit/f7506283f615084d4975c6f774519fd20e88e7d4))
+
+- **datagen**: Credit v14 claim values that read as correction cues
+  ([#2769](https://github.com/ditto-assistant/ditto-subnet/pull/2769),
+  [`7b9930e`](https://github.com/ditto-assistant/ditto-subnet/commit/7b9930e24600192b8011662de11cc96198e01f84))
+
+- **datagen**: File v14 case-file records in story order
+  ([#3099](https://github.com/ditto-assistant/ditto-subnet/pull/3099),
+  [`dc2c12e`](https://github.com/ditto-assistant/ditto-subnet/commit/dc2c12e717d9da41fb558e43c8afea74a9fddfbd))
+
+- **miner**: Wrap the workbench stylesheet under the source line limit
+  ([#3176](https://github.com/ditto-assistant/ditto-subnet/pull/3176),
+  [`d723ae6`](https://github.com/ditto-assistant/ditto-subnet/commit/d723ae66c902cae82dd5d47de9126ac8de31a7ff))
+
+- **platform**: Refill generator panels and void fault-only rounds
+  ([#3169](https://github.com/ditto-assistant/ditto-subnet/pull/3169),
+  [`2707514`](https://github.com/ditto-assistant/ditto-subnet/commit/270751478f21ec1a4ad972574962a78e505f06b1))
+
+### Documentation
+
+- **backroom-review**: Record October 24 bold-strip W8 and generator-parser I5 holdings
+  ([#3168](https://github.com/ditto-assistant/ditto-subnet/pull/3168),
+  [`8b73027`](https://github.com/ditto-assistant/ditto-subnet/commit/8b730276e5532f8b6931f4d4313ba3a1d7659e9e))
+
+- **dittobench**: Design the dueling bench version
+  ([#3166](https://github.com/ditto-assistant/ditto-subnet/pull/3166),
+  [`72bba4b`](https://github.com/ditto-assistant/ditto-subnet/commit/72bba4b177ff9978301f12e12d9a9ae3c0e41c65))
+
+### Features
+
+- **platform**: Allow up to 80 generator cases per column
+  ([#3175](https://github.com/ditto-assistant/ditto-subnet/pull/3175),
+  [`94f6c31`](https://github.com/ditto-assistant/ditto-subnet/commit/94f6c3142de4254ac3958c3288a927e1eca322da))
+
+- **platform**: Enforce mode and track-share governance for the generator competition
+  ([#3174](https://github.com/ditto-assistant/ditto-subnet/pull/3174),
+  [`25b5952`](https://github.com/ditto-assistant/ditto-subnet/commit/25b5952f2e2697d74b6cca5a59a25872213ba442))
+
+- **validator**: Let the generator track pay a governed share
+  ([#3171](https://github.com/ditto-assistant/ditto-subnet/pull/3171),
+  [`f5c4b50`](https://github.com/ditto-assistant/ditto-subnet/commit/f5c4b50ba3c3375f62446266a080f422f999034e))
+
+- **validator**: Publish generator round commitments from elected validators
+  ([#3172](https://github.com/ditto-assistant/ditto-subnet/pull/3172),
+  [`07b3b0b`](https://github.com/ditto-assistant/ditto-subnet/commit/07b3b0b2e673c82fe109bab208b35ef9dcb14781))
+
+
 ## v0.389.0 (2026-10-25)
 
 ### Bug Fixes

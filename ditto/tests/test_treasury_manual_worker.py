@@ -525,7 +525,8 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     module.consume_iteration(mailbox, j, p, c)
     module.consume_iteration(mailbox, j, p, c)
     assert pulls == ["pulled", "pulled"]
-    assert mailbox.reports[-1]["status"] == "finalized" and mailbox.acks == ["ack"]
+    assert any(r["status"] == "finalized" for r in mailbox.reports)
+    assert mailbox.acks == ["ack"]
     assert len(c.sent) == 2  # Original canary plus one bound manual transfer.
     assert not j.db.in_transaction
     logs = capsys.readouterr().out
@@ -758,7 +759,7 @@ def test_slow_receipt_catchup_keeps_readiness_inside_freshness_window(
     assert max(b - a for a, b in zip([1000] + published, published, strict=False)) < 180
     assert published[-1] == now[0]
     assert all(r["status"] == "readiness" for r in mailbox.reports)
-    assert pulled == [True]  # Still at most one manual message per outer iteration.
+    assert pulled == [True] * 4  # Poll between chunks; consume at most one message.
     assert not journal.db.in_transaction and len(c.sent) == 1
     assert list(journal.db.execute("SELECT * FROM operations")) == before_operations
     journal.close()
@@ -846,7 +847,8 @@ def test_caught_up_worker_publishes_readiness_then_stops_redundant_chunks(
     assert calls == list(range(cursor + 1, 101))
     assert len(mailbox.reports) == reports
     assert all(r["status"] == "readiness" for r in mailbox.reports)
-    assert pulls == [True] and len(c.sent) == 1 and not journal.db.in_transaction
+    assert pulls == [True] * reports
+    assert len(c.sent) == 1 and not journal.db.in_transaction
     journal.close()
 
 

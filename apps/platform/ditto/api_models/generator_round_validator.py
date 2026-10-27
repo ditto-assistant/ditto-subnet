@@ -41,7 +41,28 @@ GENERATOR_ROUND_COMMITMENT_REPORT_DOMAIN = (
 ROUND_COMMITMENT_TAG = "dgr1"
 # ``Commitments.set_commitment`` accepts at most 128 bytes of raw data.
 MAX_COMMITMENT_PAYLOAD_BYTES = 128
-MAX_ROUND_CASES = 8 * 32
+# A round holds at most MAX_ROUND_COLUMNS columns of MAX_ROUND_COLUMN_CASES
+# cases (the pack contract's challenge.MaxRoundColumns and challenge.MaxCases).
+# LEGACY_ROUND_COLUMN_CASES is the column size a scorer that does not advertise
+# ``generator-round-max-cases-<n>`` is assumed to run: validators released with
+# the old 8 x 32 bound refuse a larger job, so Platform leases them none.
+MAX_ROUND_COLUMNS = 8
+MAX_ROUND_COLUMN_CASES = 80
+LEGACY_ROUND_COLUMN_CASES = 32
+MAX_ROUND_CASES = MAX_ROUND_COLUMNS * MAX_ROUND_COLUMN_CASES
+GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX = "generator-round-max-cases-"
+# Bench versions a generator round can run at. A round freezes one of these
+# when it opens (the active version when it is listed, else the newest listed
+# version below it) and keeps it until it is scored. The set is the pack
+# contract's grading policy, not the agent benchmark: every v1 pack case is
+# graded at ``challenge.GradingBenchVersion`` (13), the generator scorer
+# validates packs at that version, and dittobench-api's ``generator-round-v1``
+# mode refuses any other ``bench_version``. A newer version joins this tuple
+# only together with a pack contract and scorer round mode that grade at it
+# (``ditto/tests/test_bench_version_pins.py`` diffs the Go pins).
+GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13,)
+# The version every round opened before rounds recorded one ran at.
+LEGACY_ROUND_BENCH_VERSION = 13
 
 GeneratorRoundFailReason = Literal["scoring_error", "infrastructure"]
 GeneratorRoundCommitmentOutcome = Literal["confirmed", "failed"]

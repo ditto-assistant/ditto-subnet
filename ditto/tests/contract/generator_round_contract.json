@@ -388,7 +388,7 @@
         "default": null
       },
       "case_count": {
-        "maximum": 256,
+        "maximum": 640,
         "minimum": 1,
         "type": "integer"
       },
@@ -503,7 +503,7 @@
         "items": {
           "$ref": "#/$defs/GeneratorRoundCaseResult"
         },
-        "maxItems": 256,
+        "maxItems": 640,
         "minItems": 1,
         "type": "array"
       },

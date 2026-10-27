@@ -73,6 +73,16 @@ lost publication ACK or later pause until custody supplies a terminal report;
 a crash between reservation and publication is conservatively unresolved.
 An intent expiring after arming stays in custody history and requires recovery.
 
+For an intent that reached finalized expiry **without reserving any signed
+operation**, the operator-only `scripts/treasury_expire_unsigned.py` can append
+an audited closure. Stop the manual consumer, preserve a consistent private
+backup, use its exact active policy/journal and request UUID, and supply
+`EXPIRE UNSIGNED <uuid>` as the confirmation. The command refuses signed,
+unresolved, changed, or unexpired claims. It neither resets history nor signs,
+sends or queues a replacement. A new request still requires its own preview
+and confirmation. See the [October 26 incident and recovery
+procedure](audits/gamma-manual-expiry-20261026.md).
+
 The default-off Google Pub/Sub bridge uses the attached VM identities, not
 wallet credentials or copied desktop OAuth tokens. Platform can publish only
 to `sn118-manual-requests` and consume only `sn118-manual-reports`. The transfer

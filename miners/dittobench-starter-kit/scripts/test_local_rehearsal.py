@@ -38,7 +38,7 @@ class LocalRehearsalTest(unittest.TestCase):
                 "run_size": "small",
             },
         )
-        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 12)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 13)
 
     def test_submit_body_can_pin_an_older_contract(self) -> None:
         body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)
@@ -101,9 +101,8 @@ class LocalRehearsalTest(unittest.TestCase):
             LOCAL.parse_args(["--timeout", "0"])
 
     def test_default_and_rejected_bench_versions(self) -> None:
-        self.assertEqual(
-            LOCAL.parse_args([]).bench_version, LOCAL.LIVE_SCORING_BENCH_VERSION
-        )
+        # No explicit version: resolved at run time from the live rollout.
+        self.assertIsNone(LOCAL.parse_args([]).bench_version)
         self.assertEqual(
             LOCAL.parse_args(["--bench-version", str(LOCAL.MAX_BENCH_VERSION)]).bench_version,
             LOCAL.MAX_BENCH_VERSION,
@@ -112,6 +111,85 @@ class LocalRehearsalTest(unittest.TestCase):
             LOCAL.parse_args(["--bench-version", str(LOCAL.MIN_BENCH_VERSION - 1)])
         with self.assertRaises(SystemExit):
             LOCAL.parse_args(["--bench-version", str(LOCAL.MAX_BENCH_VERSION + 1)])
+
+    def test_explicit_bench_version_skips_the_live_lookup(self) -> None:
+        with patch.object(LOCAL, "fetch_live_bench_version") as fetch:
+            self.assertEqual(LOCAL.resolve_bench_version(9), 9)
+        fetch.assert_not_called()
+
+    def test_default_bench_version_follows_the_live_rollout(self) -> None:
+        live = LOCAL.MAX_BENCH_VERSION
+        with patch.dict(os.environ, {LOCAL.PUBLIC_ROLLOUT_URL_ENV: "http://x/r"}):
+            with patch.object(
+                LOCAL, "fetch_live_bench_version", return_value=live
+            ) as fetch:
+                self.assertEqual(LOCAL.resolve_bench_version(None), live)
+        fetch.assert_called_once_with("http://x/r")
+
+    def test_default_bench_version_falls_back_offline(self) -> None:
+        with patch.object(LOCAL, "fetch_live_bench_version", return_value=None):
+            self.assertEqual(
+                LOCAL.resolve_bench_version(None), LOCAL.LIVE_SCORING_BENCH_VERSION
+            )
+        with patch.dict(os.environ, {LOCAL.PUBLIC_ROLLOUT_URL_ENV: "off"}):
+            with patch.object(LOCAL, "fetch_live_bench_version") as fetch:
+                self.assertEqual(
+                    LOCAL.resolve_bench_version(None),
+                    LOCAL.LIVE_SCORING_BENCH_VERSION,
+                )
+            fetch.assert_not_called()
+
+    def test_live_bench_newer_than_checkout_fails_loudly(self) -> None:
+        with patch.object(
+            LOCAL,
+            "fetch_live_bench_version",
+            return_value=LOCAL.MAX_BENCH_VERSION + 1,
+        ):
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "update ditto-subnet"):
+                LOCAL.resolve_bench_version(None)
+
+    def test_fetch_live_bench_version_reads_active_version_only(self) -> None:
+        class Response:
+            def __init__(self, body: bytes) -> None:
+                self.body = body
+
+            def __enter__(self):  # noqa: ANN204
+                import io
+
+                return io.BytesIO(self.body)
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+        cases = {
+            b'{"active_version": 13, "desired_version": 14}': 13,
+            b'{"active_version": true}': None,
+            b'{"desired_version": 14}': None,
+            b"[13]": None,
+            b"not json": None,
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body), patch.object(
+                LOCAL.urllib.request, "urlopen", return_value=Response(body)
+            ):
+                self.assertEqual(
+                    LOCAL.fetch_live_bench_version("http://x/r"), expected
+                )
+        with patch.object(
+            LOCAL.urllib.request,
+            "urlopen",
+            side_effect=LOCAL.urllib.error.URLError("offline"),
+        ):
+            self.assertIsNone(LOCAL.fetch_live_bench_version("http://x/r"))
+
+    @unittest.skipUnless(
+        os.environ.get("DITTO_LIVE_CHECKS") == "1",
+        "set DITTO_LIVE_CHECKS=1 to compare the fallback with live Platform",
+    )
+    def test_offline_fallback_matches_live_scoring(self) -> None:
+        live = LOCAL.fetch_live_bench_version(LOCAL.PUBLIC_ROLLOUT_URL)
+        self.assertIsNotNone(live)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, live)
 
     def test_gates_flag_and_keep_artifacts_dependency(self) -> None:
         self.assertFalse(LOCAL.parse_args([]).gates)
@@ -255,6 +333,9 @@ class LocalRehearsalTest(unittest.TestCase):
 
     def test_fresh_longmem_command_does_not_request_resume_rebalancing(self) -> None:
         args = LOCAL.parse_args(["--longmem-eval", "--longmem-limit", "1"])
+        args.bench_version = LOCAL.resolve_bench_version(
+            LOCAL.LIVE_SCORING_BENCH_VERSION
+        )
         command = LOCAL.longmem_adapter_command(
             args=args,
             kit_dir=Path("/tmp/starter"),

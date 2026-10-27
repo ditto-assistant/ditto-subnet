@@ -449,6 +449,10 @@ type v13Group struct {
 	Orgs [4]string
 	// Neutral milestone date planted in the third state record.
 	Milestone v13Date
+	// V14 only: the fourth chain value (SN-353) a counterfactual may move
+	// to. ExtraPerson serves person families, ExtraClass term families.
+	ExtraPerson string
+	ExtraClass  int
 }
 
 // v13Draws holds the per-seed draw state shared across groups.
@@ -553,6 +557,9 @@ func (d *v13Draws) drawGroup(group int) v13Group {
 		g.Orgs[2] = v13Org(d.seed, fmt.Sprintf("counter-client-%d", group), d.usedOrgs)
 		g.Orgs[3] = v13Org(d.seed, fmt.Sprintf("decoy-client-%d", group), d.usedOrgs)
 	}
+	if v14ChainUsesChains(d.benchVersion) {
+		d.drawV14BusinessChainValues(group, &g)
+	}
 	return g
 }
 
@@ -618,6 +625,11 @@ type v13Member struct {
 	Constraints []string
 	Operations  []string
 	Protected   []string
+	// ChainExtra holds v14 supersession-chain records after Records[1]
+	// (SN-353); always empty below v14.
+	ChainExtra []string
+	// chain is the rendered v14 chain with the value each row mentions.
+	chain []v14ChainRow
 }
 
 func v13Subject(seed int64, group int, purpose string) string {
@@ -913,6 +925,9 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 	default:
 		panic("unhandled v13 family")
 	}
+	if v14ChainUsesChains(d.benchVersion) {
+		applyV14BusinessChain(d, &m, schema, group, g, counter)
+	}
 	return m
 }
 
@@ -943,8 +958,13 @@ func v13Glossary(d *v13Draws, group int, schema v13Schema, g v13Group) []string 
 	if g.Family == V13FamilyStandingStatus {
 		// The status legend binds every alias term this group uses to its
 		// plain-English class, so an honest reader can answer either way.
-		legend := make([]string, 0, 4)
-		for _, class := range g.Classes {
+		legend := make([]string, 0, 5)
+		classes := g.Classes[:]
+		if v14ChainUsesChains(d.benchVersion) {
+			// The v14 chain can move the counterfactual to a fifth class.
+			classes = append(append([]int(nil), classes...), g.ExtraClass)
+		}
+		for _, class := range classes {
 			legend = append(legend, fmt.Sprintf("%s means %s", d.statusAlias(class), V13StatusClasses[class].Canonical))
 		}
 		perm := v13Perm(seed, fmt.Sprintf("legend-%d", group), len(legend))
@@ -1057,12 +1077,15 @@ func materializeV13Case(
 		protocol.OpaqueCaseID(seed, prefix+"-state-b", 0),
 		protocol.OpaqueCaseID(seed, prefix+"-state-c", 0),
 	}
+	for k := range m.ChainExtra {
+		pairIDs = append(pairIDs, protocol.OpaqueCaseID(seed, prefix+"-state-chain", k))
+	}
 	glossary := v13Glossary(d, group, schema, g)
 	binding := fmt.Sprintf("%s=%s; %s=%s. Its remit is %s.", schema.Entity, g.Alias, schema.Alias, g.Alias, g.Purpose)
 	if includeDistractor {
 		binding += fmt.Sprintf(" Separately, an unrelated workstream %s=%s handles %s.%s", schema.Entity, g.DecoyAlias, g.DecoyPurpose, m.DecoyClause)
 	}
-	movable := []string{binding, m.Records[0], m.Records[1], m.Records[2]}
+	movable := append(append([]string{binding, m.Records[0], m.Records[1]}, m.ChainExtra...), m.Records[2])
 	perm := v13Perm(seed, fmt.Sprintf("rows-%d", group), len(movable))
 	rows := []string{glossary[0], glossary[1]}
 	fixedRows := len(rows)

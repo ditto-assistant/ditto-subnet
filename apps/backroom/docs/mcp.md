@@ -158,7 +158,9 @@ Each round's secret is revealed after `privacy_window_rounds`.
 - **Reads (`backroom:read`):**
   - `get_generator_competition_settings` returns the policy, including the
     round knobs (`epochs_per_round`, columns, reference agents, privacy
-    window, on-chain commitment and `validator_rounds_enabled`).
+    window, on-chain commitment and `validator_rounds_enabled`) and
+    `upload_fee_required`. A Platform that predates the fee field reads as
+    `false`.
   - `list_generator_submissions` and `get_generator_submission` return
     identity, status, qualification and latest round score, never source.
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
@@ -182,6 +184,11 @@ Each round's secret is revealed after `privacy_window_rounds`.
 - **Writes (`backroom:write`, actor recorded):**
   - `set_generator_competition_settings` stores a whole-object revision with
     `expectedRevision` and the confirmation `APPLY GENERATOR COMPETITION {MODE}`.
+    `upload_fee_required=true` charges every generator upload the generator
+    competition's fee (`get_submission_cooldown`
+    `effective_competition_fees`), which inherits the default `feeAmountRao`
+    until `set_submission_cooldown` `competitionFees` gives generator its own
+    price; one payment funds one upload across both lanes. It ships `false`.
   - `register_default_generator` (`REGISTER DEFAULT GENERATOR`) registers the
     public generator that fills empty counted columns.
   - `tick_generator_rounds` runs one idempotent round-driver tick now.
@@ -200,6 +207,14 @@ Each round's secret is revealed after `privacy_window_rounds`.
     `REJECT GENERATOR SUBMISSION` and `expectedStatus`. It abandons an
     in-flight qualification run and drops the generator from the ledger at
     once.
+  - `reinstate_generator_submission` needs the confirmation
+    `REINSTATE GENERATOR SUBMISSION`, `expectedStatus: rejected`, and the
+    exact `expectedStatusReason` from `get_generator_submission`. It returns
+    a rejection that was not the generator's fault (for example a stale
+    scorer) to `active` for a fresh qualification run. It refuses while the
+    hotkey has another active or a newer submission, and it refuses an
+    operator ruling unless `overrideOperatorRuling` is true.
+    `get_generator_submission` lists the same guards as `reinstate_blockers`.
 
 Activating the lane in shadow takes four steps:
 
@@ -260,7 +275,7 @@ Three scopes, in ascending sensitivity:
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
 | `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
-| `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
+| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
 
 Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through
@@ -555,6 +570,42 @@ the signed-in operator identity plus the previous ban evidence to
 `hotkey_ban_audit`. Existing agent UUID statuses are never changed. The tool
 returns the post-write state so a successful call proves `banned=false` and
 surfaces the new audit entry.
+
+## Submission terms and per-competition fees
+
+`get_competition_submission_terms` reads `GET /api/v1/public/submission-terms`:
+for every competition with an upload lane (memory agent uploads, generator
+uploads) it returns the deliverable (artifact kind, format, contract version,
+required files, each upload-time limit with its source), the cooldown and its
+scope, and the competition's own fee. `competitions=null` means the Platform
+predates the endpoint. The miner CLI prints the same terms before upload.
+This is the miner submission contract only; build bounties are separate.
+
+Fees live in the submission settings. `get_submission_cooldown` returns the
+default fee (`fee_amount_rao`, what agent uploads pay and what every other
+competition inherits), the overrides as written (`competition_fees`), and
+every lane's resolved fee (`effective_competition_fees`). To give the
+generator competition its own price, read `get_submission_cooldown` and call
+`set_submission_cooldown` with the current cooldown and default fee plus the
+whole override map:
+
+```json
+{
+  "expectedRevision": 7,
+  "cooldownSeconds": 3600,
+  "feeAmountRao": 200000000,
+  "competitionFees": { "generator": { "fee_amount_rao": 500000000, "fee_required": null } },
+  "reason": "price generator uploads separately from agent uploads",
+  "confirmation": "SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT"
+}
+```
+
+A null `fee_amount_rao` inherits `feeAmountRao`; `fee_required` true charges,
+false makes uploads free, null leaves it to the generator
+`upload_fee_required` switch. `{}` clears every override, and omitting
+`competitionFees` carries the current map forward with the original phrase
+(the Backroom panel does this). An upload must pay its competition's fee
+exactly, and one transfer funds one upload across both lanes.
 
 ## Reading miner source
 

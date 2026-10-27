@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,6 +19,7 @@ type fakeRoundPlatform struct {
 	work      []*roundWork
 	generated []roundGenerateResult
 	scored    []roundScoreResult
+	faults    []faultReport
 }
 
 func newFakeRoundPlatform(t *testing.T, work ...*roundWork) *fakeRoundPlatform {
@@ -43,6 +45,10 @@ func newFakeRoundPlatform(t *testing.T, work ...*roundWork) *fakeRoundPlatform {
 			var res roundScoreResult
 			_ = json.NewDecoder(r.Body).Decode(&res)
 			fp.scored = append(fp.scored, res)
+		case "/api/v1/generator-scorer/fault":
+			var f faultReport
+			_ = json.NewDecoder(r.Body).Decode(&f)
+			fp.faults = append(fp.faults, f)
 		default:
 			http.NotFound(w, r)
 		}
@@ -137,5 +143,25 @@ func TestProcessRoundScoresTheMatrix(t *testing.T) {
 	wantRaw, _ := json.Marshal(want)
 	if string(gotRaw) != string(wantRaw) || fp.scored[0].RoundIndex != 4 {
 		t.Fatalf("score: %s", gotRaw)
+	}
+}
+
+// A round leased with more cases per column than this build supports voids
+// as an infrastructure fault; no column result (which could reject a miner's
+// generator) is ever posted.
+func TestProcessRoundReportsUnsupportedCaseCountsAsFaults(t *testing.T) {
+	good := generatorArchive(t, false)
+	fp := newFakeRoundPlatform(t, &roundWork{
+		Kind: "generate", LeaseID: "lease-r", RoundIndex: 25968, Seed: challenge.SeedFromInt64(1),
+		CasesPerColumn: challenge.MaxCases + 1, Columns: []roundSourceCol{sourceCol("c0", good)},
+	})
+	_, err := processRound(context.Background(), fp.client(), genrun.Local{})
+	if !errors.Is(err, genrun.ErrInvalidRequest) || len(fp.generated) != 0 {
+		t.Fatalf("unsupported round: err=%v generated=%d", err, len(fp.generated))
+	}
+	f := fp.faults
+	if len(f) != 1 || f[0].Work != "round" || f[0].RoundIndex == nil || *f[0].RoundIndex != 25968 ||
+		f[0].ErrorKind != "unsupported_request" || f[0].LeaseID != "lease-r" {
+		t.Fatalf("round fault: %+v", f)
 	}
 }

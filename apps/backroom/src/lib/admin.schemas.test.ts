@@ -5,6 +5,8 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  competitionFeesInputSchema,
+  submissionSettingsRevisionSchema,
   retryValidationInputSchema,
   reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
@@ -125,6 +127,10 @@ import {
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
   validatorFleetObservabilityMemberSchema,
+  setTrackShareSettingsInputSchema,
+  emissionAllocationConfirmation,
+  setEmissionAllocationInputSchema,
+  trackSharesConfirmation,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -5416,5 +5422,119 @@ describe('targeted validator retry input', () => {
     expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
     expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
     expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
+  })
+})
+
+describe('track share settings', () => {
+  it('spells out the split, with no trailing space and a clear phrase for null', () => {
+    expect(trackSharesConfirmation({ generator: 1000, memory: 9000 })).toBe(
+      'APPLY TRACK SHARES memory=9000 generator=1000',
+    )
+    expect(trackSharesConfirmation({ memory: 0 })).toBe('APPLY TRACK SHARES')
+    expect(trackSharesConfirmation(null)).toBe('CLEAR TRACK SHARES')
+  })
+
+  it('mirrors the Platform refusals', () => {
+    const base = { expectedRevision: 0, reason: 'activate generator emissions' }
+    const parse = (shares: Record<string, number> | null) =>
+      setTrackShareSettingsInputSchema.safeParse({
+        ...base,
+        settings: { track_shares_bps: shares },
+        confirmation: trackSharesConfirmation(shares),
+      }).success
+    expect(parse({ memory: 9000, generator: 1000 })).toBe(true)
+    expect(parse(null)).toBe(true)
+    expect(parse({ generator: 1000 })).toBe(false)
+    expect(parse({ memory: 9000, router: 1000 })).toBe(false)
+    expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
+    expect(parse({ memory: 0 })).toBe(false)
+    expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
+  })
+})
+
+describe('emission allocation', () => {
+  const live = [
+    { kind: 'burn' as const, bps: 5000 },
+    { kind: 'track' as const, id: 'memory', bps: 3500 },
+    { kind: 'track' as const, id: 'generator', bps: 1500 },
+  ]
+
+  it('spells every nonzero entry in canonical order', () => {
+    expect(emissionAllocationConfirmation([live[2], { kind: 'gamma', bucket: 'gm', bps: 0 }, live[0], live[1]])).toBe(
+      'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+    )
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'gamma', bucket: 'gm', bps: 500 },
+        { kind: 'burn', bps: 4500 },
+        live[1],
+        live[2],
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500')
+  })
+
+  it('orders Gamma buckets by codepoint like Platform', () => {
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'burn', bps: 4000 },
+        live[1],
+        live[2],
+        { kind: 'gamma', bucket: 'gm2', bps: 600 },
+        { kind: 'gamma', bucket: 'gm_2', bps: 400 },
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4000 memory=3500 generator=1500 gamma:gm2=600 gamma:gm_2=400')
+  })
+
+  it.each([
+    ['sum short of 10000', [live[0], live[1], { kind: 'track', id: 'generator', bps: 1400 }]],
+    ['duplicate', [...live, { kind: 'track', id: 'memory', bps: 0 }]],
+    ['unpaid coding', [{ kind: 'burn', bps: 4000 }, live[1], live[2], { kind: 'track', id: 'coding', bps: 1000 }]],
+    ['missing generator', [{ kind: 'burn', bps: 6500 }, live[1], { kind: 'track', id: 'router', bps: 0 }]],
+    ['burn with an id', [{ kind: 'burn', id: 'memory', bps: 5000 }, live[1], live[2]]],
+  ])('refuses %s', (_label, entries) => {
+    const parsed = setEmissionAllocationInputSchema.safeParse({
+      expectedRevision: 0,
+      entries,
+      reason: 'operator split change',
+      confirmation: emissionAllocationConfirmation(entries as typeof live),
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('accepts the live split with its phrase', () => {
+    expect(
+      setEmissionAllocationInputSchema.safeParse({
+        expectedRevision: 0,
+        entries: live,
+        reason: 'operator split change',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      }).success,
+    ).toBe(true)
+  })
+})
+
+describe('competition fee policy schemas', () => {
+  it('rejects unknown fields in operator input but tolerates them on read', () => {
+    expect(
+      competitionFeesInputSchema.safeParse({
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, extra: 1 },
+      }).success,
+    ).toBe(false)
+    const revision = submissionSettingsRevisionSchema.parse({
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 1_000_000,
+      competition_fees: {
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, added_later: 'x' },
+      },
+      reason: 'price generator uploads',
+      actor: 'operator',
+      created_at: null,
+    })
+    expect(revision.competition_fees.generator).toMatchObject({
+      fee_amount_rao: 2_000_000,
+      fee_required: true,
+    })
   })
 })

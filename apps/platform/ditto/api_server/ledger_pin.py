@@ -54,6 +54,7 @@ from ditto.chain.errors import (
     ChainTreasuryActivationReadError,
     ChainTreasuryReadTimeoutError,
 )
+from ditto.db.queries.emission_allocation import latest_emission_allocation_number
 from ditto.db.queries.ledger_epochs import (
     LedgerPinDraft,
     get_pin,
@@ -215,6 +216,51 @@ def served_rank_shares(served: dict[str, Any]) -> list[float] | None:
     return shares
 
 
+def served_track_shares(served: dict[str, Any]) -> dict[str, int]:
+    """The protocol-33 track split frozen with a pin, or ``{}`` for none.
+
+    Anything validators would refuse (non-integer or out-of-range bps, an
+    over-cap sum) reads as absent, exactly as ``resolve_track_shares`` folds it.
+    """
+    raw = served.get("track_shares_bps")
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    shares: dict[str, int] = {}
+    for track, bps in raw.items():
+        if (
+            not isinstance(track, str)
+            or not track
+            or isinstance(bps, bool)
+            or not isinstance(bps, int)
+            or not 0 <= bps <= 10_000
+        ):
+            return {}
+        shares[track] = bps
+    if sum(shares.values()) > 10_000:
+        return {}
+    # A validator reads a missing memory share as the full pool, so any other
+    # positive share is over the cap and folds the compiled split instead.
+    if "memory" not in shares and any(bps > 0 for bps in shares.values()):
+        return {}
+    return shares
+
+
+def pin_generator_fraction(served: dict[str, Any]) -> float:
+    """The share of the paid miner pool a pin's split can route to generators.
+
+    ``0.0`` without a served generator share. Otherwise the generator's bps
+    over the bps memory and generator claim together: a validator folds memory
+    at exactly that complement when generators are paid, and at the full pool
+    when none is eligible (the generator share falls back to memory).
+    """
+    shares = served_track_shares(served)
+    generator = shares.get("generator", 0)
+    memory = shares.get("memory", 10_000)
+    if generator <= 0 or generator + memory <= 0:
+        return 0.0
+    return generator / (generator + memory)
+
+
 def pin_provisional_incumbent(served: dict[str, Any]) -> LedgerEntry | None:
     """The crown-only incumbent a pin froze (protocol 28), or ``None``.
 
@@ -258,6 +304,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         stale=stale,
         age_seconds=age,
         burn_share=float(served.get("burn_share", 0.0)),
+        track_shares_bps=served_track_shares(served),
         continual_retest_cohort_size=int(served.get("continual_retest_cohort_size", 5)),
         ledger_snapshot_id=pin.snapshot_id,
         epoch_index=pin.epoch_index,
@@ -440,15 +487,27 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     return shares
 
 
-def pin_expected_burn(burn_share: float, expected: dict[str, float] | None) -> float:
+def pin_expected_burn(
+    burn_share: float,
+    expected: dict[str, float] | None,
+    *,
+    generator_fraction: float = 0.0,
+) -> float:
     """The owner-burn fraction a pin's fold puts on chain.
 
     ``burn_share`` of the vector, plus -- under a provisional incumbent
     (protocol 28) -- every miner-pool share the pin leaves unpaid, which
     :func:`pin_expected_shares` reports as paid shares summing below one. For
     any other pin the paid shares sum to one and this is ``burn_share``.
+
+    ``generator_fraction`` (:func:`pin_generator_fraction`) is the slice of the
+    pool a served track split pays generators. Only memory carries an unpaid
+    incumbent share, so a paid generator slice shrinks the burned remainder.
+    ``0.0`` is the memory-only fold, which is also what validators fold when no
+    generator is eligible.
     """
     paid = sum(expected.values()) if expected else 1.0
+    paid = (1.0 - generator_fraction) * paid + generator_fraction
     return 1.0 - (1.0 - burn_share) * paid
 
 
@@ -459,6 +518,8 @@ def classify_vector_against_pins(
     expected_previous: dict[str, float] | None,
     burn_hotkey: str | None,
     tolerance: float = PIN_SHARE_TOLERANCE,
+    generator_current: float = 0.0,
+    generator_previous: float = 0.0,
 ) -> str:
     """Whether a revealed on-chain vector matches the current or previous pin.
 
@@ -467,6 +528,14 @@ def classify_vector_against_pins(
     validator on an older burn setting would otherwise read as diverged on
     every miner. Remaining shares are renormalized and compared recipient by
     recipient within ``tolerance``.
+
+    ``generator_current``/``generator_previous`` are each pin's
+    :func:`pin_generator_fraction`. The pin does not freeze the generator
+    ledger, so with a served generator share a vector also matches when its
+    memory recipients hold at least their memory slice (``1 - fraction`` of the
+    pin's shares) and everything above that, on them or on other hotkeys, sums
+    to the generator slice. A vector that pays memory alone (no eligible
+    generator, so the share fell back to memory) still matches exactly.
     """
     miners = {
         hotkey: float(value)
@@ -489,9 +558,30 @@ def classify_vector_against_pins(
         scale = paid if 1.0 - paid > tolerance else 1.0
         return all(abs(actual[h] - expected[h] / scale) <= tolerance for h in expected)
 
-    if matches(expected_current):
+    def matches_with_generators(expected: dict[str, float], fraction: float) -> bool:
+        if fraction <= 0.0 or not set(expected) <= set(actual):
+            return False
+        memory = 1.0 - fraction
+        paid = sum(expected.values())
+        # Paid fraction of the miner vector: memory's paid slice plus the
+        # generator slice (only memory can carry an unpaid incumbent share).
+        denominator = memory * paid + fraction
+        if denominator <= 0.0:
+            return False
+        floor = {h: memory * expected[h] / denominator for h in expected}
+        if any(actual[h] < floor[h] - tolerance for h in expected):
+            return False
+        extra = sum(actual.values()) - sum(floor.values())
+        return abs(extra - fraction / denominator) <= tolerance * max(1, len(actual))
+
+    if matches(expected_current) or matches_with_generators(
+        expected_current, generator_current
+    ):
         return "current"
-    if expected_previous is not None and matches(expected_previous):
+    if expected_previous is not None and (
+        matches(expected_previous)
+        or matches_with_generators(expected_previous, generator_previous)
+    ):
         return "previous"
     return "diverged"
 
@@ -797,6 +887,15 @@ class LedgerPinMaterializer:
                         raise ValueError(
                             "Gamma allocation changed during epoch materialization"
                         )
+                    if await latest_emission_allocation_number(session) != getattr(
+                        context.policy, "allocation_revision", 0
+                    ):
+                        # Serialized with the allocation writer by the lock
+                        # above: the burn share and track map in this draft
+                        # must come from the allocation in force at insert.
+                        raise ValueError(
+                            "emission allocation changed during epoch materialization"
+                        )
                     row = await insert_pin(session, draft)
                 await session.refresh(row)
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="pinned").inc()
@@ -861,6 +960,13 @@ def build_pin_draft(
     rank_shares = getattr(snapshot, "rank_shares", None)
     if rank_shares is not None:
         served["rank_shares"] = [float(share) for share in rank_shares]
+    # Keyed only when a fleet-ready split is served, so every pin taken without
+    # one keeps its digest byte for byte.
+    track_shares = getattr(snapshot, "track_shares_bps", None)
+    if track_shares:
+        served["track_shares_bps"] = {
+            str(track): int(bps) for track, bps in track_shares.items()
+        }
     # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a
     # validator re-deriving the champion-anchored family from a pin sees the
     # same binding a live read would have served. Keyed only when present, so
@@ -1086,8 +1192,10 @@ __all__ = [
     "classify_vector_against_pins",
     "pin_expected_burn",
     "pin_expected_shares",
+    "pin_generator_fraction",
     "pin_provisional_incumbent",
     "served_rank_shares",
+    "served_track_shares",
     "ledger_digest",
     "response_from_pin",
 ]

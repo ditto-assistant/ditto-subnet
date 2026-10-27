@@ -9,6 +9,12 @@ unqualified generator, creates a run on fresh secret seeds with the current
 probe seed, and serves the exact uploaded source archive. ``POST
 /generator-scorer/results`` accepts an evaluation only for the current lease.
 
+Faults: ``POST /generator-scorer/fault`` reports a leased item the scorer could
+not do through no fault of the generator: a request its pack contract refuses
+(``unsupported_request``, e.g. a stale scorer below the leased case count) or a
+sandbox failure. A qualification backs off and stays active; a round is voided
+with an infrastructure reason or re-leased. A fault never rejects a generator.
+
 Rounds: ``GET /generator-scorer/round-work`` leases a round that needs its
 dataset generated (``kind=generate``: frozen columns, their sources, the round
 seed) or its matrix scored (``kind=score``: the columns' case refs, every
@@ -32,6 +38,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.generator import (
     GeneratorResultRequest,
     GeneratorResultResponse,
+    GeneratorScorerFault,
+    GeneratorScorerFaultAck,
     GeneratorWorkItem,
     GeneratorWorkResponse,
 )
@@ -47,11 +55,13 @@ from ditto.api_server.generator_competition import (
     lease_next,
     load_settings,
     record_result,
+    record_scorer_fault,
 )
 from ditto.api_server.generator_rounds import (
     RoundResultRejected,
     lease_round_work,
     record_generation,
+    record_round_fault,
     record_round_score,
 )
 from ditto.db.models import GeneratorProbeEpoch
@@ -159,6 +169,61 @@ async def post_results(
         status=recorded.status,  # type: ignore[arg-type]
         outcome=recorded.outcome,
         score=recorded.score,
+        submission_status=recorded.submission_status,  # type: ignore[arg-type]
+    )
+
+
+@router.post("/fault", response_model=GeneratorScorerFaultAck)
+async def post_fault(
+    payload: GeneratorScorerFault, _scorer: ScorerDep, session: SessionDep
+) -> GeneratorScorerFaultAck:
+    """Record a scorer-side fault for the current lease; never blames a generator."""
+    now = datetime.now(UTC)
+    if payload.work == "round":
+        try:
+            row = await record_round_fault(session, payload, now=now)
+        except RoundResultRejected as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await session.commit()
+        logger.warning(
+            "generator scorer fault round=%s kind=%s status=%s scorer=%s",
+            row.round_index,
+            payload.error_kind,
+            row.status,
+            payload.scorer_version,
+        )
+        return GeneratorScorerFaultAck(
+            work="round",
+            action="voided" if row.status == "void" else "released",
+            round_status=row.status,
+        )
+    if payload.submission_id is None or payload.run_id is None:
+        raise HTTPException(
+            status_code=422, detail="a qualification fault names its run"
+        )
+    sub = await get_submission(session, payload.submission_id, for_update=True)
+    if sub is None:
+        raise HTTPException(status_code=404, detail="unknown submission")
+    run = await get_run(session, payload.run_id, for_update=True)
+    if run is None or run.submission_id != sub.submission_id:
+        raise HTTPException(status_code=404, detail="unknown run")
+    try:
+        recorded = await record_scorer_fault(session, sub, run, payload, now=now)
+    except ResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    logger.warning(
+        "generator scorer fault submission_id=%s run_id=%s kind=%s scorer=%s",
+        payload.submission_id,
+        payload.run_id,
+        payload.error_kind,
+        payload.scorer_version,
+    )
+    return GeneratorScorerFaultAck(
+        work="qualification",
+        action="backed_off",
         submission_status=recorded.submission_status,  # type: ignore[arg-type]
     )
 

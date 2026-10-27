@@ -8,7 +8,10 @@ import {
   createBackroomMcpServer,
   type McpGrantProps,
 } from './mcp.server'
-import { generatorRunDetailSchema } from '../lib/generator-competition.schemas'
+import {
+  generatorCompetitionSettingsSchema,
+  generatorRunDetailSchema,
+} from '../lib/generator-competition.schemas'
 
 const session = {
   version: 2 as const,
@@ -47,7 +50,10 @@ const settings = {
   lease_ttl_seconds: 7200, max_attempts: 6, retry_backoff_seconds: 3600,
   epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
   privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false,
+  upload_fee_required: false,
 }
+// What a Platform that predates the generator upload fee returns.
+const { upload_fee_required: _absent, ...olderSettings } = settings
 const runSummary = {
   run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,
   case_counts: null,
@@ -75,8 +81,8 @@ describe('generator competition MCP tools', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const routes: Record<string, unknown> = {
       '/api/v1/admin/generator-competition/settings': {
-        current: [], history: [], default: { ...settings, mode: 'off' },
-        effective: { revision: 0, settings: { ...settings, mode: 'off' }, checksum: '', source: 'default' },
+        current: [], history: [], default: { ...olderSettings, mode: 'off' },
+        effective: { revision: 0, settings: { ...olderSettings, mode: 'off' }, checksum: '', source: 'default' },
       },
       '/api/v1/admin/generator-competition/submissions?limit=50&offset=0&status=active': {
         submissions: [{ ...submission, source_base64: 'must-not-pass' }], counts_by_status: { active: 1 },
@@ -105,9 +111,10 @@ describe('generator competition MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
       const control = json(await client.callTool({ name: 'get_generator_competition_settings', arguments: {} })) as {
-        effective: { settings: { mode: string } }
+        effective: { settings: { mode: string, upload_fee_required: boolean } }
       }
       expect(control.effective.settings.mode).toBe('off')
+      expect(control.effective.settings.upload_fee_required).toBe(false)
       const listing = json(await client.callTool({ name: 'list_generator_submissions', arguments: { status: 'active' } }))
       expect(JSON.stringify(listing)).not.toContain('must-not-pass')
       expect(json(await client.callTool({ name: 'get_generator_submission', arguments: { submissionId: SUBMISSION } })))
@@ -137,6 +144,15 @@ describe('generator competition MCP tools', () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+
+  it('accepts cases_per_seed up to the pack contract cap of 80 and no further', () => {
+    for (const cases of [8, 70, 80]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, cases_per_seed: cases }).success).toBe(true)
+    }
+    for (const cases of [7, 81]) {
+      expect(generatorCompetitionSettingsSchema.safeParse({ ...settings, cases_per_seed: cases }).success).toBe(false)
     }
   })
 
@@ -197,9 +213,17 @@ describe('generator competition MCP tools', () => {
       expect(wrongPhrase.isError).toBe(true)
       expect(fetchMock).not.toHaveBeenCalled()
 
+      // A revision stores the whole policy: omitting the fee flag is refused.
+      const partial = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: { expectedRevision: 1, settings: olderSettings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+      })
+      expect(partial.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+
       const applied = json(await client.callTool({
         name: 'set_generator_competition_settings',
-        arguments: { expectedRevision: 1, settings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
+        arguments: { expectedRevision: 1, settings: { ...settings, upload_fee_required: true }, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
       })) as { revision: number }
       expect(applied.revision).toBe(2)
       expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -207,6 +231,7 @@ describe('generator competition MCP tools', () => {
       expect(settingsUrl).toContain('/api/v1/admin/generator-competition/settings')
       expect(JSON.parse(String(settingsInit.body))).toMatchObject({
         expected_revision: 1, scope: '*', actor: session.email, confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        settings: { upload_fee_required: true },
       })
       expect(settingsInit.headers['X-Admin-Actor']).toBe(session.email)
 
@@ -222,6 +247,31 @@ describe('generator competition MCP tools', () => {
       })
 
       fetchMock.mockClear()
+      const unphrased = await client.callTool({
+        name: 'reinstate_generator_submission',
+        arguments: {
+          submissionId: SUBMISSION, expectedStatus: 'rejected', expectedStatusReason: 'generation_failed: x',
+          reason: 'stale scorer refused the case count', confirmation: 'REINSTATE',
+        },
+      })
+      expect(unphrased.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      await client.callTool({
+        name: 'reinstate_generator_submission',
+        arguments: {
+          submissionId: SUBMISSION, expectedStatus: 'rejected', expectedStatusReason: 'generation_failed: x',
+          reason: 'stale scorer refused the case count', confirmation: 'REINSTATE GENERATOR SUBMISSION',
+        },
+      })
+      const [reinstateUrl, reinstateInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(reinstateUrl).toContain(`/submissions/${SUBMISSION}/reinstate`)
+      expect(JSON.parse(String(reinstateInit.body))).toEqual({
+        expected_status: 'rejected', expected_status_reason: 'generation_failed: x',
+        reason: 'stale scorer refused the case count', actor: session.email,
+        confirmation: 'REINSTATE GENERATOR SUBMISSION', override_operator_ruling: false,
+      })
+
+      fetchMock.mockClear()
       const unconfirmed = await client.callTool({
         name: 'rotate_generator_probe_seed', arguments: { reason: 'suspected leak', confirmation: 'rotate' },
       })
@@ -231,6 +281,45 @@ describe('generator competition MCP tools', () => {
         name: 'rotate_generator_probe_seed', arguments: { reason: 'suspected leak', confirmation: 'ROTATE GENERATOR PROBE SEED' },
       })
       expect(fetchMock.mock.calls[0][0]).toContain('/probe/rotate')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('refuses to report a settings write an older Platform silently dropped', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    // An older Platform ignores the unknown field and stores the revision without it.
+    const fetchMock = vi.fn(async () => Response.json({
+      revision: 2, parent_revision: 1, scope: '*', settings: olderSettings, reason: 'charge generator uploads',
+      actor: session.email, created_at: '2026-10-23T00:00:00Z', checksum: 'b'.repeat(64),
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const dropped = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1, settings: { ...settings, upload_fee_required: true },
+          reason: 'charge generator uploads', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(dropped.isError).toBe(true)
+      const text = (dropped.content as Array<{ text: string }>)[0].text
+      expect(text).toContain('revision 2 without upload_fee_required')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // Sending the default value (fee off) changes nothing on an older
+      // Platform, so that write succeeds.
+      const unchanged = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1, settings: { ...settings, upload_fee_required: false },
+          reason: 'raise the cooldown only', confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(unchanged.isError).toBeFalsy()
+      expect(json(unchanged)).toMatchObject({ revision: 2, settings: { upload_fee_required: false } })
     } finally {
       await client.close()
       await server.close()
@@ -308,9 +397,10 @@ describe('generator competition MCP tools', () => {
     const reader = await connect([BACKROOM_READ_SCOPE])
     try {
       expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
-        .toMatchObject({ rounds: [{ round_index: 7 }], schedule: { current_round: 7 } })
+        .toMatchObject({ rounds: [{ round_index: 7, panel_dropped: 0 }], schedule: { current_round: 7 } })
+      // An older Platform without panel drops still parses, with empty drops.
       expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 7 } })))
-        .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 } })
+        .toMatchObject({ pending_agents: [AGENT], column_case_counts: { c0: 16 }, skipped_panel_agents: [] })
       // Validator-published commitments are visible per validator; an older
       // Platform without these fields (round 7 above) still parses.
       expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 9 } })))
@@ -441,6 +531,53 @@ describe('generator competition MCP tools', () => {
     } finally {
       await client.close()
       await server.close()
+    }
+  })
+
+  it('shows dropped and skipped panel agents and the void reason of a fault-only round', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const KEPT = '1a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const DROPPED = '2a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const SKIPPED = '3a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d'
+    const summary = {
+      round_index: 9, status: 'void', epochs_per_round: 4, commitment: 'aa'.repeat(32),
+      commitment_publication: 'published', committed_at: '2026-10-24T00:00:00Z', column_count: 5,
+      panel_size: 4, panel_dropped: 1, results: 3, answered_results: 0, secret_hex: null, seed: null,
+      void_reason: 'insufficient_answered_results: 0 of 3 agent result(s) answered at least one case',
+    }
+    const slot = { owner_key: 'coldkey:a', champion: false, reference: false }
+    const result = { validator_hotkey: '5V', run_id: 'r', answered: 0, faulted: 80, mean_score: null, recorded_at: '2026-10-24T01:00:00Z' }
+    const detail = {
+      summary, settings_revision: 2, cases_per_column: 16, seed: null, columns: [],
+      panel: [
+        { ...slot, agent_id: KEPT },
+        { ...slot, agent_id: DROPPED, dropped_reason: 'agent status is banned', dropped_at: '2026-10-24T00:30:00Z' },
+      ],
+      generation: null, column_case_counts: {}, dataset_bytes: 1024, lease_id: null, lease_expires_at: null,
+      lease_attempts: 1, commitment_published_at: null, commitment_error: null, attempts: [],
+      results: [{ ...result, agent_id: KEPT, excluded_reason: 'faulted every case; counts as not reported' }],
+      pending_agents: [], score: null, scorer_version: null, standings: [], columns_scored: [],
+      skipped_panel_agents: [{ agent_id: SKIPPED, owner_key: 'coldkey:b', reason: 'miner hotkey is banned' }],
+    }
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (
+      url.includes('/rounds?')
+        ? Response.json({ schedule: { mode: 'shadow', epochs_per_round: 4 }, rounds: [summary], counts_by_status: { void: 1 } })
+        : Response.json(detail)
+    )))
+
+    const reader = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect(json(await reader.client.callTool({ name: 'list_generator_rounds', arguments: {} })))
+        .toMatchObject({ rounds: [{ panel_dropped: 1, answered_results: 0, void_reason: summary.void_reason }] })
+      expect(json(await reader.client.callTool({ name: 'get_generator_round', arguments: { roundIndex: 9 } })))
+        .toMatchObject({
+          panel: [{ agent_id: KEPT, dropped_reason: null }, { agent_id: DROPPED, dropped_reason: 'agent status is banned' }],
+          results: [{ agent_id: KEPT, excluded_reason: 'faulted every case; counts as not reported' }],
+          skipped_panel_agents: [{ agent_id: SKIPPED, reason: 'miner hotkey is banned' }],
+        })
+    } finally {
+      await reader.client.close()
+      await reader.server.close()
     }
   })
 })

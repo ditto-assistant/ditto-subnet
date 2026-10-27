@@ -63,7 +63,8 @@ uv run ditto practice --run-size small --longmem-eval
 uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
 ```
 
-The command starts and tears down the harness, live-bench (currently 11) scorer,
+The command starts and tears down the harness, the live-bench scorer (the
+active version from the public rollout endpoint, currently 13),
 trusted local reader/judge proxies, and isolated LongMemEval stores. Default
 `--run-size small` is a smoke profile, not the on-chain case count. Nothing is
 exposed to the public internet. LongMemEval remains a separately labeled
@@ -177,7 +178,15 @@ if the agent is never submitted or scores 0. It is also separate from, and
 usually larger than, the evaluation fee.
 
 The coldkey pays the fee. The hotkey signs the artifact and receives incentive.
-The fee is configured in TAO through Backroom. TAO/USD pricing is recorded only
+The fee is configured in TAO through Backroom. Each competition has its own
+fee: agent uploads (the memory competition) pay the default submission fee, and
+generator uploads pay the generator competition's fee, which inherits the
+default until an operator sets a separate generator price. `GET
+/api/v1/public/submission-terms` lists every competition's deliverable
+(artifact kind, required files, size and source limits), cooldown, and fee;
+`ditto upload` and `ditto generator upload` print the relevant terms before
+asking you to pay. A payment must match its competition's fee exactly and funds
+one upload in one lane. TAO/USD pricing is recorded only
 for internal revenue reporting; it neither determines the amount due nor takes
 part in payment or admission validation. Never put wallet secrets in the build
 context.
@@ -350,10 +359,8 @@ result.
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
-  choice is not a miner lever: on the current contract (**Bench v12**; Bench
-  v13 will be scored in shadow once its rollout is scheduled and activates by
-  a separate owner decision — see the starter kit's [*Bench v13: how to stay
-  inside the
+  choice is not a miner lever: on the current contract (**Bench v13** — see
+  the starter kit's [*Bench v13: how to stay inside the
   gates*](../miners/dittobench-starter-kit/README.md#bench-v13-how-to-stay-inside-the-gates))
   that is **`openai/gpt-oss-20b`**, served through the platform-owned
   OpenRouter inference boundary. Reasoning effort is an intentional v9 strategy: a harness

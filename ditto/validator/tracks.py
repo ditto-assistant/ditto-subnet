@@ -39,6 +39,7 @@ from ditto.validator.weights import (
     compute_generator_weights,
     compute_router_weights,
     compute_weights,
+    reassign_unclaimed_shares,
 )
 
 if TYPE_CHECKING:
@@ -162,6 +163,16 @@ class Track:
     emission_share_bps: int
     weight_eligible: bool
     fold: TrackFold = field(repr=False, default=reserved_fold)
+    unclaimed_share_to: str | None = None
+    """Track that receives this track's share when it folds no payable miner.
+
+    ``None`` (memory, coding, router) keeps the original rule: an empty
+    eligible track's bps burn through
+    :func:`~ditto.validator.weights.track_allocated_share`. The generator track
+    names memory, so a governed generator share with no weight-eligible
+    generator pays agent miners instead of shorting them, and that state folds
+    byte-identically to the memory-only vector. See
+    :func:`~ditto.validator.weights.reassign_unclaimed_shares`."""
 
     def __post_init__(self) -> None:
         if not self.track_id:
@@ -221,6 +232,25 @@ class TrackRegistry:
             track.track_id: track.effective_bps() for track in self.active_eligible()
         }
 
+    def claimed_shares_bps(
+        self, vectors: Mapping[str, Mapping[str, float]]
+    ) -> dict[str, int]:
+        """The paying split after empty tracks hand their share to a fallback.
+
+        :meth:`shares_bps` with each paying track that folded no payable miner
+        and declares :attr:`Track.unclaimed_share_to` merged into that track.
+        This is the split the blend and the allocated-share cap use.
+        """
+        return reassign_unclaimed_shares(
+            self.shares_bps(),
+            vectors,
+            fallbacks={
+                track.track_id: track.unclaimed_share_to
+                for track in self.active_eligible()
+                if track.unclaimed_share_to is not None
+            },
+        )
+
 
 def _build_registry(
     *,
@@ -267,6 +297,7 @@ def _build_registry(
                 emission_share_bps=track_shares_bps.get(TRACK_GENERATOR, 0),
                 weight_eligible=generator_weight_eligible,
                 fold=generator_fold,
+                unclaimed_share_to=TRACK_MEMORY,
             ),
         )
     )
@@ -296,8 +327,10 @@ def build_default_registry(
     """The shipped four-track registry.
 
     Memory is ``ACTIVE`` and eligible (the existing competition); coding,
-    router, and generator default to ``SHADOW`` / not-eligible so v1 touches no
-    emissions. The
+    router, and generator default to ``SHADOW`` / not-eligible here so a bare
+    registry touches no emissions. The validator config promotes the generator
+    track (protocol 33); it still pays only a governed share, only to
+    weight-eligible ledger entries, and hands an unclaimed share to memory. The
     per-track bps come from the resolved ``track_shares_bps`` (compiled fallback
     or, later, the platform governance field).
 

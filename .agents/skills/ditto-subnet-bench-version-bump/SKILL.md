@@ -136,9 +136,11 @@ Not an opt-in per-version feature: every new `bench_version` is expected to run 
 
 ### 8. Miner rehearsal (otherwise miners keep scoring v(N-1) locally)
 
-- `miners/dittobench-starter-kit/scripts/local-rehearsal.py` `LIVE_SCORING_BENCH_VERSION` and `MAX_BENCH_VERSION`
+- `miners/dittobench-starter-kit/scripts/local-rehearsal.py` `MAX_BENCH_VERSION` on support; the offline-fallback
+  `LIVE_SCORING_BENCH_VERSION` on activation (the default itself reads the public rollout `active_version`;
+  `DITTO_LIVE_CHECKS=1 python3 scripts/test_local_rehearsal.py` compares the fallback with live)
 - `miners/dittobench-starter-kit/src/protocol.rs` `MAX_SUPPORTED_BENCH_VERSION` (accept the new version on `/run`; do not change `ACTIVE_BENCH_VERSION` unless cargo-evaluate should follow)
-- `.agents/skills/mine/SKILL.md` live bench number
+- `.agents/skills/mine/SKILL.md` live bench number and run-size envelope, plus the starter-kit `README.md`/`AGENTS.md`/`CLAUDE.md` and `docs/MINER.md` live-bench mentions
 
 A kit that 400s the new `bench_version` on `/run` looks like "scoring is broken" to miners.
 

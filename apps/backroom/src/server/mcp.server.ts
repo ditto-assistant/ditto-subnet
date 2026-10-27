@@ -56,6 +56,7 @@ import {
   fetchGeneratorSubmission,
   listGeneratorSubmissions,
   rejectGenerator,
+  reinstateGenerator,
   rescoreGenerator,
   rotateGeneratorProbe,
   setGeneratorSettings,
@@ -86,6 +87,7 @@ import {
   generatorSubmissionIdInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
+  reinstateGeneratorInputSchema,
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
@@ -130,7 +132,11 @@ import {
   compactValidatorAssignments,
   compactValidatorFleet,
 } from '../lib/mcp-payloads'
-import { compactListFields, type HoistOptions } from '../lib/mcp-response'
+import {
+  compactListField,
+  compactListFields,
+  type HoistOptions,
+} from '../lib/mcp-response'
 import {
   athReviewQueueInputSchema,
   auditReasonSchema,
@@ -176,12 +182,15 @@ import {
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
   claimProvenanceCasesInputSchema,
+  agentScoresInputSchema,
   agentScoresLookupInputSchema,
   continualRetestDiagnosticInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
   agentEmissionEligibilityInputSchema,
   setBurnSettingsInputSchema,
+  setTrackShareSettingsInputSchema,
+  setEmissionAllocationInputSchema,
   setEfficiencyBonusSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
@@ -376,7 +385,12 @@ import {
   fetchBurnSettings,
   fetchEmissionEligibility,
   setBurnSettings,
+  fetchTrackShareSettings,
+  setTrackShareSettings,
+  fetchEmissionAllocation,
+  setEmissionAllocation,
   fetchSubmissionSettingsControl,
+  fetchCompetitionSubmissionTerms,
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   updateSubmissionSettings,
@@ -450,6 +464,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'rotate_generator_probe_seed',
   'rescore_generator_submission',
   'reject_generator_submission',
+  'reinstate_generator_submission',
   'tick_generator_rounds',
   'void_generator_round',
   'close_generator_round',
@@ -542,6 +557,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'record_bounty_evaluation',
   'decide_bounty_evaluation',
   'set_burn_settings',
+  'set_track_share_settings',
+  'set_emission_allocation',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
 ])
@@ -606,6 +623,29 @@ function compacted(value: unknown, fields: Record<string, HoistOptions>) {
     return value
   }
   return compactListFields(value as Record<string, unknown>, fields)
+}
+
+const AGENT_SCORE_ROWS: HoistOptions = { pin: ['validator_hotkey'] }
+
+/**
+ * Compact get_agent_scores losslessly: the selected version's `scores` and
+ * each `other_bench_versions[i].scores` hoist their invariant fields into a
+ * sibling `scores_shared`. Reconstruct every row as `{ ...scores_shared, ...row }`
+ * within its own group; a field missing from a row is in that group's
+ * `scores_shared`, never null.
+ */
+export function compactAgentScores(detail: Record<string, unknown>) {
+  const top = compactListFields(detail, { scores: AGENT_SCORE_ROWS })
+  const groups = top.other_bench_versions
+  if (!Array.isArray(groups)) return top
+  return {
+    ...top,
+    other_bench_versions: groups.map((group) =>
+      typeof group === 'object' && group !== null && !Array.isArray(group)
+        ? compactListField(group as Record<string, unknown>, 'scores', AGENT_SCORE_ROWS)
+        : group,
+    ),
+  }
 }
 
 const MCP_PAGINATION_INPUT = {
@@ -903,14 +943,14 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_competition_settings: 'Read generator competition policy, mode and optional history.',
   set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
   list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
-  get_generator_submission: 'Read one generator submission, lease and every run (never source).',
+  get_generator_submission: 'Read one generator submission, lease, runs and reinstate blockers (never source).',
   get_generator_run: 'Read one qualification run: evaluation and outcome; seeds once finished.',
   get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
   rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
   list_generator_promotion_candidates: 'Discriminating round cases, highest credit first.',
   get_generator_board: 'Read the shadow generator ledger (weight_eligible=false).',
   list_generator_rounds: 'Page chain-epoch generator rounds with schedule and counts by status.',
-  get_generator_round: 'Read one round: columns, panel, generation, leases, results, pending agents, matrix.',
+  get_generator_round: 'Read one round: columns, panel and drops, generation, leases, results, pending agents, matrix.',
   preview_generator_round: 'What a round opened now would freeze, and every blocker.',
   get_generator_round_loop: 'Read the round driver\'s last tick, actions, errors and chain position.',
   tick_generator_rounds: 'Run one idempotent round-driver tick now.',
@@ -923,6 +963,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
   rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
   reject_generator_submission: 'Reject a generator by ruling; abandons its live run, drops it from the ledger.',
+  reinstate_generator_submission: 'Reinstate a rejected generator with REINSTATE GENERATOR SUBMISSION; fresh qualification run.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
   get_bounty_queue: 'Review queue (overdue first), settlement queue with approvers, or pending appeals.',
@@ -1023,9 +1064,17 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_source_release_evidence:
     'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
   set_burn_settings:
-    'Change burn weights with CAS/reason/confirmation. MOVES TAO. See tool help.',
+    'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
+  get_track_share_settings:
+    'Read per-track emission split, what validators fold now, v33 gate, generator mode; history opt-in.',
+  set_track_share_settings:
+    'Legacy track split; refused once an allocation exists. MOVES TAO. See tool help.',
+  get_emission_allocation:
+    'Read burn/track/Gamma split as % of emission: in force, pinned, history.',
+  set_emission_allocation:
+    'Set burn, tracks and Gamma in bps summing to 10000. MOVES TAO. See tool help.',
   get_emission_eligibility_policy:
     'Read emission gates, fleet fold, revision, windows and shadow withheld count; optional history.',
   get_treasury_settings: 'Read shadow buckets/history; no weights or funds.',
@@ -1048,7 +1097,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_emission_eligibility:
     'Read exact earning/withheld reason, clear time and fleet visibility.',
   get_submission_cooldown:
-    'Read fee/coldkey cooldown; optional history, default 0.',
+    'Read coldkey cooldown, default fee, per-competition fee overrides and each lane\'s effective fee; optional history, default 0.',
+  set_submission_cooldown:
+    'Set cooldown, default fee and optional per-competition fees with CAS and exact phrase; see help.',
+  get_competition_submission_terms:
+    'Read every competition\'s submission terms: artifact contract and limits (with source), cooldown, and own fee.',
   list_hotkey_bans: 'Hotkey bans.',
   unban_hotkey: 'Unban.',
   get_confirmation_bundle_settings:
@@ -1772,14 +1825,14 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_competition_settings', {
     title: 'Get generator competition settings',
-    description: 'Read the shadow DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane at zero emission); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); and window_days for the ledger. Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
+    description: 'Read the DittoBench generator competition policy: mode (off refuses uploads, leases nothing and opens no rounds; shadow runs the lane with every ledger entry weight_eligible=false; enforce marks qualified miner generators eligible, which pays only with a served generator track share); the score (panel_size top agent owners, min_panel, min_solver_owners, solve_threshold, champion_bonus); qualification (seeds_per_run secret seeds of exactly cases_per_seed cases, copy_overlap_threshold on the probe, upload cooldown, lease TTL, max_attempts, retry backoff); rounds (epochs_per_round chain epochs per round, counted_columns, challenger_columns, reference_agent_ids added to every panel as independent solvers, privacy_window_rounds before a round is revealed, onchain_commitment, validator_rounds_enabled which lets validators run panel agents); window_days for the ledger; and upload_fee_required (true makes every generator upload carry a finalized TAO payment of the generator competition fee, get_submission_cooldown effective_competition_fees generator, which inherits the default fee until set_submission_cooldown competitionFees prices it, to the submission address, and a payment funds exactly one upload across both lanes; false, the shipped default and the reading of a Platform that predates the field, charges nothing; a competitionFees generator fee_required override decides instead when set). Returns the effective revision (0 means the shipped default, mode=off) and optional newest-first history. Requires backroom:read and changes nothing.',
     inputSchema: MCP_SETTINGS_HISTORY_INPUT, annotations: toolAnnotations('read'),
   }, async ({ historyLimit, historyOffset }) =>
     result(compacted(pageRevisionHistory(await fetchGeneratorSettings(), historyLimit, historyOffset), REVISION_LISTS)))
 
   registerTool('set_generator_competition_settings', {
     title: 'Set generator competition settings',
-    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. Returns the revision this write created. There is no enforcing mode: every ledger entry stays weight_eligible=false and the validator track stays SHADOW. Requires backroom:write.',
+    description: 'Append one whole-object revision of the generator competition policy. Send every field (read get_generator_competition_settings and send its effective settings back with your change), expectedRevision exactly as that read reports, a reason of at least 8 characters, and the confirmation "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies. Platform refuses min_solver_owners > min_panel, min_panel above the round panel (panel_size plus reference agents), duplicate reference agents, and more than 8 columns. cases_per_seed is 8..80: about 70 per column over 5 counted columns gives a round the ~350 cases of a bench v13 run. Raising it rejects, on its next round seed, every miner generator that cannot fill the new size (the public starter kit fills 80; older forks often stop at 32), and a round leases only to validators whose scorer advertises that column size; larger rounds also need more time left before their close to be leased (20 minutes, or 5 minutes plus 4 seconds per round case when longer). To start rounds: mode=shadow, a registered and qualified default generator (register_default_generator), then validator_rounds_enabled=true; check preview_generator_round first. To charge generator uploads, set upload_fee_required=true: the amount is the generator competition fee (the default submission fee until set_submission_cooldown competitionFees gives generator its own fee_amount_rao), miners on an older CLI get a 402 telling them to upgrade, and uploads already accepted are unaffected. Returns the revision this write created. mode=enforce (confirmation APPLY GENERATOR COMPETITION ENFORCE) runs the lane exactly like shadow but marks qualified miner generators weight_eligible on the ledger; validators pay them only from a generator share served by set_track_share_settings, and hand an unpaid generator share back to memory, so enforce alone moves no emission. Requires backroom:write.',
     inputSchema: setGeneratorSettingsInputSchema, annotations: toolAnnotations('write', true),
   }, async (input) => write(() => setGeneratorSettings(input, props.session.email)))
 
@@ -1791,7 +1844,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_submission', {
     title: 'Get generator submission',
-    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
+    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). For a rejected submission, operator_ruling says whether reject_generator_submission rejected it and reinstate_blockers lists every guard reinstate_generator_submission would refuse on (empty: it would proceed). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
     inputSchema: generatorSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorSubmission(input)))
 
@@ -1837,21 +1890,27 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: rejectGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => rejectGenerator(input, props.session.email)))
 
+  registerTool('reinstate_generator_submission', {
+    title: 'Reinstate generator submission',
+    description: 'Return a rejected generator to active for a fresh qualification run on fresh secret seeds. Use it when the rejection was not the generator\'s fault, for example a stale scorer that refused the requested case count. It holds no round column until it qualifies again. expectedStatus must be rejected and expectedStatusReason the exact status_reason from get_generator_submission (null when none); reinstate_blockers there lists every guard that would refuse. Refused while the hotkey has another active or a newer submission (one active generator per hotkey; a newer upload is the miner\'s choice), for a second active public default, and for an operator ruling (reject_generator_submission) unless overrideOperatorRuling is true. The confirmation is REINSTATE GENERATOR SUBMISSION. Audited with the previous status_reason. Requires backroom:write.',
+    inputSchema: reinstateGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => reinstateGenerator(input, props.session.email)))
+
   registerTool('list_generator_rounds', {
     title: 'List generator rounds',
-    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter (round = SubnetEpochIndex // epochs_per_round). Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason), commitment and its on-chain publication state (published by elected validators; commitment_confirmations counts them), open epoch and block, column count, panel size, results received, and once past privacy_window_rounds the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
+    description: 'Newest-first generator rounds and the chain schedule. A round is keyed on the chain epoch counter (round = SubnetEpochIndex // epochs_per_round). Each round reports status (committed: secret drawn and commitment published one round ahead; generating: columns and panel frozen, seed derived from the committed secret and the block the round opened at, waiting for the scorer to build the dataset; running: validators are running panel agents on it; scoring; scored; void with void_reason, which starts insufficient_panel or insufficient_answered_results when too few seated panel agents reported or answered at least one case), commitment and its on-chain publication state (published by elected validators; commitment_confirmations counts them), open epoch and block, column count, panel size, panel_dropped (agents dropped mid-round as ineligible), results received, answered_results (results from seated agents that answered at least one case; a run that faulted every case counts as not reported), and once past privacy_window_rounds the revealed secret and seed. schedule shows the observed SubnetEpochIndex, current round, and the epoch the next round opens at. Requires backroom:read.',
     inputSchema: listGeneratorRoundsInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listGeneratorRounds(input)))
 
   registerTool('get_generator_round', {
     title: 'Get generator round',
-    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, which validators published the commitment on chain (commitment_publications: each elected validator\'s claim, status claimed/confirmed/failed/expired, block number and detail; commitment_elected: who is asked right now; commitment_publishers_target), every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
+    description: 'Everything about one round for running or debugging it: the frozen columns (submission, hotkey, owner key, source SHA-256, counted or challenger, public default), the panel (agents, owner keys, champion, reference agents, and dropped_reason/dropped_at for an agent dropped mid-round because it was banned, held or otherwise stopped being runnable; the seat is never refilled and its result is not scored), skipped_panel_agents (ranked owners passed over at freeze because their agent could not run, with the reason; the next eligible owner took the seat), the settings revision and cases per column, per-column generation results (ok, error, build and generate durations, scorer version), case counts per column and dataset size, the scorer lease and its attempts, commitment publication and error, which validators published the commitment on chain (commitment_publications: each elected validator\'s claim, status claimed/confirmed/failed/expired, block number and detail; commitment_elected: who is asked right now; commitment_publishers_target), every validator lease attempt (validator, slot, deadline, status, detail), every accepted result (validator, run id, answered, faulted, mean score, excluded_reason when it does not count: its agent was dropped or it faulted every case), the panel agents still pending, and once scored the per-column scores and pairwise-neutral agent standings. The seed and secret are withheld until the round is revealed; get_generator_round_dataset (backroom:artifact:read) returns the seed with the dataset. Requires backroom:read.',
     inputSchema: generatorRoundIndexInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorRound(input)))
 
   registerTool('preview_generator_round', {
     title: 'Preview generator round',
-    description: 'What a round opened right now would freeze: counted columns (best qualified generators by latest round score, then never-scored ones, then the public default generator filling the rest) and challenger columns, and the panel (top ledger owners plus reference agents). Lists every blocker: mode off, invalid settings, no counted columns (no qualified generator and no registered or qualified default), a panel below min_panel, skipped reference agents, and validator_rounds_enabled=false. Use it before switching the lane on. Requires backroom:read.',
+    description: 'What a round opened right now would freeze: counted columns (best qualified generators by latest round score, then never-scored ones, then the public default generator filling the rest) and challenger columns, and the panel (top runnable ledger owners plus reference agents; skipped_panel_agents lists ranked owners passed over as ineligible). Lists every blocker: mode off, invalid settings, no counted columns (no qualified generator and no registered or qualified default), a panel below min_panel, skipped reference agents, and validator_rounds_enabled=false. Use it before switching the lane on. Requires backroom:read.',
     inputSchema: {}, annotations: toolAnnotations('read'),
   }, async () => result(await fetchGeneratorRoundPreview()))
 
@@ -2359,16 +2418,11 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get authoritative agent scores',
       description:
-        "Authoritative production scores for one SN118 agent, by agent UUID or miner hotkey (a hotkey resolves to that miner's current leaderboard submission). Returns the finalized median composite, every accepted per-validator score with its per-axis tool/memory means, seed, run id, bench version, and transcript hash, the pinned dataset (seed + sha256 + seed block), the active and desired bench versions, and the agent's leaderboard context: rank, quorum vs provisional state, emission eligibility, and the composite breakdown with the aggregate benchmark-quality gate and token-efficiency penalty multipliers. A submission below quorum answers with `finalized: false` instead of an error: score_count of quorum, the accepted scores that DO exist with their composites and exact seeds, and median_composite null because no canonical aggregate exists yet. Those pre-quorum rows carry `validator_hotkey: null` (also run_id, tool_mean, memory_mean, median_ms, n) because the platform withholds validator identity until quorum — null means not published yet, never that no validator scored it; use list_stuck_submissions or agent_scoring_readiness for per-validator ticket state. Dataset pin fields are null before quorum; each accepted row carries the exact seed it was graded against. Only a genuinely unknown agent UUID errors. Reads the same public score ledger that drives validator weights, never influences it, and exposes no miner source. Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. v13+ rows add `gate_evidence` (gate posture, gate summaries, flagged_case_count/share, gate_counts; aggregates only). This read does not compare same-owner generations or show continual retest-cohort membership; to explain why a scored agent is not the owner's representative or is absent from shared-seed retests, call get_continual_retest_diagnostic with its exact UUID. Requires backroom:read.",
-      inputSchema: agentScoresLookupInputSchema,
+        "Production scores for one SN118 agent at ONE benchmark version, by agent UUID or miner hotkey (a hotkey resolves to that miner's current leaderboard submission). Composites from different bench versions measure different benchmarks and are never pooled. `benchVersion` selects the version; omitted, it defaults to the board's active bench version. The response names it: `selected_bench_version` with `selected_bench_version_source` (`active` or `requested`). `score_count`, `median_composite`, `selected_quorum_reached` and `scores` cover the selected version only; `total_score_count` counts every version, and `other_bench_versions` keeps every other version's accepted rows whole in its own group (`bench_version`, `score_count`, `quorum_reached`, `median_composite`, `median_composite_authority`, `scores`). `median_composite_authority` says what a median is: `platform_ledger` when Platform itself published that median for exactly that version, `per_benchmark_statistic` when it is the median of that version's rows computed here (follows Platform's finalization rule but is not a ledger value), and null with a null median below quorum in that version. The authoritative ranked composite with gate and token-efficiency multipliers is `leaderboard.composite`, and only when `leaderboard.bench_version` equals the selected version. Each accepted row carries composite, per-axis tool/memory means, exact seed, run id, bench version, signature, transcript hash, and v13+ `gate_evidence` (gate posture, gate summaries, flagged_case_count/share, gate_counts; aggregates only). Rows are compacted losslessly per group: invariant fields move to a sibling `scores_shared` (top level for `scores`, inside each `other_bench_versions` entry for its own `scores`); reconstruct each row as `{ ...scores_shared, ...row }` and never read a field missing from a row as null. Also returns the pinned dataset (seed + sha256 + seed block), the active and desired bench versions, and the agent's leaderboard context: rank, quorum vs provisional state, emission eligibility, and the composite breakdown. A submission below quorum answers with `finalized: false` instead of an error, with the accepted scores that DO exist. Those pre-quorum rows carry `validator_hotkey: null` (also run_id, tool_mean, memory_mean, median_ms, n) because the platform withholds validator identity until quorum — null means not published yet, never that no validator scored it; use list_stuck_submissions or agent_scoring_readiness for per-validator ticket state. Dataset pin fields are null before quorum. Only a genuinely unknown agent UUID errors. Reads the same public score ledger that drives validator weights, never influences it, and exposes no miner source. Seeds are exact decimal strings, not numbers, because a 63-bit seed does not fit a JavaScript number and a rounded seed reproduces a different dataset. For version-over-version deltas use get_score_history. This read does not compare same-owner generations or show continual retest-cohort membership; to explain why a scored agent is not the owner's representative or is absent from shared-seed retests, call get_continual_retest_diagnostic with its exact UUID. Requires backroom:read.",
+      inputSchema: agentScoresInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async (input) =>
-      result(
-        compacted(await fetchAgentScores(input), {
-          scores: { pin: ['validator_hotkey'] },
-        }),
-      ),
+    async (input) => result(compactAgentScores(await fetchAgentScores(input))),
   )
 
   registerTool(
@@ -2548,7 +2602,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get miner submission settings',
       description:
-        'Read the platform-owned TAO fee and cooldown enforced between accepted uploads from the same owner coldkey. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
+        'Read the platform-owned miner submission settings: the cooldown enforced between accepted agent uploads from the same owner coldkey, the default TAO fee (fee_amount_rao: what memory agent uploads pay and what every other competition inherits), the per-competition fee overrides as written (competition_fees: {generator: {fee_amount_rao, fee_required}}, null fields inherit), and effective_competition_fees: each upload lane\'s resolved amount and whether it is required, with amount_source (default or override) and required_source (always for memory; competition_settings when the generator upload_fee_required switch decides; override when competition_fees decides). effective_competition_fees=null means the Platform predates per-competition fees. Revision history is newest-first and opt-in with historyLimit (default 0). Compatible clients reserve these terms before payment. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
     },
@@ -2563,6 +2617,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_competition_submission_terms',
+    {
+      title: 'Get competition submission terms',
+      description:
+        'Read what a miner submits to each competition with an upload lane (memory agent uploads, generator uploads), from GET /api/v1/public/submission-terms, the same terms the miner CLI shows before upload. Each entry gives the deliverable (artifact kind, format, contract version such as dittobench-generator/v1, required files, every upload-time limit with its source: code for a release constant, environment for a deploy variable, setting for an audited operator setting), the upload cooldown and its scope (owner coldkey or hotkey), and the competition\'s own fee (amount_rao, whether required, whether the amount is the default fee or this competition\'s override, the receiving address, and the submission settings revision it resolves from). Change a fee with set_submission_cooldown competitionFees; change the generator cooldown, pack size or fee switch with set_generator_competition_settings. competitions=null means the Platform predates these terms. This is the miner submission contract only; build bounties are separate. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchCompetitionSubmissionTerms()),
   )
 
   registerTool(
@@ -3702,6 +3767,24 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_track_share_settings',
+    {
+      title: 'Get track share settings',
+      description:
+        'Read the operator-governed per-track emission split Platform serves on the scoring ledger as track_shares_bps (memory agents and the DittoBench generator competition; coding and router may only appear at 0). effective.settings.track_shares_bps is null by default: nothing is served and every validator folds its compiled split (memory 10000 bps). effective.in_force_bps is what validators fold now: the configured map only when effective.served is true, which needs every recently-live weight setter on protocol 33 (required_protocol), otherwise memory-only. unallocated_bps of a served map burn. generator_mode shows the generator competition mode beside the split: a generator share pays only ledger entries that mode=enforce marks weight_eligible, and a protocol-33 validator hands an unpaid generator share back to memory, so a share served before enforce changes no weight. confirmation_hint is the phrase that re-applies the configured split. History is newest-first and opt-in with historyLimit (default 0). Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchTrackShareSettings(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
     'get_emission_eligibility_policy',
     {
       title: 'Get terminal-review emission eligibility policy',
@@ -3883,7 +3966,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set emission burn',
       description:
-        'Apply one append-only revision of the SN118 emission burn live, with no validator release. Supply burn_share (0 releases the full miner emission through KOTH, 1 burns all of it — the same all-to-burn vector the fold already submits when no agent holds a positive score), expectedRevision exactly as get_burn_settings reports it (0 when no revision has ever been written) as an optimistic-concurrency guard, an operator reason, and the confirmation string "APPLY BURN SETTINGS". This is the one control here that moves TAO directly, which is why the revision log records who set it and why. Optionally supply rank_shares, the KOTH payout curve for the champion then the four tail slots (five positive, non-increasing shares summing to 1, e.g. [0.5, 0.2, 0.13, 0.1, 0.07]). Omitting rank_shares keeps the current curve; null clears it to the frozen 65/14/10/7/4. Platform serves a curve to validators only once every recently-live weight setter reports protocol 31, so a mixed fleet never folds two curves; get_burn_settings reports effective.rank_shares_served, and until it is true the leaderboard keeps the frozen curve. Resend the current burn_share when changing only the curve. It scales the competitive vector without re-ordering it: the remainder is normalized across the eligible miner weights, so no miner share of what miners receive changes. It is not instantaneous — a validator that already submitted weights this epoch keeps that vector until its next one, so budget roughly an epoch for the subnet-wide effect. Requires backroom:write.',
+        'Apply one append-only revision of the SN118 emission burn live, with no validator release. Supply burn_share (0 releases the full miner emission through KOTH, 1 burns all of it — the same all-to-burn vector the fold already submits when no agent holds a positive score), expectedRevision exactly as get_burn_settings reports it (0 when no revision has ever been written) as an optimistic-concurrency guard, an operator reason, and the confirmation string "APPLY BURN SETTINGS". This is the one control here that moves TAO directly, which is why the revision log records who set it and why. Optionally supply rank_shares, the KOTH payout curve for the champion then the four tail slots (five positive, non-increasing shares summing to 1, e.g. [0.5, 0.2, 0.13, 0.1, 0.07]). Omitting rank_shares keeps the current curve; null clears it to the frozen 65/14/10/7/4. Platform serves a curve to validators only once every recently-live weight setter reports protocol 31, so a mixed fleet never folds two curves; get_burn_settings reports effective.rank_shares_served, and until it is true the leaderboard keeps the frozen curve. Resend the current burn_share when changing only the curve. Once an emission allocation revision exists (set_emission_allocation, SN-350) it owns burn_share: Platform refuses any other value here, so change the burn there. It scales the competitive vector without re-ordering it: the remainder is normalized across the eligible miner weights, so no miner share of what miners receive changes. It is not instantaneous — a validator that already submitted weights this epoch keeps that vector until its next one, so budget roughly an epoch for the subnet-wide effect. Requires backroom:write.',
       inputSchema: setBurnSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -3891,11 +3974,53 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'get_emission_allocation',
+    {
+      title: 'Get emission allocation',
+      description:
+        'Read the one typed-weights split of SN118 miner emission (SN-350): every destination (burn, each competition track, each Gamma service bucket) as basis points and percent of total emission. source is legacy_settings until the first set_emission_allocation write (revision 0): the split then comes from get_burn_settings, get_track_share_settings and the Gamma treasury bucket, and legacy_equivalent gives the exact allocation and confirmation that reproduce it (byte_identical=true means writing it changes no served byte). configured is what the current settings fold to (Gamma counts only while it enforces), in_force applies the protocol-33 track-map fleet gate (track_shares_served), and pinned is what the newest epoch pin froze for every validator. served on the current revision is the burn_share, track_shares_bps and Gamma bucket validators are served. in_sync=false means the settings no longer match the current allocation. gamma_buckets lists the buckets an allocation must name and gamma_ranges the coldkey-signed ranges while Gamma enforces. rank_shares (the KOTH payout curve) stays its own setting in set_burn_settings. History is newest-first and opt-in with historyLimit (default 0). Requires backroom:read and changes nothing.',
+      inputSchema: MCP_SETTINGS_HISTORY_INPUT,
+      annotations: toolAnnotations('read'),
+    },
+    async ({ historyLimit, historyOffset }) =>
+      result(
+        compacted(
+          pageRevisionHistory(await fetchEmissionAllocation(), historyLimit, historyOffset),
+          REVISION_LISTS,
+        ),
+      ),
+  )
+
+  registerTool(
+    'set_emission_allocation',
+    {
+      title: 'Set emission allocation',
+      description:
+        'Apply one atomic revision of the whole SN118 emission split, with no validator release. entries names every destination in integer basis points of total miner emission summing to exactly 10000: {kind: "burn", bps}, {kind: "track", id: "memory"|"generator", bps} (coding and router only at 0) and one {kind: "gamma", bucket, bps} per Gamma service bucket get_emission_allocation lists in gamma_buckets, e.g. [{kind: "burn", bps: 5000}, {kind: "track", id: "memory", bps: 3500}, {kind: "track", id: "generator", bps: 1500}]. Platform derives what validators fold (burn_share = burn / (10000 - Gamma), a track map claiming the whole pool, the Gamma bucket) and writes any changed burn, track-share or treasury revision in the same transaction, so no ordering hazard remains. It refuses sums other than 10000, unknown kinds or tracks, duplicates, unnamed paid tracks or Gamma buckets, nonzero coding or router shares, nonzero Gamma unless Gamma enforces and its activation epoch has been pinned, Gamma outside the coldkey-signed range, and any split whose track bps do not divide the pool into integer bps (for example memory 4000 / generator 2000 of a 6000 pool); it never rounds. Burn 5000 makes any integer track split exact. Supply expectedRevision exactly as get_emission_allocation reports it (0 before the first write), a reason, and the confirmation spelling every nonzero entry in order (burn, tracks in registry order, Gamma buckets as gamma:<bucket>): "APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500". Once a revision exists, set_track_share_settings is refused, set_burn_settings accepts only the current burn_share (to change rank_shares), and enforcing Gamma bucket changes in record_treasury_settings are refused. Takes effect at the next ledger read or epoch pin; budget roughly an epoch subnet-wide. Requires backroom:write.',
+      inputSchema: setEmissionAllocationInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setEmissionAllocation(input, props.session.email)),
+  )
+
+  registerTool(
+    'set_track_share_settings',
+    {
+      title: 'Set track share settings',
+      description:
+        'Legacy writer, refused once an emission allocation revision exists: set the split with set_emission_allocation instead. Apply one append-only revision of the per-track emission split validators fold, with no validator release. settings.track_shares_bps is a map of basis points, e.g. {memory: 9000, generator: 1000}, or null to clear it (validators return to their compiled memory-only split). Platform refuses unknown track ids, a map without memory (validators would read a missing memory share as the full pool), a nonzero share for coding or router (no shipped validator pays them), and a sum above 10000 (anything short of 10000 burns). Supply expectedRevision exactly as get_track_share_settings reports it, a reason, and the confirmation that spells out every nonzero share in track order: "APPLY TRACK SHARES memory=9000 generator=1000", or "CLEAR TRACK SHARES" for null. Platform serves the map only once every recently-live weight setter reports protocol 33; check effective.served. A generator share pays only ledger entries the generator competition marks weight_eligible (set_generator_competition_settings mode=enforce); until then validators hand it back to memory. Takes effect at the next ledger read or epoch pin, so budget roughly an epoch subnet-wide. Requires backroom:write.',
+      inputSchema: setTrackShareSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setTrackShareSettings(input, props.session.email)),
+  )
+
+  registerTool(
     'set_submission_cooldown',
     {
       title: 'Set miner submission settings',
       description:
-        'Apply one append-only revision of the platform-owned miner submission cooldown and TAO-denominated fee. Supply expectedRevision, cooldownSeconds, feeAmountRao, an operator reason, and the exact confirmation string returned by the schema helper. Requires backroom:write.',
+        'Apply one append-only revision of the platform-owned miner submission cooldown, default TAO fee and per-competition fees. Supply expectedRevision (get_submission_cooldown current.revision), cooldownSeconds, feeAmountRao (the default fee: memory agent uploads pay it and every competition without its own amount inherits it), an operator reason, and the exact confirmation. Omit competitionFees to carry the current overrides forward unchanged; the confirmation is then "SET SUBMISSION COOLDOWN <seconds> SECONDS FEE <feeAmountRao> RAO". To price a competition send the WHOLE override map, e.g. competitionFees={generator: {fee_amount_rao: 500000000, fee_required: null}} (known ids: generator, coding, router; memory is priced by feeAmountRao), where a null fee_amount_rao inherits feeAmountRao, fee_required true charges, false makes uploads free, and null leaves it to the generator upload_fee_required switch; {} clears every override. With competitionFees the confirmation appends, in the order generator, coding, router, "; <ID> FEE <rao> RAO REQUIRED <YES|NO|INHERIT>" per overridden competition (FEE INHERIT for a null amount), or "; ALL COMPETITIONS INHERIT" for {}: for the example, "SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT". An upload must pay its competition\'s amount exactly (less or more is refused and spends nothing), and one transfer funds one upload across both lanes. Uploads already accepted are unaffected. Requires backroom:write.',
       inputSchema: updateSubmissionSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },

@@ -3,6 +3,7 @@ package genrun
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
@@ -20,6 +21,25 @@ type Plan struct {
 	Cases int
 	// CheckDeterminism re-runs the first seed and requires identical bytes.
 	CheckDeterminism bool
+}
+
+// Validate checks every request the plan would send, so a request this
+// scorer's pack contract refuses (for example cases above challenge.MaxCases)
+// is reported as ErrInvalidRequest instead of a generator failure.
+func (p Plan) Validate() error {
+	if len(p.Seeds) == 0 {
+		return fmt.Errorf("%w: plan has no seeds", ErrInvalidRequest)
+	}
+	seeds := p.Seeds
+	if p.ProbeSeed != "" {
+		seeds = append(append([]string(nil), p.Seeds...), p.ProbeSeed)
+	}
+	for _, seed := range seeds {
+		if err := challenge.NewGenerateRequest(seed, p.MinerHotkey, p.Cases).Validate(); err != nil {
+			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		}
+	}
+	return nil
 }
 
 // SeedOutput is one generation run.
@@ -74,9 +94,14 @@ func (e Evaluation) Valid() bool {
 
 // Evaluate builds the generator in srcDir and runs the plan. Generator
 // failures are recorded in the Evaluation; a returned error is always a
-// sandbox failure (errors.Is(err, ErrSandbox)) or a cancelled context.
+// request this scorer cannot serve (errors.Is(err, ErrInvalidRequest),
+// checked before the build), a sandbox failure (errors.Is(err, ErrSandbox)),
+// or a cancelled context. None of them is the generator's fault.
 func Evaluate(ctx context.Context, sb Sandbox, srcDir string, plan Plan) (Evaluation, error) {
 	ev := Evaluation{Sandbox: sb.Name()}
+	if err := plan.Validate(); err != nil {
+		return ev, err
+	}
 	start := time.Now()
 	prog, err := sb.Build(ctx, srcDir)
 	ev.Build.DurationMS = time.Since(start).Milliseconds()

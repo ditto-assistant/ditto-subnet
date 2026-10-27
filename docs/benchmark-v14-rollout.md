@@ -9,8 +9,12 @@ alter emissions, or change a production setting.
 
 V14 changes the declarative memory over-call rule, one claim-set grading
 correction, folds the typographic hyphens U+2010/U+2011 in graded reply text to
-ASCII (#2734) with matching claim-gate forms and twin/result-usage reads, and
-changes benchmark identity.
+ASCII (#2734) with matching claim-gate forms and twin/result-usage reads, adds
+three memory matcher corrections from #2734 (a hyphen joining the words of a
+known multi-word value reads as a space; set removal may end in a short place
+phrase such as `from the list`; action claims accept the verb's -ing form), and
+changes benchmark identity. It also reads every graded reply as rendered text
+(see *V14 answer-normalization contract* below).
 V13 keeps its whole-case exclusion. V2–v12 keep their existing rules. Lifecycle
 write cases remain excluded at every version. V14 counts each observed
 declarative-ack case and permits save/update/delete memory actions on that case;
@@ -32,14 +36,73 @@ that value is also a correction cue. "better safe than sorry" is published as
 `sorry`. V14 credits both. A sentence that carries anything beyond the value
 ("Sorry, I mean safe.") is still a correction, and v13 grading is unchanged.
 The v14 full/public vector at seed 123456789 is
-`cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432`,
+`36b72e10eafd792ecf4ed20a9d9b0d0e27f11433a2ad7178ec58f117bca53daa`,
 with epoch `2027-06-01T00:00:00Z`. The grader (apart from the claim-set
-correction above and the hyphen fold), v13 gate postures, LongMem
-instrument and public harness wire (9) carry forward. The surface carries
+correction above, the #2734 hyphen fold and matchers, and the answer-normalization
+contract below), v13 gate postures,
+LongMem instrument and public harness wire (9) carry forward. The surface carries
 forward apart from case-file records, which v14 files in story order instead of
-shuffled-presentation order (#3088); that moves the v14 vector and leaves every
-v13 seed untouched. There is no private
+shuffled-presentation order (#3088), and the supersession chains of SN-353/354
+below. Both move the v14 vector and leave every v13 seed untouched. There is no private
 surface expansion or screening policy v14 activation in this change.
+
+## Anti-template work remains unqualified
+
+The October 26 scope in
+[ditto-subnet#1832](https://github.com/ditto-assistant/ditto-subnet/issues/1832)
+adds resistance to public-generator template matching to the intended v14
+launch. The compatibility implementation above does not deliver that work.
+The public phrase banks still carry forward; changing the seed, grading
+normalization or case-file dates does not establish generalization.
+
+See [the implementation and qualification handoff](benchmark-v14-template-resistance.md)
+for the retained experiments, missing version boundaries and required controls.
+Keep anti-template qualification incomplete until those results exist. A
+Backroom `start_ready` result checks mechanical rollout prerequisites; it is
+not that qualification or operator approval. This document does not change a
+production guard or authorize a rollout.
+
+## V14 answer-normalization contract
+
+V14 grades the reply a user would read, so a harness needs no final-writer
+typography pass to be scored. Top v13 agents strip paired `**` and fold U+2011
+before returning (`typography.py`/`output.cpp` in the dan0l line, released
+agent `82172ff9`), which operators accepted as W8 typography (SN-342). From v14
+the grader does that itself, in the memory grader and in every scorer path that
+reads reply text (`grade.ReplyAsRead`: text-graded tool cases, result-usage
+needles, twin post-pass answers). V13 and older grade byte-identically.
+
+- **Rendered markdown** (`grade.PlainReplyTextV14`). Paired `*`/`**`/`***`/`_`/
+  `__` emphasis (word-bounded, so `snake_case` and `2*3*4` stay text), inline
+  code and code-fence lines, ATX headings, blockquote markers, bullets and task
+  boxes, table outer pipes and delimiter rows, thematic breaks, and link or image
+  syntax (`[text](url)` reads as `text`) are removed; the characters they mark up
+  are kept. Ordered-list ordinals are removed only for a real numbered list
+  (two or more items numbered 1, 2, ...); a lone `5. That's it.` keeps its
+  number. Strikethrough is kept, so `~~Oslo~~ Lisbon` still names the
+  distractor. Non-ASCII spaces read as a space, zero-width characters are
+  dropped, U+2212 reads as `-`.
+- **Sentence punctuation ends a number.** A `.` or `,` that no digit follows
+  ends a number token: `Your PIN is 4471, as saved` names `4471`, and the same
+  rule catches a forbidden, dump-guard or decoy number followed by punctuation.
+  A decimal or grouping separator (`4471.5`, `4471,500`), a sign, or another
+  digit still attaches.
+- **Percent claims.** A quantity claim in `percent` or `percentage points`
+  reads `15%` as `15 percent`. A count claim still ignores percentages.
+
+Every other v13 guard is unchanged: distractor and hedge detection (two or more
+distinct asserted values), cited-and-rejected excusal, the stuffing quantifier,
+slot-in-prose, the forbidden-value and dump guards, and number-token boundaries
+against neighbouring digits and signs. Audit bank `v14-2` adds reviewed
+positives for each rule and negatives for a bolded distractor, a markdown
+hedge, strikethrough, a decimal tail, a comma hedge, a punctuated forbidden
+value and a percent distractor. No generation vector moves; only v14 grading.
+
+Deliberately not relaxed: number words beyond the existing lexicon, abbreviated
+amounts (`$1.2k`), numeric slash dates (`03/04/2026` is ambiguous between
+locales), unicode en/em dashes inside identifiers (they separate clauses), and
+the v13-pinned effect reads (`grade.MemoryEffectV13`), which receive the
+rendered reply but keep the v13 number boundary.
 
 ## Record the release packet before enabling any v14 work
 
@@ -96,6 +159,114 @@ image/source**, which may differ from this baseline.
 5. The operator reviews the shadow report, fleet capacity and rollback evidence
    before issuing any activation. Keep missing evidence as a blocker.
 
+## Generator-competition changes (SN-361)
+
+These change v14 generation only. V13 generation and grading stay
+byte-identical. Each change that moves the v14 vector makes the earlier
+v14 qualification evidence stale, including the 40-seed GIH diagnostic at
+`8f1005957` (#3179: quality 0.9501 over 14,000 cases). Rerun it on the new
+source before citing it.
+
+### SN-351 family-mix admission gate
+
+`research/dittobench-datagen/internal/familygate` (CLI `cmd/familygate`) folds
+per-case panel verdicts, labelled by family, into one row per family. A family
+is admitted only with at least 3 rounds of evidence, a trivial rate of at most
+0.60 and an unsolved rate of at most 1/3. A case counts as solved only when at
+least 2 distinct owners solve it, as in the generator competition's
+`min_solver_owners`. The rows come from a private operator column, an offline
+panel run or Backroom's generator round view. The column `at threshold` counts
+cases where every solver scored exactly 0.5 (SN-352).
+`universe.V14FamilyMix` lists every v14 program family with its origin and
+admission state. `universe.V14ExcludedShapes` lists the shapes SN-351 rules out,
+with round evidence: simple update chain, two-hop, single retraction,
+scattered list, single-hop as-of and needle as always trivial; conditional,
+alias-reroute and owner-alias-email as unsolved. Tests refuse a new v14 or
+generator-derived family that uses an excluded shape, and a generator-derived
+family that is generated before admission. Applied to the SN-351 evidence
+(`internal/familygate/testdata`), the gate holds the public default and
+needle/as-of shapes as trivial, holds conditional, alias-reroute,
+owner-alias-email and revised-cheapest as unsolved, and admits
+revert-to-original. This change adds no generation bytes.
+
+Qualification gate 4 must include the `familygate` table for every family
+`universe.V14FamiliesAwaitingPanel` returns, measured over at least 3 rounds.
+
+### SN-352 the leading generator's 0.5 per-case ceiling
+
+The leading generator (generator B in
+`research/dittobench-datagen/docs/v14-generator-credits.md`) earns about 4x
+the next generator's score. Almost no panel agent scores above 0.5 on its
+cases. Its primary family is a **two-item list about one person** asked by full
+name:
+
+- One item is recorded under the full name.
+- The other is recorded under a nickname that only an identity record binds
+  to that person.
+- Several look-alike nicknames, one suffix away, each carry an item in the
+  same frame. Those items are distractors.
+
+The memory grader credits a list by the fraction of items present
+(`grade/v13.go` `gradeListV13`). So the full-name item alone scores exactly
+0.5, a look-alike's item zeroes the case, and only both items score 1
+(`challenge/half_credit_test.go`). The panel matches this exactly. All 27
+top promotion candidates in rounds 25955-25967 have panel mean 0.2, which is
+2 solvers × 0.5 / 5. Every trivial case in round 25955 has mean 0.5 with 5/5
+solvers, and only two cases in round 25963 exceed 0.5.
+
+Verdict: the hard half is real, not a grading or format artifact.
+`challenge.ValidateGenerated` rejects any pack whose gold answer (both items)
+scores below 1.0 under the production grader, and round 25963 has two cases
+with panel means 0.6 and 0.7, so some agents do earn full credit. The
+nickname is honestly recoverable from the identity record, and the
+look-alikes are legitimate interference. But the panel almost never earns
+the hard half. The generator is credited for who avoided a look-alike's item, not for
+who resolved the nickname, because `solve_threshold = 0.5` counts the easy
+half as a solve.
+
+V14 does not port the mechanic at this difficulty. `internal/familygate` now
+holds a family as `hold-half-credit` when more than half of its solved cases
+are solved only at the threshold. Replaying the candidates
+(`internal/familygate/testdata/sn352_candidates.json`) holds the family. The
+same rows with full-credit solves would be admitted. Porting is deferred, not rejected. In v14's continuous scoring, the hard
+half is exactly the signal worth having. A port needs two things: a
+program-envelope slot (the v14 business and personal slot counts are fixed,
+and SN-356 to SN-360 are changing those families now), and full-credit
+evidence over 3 rounds, for example a single-value nickname hop scored 0 or 1. Changing the live generator scoring so a
+half-credit-only case does not count as solvable is recorded as a follow-up
+for the generator competition owners. It changes live rewards, not v14, so
+it is not part of this change. No v14 generation bytes change.
+### SN-353 / SN-354 supersession chains without announcing cues
+
+In v13, each correction family has one superseding record, and that record
+announces itself ("the newest entry governs", "replacing ..."). With v14's
+story-order stamps, the cue sentence, the second record and the latest filing
+all point to the answer. V14 renders a 2-3 hop chain in the owner,
+standing-status and current-channel business families and in six personal
+domains (household, appointments, milestones, subscriptions, travel,
+hobbies). Every chain has one of:
+
+- a revert (A, then B, then A again, or A, B, C, then B);
+- a declined proposal, optionally after a real change;
+- an entry logged in error, so the value before it stands.
+
+The counterfactual flips exactly one link: the proposal is adopted, the entry
+is confirmed, or the last change names a different value. Cue placement is
+seeded per group: half announce every adopted change, a quarter are cue-free
+(state the change plainly, with precedence only from filing order), and a
+quarter misplace the cue onto a non-governing record. Half of the reverts do
+not restate the value ("back to the original entry"). That idea is ported from
+generator D's revert family (`research/dittobench-datagen/docs/v14-generator-credits.md`).
+`universe/v14_supersession_test.go` proves the counterfactual changes exactly
+one record. It also proves that the last-cue, second-record and latest-named
+shortcuts each solve both readings of at most 16% of chained groups (0.08,
+0.00 and 0.16 over 120 seeds). On v13, the second-record shortcut is exact.
+The oracle scores 1 under the v14 grader.
+Next-action, school list, latest-event and client-vs-vendor are left to
+SN-356 to SN-360. The v14 known vector moves; v13 stays byte-identical. The
+chained families are listed in `universe.V14FamilyMix` as v14-structural,
+pending a 3-round `familygate` panel measurement.
+
 ## Ticket boundary and rollback
 
 Use the existing guarded benchmark rollout endpoints from Backroom. Record the
@@ -125,3 +296,84 @@ Database score/ticket versions already have no upper bound. The equality-to-13
 constraints belong to private v13 screening, canary or scorer-cohort records;
 those remain version-specific. No schema migration or production write is
 required for this compatibility change.
+
+## Open activation blockers
+
+This is the October 26 readiness audit. V13 is active and confirmation runs in
+`shadow`. Each item below must be closed with evidence, or explicitly waived
+by the operator, before anyone calls `start_benchmark_rollout` for v14. An
+item listed here is a blocker. It is not a claim that the work has started.
+
+Closed in code:
+
+- **Weight fold receipt parity.** Issue #2989 was fixed by #3184. The
+  validator fold and the enforce ledger check now read the full-confirmation
+  receipt for every confirmation-capable version, matching Platform's crown.
+  Before the fix, enabling confirmation enforce on a v14 ledger could crown a
+  different champion than the Platform pin. Every weight receipt would then
+  fail `ledger_pin_mismatch`. The fix does not change live v13 shadow
+  behavior. Validators must run a release that includes #3184 before enforce
+  is served on any v10+ ledger.
+- **Public v14 adversary control.** #3179 lets `parserprobe
+  -require-public-control` validate a v14 report.
+
+Open, and requiring an operator, release-owner or paid run:
+
+1. **Anti-template qualification (#1832).** The steps are in
+   [the handoff](benchmark-v14-template-resistance.md):
+   - an advisory-guidance carrier run
+   - paired cases with fresh phrasing and misleading cues, plus paired cases
+     where the stored decision differs
+   - a coordinated v14 contract for the private producer and its delivery,
+     replacing the private base, surface and artifact decoders that are still
+     bound to v13
+   - clean honest-agent and adversary controls against the documented 0.02
+     and 0.05 limits
+
+   These need private producer runs, provider spend and owner design
+   decisions, so no code is merged for them here. The latest offline public
+   GIH diagnostic still inverts v14 at a quality of 0.9501. Comments on #1832
+   give the report SHA.
+2. **Release packet and fleet readiness (#2508).** This document already
+   describes it: the exact merge SHA, scorer image and descriptor digests,
+   `v14_scored_runtime_env` heartbeats from a separate cohort, and the
+   archived v13 cohort packet.
+3. **Accepted diagnostic canaries and the shadow report.** These are gates 3
+   to 5 above. No measured v14 shadow results exist yet.
+4. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
+   bundles exist. Enforce stays off at activation unless that evidence is
+   recorded separately.
+5. **Generator-competition rounds stay on v13 at activation (explicit
+   fallback).** Rounds now freeze a bench version when they open and follow
+   the active version where a round contract exists. The Platform lane,
+   tickets, capability routing, V13 pin and the validator all run at the
+   round's frozen version, and in-flight rounds never change contract.
+   - What migrates automatically: nothing at v14 activation itself. A round
+     opened after activation records `bench_contract` ("active bench v14 has
+     no generator-round contract") and runs at v13. It is leased only to
+     validators verified for v13 that sign the V13 cohort authority packet.
+   - Still pinned to v13, and why: `GENERATOR_ROUND_BENCH_VERSIONS` is `(13,)`.
+     Round packs grade at `challenge.GradingBenchVersion = 13` (pack contract
+     v1, which miners' generators emit). dittobench-api's `generator-round-v1`
+     mode accepts only `bench_version` 13.
+   - Remaining step: ship a v14 pack contract and a scorer round mode that
+     accepts v14 and advertises it as a scorer feature. Then add 14 to the
+     tuple. The pin test in `ditto/tests/test_bench_version_pins.py` keeps
+     these in step.
+   - Until then, rounds depend on a staffed v13 cohort after v14 activates. A
+     round with no validator able to run v13 is void at opening with the
+     reason.
+6. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
+   now reads `active_version` from the public rollout endpoint, so the
+   default follows activation without a code change. The activation PR still
+   bumps the offline fallback `LIVE_SCORING_BENCH_VERSION` (now 13) and the
+   bench number quoted in `.agents/skills/mine/SKILL.md` (bump checklist
+   step 8).
+
+Work in progress elsewhere that also changes the v14 vector:
+
+- SN-351 to SN-360 (generator-derived datagen families)
+- the answer-checker normalization and markdown-tolerance work
+
+The vector and the replay evidence must be re-pinned after the last of these
+lands, and before the release packet is cut.

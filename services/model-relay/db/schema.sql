@@ -3833,6 +3833,50 @@ CREATE TABLE public.efficiency_cohort_snapshots (
 
 
 --
+-- Name: emission_allocation_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_allocation_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    allocation jsonb NOT NULL,
+    served jsonb NOT NULL,
+    burn_settings_revision integer NOT NULL,
+    track_share_settings_revision integer NOT NULL,
+    treasury_settings_revision integer NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ac_6add CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ch_4c52 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_pa_3099 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_re_f2f4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_se_d33a CHECK (((burn_settings_revision >= 0) AND (track_share_settings_revision >= 0) AND (treasury_settings_revision >= 0)))
+);
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.emission_allocation_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.emission_allocation_revisions_revision_seq OWNED BY public.emission_allocation_revisions.revision;
+
+
+--
 -- Name: emission_eligibility_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4202,6 +4246,8 @@ CREATE TABLE public.generator_rounds (
     scored_at timestamp with time zone,
     void_reason text,
     revealed_at timestamp with time zone,
+    bench_version integer,
+    CONSTRAINT ck_generator_rounds_generator_rounds_bench_version_check CHECK (((bench_version IS NULL) OR (bench_version >= 13))),
     CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
     CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
     CONSTRAINT ck_generator_rounds_generator_rounds_lease_check CHECK (((lease_id IS NULL) = (lease_expires_at IS NULL))),
@@ -4253,10 +4299,32 @@ CREATE TABLE public.generator_runs (
     scorer_version text,
     leased_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 64))),
+    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 80))),
     CONSTRAINT ck_generator_runs_generator_runs_finished_check CHECK (((status = 'leased'::text) = (finished_at IS NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_score_check CHECK (((status = 'scored'::text) = (score IS NOT NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'qualified'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))
+);
+
+
+--
+-- Name: generator_submission_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_submission_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text NOT NULL,
+    amount_rao bigint NOT NULL,
+    tao_usd_rate numeric(20,8),
+    dest_address text NOT NULL,
+    "timestamp" timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_548c CHECK ((amount_rao > 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_8849 CHECK ((extrinsic_index >= 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_e702 CHECK ((block_hash = lower(block_hash))),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_fea8 CHECK (((tao_usd_rate IS NULL) OR (tao_usd_rate > (0)::numeric)))
 );
 
 
@@ -4288,9 +4356,11 @@ CREATE TABLE public.generator_submissions (
     public_default boolean DEFAULT false NOT NULL,
     round_score double precision,
     round_scored_index bigint,
+    name text,
     CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_name_check CHECK (((name IS NULL) OR ((char_length(name) >= 1) AND (char_length(name) <= 64)))),
     CONSTRAINT ck_generator_submissions_generator_submissions_size_check CHECK (((size_bytes > 0) AND (size_bytes = octet_length(source_bytes)) AND (size_bytes <= 4194304))),
     CONSTRAINT ck_generator_submissions_generator_submissions_status_check CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'rejected'::text])))
 );
@@ -6363,8 +6433,10 @@ CREATE TABLE public.submission_settings_revisions (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     fee_amount_rao bigint NOT NULL,
+    competition_fees jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT ck_submission_settings_revisions_submission_settings_ac_6db4 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_co_109c CHECK (((cooldown_seconds >= 60) AND (cooldown_seconds <= 86400))),
+    CONSTRAINT ck_submission_settings_revisions_submission_settings_co_c3f0 CHECK ((jsonb_typeof(competition_fees) = 'object'::text)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_fe_4fea CHECK (((fee_amount_rao >= 1) AND (fee_amount_rao <= '1000000000000'::bigint))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_pa_46f1 CHECK ((parent_revision >= 0)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_re_fa8a CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
@@ -6426,6 +6498,47 @@ CREATE TABLE public.submission_source_reviews (
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text, 'hetzner'::text])))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__fa74 CHECK (((attempt_count >= 0) AND (attempt_count <= 3)))
 );
+
+
+--
+-- Name: track_share_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.track_share_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__1ff4 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__3a5f CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__a93e CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__b1ff CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__d7e4 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.track_share_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.track_share_settings_revisions_revision_seq OWNED BY public.track_share_settings_revisions.revision;
 
 
 --
@@ -7420,6 +7533,13 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: emission_allocation_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_allocation_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: emission_eligibility_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -7543,6 +7663,13 @@ ALTER TABLE ONLY public.submission_deposit_address_revisions ALTER COLUMN revisi
 --
 
 ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.submission_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: track_share_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.track_share_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -8412,6 +8539,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_allocation_revisions emission_allocation_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT emission_allocation_parent_key UNIQUE (parent_revision);
+
+
+--
 -- Name: emission_eligibility_settings_revisions emission_eligibility_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8457,6 +8592,22 @@ ALTER TABLE ONLY public.feedback_track_contributions
 
 ALTER TABLE ONLY public.generator_competition_settings_revisions
     ADD CONSTRAINT generator_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_pkey PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_key UNIQUE (submission_id);
 
 
 --
@@ -9236,6 +9387,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_allocation_revisions pk_emission_allocation_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT pk_emission_allocation_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: emission_eligibility_settings_revisions pk_emission_eligibility_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9780,6 +9939,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: track_share_settings_revisions pk_track_share_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT pk_track_share_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: transcript_mirror_settings_revisions pk_transcript_mirror_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10281,6 +10448,14 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 ALTER TABLE ONLY public.screening_verification_replays
     ADD CONSTRAINT svrp_request_id_key UNIQUE (request_id);
+
+
+--
+-- Name: track_share_settings_revisions track_share_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT track_share_settings_scope_parent_key UNIQUE (scope, parent_revision);
 
 
 --
@@ -11476,6 +11651,13 @@ CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree 
 
 
 --
+-- Name: generator_submission_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submission_payments_miner_coldkey_idx ON public.generator_submission_payments USING btree (miner_coldkey);
+
+
+--
 -- Name: generator_submissions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12110,6 +12292,13 @@ CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay
 --
 
 CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
+
+
+--
+-- Name: track_share_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX track_share_settings_scope_revision_idx ON public.track_share_settings_revisions USING btree (scope, revision);
 
 
 --
@@ -14773,6 +14962,14 @@ ALTER TABLE ONLY public.v13_replay_private_generation_groups
 
 ALTER TABLE ONLY public.v13_replay_private_generation_groups
     ADD CONSTRAINT fk_v13_replay_private_generation_groups_target_attempt__08f4 FOREIGN KEY (target_attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_fkey FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE RESTRICT;
 
 
 --

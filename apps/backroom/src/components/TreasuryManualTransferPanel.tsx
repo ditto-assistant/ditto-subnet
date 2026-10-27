@@ -54,9 +54,11 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     d.holding_coldkey === preview.envelope.destination && fundable(d))
   return <section className="mt-8 space-y-4 border-t border-[var(--line)] pt-6" aria-label="Manual collector transfers">
     <h2 className="text-lg font-semibold">Transfer to a service wallet</h2>
-    <p className="text-sm text-[var(--muted-strong)]">Send SN118 alpha once from the collector to an approved holding wallet. Keep a minimum stake reserve. Recurring transfers are off. A wallet transfer does not prove purchased service credits.</p>
+    <p className="text-sm text-[var(--muted-strong)]">Move SN118 alpha from the collector to an approved holding wallet. Keep a minimum stake reserve. Recurring transfers are off.</p>
+    <p className="text-sm text-[var(--muted-strong)]">Funding GM with TAO has four steps: collector → holding wallet, sell SN118 alpha for TAO, send TAO to GM, then confirm GM credits. This control performs the first step. Sale, payment and credit receipts must be linked separately.</p>
     <button className={inputClass} disabled={busy} onClick={() => { void load() }}>Refresh transfer status</button>
     {state.blocked_reason && <p role="status">{state.blocked_reason}</p>}
+    {state.readiness?.unsigned_intent && <p role="status">Custody intent {state.readiness.unsigned_intent.request_id} has no reserved transaction. Signing expires at block {state.readiness.unsigned_intent.expires_block}.{state.readiness.finalized_block >= state.readiness.unsigned_intent.expires_block ? ' Finalized expiry has passed; close this unsigned intent through operator recovery before creating a new request.' : ' The existing request remains the only authorized intent.'}</p>}
     {state.readiness && <p className="text-sm">Collector stake: {alphaDisplay(state.readiness.available_alpha_rao)} alpha · observed finalized block {state.readiness.finalized_block}</p>}
     {state.readiness && <p className="text-sm">
       Signed manual ceiling: {alphaDisplay(state.readiness.manual_approval?.policy.max_amount_rao ?? state.readiness.max_distribution_rao)} alpha.
@@ -96,9 +98,13 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
     {actionError && <p role="alert" className="text-[var(--red)]">{actionError}</p>}
     {message && <p role="status">{message}</p>}
     <ul className="space-y-3">{state.requests.map(r => <li key={r.request_id} className="rounded border border-[var(--line)] p-3 text-sm">
-      <p>{alphaDisplay(r.envelope.request.amount_rao)} alpha → {r.envelope.request.bucket_id.toUpperCase()} · {r.status === 'audit_pending' && r.receipt?.source_attribution === 'incomplete' ? 'Finalized — wallet receipt published; source audit pending' : statusLabels[r.status]}</p>
+      <p>{alphaDisplay(r.envelope.request.amount_rao)} alpha → {r.envelope.request.bucket_id.toUpperCase()} holding wallet · {r.status === 'audit_pending' && r.receipt?.source_attribution === 'incomplete' ? 'Finalized — wallet receipt published; source audit pending' : statusLabels[r.status]}</p>
       <p className="break-all text-xs">Request {r.request_id} · {r.actor}</p>
       {r.last_error && <p>{r.last_error}</p>}
+      {r.custody_result?.failure_code === 'signing_window_elapsed' && <p>The request reached the end of its signing window before a transaction was reserved. Operator recovery is required; this request will not be retried.</p>}
+      {r.custody_result?.failure_code === 'expired_unsigned' && <p>Expired unsigned intent closed in custody. No transaction was reserved. A new transfer requires a fresh preview and confirmation.</p>}
+      {r.status === 'failed' && !r.custody_result?.failure_code && <p>No detailed custody cause is available for this failed request. Inspect the exact custody intent and operation history before replacing it.</p>}
+      {r.envelope.request.bucket_id === 'gm' && <p className="text-xs text-[var(--muted-strong)]">This request tracks collector → holding wallet only. SN118 sale → TAO, TAO payment → GM, and GM credits: no receipts linked to this request.</p>}
       {r.receipt?.source_attribution === "incomplete" && <p>Public wallet receipt published. Source earnings attribution remains incomplete; do not resend this transfer.</p>}
       {r.receipt && <><p className="break-all font-mono text-xs">Transaction {r.receipt.extrinsic_hash}</p><a href={`https://taostats.io/extrinsic/${encodeURIComponent(r.receipt.extrinsic_hash)}`} target="_blank" rel="noreferrer">View transaction on Taostats</a></>}
     </li>)}</ul>

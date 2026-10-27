@@ -49,7 +49,7 @@ func main() {
 	artifactPaths := flag.String("artifact", "", "comma-separated artifact JSON paths to probe instead of generating (surface-passed artifacts)")
 	asJSON := flag.Bool("json", false, "emit the full JSON report on stdout")
 	out := flag.String("out", "", "write the JSON report here")
-	publicControl := flag.Bool("require-public-control", false, "fail unless generated V13 full-profile GIH control covers at least 40 seeds and scores >= 0.90 on every required surface slice; not private qualification")
+	publicControl := flag.Bool("require-public-control", false, "fail unless the selected v13/v14 public full-profile GIH control covers at least 40 seeds and scores >= 0.90 on every required surface slice; not private qualification")
 	flag.Parse()
 
 	opts := parserprobe.Options{
@@ -119,7 +119,7 @@ func main() {
 	}
 	printSummary(os.Stderr, report)
 	if *publicControl {
-		failures := parserprobe.PublicControlFailures(report)
+		failures := parserprobe.PublicControlFailuresForVersion(report, *version)
 		for _, failure := range failures {
 			fmt.Fprintf(os.Stderr, "parserprobe: public control failed: %s\n", failure)
 		}

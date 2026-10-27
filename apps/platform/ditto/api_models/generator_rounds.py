@@ -25,10 +25,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto.api_models.generator import (
     GeneratorBuildResult,
     GeneratorSeedOutput,
+    GeneratorSubmissionSummary,
     PanelCaseResult,
     SubmissionStatus,
 )
+from ditto.api_models.generator_ledger import (
+    GeneratorLedgerEntry,
+    GeneratorLedgerResponse,
+)
 from ditto.api_models.generator_round_validator import round_commitment_payload
+from ditto.api_models.name_claim import PublicNameHandle
 
 RoundStatus = Literal["committed", "generating", "running", "scoring", "scored", "void"]
 CommitmentPublication = Literal["pending", "published", "failed", "disabled"]
@@ -95,6 +101,11 @@ class GeneratorRoundColumnView(RoundModel):
     trivial: int | None = None
     unsolved: int | None = None
     duplicate: int | None = None
+    name: str | None = None
+    """The generator's public display name (``None`` when unnamed)."""
+    name_handle: PublicNameHandle | None = None
+    avatar_url: str | None = None
+    version: int | None = None
 
 
 class GeneratorRoundStandingView(RoundModel):
@@ -108,6 +119,10 @@ class GeneratorRoundStandingView(RoundModel):
     common_mean: float
     common_cases: int
     reference: bool = False
+    agent_name: str | None = None
+    agent_version: int | None = None
+    miner_hotkey: str | None = None
+    avatar_url: str | None = None
 
 
 class GeneratorRoundSummary(RoundModel):
@@ -126,7 +141,15 @@ class GeneratorRoundSummary(RoundModel):
     opened_at: datetime | None = None
     column_count: int = 0
     panel_size: int = 0
+    """Agents frozen on the panel, including any dropped later."""
+    panel_dropped: int = 0
+    """Panel agents dropped while the round ran (banned, held, or otherwise
+    no longer runnable); they are never leased or scored in the round."""
     results: int = 0
+    answered_results: int = 0
+    """Results from seated panel agents that answered at least one case. A
+    round closes void (``insufficient_answered_results``) with fewer than
+    ``min_panel``: a run that faulted every case counts as not reported."""
     closed_at: datetime | None = None
     scored_at: datetime | None = None
     void_reason: str | None = None
@@ -147,6 +170,73 @@ class GeneratorRoundDetail(RoundModel):
 class GeneratorRoundListResponse(RoundModel):
     schedule: GeneratorRoundSchedule
     rounds: list[GeneratorRoundSummary]
+
+
+# --- public board and submission detail ----------------------------------------
+
+
+class GeneratorRoundPoint(RoundModel):
+    """One scored round column a hotkey's generator held."""
+
+    round_index: int
+    submission_id: UUID
+    score: float
+    rank: int
+    """Position among the round's scored columns (1 = best score)."""
+    columns: int
+    scored_at: datetime | None = None
+
+
+class PublicGeneratorBoardEntry(GeneratorLedgerEntry):
+    """A ledger entry with the public identity and recent form the dashboard
+    shows. Validators read the plain ledger (``/scoring/generator-ledger``)."""
+
+    name: str | None = None
+    name_handle: PublicNameHandle | None = None
+    avatar_url: str | None = None
+    version: int | None = None
+    status: SubmissionStatus | None = None
+    qualified_at: datetime | None = None
+    rounds_in_window: int = 0
+    """Scored rounds in the freshness window where this hotkey held a column."""
+    recent: list[GeneratorRoundPoint] = Field(default_factory=list)
+    """The hotkey's latest scored columns in the window, oldest first (at
+    most ``PUBLIC_BOARD_RECENT_ROUNDS``)."""
+
+
+class PublicGeneratorBoardResponse(GeneratorLedgerResponse):
+    entries: list[PublicGeneratorBoardEntry] = Field(  # type: ignore[assignment]
+        default_factory=list
+    )
+
+
+class GeneratorSubmissionRoundView(RoundModel):
+    """One scored round a generator held a column in."""
+
+    round_index: int
+    scored_at: datetime | None
+    column_id: str
+    counted: bool
+    score: float
+    rank: int
+    columns: int
+    discriminating: int
+    trivial: int
+    unsolved: int
+    duplicate: int
+    panel_size: int
+
+
+class PublicGeneratorSubmissionDetail(RoundModel):
+    """Everything public about one generator: identity, lifecycle, the
+    hotkey's other versions, and its round-by-round results. Never source,
+    seeds, or case content."""
+
+    submission: GeneratorSubmissionSummary
+    versions: list[GeneratorSubmissionSummary]
+    """The hotkey's generators, newest first (this one included)."""
+    rounds: list[GeneratorSubmissionRoundView]
+    """Scored rounds with a column for this generator, newest first."""
 
 
 # --- admin ------------------------------------------------------------------
@@ -171,6 +261,9 @@ class GeneratorRoundResultView(RoundModel):
     faulted: int
     mean_score: float | None
     recorded_at: datetime
+    excluded_reason: str | None = None
+    """Why this result does not count toward the round: its agent was
+    dropped from the panel, or it faulted every case."""
 
 
 class GeneratorRoundCommitmentPublicationView(RoundModel):
@@ -196,6 +289,21 @@ class GeneratorRoundPanelSlot(RoundModel):
     miner_hotkey: str | None = None
     champion: bool = False
     reference: bool = False
+    dropped_reason: str | None = None
+    """Set when the agent became ineligible while the round ran. The panel
+    stays frozen (nobody takes the seat); the agent is no longer leased and
+    its result, if any, is excluded from scoring."""
+    dropped_at: datetime | None = None
+
+
+class GeneratorRoundSkippedAgent(RoundModel):
+    """A ranked owner passed over when the panel froze: its agent could not
+    run, so the next eligible owner took the seat."""
+
+    agent_id: UUID
+    owner_key: str
+    miner_hotkey: str | None = None
+    reason: str
 
 
 class GeneratorRoundColumnSlot(RoundModel):
@@ -214,6 +322,10 @@ class AdminGeneratorRoundDetail(RoundModel):
     summary: GeneratorRoundSummary
     settings_revision: int | None
     cases_per_column: int | None
+    bench_version: int | None = None
+    """The bench contract the round runs at, frozen when it opened (null before
+    it opened, or for a round voided at opening). Rounds opened before rounds
+    recorded a version ran at 13; the column is backfilled for them."""
     seed: str | None
     columns: list[GeneratorRoundColumnSlot]
     panel: list[GeneratorRoundPanelSlot]
@@ -236,6 +348,8 @@ class AdminGeneratorRoundDetail(RoundModel):
     attempts: list[GeneratorRoundAttemptView]
     results: list[GeneratorRoundResultView]
     pending_agents: list[UUID]
+    skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
+    """Ranked owners skipped as ineligible when the panel froze."""
     score: dict | None
     scorer_version: str | None
     standings: list[GeneratorRoundStandingView]
@@ -324,6 +438,7 @@ class AdminGeneratorRoundPreview(RoundModel):
     qualified_generators: int
     awaiting_qualification: int
     blockers: list[str]
+    skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
 
 
 class GeneratorRoundLoopStatus(RoundModel):

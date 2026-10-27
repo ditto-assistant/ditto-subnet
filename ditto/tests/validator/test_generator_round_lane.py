@@ -56,7 +56,8 @@ def _artifact(job: GeneratorRoundJobResponse) -> ArtifactResponse:
         sha256=job.sha256,
         download_url="https://signed.example/x.tar.gz",
         expires_at=datetime.now(UTC),
-        bench_version=13,
+        # The artifact route answers with the lease's own bench version.
+        bench_version=job.bench_version,
         screening_policy_version=9,
         screened_image_url="https://signed.example/image.tar",
         screened_image_sha256="12" * 32,
@@ -186,6 +187,66 @@ async def test_artifact_identity_mismatch_is_refused() -> None:
     worker, platform = _worker(job, dittobench)
     platform.get_artifact = AsyncMock(
         return_value=_artifact(job).model_copy(update={"sha256": "cd" * 32})
+    )
+
+    await worker._run_generator_round_lane()
+
+    dittobench.run_generator_round.assert_not_awaited()
+    assert (
+        platform.fail_generator_round_job.await_args.kwargs["reason"] == "scoring_error"
+    )
+
+
+async def test_a_round_runs_at_the_bench_version_platform_froze(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The job carries the round's frozen contract; the worker runs at it
+    instead of a hard-wired v13."""
+    import ditto.validator.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "GENERATOR_ROUND_BENCH_VERSIONS", (13, 14))
+    monkeypatch.setattr(worker_mod, "SUPPORTED_BENCH_VERSIONS", frozenset({13, 14}))
+    job = _job(bench_version=14)
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock(return_value=("run-1", []))
+    worker, platform = _worker(job, dittobench)
+
+    assert await worker._run_generator_round_lane() is True
+
+    assert dittobench.run_generator_round.await_args.kwargs["bench_version"] == 14
+    platform.fail_generator_round_job.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "bench_version",
+    [
+        12,  # older than every round contract
+        14,  # no round contract today (packs grade at v13)
+    ],
+)
+async def test_a_round_job_outside_the_round_contracts_is_refused(
+    bench_version: int,
+) -> None:
+    job = _job(bench_version=bench_version)
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock()
+    worker, platform = _worker(job, dittobench)
+
+    assert await worker._run_generator_round_lane() is True
+
+    dittobench.run_generator_round.assert_not_awaited()
+    assert platform.fail_generator_round_job.await_args.kwargs["detail"] == (
+        "round_job_not_executable"
+    )
+
+
+async def test_an_artifact_at_another_bench_version_is_refused() -> None:
+    job = _job()
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock()
+    worker, platform = _worker(job, dittobench)
+    platform.get_artifact = AsyncMock(
+        return_value=_artifact(job).model_copy(update={"bench_version": 12})
     )
 
     await worker._run_generator_round_lane()
