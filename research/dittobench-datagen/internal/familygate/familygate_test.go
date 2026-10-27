@@ -176,6 +176,30 @@ func TestAtThresholdFlagsHalfCreditSolves(t *testing.T) {
 	}
 }
 
+func TestMarkdownEscapesFamilyLabels(t *testing.T) {
+	rows, err := Evaluate([]CaseRow{{Round: 1, Family: "a|b\nc", Status: challenge.CaseTrivial}}, DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	md := Markdown(rows, DefaultParams())
+	if !strings.Contains(md, `| a\|b c |`) || strings.Count(md, "\n") != 5 {
+		t.Fatalf("label broke the table:\n%s", md)
+	}
+}
+
+func TestAtThresholdCountsOnlyJudgedRows(t *testing.T) {
+	rows, err := Evaluate([]CaseRow{
+		{Round: 1, Family: "x", Status: challenge.CaseDuplicate, PanelSize: 5, Solvers: 5, SolverOwners: 5, MeanScore: 0.5},
+		{Round: 1, Family: "x", Status: challenge.CaseTrivial, PanelSize: 5, Solvers: 5, SolverOwners: 5, MeanScore: 0.5},
+	}, DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows[0].AtThreshold != 1 {
+		t.Fatalf("at threshold %d, want 1 (the duplicate is not judged)", rows[0].AtThreshold)
+	}
+}
+
 func TestMarkdownListsEveryFamily(t *testing.T) {
 	p := DefaultParams()
 	rows, err := Evaluate(loadEvidence(t), p)

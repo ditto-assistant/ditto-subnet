@@ -195,7 +195,8 @@ func Evaluate(rows []CaseRow, p Params) ([]FamilyRow, error) {
 		case challenge.CaseInsufficientPanel:
 			a.row.Insufficient += n
 		}
-		if AtThreshold(r, p.SolveThreshold) {
+		judged := status == challenge.CaseDiscriminating || status == challenge.CaseTrivial || status == challenge.CaseUnsolved
+		if judged && AtThreshold(r, p.SolveThreshold) {
 			a.row.AtThreshold += n
 		}
 	}
@@ -287,6 +288,11 @@ func verdict(row FamilyRow, p Params) (string, []string) {
 	return held, reasons
 }
 
+// markdownCell keeps a label inside one table cell.
+func markdownCell(s string) string {
+	return strings.NewReplacer("|", `\|`, "\r", " ", "\n", " ").Replace(s)
+}
+
 // Markdown renders the per-family table for the v14 qualification report.
 func Markdown(rows []FamilyRow, p Params) string {
 	var b strings.Builder
@@ -296,7 +302,7 @@ func Markdown(rows []FamilyRow, p Params) string {
 	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
 	for _, r := range rows {
 		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %.2f | %.2f | %d | %d | %s |\n",
-			r.Family, r.Rounds, r.Judged, r.Discriminating, r.Trivial, r.Unsolved,
+			markdownCell(r.Family), r.Rounds, r.Judged, r.Discriminating, r.Trivial, r.Unsolved,
 			r.TrivialRate, r.UnsolvedRate, r.SolverOwners, r.AtThreshold, r.Verdict)
 	}
 	return b.String()
