@@ -495,13 +495,7 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 		"temperature":           0,
 		"max_completion_tokens": officialJudgeMaxTokens,
 		"stream":                false,
-		"provider": map[string]any{
-			"only":               []string{lane.config.RouteProvider},
-			"order":              []string{lane.config.RouteProvider},
-			"allow_fallbacks":    false,
-			"require_parameters": true,
-			"data_collection":    "deny",
-		},
+		"provider":              judgeProviderRouting(lane.config.RouteProvider),
 	})
 	if err != nil {
 		return false, errors.New("encode official LongMemEval judge request")
@@ -520,11 +514,23 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil || len(response.Choices) != 1 ||
 		strings.TrimSpace(response.Choices[0].Message.Content) == "" {
 		return false, errors.New("official LongMemEval judge response is malformed")
+	}
+	// A verdict cut off at the completion bound is not a verdict. The substring
+	// test below cannot tell "yes" from a truncated "yes, if you also count..."
+	// or from reasoning that was about to conclude "no", so a partial response
+	// silently becomes a confident label. Refusing it makes an under-budgeted
+	// or runaway judge a loud failure instead of a wrong score -- the same
+	// class as the empty completion rejected above.
+	if strings.EqualFold(strings.TrimSpace(response.Choices[0].FinishReason), "length") {
+		return false, errors.New(
+			"official LongMemEval judge response was truncated at the completion bound",
+		)
 	}
 	// Match the pinned official evaluator at LongMemEval revision
 	// 9e0b455f4ef0e2ab8f2e582289761153549043fc: its label is true when the
@@ -534,6 +540,27 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 		strings.ToLower(strings.TrimSpace(response.Choices[0].Message.Content)),
 		"yes",
 	), nil
+}
+
+// judgeProviderRouting is the provider block the judge lane sends upstream.
+//
+// zdr is included here because the judge lane may address OpenRouter directly
+// rather than through the Platform confirmation proxy, which appends it in
+// endpoints/inference.py. On a direct route the block is the only thing
+// constraining the endpoint, and only: pinning `only`/`order` to a provider
+// and denying data collection does not ask for a zero-data-retention endpoint.
+// The proxied route merges an identical value, so sending it is a no-op there
+// rather than a divergence. integrations/longmemeval/judge_evaluator.py mirrors
+// this block and test_judge_evaluator.py compares the two key for key.
+func judgeProviderRouting(routeProvider string) map[string]any {
+	return map[string]any{
+		"only":               []string{routeProvider},
+		"order":              []string{routeProvider},
+		"allow_fallbacks":    false,
+		"require_parameters": true,
+		"data_collection":    "deny",
+		"zdr":                true,
+	}
 }
 
 func officialJudgePrompt(input JudgeInput) (string, error) {

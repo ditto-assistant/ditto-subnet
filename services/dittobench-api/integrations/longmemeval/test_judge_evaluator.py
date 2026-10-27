@@ -41,8 +41,13 @@ PROVIDER_RUNTIME = (
     / "provider_runtime.go"
 )
 _GO_CONSTANT = re.compile(r"^\s*(officialJudge\w+)\s*=\s*(.+?)\s*$", re.MULTILINE)
+# The block lives in judgeProviderRouting's returned literal. Anchoring on the
+# function keeps the parser pointed at the real source rather than at any
+# `map[string]any{` that happens to be nearby.
 _GO_PROVIDER_BLOCK = re.compile(
-    r'"provider":\s*map\[string\]any\{(.*?)\n\t*\}', re.DOTALL
+    r"func judgeProviderRouting\([^)]*\)\s*map\[string\]any\s*\{\s*"
+    r"return map\[string\]any\{(.*?)\n\t*\}",
+    re.DOTALL,
 )
 _GO_PROVIDER_ENTRY = re.compile(r'"(\w+)":\s*(.+?),\s*$', re.MULTILINE)
 
@@ -75,10 +80,10 @@ def go_provider_block(route_provider: str) -> dict[str, object]:
             # exact single-element pin this helper can faithfully mirror is
             # accepted; anything else is a parse failure, not a match.
             inner = literal[len("[]string{") : -1].strip()
-            if not literal.endswith("}") or inner != "lane.config.RouteProvider":
+            if not literal.endswith("}") or inner != "routeProvider":
                 raise AssertionError(
                     f"unexpected Go provider slice for {key}: {literal!r}; "
-                    "this helper only mirrors a single-element RouteProvider pin"
+                    "this helper only mirrors a single-element routeProvider pin"
                 )
             parsed[key] = [route_provider]
         else:
@@ -338,14 +343,22 @@ class ProductionParityTests(unittest.TestCase):
         expected = go_provider_block(route)
         self.assertEqual(
             set(expected),
-            {"only", "order", "allow_fallbacks", "require_parameters", "data_collection"},
+            {
+                "only",
+                "order",
+                "allow_fallbacks",
+                "require_parameters",
+                "data_collection",
+                "zdr",
+            },
             "the Go provider block changed shape; re-check the Python helper",
         )
-        routing = dict(judge_evaluator.judge_provider_routing())
-        # zdr is appended by the platform (endpoints/inference.py), not the Go
-        # lane, so it is the one key legitimately absent from the Go map.
-        self.assertTrue(routing.pop("zdr"), "production sends every judge call under ZDR")
-        self.assertEqual(routing, expected)
+        # zdr is in the Go block itself now. The judge lane may address
+        # OpenRouter directly, where the platform proxy is not there to append
+        # it and the block is the only thing constraining the endpoint, so a
+        # missing zdr is a real weakening rather than a mirroring artefact.
+        self.assertIs(expected["zdr"], True, "the Go judge lane must request ZDR")
+        self.assertEqual(dict(judge_evaluator.judge_provider_routing()), expected)
 
     def test_the_forked_evaluator_can_run_the_production_judge(self):
         """Parity is worthless if the evaluator cannot invoke that judge."""
