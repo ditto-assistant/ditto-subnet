@@ -247,3 +247,12 @@ it('shows verified delivery separately from incomplete source attribution withou
   expect(queue).not.toHaveBeenCalled()
   expect(preview).not.toHaveBeenCalled()
 })
+
+
+it('shows the custody fee wallet and its signed reserve in TAO', () => {
+  const readiness = { policy: 'a'.repeat(64), after_operation: 2, previous_state: 'finalized', bounded_claim_available: true, finalized_block: 1000, available_alpha_rao: 9000e9, max_distribution_rao: 100e9, sources: [], transfer_delegate: '5' + 'b'.repeat(47), delegate_free_rao: 6630018, required_delegate_free_rao: 7000000 }
+  render(<TreasuryManualTransferPanel initialState={manualControlSchema.parse({ ...control, readiness, blocked_reason: 'Transfer fee wallet is below its signed reserve requirement' })} readOnly={false} />)
+  expect(screen.getByText('Transfer fee wallet: 0.006630018 TAO · signed minimum 0.007 TAO')).toBeTruthy()
+  expect(screen.getByText(readiness.transfer_delegate)).toBeTruthy()
+  expect(screen.getByText('Transfer fee wallet is below its signed reserve requirement')).toBeTruthy()
+})

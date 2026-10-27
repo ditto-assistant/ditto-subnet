@@ -63,6 +63,9 @@ export const manualControlSchema = z.object({
   enabled: z.boolean(), blocked_reason: z.string().nullable(), bridge_error: z.string().nullable(),
   recurring_enabled: z.literal(false),
   readiness: z.object({
+    transfer_delegate: address.nullish(),
+    delegate_free_rao: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+    required_delegate_free_rao: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
     unsigned_intent: z.object({ request_id: z.string().uuid(), after_operation: integer, expires_block: integer }).nullish(),
     policy: digest, after_operation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), previous_state: z.string().nullable(),
     bounded_claim_available: z.boolean(), finalized_block: integer,

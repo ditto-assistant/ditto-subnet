@@ -1073,6 +1073,17 @@ CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
 
 
 --
+-- Name: reject_treasury_funding_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_funding_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+        RAISE EXCEPTION 'operator funding reconciliation history is append only';
+      END $$;
+
+
+--
 -- Name: reject_treasury_public_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -6579,6 +6590,21 @@ ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY
 
 
 --
+-- Name: treasury_funding_reconciliations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_funding_reconciliations (
+    purchase_id text NOT NULL,
+    payment_reference text NOT NULL,
+    payload jsonb NOT NULL,
+    digest text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: treasury_ledger_samples; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9955,6 +9981,14 @@ ALTER TABLE ONLY public.transcript_mirror_settings_revisions
 
 
 --
+-- Name: treasury_funding_reconciliations pk_treasury_funding_reconciliations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_funding_reconciliations
+    ADD CONSTRAINT pk_treasury_funding_reconciliations PRIMARY KEY (purchase_id);
+
+
+--
 -- Name: treasury_ledger_samples pk_treasury_ledger_samples; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10864,6 +10898,14 @@ ALTER TABLE ONLY public.screener_node_bootstrap_grants
 
 ALTER TABLE ONLY public.screener_nodes
     ADD CONSTRAINT uq_screener_nodes_screener_hotkey UNIQUE (screener_hotkey);
+
+
+--
+-- Name: treasury_funding_reconciliations uq_treasury_funding_reconciliations_payment_reference; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_funding_reconciliations
+    ADD CONSTRAINT uq_treasury_funding_reconciliations_payment_reference UNIQUE (payment_reference);
 
 
 --
@@ -13230,6 +13272,13 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 --
 
 CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: treasury_funding_reconciliations treasury_funding_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_funding_immutable BEFORE DELETE OR UPDATE ON public.treasury_funding_reconciliations FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_funding_mutation();
 
 
 --

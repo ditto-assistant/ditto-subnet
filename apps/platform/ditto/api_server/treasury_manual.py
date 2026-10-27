@@ -185,6 +185,14 @@ async def state(session, config, *, enabled):
         )
     ):
         blocked = "Waiting for custody to observe the completed claim"
+    if (
+        blocked is None
+        and readiness
+        and readiness.delegate_free_rao is not None
+        and readiness.required_delegate_free_rao is not None
+        and readiness.delegate_free_rao < readiness.required_delegate_free_rao
+    ):
+        blocked = "Transfer fee wallet is below its signed reserve requirement"
     if readiness and not readiness.bounded_claim_available:
         blocked = "Custody cannot arm another claim until prior delivery is resolved"
     return {

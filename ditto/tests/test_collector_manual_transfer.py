@@ -99,6 +99,9 @@ def test_manual_readiness_is_read_only_and_preserves_remaining_entitlement(tmp_p
     p, c, j, request = fixture(tmp_path)
     before = list(j.db.iterdump())
     readiness = manual_transfer_readiness(j, p, c)
+    assert readiness["transfer_delegate"] == p.transfer_delegate
+    assert readiness["delegate_free_rao"] == c.observe(p, "transfer").delegate_free_rao
+    assert readiness["required_delegate_free_rao"] == p.max_fee_rao + p.fee_reserve_rao
     assert readiness["authority"] == "none"
     assert readiness["publication"] == "not_performed"
     assert readiness["bounded_claim_available"] is True

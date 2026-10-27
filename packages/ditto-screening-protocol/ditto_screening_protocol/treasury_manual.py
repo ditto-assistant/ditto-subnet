@@ -128,6 +128,9 @@ class ManualUnsignedIntent(Wire):
 
 
 class ManualReadiness(Wire):
+    transfer_delegate: Address | None = None
+    delegate_free_rao: Nonnegative | None = None
+    required_delegate_free_rao: Nonnegative | None = None
     unsigned_intent: ManualUnsignedIntent | None = None
     policy: Digest
     after_operation: Nonnegative

@@ -4,7 +4,13 @@ from uuid import uuid4
 
 import pytest
 
-from ditto.tests.test_collector_automation import Chain, open_journal, policy
+from ditto.tests.test_collector_automation import (
+    Chain,
+    open_journal,
+)
+from ditto.tests.test_collector_automation import (
+    policy as base_policy,
+)
 from ditto.treasury.collector import (
     ManualTransfer,
     Settlement,
@@ -25,6 +31,10 @@ from ditto_screening_protocol.treasury_manual import (
 )
 
 GM = "5" + "a" * 47
+
+
+def policy(**changes):
+    return base_policy(**{"transfer_delegate": "5" + "b" * 47, **changes})
 
 
 class Mailbox:
