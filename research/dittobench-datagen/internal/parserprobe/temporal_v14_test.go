@@ -1,6 +1,8 @@
 package parserprobe
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/gen"
@@ -8,8 +10,9 @@ import (
 )
 
 // TestTemporalV14GrammarInvertsEveryShape keeps the public inverse grammar in
-// step with the v14 temporal families (SN-355, SN-358): every as-of and
-// event-sequence query kind must be parsed from the public prose. A family the
+// step with the v14 state families (SN-355 to SN-358): every as-of,
+// event-sequence, process and membership-fold case must be parsed from the
+// public prose. A family the
 // probe cannot read would score as a silent zero that looks like hardening.
 func TestTemporalV14GrammarInvertsEveryShape(t *testing.T) {
 	seen := map[string]int{}
@@ -24,21 +27,33 @@ func TestTemporalV14GrammarInvertsEveryShape(t *testing.T) {
 			if c.V10Provenance == nil {
 				continue
 			}
+			user := c.UserID
+			if user == "" {
+				user = gen.PrimaryUser
+			}
 			switch op := c.V10Provenance.Program.Op; op {
 			case "as_of", "nth_by_date", "before_by_date", "after_by_date":
-				user := c.UserID
-				if user == "" {
-					user = gen.PrimaryUser
-				}
 				d := answerBusinessV13(stores[user], c.Question)
 				if !d.ok || d.value != c.ExpectedAnswer {
 					t.Fatalf("seed %d %s: parsed %q, want %q (%s)", seed, op, d.value, c.ExpectedAnswer, c.Question)
 				}
 				seen[op]++
+			case "first_open_step", "set_fold":
+				d := answerBusinessV13(stores[user], c.Question)
+				if op == "set_fold" {
+					d = answerPersonalV13(stores[user], c.Question)
+				}
+				got, want := append([]string(nil), d.items...), append([]string(nil), c.AnswerItems...)
+				sort.Strings(got)
+				sort.Strings(want)
+				if !d.ok || !reflect.DeepEqual(got, want) {
+					t.Fatalf("seed %d %s: parsed %q, want %q (%s)", seed, op, d.items, c.AnswerItems, c.Question)
+				}
+				seen[op]++
 			}
 		}
 	}
-	for _, op := range []string{"as_of", "nth_by_date", "before_by_date", "after_by_date"} {
+	for _, op := range []string{"as_of", "nth_by_date", "before_by_date", "after_by_date", "first_open_step", "set_fold"} {
 		if seen[op] == 0 {
 			t.Fatalf("no %s case over 30 seeds: %v", op, seen)
 		}

@@ -829,6 +829,10 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Operations = []string{"induce schema", "resolve subject by remit", "map role labels to commissioning vs supplier", "return the client organisation"}
 
 	case V13FamilyNextActionResponsible:
+		if g.T14 != nil {
+			renderV14Process(d, schema, group, variant, g, counter, subject, &m)
+			break
+		}
 		action := V13ActionClasses[g.Classes[0]]
 		first, current := g.People[0], g.People[1]
 		if counter {

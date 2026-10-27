@@ -36,6 +36,9 @@ var personalV13Frames = []businessFrame{
 }
 
 func answerPersonalV13(st *store, question string) derived {
+	if d, ok := answerMembershipV14(st, question); ok {
+		return d
+	}
 	values := map[string]string{}
 	for _, row := range scopedV13Rows(st, question) {
 		for _, pattern := range personalV13Frames {

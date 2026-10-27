@@ -148,6 +148,9 @@ type v13PersonalGroup struct {
 	ExtraDate   v13Date
 	ExtraTime   v13Time
 	ExtraClass  int
+	// T14Set is the v14 membership fold of the school list
+	// (v14_membership_family.go). v13 groups leave it nil.
+	T14Set *v14Membership
 }
 
 // v13Time is a time of day.
@@ -228,6 +231,9 @@ func (d *v13Draws) drawPersonalGroup(group int, domain V13PersonalDomain) v13Per
 		g.DecoyItm = v13SchoolItems[perm[5]]
 		g.DropBase = v13Index(seed, fmt.Sprintf("p-drop-%d", group), 4)
 		g.DropCF = (g.DropBase + 1 + v13Index(seed, fmt.Sprintf("p-drop-cf-%d", group), 3)) % 4
+		if d.benchVersion >= protocol.BenchVersionV14 {
+			g.T14Set = d.drawV14Membership(group, &g)
+		}
 	case V13PersonalMilestones:
 		g.Subject, g.Decoy = pick2(fmt.Sprintf("p-milestones-%d", group), v13Milestones)
 		g.Classes = d.distinctClasses(fmt.Sprintf("p-status-%d", group), len(V13PersonalStatusClasses), 4)
@@ -348,6 +354,11 @@ func renderV13PersonalMember(d *v13Draws, group, variant int, g v13PersonalGroup
 			"list everything currently required for %[1]s's %[2]s.",
 		}, []string{"Every item, please.", "Give the full current list.", "All of the items."}, relation, g.Subject)
 		m.Kind = protocol.AnswerList
+		m.Constraints = []string{relation, g.Subject}
+		if g.T14Set != nil {
+			renderV14Membership(d, group, variant, g, counter, &m)
+			break
+		}
 		for i, item := range g.Items[:4] {
 			if i != drop {
 				m.Items = append(m.Items, item)
@@ -581,7 +592,9 @@ func GenerateV13PersonalProgramsForVersion(seed int64, count, benchVersion int) 
 func materializeV13PersonalCase(seed int64, group, variant int, groupID string, renderer V13PersonalRenderer, g v13PersonalGroup, m v13Member, relation, answerRelation string, includeDistractor bool, benchVersion int) V10GeneratedCase {
 	prefix := fmt.Sprintf("v13p-%d-%d", group, variant)
 	scope := v13ProgramRecordScope(seed, "personal", group, relation)
-	rows := append(append([]string{m.Records[0], m.Records[1]}, m.ChainExtra...), m.Records[2])
+	// A member carries either supersession-chain rows (ChainExtra, before
+	// the neutral record) or v14 fold rows (Extra, after it).
+	rows := append(append(append([]string{m.Records[0], m.Records[1]}, m.ChainExtra...), m.Records[2]), m.Extra...)
 	if includeDistractor {
 		rows = append(rows, m.DecoyClause)
 	}

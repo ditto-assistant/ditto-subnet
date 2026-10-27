@@ -58,6 +58,11 @@ func v14GradeMember(m v13Member, reply string) float64 {
 	if len(m.ItemAccept) > 0 {
 		mc.AnswerItemAcceptAny = m.ItemAccept
 	}
+	return v14GradeMemberCase(mc, reply)
+}
+
+// v14GradeMemberCase grades reply text against a memory case.
+func v14GradeMemberCase(mc protocol.MemoryCase, reply string) float64 {
 	return grade.Memory(mc, protocol.RunResponse{FinalText: reply}).Score
 }
 

@@ -36,7 +36,7 @@ that value is also a correction cue. "better safe than sorry" is published as
 `sorry`. V14 credits both. A sentence that carries anything beyond the value
 ("Sorry, I mean safe.") is still a correction, and v13 grading is unchanged.
 The v14 full/public vector at seed 123456789 is
-`e0af7f233311d84c6d07039a684a42c27998dee318ecfe2f95ed58f1bcd87673`,
+`87eafc34950860ad60ccff97edbb34b835811dc0da40e22e5a65dec12424348c`,
 with epoch `2027-06-01T00:00:00Z`. The grader (apart from the claim-set
 correction above, the #2734 hyphen fold and matchers, and the answer-normalization
 contract below), v13 gate postures,
@@ -307,6 +307,30 @@ re-implemented in the v14 contract; no generator code is copied.
   `V14FamiliesAwaitingPanel` and qualification gate 4 must measure them with
   `familygate` before activation. Generator C's panel evidence motivated them;
   the v14 renderings themselves have not been panel-measured yet.
+
+### SN-356 multi-step process and SN-357 membership fold
+
+From the generator competition (generator D's next-open-step and
+removed-member shapes, rounds 25955-25963; generator C's set-intersection,
+round 25955; generator G's single next step and the public default kit's
+scattered list are the trivial controls). The mechanics are re-implemented
+in the v14 contract; no generator code is copied.
+
+- **Multi-step process (SN-356)** replaces next-action-responsible at v14.
+  The plan record lists three to five ordered steps with their owners. Later
+  records close steps (done or dropped), may finish a later step early, may
+  reopen a closed step, and reassign one step's owner. The question asks for
+  the first step still open and its current owner. The plan's first step is
+  never the answer, so copying the action from record 0 (half credit on
+  every v13 case) now scores 0. The counterfactual flips one step's state in
+  one record.
+- **Membership fold (SN-357)** replaces the school list's single drop and
+  add at v14: a removal followed by a re-add, a replacement, an optional
+  addition and an optional no-op removal (three to five events). Grading
+  keeps one set-member claim per item at 1/n: a missing member costs its
+  share, while a stale (replaced) item, the no-op item or the decoy list's
+  item zeroes the list. The first list scores 0. The counterfactual changes
+  only the replacement record.
 
 ## Ticket boundary and rollback
 

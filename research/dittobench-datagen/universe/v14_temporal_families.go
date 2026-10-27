@@ -95,6 +95,7 @@ var V14SequenceEventClasses = []V13TermClass{
 type v14TemporalDraw struct {
 	Seq  *v14Sequence
 	AsOf *v14AsOf
+	Proc *v14Process
 }
 
 // Event-sequence query kinds.
@@ -147,6 +148,8 @@ func (d *v13Draws) drawV14Temporal(g *v13Group, group int) {
 		g.T14 = &v14TemporalDraw{Seq: d.drawV14Sequence(group)}
 	case V13FamilyCurrentChannel:
 		g.T14 = &v14TemporalDraw{AsOf: d.drawV14AsOf(group)}
+	case V13FamilyNextActionResponsible:
+		g.T14 = &v14TemporalDraw{Proc: d.drawV14Process(group, g)}
 	}
 }
 

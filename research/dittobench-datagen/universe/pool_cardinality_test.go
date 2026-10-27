@@ -91,6 +91,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 
 			// v14 temporal business families (v14_temporal_families.go).
 			{Name: "V14SequenceEventClasses", Size: len(V14SequenceEventClasses), Role: "answer (event class)"},
+			{Name: "V14ProcessStepClasses", Size: len(V14ProcessStepClasses), Role: "answer (process step class)"},
 
 			// Story arcs (story_events.go, story_v2.go, story.go).
 			{Name: "storyStatusVocabulary", Size: len(storyStatusVocabulary), Role: "answer (story status)"},

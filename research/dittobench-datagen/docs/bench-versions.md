@@ -1244,6 +1244,22 @@ latest record answers it. `universe/v14_temporal_families.go` adds:
   event by date nor the first or last record filed, and the pair count varies
   with the event count.
 
+Two state-fold families follow the same evidence (SN-356, SN-357;
+`universe/v14_process_family.go`, `universe/v14_membership_family.go`):
+
+- **Multi-step process** (SN-356, in place of next-action-responsible): a
+  plan of three to five ordered steps with owners from the 24-class
+  `V14ProcessStepClasses` bank; later records close steps (done or dropped),
+  finish a later step early, reopen a closed step and reassign one owner.
+  The question asks for the first open step and its current owner (program
+  `first_open_step`). The plan's first step is never the answer, so the v13
+  half credit for copying record 0's action is gone.
+- **Membership fold** (SN-357, the school list): a removal and re-add, a
+  replacement, an optional addition and an optional no-op removal of an item
+  never listed (program `set_fold`). One set-member claim per item at 1/n
+  keeps per-member partial credit; the replaced, no-op and decoy items are
+  distractors.
+
 The full profile scores four business groups, so v13's families 4-6 never
 reached a scored run. From v14 each seed draws which of latest-event,
 next-action-responsible and current-channel fills cycle position 2; the other
@@ -1261,7 +1277,7 @@ activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`e0af7f233311d84c6d07039a684a42c27998dee318ecfe2f95ed58f1bcd87673`.
+`87eafc34950860ad60ccff97edbb34b835811dc0da40e22e5a65dec12424348c`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.
