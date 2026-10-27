@@ -240,6 +240,10 @@ class AdminGeneratorRoundDetail(RoundModel):
     summary: GeneratorRoundSummary
     settings_revision: int | None
     cases_per_column: int | None
+    bench_version: int | None = None
+    """The bench contract the round runs at, frozen when it opened (null before
+    it opened, or for a round voided at opening). Rounds opened before rounds
+    recorded a version ran at 13; the column is backfilled for them."""
     seed: str | None
     columns: list[GeneratorRoundColumnSlot]
     panel: list[GeneratorRoundPanelSlot]

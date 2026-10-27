@@ -11620,6 +11620,8 @@ export interface components {
         AdminGeneratorRoundDetail: {
             /** Attempts */
             attempts: components["schemas"]["GeneratorRoundAttemptView"][];
+            /** Bench Version */
+            bench_version?: number | null;
             /** Cases Per Column */
             cases_per_column: number | null;
             /** Column Case Counts */

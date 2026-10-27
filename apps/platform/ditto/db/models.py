@@ -13723,6 +13723,9 @@ class GeneratorRound(Base):
     seed: Mapped[str | None] = mapped_column(Text)
     settings_revision: Mapped[int | None] = mapped_column(Integer)
     cases_per_column: Mapped[int | None] = mapped_column(Integer)
+    # The bench contract the round runs at, frozen when it opens (NULL before,
+    # or for a round voided at opening). See generator_rounds.round_bench_version.
+    bench_version: Mapped[int | None] = mapped_column(Integer)
     columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
     panel: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
     lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
@@ -13773,6 +13776,10 @@ class GeneratorRound(Base):
         CheckConstraint(
             "(status = 'void') = (void_reason IS NOT NULL)",
             name="generator_rounds_void_check",
+        ),
+        CheckConstraint(
+            "bench_version IS NULL OR bench_version >= 13",
+            name="generator_rounds_bench_version_check",
         ),
         Index(
             "generator_rounds_dataset_idx",

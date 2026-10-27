@@ -224,14 +224,26 @@ Open, and requiring an operator, release-owner or paid run:
 4. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
    recorded separately.
-5. **Generator-competition rounds stay on the v13 contract.**
-   - `validator_generator_round.py` issues `benchmark_contract(13)` jobs.
-   - `issue_generator_round_ticket` keys the ticket `(agent, 13, validator)`
-     and applies the v13 scorer-cohort pin.
-   - Activating v14 does not move rounds. They keep depending on a live v13
-     cohort.
-   - Before activation, the owner must decide whether rounds stay on v13
-     (and keep that cohort staffed) or get their own versioned migration.
+5. **Generator-competition rounds stay on v13 at activation (explicit
+   fallback).** Rounds now freeze a bench version when they open and follow
+   the active version where a round contract exists. The Platform lane,
+   tickets, capability routing, V13 pin and the validator all run at the
+   round's frozen version, and in-flight rounds never change contract.
+   - What migrates automatically: nothing at v14 activation itself. A round
+     opened after activation records `bench_contract` ("active bench v14 has
+     no generator-round contract") and runs at v13. It is leased only to
+     validators verified for v13 that sign the V13 cohort authority packet.
+   - Still pinned to v13, and why: `GENERATOR_ROUND_BENCH_VERSIONS` is `(13,)`.
+     Round packs grade at `challenge.GradingBenchVersion = 13` (pack contract
+     v1, which miners' generators emit). dittobench-api's `generator-round-v1`
+     mode accepts only `bench_version` 13.
+   - Remaining step: ship a v14 pack contract and a scorer round mode that
+     accepts v14 and advertises it as a scorer feature. Then add 14 to the
+     tuple. The pin test in `ditto/tests/test_bench_version_pins.py` keeps
+     these in step.
+   - Until then, rounds depend on a staffed v13 cohort after v14 activates. A
+     round with no validator able to run v13 is void at opening with the
+     reason.
 6. **Miner rehearsal default.** Since v13 activated,
    `local-rehearsal.py` `LIVE_SCORING_BENCH_VERSION` (still 12) and
    `.agents/skills/mine/SKILL.md` have lagged the live bench. Update both

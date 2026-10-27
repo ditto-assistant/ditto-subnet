@@ -4246,6 +4246,8 @@ CREATE TABLE public.generator_rounds (
     scored_at timestamp with time zone,
     void_reason text,
     revealed_at timestamp with time zone,
+    bench_version integer,
+    CONSTRAINT ck_generator_rounds_generator_rounds_bench_version_check CHECK (((bench_version IS NULL) OR (bench_version >= 13))),
     CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
     CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
     CONSTRAINT ck_generator_rounds_generator_rounds_lease_check CHECK (((lease_id IS NULL) = (lease_expires_at IS NULL))),

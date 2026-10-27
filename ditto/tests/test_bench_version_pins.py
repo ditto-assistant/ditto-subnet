@@ -267,6 +267,34 @@ def test_local_rehearsal_range_tracks_the_supported_set() -> None:
     assert values["LIVE_SCORING_BENCH_VERSION"] in golden["supported_bench_versions"]
 
 
+# --- generator rounds ----------------------------------------------------------
+
+
+def test_generator_round_contracts_match_pack_grading_and_scorer_mode() -> None:
+    """A round freezes a version from ``GENERATOR_ROUND_BENCH_VERSIONS``; the
+    pack contract must grade at it and the scorer's round mode must run it.
+    Widening the tuple without both (or the reverse) strands rounds."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+    )
+
+    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
+    grading = re.search(
+        r"const GradingBenchVersion = protocol\.BenchVersionV(\d+)", pack
+    )
+    assert grading, "challenge.GradingBenchVersion is no longer a V-constant"
+    scorer = (
+        ROOT / "services/dittobench-api/cmd/dittobench-api/generator_round.go"
+    ).read_text()
+    mode = re.search(r"req\.BenchVersion != protocol\.BenchVersionV(\d+)", scorer)
+    assert mode, "generator-round-v1 no longer pins one bench version"
+    assert set(GENERATOR_ROUND_BENCH_VERSIONS) == {
+        int(grading.group(1)),
+        int(mode.group(1)),
+    }
+    assert set(GENERATOR_ROUND_BENCH_VERSIONS) <= set(SUPPORTED_BENCH_VERSIONS)
+
+
 # --- TypeScript mirrors (hand-written and generated) --------------------------
 
 

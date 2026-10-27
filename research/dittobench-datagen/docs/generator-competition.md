@@ -250,6 +250,47 @@ When a round opens it freezes:
   review; a banned miner hotkey; no screened image) is skipped, and the next
   eligible ledger owner takes its seat, still one agent per owner.
 
+### Bench contract
+
+Each round freezes one bench version when it opens, recorded on the round row
+(`generator_rounds.bench_version`, like `cases_per_column`). Every later step
+runs at that version: the panel tickets are the agents' `(agent, version,
+validator)` rows, leases go only to validators whose scorer is verified for
+that version and runs `generator_rounds` at the round's column size, the job
+and the scorer run carry it, and a v13 round keeps the V13 scorer-cohort pin.
+A round opened under one version finishes and is scored under it even if
+another version activates mid-round.
+
+At opening, Platform (`choose_round_bench_version`) picks:
+
+1. the active benchmark version, when it is a **round contract** and at least
+   one validator can run a round at it;
+2. otherwise the newest round contract below the active version that a
+   validator can run, recording why on the round (`generation.bench_contract`);
+3. otherwise nothing: the round is void with the reason.
+
+The round contracts are `GENERATOR_ROUND_BENCH_VERSIONS` (Platform and
+validator `api_models/generator_round_validator.py`). Today that is only 13,
+because the round contract is the pack's grading policy, not the agent
+benchmark. Every v1 pack case is graded at `challenge.GradingBenchVersion`
+(13), the generator scorer validates packs at it, and dittobench-api's
+`generator-round-v1` mode refuses any other `bench_version`. Generator cases
+are never mixed into agent benchmark runs: a round run executes only the
+round dataset. So when v14 activates, rounds keep running at v13 and record
+that the active version has no round contract.
+
+A version joins the round contracts only with all three of:
+
+- a pack contract that grades at it (generator request, validation and
+  `ScoreCases` at that `grading_bench_version`, which miners' generators
+  must emit);
+- a scorer round mode that accepts it, advertised as a scorer feature so
+  Platform does not lease it to older scorers;
+- the version added to `GENERATOR_ROUND_BENCH_VERSIONS`.
+
+`ditto/tests/test_bench_version_pins.py` fails if the tuple and the Go pins
+disagree. Rounds then follow activation with no further change.
+
 ### Execution
 
 1. The scorer runs every column generator on its column seed. It encodes the
@@ -259,8 +300,9 @@ When a round opens it freezes:
    generators must work on every seed. A failed default-generator column is
    only dropped.
 3. Validators run each panel agent on the round dataset. Platform re-leases the
-   agent's own ticket row with purpose `generator_round`, on idle capacity
-   left after canonical work and continual retests.
+   agent's own ticket row at the round's bench version with purpose
+   `generator_round`, on idle capacity left after canonical work and
+   continual retests.
 4. The validator runs dittobench-api's `generator-round-v1` mode: the screened
    image, ticket inference, and the production memory grader, one column at a
    time.

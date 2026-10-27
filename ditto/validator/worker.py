@@ -41,6 +41,7 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
     GeneratorRoundJobResponse,
 )
@@ -215,6 +216,15 @@ def _supports_bench_version(bench_version: int | None) -> bool:
     """Return whether this validator can execute a platform-issued contract."""
 
     return bench_version in SUPPORTED_BENCH_VERSIONS
+
+
+def _runs_generator_round_version(bench_version: int | None) -> bool:
+    """Whether a round job at ``bench_version`` is executable here: a round
+    contract (the pack grading policy) this validator also supports."""
+
+    return bench_version in GENERATOR_ROUND_BENCH_VERSIONS and (
+        _supports_bench_version(bench_version)
+    )
 
 
 def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
@@ -3394,7 +3404,8 @@ class ValidatorWorker:
             job.slot_id != requested
             or job.slot_id not in self._healthy_slots
             or self._slots[job.slot_id].active_agent_id
-            or job.bench_version != 13
+            # The round's frozen contract, issued by Platform per round.
+            or not _runs_generator_round_version(job.bench_version)
         ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"
@@ -3409,7 +3420,7 @@ class ValidatorWorker:
             seed=job.seed,
             dataset_sha256=job.dataset_sha256,
             run_size=job.run_size,
-            bench_version=13,
+            bench_version=job.bench_version,
             minimum_screening_policy_version=job.minimum_screening_policy_version,
             requires_screened_image=job.requires_screened_image,
             inference=job.inference,
@@ -3423,7 +3434,9 @@ class ValidatorWorker:
         slot = self._slot_state()
         slot.revoked.clear()
         try:
-            await self._begin_active_ticket(job.agent_id, job.deadline, 13)
+            await self._begin_active_ticket(
+                job.agent_id, job.deadline, job.bench_version
+            )
             run_id, per_case = await self._run_within_lease(
                 lambda: self._execute_generator_round(job, lease),
                 job=lease,
@@ -3483,7 +3496,7 @@ class ValidatorWorker:
         artifact = await self._platform.get_artifact(job.agent_id)
         if (
             artifact.sha256.lower() != job.sha256.lower()
-            or artifact.bench_version != 13
+            or artifact.bench_version != job.bench_version
         ):
             raise PlatformError(
                 f"generator round artifact identity mismatch for agent {job.agent_id}"
@@ -3503,6 +3516,7 @@ class ValidatorWorker:
                 dataset_bytes=dataset,
                 dataset_sha256=job.dataset_sha256,
                 seed=job.seed,
+                bench_version=job.bench_version,
                 screened_image_url=artifact.screened_image_url,
                 screened_image_sha256=artifact.screened_image_sha256,
                 screened_image_size_bytes=artifact.screened_image_size_bytes,

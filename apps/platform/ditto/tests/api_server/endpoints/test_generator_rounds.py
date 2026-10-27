@@ -238,6 +238,21 @@ async def _qualify_all(maker: async_sessionmaker[AsyncSession]) -> None:
             row.qualified_at = row.qualified_at or datetime.now(UTC)
 
 
+@pytest.fixture(autouse=True)
+def round_capable_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One validator can run every round contract, unless a test says not.
+
+    Opening a round needs a validator able to run its contract; the tests
+    below that exercise that gate replace this stand-in themselves.
+    """
+    import ditto.api_server.generator_rounds as rounds_mod
+
+    async def _capable(*_args: Any, **_kwargs: Any) -> int:
+        return 1
+
+    monkeypatch.setattr(rounds_mod, "round_capable_validators", _capable)
+
+
 _LOOP_EPOCH = {"epoch": 0}
 
 
@@ -1561,6 +1576,7 @@ class TestOperatorControls:
                 seed=5,
                 dataset_sha256="ef" * 32,
                 slot_id="slot-0",
+                bench_version=13,
             )
             assert ticket is not None
             assert ticket.purpose == TicketPurpose.GENERATOR_ROUND
@@ -1576,6 +1592,7 @@ class TestOperatorControls:
                 seed=5,
                 dataset_sha256="ef" * 32,
                 slot_id="slot-2",
+                bench_version=13,
             )
             assert again is None
         evaluating = await _seed_agent(session_maker, 1)
@@ -1596,6 +1613,7 @@ class TestOperatorControls:
                     seed=5,
                     dataset_sha256="ef" * 32,
                     slot_id="slot-3",
+                    bench_version=13,
                 )
                 is None
             )
@@ -1631,6 +1649,7 @@ class TestRoundRunsNeverSpendScoringAttempts:
                 seed=5,
                 dataset_sha256="ef" * 32,
                 slot_id=slot_id,
+                bench_version=13,
             )
             assert ticket is not None
             assert ticket.purpose == TicketPurpose.GENERATOR_ROUND

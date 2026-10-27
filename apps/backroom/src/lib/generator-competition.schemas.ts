@@ -423,6 +423,8 @@ export const generatorRoundDetailSchema = z.object({
   summary: roundSummarySchema,
   settings_revision: z.number().int().nullable(),
   cases_per_column: z.number().int().nullable(),
+  // Frozen bench contract of the round. Optional so an older Platform parses.
+  bench_version: z.number().int().nullable().optional(),
   seed: z.string().nullable(),
   columns: z.array(columnSlotSchema),
   panel: z.array(roundPanelSlotSchema),

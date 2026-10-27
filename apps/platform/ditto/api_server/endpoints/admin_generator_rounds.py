@@ -288,6 +288,7 @@ async def admin_round_detail(
         summary=await round_summary(session, row, operator=True),
         settings_revision=row.settings_revision,
         cases_per_column=row.cases_per_column,
+        bench_version=row.bench_version,
         seed=row.seed if closed else None,
         columns=[GeneratorRoundColumnSlot(**c) for c in row.columns or ()],
         panel=[GeneratorRoundPanelSlot(**p) for p in row.panel or ()],

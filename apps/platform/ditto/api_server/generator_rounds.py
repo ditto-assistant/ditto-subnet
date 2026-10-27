@@ -18,8 +18,10 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
    epoch derives ``seed = RoundSeed(r, secret, open_block_hash)`` (the block
    the epoch fired at, unknowable when the secret was committed) and freezes
    its generator columns (best qualified generators, the public default
-   generator filling empty counted columns, plus challengers) and its agent
-   panel (the top ledger owners plus reference agents).
+   generator filling empty counted columns, plus challengers), its agent
+   panel (the top ledger owners plus reference agents), and its bench
+   contract (:func:`choose_round_bench_version`). Every later step of the
+   round runs at that frozen version, whatever activates meanwhile.
 3. **Generate.** The scorer builds each column generator and runs it on its
    column seed; Platform stores the canonical round dataset.
 4. **Run.** Validators lease each panel agent on a ``generator_round`` ticket
@@ -64,6 +66,9 @@ from ditto.api_models.generator_ledger import (
     GeneratorLedgerResponse,
 )
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_VERSIONS,
+    LEGACY_ROUND_BENCH_VERSION,
+    LEGACY_ROUND_COLUMN_CASES,
     GeneratorRoundCaseResult,
     GeneratorRoundCommitmentJobResponse,
     GeneratorRoundCommitmentReportRequest,
@@ -101,6 +106,10 @@ from ditto.db.models import (
     GeneratorSubmission,
     ValidatorHeartbeat,
     ValidatorTicket,
+)
+from ditto.db.queries.benchmark_rollout import (
+    active_bench_version,
+    heartbeat_supports_version,
 )
 from ditto.db.queries.generator import claimed_fingerprints
 
@@ -800,6 +809,137 @@ async def advance_rounds(
     return out
 
 
+def round_bench_version(row: GeneratorRound) -> int:
+    """The bench contract ``row`` runs at: frozen when it opened, or the legacy
+    v13 pin for a round opened before rounds recorded one."""
+    if row.bench_version is None:
+        return LEGACY_ROUND_BENCH_VERSION
+    return int(row.bench_version)
+
+
+def round_column_capacity(
+    heartbeat: ValidatorHeartbeat | None, *, now: datetime, bench_version: int
+) -> int | None:
+    """The largest round column this validator can run at ``bench_version``,
+    or None for none.
+
+    The version gate is the same fresh, identity-matched scorer report agent
+    tickets use (:func:`heartbeat_supports_version`). A scorer that does not
+    advertise ``generator_round_max_cases`` predates columns above the legacy
+    size: its validator refuses a larger job (the old 8 x 32 case bound) and
+    its scorer a larger pack, so it gets only rounds of at most
+    ``LEGACY_ROUND_COLUMN_CASES`` per column.
+    """
+    if heartbeat is None or not heartbeat_supports_version(
+        heartbeat, now=now, version=bench_version
+    ):
+        return None
+    try:
+        capabilities = ValidatorCapabilities.model_validate(heartbeat.capabilities)
+    except ValidationError:
+        return None
+    scorer = capabilities.scorer_benchmarks
+    # Round runs carry their own dataset bytes; they do not need the private
+    # V13 transport (``private_datasets``), which stays off fleet-wide.
+    if not (
+        capabilities.ticket_inference
+        and capabilities.sandbox_memory_limit
+        and scorer is not None
+        and scorer.status == "fresh_verified"
+        and scorer.generator_rounds
+    ):
+        return None
+    return scorer.generator_round_max_cases or LEGACY_ROUND_COLUMN_CASES
+
+
+async def round_capable_validators(
+    session: AsyncSession, *, bench_version: int, cases_per_column: int, now: datetime
+) -> int:
+    """Validators a round at ``bench_version`` could be leased to right now.
+
+    The same gates :func:`issue_generator_round_ticket` and the lane apply: a
+    fresh scorer for the version that runs rounds of this column size, and,
+    for bench 13, a member signing the V13 scorer-cohort authority packet.
+    """
+    from ditto.api_server.v13_scorer_cohort import pinned_validator_allowed
+
+    count = 0
+    for heartbeat in await session.scalars(select(ValidatorHeartbeat)):
+        capacity = round_column_capacity(
+            heartbeat, now=now, bench_version=bench_version
+        )
+        if capacity is None or capacity < cases_per_column:
+            continue
+        if bench_version == 13 and not await pinned_validator_allowed(
+            session, hotkey=heartbeat.validator_hotkey, now=now
+        ):
+            continue
+        count += 1
+    return count
+
+
+@dataclass(frozen=True)
+class RoundContract:
+    """The bench contract a round opens at. ``bench_version`` is None when no
+    round-capable contract has a validator to run it (the round is void)."""
+
+    active_version: int
+    bench_version: int | None
+    reason: str | None = None
+
+
+async def choose_round_bench_version(
+    session: AsyncSession, *, cases_per_column: int, now: datetime
+) -> RoundContract:
+    """Pick the bench contract a round opening now freezes.
+
+    It follows the active benchmark version. When that version has no round
+    contract (``GENERATOR_ROUND_BENCH_VERSIONS``: the pack grading policy and
+    the scorer's round mode), or no validator can run a round at it, the round
+    falls back to the newest round contract below it that a validator can
+    run, and records why. An active version older than every round contract
+    keeps the oldest one, the contract rounds have always run at. With no
+    validator able to run any candidate, the round cannot run and is voided.
+    """
+    active = await active_bench_version(session)
+    candidates = sorted(
+        (version for version in GENERATOR_ROUND_BENCH_VERSIONS if version <= active),
+        reverse=True,
+    )
+    notes: list[str] = []
+    if not candidates:
+        # An active version older than every round contract (a fresh or
+        # restored deployment) keeps the rounds' historical contract.
+        candidates = [min(GENERATOR_ROUND_BENCH_VERSIONS)]
+        notes.append(
+            f"active bench v{active} predates the generator-round contracts; "
+            f"rounds run at v{candidates[0]}"
+        )
+    elif active not in GENERATOR_ROUND_BENCH_VERSIONS:
+        supported = ", ".join(f"v{v}" for v in GENERATOR_ROUND_BENCH_VERSIONS)
+        notes.append(
+            f"active bench v{active} has no generator-round contract (round "
+            f"packs grade at {supported}, and the scorer's generator-round-v1 "
+            "mode runs only those)"
+        )
+    for version in candidates:
+        if await round_capable_validators(
+            session, bench_version=version, cases_per_column=cases_per_column, now=now
+        ):
+            return RoundContract(
+                active_version=active,
+                bench_version=version,
+                reason="; ".join(notes) or None,
+            )
+        notes.append(
+            f"no validator can run a {cases_per_column}-case round column at "
+            f"bench v{version}"
+        )
+    return RoundContract(
+        active_version=active, bench_version=None, reason="; ".join(notes)
+    )
+
+
 async def open_round(
     session: AsyncSession,
     row: GeneratorRound,
@@ -818,6 +958,12 @@ async def open_round(
     row.seed = round_seed(row.round_index, row.secret, position.last_epoch_block_hash)
     row.settings_revision = resolved.revision
     row.cases_per_column = settings.cases_per_seed
+    # Frozen for the round's life: an activation mid-round must not move its
+    # panel runs, tickets, or capability routing to another contract.
+    contract = await choose_round_bench_version(
+        session, cases_per_column=settings.cases_per_seed, now=now
+    )
+    row.bench_version = contract.bench_version
     columns = await select_columns(session, settings)
     frozen = await select_round_panel(session, settings)
     panel, skipped = frozen.panel, frozen.skipped_references
@@ -830,7 +976,21 @@ async def open_round(
         generation["skipped_reference_agents"] = skipped
     if frozen.skipped_agents:
         generation["skipped_panel_agents"] = frozen.skipped_agents
+    if contract.reason is not None:
+        generation["bench_contract"] = {
+            "active_version": contract.active_version,
+            "bench_version": contract.bench_version,
+            "reason": contract.reason,
+        }
     row.generation = generation or None
+    if contract.bench_version is None:
+        void_round(
+            row,
+            f"no generator-round contract can run at active bench "
+            f"v{contract.active_version}: {contract.reason}",
+            now=now,
+        )
+        return
     if not any(column["counted"] for column in columns):
         void_round(
             row,

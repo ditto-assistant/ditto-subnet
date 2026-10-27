@@ -1442,10 +1442,12 @@ class DittobenchClient:
         inference_slot_id: str | None,
         inference_ticket_deadline: datetime | None,
         ticket_deadline: datetime,
+        bench_version: int = 13,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Run a generator-round dataset against one screened image.
+        """Run a generator-round dataset against one screened image at the
+        round's frozen ``bench_version`` (Platform's job carries it).
 
         Returns the scorer run id and the raw per-case results (case ids are
         ``column/case``; faults carry the ``generator_round_fault`` category).
@@ -1460,7 +1462,7 @@ class DittobenchClient:
             private_dataset_mode="generator-round-v1",
             private_dataset_bytes=dataset_bytes,
             run_size="full",
-            bench_version=13,
+            bench_version=bench_version,
             screened_image_url=screened_image_url,
             screened_image_sha256=screened_image_sha256,
             screened_image_size_bytes=screened_image_size_bytes,
@@ -1477,7 +1479,7 @@ class DittobenchClient:
         report = await self._poll_run(
             run_id,
             progress_callback=progress_callback,
-            expected_bench_version=13,
+            expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
             raw=True,
         )
