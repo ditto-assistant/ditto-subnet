@@ -44,3 +44,21 @@ func TestTemporalV14GrammarInvertsEveryShape(t *testing.T) {
 		}
 	}
 }
+
+// TestChannelAsOfV14ReadsTheQuestionDate: the as-of date comes from the
+// question sentence, never from a dated opener before it.
+func TestChannelAsOfV14ReadsTheQuestionDate(t *testing.T) {
+	rows := []string{
+		"Orinpath's contact channel was set up as email on 2025-01-05.",
+		"From 2025-02-10, Orinpath's contact channel moved to phone.",
+		"On 2025-03-20 the contact channel for Orinpath switched to video call.",
+	}
+	question := "Use only case file c0123456789abcdef. Reviewed on 2025-04-01. Which contact channel was in force for Orinpath on 2025-02-15? Name the channel."
+	d, ok := answerChannelAsOfV14(rows, question)
+	if !ok || !d.ok || d.value != "phone" {
+		t.Fatalf("got %+v, want phone", d)
+	}
+	if d, _ := answerChannelAsOfV14(rows, "Reviewed on 2025-04-01. Which contact channel applied for Orinpath? Name it."); d.ok {
+		t.Fatalf("an undated question body parsed as %q", d.value)
+	}
+}

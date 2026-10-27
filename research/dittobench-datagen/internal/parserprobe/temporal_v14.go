@@ -215,7 +215,7 @@ func answerChannelAsOfV14(rows []string, question string) (derived, bool) {
 	if len(chain) == 0 {
 		return derived{}, false
 	}
-	query, ok := publicEventDate(temporalV14Date.FindString(question))
+	query, ok := publicEventDate(temporalV14Date.FindString(temporalV14Body(question)))
 	result := derived{family: "v13-open-program", kind: protocol.AnswerValue}
 	if !ok {
 		return result, true
