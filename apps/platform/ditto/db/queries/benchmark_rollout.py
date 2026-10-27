@@ -492,15 +492,24 @@ async def historical_rescore_cohort(
     )
     if not agents:
         return []
-    scores = list(
-        await session.scalars(
-            select(Score).where(
+    # Only the ranking columns: a full v13 score row carries hundreds of KB of
+    # per-case JSON, and loading every row for two eras exceeded the statement
+    # timeout on the first v14 start.
+    scores = (
+        await session.execute(
+            select(
+                Score.agent_id,
+                Score.bench_version,
+                Score.validator_hotkey,
+                Score.composite,
+                Score.n,
+            ).where(
                 Score.agent_id.in_([agent.agent_id for agent in agents]),
                 Score.bench_version.in_(versions),
             )
         )
-    )
-    by_version_agent: dict[int, dict[UUID, list[Score]]] = {}
+    ).all()
+    by_version_agent: dict[int, dict[UUID, list[Any]]] = {}
     for score in scores:
         by_version_agent.setdefault(score.bench_version, {}).setdefault(
             score.agent_id, []
