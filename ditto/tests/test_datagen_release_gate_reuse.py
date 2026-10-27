@@ -13,8 +13,8 @@ SCRIPT = (
 
 
 @pytest.mark.parametrize("change", ["stamp", "code", "version_code", "no_gate"])
-def test_reuse_requires_unchanged_tested_source(tmp_path: Path, change: str):
-    def git(*args):
+def test_reuse_requires_unchanged_tested_source(tmp_path: Path, change: str) -> None:
+    def git(*args: str) -> str:
         return subprocess.check_output(["git", *args], cwd=tmp_path, text=True).strip()
 
     git("init", "-q")

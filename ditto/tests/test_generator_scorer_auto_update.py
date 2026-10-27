@@ -14,7 +14,9 @@ DIGEST = "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "c" * 64
 
 
 @pytest.mark.parametrize("fault", ["none", "signature", "identity", "startup"])
-def test_signed_activation_and_failure_preserve_last_good(tmp_path: Path, fault: str):
+def test_signed_activation_and_failure_preserve_last_good(
+    tmp_path: Path, fault: str
+) -> None:
     tools = tmp_path / "bin"
     tools.mkdir()
     release_root = tmp_path / "scorer"

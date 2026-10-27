@@ -625,7 +625,7 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
         "working-directory"
     ] == ("research/dittobench-datagen")
     assert "go test -timeout 20m ./..." in datagen_verification["run"]
-    assert 'verified_sha=$(git rev-parse HEAD)' in datagen_verification["run"]
+    assert "verified_sha=$(git rev-parse HEAD)" in datagen_verification["run"]
 
     component_gates = {
         "verify-backroom": (
