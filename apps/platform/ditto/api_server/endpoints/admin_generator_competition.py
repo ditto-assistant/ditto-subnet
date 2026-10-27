@@ -22,10 +22,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import (
     PROBE_ROTATION_CONFIRMATION,
+    REINSTATE_SUBMISSION_CONFIRMATION,
     REJECT_SUBMISSION_CONFIRMATION,
     AdminGeneratorProbeResponse,
     AdminGeneratorProbeRotateRequest,
     AdminGeneratorPromotionCandidatesResponse,
+    AdminGeneratorReinstateRequest,
     AdminGeneratorRunDetail,
     AdminGeneratorSettingsRequest,
     AdminGeneratorSettingsResponse,
@@ -55,6 +57,7 @@ from ditto.api_server.generator_round_reservation import (
 from ditto.api_server.generator_rounds import void_round
 from ditto.db.models import GeneratorCompetitionSettingsRevision as RevisionRow
 from ditto.db.models import (
+    GeneratorOperatorAction,
     GeneratorProbeEpoch,
     GeneratorRound,
     GeneratorRoundCaseVerdict,
@@ -74,6 +77,7 @@ from ditto.db.queries.generator import (
     list_runs,
     list_submissions,
     list_verdicts,
+    lock_hotkey_uploads,
     record_operator_action,
     rotate_probe_epoch,
     submission_counts_by_status,
@@ -282,6 +286,13 @@ async def admin_submission_detail(
     runs = await list_runs(session, submission_id)
     counts = await case_status_counts(session, [run.run_id for run in runs])
     latest = next((run for run in runs if run.status != "abandoned"), None)
+    rejected = row.status == "rejected"
+    ruling = await _operator_ruling(session, row) if rejected else False
+    blockers = (
+        await _reinstate_blockers(session, row, override_operator_ruling=False)
+        if rejected
+        else []
+    )
     return AdminGeneratorSubmissionDetail(
         summary=submission_summary(
             row, latest, counts.get(latest.run_id) if latest else None
@@ -295,7 +306,98 @@ async def admin_submission_detail(
             for run in runs
             if (summary := run_summary(run, counts.get(run.run_id))) is not None
         ],
+        operator_ruling=ruling,
+        reinstate_blockers=blockers,
     )
+
+
+async def _operator_ruling(session: AsyncSession, row: GeneratorSubmission) -> bool:
+    """Whether the current rejection is an operator ruling.
+
+    The audit log decides: the latest ``reject``/``reinstate`` action on the
+    submission is a ``reject`` and the stored reason is still the one
+    ``reject_submission`` stamped (a reinstated generator that a scorer verdict
+    rejects again carries the verdict's reason instead). With no audit row,
+    the ``operator (`` prefix alone decides.
+    """
+    latest = await session.scalar(
+        select(GeneratorOperatorAction.action)
+        .where(
+            GeneratorOperatorAction.subject == str(row.submission_id),
+            GeneratorOperatorAction.action.in_(("reject", "reinstate")),
+        )
+        .order_by(
+            GeneratorOperatorAction.created_at.desc(),
+            GeneratorOperatorAction.id.desc(),
+        )
+        .limit(1)
+    )
+    stamped = (row.status_reason or "").startswith("operator (")
+    if latest == "reinstate":
+        return False
+    return stamped
+
+
+async def _reinstate_blockers(
+    session: AsyncSession,
+    row: GeneratorSubmission,
+    *,
+    override_operator_ruling: bool,
+) -> list[str]:
+    """Every reason ``reinstate`` refuses this submission now.
+
+    Shared by the write and the submission detail, so the operator sees the
+    exact guard before acting. Uploads keep at most one active submission per
+    hotkey, and a newer upload is the miner's choice; neither is undone here.
+    """
+    if row.status != "rejected":
+        return [f"submission is {row.status}, not rejected"]
+    blockers: list[str] = []
+    if not override_operator_ruling and await _operator_ruling(session, row):
+        blockers.append(
+            "rejected by an operator ruling; pass override_operator_ruling to "
+            "undo the ruling"
+        )
+    others = await session.execute(
+        select(
+            GeneratorSubmission.submission_id,
+            GeneratorSubmission.status,
+            GeneratorSubmission.submitted_at,
+        )
+        .where(
+            GeneratorSubmission.miner_hotkey == row.miner_hotkey,
+            GeneratorSubmission.submission_id != row.submission_id,
+        )
+        .order_by(GeneratorSubmission.submitted_at, GeneratorSubmission.submission_id)
+    )
+    for other_id, other_status, submitted_at in others.tuples():
+        if other_status == "active":
+            blockers.append(
+                f"hotkey already has active submission {other_id}; one active "
+                "generator per hotkey"
+            )
+        elif _aware(submitted_at) > _aware(row.submitted_at):
+            blockers.append(
+                f"hotkey uploaded newer submission {other_id} ({other_status}); "
+                "a newer upload supersedes this one"
+            )
+    if row.public_default:
+        other_default = await session.scalar(
+            select(GeneratorSubmission.submission_id).where(
+                GeneratorSubmission.public_default.is_(True),
+                GeneratorSubmission.status == "active",
+                GeneratorSubmission.submission_id != row.submission_id,
+            )
+        )
+        if other_default is not None:
+            blockers.append(
+                f"public default generator {other_default} is already active"
+            )
+    return blockers
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 async def _locked_submission(
@@ -393,6 +495,107 @@ async def reject_submission(
         reason=reason,
     )
     await session.commit()
+    return await admin_submission_detail(submission_id, _admin, session)
+
+
+@router.post(
+    "/submissions/{submission_id}/reinstate",
+    response_model=AdminGeneratorSubmissionDetail,
+)
+async def reinstate_submission(
+    submission_id: UUID,
+    payload: AdminGeneratorReinstateRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminGeneratorSubmissionDetail:
+    """Return a rejected generator to ``active`` for a fresh qualification.
+
+    For a rejection that was not the generator's fault (a scorer or
+    infrastructure failure read as a generator verdict). The submission
+    qualifies again from scratch on fresh secret seeds and holds no round
+    column until it passes. Guarded by the exact status and status_reason the
+    operator read. Refused while the hotkey has another active or a newer
+    submission, and for an operator ruling unless ``override_operator_ruling``.
+    """
+    if payload.confirmation != REINSTATE_SUBMISSION_CONFIRMATION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {REINSTATE_SUBMISSION_CONFIRMATION}",
+        )
+    reason = payload.reason.strip()
+    actor = payload.actor.strip()
+    if len(reason) < MIN_REASON_LENGTH or not 1 <= len(actor) <= MAX_ACTOR_LENGTH:
+        raise HTTPException(status_code=422, detail="reason and actor are required")
+    hotkey = await session.scalar(
+        select(GeneratorSubmission.miner_hotkey).where(
+            GeneratorSubmission.submission_id == submission_id
+        )
+    )
+    if hotkey is None:
+        raise HTTPException(status_code=404, detail="unknown submission")
+    # The upload path's per-hotkey lock: an upload racing this reinstate would
+    # otherwise leave the hotkey with two active submissions.
+    await lock_hotkey_uploads(session, hotkey)
+    row = await get_submission(session, submission_id, for_update=True)
+    if row is None:
+        raise HTTPException(status_code=404, detail="unknown submission")
+    status, status_reason = row.status, row.status_reason
+    if status != payload.expected_status:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"submission is {status}, not {payload.expected_status}; "
+                "re-read it and retry"
+            ),
+        )
+    if status_reason != payload.expected_status_reason:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "status_reason changed since it was read; re-read the submission "
+                f"(current: {status_reason!r})"
+            ),
+        )
+    blockers = await _reinstate_blockers(
+        session, row, override_operator_ruling=payload.override_operator_ruling
+    )
+    if blockers:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="; ".join(blockers))
+    ruling = await _operator_ruling(session, row)
+    now = datetime.now(UTC)
+    if row.lease_run_id is not None:
+        await abandon_run(session, row.lease_run_id, now=now)
+        clear_lease(row, now=now)
+    previous_reason = row.status_reason
+    row.status = "active"
+    row.status_reason = None
+    row.qualified_at = None
+    row.attempts = 0
+    row.next_run_at = now
+    row.updated_at = now
+    record_operator_action(
+        session,
+        action="reinstate",
+        subject=str(row.submission_id),
+        actor=actor,
+        reason=reason,
+        detail={
+            "previous_status_reason": previous_reason,
+            "operator_ruling": ruling,
+            "override_operator_ruling": payload.override_operator_ruling,
+        },
+    )
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="submission changed concurrently; re-read it and retry",
+        ) from exc
     return await admin_submission_detail(submission_id, _admin, session)
 
 

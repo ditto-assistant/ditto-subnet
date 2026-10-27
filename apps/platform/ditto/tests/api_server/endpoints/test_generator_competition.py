@@ -35,6 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.generator import (
     MAX_CASES_PER_SEED,
     PROBE_ROTATION_CONFIRMATION,
+    REINSTATE_SUBMISSION_CONFIRMATION,
     REJECT_SUBMISSION_CONFIRMATION,
     GeneratorCompetitionSettings,
     generator_settings_confirmation,
@@ -909,3 +910,173 @@ class TestOperatorActions:
                 json={**reject, "expected_status": "rejected"},
             )
         ).status_code == 409
+
+    async def _rejected_by_scorer(
+        self, client: httpx.AsyncClient, raw: bytes, key=_MINER
+    ) -> dict[str, Any]:
+        accepted = await _upload(client, raw, key)
+        work = await _lease(client)
+        result = _result(work, tag="x", build_ok=False)
+        assert (await _post(client, result)).json()["submission_status"] == "rejected"
+        detail = await client.get(
+            "/api/v1/admin/generator-competition/submissions/"
+            f"{accepted['submission_id']}",
+            headers=_ADMIN,
+        )
+        assert detail.status_code == 200, detail.text
+        return detail.json()
+
+    async def test_reinstate_returns_a_rejection_to_qualification(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        detail = await self._rejected_by_scorer(client, _archive())
+        sub_id = detail["summary"]["submission_id"]
+        assert detail["operator_ruling"] is False
+        assert detail["reinstate_blockers"] == []
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        body = {
+            "expected_status": "rejected",
+            "expected_status_reason": detail["summary"]["status_reason"],
+            "reason": "scorer was stale; not the miner's fault",
+            "actor": "backroom:test",
+            "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+        }
+        assert (await client.post(f"{base}/reinstate", json=body)).status_code == 401
+        wrong = {**body, "confirmation": "REINSTATE"}
+        assert (
+            await client.post(f"{base}/reinstate", headers=_ADMIN, json=wrong)
+        ).status_code == 409
+        stale = {**body, "expected_status_reason": "something else"}
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=stale)
+        assert resp.status_code == 409 and "status_reason" in resp.text
+
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert resp.status_code == 200, resp.text
+        out = resp.json()
+        assert out["summary"]["status"] == "active"
+        assert out["summary"]["status_reason"] is None
+        assert out["summary"]["qualified_at"] is None
+        assert out["reinstate_blockers"] == []
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction).where(
+                        GeneratorOperatorAction.subject == sub_id
+                    )
+                )
+            ).all()
+            assert [a.action for a in audit] == ["reinstate"]
+            assert audit[0].actor == "backroom:test"
+            assert audit[0].detail is not None
+            assert (
+                audit[0].detail["previous_status_reason"]
+                == (detail["summary"]["status_reason"])
+            )
+        # A fresh qualification run on fresh seeds.
+        rerun = await _lease(client)
+        assert rerun is not None and rerun["submission_id"] == sub_id
+        assert (await _post(client, _result(rerun, tag="ok"))).json()[
+            "status"
+        ] == "qualified"
+        # Replaying the same request is refused: it is no longer rejected.
+        again = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert again.status_code == 409
+
+    async def test_reinstate_refuses_an_operator_ruling_without_override(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        accepted = await _upload(client, _archive())
+        sub_id = accepted["submission_id"]
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        resp = await client.post(
+            f"{base}/reject",
+            headers=_ADMIN,
+            json={
+                "expected_status": "active",
+                "reason": "copy of another miner's generator",
+                "confirmation": REJECT_SUBMISSION_CONFIRMATION,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        detail = resp.json()
+        assert detail["operator_ruling"] is True
+        assert any("operator ruling" in b for b in detail["reinstate_blockers"])
+        body = {
+            "expected_status": "rejected",
+            "expected_status_reason": detail["summary"]["status_reason"],
+            "reason": "ruling was a mistake after review",
+            "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+        }
+        refused = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert refused.status_code == 409 and "operator ruling" in refused.text
+        resp = await client.post(
+            f"{base}/reinstate",
+            headers=_ADMIN,
+            json={**body, "override_operator_ruling": True},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["summary"]["status"] == "active"
+        async with session_maker() as session:
+            audit = (
+                await session.scalars(
+                    select(GeneratorOperatorAction)
+                    .where(GeneratorOperatorAction.subject == sub_id)
+                    .order_by(GeneratorOperatorAction.id)
+                )
+            ).all()
+            assert [a.action for a in audit] == ["reject", "reinstate"]
+            assert audit[1].detail is not None
+            assert audit[1].detail["operator_ruling"] is True
+            assert audit[1].detail["override_operator_ruling"] is True
+
+    async def test_reinstate_never_resurrects_a_superseded_choice(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, session_maker)
+        await _open_lane(client)
+        detail = await self._rejected_by_scorer(client, _archive("one"))
+        sub_id = detail["summary"]["submission_id"]
+        await _skip_cooldown(session_maker)
+        newer = await _upload(client, _archive("two"))
+        # The rejected row is not active, so the upload superseded nothing.
+        assert newer["superseded"] == []
+        base = f"/api/v1/admin/generator-competition/submissions/{sub_id}"
+        detail = (await client.get(base, headers=_ADMIN)).json()
+        assert detail["reinstate_blockers"], detail
+        body = {
+            "expected_status": "rejected",
+            "expected_status_reason": detail["summary"]["status_reason"],
+            "reason": "scorer was stale; not the miner's fault",
+            "confirmation": REINSTATE_SUBMISSION_CONFIRMATION,
+            "override_operator_ruling": True,
+        }
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert resp.status_code == 409
+        assert "active submission" in resp.text
+        assert newer["submission_id"] in resp.text
+        # Even once the newer upload is itself rejected, it is still the
+        # miner's latest choice.
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(newer["submission_id"]))
+            assert row is not None
+            row.status = "rejected"
+            row.status_reason = "build_failed: x"
+            await session.commit()
+        resp = await client.post(f"{base}/reinstate", headers=_ADMIN, json=body)
+        assert resp.status_code == 409 and "newer submission" in resp.text
+        async with session_maker() as session:
+            row = await session.get(GeneratorSubmission, UUID(sub_id))
+            assert row is not None and row.status == "rejected"

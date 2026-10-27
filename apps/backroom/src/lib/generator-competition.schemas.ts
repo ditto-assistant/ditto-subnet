@@ -16,6 +16,7 @@ const ss58 = z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/)
 export const GENERATOR_SETTINGS_SCOPE = '*'
 export const PROBE_ROTATION_CONFIRMATION = 'ROTATE GENERATOR PROBE SEED'
 export const REJECT_GENERATOR_CONFIRMATION = 'REJECT GENERATOR SUBMISSION'
+export const REINSTATE_GENERATOR_CONFIRMATION = 'REINSTATE GENERATOR SUBMISSION'
 export const REGISTER_DEFAULT_GENERATOR_CONFIRMATION = 'REGISTER DEFAULT GENERATOR'
 export const REPUBLISH_COMMITMENT_CONFIRMATION = 'REPUBLISH GENERATOR ROUND COMMITMENT'
 export const RELEASE_ROUND_LEASE_CONFIRMATION = 'RELEASE GENERATOR ROUND LEASE'
@@ -181,6 +182,9 @@ export const generatorSubmissionDetailSchema = z.object({
   lease_run_id: uuid.nullable(),
   lease_expires_at: z.string().nullable(),
   runs: z.array(runSummarySchema),
+  // Older Platforms omit both; a missing field reads as "not computed".
+  operator_ruling: z.boolean().optional(),
+  reinstate_blockers: z.array(z.string()).optional(),
 })
 
 const panelSlotSchema = z.object({
@@ -306,6 +310,16 @@ export const rejectGeneratorInputSchema = z.object({
   expectedStatus: z.enum(['active', 'superseded']),
   reason: auditReasonSchema(8),
   confirmation: z.literal(REJECT_GENERATOR_CONFIRMATION),
+})
+
+export const reinstateGeneratorInputSchema = z.object({
+  submissionId: uuid,
+  expectedStatus: z.literal('rejected'),
+  // The exact status_reason read from get_generator_submission (null when none).
+  expectedStatusReason: z.string().nullable(),
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(REINSTATE_GENERATOR_CONFIRMATION),
+  overrideOperatorRuling: z.boolean().default(false),
 })
 
 // --- rounds ----------------------------------------------------------------

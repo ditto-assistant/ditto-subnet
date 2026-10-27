@@ -525,6 +525,7 @@ describe('Backroom MCP tools', () => {
         'get_generator_board',
         'rescore_generator_submission',
         'reject_generator_submission',
+        'reinstate_generator_submission',
         'list_generator_rounds',
         'get_generator_round',
         'preview_generator_round',

@@ -207,6 +207,14 @@ Each round's secret is revealed after `privacy_window_rounds`.
     `REJECT GENERATOR SUBMISSION` and `expectedStatus`. It abandons an
     in-flight qualification run and drops the generator from the ledger at
     once.
+  - `reinstate_generator_submission` needs the confirmation
+    `REINSTATE GENERATOR SUBMISSION`, `expectedStatus: rejected`, and the
+    exact `expectedStatusReason` from `get_generator_submission`. It returns
+    a rejection that was not the generator's fault (for example a stale
+    scorer) to `active` for a fresh qualification run. It refuses while the
+    hotkey has another active or a newer submission, and it refuses an
+    operator ruling unless `overrideOperatorRuling` is true.
+    `get_generator_submission` lists the same guards as `reinstate_blockers`.
 
 Activating the lane in shadow takes four steps:
 

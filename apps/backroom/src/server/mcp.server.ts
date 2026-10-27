@@ -56,6 +56,7 @@ import {
   fetchGeneratorSubmission,
   listGeneratorSubmissions,
   rejectGenerator,
+  reinstateGenerator,
   rescoreGenerator,
   rotateGeneratorProbe,
   setGeneratorSettings,
@@ -86,6 +87,7 @@ import {
   generatorSubmissionIdInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
+  reinstateGeneratorInputSchema,
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
@@ -462,6 +464,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'rotate_generator_probe_seed',
   'rescore_generator_submission',
   'reject_generator_submission',
+  'reinstate_generator_submission',
   'tick_generator_rounds',
   'void_generator_round',
   'close_generator_round',
@@ -940,7 +943,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_generator_competition_settings: 'Read generator competition policy, mode and optional history.',
   set_generator_competition_settings: 'Write complete generator policy with CAS and APPLY GENERATOR COMPETITION {MODE}.',
   list_generator_submissions: 'Page generator submissions with latest run; filter hotkey/status.',
-  get_generator_submission: 'Read one generator submission, lease and every run (never source).',
+  get_generator_submission: 'Read one generator submission, lease, runs and reinstate blockers (never source).',
   get_generator_run: 'Read one qualification run: evaluation and outcome; seeds once finished.',
   get_generator_probe: 'Read probe epochs and probed counts; the probe seed is never served.',
   rotate_generator_probe_seed: 'Retire the probe seed; every active generator re-qualifies.',
@@ -960,6 +963,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   create_default_generator_upload: 'Presigned five-minute PUT for one default-generator archive under this operator\'s prefix.',
   rescore_generator_submission: 'Re-qualify an active generator now on fresh seeds.',
   reject_generator_submission: 'Reject a generator by ruling; abandons its live run, drops it from the ledger.',
+  reinstate_generator_submission: 'Reinstate a rejected generator with REINSTATE GENERATOR SUBMISSION; fresh qualification run.',
   get_bounty: 'Operator view of one bounty: claims, appeals, full private audit.',
   get_bounty_claim: 'Read one bounty claim: submissions, obligations, facts.',
   get_bounty_queue: 'Review queue (overdue first), settlement queue with approvers, or pending appeals.',
@@ -1840,7 +1844,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('get_generator_submission', {
     title: 'Get generator submission',
-    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
+    description: 'One generator submission: its summary, owner key, consecutive lease attempts, the in-flight run and its lease expiry, and every run newest first (abandoned runs are expired leases whose seeds were retired). For a rejected submission, operator_ruling says whether reject_generator_submission rejected it and reinstate_blockers lists every guard reinstate_generator_submission would refuse on (empty: it would proceed). Use get_generator_run for a run\'s evaluation and verdicts. Source is never returned. Requires backroom:read.',
     inputSchema: generatorSubmissionIdInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchGeneratorSubmission(input)))
 
@@ -1885,6 +1889,12 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     description: 'Reject one generator by operator ruling, for example a copy the probe missed or abuse. It leaves the ledger at once, an in-flight qualification run is abandoned (its result will be refused), and it never holds another round column; the miner can still upload a new generator. expectedStatus must match the current status, and the confirmation is REJECT GENERATOR SUBMISSION. The reason is stored as the miner-visible status_reason. Requires backroom:write.',
     inputSchema: rejectGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', true),
   }, async (input) => write(() => rejectGenerator(input, props.session.email)))
+
+  registerTool('reinstate_generator_submission', {
+    title: 'Reinstate generator submission',
+    description: 'Return a rejected generator to active for a fresh qualification run on fresh secret seeds. Use it when the rejection was not the generator\'s fault, for example a stale scorer that refused the requested case count. It holds no round column until it qualifies again. expectedStatus must be rejected and expectedStatusReason the exact status_reason from get_generator_submission (null when none); reinstate_blockers there lists every guard that would refuse. Refused while the hotkey has another active or a newer submission (one active generator per hotkey; a newer upload is the miner\'s choice), for a second active public default, and for an operator ruling (reject_generator_submission) unless overrideOperatorRuling is true. The confirmation is REINSTATE GENERATOR SUBMISSION. Audited with the previous status_reason. Requires backroom:write.',
+    inputSchema: reinstateGeneratorInputSchema.extend({ submissionId: sourceAgentId() }), annotations: toolAnnotations('write', false),
+  }, async (input) => write(() => reinstateGenerator(input, props.session.email)))
 
   registerTool('list_generator_rounds', {
     title: 'List generator rounds',

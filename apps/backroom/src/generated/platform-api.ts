@@ -2002,6 +2002,33 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/generator-competition/submissions/{submission_id}/reinstate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reinstate Submission
+         * @description Return a rejected generator to ``active`` for a fresh qualification.
+         *
+         *     For a rejection that was not the generator's fault (a scorer or
+         *     infrastructure failure read as a generator verdict). The submission
+         *     qualifies again from scratch on fresh secret seeds and holds no round
+         *     column until it passes. Guarded by the exact status and status_reason the
+         *     operator read. Refused while the hotkey has another active or a newer
+         *     submission, and for an operator ruling unless ``override_operator_ruling``.
+         */
+        post: operations["reinstate_submission_api_v1_admin_generator_competition_submissions__submission_id__reinstate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/submissions/{submission_id}/reject": {
         parameters: {
             query?: never;
@@ -11594,6 +11621,37 @@ export interface components {
             candidates: components["schemas"]["GeneratorPromotionCandidate"][];
         };
         /**
+         * AdminGeneratorReinstateRequest
+         * @description Return one rejected generator to ``active`` for a fresh qualification.
+         *
+         *     ``expected_status_reason`` must equal the stored status_reason exactly, so
+         *     the operator reinstates the rejection they read, not a newer one.
+         *     ``override_operator_ruling`` is required to undo an operator ruling.
+         */
+        AdminGeneratorReinstateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Expected Status
+             * @constant
+             */
+            expected_status: "rejected";
+            /** Expected Status Reason */
+            expected_status_reason: string | null;
+            /**
+             * Override Operator Ruling
+             * @default false
+             */
+            override_operator_ruling: boolean;
+            /** Reason */
+            reason: string;
+        };
+        /**
          * AdminGeneratorRoundActionRequest
          * @description An audited operator action on one round, guarded by its status.
          */
@@ -11829,8 +11887,15 @@ export interface components {
             lease_expires_at: string | null;
             /** Lease Run Id */
             lease_run_id: string | null;
+            /**
+             * Operator Ruling
+             * @default false
+             */
+            operator_ruling: boolean;
             /** Owner Key */
             owner_key: string;
+            /** Reinstate Blockers */
+            reinstate_blockers?: string[];
             /** Runs */
             runs: components["schemas"]["GeneratorRunSummary"][];
             summary: components["schemas"]["GeneratorSubmissionSummary"];
@@ -45392,6 +45457,43 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminGeneratorSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reinstate_submission_api_v1_admin_generator_competition_submissions__submission_id__reinstate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminGeneratorReinstateRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

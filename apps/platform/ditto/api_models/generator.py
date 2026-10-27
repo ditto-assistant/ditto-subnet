@@ -64,6 +64,7 @@ def generator_settings_confirmation(mode: str) -> str:
 
 PROBE_ROTATION_CONFIRMATION = "ROTATE GENERATOR PROBE SEED"
 REJECT_SUBMISSION_CONFIRMATION = "REJECT GENERATOR SUBMISSION"
+REINSTATE_SUBMISSION_CONFIRMATION = "REINSTATE GENERATOR SUBMISSION"
 
 
 def source_signature_payload(
@@ -508,6 +509,13 @@ class AdminGeneratorSubmissionDetail(GeneratorModel):
     lease_run_id: UUID | None
     lease_expires_at: datetime | None
     runs: list[GeneratorRunSummary]
+    operator_ruling: bool = False
+    """The rejection was an operator ruling (``reject_generator_submission``),
+    not a qualification or round verdict."""
+    reinstate_blockers: list[str] = Field(default_factory=list)
+    """Why ``reinstate`` would refuse right now without
+    ``override_operator_ruling`` (empty when it would proceed). Only computed
+    for a rejected submission; the write re-checks the same predicate."""
 
 
 class AdminGeneratorSubmissionListResponse(GeneratorModel):
@@ -552,6 +560,24 @@ class AdminGeneratorSubmissionActionRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str | None = None
+
+
+class AdminGeneratorReinstateRequest(BaseModel):
+    """Return one rejected generator to ``active`` for a fresh qualification.
+
+    ``expected_status_reason`` must equal the stored status_reason exactly, so
+    the operator reinstates the rejection they read, not a newer one.
+    ``override_operator_ruling`` is required to undo an operator ruling.
+    """
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    expected_status: Literal["rejected"]
+    expected_status_reason: str | None
+    reason: Annotated[str, Field(min_length=8)]
+    actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
+    confirmation: str
+    override_operator_ruling: bool = False
 
 
 class GeneratorPromotionCandidate(GeneratorModel):

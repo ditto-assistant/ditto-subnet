@@ -28,6 +28,7 @@ import {
   generatorPromotionInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
+  reinstateGeneratorInputSchema,
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
@@ -190,6 +191,27 @@ export async function rejectGenerator(rawInput: unknown, actor: string) {
           reason: input.reason,
           actor,
           confirmation: input.confirmation,
+        },
+      },
+    ),
+  )
+}
+
+export async function reinstateGenerator(rawInput: unknown, actor: string) {
+  const input = reinstateGeneratorInputSchema.parse(rawInput)
+  return generatorSubmissionDetailSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/reinstate`,
+      {
+        method: 'POST',
+        actor,
+        body: {
+          expected_status: input.expectedStatus,
+          expected_status_reason: input.expectedStatusReason,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+          override_operator_ruling: input.overrideOperatorRuling,
         },
       },
     ),

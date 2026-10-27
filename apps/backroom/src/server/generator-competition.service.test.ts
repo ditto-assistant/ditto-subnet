@@ -247,6 +247,31 @@ describe('generator competition MCP tools', () => {
       })
 
       fetchMock.mockClear()
+      const unphrased = await client.callTool({
+        name: 'reinstate_generator_submission',
+        arguments: {
+          submissionId: SUBMISSION, expectedStatus: 'rejected', expectedStatusReason: 'generation_failed: x',
+          reason: 'stale scorer refused the case count', confirmation: 'REINSTATE',
+        },
+      })
+      expect(unphrased.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      await client.callTool({
+        name: 'reinstate_generator_submission',
+        arguments: {
+          submissionId: SUBMISSION, expectedStatus: 'rejected', expectedStatusReason: 'generation_failed: x',
+          reason: 'stale scorer refused the case count', confirmation: 'REINSTATE GENERATOR SUBMISSION',
+        },
+      })
+      const [reinstateUrl, reinstateInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(reinstateUrl).toContain(`/submissions/${SUBMISSION}/reinstate`)
+      expect(JSON.parse(String(reinstateInit.body))).toEqual({
+        expected_status: 'rejected', expected_status_reason: 'generation_failed: x',
+        reason: 'stale scorer refused the case count', actor: session.email,
+        confirmation: 'REINSTATE GENERATOR SUBMISSION', override_operator_ruling: false,
+      })
+
+      fetchMock.mockClear()
       const unconfirmed = await client.callTool({
         name: 'rotate_generator_probe_seed', arguments: { reason: 'suspected leak', confirmation: 'rotate' },
       })
