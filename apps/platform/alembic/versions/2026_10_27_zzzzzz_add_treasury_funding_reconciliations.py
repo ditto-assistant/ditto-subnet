@@ -43,6 +43,9 @@ def upgrade():
 
 
 def downgrade():
+    # Lock before testing emptiness so an in-flight insert cannot commit
+    # between the check and the destructive DDL below.
+    op.execute("LOCK TABLE treasury_funding_reconciliations IN ACCESS EXCLUSIVE MODE")
     if op.get_bind().scalar(
         sa.text("SELECT EXISTS(SELECT 1 FROM treasury_funding_reconciliations)")
     ):

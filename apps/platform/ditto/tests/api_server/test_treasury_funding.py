@@ -203,20 +203,26 @@ async def test_endpoint_requires_service_auth_and_preserves_operator_header(
         assert row.actor == "signed-in@example.com"
 
 
-async def test_empty_migration_downgrade_and_upgrade_roundtrip(engine):
+def funding_migration():
     import importlib.util
     from pathlib import Path
-
-    from alembic.migration import MigrationContext
-    from alembic.operations import Operations
 
     path = (
         Path(__file__).resolve().parents[3]
         / "alembic/versions/2026_10_27_zzzzzz_add_treasury_funding_reconciliations.py"
     )
     spec = importlib.util.spec_from_file_location("funding_migration", path)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+async def test_empty_migration_downgrade_and_upgrade_roundtrip(engine):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    module = funding_migration()
 
     def roundtrip(connection):
         with Operations.context(MigrationContext.configure(connection)):
@@ -234,3 +240,21 @@ async def test_empty_migration_downgrade_and_upgrade_roundtrip(engine):
 
     async with engine.begin() as connection:
         await connection.run_sync(roundtrip)
+
+
+async def test_migration_downgrade_preserves_retained_history(engine, session_maker):
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+
+    await save(session_maker, batch())
+    module = funding_migration()
+
+    def downgrade(connection):
+        with Operations.context(MigrationContext.configure(connection)):
+            module.downgrade()
+
+    with pytest.raises(RuntimeError, match="audit history"):
+        async with engine.begin() as connection:
+            await connection.run_sync(downgrade)
+    async with session_maker() as session:
+        assert await session.scalar(select(TreasuryFundingReconciliation.purchase_id))
