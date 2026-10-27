@@ -288,9 +288,8 @@ over-call rule is a small part of the loss and that the new cases and the
 rendered-text grading carry the rest. The fourth agent's 0.111 drop
 is more than twice the v13 cross-validator spread for that agent (0.853 to
 0.914). These are five single-seed runs, so they bound the rank impact but do
-not measure it: gate 5 must. Per-case reports are not retained by Platform
-for canaries (only composite, means and `n`), so the loss cannot yet be split
-by family or by grading rule from this evidence.
+not measure it: gate 5 must. Platform keeps each canary's per-case report
+(`benchmark_canaries.result.per_case`). Gate 4 below splits it by family.
 
 Each run completed with signed evidence and no scorer error. These are clean
 runs of honest, top-ranked agents. Known-benign and adversarial control
@@ -376,6 +375,104 @@ The operator's choices are unchanged:
   SN-360). Identity-join (SN-359) should not ship on a waiver. Without a
   panel it would need a code change that holds it out of v14 generation,
   which moves the v14 vector and reopens gate 1 and the GIH diagnostic.
+
+**Gate 4 (family admission): measured from executed canaries, closed as
+MEDIUM (October 27).** Rounds cannot supply the table before activation (see
+above), so the evidence comes from isolated v14 canaries. A canary's seed
+derives from the agent and validator, so no two agents share a case and
+familygate's per-case panel verdict cannot be formed directly.
+`cmd/familypanel` (#3228) fills that gap:
+
+- it regenerates each run's dataset from its seed and checks the digest;
+- it labels every program case with its v14 family: the business group's
+  `V13FamilyOfVersion`, or the personal-life domain in the case provenance;
+- it folds each owner's per-family solve rate p_i;
+- it bounds the panel verdicts over every possible coupling of case
+  difficulty across agents: trivial is at most `min p_i`, unsolved is at most
+  the U-capacity bound;
+- it runs those worst cases through familygate's own thresholds
+  (`familygate.Judge`), adding a five-owner, eight-case-per-owner panel floor.
+
+Evidence: 9 completed full-profile v14 canaries.
+- 5 are the gate 3 runs above. 4 more were chosen with `familypanel -plan` to
+  cover the rare role and temporal families.
+- 6 independently owned agents: the hybrid top five plus the rank-7 agent,
+  which joined as a fifth owner for identity-join and latest-event (one
+  top-five agent has no identity-join seed on any validator). Owners were
+  checked by payment coldkey; a same-owner agent was excluded.
+- Every dataset regenerated to its production digest, and every program case
+  was labelled and scored.
+- One more canary failed on the lease collision fixed in #3230. One was
+  cancelled unstarted.
+- Spend: $4.56 of locked-model inference for the gate 4 runs, $9.96 for all
+  v14 canaries.
+
+The baseline is the same tool run on the same six agents' accepted live v13
+scores (18 runs).
+
+| Family | Owners | Seeds | Cases | v14 solved | Trivial max | Unsolved max | Unsolved (indep.) | v14 verdict | Live v13, same agents |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| appointments-medication | 4 | 7 | 28 | 79% | 0.38 | 0.00 | 0.00 | hold-thin-panel | 98% (hold-trivial) |
+| client-vs-vendor | 2 | 2 | 8 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | 83% (hold-trivial) |
+| current-channel | 3 | 4 | 16 | 94% | 0.88 | 0.00 | 0.00 | hold-trivial | new in v14 |
+| family-milestones | 6 | 8 | 32 | 56% | 0.25 | 0.25 | 0.02 | hold-thin-panel | 81% (admit) |
+| hobbies-clubs | 6 | 8 | 32 | 81% | 0.25 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+| holder-vs-actor | 3 | 3 | 12 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | new in v14 |
+| household-chores | 5 | 7 | 28 | 29% | 0.00 | 0.75 | 0.45 | hold-unsolved | 98% (hold-trivial) |
+| identity-join | 4 | 4 | 16 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | new in v14 |
+| latest-event | 3 | 3 | 12 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | 100% (hold-trivial) |
+| next-action-responsible | 2 | 2 | 8 | 62% | 0.25 | 0.75 | 0.75 | hold-unsolved | new in v14 |
+| owner-after-correction | 6 | 9 | 36 | 81% | 0.50 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+| school-logistics | 6 | 9 | 36 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | 100% (hold-trivial) |
+| standing-status | 6 | 9 | 36 | 72% | 0.25 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+| subscriptions-renewals | 5 | 6 | 24 | 50% | 0.25 | 0.00 | 0.00 | hold-thin-panel | 71% (admit) |
+| travel-logistics | 6 | 9 | 36 | 56% | 0.12 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+
+Reading:
+
+- *Hold-trivial is no worse than live.* With the same tool, 8 of the 10
+  families comparable at v13 are hold-trivial at 98 to 100% on the live
+  benchmark today. v14 lowers the solve rate on 8 of the 10 shared families,
+  by 19 to 69 points. The two still trivial at v14 (school-logistics,
+  latest-event) were equally trivial at v13.
+  The new role and temporal families solve at 94 to 100%. Trivial cases are
+  uniform points for every agent and cannot reorder them.
+- *Identity-join (SN-359)* was solved on 16 of 16 cases by 4 independent
+  owners. It is neither broken nor misgraded: it holds only as too easy. The
+  concern that it is adjacent to the excluded owner-alias-email shape is not
+  borne out.
+- *Household-chores* is the one family with real unsolved mass: 29% solved,
+  5 owners, unsolved bound 0.75 (0.45 under independence). The cases are
+  well-posed revert chains. One example: the dog walk passes Lauren, then
+  Christopher, then Erica, and then a record says it "is back to what it was
+  before the most recent change", so the answer is Christopher.
+  - The inference traces of the champion's run show the agent answering
+    "Erica Abraham" on the base and its variants. Its own prompt heuristic
+    takes the latest record that announces itself as a change.
+  - Subscriptions-renewals fails the same way on a struck-entry chain: the
+    agent answers "switch it to annual billing" for an entry the notes say was
+    struck.
+  - The grader scored both correctly. This is the difficulty SN-353/354 were
+    added for, and every agent fails it alike. Weight: one 4-case group in
+    about 6 of 7 seeds, about 1.6% of memory cases, under 1% of the composite.
+- *Thin panels.* Next-action-responsible (2 owners, 62%) and the 3-owner
+  role and temporal families sit below the panel floor. Their measured rates
+  are admissible or trivial.
+
+Verdict by the letter of familygate: five families hold as trivial
+(school-logistics, identity-join, holder-vs-actor, latest-event,
+current-channel) and household-chores holds as unsolved. The orchestrator,
+under the operator's activation authority, closed H2 as MEDIUM with **no
+hold-out**:
+
+- hold-trivial is no worse than live v13 and cannot misrank;
+- identity-join is solved and correctly graded;
+- household-chores is well-posed, uniform difficulty under 1% of the composite.
+
+Holding families out would move the v14 vector and reopen gate 1, the GIH
+diagnostic and the canaries. Familygate tuning (a hold-trivial rule relative
+to the live baseline, panel depth for rare families) is recorded for v15 as
+an SN-351 follow-up.
 
 **Gate 5 (partial, no spend): the v14 composite rule on accepted v13 cases.**
 Platform keeps each accepted score's per-case rows (`details.per_case`: kind,
@@ -687,15 +784,9 @@ Open, and requiring an operator, release-owner or paid run:
    probes as executed runs (unit-pinned only). LongMem confirmation at subject
    version 14 cannot run before `start_benchmark_rollout` (see gate 3 above).
    Accept it as a during-rollout shadow check or waive it.
-4. **Gate 4 family admission (SN-351).** There is no `familygate` table for
-   any of the 14 families in `universe.V14FamiliesAwaitingPanel`. Generator
-   rounds cannot supply one before activation, even with the v14 pack contract
-   and the kit version 4 default generator (see *Can the v14 pack contract
-   supply gate 4 before activation?* above). The
-   operator must choose one of: a private operator column of v14 datagen cases
-   in at least 3 live rounds, a funded offline panel of at least 2
-   independently owned harnesses, or a recorded waiver for the structural
-   families. Identity-join should not ship on a waiver alone.
+4. **Gate 4 family admission (SN-351): closed as MEDIUM, no hold-out.** See
+   *Gate 4 (family admission): measured from executed canaries* above. The
+   familygate tuning follow-up targets v15.
 5. **Fleet depth.** During October 27 one of the four v13 cohort members
    (`5HEouuDa...`) dropped out of v14 capability for several hours with a live
    v13 ticket, leaving three. That equals the three-validator quorum, so one
