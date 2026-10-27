@@ -188,6 +188,13 @@
     state: link
   notify: restart generator scorer
 
+- name: Point the operator command at the managed scorer
+  ansible.builtin.file:
+    src: /opt/ditto-generator-scorer/current/challenge-scorer
+    dest: "{{ generator_scorer_binary }}"
+    state: link
+    force: true
+
 - name: Preserve the supervised rollback revision
   ansible.builtin.file:
     src: "/opt/ditto-generator-scorer/releases/bootstrap-{{ generator_scorer_revision }}"
