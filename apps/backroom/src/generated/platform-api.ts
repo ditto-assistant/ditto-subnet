@@ -2266,6 +2266,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-grant-costs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Inference Grant Costs
+         * @description Full recorded cost of grants created in a bounded window, not an invoice.
+         */
+        get: operations["get_inference_grant_costs_api_v1_admin_inference_grant_costs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-routes": {
         parameters: {
             query?: never;
@@ -24296,6 +24316,71 @@ export interface components {
             rate_limit_bursts: components["schemas"]["InferenceRateLimitBurst"][];
             /** Window Seconds */
             window_seconds: number[];
+        };
+        /** InferenceGrantCostGroup */
+        InferenceGrantCostGroup: {
+            /** Bench Version */
+            bench_version: number;
+            /** Chat Calls */
+            chat_calls: number;
+            /** Chat Cost Microusd */
+            chat_cost_microusd: number;
+            /** Classification Basis */
+            classification_basis: string;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Embedding Calls */
+            embedding_calls: number;
+            /** Embedding Cost Microusd */
+            embedding_cost_microusd: number;
+            /** Embedding Tokens */
+            embedding_tokens: number;
+            /** Grants */
+            grants: number;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Purpose */
+            purpose: string;
+        };
+        /** InferenceGrantCostSnapshot */
+        InferenceGrantCostSnapshot: {
+            /**
+             * Aggregation Basis
+             * @default grant_created_at_full_lifetime
+             * @constant
+             */
+            aggregation_basis: "grant_created_at_full_lifetime";
+            /** Grants */
+            grants: number;
+            /** Groups */
+            groups: components["schemas"]["InferenceGrantCostGroup"][];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /**
+             * Provider Bill Reconciled
+             * @default false
+             * @constant
+             */
+            provider_bill_reconciled: false;
+            /** Total Cost Microusd */
+            total_cost_microusd: number;
+            /** Unclassified Cost Microusd */
+            unclassified_cost_microusd: number;
+            /** Unclassified Grants */
+            unclassified_grants: number;
+            /**
+             * Window End
+             * Format: date-time
+             */
+            window_end: string;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
         };
         /** InferenceGrantOffer */
         InferenceGrantOffer: {
@@ -46518,6 +46603,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InferenceFailureTaxonomy"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_inference_grant_costs_api_v1_admin_inference_grant_costs_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceGrantCostSnapshot"];
                 };
             };
             /** @description Validation Error */

@@ -39,6 +39,9 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 		t.Errorf("upload defaults wrong: %+v", cfg.Upload)
 	}
 	ip := cfg.Inference
+	if ip.OpenRouterSessionAffinity {
+		t.Error("cache affinity must default disabled")
+	}
 	if ip.Enabled {
 		t.Error("proxy must default disabled")
 	}
@@ -556,5 +559,19 @@ func TestDittoRouterUpstreamHostAllowlist(t *testing.T) {
 		if !tc.ok && (err == nil || !strings.Contains(err.Error(), "DITTO_ROUTER_UPSTREAM_URL")) {
 			t.Errorf("%s: expected DITTO_ROUTER_UPSTREAM_URL rejection, got %v", tc.url, err)
 		}
+	}
+}
+
+func TestOpenRouterSessionAffinityRequiresExplicitOptIn(t *testing.T) {
+	env := minimalEnv()
+	env["DITTO_INFERENCE_OPENROUTER_SESSION_AFFINITY"] = "true"
+	cfg, err := Load(MapLookup(env))
+	if err != nil || !cfg.Inference.OpenRouterSessionAffinity {
+		t.Fatalf("explicit affinity opt in missing: %v", err)
+	}
+	env["DITTO_INFERENCE_OPENROUTER_SESSION_AFFINITY"] = "invalid"
+	cfg, err = Load(MapLookup(env))
+	if err != nil || cfg.Inference.OpenRouterSessionAffinity {
+		t.Fatal("unrecognized boolean must not enable affinity")
 	}
 }

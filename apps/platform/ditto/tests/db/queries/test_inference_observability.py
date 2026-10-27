@@ -481,3 +481,62 @@ def _percentile(values: list[int], fraction: float) -> float:
     lower = int(position)
     upper = min(lower + 1, len(values) - 1)
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
+
+
+async def test_grant_costs_do_not_relabel_reused_tickets(session: AsyncSession) -> None:
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC)
+    async with session.begin():
+        exact = await _grant(session, validator_hotkey="current", now=now)
+        historical = await _grant(session, validator_hotkey="reused", now=now)
+        accepted = await _grant(session, validator_hotkey="accepted", now=now)
+        outside = await _grant(session, validator_hotkey="outside", now=now)
+        for grant in (exact, historical, accepted, outside):
+            grant.created_at = now - timedelta(minutes=10)
+            grant.cost_microusd = 1_000_000
+            grant.embedding_cost_microusd = 17
+            grant.request_count = 3
+        outside.created_at = now - timedelta(days=3)
+        # The present ticket must not lend its purpose to a different lease.
+        for grant in (historical, accepted):
+            await session.execute(
+                text(
+                    "UPDATE validator_tickets SET deadline=deadline+interval '1 hour', "
+                    "purpose='continual_retest' WHERE agent_id=:agent"
+                ),
+                {"agent": grant.agent_id},
+            )
+        session.add(
+            ScoreAuditEntry(
+                agent_id=accepted.agent_id,
+                validator_hotkey=accepted.validator_hotkey,
+                event="score",
+                payload={
+                    "bench_version": accepted.bench_version,
+                    "ticket_deadline": accepted.ticket_deadline.isoformat(
+                        timespec="microseconds"
+                    ),
+                },
+                prev_hash="0" * 64,
+                entry_hash="1" * 64,
+                recorded_at=now,
+            )
+        )
+        await session.flush()
+        rows = await load_inference_grant_costs(
+            session, window_start=now - timedelta(hours=24), window_end=now
+        )
+        groups = {row["classification_basis"]: row for row in rows}
+        assert set(groups) == {
+            "current_exact_lease",
+            "unknown",
+            "accepted_score_receipt",
+        }
+        assert groups["unknown"]["purpose"] == "historical_unclassified"
+        assert groups["accepted_score_receipt"]["purpose"] == "accepted_canonical_score"
+        assert sum(row["grants"] for row in rows) == 3
+        assert sum(row["chat_cost_microusd"] for row in rows) == 3_000_000
+        assert sum(row["embedding_cost_microusd"] for row in rows) == 51
+        assert sum(row["chat_calls"] for row in rows) == 9

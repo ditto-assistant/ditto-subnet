@@ -223,3 +223,28 @@ async def test_runtime_metrics_reads_the_ledger_and_keeps_its_shape(
         "platform-relay-2",
     ]
     assert {relay["status"] for relay in body["relays"]} == {"unavailable"}
+
+
+async def test_grant_costs_require_admin_and_bound_window(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app)
+    _install_session(app, session_maker)
+    assert (await client.get("/api/v1/admin/inference-grant-costs")).status_code == 401
+    for hours in (0, 745):
+        response = await client.get(
+            f"/api/v1/admin/inference-grant-costs?hours={hours}", headers=_HEADERS
+        )
+        assert response.status_code == 422
+    response = await client.get(
+        "/api/v1/admin/inference-grant-costs?hours=744", headers=_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["aggregation_basis"] == "grant_created_at_full_lifetime"
+    assert data["provider_bill_reconciled"] is False
+    assert data["groups"] == []
+    assert data["total_cost_microusd"] == data["unclassified_cost_microusd"] == 0
+    assert data["grants"] == data["unclassified_grants"] == 0

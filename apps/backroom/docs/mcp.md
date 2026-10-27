@@ -832,3 +832,31 @@ validation gates without rerunning deep source review or granting a paid retry.
 The review console exposes this release action on the resolved quarantine when its
 submission is still `screening_failed`; older Platform contexts without score
 counts fail closed. Inconclusive reviews alone do not establish a policy violation.
+
+## Inference cost attribution
+
+`get_inference_runtime_metrics` accepts optional `costWindowHours` (1–744).
+Ordinary calls retain their existing response and do not scan the cost ledger.
+An explicit window adds `grant_costs`, backed by the admin-only
+`GET /api/v1/admin/inference-grant-costs?hours=24` endpoint.
+
+This groups **full recorded lifetime counters of grants created in the window**.
+It is not request-time spend, settled provider billing, account-wide usage or a
+complete screening/review cost report. Active grants continue accumulating cost.
+`aggregation_basis` and `provider_bill_reconciled=false` make that distinction
+machine-readable. Costs are integer micro-USD; chat and embeddings are separate.
+
+Historical ticket rows are reused. A current ticket purpose is admissible only
+for the exact agent/version/validator/deadline and a purpose-aware revision.
+Immutable round attempts, canary leases and accepted score receipts can also
+identify their exact leases. Everything else remains `historical_unclassified`;
+the result includes unknown grants and dollars explicitly. Accepted score
+receipts do not distinguish initial quorum from every repair/rollout path.
+Historical timestamp encodings not matching the canonical signed representation
+remain unknown. No prompt, answer, API key or actor credential is returned.
+
+Reconcile this operational view to provider key/model exports with matching
+service periods before claiming realized savings. Do not reduce seeds, panel
+coverage or independent executions solely because a grant's purpose is unknown.
+Immutable purpose capture at issuance is still needed for complete future
+attribution after ticket reuse; this read does not reconstruct missing history.

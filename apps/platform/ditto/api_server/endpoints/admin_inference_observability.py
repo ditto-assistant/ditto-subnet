@@ -5,15 +5,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.inference_costs import (
+    InferenceGrantCostGroup,
+    InferenceGrantCostSnapshot,
+)
 from ditto.api_models.inference_failure_taxonomy import (
     ConfirmationFailureGroup,
     ConfirmationFailureLaneWindow,
@@ -53,6 +57,7 @@ from ditto.db.queries.confirmation_failure_taxonomy import (
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
 )
+from ditto.db.queries.inference_costs import load_inference_grant_costs
 from ditto.db.queries.inference_failure_taxonomy import (
     FAILURE_GROUP_LIMIT,
     FAILURE_WINDOWS_SECONDS,
@@ -72,6 +77,42 @@ ActorDep = Annotated[
     Header(alias="X-Admin-Actor", max_length=320),
 ]
 CAPTURE_CONFIRMATION = "CAPTURE RUNTIME PROFILE"
+
+
+@router.get(
+    "/admin/inference-grant-costs",
+    response_model=InferenceGrantCostSnapshot,
+)
+async def get_inference_grant_costs(
+    _admin: AdminDep,
+    session: SessionDep,
+    hours: Annotated[int, Query(ge=1, le=744)] = 24,
+) -> InferenceGrantCostSnapshot:
+    """Full recorded cost of grants created in a bounded window, not an invoice."""
+    observed_at = datetime.now(UTC)
+    window_start = observed_at - timedelta(hours=hours)
+    rows = await load_inference_grant_costs(
+        session, window_start=window_start, window_end=observed_at
+    )
+    groups = [InferenceGrantCostGroup.model_validate(dict(row)) for row in rows]
+    unknown = [group for group in groups if group.classification_basis == "unknown"]
+    return InferenceGrantCostSnapshot(
+        observed_at=observed_at,
+        window_start=window_start,
+        window_end=observed_at,
+        groups=groups,
+        total_cost_microusd=sum(
+            group.chat_cost_microusd + group.embedding_cost_microusd for group in groups
+        ),
+        unclassified_cost_microusd=sum(
+            group.chat_cost_microusd + group.embedding_cost_microusd
+            for group in unknown
+        ),
+        grants=sum(group.grants for group in groups),
+        unclassified_grants=sum(group.grants for group in unknown),
+    )
+
+
 _CAPACITY_RE = re.compile(
     r"^ditto_inference_admission_at_capacity_total\{"
     r'lane="([^"]+)",scope="([^"]+)"\} ([0-9.eE+-]+)$'
