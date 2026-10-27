@@ -652,14 +652,34 @@ Open, and requiring an operator, release-owner or paid run:
    decisions, so no code is merged for them here. The latest offline public
    GIH diagnostic, at `7852c80c3` on the final vector, still inverts v14 at a
    quality of 0.9498. Comments on #1832 give the report SHA.
-2. **Release packet and a separate v14 cohort (#2508).** The capability is
-   live (gate 2 evidence above), but the packet is not recorded. It needs a
-   reviewed merge SHA and its release (v0.398.0 or later, so it includes
-   #3210; #3210 changes no scored bytes), its scorer image and descriptor
-   digests, and the archived v13 cohort packet. The four capable validators
-   also serve the pinned v13 cohort. Either stand up a separate v14 cohort, or
-   have the operator explicitly waive that requirement and hold automatic stack
-   updates on the v13 members.
+2. **Release packet and a separate v14 cohort (#2508).** Candidate packet,
+   observed on October 27 at 21:20 UTC. It is not reviewed or accepted:
+   - Merge source `8730e77d45e828c47c2a7f34969986a59453ed2a` (#3222).
+     Release v0.399.0, release commit
+     `e3f18675dd52ecdb43e3ded22bc50323abf9200f`, run 40577508333. It
+     contains #3204, #3210, #3211, #3212, #3213, #3219 and #3222. Only
+     #3212 and #3222 change v14 code, and neither moves the v14 vector or
+     v14 grading.
+   - Signed stack descriptor
+     `sha256:d9b58c6e80bc2641d9077499639ef881f13a7a62df1d87f42be048c0f5a40a6b`,
+     dittobench-api image
+     `sha256:e965c94cbc49b9ad94b15878812e07d7d416b24f3f78d48ec5825acb1d3ee1c2`.
+   - `v14_scored_runtime_env` sha256
+     `57ea6e21d68c678ab8ccb0dcb76f89d49cb3e809a454864a3d547a01b2e27c63` on the
+     three cohort members already on v0.399.0. The fourth member (`5CFtzzb4...`)
+     was still on v0.398.0 and must converge before the packet is recorded.
+   - Archived v13 cohort pin: rotation 12, packet source
+     `c2eeb1dd6bb7afe5a50c34b06065fa9dd88f0fa3`, scorer image
+     `sha256:60b03a024f86a67438e1b5b0d93cc975ac515d9f6029baa0fc5e32564092d745`,
+     descriptor
+     `sha256:16e3b8baabceb7cdc7746b015b727114f64f2c9fab24e784be06acf373a8926f`.
+     The live authority packet has already followed the fleet to newer
+     releases, so the v13 pin is not image-frozen.
+
+   The cohort validators also serve v13, and no separate v14 cohort exists.
+   Either stand up a separate v14 cohort, or have the operator explicitly
+   waive that requirement and hold automatic stack updates on the v13
+   members.
 3. **Gate 3 controls.** The honest-agent canaries pass on all five of the
    current hybrid top five. Still missing: known-benign and adversarial
    harness canaries (no control agent row exists to canary), and the
@@ -676,10 +696,15 @@ Open, and requiring an operator, release-owner or paid run:
    in at least 3 live rounds, a funded offline panel of at least 2
    independently owned harnesses, or a recorded waiver for the structural
    families. Identity-join should not ship on a waiver alone.
-5. **Fleet depth.** On October 27 one of the four v14-capable validators
-   (`5HEouuDa...`) went offline with a live v13 ticket, leaving three. That
-   equals the three-validator quorum, so one more outage stalls every v14
-   rollout member. Restore it, or add a capable validator, before the start.
+5. **Fleet depth.** During October 27 one of the four v13 cohort members
+   (`5HEouuDa...`) dropped out of v14 capability for several hours with a live
+   v13 ticket, leaving three. That equals the three-validator quorum, so one
+   more outage would have stalled every v14 rollout member. It returned on
+   v0.399.0. At 21:20 UTC rollout control counts 5 v14-capable validators: the
+   4 cohort members and `5CqJAjSj...`, a paused source-mode validator with
+   `local_unverified` provenance. Before the start, confirm that at least 4
+   managed, signed-descriptor validators are capable. Do not rely on the
+   paused source-mode one.
 6. **Shadow replay report (gates 4 and 5).** The no-spend part is measured:
    the v14 composite rule replayed on 684 accepted v13 per-case rows (see
    *Gate 5 (partial)* above), and five same-seed top-five canaries. Still no
