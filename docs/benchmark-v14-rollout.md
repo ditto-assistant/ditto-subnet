@@ -36,7 +36,7 @@ that value is also a correction cue. "better safe than sorry" is published as
 `sorry`. V14 credits both. A sentence that carries anything beyond the value
 ("Sorry, I mean safe.") is still a correction, and v13 grading is unchanged.
 The v14 full/public vector at seed 123456789 is
-`87eafc34950860ad60ccff97edbb34b835811dc0da40e22e5a65dec12424348c`,
+`760d155a9f192b635d3f5a19ef58ebba211576dd9ae2bccf5ae89135ff8492d9`,
 with epoch `2027-06-01T00:00:00Z`. The grader (apart from the claim-set
 correction above, the #2734 hyphen fold and matchers, and the answer-normalization
 contract below), v13 gate postures,
@@ -104,6 +104,41 @@ amounts (`$1.2k`), numeric slash dates (`03/04/2026` is ambiguous between
 locales), unicode en/em dashes inside identifiers (they separate clauses), and
 the v13-pinned effect reads (`grade.MemoryEffectV13`), which receive the
 rendered reply but keep the v13 number boundary.
+## Generator-competition role families (SN-359, SN-360)
+
+Both families come directly from the generator competition; see
+`research/dittobench-datagen/docs/v14-generator-credits.md`. V14 generation
+adds them as business-program families and rotates them through the role slot
+of the business cycle (positions 3, 7 and 8). Positions 0–2 and 4–6 keep their
+v13 families up to the temporal-slot draw of positions 2, 4 and 5 (SN-355,
+SN-358), and v13 never reaches positions 7 or 8, so every v13 seed is
+byte-identical. On the full profile the fourth business group is
+client-vs-vendor, holder-vs-actor or identity-join by a per-seed draw. The
+grader is unchanged: both families use existing person and value claims.
+
+- **SN-360, holder-vs-actor.** Custody records name the doer of a step and the
+  resulting holder in one sentence with no role label ("A signed the release
+  and passed the keys to B"), over a one- or two-hop chain whose second hop
+  names the item only by its bare noun (capped at two: 3+ hop generator
+  analogs sat at 0/5). The question asks who holds the item now (a holder
+  fold) or who performed a named step. The actor, or the recipient for step
+  questions, is the distractor. The counterfactual changes one handoff
+  recipient or one step's actor. Contributed by generator-competition miners
+  (generators C and D, rounds 25955-25963).
+- **SN-359, identity-join.** A directory record binds each person to one
+  synthetic handle (`example.invalid` address or chat handle), stated once.
+  The owner records use one side of the binding only, so the answer never
+  appears in the governing record: handles in the records with the name
+  asked, or names (or initial and surname) with the contact asked. Distractors
+  are the previous owner and a near-miss handle owned by another person (never
+  edit distance 1). The counterfactual rebinds one directory entry. This is
+  the riskiest shape (generator analogs often hit 0/5) and still needs the
+  SN-351 admission gate before activation. Contributed by
+  generator-competition miners (generators C and D, rounds 25955-25963; generator J, round 25946).
+
+Both families move the v14 vector. Any v14 qualification evidence recorded
+against 8f1005957 (v0.391.0) or an earlier v14 vector is stale and must be
+re-run on the new vector.
 
 ## Record the release packet before enabling any v14 work
 

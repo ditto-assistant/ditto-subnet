@@ -92,6 +92,11 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			// v14 temporal business families (v14_temporal_families.go).
 			{Name: "V14SequenceEventClasses", Size: len(V14SequenceEventClasses), Role: "answer (event class)"},
 			{Name: "V14ProcessStepClasses", Size: len(V14ProcessStepClasses), Role: "answer (process step class)"},
+			// v14 role families (v14_role_families.go). The custody item and step
+			// banks are question cues; handle stems and domains compose answers.
+			{Name: "v14CustodySteps", Size: len(v14CustodySteps), Role: "question cue (custody step)"},
+			{Name: "v14HandleWords", Size: len(v14HandleWords), Role: "answer part (contact handle stem)"},
+			{Name: "v14HandleDomains", Size: len(v14HandleDomains), Role: "answer part (contact handle domain)"},
 
 			// Story arcs (story_events.go, story_v2.go, story.go).
 			{Name: "storyStatusVocabulary", Size: len(storyStatusVocabulary), Role: "answer (story status)"},
@@ -206,6 +211,9 @@ func TestPoolCardinalityCanary(t *testing.T) {
 
 			// Published case-structure enums.
 			"V13Families":          poolcanary.Schema,
+			"V14Families":          poolcanary.Schema,
+			"v14RoleFamilies":      poolcanary.Schema,
+			"v14RoleSlots":         poolcanary.Internal,
 			"V13PersonalDomains":   poolcanary.Schema,
 			"V13AbsenceFamilies":   poolcanary.Schema,
 			"v13PersonalRenderers": poolcanary.Schema,

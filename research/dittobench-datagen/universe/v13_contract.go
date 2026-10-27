@@ -456,6 +456,8 @@ type v13Group struct {
 	// T14 holds the draws of the v14 temporal families
 	// (v14_temporal_families.go). v13 groups leave it nil.
 	T14 *v14TemporalDraw
+	// V14 holds the draws of the v14 role families (v14_role_families.go).
+	V14 *v14GroupExtra
 }
 
 // v13Draws holds the per-seed draw state shared across groups.
@@ -468,6 +470,7 @@ type v13Draws struct {
 	usedOrgs     map[string]bool
 	usedPurp     map[string]bool
 	statusMap    []int // class index -> alias term index
+	v14          *v14DrawState
 }
 
 // newV13Draws opens the per-seed draw state. stream separates the name RNG of
@@ -518,10 +521,7 @@ func (d *v13Draws) distinctClasses(salt string, size, n int) [4]int {
 }
 
 func (d *v13Draws) drawGroup(group int) v13Group {
-	g := v13Group{Family: V13Families[group%len(V13Families)]}
-	if d.benchVersion >= protocol.BenchVersionV14 {
-		g.Family = V14TemporalFamily(d.seed, g.Family)
-	}
+	g := v13Group{Family: d.family(group)}
 	g.Alias = v12Label(d.seed, fmt.Sprintf("v13-scenario-%d", group))
 	g.DecoyAlias = v12Label(d.seed, fmt.Sprintf("v13-decoy-%d", group))
 	g.Purpose = v13Purpose(d.seed, fmt.Sprintf("remit-%d", group), d.usedPurp)
@@ -562,6 +562,8 @@ func (d *v13Draws) drawGroup(group int) v13Group {
 		g.Orgs[1] = v13Org(d.seed, fmt.Sprintf("vendor-%d", group), d.usedOrgs)
 		g.Orgs[2] = v13Org(d.seed, fmt.Sprintf("counter-client-%d", group), d.usedOrgs)
 		g.Orgs[3] = v13Org(d.seed, fmt.Sprintf("decoy-client-%d", group), d.usedOrgs)
+	case V14FamilyHolderVsActor, V14FamilyIdentityJoin:
+		d.drawV14Group(&g, group)
 	}
 	if v14ChainUsesChains(d.benchVersion) {
 		d.drawV14BusinessChainValues(group, &g)
@@ -642,6 +644,9 @@ type v13Member struct {
 	ChainExtra []string
 	// chain is the rendered v14 chain with the value each row mentions.
 	chain []v14ChainRow
+	// custody is the holder-vs-actor oracle input: one handover per record
+	// (v14_role_families.go). Never rendered.
+	custody []v14Handover
 }
 
 func v13Subject(seed int64, group int, purpose string) string {
@@ -946,6 +951,12 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Facts = []string{"per-run schema glossary", "entity alias", "first sign-off record", "independent second sign-off record"}
 		m.Constraints = []string{g.Alias, g.Purpose}
 		m.Operations = []string{"induce schema", "resolve subject by remit", "collect every sign-off record", "detect disagreement", "return both values and the conflict"}
+
+	case V14FamilyHolderVsActor:
+		renderV14HolderVsActor(d, schema, group, variant, g, counter, subject, &m)
+
+	case V14FamilyIdentityJoin:
+		renderV14IdentityJoin(d, schema, group, variant, g, counter, subject, &m)
 	default:
 		panic("unhandled v13 family")
 	}
@@ -1035,7 +1046,8 @@ func GenerateV13Programs(seed int64, count int) ([]V10GeneratedCase, error) {
 
 // GenerateV13ProgramsForVersion is GenerateV13Programs under an explicit
 // benchmark contract. v13 renders exactly as before; bench_version >= 14 files
-// the shuffled case-file rows in story order (ditto-subnet#3088).
+// the shuffled case-file rows in story order (ditto-subnet#3088) and rotates
+// the v14 role families through the role slot (V14FamilyFor).
 func GenerateV13ProgramsForVersion(seed int64, count, benchVersion int) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("v13 program count must be a positive multiple of four, got %d", count)

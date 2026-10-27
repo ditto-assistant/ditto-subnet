@@ -56,7 +56,7 @@ func V14TemporalFamily(seed int64, family V13Family) V13Family {
 // V14FamilyOf returns the family a generated v14 business case belongs to.
 // Provenance-only: never on the wire.
 func V14FamilyOf(seed int64, caseIndex int) V13Family {
-	return V14TemporalFamily(seed, V13FamilyOf(caseIndex))
+	return V14FamilyFor(seed, caseIndex/4)
 }
 
 // V14SequenceEventClasses is the v14 event bank. It is a new contract's own

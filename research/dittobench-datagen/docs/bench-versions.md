@@ -1225,6 +1225,7 @@ ported from a generator-competition miner (generator D in
 model-free shortcut (last cued record, the second record, or the latest
 record naming a value) solves both readings of more than 16% of chained
 groups. On v13 the second-record shortcut is exact.
+
 V14 also replaces two business families with temporal shapes that the
 generator competition measured as discriminating (SN-355, SN-358; credits in
 [v14-generator-credits.md](v14-generator-credits.md)). Every v13 family asks
@@ -1268,16 +1269,48 @@ own contract: the v13 slot table left business, personal, enterprise,
 record-quantity and injection cases at 13, so the grader read them under the
 v13 policy.
 
+V14 also adds two business-program families from generator-competition
+evidence (SN-359, SN-360) and rotates them through the role slot of the
+business cycle. Both come directly from the generator competition
+(`docs/v14-generator-credits.md`). The v13 cycle is unchanged; from v14
+positions 3, 7 and 8 take a per-seed permutation of client-vs-vendor,
+holder-vs-actor and identity-join, so the full profile's fourth business group
+is one of the three and a 36-case request covers all nine families
+(`universe/v14_role_families.go`).
+
+- **holder-vs-actor.** Client-vs-vendor labels every role ("X's client is Y"),
+  so picking the label solves it, and the owner families never separate the
+  person who did a step from the person who holds the item. Custody records now
+  name the step's doer and the resulting holder in one sentence with no role
+  label, over a one- or two-hop chain in which each hop names its giver, so the
+  chain links in any filing order. The second hop names the item only by its
+  bare noun. Questions ask who holds the item now (a holder fold with exactly
+  one end) or who performed a named step. Actors, or the recipients for step
+  questions, are distractors. Names only; no pronoun crosses a handoff.
+- **identity-join.** A directory record binds each person in the case to one
+  synthetic handle (`example.invalid` address or chat handle) exactly once. The
+  owner records use one side of the binding only: handles when the name is
+  asked, names or initial and surname when the contact is asked, so the answer
+  never appears in the governing record. Distractors are the previous owner
+  and a near-miss handle owned by another person (same stem, both digits
+  different). Handles and surnames are unique per seed. The counterfactual
+  rebinds one directory entry.
+
+The v14 family draws finalise the FNV draw hash with splitmix64, because
+FNV-1a's low bit is the parity of its input bytes and would tie every binary
+draw of a group together. Both families grade with existing person and value
+claims; the grader policy does not change.
+
 Question-family identifiers, the envelope, the rest of the grader policy, v13
 gate postures, the LongMem instrument, and public harness wire version (9)
 carry forward. The generated surface carries forward apart from the case-file
-filing dates, the supersession chains and the temporal families above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+filing dates, the supersession chains and the temporal, state-fold and role families above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`87eafc34950860ad60ccff97edbb34b835811dc0da40e22e5a65dec12424348c`.
+`760d155a9f192b635d3f5a19ef58ebba211576dd9ae2bccf5ae89135ff8492d9`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.

@@ -72,8 +72,8 @@ func v14AllRecords(m v13Member) []string {
 
 // TestV14TemporalSlotRotatesPerSeed: from v14 the temporal slot (cycle
 // position 2) draws latest-event, next-action-responsible or current-channel
-// per seed, the other two keep positions 4 and 5, and every other position
-// keeps its v13 family. v13 draws are untouched.
+// per seed, the other two keep positions 4 and 5, and every position outside
+// the role slot keeps its v13 family. v13 draws are untouched.
 func TestV14TemporalSlotRotatesPerSeed(t *testing.T) {
 	seen := map[V13Family]int{}
 	for seed := int64(1); seed <= 90; seed++ {
@@ -91,6 +91,8 @@ func TestV14TemporalSlotRotatesPerSeed(t *testing.T) {
 			switch group {
 			case 2, 4, 5:
 				temporal = append(temporal, f14)
+			case 3:
+				// The role slot (v14_role_families.go) draws position 3.
 			default:
 				if f14 != f13 {
 					t.Fatalf("seed %d group %d: non-temporal family moved to %s", seed, group, f14)
