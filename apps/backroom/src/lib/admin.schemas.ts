@@ -7476,7 +7476,8 @@ export const benchmarkRolloutQualificationDetailSchema = z.object({
   agent_status: z.string(),
   artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   rollout_id: z.string().uuid().nullable(),
-  source_bench_version: z.number().int().positive(),
+  // Null when no rollout is open (Platform's AdminBenchmarkQualificationDetail).
+  source_bench_version: z.number().int().positive().nullable(),
   target_bench_version: z.number().int().positive().nullable(),
   currently_top_five: z.boolean(),
   rollout_member: z.boolean(),
@@ -9847,6 +9848,7 @@ const validatorCapacityAssignmentSchema = z.object({
     'canonical_quorum',
     'continual_retest',
     'benchmark_canary',
+    'generator_round',
   ]),
   stage: z
     .enum([

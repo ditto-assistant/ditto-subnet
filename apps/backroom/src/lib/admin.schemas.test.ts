@@ -83,6 +83,7 @@ import {
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
   validatorCapacityEntrySchema,
+  benchmarkRolloutQualificationDetailSchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
   setValidatorIssuancePauseInputSchema,
@@ -3441,6 +3442,38 @@ describe('validator slot settings schemas', () => {
     expect(parsed.reserved_round_slots).toBe(0)
   })
 
+  it('reads a validator running a generator-round panel lease', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-27T19:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 8,
+      serviceable_slots: 8,
+      reserved_round_slots: 1,
+      claimed_slots: 1,
+      assignments: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'panel-agent',
+          slot_id: 'slot-0',
+          bench_version: 13,
+          purpose: 'generator_round',
+          stage: 'running_benchmark',
+          started_at: '2026-10-27T18:55:00Z',
+          age_seconds: 300,
+          completed_checks: null,
+          total_checks: null,
+          stalled: false,
+          checks_per_minute: null,
+          estimated_remaining_slot_minutes: null,
+        },
+      ],
+    })
+    expect(parsed.assignments[0].purpose).toBe('generator_round')
+  })
+
   describe('per-validator overrides and the round reservation', () => {
     const bigHost = '5' + 'B'.repeat(47)
     const smallHost = '5' + 'C'.repeat(47)
@@ -5536,5 +5569,30 @@ describe('competition fee policy schemas', () => {
       fee_amount_rao: 2_000_000,
       fee_required: true,
     })
+  })
+})
+
+describe('benchmark rollout qualification detail', () => {
+  it('reads an agent while no rollout is open', () => {
+    const parsed = benchmarkRolloutQualificationDetailSchema.parse({
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'top-five-agent',
+      agent_status: 'scored',
+      artifact_sha256: 'ab'.repeat(32),
+      rollout_id: null,
+      source_bench_version: null,
+      target_bench_version: null,
+      currently_top_five: true,
+      rollout_member: false,
+      target_dataset_sha256: null,
+      total_score_count: 3,
+      source_score_count: 0,
+      target_score_count: 0,
+      screening_attempt_active: false,
+      validator_run_active: false,
+      qualification_allowed: false,
+      blocking_reason: 'no benchmark rollout is open',
+    })
+    expect(parsed.source_bench_version).toBeNull()
   })
 })
