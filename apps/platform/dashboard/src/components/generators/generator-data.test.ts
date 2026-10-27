@@ -11,16 +11,20 @@ import {
   columnCases,
   cooldownText,
   generatorEmissionShare,
+  generatorLabel,
+  isSubmissionId,
   latestScoredRound,
+  newestScoredIndex,
   nextRoundEta,
   nextRoundIndex,
+  payoutFor,
   projectGeneratorPayouts,
   taoAmount,
 } from "./generator-data";
 
 const board = loadFixture<GeneratorBoard>("generator-board");
 const rounds = loadFixture<GeneratorRoundList>("generator-rounds");
-const round = loadFixture<GeneratorRoundDetail>("generator-round-25963");
+const round = loadFixture<GeneratorRoundDetail>("generator-round-25967");
 
 function entry(over: Partial<GeneratorBoardEntry>): GeneratorBoardEntry {
   return {
@@ -38,16 +42,23 @@ function entry(over: Partial<GeneratorBoardEntry>): GeneratorBoardEntry {
 }
 
 describe("projectGeneratorPayouts", () => {
-  it("rescales the first four rank shares over 0.92 on the live board", () => {
+  it("pays the five rank shares on the live board and leaves the sixth unpaid", () => {
     const rows = projectGeneratorPayouts(board.entries);
-    expect(rows.map((row) => row.position)).toEqual([1, 2, 3, 4]);
+    expect(rows.map((row) => row.position)).toEqual([1, 2, 3, 4, 5, null]);
     expect(rows[0]?.entry.miner_hotkey).toBe("5CXEMm6u6onoMpFPbpSqFLdeDzkG68nyTirSg3SVQfiMVhJa");
+    expect(rows[5]?.unpaidReason).toBe("beyond_paid_ranks");
     const shares = rows.map((row) => row.trackShare);
-    expect(shares[0]).toBeCloseTo(0.4 / 0.92, 12);
-    expect(shares[1]).toBeCloseTo(0.25 / 0.92, 12);
-    expect(shares[2]).toBeCloseTo(0.15 / 0.92, 12);
-    expect(shares[3]).toBeCloseTo(0.12 / 0.92, 12);
+    expect(shares.slice(0, 5)).toEqual(
+      [0.4, 0.25, 0.15, 0.12, 0.08].map((v) => expect.closeTo(v, 12)),
+    );
     expect(shares.reduce((a, b) => a + b, 0)).toBeCloseTo(1, 12);
+  });
+
+  it("rescales the paid shares when fewer than five generators are payable", () => {
+    const rows = projectGeneratorPayouts(board.entries.slice(0, 4));
+    expect(rows.map((row) => row.position)).toEqual([1, 2, 3, 4]);
+    expect(rows[0]?.trackShare).toBeCloseTo(0.4 / 0.92, 12);
+    expect(rows[3]?.trackShare).toBeCloseTo(0.12 / 0.92, 12);
   });
 
   it("breaks score ties on first seen, then submission id, like the validator", () => {
@@ -97,7 +108,7 @@ describe("nextRoundEta", () => {
   });
 
   it("adds one epoch per whole epoch still between them", () => {
-    const schedule = { ...rounds.schedule, next_round_epoch: 25966 };
+    const schedule = { ...rounds.schedule, next_round_epoch: 25970 };
     expect(nextRoundEta(schedule, epoch)?.toISOString()).toBe("2026-10-26T23:24:00.000Z");
   });
 
@@ -114,14 +125,14 @@ describe("nextRoundEta", () => {
 
 describe("round helpers", () => {
   it("counts every case bucket and finds the newest scored round", () => {
-    expect(round.columns.map(columnCases)).toEqual([32, 32, 32, 32, 32]);
-    expect(latestScoredRound(rounds)?.round_index).toBe(25963);
+    expect(round.columns.map(columnCases)).toEqual([32, 32, 32, 32, 32, 32]);
+    expect(latestScoredRound(rounds)?.round_index).toBe(25967);
     const ascending = { ...rounds, rounds: [...rounds.rounds].reverse() };
-    expect(latestScoredRound(ascending)?.round_index).toBe(25963);
+    expect(latestScoredRound(ascending)?.round_index).toBe(25967);
   });
 
   it("maps the next round's first epoch back to its round index", () => {
-    expect(nextRoundIndex(rounds.schedule)).toBe(25964);
+    expect(nextRoundIndex(rounds.schedule)).toBe(25968);
     expect(
       nextRoundIndex({ mode: "enforce", epochs_per_round: 4, next_round_epoch: 103_860 }),
     ).toBe(25965);
@@ -166,5 +177,40 @@ describe("round helpers", () => {
     expect(taoAmount(null)).toBe("–");
     expect(cooldownText(3600)).toBe("1h");
     expect(cooldownText(90)).toBe("90s");
+  });
+});
+
+describe("generator identity helpers", () => {
+  it("labels a named generator by name and an unnamed one by short id", () => {
+    const id = "7241781f-99d0-4d96-a908-ac1281cca36f";
+    expect(generatorLabel({ submission_id: id, name: "  Needle Forge " })).toBe("Needle Forge");
+    expect(generatorLabel({ submission_id: id, name: "   " })).toBe("Generator 7241781f");
+    expect(generatorLabel({ submission_id: id })).toBe("Generator 7241781f");
+  });
+
+  it("accepts only canonical lowercase submission ids from the URL", () => {
+    expect(isSubmissionId("7241781f-99d0-4d96-a908-ac1281cca36f")).toBe(true);
+    expect(isSubmissionId("7241781F-99D0-4D96-A908-AC1281CCA36F")).toBe(false);
+    expect(isSubmissionId("../etc/passwd")).toBe(false);
+    expect(isSubmissionId(null)).toBe(false);
+  });
+
+  it("finds the newest scored round from either the list or the board", () => {
+    const rounds = loadFixture<GeneratorRoundList>("generator-rounds");
+    const board = loadFixture<GeneratorBoard>("generator-board");
+    expect(newestScoredIndex(rounds, null)).toBe(latestScoredRound(rounds)?.round_index);
+    expect(newestScoredIndex(null, board)).toBe(25967);
+    expect(newestScoredIndex(null, null)).toBeNull();
+    const ahead = structuredClone(board);
+    (ahead.entries[0] as GeneratorBoardEntry).round_index = 99_999;
+    expect(newestScoredIndex(rounds, ahead)).toBe(99_999);
+  });
+
+  it("looks up a submission's payout row", () => {
+    const board = loadFixture<GeneratorBoard>("generator-board");
+    const rows = projectGeneratorPayouts(board.entries);
+    const top = rows[0];
+    expect(payoutFor(rows, top?.entry.submission_id ?? "")).toBe(top);
+    expect(payoutFor(rows, "00000000-0000-4000-8000-000000000000")).toBeNull();
   });
 });

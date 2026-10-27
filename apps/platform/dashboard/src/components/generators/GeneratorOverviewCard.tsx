@@ -42,7 +42,8 @@ export function GeneratorOverviewCard(props: {
           >
             {(entry) => (
               <span>
-                Leader {shortKey(entry().miner_hotkey)} · {fx(entry().score)}
+                Leader {entry().name?.trim() || shortKey(entry().miner_hotkey)} ·{" "}
+                {fx(entry().score)}
               </span>
             )}
           </Show>

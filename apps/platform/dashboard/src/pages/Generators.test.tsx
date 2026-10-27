@@ -11,7 +11,7 @@ afterEach(cleanup);
 const LIVE: Record<string, unknown> = {
   "/generator/board": loadFixture("generator-board"),
   "/generator/rounds": loadFixture("generator-rounds"),
-  "/generator/rounds/25963": loadFixture("generator-round-25963"),
+  "/generator/rounds/25967": loadFixture("generator-round-25967"),
   "/generator/upload-terms": loadFixture("generator-upload-terms"),
   "/public/treasury-allocation": loadFixture("treasury-allocation"),
   "/public/weights": {
@@ -51,24 +51,24 @@ it("renders the live round, projected payouts and the unpublished split", async 
   render(() => <GeneratorsPage />);
   const payouts = await screen.findByRole("table", { name: "Projected generator payouts" });
   expect(screen.getByText("Paying")).toBeInTheDocument();
-  expect(await screen.findByText("Round 25963 results")).toBeInTheDocument();
-  // Four eligible generators split the first four rank shares over 0.92.
+  expect(await screen.findByText("Round 25967 results")).toBeInTheDocument();
+  // Six eligible generators: five paid rank shares, the sixth below the ranks.
   const rows = within(payouts).getAllByRole("row").slice(1);
-  expect(rows).toHaveLength(4);
+  expect(rows).toHaveLength(6);
   expect(rows[0]).toHaveTextContent("#1");
   expect(rows[0]).toHaveTextContent("5CXEMm6u");
-  expect(rows[0]).toHaveTextContent("0.347");
-  expect(rows[0]).toHaveTextContent("43.48%");
+  expect(rows[0]).toHaveTextContent("0.368");
+  expect(rows[0]).toHaveTextContent("40%");
   expect(rows[0]).toHaveTextContent("Split not published");
+  expect(rows[5]).toHaveTextContent("Below the paid ranks");
   expect(
     screen.getByText(/split between agent and generator miners is not yet published/),
   ).toBeInTheDocument();
   expect(screen.getByText("Burn, forecast").nextElementSibling).toHaveTextContent("50%");
-  // Next round 25964 is committed and opens at the next epoch boundary.
-  expect(screen.getByText("Next round").nextElementSibling).toHaveTextContent("25964 opens in 25m");
-  expect(screen.getByText(/Published · 3 confirmations/)).toBeInTheDocument();
-  expect(screen.getByText("Public default generator")).toBeInTheDocument();
-  expect(screen.getByText("32 cases per generator", { exact: false })).toBeInTheDocument();
+  // Next round 25968 is committed and opens at the next epoch boundary.
+  expect(await screen.findByText(/Published · 3 confirmations/)).toBeInTheDocument();
+  expect(screen.getByText("Next round").nextElementSibling).toHaveTextContent("25968 opens in 25m");
+  expect(await screen.findByText("32 cases per generator", { exact: false })).toBeInTheDocument();
   expect(screen.getByText("0.05 TAO")).toBeInTheDocument();
 });
 
@@ -83,8 +83,8 @@ it("shows the published split and each generator's share of miner emission", asy
   // Zero-share recipients stay out of the bar and the legend.
   expect(screen.queryByText(/Gamma · gm/)).not.toBeInTheDocument();
   expect(screen.getByText("Epoch pin 25963")).toBeInTheDocument();
-  // 0.4 / 0.92 of a 15% track.
-  await waitFor(() => expect(screen.getByText("6.52%")).toBeInTheDocument());
+  // The first rank share (40%) of a 15% track.
+  await waitFor(() => expect(screen.getByText("6%")).toBeInTheDocument());
   expect(screen.queryByText("Split not published")).not.toBeInTheDocument();
 });
 
@@ -98,7 +98,7 @@ it("says the generator share pays agent miners when nothing is eligible", async 
       /No generator is eligible right now, so the generator share pays agent miners/,
     ),
   ).toBeInTheDocument();
-  expect(screen.getAllByText("Not weight-eligible")).toHaveLength(4);
+  expect(screen.getAllByText("Not weight-eligible")).toHaveLength(6);
 });
 
 it("finds the committed next round when a round spans several epochs", async () => {
@@ -106,30 +106,30 @@ it("finds the committed next round when a round spans several epochs", async () 
     schedule: Record<string, unknown>;
     rounds: { round_index: number }[];
   }>("generator-rounds");
-  // Round 25964 opens at epoch 25964 * 4 when rounds span four epochs.
+  // Round 25968 opens at epoch 25968 * 4 when rounds span four epochs.
   list.schedule = {
     ...list.schedule,
+    current_round: null,
     epochs_per_round: 4,
-    subnet_epoch_index: 103_853,
-    next_round_epoch: 103_856,
+    subnet_epoch_index: 103_869,
+    next_round_epoch: 103_872,
   };
   serve({ "/generator/rounds": list });
   render(() => <GeneratorsPage />);
-  const next = await screen.findByText("Next round");
-  expect(next.nextElementSibling).toHaveTextContent(/^25964/);
-  expect(screen.getByText(/Published · 3 confirmations/)).toBeInTheDocument();
+  expect(await screen.findByText(/Published · 3 confirmations/)).toBeInTheDocument();
+  expect(screen.getByText("Next round").nextElementSibling).toHaveTextContent(/^25968/);
 });
 
 it("offers a retry when the scored round's detail fails to load", async () => {
-  serve({ "/generator/rounds/25963": new Error("offline") });
+  serve({ "/generator/rounds/25967": new Error("offline") });
   render(() => <GeneratorsPage />);
-  expect(await screen.findByText(/Round 25963 results could not be loaded/)).toBeInTheDocument();
+  expect(await screen.findByText(/Round 25967 results could not be loaded/)).toBeInTheDocument();
   serve();
   screen
-    .getByText(/Round 25963 results could not be loaded/)
+    .getByText(/Round 25967 results could not be loaded/)
     .querySelector("button")
     ?.click();
-  expect(await screen.findByText("Round 25963 results")).toBeInTheDocument();
+  expect(await screen.findByText("Round 25967 results")).toBeInTheDocument();
 });
 
 it("reports unavailable data instead of inventing a schedule or payouts", async () => {
@@ -140,6 +140,6 @@ it("reports unavailable data instead of inventing a schedule or payouts", async 
   render(() => <GeneratorsPage />);
   expect(await screen.findByText(/Round schedule could not be loaded/)).toBeInTheDocument();
   expect(await screen.findByText(/Generator board could not be loaded/)).toBeInTheDocument();
-  expect(screen.queryByText("Projected payouts")).not.toBeInTheDocument();
+  expect(screen.queryByRole("table", { name: "Projected generator payouts" })).toBeNull();
   expect(screen.queryByText("Current round")).not.toBeInTheDocument();
 });

@@ -1,8 +1,10 @@
 {
   "accepting": true,
+  "competition": "generator",
   "payment_required": true,
   "payment_amount_rao": 50000000,
   "payment_send_address": "5Ecr5EGwvg2Xue2MdeJeCVSMLYWYuGcFb7y41eo7rQy3mGDN",
+  "payment_amount_source": "default",
   "upload_cooldown_seconds": 3600,
   "retry_at": null,
   "blockers": []

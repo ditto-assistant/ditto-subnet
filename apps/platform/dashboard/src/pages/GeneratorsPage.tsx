@@ -1,24 +1,32 @@
 // Generator competition (/generators). Miners submit case generators; each
 // round runs every counted generator against a panel of top agents and pays
 // generators whose cases separate those agents. The page reads only public
-// endpoints: the generator board, rounds and upload terms, the shared chain
-// epoch, and the treasury allocation for the emission split.
-import { For, Show, createMemo, createResource } from "solid-js";
-import type { JSX } from "solid-js";
+// endpoints: the generator board, rounds, round detail and upload terms, one
+// generator's public detail (the ?generator= panel), the shared chain epoch,
+// and the treasury allocation for the emission split.
+//
+// Every section loads, fails and retries on its own: a slow or failed read
+// shows a skeleton or an error with a retry in its own place, and a failed
+// refresh keeps the last good data on screen instead of blanking it.
+import { For, Show, createMemo, createResource, createSignal, onCleanup } from "solid-js";
+import type { Accessor, JSX } from "solid-js";
 
+import type { ResourceState } from "../data/useEndpoint";
 import { useEndpoint } from "../data/useEndpoint";
 import { weightsResource } from "../data/weights";
 import { getJSON } from "../lib/api";
 import { REFRESH_MS } from "../lib/config";
-import { fx, monoDisplay, relTime, relTimeUntil, shortKey } from "../lib/format";
+import { fx, monoDisplay, relTime, relTimeUntil } from "../lib/format";
+import { spaQuery } from "../lib/router";
 import { EntityButton } from "../components/ui/EntityButton";
+import { MinerAvatar } from "../components/ui/MinerAvatar";
+import { Sparkline } from "../components/ui/Sparkline";
 import { StatusChip } from "../components/ui/StatusChip";
 import type {
   EmissionAllocation,
   EmissionShare,
   GeneratorBoard,
   GeneratorMode,
-  GeneratorRoundColumn,
   GeneratorRoundDetail,
   GeneratorRoundList,
   GeneratorRoundStatus,
@@ -31,12 +39,22 @@ import {
   columnCases,
   cooldownText,
   generatorEmissionShare,
-  latestScoredRound,
+  isSubmissionId,
+  newestScoredIndex,
   nextRoundEta,
   nextRoundIndex,
+  payoutFor,
   projectGeneratorPayouts,
   taoAmount,
 } from "../components/generators/generator-data";
+import { GeneratorIdentityCell, showGenerator } from "../components/generators/GeneratorIdentity";
+import { GeneratorPanel } from "../components/generators/GeneratorPanel";
+import {
+  CaseBar,
+  CaseLegend,
+  SectionError,
+  SkeletonRows,
+} from "../components/generators/GeneratorParts";
 
 const GUIDE_URL =
   "https://github.com/ditto-assistant/ditto-subnet/blob/main/research/dittobench-datagen/docs/generator-competition.md";
@@ -66,8 +84,23 @@ const UNPAID_LABEL: Record<NonNullable<ProjectedPayout["unpaidReason"]>, string>
   beyond_paid_ranks: "Below the paid ranks",
 };
 
-function safe<T>(resource: { data: () => T | undefined; error: () => unknown }): T | undefined {
-  return resource.error() ? undefined : resource.data();
+/** The newest successful value, kept through a failed refresh. */
+function lastGood<T>(
+  data: Accessor<T | undefined>,
+  error: Accessor<unknown>,
+): Accessor<T | undefined> {
+  let last: T | undefined;
+  return createMemo(() => {
+    if (!error()) {
+      const value = data();
+      if (value !== undefined) last = value;
+    }
+    return last;
+  });
+}
+
+function fromEndpoint<T>(resource: ResourceState<T>): Accessor<T | undefined> {
+  return lastGood(resource.data, resource.error);
 }
 
 function chainEpoch() {
@@ -174,226 +207,265 @@ function RoundStatus(props: { round: GeneratorRoundSummary }): JSX.Element {
   return <StatusChip label={chip()[0]} tone={chip()[1]} />;
 }
 
-function CaseBar(props: { column: GeneratorRoundColumn }): JSX.Element {
-  const total = () => columnCases(props.column) || 1;
-  const parts = () =>
-    [
-      ["discriminating", props.column.discriminating],
-      ["trivial", props.column.trivial],
-      ["unsolved", props.column.unsolved],
-      ["duplicate", props.column.duplicate],
-    ] as const;
-  return (
-    <span
-      class="gen-casebar"
-      role="img"
-      aria-label={parts()
-        .map(([name, count]) => count + " " + name)
-        .join(", ")}
-    >
-      <For each={parts().filter(([, count]) => count > 0)}>
-        {([name, count]) => (
-          <span class={"gen-case " + name} style={{ width: (count / total()) * 100 + "%" }} />
-        )}
-      </For>
-    </span>
-  );
-}
-
-function PayoutTable(props: { board: GeneratorBoard; generatorShare: number | null }): JSX.Element {
-  const rows = createMemo(() => projectGeneratorPayouts(props.board.entries));
-  const anyPaid = () => rows().some((row) => row.position !== null);
+function PayoutTable(props: {
+  board: GeneratorBoard | undefined;
+  rows: ProjectedPayout[];
+  generatorShare: number | null;
+  loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
+}): JSX.Element {
+  const anyPaid = () => props.rows.some((row) => row.position !== null);
   return (
     <section class="gen-section" aria-labelledby="gen-board-title">
       <div class="gen-section-title">
-        <h3 id="gen-board-title">Projected payouts</h3>
-        <span>
-          Latest scored run per hotkey · {props.board.window_days}-day window · updated{" "}
-          {relTime(props.board.generated_at)}
-        </span>
+        <h3 id="gen-board-title">Generator board</h3>
+        <Show when={props.board}>
+          {(board) => (
+            <span>
+              Latest scored round per hotkey · {board().window_days}-day window · updated{" "}
+              {relTime(board().generated_at)}
+            </span>
+          )}
+        </Show>
       </div>
-      <Show when={props.board.mode !== "enforce"}>
+      <Show when={props.failed}>
+        <SectionError what="Generator board" stale={!!props.board} onRetry={props.onRetry} />
+      </Show>
+      <Show when={props.board && props.board.mode !== "enforce"}>
         <p class="gen-note">
-          The competition is in {props.board.mode} mode, so validators pay generators nothing yet.
+          The competition is in {props.board?.mode} mode, so validators pay generators nothing yet.
           The positions below show what they would earn once it pays.
         </p>
       </Show>
-      <Show when={!anyPaid()}>
+      <Show when={props.board && !anyPaid()}>
         <p class="gen-note">
           No generator is eligible right now, so the generator share pays agent miners.
         </p>
       </Show>
-      <div class="gen-table-scroll">
-        <table class="gen-table" aria-label="Projected generator payouts">
-          <thead>
-            <tr>
-              <th scope="col">Position</th>
-              <th scope="col">Miner</th>
-              <th scope="col" class="num">
-                Score
-              </th>
-              <th scope="col" class="num">
-                Discriminating cases
-              </th>
-              <th scope="col" class="num">
-                Share of generator track
-              </th>
-              <th scope="col" class="num">
-                Share of miner emission
-              </th>
-              <th scope="col">First seen</th>
-            </tr>
-          </thead>
-          <tbody>
-            <Show
-              when={rows().length}
-              fallback={
-                <tr>
-                  <td colspan={7} class="empty">
-                    <div class="empty-msg">No generator has a scored run in the window.</div>
-                  </td>
-                </tr>
-              }
-            >
-              <For each={rows()}>
-                {(row) => (
-                  <tr classList={{ unpaid: row.position === null }}>
-                    <td>
-                      {row.position !== null
-                        ? "#" + row.position
-                        : UNPAID_LABEL[row.unpaidReason ?? "zero_score"]}
-                    </td>
-                    <td>
-                      <EntityButton
-                        kind="miner"
-                        id={row.entry.miner_hotkey}
-                        label={shortKey(row.entry.miner_hotkey)}
-                        title="Open the miner profile"
-                      />
-                    </td>
-                    <td class="num">{fx(row.entry.score)}</td>
-                    <td class="num">{row.entry.discriminating_cases}</td>
-                    <td class="num">{row.position !== null ? share(row.trackShare) : "–"}</td>
-                    <td class="num">
-                      {row.position === null
-                        ? "–"
-                        : props.generatorShare === null
-                          ? "Split not published"
-                          : share(row.trackShare * props.generatorShare)}
-                    </td>
-                    <td>{relTime(row.entry.first_seen)}</td>
-                  </tr>
-                )}
-              </For>
-            </Show>
-          </tbody>
-        </table>
-      </div>
+      <Show when={props.board || props.loading}>
+        <div class="gen-table-scroll">
+          <table class="gen-table gen-board" aria-label="Projected generator payouts">
+            <thead>
+              <tr>
+                <th scope="col">Position</th>
+                <th scope="col">Generator</th>
+                <th scope="col" class="num">
+                  Score
+                </th>
+                <th scope="col" class="hide-sm">
+                  <span title="Column score in each recent scored round, oldest to newest">
+                    Recent rounds
+                  </span>
+                </th>
+                <th scope="col" class="num hide-md">
+                  Discriminating
+                </th>
+                <th scope="col" class="num">
+                  Generator track
+                </th>
+                <th scope="col" class="num hide-sm">
+                  Miner emission
+                </th>
+                <th scope="col" class="hide-md">
+                  First seen
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <Show
+                when={props.board}
+                fallback={<SkeletonRows rows={4} cols={8} label="Loading the generator board" />}
+              >
+                <Show
+                  when={props.rows.length}
+                  fallback={
+                    <tr>
+                      <td colspan={8} class="empty">
+                        <div class="empty-msg">
+                          No generator has a scored round in the window. Qualified generators enter
+                          rounds best-first; see Submitting a generator below.
+                        </div>
+                      </td>
+                    </tr>
+                  }
+                >
+                  <For each={props.rows}>
+                    {(row) => (
+                      <tr
+                        classList={{
+                          unpaid: row.position === null,
+                          ["pos-" + row.position]: row.position !== null && row.position <= 3,
+                        }}
+                      >
+                        <td class="gen-pos">
+                          {row.position !== null ? (
+                            "#" + row.position
+                          ) : (
+                            <small>{UNPAID_LABEL[row.unpaidReason ?? "zero_score"]}</small>
+                          )}
+                        </td>
+                        <td>
+                          <GeneratorIdentityCell
+                            item={row.entry}
+                            minerHotkey={row.entry.miner_hotkey}
+                          />
+                        </td>
+                        <td class="num">{fx(row.entry.score)}</td>
+                        <td class="hide-sm">
+                          <Show
+                            when={(row.entry.recent?.length ?? 0) > 1}
+                            fallback={
+                              <small>
+                                {row.entry.rounds_in_window != null
+                                  ? row.entry.rounds_in_window +
+                                    " round" +
+                                    (row.entry.rounds_in_window === 1 ? "" : "s")
+                                  : "–"}
+                              </small>
+                            }
+                          >
+                            <span class="gen-form">
+                              <Sparkline
+                                history={row.entry.recent?.map((point) => point.score)}
+                                width={72}
+                                height={18}
+                                measure="Round score"
+                                unit="scored rounds"
+                              />
+                              <small
+                                title={row.entry.rounds_in_window + " scored rounds in the window"}
+                              >
+                                {row.entry.rounds_in_window}
+                              </small>
+                            </span>
+                          </Show>
+                        </td>
+                        <td class="num hide-md">{row.entry.discriminating_cases}</td>
+                        <td class="num">{row.position !== null ? share(row.trackShare) : "–"}</td>
+                        <td class="num hide-sm">
+                          {row.position === null
+                            ? "–"
+                            : props.generatorShare === null
+                              ? "Split not published"
+                              : share(row.trackShare * props.generatorShare)}
+                        </td>
+                        <td class="hide-md">{relTime(row.entry.first_seen)}</td>
+                      </tr>
+                    )}
+                  </For>
+                </Show>
+              </Show>
+            </tbody>
+          </table>
+        </div>
+      </Show>
       <p class="gen-note">
         Validators rank eligible generators with a score above zero by score, then first seen, keep
         one per hotkey, and pay positions{" "}
         {GENERATOR_RANK_SHARES.map((value) => share(value)).join(" / ")}. With fewer than{" "}
         {GENERATOR_RANK_SHARES.length} paid generators those shares are rescaled to fill the
-        generator track.
+        generator track. Open a generator for its round-by-round results.
       </p>
     </section>
   );
 }
 
-function RoundDetail(props: { detail: GeneratorRoundDetail }): JSX.Element {
+function RoundDetail(props: {
+  index: number | null;
+  detail: GeneratorRoundDetail | undefined;
+  failed: boolean;
+  onRetry: () => void;
+}): JSX.Element {
   const cases = () => {
-    const counts = props.detail.columns.map(columnCases);
+    const counts = (props.detail?.columns ?? []).map(columnCases);
     return counts.length && counts.every((count) => count === counts[0]) ? counts[0] : null;
   };
+  const columns = () => [...(props.detail?.columns ?? [])].sort((a, b) => b.score - a.score);
   return (
     <section class="gen-section" aria-labelledby="gen-round-title">
       <div class="gen-section-title">
-        <h3 id="gen-round-title">Round {props.detail.summary.round_index} results</h3>
-        <span>
-          Scored {relTime(props.detail.summary.scored_at)} · {props.detail.summary.panel_size} panel
-          agents
-          <Show when={cases() !== null}> · {cases()} cases per generator</Show>
-        </span>
+        <h3 id="gen-round-title">
+          {props.index != null ? "Round " + props.index + " results" : "Latest round results"}
+        </h3>
+        <Show when={props.detail}>
+          {(detail) => (
+            <span>
+              Scored {relTime(detail().summary.scored_at)} · {detail().summary.panel_size} panel
+              agents
+              <Show when={cases() !== null}> · {cases()} cases per generator</Show>
+            </span>
+          )}
+        </Show>
       </div>
-      <div class="gen-table-scroll">
-        <table class="gen-table">
-          <caption>Generators in this round</caption>
-          <thead>
-            <tr>
-              <th scope="col">Generator</th>
-              <th scope="col" class="num">
-                Score
-              </th>
-              <th scope="col">Cases</th>
-              <th scope="col" class="num">
-                Discriminating
-              </th>
-              <th scope="col" class="num">
-                Trivial
-              </th>
-              <th scope="col" class="num">
-                Unsolved
-              </th>
-              <th scope="col" class="num">
-                Duplicate
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <For each={[...props.detail.columns].sort((a, b) => b.score - a.score)}>
-              {(column) => (
-                <tr>
-                  <td>
-                    <Show
-                      when={column.miner_hotkey}
-                      fallback={<span class="gen-default">Public default generator</span>}
-                    >
-                      {(hotkey) => (
-                        <EntityButton
-                          kind="miner"
-                          id={hotkey()}
-                          label={shortKey(hotkey())}
-                          title="Open the miner profile"
-                        />
-                      )}
-                    </Show>
-                  </td>
-                  <td class="num">{fx(column.score)}</td>
-                  <td>
-                    <CaseBar column={column} />
-                  </td>
-                  <td class="num">{column.discriminating}</td>
-                  <td class="num">{column.trivial}</td>
-                  <td class="num">{column.unsolved}</td>
-                  <td class="num">{column.duplicate}</td>
-                </tr>
-              )}
-            </For>
-          </tbody>
-        </table>
-      </div>
-      <ul class="gen-case-legend" aria-label="Case outcomes">
-        <li>
-          <span class="gen-case discriminating" aria-hidden="true" /> Discriminating: some panel
-          agents solve it and others miss it (earns credit)
-        </li>
-        <li>
-          <span class="gen-case trivial" aria-hidden="true" /> Trivial: every eligible agent solves
-          it
-        </li>
-        <li>
-          <span class="gen-case unsolved" aria-hidden="true" /> Unsolved: too few agent owners solve
-          it
-        </li>
-        <li>
-          <span class="gen-case duplicate" aria-hidden="true" /> Duplicate: repeats an earlier
-          column's or round's case
-        </li>
-      </ul>
-      <Show when={props.detail.standings.length}>
+      <Show when={props.failed}>
+        <SectionError
+          what={"Round " + (props.index ?? "") + " results"}
+          stale={!!props.detail}
+          onRetry={props.onRetry}
+        />
+      </Show>
+      <Show when={props.detail || !props.failed}>
         <div class="gen-table-scroll">
           <table class="gen-table">
-            <caption>Panel agents on this round's cases</caption>
+            <caption>Generators in this round</caption>
+            <thead>
+              <tr>
+                <th scope="col">Generator</th>
+                <th scope="col" class="num">
+                  Score
+                </th>
+                <th scope="col">Cases</th>
+                <th scope="col" class="num">
+                  Discriminating
+                </th>
+                <th scope="col" class="num hide-sm">
+                  Trivial
+                </th>
+                <th scope="col" class="num hide-sm">
+                  Unsolved
+                </th>
+                <th scope="col" class="num hide-sm">
+                  Duplicate
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <Show
+                when={props.detail}
+                fallback={<SkeletonRows rows={5} cols={7} label="Loading round results" />}
+              >
+                <For each={columns()}>
+                  {(column) => (
+                    <tr>
+                      <td>
+                        <GeneratorIdentityCell
+                          item={column}
+                          minerHotkey={column.miner_hotkey}
+                          publicDefault={column.public_default || !column.miner_hotkey}
+                        />
+                      </td>
+                      <td class="num">{fx(column.score)}</td>
+                      <td>
+                        <CaseBar counts={column} />
+                      </td>
+                      <td class="num">{column.discriminating}</td>
+                      <td class="num hide-sm">{column.trivial}</td>
+                      <td class="num hide-sm">{column.unsolved}</td>
+                      <td class="num hide-sm">{column.duplicate}</td>
+                    </tr>
+                  )}
+                </For>
+              </Show>
+            </tbody>
+          </table>
+        </div>
+      </Show>
+      <CaseLegend />
+      <Show when={props.detail?.standings.length}>
+        <div class="gen-table-scroll">
+          <table class="gen-table">
+            <caption>Panel agents on this round&apos;s cases</caption>
             <thead>
               <tr>
                 <th scope="col">Rank</th>
@@ -401,7 +473,7 @@ function RoundDetail(props: { detail: GeneratorRoundDetail }): JSX.Element {
                 <th scope="col" class="num">
                   Pairwise score
                 </th>
-                <th scope="col" class="num">
+                <th scope="col" class="num hide-sm">
                   Wins / ties / losses
                 </th>
                 <th scope="col" class="num">
@@ -410,20 +482,41 @@ function RoundDetail(props: { detail: GeneratorRoundDetail }): JSX.Element {
               </tr>
             </thead>
             <tbody>
-              <For each={props.detail.standings}>
+              <For each={props.detail?.standings ?? []}>
                 {(standing) => (
                   <tr>
                     <td>#{standing.rank}</td>
                     <td>
-                      <EntityButton
-                        kind="agent"
-                        id={standing.agent_id}
-                        label={monoDisplay(standing.agent_id)}
-                        title="Open the agent"
-                      />
+                      <span class="gen-identity">
+                        <Show
+                          when={standing.avatar_url}
+                          fallback={<span class="gen-avatar-blank" aria-hidden="true" />}
+                        >
+                          <MinerAvatar url={standing.avatar_url} />
+                        </Show>
+                        <span class="gen-identity-text">
+                          <span class="gen-identity-name">
+                            <EntityButton
+                              kind="agent"
+                              id={standing.agent_id}
+                              label={standing.agent_name || monoDisplay(standing.agent_id)}
+                              class="gen-name"
+                              title="Open the agent"
+                            />
+                            <Show when={standing.agent_version != null}>
+                              <span class="gen-version">v{standing.agent_version}</span>
+                            </Show>
+                            <Show when={standing.reference}>
+                              <small title="A reference agent the operator seats on every panel">
+                                reference
+                              </small>
+                            </Show>
+                          </span>
+                        </span>
+                      </span>
                     </td>
                     <td class="num">{fx(standing.pairwise_score)}</td>
-                    <td class="num">
+                    <td class="num hide-sm">
                       {standing.wins} / {standing.ties} / {standing.losses}
                     </td>
                     <td class="num">
@@ -453,12 +546,16 @@ function RoundHistory(props: { rounds: GeneratorRoundSummary[] }): JSX.Element {
             <tr>
               <th scope="col">Round</th>
               <th scope="col">Status</th>
-              <th scope="col">Commitment</th>
+              <th scope="col" class="hide-sm">
+                Commitment
+              </th>
               <th scope="col">Opened</th>
               <th scope="col" class="num">
                 Generators
               </th>
-              <th scope="col">Revealed seed</th>
+              <th scope="col" class="hide-sm">
+                Revealed seed
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -472,7 +569,7 @@ function RoundHistory(props: { rounds: GeneratorRoundSummary[] }): JSX.Element {
                       <small> {round.void_reason}</small>
                     </Show>
                   </td>
-                  <td class="mono" title={round.commitment}>
+                  <td class="mono hide-sm" title={round.commitment}>
                     {monoDisplay(round.commitment)}
                     <small>
                       {" "}
@@ -483,7 +580,7 @@ function RoundHistory(props: { rounds: GeneratorRoundSummary[] }): JSX.Element {
                   </td>
                   <td>{round.opened_at ? relTime(round.opened_at) : "Not yet"}</td>
                   <td class="num">{round.column_count || "–"}</td>
-                  <td class="mono" title={round.seed ?? undefined}>
+                  <td class="mono hide-sm" title={round.seed ?? undefined}>
                     {round.seed ? monoDisplay(round.seed) : "Private"}
                   </td>
                 </tr>
@@ -496,6 +593,11 @@ function RoundHistory(props: { rounds: GeneratorRoundSummary[] }): JSX.Element {
   );
 }
 
+function selectedGenerator(): string | null {
+  const id = spaQuery().get("generator")?.toLowerCase() ?? null;
+  return isSubmissionId(id) ? id : null;
+}
+
 export function GeneratorsPage(): JSX.Element {
   const board = useEndpoint<GeneratorBoard>("/generator/board", { pollMs: REFRESH_MS });
   const rounds = useEndpoint<GeneratorRoundList>("/generator/rounds", { pollMs: REFRESH_MS });
@@ -503,14 +605,24 @@ export function GeneratorsPage(): JSX.Element {
   const allocation = useEndpoint<EmissionAllocation>("/public/treasury-allocation");
   const epoch = chainEpoch();
 
-  const roundList = () => safe(rounds);
-  const scoredRound = () => latestScoredRound(roundList())?.round_index;
-  // Keyed on the round index so a new scored round refetches its detail
-  // while unchanged polls reuse the one already loaded.
-  const [detail, { refetch: refetchDetail }] = createResource(scoredRound, (index) =>
+  const boardData = fromEndpoint(board);
+  const roundList = fromEndpoint(rounds);
+  const termsData = fromEndpoint(terms);
+  const allocationData = fromEndpoint(allocation);
+
+  // Either the board or the round list names the newest scored round, so its
+  // detail starts loading as soon as the first of the two answers. Keyed on
+  // the index: unchanged polls reuse the detail already loaded.
+  const scoredIndex = createMemo(() => newestScoredIndex(roundList(), boardData()));
+  const [detail, { refetch: refetchDetail }] = createResource(scoredIndex, (index) =>
     getJSON<GeneratorRoundDetail>("/generator/rounds/" + index),
   );
-  const detailData = () => (detail.error ? undefined : detail());
+  const detailData = lastGood(
+    () => (detail.error ? undefined : detail()),
+    () => detail.error,
+  );
+
+  const payouts = createMemo(() => projectGeneratorPayouts(boardData()?.entries ?? []));
   const schedule = () => roundList()?.schedule;
   const nextIndex = () => nextRoundIndex(schedule());
   const nextRound = () => {
@@ -523,8 +635,13 @@ export function GeneratorsPage(): JSX.Element {
     return roundList()?.rounds.find((round) => round.round_index === current) ?? null;
   };
   const eta = () => nextRoundEta(schedule(), epoch());
-  const mode = () => safe(board)?.mode ?? schedule()?.mode;
-  const generatorShare = () => generatorEmissionShare(safe(allocation));
+  const mode = () => boardData()?.mode ?? schedule()?.mode;
+  const generatorShare = () => generatorEmissionShare(allocationData());
+
+  const [selected, setSelected] = createSignal(selectedGenerator());
+  const restore = () => setSelected(selectedGenerator());
+  window.addEventListener("popstate", restore);
+  onCleanup(() => window.removeEventListener("popstate", restore));
 
   return (
     <section class="page active generators-page" data-page="generators">
@@ -551,18 +668,32 @@ export function GeneratorsPage(): JSX.Element {
       </header>
 
       <section class="gen-section gen-rounds-now" aria-label="Round schedule">
-        <Show when={rounds.loading() && !roundList()}>
-          <p role="status">Loading rounds…</p>
-        </Show>
         <Show when={rounds.error()}>
-          <p role="alert">
-            Round schedule could not be loaded.{" "}
-            <button class="btn" onClick={() => rounds.refresh()}>
-              Try again
-            </button>
-          </p>
+          <SectionError
+            what="Round schedule"
+            stale={!!roundList()}
+            onRetry={() => rounds.refresh()}
+          />
         </Show>
-        <Show when={roundList()}>
+        <Show
+          when={roundList()}
+          fallback={
+            <Show when={!rounds.error()}>
+              <dl class="gen-stats" role="status" aria-label="Loading rounds">
+                <For each={["Current round", "Next round", "Next commitment", "Round length"]}>
+                  {(label) => (
+                    <div>
+                      <dt>{label}</dt>
+                      <dd>
+                        <span class="gen-skel gen-skel-stat" />
+                      </dd>
+                    </div>
+                  )}
+                </For>
+              </dl>
+            </Show>
+          }
+        >
           <dl class="gen-stats">
             <div>
               <dt>Current round</dt>
@@ -615,64 +746,80 @@ export function GeneratorsPage(): JSX.Element {
         </Show>
       </section>
 
-      <EmissionSplit allocation={safe(allocation)} />
+      <PayoutTable
+        board={boardData()}
+        rows={payouts()}
+        generatorShare={generatorShare()}
+        loading={board.loading()}
+        failed={!!board.error()}
+        onRetry={() => board.refresh()}
+      />
 
-      <Show when={board.error()}>
-        <p role="alert">
-          Generator board could not be loaded.{" "}
-          <button class="btn" onClick={() => board.refresh()}>
-            Try again
-          </button>
-        </p>
-      </Show>
-      <Show when={safe(board)}>
-        {(value) => <PayoutTable board={value()} generatorShare={generatorShare()} />}
-      </Show>
+      <EmissionSplit allocation={allocationData()} />
 
-      <Show when={detail.error}>
-        <p role="alert">
-          Round {scoredRound()} results could not be loaded.{" "}
-          <button class="btn" onClick={() => void refetchDetail()}>
-            Try again
-          </button>
-        </p>
+      <Show when={scoredIndex() !== null || detail.error || (!boardData() && !roundList())}>
+        <RoundDetail
+          index={scoredIndex()}
+          detail={detailData()}
+          failed={!!detail.error}
+          onRetry={() => void refetchDetail()}
+        />
       </Show>
-      <Show when={detailData()}>{(value) => <RoundDetail detail={value()} />}</Show>
 
       <Show when={roundList()?.rounds.length}>
         <RoundHistory rounds={roundList()?.rounds ?? []} />
       </Show>
 
-      <Show when={safe(terms)}>
-        {(value) => (
-          <section class="gen-section" aria-labelledby="gen-terms-title">
-            <div class="gen-section-title">
-              <h3 id="gen-terms-title">Submitting a generator</h3>
-            </div>
-            <dl class="gen-stats">
-              <div>
-                <dt>Uploads</dt>
-                <dd>{value().accepting ? "Open" : "Paused"}</dd>
-              </div>
-              <div>
-                <dt>Upload fee</dt>
-                <dd>{value().payment_required ? taoAmount(value().payment_amount_rao) : "None"}</dd>
-              </div>
-              <div>
-                <dt>Cooldown per hotkey</dt>
-                <dd>{cooldownText(value().upload_cooldown_seconds)}</dd>
-              </div>
-            </dl>
-            <Show when={value().blockers.length}>
-              <ul class="gen-note">
-                <For each={value().blockers}>{(blocker) => <li>{blocker}</li>}</For>
-              </ul>
-            </Show>
-            <p class="gen-note">
-              Upload with <code>ditto generator upload</code>. It checks these terms, refuses to pay
-              while anything blocks the upload, then pays the fee and attaches the proof.
-            </p>
-          </section>
+      <section class="gen-section" aria-labelledby="gen-terms-title">
+        <div class="gen-section-title">
+          <h3 id="gen-terms-title">Submitting a generator</h3>
+        </div>
+        <Show when={terms.error() && !termsData()}>
+          <SectionError what="Upload terms" onRetry={() => terms.refresh()} />
+        </Show>
+        <Show when={termsData()}>
+          {(value) => (
+            <>
+              <dl class="gen-stats">
+                <div>
+                  <dt>Uploads</dt>
+                  <dd>{value().accepting ? "Open" : "Paused"}</dd>
+                </div>
+                <div>
+                  <dt>Upload fee</dt>
+                  <dd>
+                    {value().payment_required ? taoAmount(value().payment_amount_rao) : "None"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Cooldown per hotkey</dt>
+                  <dd>{cooldownText(value().upload_cooldown_seconds)}</dd>
+                </div>
+              </dl>
+              <Show when={value().blockers.length}>
+                <ul class="gen-note">
+                  <For each={value().blockers}>{(blocker) => <li>{blocker}</li>}</For>
+                </ul>
+              </Show>
+            </>
+          )}
+        </Show>
+        <p class="gen-note">
+          Upload with <code>ditto generator upload --name &quot;your generator&quot;</code>. It
+          checks these terms and the name, refuses to pay while anything blocks the upload, then
+          pays the fee and attaches the proof. The board shows the name next to your miner profile
+          picture (<code>ditto avatar set</code>).
+        </p>
+      </section>
+
+      <Show when={selected()} keyed>
+        {(id) => (
+          <GeneratorPanel
+            submissionId={id}
+            payout={payoutFor(payouts(), id)}
+            generatorShare={generatorShare()}
+            onClose={() => showGenerator(null)}
+          />
         )}
       </Show>
     </section>

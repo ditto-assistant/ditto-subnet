@@ -10,6 +10,10 @@ export interface SparklineProps {
   history: number[] | null | undefined;
   width?: number;
   height?: number;
+  /** What the series measures, for the accessible label ("Composite" by
+   * default) and the unit each point is ("scored runs" by default). */
+  measure?: string;
+  unit?: string;
 }
 
 interface SparkGeometry {
@@ -55,13 +59,16 @@ export function Sparkline(props: SparklineProps): JSX.Element {
       area,
       last,
       label:
-        "Composite trend over " +
+        (props.measure ?? "Composite") +
+        " trend over " +
         h.length +
-        " scored runs, " +
+        " " +
+        (props.unit ?? "scored runs") +
+        ", " +
         fx(h[0] as number) +
         " to " +
         fx(h[h.length - 1] as number),
-      title: "composite over time: " + h.map(fx).join(", "),
+      title: (props.measure ?? "Composite").toLowerCase() + " over time: " + h.map(fx).join(", "),
     };
   });
   return (

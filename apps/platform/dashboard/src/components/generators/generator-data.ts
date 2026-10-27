@@ -4,11 +4,31 @@
 // projection mirrors the validator fold (ditto/validator/weights.py
 // compute_generator_weights) so the page never invents a share.
 
-import type { ChainEpoch } from "../../types/leaderboard";
+import type { ChainEpoch, NameHandle } from "../../types/leaderboard";
 
 export type GeneratorMode = "off" | "shadow" | "enforce";
+export type GeneratorSubmissionStatus = "active" | "superseded" | "rejected";
 
-export interface GeneratorBoardEntry {
+/** The public identity Platform attaches to a generator (all optional: an
+ * older Platform build omits every field). */
+export interface GeneratorIdentity {
+  name?: string | null;
+  name_handle?: NameHandle | null;
+  avatar_url?: string | null;
+  version?: number | null;
+}
+
+/** One scored round column a hotkey's generator held. */
+export interface GeneratorRoundPoint {
+  round_index: number;
+  submission_id: string;
+  score: number;
+  rank: number;
+  columns: number;
+  scored_at: string | null;
+}
+
+export interface GeneratorBoardEntry extends GeneratorIdentity {
   miner_hotkey: string;
   submission_id: string;
   round_index: number | null;
@@ -18,6 +38,10 @@ export interface GeneratorBoardEntry {
   discriminating_cases: number;
   first_seen: string;
   scored_at: string;
+  status?: GeneratorSubmissionStatus | null;
+  qualified_at?: string | null;
+  rounds_in_window?: number;
+  recent?: GeneratorRoundPoint[];
 }
 
 export interface GeneratorBoard {
@@ -78,7 +102,7 @@ export interface GeneratorRoundList {
   rounds: GeneratorRoundSummary[];
 }
 
-export interface GeneratorRoundColumn {
+export interface GeneratorRoundColumn extends GeneratorIdentity {
   column_id: string;
   submission_id: string;
   miner_hotkey: string | null;
@@ -103,12 +127,71 @@ export interface GeneratorRoundStanding {
   common_mean: number;
   common_cases: number;
   reference: boolean;
+  agent_name?: string | null;
+  agent_version?: number | null;
+  miner_hotkey?: string | null;
+  avatar_url?: string | null;
 }
 
 export interface GeneratorRoundDetail {
   summary: GeneratorRoundSummary;
   columns: GeneratorRoundColumn[];
   standings: GeneratorRoundStanding[];
+}
+
+export interface GeneratorCaseCounts {
+  discriminating: number;
+  trivial: number;
+  unsolved: number;
+  duplicate: number;
+}
+
+export interface GeneratorRunSummary {
+  run_id: string;
+  attempt: number;
+  status: string;
+  outcome: string | null;
+  score: number | null;
+  case_counts: GeneratorCaseCounts | null;
+  leased_at: string;
+  finished_at: string | null;
+}
+
+export interface GeneratorSubmissionSummary extends GeneratorIdentity {
+  submission_id: string;
+  miner_hotkey: string;
+  source_sha256: string;
+  tree_sha256: string;
+  module: string;
+  go_version: string;
+  file_count: number;
+  size_bytes: number;
+  status: GeneratorSubmissionStatus;
+  status_reason: string | null;
+  next_run_at: string | null;
+  submitted_at: string;
+  latest_run: GeneratorRunSummary | null;
+  qualified_at: string | null;
+  public_default: boolean;
+  round_score: number | null;
+  round_scored_index: number | null;
+}
+
+export interface GeneratorSubmissionRound extends GeneratorCaseCounts {
+  round_index: number;
+  scored_at: string | null;
+  column_id: string;
+  counted: boolean;
+  score: number;
+  rank: number;
+  columns: number;
+  panel_size: number;
+}
+
+export interface GeneratorSubmissionDetail {
+  submission: GeneratorSubmissionSummary;
+  versions: GeneratorSubmissionSummary[];
+  rounds: GeneratorSubmissionRound[];
 }
 
 export interface GeneratorUploadTerms {
@@ -276,4 +359,43 @@ export function cooldownText(seconds: number): string {
   if (seconds % 3600 === 0) return seconds / 3600 + "h";
   if (seconds % 60 === 0) return seconds / 60 + "m";
   return seconds + "s";
+}
+
+/** A generator's display label: its chosen name, else "Generator" and the
+ * short submission id, so an unnamed row is still identifiable. */
+export function generatorLabel(item: GeneratorIdentity & { submission_id: string }): string {
+  const name = item.name?.trim();
+  return name ? name : "Generator " + item.submission_id.slice(0, 8);
+}
+
+/** True when a submission id is a canonical UUID (guards URL state). */
+export function isSubmissionId(value: string | null | undefined): value is string {
+  return (
+    typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value)
+  );
+}
+
+/** The newest scored round index any source knows about. The board's entries
+ * name the round that scored them, so the latest results can load as soon as
+ * either the board or the round list arrives. */
+export function newestScoredIndex(
+  rounds: GeneratorRoundList | null | undefined,
+  board: GeneratorBoard | null | undefined,
+): number | null {
+  let newest = latestScoredRound(rounds)?.round_index ?? null;
+  for (const entry of board?.entries ?? []) {
+    if (entry.round_index != null && (newest === null || entry.round_index > newest)) {
+      newest = entry.round_index;
+    }
+  }
+  return newest;
+}
+
+/** A submission's position on the projected payout ladder, or null. */
+export function payoutFor(
+  rows: readonly ProjectedPayout[],
+  submissionId: string,
+): ProjectedPayout | null {
+  return rows.find((row) => row.entry.submission_id === submissionId) ?? null;
 }

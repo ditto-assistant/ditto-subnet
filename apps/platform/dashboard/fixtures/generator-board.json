@@ -3,50 +3,72 @@
     {
       "miner_hotkey": "5CXEMm6u6onoMpFPbpSqFLdeDzkG68nyTirSg3SVQfiMVhJa",
       "submission_id": "7241781f-99d0-4d96-a908-ac1281cca36f",
-      "round_index": 25963,
+      "round_index": 25967,
       "generator_contract_version": 1,
       "weight_eligible": true,
-      "score": 0.3473368326822916,
-      "discriminating_cases": 26,
+      "score": 0.3677083333333333,
+      "discriminating_cases": 24,
       "first_seen": "2026-10-26T05:12:23.222328Z",
-      "scored_at": "2026-10-26T20:11:42.097284Z"
-    },
-    {
-      "miner_hotkey": "5HKmBL1H6aC3u7jwDShSV9Np1oDuNaq1Bzer2wSi4EFzh9Xv",
-      "submission_id": "46bb9b61-0531-4d6e-bb3a-f51a65717c6e",
-      "round_index": 25963,
-      "generator_contract_version": 1,
-      "weight_eligible": true,
-      "score": 0.0826992367513021,
-      "discriminating_cases": 12,
-      "first_seen": "2026-10-24T19:12:05.537858Z",
-      "scored_at": "2026-10-26T20:11:42.097284Z"
+      "scored_at": "2026-10-27T01:02:42.285475Z"
     },
     {
       "miner_hotkey": "5HDmNaBQNVQoyApQbFQdSx6pD4ajcJdaYDJePufpWvoxCsrq",
-      "submission_id": "7d78a131-2870-4531-aecf-20557c7dc161",
-      "round_index": 25963,
+      "submission_id": "b98d6e84-568e-4d32-abec-5328cf30d814",
+      "round_index": 25967,
       "generator_contract_version": 1,
       "weight_eligible": true,
-      "score": 0.045703125,
-      "discriminating_cases": 9,
-      "first_seen": "2026-10-26T18:22:00.286172Z",
-      "scored_at": "2026-10-26T20:11:42.097284Z"
+      "score": 0.05371093749999999,
+      "discriminating_cases": 12,
+      "first_seen": "2026-10-26T23:22:11.872926Z",
+      "scored_at": "2026-10-27T01:02:42.285475Z"
+    },
+    {
+      "miner_hotkey": "5HNnehGZ3b64ZUtFEW3iifnZzfS7BSXa9kdrwuYBPgevg67c",
+      "submission_id": "dd3f3d39-8747-4ce4-9af7-73baec7e5a51",
+      "round_index": 25967,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.0531005859375,
+      "discriminating_cases": 6,
+      "first_seen": "2026-10-26T20:39:23.276551Z",
+      "scored_at": "2026-10-27T01:02:42.285475Z"
+    },
+    {
+      "miner_hotkey": "5FNNmudZou6QiWdcTfyXteALiqymWVGhKGnKmzRLumCvWYTw",
+      "submission_id": "cfed259f-d7a6-484e-adc7-278c237758fb",
+      "round_index": 25967,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.031944445833333335,
+      "discriminating_cases": 4,
+      "first_seen": "2026-10-27T00:01:25.365790Z",
+      "scored_at": "2026-10-27T01:02:42.285475Z"
+    },
+    {
+      "miner_hotkey": "5HKmBL1H6aC3u7jwDShSV9Np1oDuNaq1Bzer2wSi4EFzh9Xv",
+      "submission_id": "a4eaf2b1-4db8-4e1b-a1e6-dd97abfc9888",
+      "round_index": 25967,
+      "generator_contract_version": 1,
+      "weight_eligible": true,
+      "score": 0.019412664737955727,
+      "discriminating_cases": 5,
+      "first_seen": "2026-10-26T23:50:48.443844Z",
+      "scored_at": "2026-10-27T01:02:42.285475Z"
     },
     {
       "miner_hotkey": "5FZcghokSYXnskXjzYT7bcEn4nYLuqkskEAz82dUb6AXeu7T",
       "submission_id": "c3cb1b6b-840d-420e-9e1a-072a5f46d252",
-      "round_index": 25963,
+      "round_index": 25967,
       "generator_contract_version": 1,
       "weight_eligible": true,
-      "score": 0.022916666666666665,
+      "score": 0.008333333333333331,
       "discriminating_cases": 2,
       "first_seen": "2026-10-26T16:39:45.903568Z",
-      "scored_at": "2026-10-26T20:11:42.097284Z"
+      "scored_at": "2026-10-27T01:02:42.285475Z"
     }
   ],
-  "count": 4,
+  "count": 6,
   "window_days": 7,
   "mode": "enforce",
-  "generated_at": "2026-10-26T20:28:54.555032Z"
+  "generated_at": "2026-10-27T01:30:22.254583Z"
 }
