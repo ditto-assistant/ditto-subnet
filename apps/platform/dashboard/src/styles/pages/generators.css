@@ -476,6 +476,10 @@
 .gen-panel:focus {
   outline: none;
 }
+.gen-panel:focus-visible {
+  outline: 2px solid var(--split-generator);
+  outline-offset: -2px;
+}
 body.gen-panel-open {
   overflow: hidden;
 }

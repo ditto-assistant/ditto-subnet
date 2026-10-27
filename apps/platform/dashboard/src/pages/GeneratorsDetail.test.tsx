@@ -8,6 +8,8 @@ import type {
   GeneratorRoundDetail,
   GeneratorSubmissionDetail,
 } from "../components/generators/generator-data";
+import { refreshAllEndpoints } from "../data/useEndpoint";
+import { showGenerator } from "../components/generators/GeneratorIdentity";
 import { GeneratorsPage } from "./GeneratorsPage";
 
 vi.mock("../lib/api", () => ({ getJSON: vi.fn() }));
@@ -227,6 +229,44 @@ it("opens straight from a shared link and retries a failed panel load", async ()
   expect(await screen.findByRole("dialog", { name: "Needle Forge" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Close generator" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+});
+
+it("labels the round detail by the round it shows while a newer one loads", async () => {
+  serve();
+  render(() => <GeneratorsPage />);
+  expect(await screen.findByText("Round 25967 results")).toBeInTheDocument();
+  // The next poll names a newer scored round whose detail is still loading.
+  const board = namedBoard();
+  board.entries.forEach((entry) => (entry.round_index = 25968));
+  routes["/generator/board"] = board;
+  routes["/generator/rounds/25968"] = new Promise(() => undefined);
+  refreshAllEndpoints();
+  await waitFor(() => expect(vi.mocked(getJSON)).toHaveBeenCalledWith("/generator/rounds/25968"));
+  expect(screen.getByText("Round 25967 results")).toBeInTheDocument();
+  expect(screen.queryByText("Round 25968 results")).toBeNull();
+});
+
+it("adds no history entry when the open generator is clicked again", async () => {
+  serve();
+  render(() => <GeneratorsPage />);
+  const board = await screen.findByRole("table", { name: "Projected generator payouts" });
+  const link = within(board).getByRole("link", { name: "Needle Forge" });
+  fireEvent.click(link);
+  await screen.findByRole("dialog", { name: "Needle Forge" });
+  const depth = history.length;
+  showGenerator(TOP);
+  expect(history.length).toBe(depth);
+});
+
+it("omits the rounds count when the board does not report it", async () => {
+  const board = namedBoard();
+  delete (board.entries[0] as { rounds_in_window?: number }).rounds_in_window;
+  serve({ "/generator/board": board });
+  render(() => <GeneratorsPage />);
+  const table = await screen.findByRole("table", { name: "Projected generator payouts" });
+  const top = within(table).getAllByRole("row")[1] as HTMLElement;
+  expect(top).not.toHaveTextContent("undefined");
+  expect(within(top).getByRole("img", { name: /Round score trend/ })).toBeTruthy();
 });
 
 it("ignores a malformed generator id in the URL", async () => {

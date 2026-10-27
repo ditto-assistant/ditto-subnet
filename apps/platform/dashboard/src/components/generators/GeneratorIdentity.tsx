@@ -23,7 +23,11 @@ export function generatorHref(submissionId: string | null): string {
 
 /** Open (or with null, close) a generator's panel without reloading. */
 export function showGenerator(submissionId: string | null): void {
-  history.pushState(history.state, "", generatorHref(submissionId));
+  const href = generatorHref(submissionId);
+  // Re-clicking the open generator adds no history entry for Back to wade
+  // through.
+  if (href === location.pathname + location.search + location.hash) return;
+  history.pushState(history.state, "", href);
   window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
 }
 

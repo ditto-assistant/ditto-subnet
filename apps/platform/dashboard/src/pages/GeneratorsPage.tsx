@@ -333,11 +333,15 @@ function PayoutTable(props: {
                                 measure="Round score"
                                 unit="scored rounds"
                               />
-                              <small
-                                title={row.entry.rounds_in_window + " scored rounds in the window"}
-                              >
-                                {row.entry.rounds_in_window}
-                              </small>
+                              <Show when={row.entry.rounds_in_window != null}>
+                                <small
+                                  title={
+                                    row.entry.rounds_in_window + " scored rounds in the window"
+                                  }
+                                >
+                                  {row.entry.rounds_in_window}
+                                </small>
+                              </Show>
                             </span>
                           </Show>
                         </td>
@@ -759,7 +763,9 @@ export function GeneratorsPage(): JSX.Element {
 
       <Show when={scoredIndex() !== null || detail.error || (!boardData() && !roundList())}>
         <RoundDetail
-          index={scoredIndex()}
+          // The heading follows the data on screen: while a newly scored
+          // round loads, the previous round stays labelled as itself.
+          index={detailData()?.summary.round_index ?? scoredIndex()}
           detail={detailData()}
           failed={!!detail.error}
           onRetry={() => void refetchDetail()}
