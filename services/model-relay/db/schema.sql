@@ -4318,6 +4318,25 @@ CREATE TABLE public.generator_runs (
 
 
 --
+-- Name: generator_scorer_heartbeats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_scorer_heartbeats (
+    scorer_id text NOT NULL,
+    scorer_version text NOT NULL,
+    min_cases integer,
+    max_cases integer,
+    sandbox text,
+    build_revision text,
+    last_poll text NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text]))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_c3f0 CHECK ((((min_cases IS NULL) = (max_cases IS NULL)) AND ((min_cases IS NULL) OR ((min_cases >= 1) AND (max_cases >= min_cases)))))
+);
+
+
+--
 -- Name: generator_submission_payments; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9530,6 +9549,14 @@ ALTER TABLE ONLY public.generator_rounds
 
 ALTER TABLE ONLY public.generator_runs
     ADD CONSTRAINT pk_generator_runs PRIMARY KEY (run_id);
+
+
+--
+-- Name: generator_scorer_heartbeats pk_generator_scorer_heartbeats; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_scorer_heartbeats
+    ADD CONSTRAINT pk_generator_scorer_heartbeats PRIMARY KEY (scorer_id);
 
 
 --

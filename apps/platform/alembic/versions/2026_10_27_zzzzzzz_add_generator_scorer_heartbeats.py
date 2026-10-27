@@ -1,7 +1,7 @@
 """add generator scorer heartbeats (advertised capability)
 
 Revision ID: 8d2f4b6a1c37
-Revises: 3d8f1a6c2e57
+Revises: 8f6a2c4e9b71
 Create Date: 2026-10-27
 
 The generator scorer advertises its version, build revision and the case
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "8d2f4b6a1c37"
-down_revision: str | Sequence[str] | None = "3d8f1a6c2e57"
+down_revision: str | Sequence[str] | None = "8f6a2c4e9b71"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
