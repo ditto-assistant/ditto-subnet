@@ -190,6 +190,7 @@ func TestMarkdownEscapesFamilyLabels(t *testing.T) {
 func TestAtThresholdCountsOnlyJudgedRows(t *testing.T) {
 	rows, err := Evaluate([]CaseRow{
 		{Round: 1, Family: "x", Status: challenge.CaseDuplicate, PanelSize: 5, Solvers: 5, SolverOwners: 5, MeanScore: 0.5},
+		{Round: 1, Family: "x", Status: challenge.CaseUnsolved, PanelSize: 5, Solvers: 1, SolverOwners: 1, MeanScore: 0.1},
 		{Round: 1, Family: "x", Status: challenge.CaseTrivial, PanelSize: 5, Solvers: 5, SolverOwners: 5, MeanScore: 0.5},
 	}, DefaultParams())
 	if err != nil {
@@ -197,6 +198,48 @@ func TestAtThresholdCountsOnlyJudgedRows(t *testing.T) {
 	}
 	if rows[0].AtThreshold != 1 {
 		t.Fatalf("at threshold %d, want 1 (the duplicate is not judged)", rows[0].AtThreshold)
+	}
+}
+
+// TestSN352HalfCreditCandidatesAreHeld replays generator B's top promotion
+// candidates (testdata/sn352_candidates.json, rounds 25955-25967). Every one
+// has panel mean exactly 0.2 with two solvers on a five-agent panel: both
+// solvers earned exactly 0.5 and everyone else 0. The gate counts them as
+// solved for the generator competition, but holds the mechanic for v14
+// because no case is solved at full credit.
+func TestSN352HalfCreditCandidatesAreHeld(t *testing.T) {
+	raw, err := os.ReadFile("testdata/sn352_candidates.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []CaseRow
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Evaluate(rows, DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("families: %+v", got)
+	}
+	r := got[0]
+	if r.AtThreshold != r.Discriminating+r.Trivial || r.AtThresholdRate != 1 || r.Verdict != HoldHalfCredit {
+		t.Fatalf("half-credit family not held: %+v", r)
+	}
+	if r.UnsolvedRate != 0 || r.TrivialRate > 0.6 || r.Rounds < 3 {
+		t.Fatalf("expected the candidates to pass every other rule: %+v", r)
+	}
+	// The same rows with full-credit solvers are admitted.
+	for i := range rows {
+		rows[i].MeanScore = float64(rows[i].Solvers) / float64(rows[i].PanelSize)
+	}
+	got, err = Evaluate(rows, DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].Verdict != Admit {
+		t.Fatalf("full-credit variant: %+v", got[0])
 	}
 }
 

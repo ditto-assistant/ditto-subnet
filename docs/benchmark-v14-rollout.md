@@ -148,6 +148,51 @@ revert-to-original. This change adds no generation bytes.
 Qualification gate 4 must include the `familygate` table for every family
 `universe.V14FamiliesAwaitingPanel` returns, measured over at least 3 rounds.
 
+### SN-352 the leading generator's 0.5 per-case ceiling
+
+The leading generator (generator B in
+`research/dittobench-datagen/docs/v14-generator-credits.md`) earns about 4x
+the next generator's score. Almost no panel agent scores above 0.5 on its
+cases. Its primary family is a **two-item list about one person** asked by full
+name:
+
+- One item is recorded under the full name.
+- The other is recorded under a nickname that only an identity record binds
+  to that person.
+- Several look-alike nicknames, one suffix away, each carry an item in the
+  same frame. Those items are distractors.
+
+The memory grader credits a list by the fraction of items present
+(`grade/v13.go` `gradeListV13`). So the full-name item alone scores exactly
+0.5, a look-alike's item zeroes the case, and only both items score 1
+(`challenge/half_credit_test.go`). The panel matches this exactly. All 27
+top promotion candidates in rounds 25955-25967 have panel mean 0.2, which is
+2 solvers × 0.5 / 5. Every trivial case in round 25955 has mean 0.5 with 5/5
+solvers, and only two cases in round 25963 exceed 0.5.
+
+Verdict: the hard half is real, not a grading or format artifact.
+`challenge.ValidateGenerated` rejects any pack whose gold answer (both items)
+scores below 1.0 under the production grader, and round 25963 has two cases
+with panel means 0.6 and 0.7, so some agents do earn full credit. The
+nickname is honestly recoverable from the identity record, and the
+look-alikes are legitimate interference. But the panel almost never earns
+the hard half. The generator is credited for who avoided a look-alike's item, not for
+who resolved the nickname, because `solve_threshold = 0.5` counts the easy
+half as a solve.
+
+V14 does not port the mechanic at this difficulty. `internal/familygate` now
+holds a family as `hold-half-credit` when more than half of its solved cases
+are solved only at the threshold. Replaying the candidates
+(`internal/familygate/testdata/sn352_candidates.json`) holds the family. The
+same rows with full-credit solves would be admitted. Porting is deferred, not rejected. In v14's continuous scoring, the hard
+half is exactly the signal worth having. A port needs two things: a
+program-envelope slot (the v14 business and personal slot counts are fixed,
+and SN-356 to SN-360 are changing those families now), and full-credit
+evidence over 3 rounds, for example a single-value nickname hop scored 0 or 1. Changing the live generator scoring so a
+half-credit-only case does not count as solvable is recorded as a follow-up
+for the generator competition owners. It changes live rewards, not v14, so
+it is not part of this change. No v14 generation bytes change.
+
 ## Ticket boundary and rollback
 
 Use the existing guarded benchmark rollout endpoints from Backroom. Record the

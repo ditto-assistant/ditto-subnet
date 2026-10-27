@@ -55,6 +55,12 @@ type Params struct {
 	// MaxUnsolvedRate is the highest share of judged cases that fewer than
 	// MinSolverOwners owners may solve.
 	MaxUnsolvedRate float64 `json:"max_unsolved_rate"`
+	// MaxAtThresholdRate is the highest share of solved (discriminating or
+	// trivial) cases whose every solver scored exactly SolveThreshold. Above
+	// it, the family is "solved" only through partial credit (SN-352): a
+	// two-part case where agents earn the easy half and nobody earns the
+	// hard half reads as solvable at threshold 0.5 without being solved.
+	MaxAtThresholdRate float64 `json:"max_at_threshold_rate"`
 }
 
 // DefaultParams are the SN-351 values. MinSolverOwners and SolveThreshold
@@ -66,11 +72,12 @@ type Params struct {
 func DefaultParams() Params {
 	score := challenge.DefaultScoreParams()
 	return Params{
-		MinRounds:       3,
-		MinSolverOwners: score.MinSolverOwners,
-		SolveThreshold:  score.SolveThreshold,
-		MaxTrivialRate:  0.60,
-		MaxUnsolvedRate: 1.0 / 3,
+		MinRounds:          3,
+		MinSolverOwners:    score.MinSolverOwners,
+		SolveThreshold:     score.SolveThreshold,
+		MaxTrivialRate:     0.60,
+		MaxUnsolvedRate:    1.0 / 3,
+		MaxAtThresholdRate: 0.5,
 	}
 }
 
@@ -87,6 +94,8 @@ func (p Params) Validate() error {
 		return fmt.Errorf("max_trivial_rate must be in [0, 1]")
 	case !(p.MaxUnsolvedRate >= 0 && p.MaxUnsolvedRate <= 1):
 		return fmt.Errorf("max_unsolved_rate must be in [0, 1]")
+	case !(p.MaxAtThresholdRate >= 0 && p.MaxAtThresholdRate <= 1):
+		return fmt.Errorf("max_at_threshold_rate must be in [0, 1]")
 	}
 	return nil
 }
@@ -119,27 +128,29 @@ const (
 	HoldUnsolved        = "hold-unsolved"
 	HoldInsufficient    = "hold-insufficient-evidence"
 	HoldNoJudgedCases   = "hold-no-judged-cases"
+	HoldHalfCredit      = "hold-half-credit"
 	statusUnknownReason = "unknown case status"
 )
 
 // FamilyRow is one family's measurement and verdict.
 type FamilyRow struct {
-	Family         string   `json:"family"`
-	Rounds         int      `json:"rounds"`
-	Cases          int      `json:"cases"`
-	Judged         int      `json:"judged"`
-	Discriminating int      `json:"discriminating"`
-	Trivial        int      `json:"trivial"`
-	Unsolved       int      `json:"unsolved"`
-	Duplicate      int      `json:"duplicate"`
-	Insufficient   int      `json:"insufficient_panel"`
-	TrivialRate    float64  `json:"trivial_rate"`
-	UnsolvedRate   float64  `json:"unsolved_rate"`
-	SolverOwners   int      `json:"max_solver_owners"`
-	AtThreshold    int      `json:"at_threshold"`
-	Sources        []string `json:"sources,omitempty"`
-	Verdict        string   `json:"verdict"`
-	Reasons        []string `json:"reasons,omitempty"`
+	Family          string   `json:"family"`
+	Rounds          int      `json:"rounds"`
+	Cases           int      `json:"cases"`
+	Judged          int      `json:"judged"`
+	Discriminating  int      `json:"discriminating"`
+	Trivial         int      `json:"trivial"`
+	Unsolved        int      `json:"unsolved"`
+	Duplicate       int      `json:"duplicate"`
+	Insufficient    int      `json:"insufficient_panel"`
+	TrivialRate     float64  `json:"trivial_rate"`
+	UnsolvedRate    float64  `json:"unsolved_rate"`
+	AtThresholdRate float64  `json:"at_threshold_rate"`
+	SolverOwners    int      `json:"max_solver_owners"`
+	AtThreshold     int      `json:"at_threshold"`
+	Sources         []string `json:"sources,omitempty"`
+	Verdict         string   `json:"verdict"`
+	Reasons         []string `json:"reasons,omitempty"`
 }
 
 // Evaluate folds case rows into one verdict per family, sorted by family.
@@ -195,8 +206,8 @@ func Evaluate(rows []CaseRow, p Params) ([]FamilyRow, error) {
 		case challenge.CaseInsufficientPanel:
 			a.row.Insufficient += n
 		}
-		judged := status == challenge.CaseDiscriminating || status == challenge.CaseTrivial || status == challenge.CaseUnsolved
-		if judged && AtThreshold(r, p.SolveThreshold) {
+		solved := status == challenge.CaseDiscriminating || status == challenge.CaseTrivial
+		if solved && AtThreshold(r, p.SolveThreshold) {
 			a.row.AtThreshold += n
 		}
 	}
@@ -212,6 +223,9 @@ func Evaluate(rows []CaseRow, p Params) ([]FamilyRow, error) {
 		if row.Judged > 0 {
 			row.TrivialRate = float64(row.Trivial) / float64(row.Judged)
 			row.UnsolvedRate = float64(row.Unsolved) / float64(row.Judged)
+		}
+		if solved := row.Discriminating + row.Trivial; solved > 0 {
+			row.AtThresholdRate = float64(row.AtThreshold) / float64(solved)
 		}
 		row.Verdict, row.Reasons = verdict(row, p)
 		out = append(out, row)
@@ -276,6 +290,9 @@ func verdict(row FamilyRow, p Params) (string, []string) {
 	if row.UnsolvedRate > p.MaxUnsolvedRate {
 		hold(HoldUnsolved, fmt.Sprintf("unsolved rate %.2f > %.2f: fewer than %d owners solve too many cases", row.UnsolvedRate, p.MaxUnsolvedRate, p.MinSolverOwners))
 	}
+	if row.AtThresholdRate > p.MaxAtThresholdRate {
+		hold(HoldHalfCredit, fmt.Sprintf("%.2f of solved cases are solved only at the %.2f threshold (partial credit, SN-352)", row.AtThresholdRate, p.SolveThreshold))
+	}
 	if row.TrivialRate > p.MaxTrivialRate {
 		hold(HoldTrivial, fmt.Sprintf("trivial rate %.2f > %.2f: the whole panel solves it", row.TrivialRate, p.MaxTrivialRate))
 	}
@@ -296,8 +313,8 @@ func markdownCell(s string) string {
 // Markdown renders the per-family table for the v14 qualification report.
 func Markdown(rows []FamilyRow, p Params) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Gate: >= %d rounds, trivial rate <= %.2f, unsolved rate <= %.2f (solved = >= %d owners at score >= %.2f).\n\n",
-		p.MinRounds, p.MaxTrivialRate, p.MaxUnsolvedRate, p.MinSolverOwners, p.SolveThreshold)
+	fmt.Fprintf(&b, "Gate: >= %d rounds, trivial rate <= %.2f, unsolved rate <= %.2f, at-threshold share of solved cases <= %.2f (solved = >= %d owners at score >= %.2f).\n\n",
+		p.MinRounds, p.MaxTrivialRate, p.MaxUnsolvedRate, p.MaxAtThresholdRate, p.MinSolverOwners, p.SolveThreshold)
 	b.WriteString("| family | rounds | judged | discriminating | trivial | unsolved | trivial rate | unsolved rate | max solver owners | at threshold | verdict |\n")
 	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
 	for _, r := range rows {
