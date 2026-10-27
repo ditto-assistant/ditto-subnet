@@ -27,6 +27,12 @@ readiness and v14 canary issuance. No scorer image or version is
 activated by capability advertisement. See
 [the rollout plan](../../docs/benchmark-v14-rollout.md).
 
+V14 graders also read every graded reply field (`answer`, `final_text`) as
+rendered text before matching (`grade.ReplyAsRead`): markdown markup is removed
+and the text it marks up is kept, non-ASCII spaces read as a space, and a `.`
+or `,` that no digit follows ends a number token. The wire is unchanged; see
+the rollout plan's *V14 answer-normalization contract*.
+
 ## Benchmark-version negotiation (validator control plane)
 
 The benchmark contract is a deliberate input, never inferred from a dataset

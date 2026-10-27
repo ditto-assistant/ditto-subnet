@@ -75,6 +75,10 @@ type claimLexicon struct {
 	// value ("avoid pausing it") and a post-posed negative predicate right after
 	// one ("pausing isn't possible") reject that value. Empty elsewhere.
 	gerundNegation, postposedRejection []string
+	// v14 reply reading: a "." or "," that no digit follows ends a number token
+	// (numberPunctuationBounds), and a percentage quantity claim reads "15%"
+	// (percentClaims). False below v14.
+	numberPunctuationBounds, percentClaim bool
 }
 
 var (
@@ -903,7 +907,7 @@ func cueStrength(text string, m mention, ms []mention, lex claimLexicon) int {
 // knownValueExtractor builds a value-kind extractor over the case's known
 // values: expected/accepted forms share the key "expected"; each distractor
 // gets its own key. Only known values can be candidates for a value claim.
-func knownValueExtractor(expected []string, distractors []string) extractor {
+func knownValueExtractor(expected []string, distractors []string, punctBounds bool) extractor {
 	type known struct {
 		form, key string
 	}
@@ -926,7 +930,7 @@ func knownValueExtractor(expected []string, distractors []string) extractor {
 				// "2026" is never positioned as a mention and a repeated number
 				// is seen as many times as it occurs.
 				for from := 0; ; {
-					j := indexNumberTokenV13(text, k.form, from)
+					j := indexNumberTokenRuleV13(text, k.form, from, punctBounds)
 					if j < 0 {
 						break
 					}

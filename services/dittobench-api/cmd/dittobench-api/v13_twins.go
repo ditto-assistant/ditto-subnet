@@ -15,9 +15,9 @@ import (
 // Both builders return the zero value (!Paired()) for bench_version < 13, so
 // the caller's evidence map stays empty and the post-pass is the identity.
 // From v14 both read the asserted answer as the graders do (#2734): the
-// memory builder through grade.MemoryReplyAsGraded (hyphen fold plus the
-// case-aware hyphen-joined-value rewrite), the tool builder through
-// grade.FoldReplyHyphens. Otherwise a base twin answering "VK-48" or "blue
+// memory builder through grade.MemoryReplyAsGraded (hyphen fold, rendered
+// markdown, and the case-aware hyphen-joined-value rewrite), the tool builder
+// through grade.ReplyAsRead (hyphen fold and rendered markdown). Otherwise a base twin answering "VK-48" or "blue
 // purple" and its counterfactual answering "VK‑48" (U+2011) or "blue-purple"
 // would both be credited yet compare unequal, slipping past the
 // counterfactual-insensitive check.
@@ -63,7 +63,7 @@ func toolTwinEvidence(benchVersion int, c protocol.ToolCase, resp protocol.RunRe
 	return scorer.TwinEvidence{
 		TwinGroup:    c.TwinGroup,
 		TwinRelation: c.TwinRelation,
-		Answer:       scorer.AssertedAnswer(grade.FoldReplyHyphens(benchVersion, resp)),
+		Answer:       scorer.AssertedAnswer(grade.ReplyAsRead(benchVersion, resp)),
 		Decision:     scorer.ClassifyDecision(resp, observed),
 	}
 }

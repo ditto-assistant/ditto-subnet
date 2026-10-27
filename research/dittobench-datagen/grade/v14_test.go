@@ -8,20 +8,22 @@ import (
 )
 
 // TestV14PolicyOnlyAddsIssue2734Matchers pins the v14 floor: every v13 policy
-// field carries forward and the claim-value correction guard (#2769) and the
-// #2734 matcher fields are the only additions. V13 stays a frozen scored
-// contract.
+// field carries forward and the claim-value correction guard (#2769), the
+// #2734 matcher fields and the reply-reading fields (plainReplyText,
+// numberPunctuationBounds, percentClaims) are the only additions. V13 stays a
+// frozen scored contract.
 func TestV14PolicyOnlyAddsIssue2734Matchers(t *testing.T) {
 	v13 := gradingPolicyForVersion(protocol.BenchVersionV13)
 	v14 := gradingPolicyForVersion(protocol.BenchVersionV14)
-	if v13.foldTypographicHyphens || v13.hyphenJoinedValues || v13.setRemovalPlace || v13.progressiveActions || v13.claimValuesAreNotCorrections {
+	if v13.foldTypographicHyphens || v13.hyphenJoinedValues || v13.setRemovalPlace || v13.progressiveActions || v13.claimValuesAreNotCorrections || v13.plainReplyText || v13.numberPunctuationBounds || v13.percentClaims {
 		t.Fatalf("a v14 matcher reached v13: %+v", v13)
 	}
-	if !v14.foldTypographicHyphens || !v14.hyphenJoinedValues || !v14.setRemovalPlace || !v14.progressiveActions || !v14.claimValuesAreNotCorrections {
+	if !v14.foldTypographicHyphens || !v14.hyphenJoinedValues || !v14.setRemovalPlace || !v14.progressiveActions || !v14.claimValuesAreNotCorrections || !v14.plainReplyText || !v14.numberPunctuationBounds || !v14.percentClaims {
 		t.Fatalf("v14 is missing a matcher: %+v", v14)
 	}
 	v14.foldTypographicHyphens, v14.hyphenJoinedValues, v14.setRemovalPlace, v14.progressiveActions = false, false, false, false
 	v14.claimValuesAreNotCorrections = false
+	v14.plainReplyText, v14.numberPunctuationBounds, v14.percentClaims = false, false, false
 	if v14 != v13 {
 		t.Fatalf("v14 changed a v13 policy field: v13=%+v v14=%+v", v13, v14)
 	}

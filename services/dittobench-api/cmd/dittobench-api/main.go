@@ -2086,9 +2086,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			// fished from the wrong tool's result) zeros the usage half too.
 			// Under v7 the composition is multiplicative and a decoy zeroes the
 			// whole case (ComposeResultUsageForVersion).
-			// From v14 the reply is read under the graders' hyphen fold
-			// (#2734), so a needle copied with U+2011 still counts as used.
-			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, grade.FoldReplyHyphens(req.BenchVersion, resp).FinalText,
+			// From v14 the reply is read as the graders read it (grade.ReplyAsRead:
+			// the #2734 hyphen fold and rendered markdown), so a needle copied with
+			// U+2011 or behind a no-break space still counts as used.
+			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, grade.ReplyAsRead(req.BenchVersion, resp).FinalText,
 				fixture.NeedleValue(), fixture.DecoyValue())
 		} else {
 			cs = scorer.FinishTool(cs)

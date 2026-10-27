@@ -13,7 +13,8 @@ ASCII (#2734) with matching claim-gate forms and twin/result-usage reads, adds
 three memory matcher corrections from #2734 (a hyphen joining the words of a
 known multi-word value reads as a space; set removal may end in a short place
 phrase such as `from the list`; action claims accept the verb's -ing form), and
-changes benchmark identity.
+changes benchmark identity. It also reads every graded reply as rendered text
+(see *V14 answer-normalization contract* below).
 V13 keeps its whole-case exclusion. V2–v12 keep their existing rules. Lifecycle
 write cases remain excluded at every version. V14 counts each observed
 declarative-ack case and permits save/update/delete memory actions on that case;
@@ -37,7 +38,8 @@ that value is also a correction cue. "better safe than sorry" is published as
 The v14 full/public vector at seed 123456789 is
 `cb5962df023627c294be1de814ae22b65a3c58f6eb9a2bc9601bee8439f10432`,
 with epoch `2027-06-01T00:00:00Z`. The grader (apart from the claim-set
-correction above and the #2734 hyphen fold and matchers), v13 gate postures,
+correction above, the #2734 hyphen fold and matchers, and the answer-normalization
+contract below), v13 gate postures,
 LongMem instrument and public harness wire (9) carry forward. The surface carries
 forward apart from case-file records, which v14 files in story order instead of
 shuffled-presentation order (#3088); that moves the v14 vector and leaves every
@@ -59,6 +61,48 @@ Keep anti-template qualification incomplete until those results exist. A
 Backroom `start_ready` result checks mechanical rollout prerequisites; it is
 not that qualification or operator approval. This document does not change a
 production guard or authorize a rollout.
+
+## V14 answer-normalization contract
+
+V14 grades the reply a user would read, so a harness needs no final-writer
+typography pass to be scored. Top v13 agents strip paired `**` and fold U+2011
+before returning (`typography.py`/`output.cpp` in the dan0l line, released
+agent `82172ff9`), which operators accepted as W8 typography (SN-342). From v14
+the grader does that itself, in the memory grader and in every scorer path that
+reads reply text (`grade.ReplyAsRead`: text-graded tool cases, result-usage
+needles, twin post-pass answers). V13 and older grade byte-identically.
+
+- **Rendered markdown** (`grade.PlainReplyTextV14`). Paired `*`/`**`/`***`/`_`/
+  `__` emphasis (word-bounded, so `snake_case` and `2*3*4` stay text), inline
+  code and code-fence lines, ATX headings, blockquote markers, bullets and task
+  boxes, table outer pipes and delimiter rows, thematic breaks, and link or image
+  syntax (`[text](url)` reads as `text`) are removed; the characters they mark up
+  are kept. Ordered-list ordinals are removed only for a real numbered list
+  (two or more items numbered 1, 2, ...); a lone `5. That's it.` keeps its
+  number. Strikethrough is kept, so `~~Oslo~~ Lisbon` still names the
+  distractor. Non-ASCII spaces read as a space, zero-width characters are
+  dropped, U+2212 reads as `-`.
+- **Sentence punctuation ends a number.** A `.` or `,` that no digit follows
+  ends a number token: `Your PIN is 4471, as saved` names `4471`, and the same
+  rule catches a forbidden, dump-guard or decoy number followed by punctuation.
+  A decimal or grouping separator (`4471.5`, `4471,500`), a sign, or another
+  digit still attaches.
+- **Percent claims.** A quantity claim in `percent` or `percentage points`
+  reads `15%` as `15 percent`. A count claim still ignores percentages.
+
+Every other v13 guard is unchanged: distractor and hedge detection (two or more
+distinct asserted values), cited-and-rejected excusal, the stuffing quantifier,
+slot-in-prose, the forbidden-value and dump guards, and number-token boundaries
+against neighbouring digits and signs. Audit bank `v14-2` adds reviewed
+positives for each rule and negatives for a bolded distractor, a markdown
+hedge, strikethrough, a decimal tail, a comma hedge, a punctuated forbidden
+value and a percent distractor. No generation vector moves; only v14 grading.
+
+Deliberately not relaxed: number words beyond the existing lexicon, abbreviated
+amounts (`$1.2k`), numeric slash dates (`03/04/2026` is ambiguous between
+locales), unicode en/em dashes inside identifiers (they separate clauses), and
+the v13-pinned effect reads (`grade.MemoryEffectV13`), which receive the
+rendered reply but keep the v13 number boundary.
 
 ## Record the release packet before enabling any v14 work
 

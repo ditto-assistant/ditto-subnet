@@ -155,6 +155,21 @@ type gradingPolicy struct {
 	// claim's verb ("pausing" for "pause"), for accepted and distractor forms
 	// alike (#2734). Past -ed forms describe an earlier action and stay misses.
 	progressiveActions bool
+	// plainReplyText (v14) reads the reply as rendered text before grading:
+	// markdown emphasis, inline code, links, headings, blockquotes, bullets,
+	// numbered-list ordinals and table pipes are removed and the characters
+	// they mark up are kept; non-ASCII spaces read as a space
+	// (PlainReplyTextV14). Top agents stripped `**` in their final writer so a
+	// bolded date or a value split by emphasis would grade (SN-342).
+	plainReplyText bool
+	// numberPunctuationBounds (v14) lets a "." or "," that is not followed by
+	// a digit end a number token in the reply: "Your PIN is 4471, as saved"
+	// names 4471, and a forbidden or dump-guard number followed by sentence
+	// punctuation is caught. A decimal or grouping separator still attaches.
+	numberPunctuationBounds bool
+	// percentClaims (v14) lets a quantity claim whose unit is a percentage
+	// read "15%" as "15 percent". Counts keep ignoring percentages.
+	percentClaims bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
@@ -173,6 +188,9 @@ func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 			hyphenJoinedValues:           true,
 			setRemovalPlace:              true,
 			progressiveActions:           true,
+			plainReplyText:               true,
+			numberPunctuationBounds:      true,
+			percentClaims:                true,
 		}
 	case benchVersion >= protocol.BenchVersionV13:
 		return gradingPolicy{

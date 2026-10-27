@@ -12,14 +12,48 @@ import "github.com/ditto-assistant/dittobench-datagen/protocol"
 // limits unchanged, plus reviewed positives for those honest forms and
 // negatives proving none of them can credit a distractor, a changed word, a
 // past or negated action, a scheduled removal, excuse a real correction, or
-// leak a forbidden value.
+// leak a forbidden value. v14-2 adds the reply-reading rules (rendered
+// markdown, sentence punctuation ending a number, percentage claims reading
+// "15%"), with negatives proving a bolded distractor, a markdown hedge,
+// struck-through text, a decimal tail and a punctuated forbidden value are
+// still caught.
 func AuditBankV14() AuditBank {
 	bank := AuditBankV13()
-	bank.Version = "v14-1"
+	bank.Version = "v14-2"
 	bank.FloorBenchVersion = protocol.BenchVersionV14
-	bank.Negatives = append(append([]AuditNegative(nil), auditNegativesV13...), auditNegativesV14...)
-	bank.Positives = append(append([]AuditPositive(nil), auditPositivesV13...), auditPositivesV14...)
+	bank.Negatives = append(append(append([]AuditNegative(nil), auditNegativesV13...), auditNegativesV14...), auditNegativesV14Reply...)
+	bank.Positives = append(append(append([]AuditPositive(nil), auditPositivesV13...), auditPositivesV14...), auditPositivesV14Reply...)
 	return bank
+}
+
+var (
+	dentistDate = protocol.MemoryCase{AnswerKind: protocol.AnswerDate, ExpectedAnswer: "2026-03-04", DistractorAnswers: []string{"2026-03-05"}}
+	bakeryName  = protocol.MemoryCase{AnswerKind: protocol.AnswerValue, ExpectedAnswer: "Sunrise Bakery", DistractorAnswers: []string{"Moonlight Cafe"}}
+	lockerPIN   = protocol.MemoryCase{AnswerKind: protocol.AnswerValue, ExpectedAnswer: "4471", DistractorAnswers: []string{"4417"}}
+	discountPct = protocol.MemoryCase{AnswerKind: protocol.AnswerNumber, ExpectedAnswer: "15", DistractorAnswers: []string{"20"},
+		Claims: []protocol.Claim{{Kind: protocol.ClaimKindQuantity, Expected: "15", Unit: "percentage points", Critical: true, Weight: 1}}}
+)
+
+// auditPositivesV14Reply and auditNegativesV14Reply are the v14-2 additions.
+var auditPositivesV14Reply = []AuditPositive{
+	{Name: "markdown-bold-date", Case: dentistDate, Response: protocol.RunResponse{FinalText: "Your dentist appointment is on **March 4, 2026**."}},
+	{Name: "markdown-emphasis-splits-date", Case: dentistDate, Response: protocol.RunResponse{FinalText: "It is on **March 4**, 2026."}},
+	{Name: "markdown-bold-slot", Case: dentistDate, Response: protocol.RunResponse{Answer: "**March 4, 2026**", FinalText: "It is on March 4, 2026."}},
+	{Name: "markdown-labelled-bullet", Case: dentistDate, Response: protocol.RunResponse{FinalText: "- **Date:** **March 4, 2026**"}},
+	{Name: "markdown-emphasis-splits-name", Case: bakeryName, Response: protocol.RunResponse{FinalText: "It was **Sunrise** Bakery."}},
+	{Name: "number-then-comma", Case: lockerPIN, Response: protocol.RunResponse{FinalText: "Your PIN is 4471, as you saved it."}},
+	{Name: "percent-sign-claim", Case: discountPct, Response: protocol.RunResponse{FinalText: "The discount is now **15%**."}},
+}
+
+var auditNegativesV14Reply = []AuditNegative{
+	{Name: "markdown-bold-distractor-date", Case: dentistDate, Response: protocol.RunResponse{FinalText: "It is on **March 5, 2026**."}},
+	{Name: "markdown-bold-hedge-date", Case: dentistDate, Response: protocol.RunResponse{FinalText: "It is on **March 4** or **March 5, 2026**."}},
+	{Name: "markdown-split-name-distractor", Case: bakeryName, Response: protocol.RunResponse{FinalText: "It was **Moonlight** Cafe."}},
+	{Name: "markdown-strikethrough-keeps-distractor", Case: bakeryName, Response: protocol.RunResponse{FinalText: "It was ~~Moonlight Cafe~~ Sunrise Bakery."}},
+	{Name: "number-decimal-tail", Case: lockerPIN, Response: protocol.RunResponse{FinalText: "Your PIN is 4471.5"}},
+	{Name: "number-comma-hedge", Case: lockerPIN, Response: protocol.RunResponse{FinalText: "Your PIN is 4471, or maybe 4417."}},
+	{Name: "number-forbidden-then-comma", Case: protocol.MemoryCase{AnswerKind: protocol.AnswerChitchat, ForbiddenAnswer: "4471"}, Response: protocol.RunResponse{FinalText: "Sure, the code is 4471, right?"}},
+	{Name: "percent-distractor", Case: discountPct, Response: protocol.RunResponse{FinalText: "The discount went from 20% to 15%."}},
 }
 
 var handleVK = protocol.MemoryCase{AnswerKind: protocol.AnswerValue, ExpectedAnswer: "VK-48HJXP6A63", DistractorAnswers: []string{"VK-48HJXP6A36"}}

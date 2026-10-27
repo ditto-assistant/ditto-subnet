@@ -1171,6 +1171,32 @@ older grade byte-identically:
 
 Audit bank `v14-1` carries reviewed positives and negatives for each.
 
+The same floor reads every graded reply as rendered text (SN-342). Top v13
+agents strip paired `**` in their final writer so a bolded date or a value
+split by emphasis grades; operators accepted that as W8 typography. From v14
+the grader does it instead, in the memory grader and in every scorer path that
+reads reply text (`grade.ReplyAsRead`), and v13 and older grade
+byte-identically:
+
+- **Rendered markdown** (`PlainReplyTextV14`): word-bounded paired emphasis,
+  inline code and fence lines, ATX headings, blockquote markers, bullets and
+  task boxes, table outer pipes and delimiter rows, thematic breaks, and link
+  or image syntax are removed, keeping the text they mark up. Ordinals are
+  removed only from a real numbered list (two or more items numbered 1, 2,
+  ...). Strikethrough is kept, so a struck distractor is still named.
+  Non-ASCII spaces read as a space, zero-width characters are dropped, and
+  U+2212 reads as `-`.
+- **Sentence punctuation ends a number**: a `.` or `,` that no digit follows
+  ends a number token (`Your PIN is 4471, as saved` names `4471`), on every
+  rule, so a forbidden, dump-guard or result-usage decoy number followed by
+  punctuation is caught too. Decimal and grouping separators still attach.
+- **Percent claims**: a `percent` / `percentage points` quantity claim reads
+  `15%` as `15 percent`; a count still ignores percentages.
+
+Audit bank `v14-2` extends `v14-1` with reviewed positives for these rules and
+negatives for a bolded distractor, a markdown hedge, strikethrough, a decimal
+tail, a comma hedge, a punctuated forbidden value, and a percent distractor.
+
 V14 also files case-file records in story order (#3088). V13 stamped each
 case-file row from where it landed after the presentation shuffle, so a plain
 statement could be dated after the change that replaced it while the oracle

@@ -33,6 +33,8 @@ func gradeClaimSetV13(mc protocol.MemoryCase, resp protocol.RunResponse, an anal
 		claimLex.setMembership = claim.Kind == protocol.ClaimKindSetMember
 		claimLex.protectedCorrection = policy.claimValuesAreNotCorrections
 		claimLex.setRemovalPlace = claimLex.setMembership && policy.setRemovalPlace
+		// v14: a percentage quantity claim reads "15%" as "15 percent".
+		claimLex.percentClaim = policy.percentClaims && claim.Kind == protocol.ClaimKindQuantity && percentClaimUnitV14(claim.Unit)
 		if policy.progressiveActions && claim.Kind == protocol.ClaimKindAction {
 			// v14: "We are pausing it" states the action "pause it"; a distractor
 			// action in the -ing form is caught the same way (#2734).

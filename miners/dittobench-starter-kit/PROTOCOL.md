@@ -404,6 +404,13 @@ cohort (#1521) shows 0 false zeros on every honest architecture.
   (fraction 0 in v13.0) accepts the answer in that language or English,
   including translated status words and decline phrases; values stay canonical.
 - A declarative acknowledgement without the stated value scores 0.25.
+- **From bench_version 14, the reply as it renders.** Markdown emphasis,
+  inline code, links, headings, blockquotes, bullets, numbered-list ordinals
+  and table pipes are read as the text they mark up, non-ASCII spaces as a
+  space, and a `.`/`,` that no digit follows ends a number (`4471, as saved`).
+  A final writer does not need to strip `**` or reformat values to be graded;
+  strikethrough is kept, so a struck distractor is still named. See
+  [`docs/benchmark-v14-rollout.md`](../../docs/benchmark-v14-rollout.md).
 
 ### What is prohibited (in addition to the v12 list)
 

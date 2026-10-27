@@ -328,13 +328,17 @@ func ComposeResultUsageForVersion(benchVersion int, cs protocol.CaseScore, answe
 	if benchVersion < protocol.BenchVersionV7 {
 		return ComposeResultUsageWithDecoy(cs, answer, needleValue, decoyValue)
 	}
+	carries := answerCarriesValue
+	if benchVersion >= protocol.BenchVersionV14 {
+		carries = answerCarriesValueV14
+	}
 	gate := v7ResultUsageMissGate
 	usage := 0.0
 	switch {
-	case decoyValue != "" && answerCarriesValue(answer, decoyValue):
+	case decoyValue != "" && carries(answer, decoyValue):
 		gate = 0.0
 		cs.Notes = append(cs.Notes, "v7: answer carried the decoy value (fished from the wrong tool) — case scored 0")
-	case answerCarriesValue(answer, needleValue):
+	case carries(answer, needleValue):
 		gate = 1.0
 		usage = 1.0
 		cs.Notes = append(cs.Notes, "answer incorporated the served tool result")
@@ -406,9 +410,10 @@ func ScoreToolCaseObservedForVersion(c protocol.ToolCase, resp protocol.RunRespo
 	if benchVersion >= protocol.BenchVersionV13 {
 		// v13: claim-aware arguments, alternative outcomes, effect-graded memory
 		// reads, text-graded restraint, forbidden tools (v13.go). The v7..v12
-		// path below is unchanged. From v14 the reply's typographic hyphens are
-		// folded under the memory grader's rule (#2734).
-		return scoreToolCaseV13(c, grade.FoldReplyHyphens(benchVersion, resp), ok, observed)
+		// path below is unchanged. From v14 the reply is read as the memory
+		// grader reads it: typographic hyphens folded (#2734) and markdown
+		// rendered to plain text (grade.ReplyAsRead).
+		return scoreToolCaseV13(c, grade.ReplyAsRead(benchVersion, resp), ok, observed)
 	}
 	strict := benchVersion >= protocol.BenchVersionV7
 	if !strict {
