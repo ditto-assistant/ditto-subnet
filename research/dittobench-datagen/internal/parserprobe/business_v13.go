@@ -91,6 +91,9 @@ func answerBusinessV13(st *store, question string) derived {
 	if len(rows) == 0 {
 		return derived{}
 	}
+	if d, ok := answerRoleV14(rows, question); ok {
+		return d
+	}
 	if d, ok := answerProcessV14(scopedV14RowsInTime(st, question)); ok {
 		return d
 	}
