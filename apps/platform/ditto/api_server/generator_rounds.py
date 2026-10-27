@@ -21,7 +21,11 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
    generator filling empty counted columns, plus challengers), its agent
    panel (the top ledger owners plus reference agents), and its bench
    contract (:func:`choose_round_bench_version`). Every later step of the
-   round runs at that frozen version, whatever activates meanwhile.
+   round runs at that frozen version, whatever activates meanwhile. When the
+   only thing missing is validator capacity (heartbeats absent, stale, or
+   mid-update), the round stays committed and later ticks of its opening
+   epoch retry for :data:`ROUND_OPEN_CAPACITY_GRACE`; only then is it void,
+   with an ``infra:`` reason.
 3. **Generate.** The scorer builds each column generator and runs it on its
    column seed; Platform stores the canonical round dataset.
 4. **Run.** Validators lease each panel agent on a ``generator_round`` ticket
@@ -156,6 +160,17 @@ COMMITMENT_CLAIM_TTL = timedelta(minutes=10)
 COMMITMENT_ESCALATION_INTERVAL = timedelta(minutes=15)
 COMMITMENT_HEARTBEAT_FRESHNESS = timedelta(minutes=5)
 PUBLISHER_ORDER_DOMAIN = b"dittobench-generator-round-publisher/v1"
+# A round whose opening finds validator capacity as its only blocker (no
+# capable validator, or too few for the quorum, usually because heartbeats are
+# missing, stale or mid-update at that instant) stays committed and is retried
+# on each later tick of its opening epoch for this long before it is voided.
+# Two heartbeat freshness windows (5 minutes each): an idle validator
+# heartbeats once per scoring sweep, and a fleet that restarts onto a new
+# stack is back well within that. The seed binds the opening epoch's boundary
+# block, which does not move inside the epoch, so a deferred round opens on
+# exactly the seed its commitment promised.
+ROUND_OPEN_CAPACITY_GRACE = timedelta(minutes=10)
+OPEN_DEFERRED_KEY = "open_deferred"
 
 
 # --- derivations ------------------------------------------------------------
@@ -490,6 +505,29 @@ def void_round(row: GeneratorRound, reason: str, *, now: datetime) -> None:
     row.closed_at = row.closed_at or now
 
 
+def open_deferral(row: GeneratorRound) -> dict[str, Any] | None:
+    """The capacity deferral a committed round is waiting out, if any (see
+    :data:`ROUND_OPEN_CAPACITY_GRACE`)."""
+    value = (row.generation or {}).get(OPEN_DEFERRED_KEY)
+    return value if isinstance(value, dict) else None
+
+
+def _void_unopened(row: GeneratorRound, reason: str, *, now: datetime) -> None:
+    """Void a round that never opened. One that was waiting out a capacity
+    deferral failed for validator capacity, not for anything a generator
+    did, so its reason is an ``infra:`` one naming the deferral."""
+    deferral = open_deferral(row)
+    if deferral is None:
+        void_round(row, reason, now=now)
+        return
+    void_round(
+        row,
+        f"infra: {reason} while waiting for validator capacity since "
+        f"{deferral.get('since')}: {deferral.get('reason')}",
+        now=now,
+    )
+
+
 def active_panel(row: GeneratorRound) -> list[dict[str, Any]]:
     """The round's frozen panel minus agents dropped while it ran."""
     return [slot for slot in row.panel or () if not slot.get("dropped_reason")]
@@ -751,7 +789,7 @@ async def advance_rounds(
     )
     for row in stale:
         if row.status == "committed":
-            void_round(row, "round passed without opening", now=now)
+            _void_unopened(row, "round passed without opening", now=now)
             out.note(f"round {row.round_index}: void (never opened)")
         elif row.status == "generating":
             void_round(row, "round dataset was not generated before it closed", now=now)
@@ -803,7 +841,7 @@ async def advance_rounds(
             # The seed binds the boundary block of the round's first epoch, and
             # only the latest boundary is observable: a round the loop reaches
             # late cannot be opened on the block its commitment promised.
-            void_round(opening, "round opening epoch was missed", now=now)
+            _void_unopened(opening, "round opening epoch was missed", now=now)
             out.note(f"round {current}: void (opening epoch missed)")
         elif opening.committed_epoch_index >= first_epoch:
             void_round(opening, "not committed before the round opened", now=now)
@@ -812,7 +850,15 @@ async def advance_rounds(
             await open_round(
                 session, opening, resolved=resolved, position=position, now=now
             )
-            out.note(f"round {current}: {opening.status}")
+            deferral = open_deferral(opening)
+            if opening.status == "committed" and deferral is not None:
+                out.note(
+                    f"round {current}: opening deferred (attempt "
+                    f"{deferral.get('attempts')}, until {deferral.get('until')}): "
+                    f"{deferral.get('reason')}"
+                )
+            else:
+                out.note(f"round {current}: {opening.status}")
 
     # 4. Settle the publication of every round that left ``committed``: no
     # validator is asked to publish a commitment once its round opened.
@@ -972,6 +1018,12 @@ class RoundContract:
     min_round_validators: int = 1
     scorer_grading_versions: tuple[int, ...] = LEGACY_SCORER_ROUND_BENCH_VERSIONS
     """What the live generator scorer advertises it grades (v13 when none)."""
+    capacity_blocked: bool = False
+    """With no ``bench_version``: at least one candidate the scorer grades
+    was refused only for want of capable validators. That is a fleet gap
+    (heartbeats missing, stale or mid-update) that heals on its own, so the
+    round defers its opening rather than voiding (see
+    :data:`ROUND_OPEN_CAPACITY_GRACE`)."""
 
 
 async def previous_round_bench_version(session: AsyncSession) -> int:
@@ -1020,6 +1072,7 @@ async def choose_round_bench_version(
         reverse=True,
     )
     notes: list[str] = []
+    capacity_blocked = False
     if not candidates:
         # An active version older than every round contract (a fresh or
         # restored deployment) keeps the rounds' historical contract.
@@ -1053,6 +1106,7 @@ async def choose_round_bench_version(
                 min_round_validators=min_round_validators,
                 scorer_grading_versions=scorer_versions,
             )
+        capacity_blocked = True
         if capable == 0:
             notes.append(
                 f"no validator can run a {cases_per_column}-case round column "
@@ -1072,6 +1126,7 @@ async def choose_round_bench_version(
         previous_version=previous,
         min_round_validators=min_round_validators,
         scorer_grading_versions=scorer_versions,
+        capacity_blocked=capacity_blocked,
     )
 
 
@@ -1083,7 +1138,46 @@ async def open_round(
     position: ChainPosition,
     now: datetime,
 ) -> None:
+    """Open a committed round at its opening epoch, defer it, or void it.
+
+    The caller has checked that ``position`` is the round's first epoch. When
+    validator capacity is the only blocker (:attr:`RoundContract.capacity_blocked`),
+    the round stays ``committed`` with an ``open_deferred`` record and the
+    next tick retries, for up to :data:`ROUND_OPEN_CAPACITY_GRACE` from the
+    first deferred attempt; then it is void with an ``infra:`` reason. Every
+    other blocker voids at once, as before.
+    """
     settings = resolved.settings
+    # Frozen for the round's life: an activation mid-round must not move its
+    # panel runs, tickets, or capability routing to another contract. Chosen
+    # before the row changes, so a deferred round is left exactly as committed.
+    contract = await choose_round_bench_version(
+        session,
+        cases_per_column=settings.cases_per_seed,
+        now=now,
+        min_round_validators=settings.min_round_validators,
+    )
+    deferral = open_deferral(row)
+    if contract.bench_version is None and contract.capacity_blocked:
+        since = (
+            datetime.fromisoformat(deferral["since"])
+            if deferral is not None and isinstance(deferral.get("since"), str)
+            else now
+        )
+        until = since + ROUND_OPEN_CAPACITY_GRACE
+        if now < until:
+            row.generation = {
+                **(row.generation or {}),
+                OPEN_DEFERRED_KEY: {
+                    "since": since.isoformat(),
+                    "until": until.isoformat(),
+                    "attempts": int((deferral or {}).get("attempts") or 0) + 1,
+                    "last_attempt_at": now.isoformat(),
+                    "active_version": contract.active_version,
+                    "reason": contract.reason,
+                },
+            }
+            return
     row.open_epoch_index = position.subnet_epoch_index
     row.open_block = position.last_epoch_block
     row.open_block_hash = position.last_epoch_block_hash.lower()
@@ -1093,14 +1187,6 @@ async def open_round(
     row.seed = round_seed(row.round_index, row.secret, position.last_epoch_block_hash)
     row.settings_revision = resolved.revision
     row.cases_per_column = settings.cases_per_seed
-    # Frozen for the round's life: an activation mid-round must not move its
-    # panel runs, tickets, or capability routing to another contract.
-    contract = await choose_round_bench_version(
-        session,
-        cases_per_column=settings.cases_per_seed,
-        now=now,
-        min_round_validators=settings.min_round_validators,
-    )
     row.bench_version = contract.bench_version
     columns = await select_columns(session, settings)
     frozen = await select_round_panel(session, settings)
@@ -1110,6 +1196,9 @@ async def open_round(
     # Recorded before any void below, so a round voided for an undersized
     # panel still shows which agents were skipped and why.
     generation: dict[str, Any] = {}
+    if deferral is not None:
+        # Kept on the opened (or voided) round: it opened late, and why.
+        generation[OPEN_DEFERRED_KEY] = deferral
     if skipped:
         generation["skipped_reference_agents"] = skipped
     if frozen.skipped_agents:
@@ -1122,12 +1211,18 @@ async def open_round(
         }
     row.generation = generation or None
     if contract.bench_version is None:
-        void_round(
-            row,
+        reason = (
             f"no generator-round contract can run at active bench "
-            f"v{contract.active_version}: {contract.reason}",
-            now=now,
+            f"v{contract.active_version}: {contract.reason}"
         )
+        if contract.capacity_blocked:
+            # The grace window ran out: validator capacity never recovered.
+            reason = (
+                f"infra: {reason} (validator capacity did not recover within "
+                f"{int(ROUND_OPEN_CAPACITY_GRACE.total_seconds() // 60)} minutes "
+                "of the round's opening)"
+            )
+        void_round(row, reason, now=now)
         return
     refused = capability_refusal(
         await live_scorer(session, now=now),

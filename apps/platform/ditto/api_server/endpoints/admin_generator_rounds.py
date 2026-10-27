@@ -62,6 +62,7 @@ from ditto.api_server.generator_competition import (
 )
 from ditto.api_server.generator_rounds import (
     ROUND_COMMITMENT_PUBLISHERS,
+    ROUND_OPEN_CAPACITY_GRACE,
     GeneratorRoundLoop,
     attempt_views,
     choose_round_bench_version,
@@ -274,7 +275,17 @@ async def admin_round_preview(
         min_round_validators=settings.min_round_validators,
     )
     if contract.bench_version is None:
-        blockers.append(f"no generator-round contract can run: {contract.reason}")
+        blockers.append(
+            f"no generator-round contract can run: {contract.reason}"
+            + (
+                "; validator capacity is the only blocker, so a round opening "
+                "now would stay committed and retry for "
+                f"{int(ROUND_OPEN_CAPACITY_GRACE.total_seconds() // 60)} minutes "
+                "before voiding"
+                if contract.capacity_blocked
+                else ""
+            )
+        )
     capable = await round_contract_capacity(
         session, cases_per_column=settings.cases_per_seed, now=now
     )
