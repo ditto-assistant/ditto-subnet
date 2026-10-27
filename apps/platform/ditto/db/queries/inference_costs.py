@@ -15,7 +15,8 @@ WITH classified AS (
    g.embedding_cost_microusd,
    CASE
     WHEN EXISTS (SELECT 1 FROM generator_round_attempts a
-      WHERE a.agent_id=g.agent_id AND a.validator_hotkey=g.validator_hotkey
+      JOIN generator_rounds r ON r.round_index=a.round_index
+      WHERE r.bench_version=g.bench_version AND a.agent_id=g.agent_id AND a.validator_hotkey=g.validator_hotkey
         AND a.ticket_deadline=g.ticket_deadline) THEN 'round_attempt'
     WHEN EXISTS (SELECT 1 FROM benchmark_canaries c
       WHERE c.agent_id=g.agent_id AND c.validator_hotkey=g.validator_hotkey
@@ -25,8 +26,11 @@ WITH classified AS (
     WHEN EXISTS (SELECT 1 FROM score_audit_log a
       WHERE a.agent_id=g.agent_id AND a.validator_hotkey=g.validator_hotkey
         AND a.event='score' AND a.payload->>'bench_version'=g.bench_version::text
-        AND a.payload->>'ticket_deadline'=
-          to_char(g.ticket_deadline AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || '+00:00')
+        AND (a.payload->>'ticket_deadline'=
+          to_char(g.ticket_deadline AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') || '+00:00'
+          OR (g.ticket_deadline=date_trunc('second',g.ticket_deadline)
+            AND a.payload->>'ticket_deadline'=
+              to_char(g.ticket_deadline AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS') || '+00:00')))
       THEN 'accepted_score_receipt'
     ELSE 'unknown'
    END AS classification_basis,
