@@ -186,7 +186,6 @@ import {
   claimProvenanceCasesInputSchema,
   agentScoresInputSchema,
   agentScoresLookupInputSchema,
-  continualRetestDiagnosticInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
   agentEmissionEligibilityInputSchema,
@@ -787,7 +786,7 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
   }
 }
 
-// Agent ids on the artifact-scope source readers publish as plain
+// Exact-agent readers (source and retest diagnostics) publish as plain
 // `format: uuid`, without zod's ~170-byte uuid regex, to hold the catalog byte
 // budget. Each tool's service function parses its input with the strict
 // `z.string().uuid()` schema before any Platform request, so validation is
@@ -2446,7 +2445,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       title: 'Explain exact agent continual retest admission',
       description:
         'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
-      inputSchema: continualRetestDiagnosticInputSchema,
+      inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchContinualRetestDiagnostic(input)),
