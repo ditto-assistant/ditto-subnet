@@ -1049,14 +1049,6 @@ offline.
   rollout is scheduled through the Backroom, and
   `GET /api/v1/public/bench/config` is authoritative for what is active.
 
-## How this kit improves
-
-Every starter kit is improved continuously. An improvement learned from a
-miner's submission ships here only after that agent's source has been made
-public under the subnet's source-disclosure policy (Backroom
-`get_source_release_policy`: king-only, after the embargo, and never while
-disclosure is `never`).
-
 ## Pitfalls
 
 - Do not overfit the local scorer. The local dataset generator is a

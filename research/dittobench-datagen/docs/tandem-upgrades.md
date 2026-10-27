@@ -319,7 +319,9 @@ That policy is subnet-wide (`disclosure` `public` or `never`, plus
 `embargo_hours`), and release is king-only: only a submission that held the
 crown and earned winner emissions is ever published, after the embargo. Under
 `disclosure = never`, nothing submission-derived ships in a kit. Improvements
-the subnet writes itself ship whenever they are ready.
+the subnet writes itself ship whenever they are ready. The agent starter-kit README is provenance-pinned
+(`starter-kit-provenance-v<N>.json`), so this note lands there with the next
+kit release rather than as a standalone edit.
 
 Generator source has no public release path yet (generator source is never
 served publicly, [generator-competition.md](generator-competition.md)
