@@ -169,3 +169,43 @@ def test_request_arriving_during_catchup_runs_before_next_chunk(tmp_path, monkey
     monkeypatch.setattr(worker, "observe_earnings", scan)
     worker.consume_iteration(mailbox, j, p, c)
     assert calls == [8] and len(c.sent) == 2
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["pin_missing", "armed_policy_missing", "expiry_missing_id", "expiry_wrong_type"],
+)
+def test_malformed_recovery_history_refuses_consistently(tmp_path, fault):
+    p, c, j, env, _ = expired(tmp_path)
+    if fault.startswith("expiry"):
+        expire_unsigned_manual(
+            j, p, c, env.request.request_id, reason="explicit recovery audit"
+        )
+        row = j.db.execute(
+            "SELECT id,payload FROM events WHERE event='manual_unsigned_expired'"
+        ).fetchone()
+        body = json.loads(row["payload"])
+        if fault == "expiry_missing_id":
+            del body["request_id"]
+        else:
+            body["finalized_block"] = "not a block"
+        j.db.execute(
+            "UPDATE events SET payload=? WHERE id=?", (json.dumps(body), row["id"])
+        )
+    elif fault == "pin_missing":
+        j.db.execute("DELETE FROM pin")
+    else:
+        row = j.db.execute(
+            "SELECT id,payload FROM events WHERE event='manual_transfer_armed'"
+        ).fetchone()
+        body = json.loads(row["payload"])
+        del body["policy"]
+        j.db.execute(
+            "UPDATE events SET payload=? WHERE id=?", (json.dumps(body), row["id"])
+        )
+    before = list(j.db.iterdump())
+    with pytest.raises(ValueError):
+        expire_unsigned_manual(
+            j, p, c, env.request.request_id, reason="explicit recovery audit"
+        )
+    assert list(j.db.iterdump()) == before

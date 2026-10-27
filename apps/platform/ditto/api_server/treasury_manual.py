@@ -84,7 +84,12 @@ def delivery_verified(row) -> bool:
 
 
 def transfer_result(row):
-    report = ManualReport.model_validate(row.report) if row.report else None
+    try:
+        report = ManualReport.model_validate(row.report) if row.report else None
+    except ValueError:
+        # A corrupt diagnostic must not hide the immutable request or receipts.
+        # Its absence provides no evidence of delivery or failure cause.
+        report = None
     return {
         "request_id": row.request_id,
         "envelope": row.envelope,

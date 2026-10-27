@@ -261,6 +261,17 @@ def manual_transfer_history(journal, policy):
         "ORDER BY id"
     ):
         body = json.loads(row["payload"])
+        if (
+            not isinstance(body, dict)
+            or not all(
+                isinstance(body.get(k), str)
+                for k in ("request_id", "policy", "request_digest")
+            )
+            or not all(
+                type(body.get(k)) is int for k in ("after_operation", "finalized_block")
+            )
+        ):
+            raise ValueError("malformed unsigned expiry payload")
         request_id = body["request_id"]
         if request_id in expired:
             raise ValueError("duplicate unsigned expiry")
@@ -377,14 +388,14 @@ def arm_manual_transfer(journal, policy, chain, requested, *, record=True):
     ):
         raise ManualIntentRefused("manual request requires enabled signed policy")
     db = journal.db
-    if db.execute(
-        "SELECT 1 FROM events WHERE event='manual_unsigned_expired' "
-        "AND json_extract(payload,'$.request_id')=?",
-        (requested.request_id,),
-    ).fetchone():
-        raise ManualIntentRefused("expired unsigned request cannot be rearmed")
     db.execute("BEGIN IMMEDIATE" if record else "BEGIN")
     try:
+        if db.execute(
+            "SELECT 1 FROM events WHERE event='manual_unsigned_expired' "
+            "AND json_extract(payload,'$.request_id')=?",
+            (requested.request_id,),
+        ).fetchone():
+            raise ManualIntentRefused("expired unsigned request cannot be rearmed")
         if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
             policy.digest,
             "transfer",

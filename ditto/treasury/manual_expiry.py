@@ -14,12 +14,16 @@ def expire_unsigned_manual(journal, policy, chain, request_id, *, reason):
     db = journal.db
     db.execute("BEGIN IMMEDIATE")
     try:
-        if tuple(db.execute("SELECT digest,role FROM pin").fetchone()) != (
+        pinned = db.execute("SELECT digest,role FROM pin").fetchone()
+        if pinned is None or tuple(pinned) != (
             policy.digest,
             "transfer",
         ):
             raise ValueError("recovery requires current pinned transfer journal")
-        history = manual_transfer_history(journal, policy)
+        try:
+            history = manual_transfer_history(journal, policy)
+        except (KeyError, TypeError) as error:
+            raise ValueError("invalid armed manual history") from error
         if not history or history[-1].request_id != request_id:
             raise ValueError("recovery requires exact latest armed request")
         request = history[-1]
@@ -28,7 +32,11 @@ def expire_unsigned_manual(journal, policy, chain, request_id, *, reason):
             "AND json_extract(payload,'$.request_id')=?",
             (request_id,),
         ).fetchone()
-        if json.loads(armed["payload"])["policy"] != policy.digest:
+        armed_payload = json.loads(armed["payload"]) if armed is not None else None
+        if (
+            not isinstance(armed_payload, dict)
+            or armed_payload.get("policy") != policy.digest
+        ):
             raise ValueError("recovery cannot cross a policy migration")
         maximum = db.execute("SELECT COALESCE(MAX(id),0) FROM operations").fetchone()[0]
         prior = db.execute(

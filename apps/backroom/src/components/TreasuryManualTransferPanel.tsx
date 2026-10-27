@@ -103,7 +103,7 @@ export function TreasuryManualTransferPanel({ initialState, readOnly }: { initia
       {r.last_error && <p>{r.last_error}</p>}
       {r.custody_result?.failure_code === 'signing_window_elapsed' && <p>The request reached the end of its signing window before a transaction was reserved. Operator recovery is required; this request will not be retried.</p>}
       {r.custody_result?.failure_code === 'expired_unsigned' && <p>Expired unsigned intent closed in custody. No transaction was reserved. A new transfer requires a fresh preview and confirmation.</p>}
-      {r.status === 'failed' && !r.custody_result?.failure_code && <p>Custody reported failure without a detailed cause. Inspect the exact custody intent and operation history before replacing this request.</p>}
+      {r.status === 'failed' && !r.custody_result?.failure_code && <p>No detailed custody cause is available for this failed request. Inspect the exact custody intent and operation history before replacing it.</p>}
       {r.envelope.request.bucket_id === 'gm' && <p className="text-xs text-[var(--muted-strong)]">This request tracks collector → holding wallet only. SN118 sale → TAO, TAO payment → GM, and GM credits: no receipts linked to this request.</p>}
       {r.receipt?.source_attribution === "incomplete" && <p>Public wallet receipt published. Source earnings attribution remains incomplete; do not resend this transfer.</p>}
       {r.receipt && <><p className="break-all font-mono text-xs">Transaction {r.receipt.extrinsic_hash}</p><a href={`https://taostats.io/extrinsic/${encodeURIComponent(r.receipt.extrinsic_hash)}`} target="_blank" rel="noreferrer">View transaction on Taostats</a></>}
