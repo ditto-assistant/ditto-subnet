@@ -266,7 +266,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         assert "needs.plan.outputs.validator_stack == 'true'" in job["if"]
 
     datagen = jobs["publish-datagen"]
-    assert datagen["needs"] == ["plan", "release"]
+    assert datagen["needs"] == ["plan", "release", "verify-dittobench-datagen"]
     assert "needs.plan.outputs.dittobench_datagen == 'true'" in datagen["if"]
     publish = _step(datagen["steps"], "Publish immutable component and source tags")
     assert "$DATAGEN_REPOSITORY:$COMPONENT_TAG" in publish["run"]
@@ -388,6 +388,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-model-relay-compat",
         "build-dittobench",
         "publish-datagen",
+        "publish-generator-scorer",
         "deploy-dittobench",
         "assemble-stack",
         "smoke-stack-runtime-amd64",
@@ -623,7 +624,8 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert jobs["verify-dittobench-datagen"]["defaults"]["run"][
         "working-directory"
     ] == ("research/dittobench-datagen")
-    assert datagen_verification["run"] == "go test -timeout 20m ./..."
+    assert "go test -timeout 20m ./..." in datagen_verification["run"]
+    assert 'verified_sha=$(git rev-parse HEAD)' in datagen_verification["run"]
 
     component_gates = {
         "verify-backroom": (
@@ -1688,6 +1690,7 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
             writer_scopes.setdefault(job_name, []).append(writer)
 
     assert writer_scopes == {
+        "publish-generator-scorer": ["generator-scorer-release"],
         "verify-dittobench-coding-starter-kit": [
             "coding-starter-kit",
             "unified-starter-kit",
@@ -1713,5 +1716,5 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 12
+        == 13
     )

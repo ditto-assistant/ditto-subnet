@@ -1,5 +1,39 @@
 # Generator competition scorer
 
+## Automatic releases and updates
+
+The release workflow publishes a native Linux amd64 scorer and its updater in
+the public `ditto-subnet-stack:generator-scorer-stable-1` descriptor channel.
+Publication follows the exact-source release gates. The channel is discovery
+only: the host resolves one immutable digest, verifies its keyless Cosign
+signature against this repository's `release.yml` on `main`, and checks its
+protocol, embedded revision and case bound before touching the running service.
+It also pre-pulls the binary's digest-pinned generator sandbox images.
+
+The Ansible role installs `ditto-generator-scorer-auto-update.timer`, polling
+once a minute with up to 15 seconds of jitter. No GitHub runner connects to the
+VM, and the updater never loads the scorer bearer. The first supervised
+converge must pin `generator_scorer_revision` to a full released commit SHA;
+it installs the drain-capable binary, root-owned release directories and timer.
+Subsequent releases activate without another Ansible run.
+
+Activation switches `/opt/ditto-generator-scorer/current` atomically, then sends
+SIGUSR1 to the scorer's main process. It finishes the current lease and exits
+before claiming more work. Systemd starts the candidate through `current`.
+Adoption requires the candidate executable to stay active with the same PID
+for ten seconds. A failed 30-minute adoption restores `last-good` and requests
+another graceful restart. The updater retains prior releases and refreshes
+itself only after successful adoption; an interrupted update keeps `last-good`
+available for the next attempt.
+
+Inspect with `systemctl status ditto-generator-scorer-auto-update.timer`,
+`journalctl -u ditto-generator-scorer-auto-update`, and
+`/opt/ditto-generator-scorer/current/challenge-scorer version`. Confirm the
+running executable through `/proc/<MainPID>/exe`; a symlink target alone is
+not proof of adoption. To hold or roll back, stop the update timer, point
+`current` at the retained `last-good` release, and send SIGUSR1 to the scorer.
+SIGTERM remains immediate cancellation and is not used by the updater.
+
 `cmd/challenge-scorer` does the generator competition's CPU-only work. It
 builds generator source in a no-network sandbox and runs it on seeds. It never
 talks to a model, and in Platform mode it never runs an agent: validators run

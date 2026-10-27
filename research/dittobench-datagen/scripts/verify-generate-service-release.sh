@@ -32,9 +32,21 @@ component_tag="v$declared_version"
   exit 1
 }
 
+# A release may only reuse the successful exact-source gate when its source
+# tree is unchanged except the version stamp made by semantic-release.
+if [ -n "${DATAGEN_VERIFIED_SOURCE_SHA:-}" ]; then
+  [[ "$DATAGEN_VERIFIED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+  git merge-base --is-ancestor "$DATAGEN_VERIFIED_SOURCE_SHA" HEAD
+  # Only the literal version constant may differ in the excluded file.
+  diff -u <(git show "$DATAGEN_VERIFIED_SOURCE_SHA:$module_dir/internal/version/version.go" | sed -E 's/^const Version = "[0-9]+\.[0-9]+\.[0-9]+"$/const Version = "STAMP"/') \
+    <(sed -E 's/^const Version = "[0-9]+\.[0-9]+\.[0-9]+"$/const Version = "STAMP"/' "$module_dir/internal/version/version.go")
+  git diff --exit-code "$DATAGEN_VERIFIED_SOURCE_SHA" HEAD -- "$module_dir" \
+    ':!research/dittobench-datagen/internal/version/version.go'
+else
+  (cd "$module_dir" && go test -timeout 20m ./...)
+fi
 (
   cd "$module_dir"
-  go test -timeout 20m ./...
   go test ./gen -run '^TestV7KnownVector$' -count=1
 )
 docker build \

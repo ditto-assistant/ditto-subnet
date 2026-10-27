@@ -58,6 +58,10 @@
     - { path: "{{ generator_scorer_state_dir }}/go", owner: "{{ generator_scorer_owner }}", group: "{{ generator_scorer_group }}", mode: "0700" }
     - { path: "{{ generator_scorer_config_dir }}", owner: root, group: root, mode: "0700" }
 
+- name: Require an immutable bootstrap revision
+  ansible.builtin.assert:
+    that: generator_scorer_revision is match('^[0-9a-f]{40}$')
+
 - name: Clone or update the subnet monorepo at the pinned revision
   ansible.builtin.git:
     repo: "{{ generator_scorer_repo_url }}"
@@ -73,7 +77,7 @@
 # binary, and restarts the unit, only when the bytes differ.
 - name: Build challenge-scorer
   ansible.builtin.command:
-    cmd: /usr/local/go/bin/go build -trimpath -buildvcs=false -o {{ generator_scorer_state_dir }}/challenge-scorer ./cmd/challenge-scorer
+    cmd: /usr/local/go/bin/go build -trimpath -buildvcs=false -ldflags "-X main.releaseRevision={{ generator_scorer_revision }}" -o {{ generator_scorer_state_dir }}/challenge-scorer ./cmd/challenge-scorer
     chdir: "{{ generator_scorer_checkout }}/services/dittobench-api"
   become: true
   become_user: "{{ generator_scorer_owner }}"
@@ -84,10 +88,18 @@
     CGO_ENABLED: "0"
   changed_when: false
 
+- name: Create the bootstrap release directory
+  ansible.builtin.file:
+    path: "/opt/ditto-generator-scorer/releases/bootstrap-{{ generator_scorer_revision }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Install the challenge-scorer binary
   ansible.builtin.copy:
     src: "{{ generator_scorer_state_dir }}/challenge-scorer"
-    dest: "{{ generator_scorer_binary }}"
+    dest: "/opt/ditto-generator-scorer/releases/bootstrap-{{ generator_scorer_revision }}/challenge-scorer"
     remote_src: true
     owner: root
     group: root
@@ -151,9 +163,59 @@
     - reload systemd for generator scorer
     - restart generator scorer
 
+# Install the first updater through supervised convergence; later releases
+# self-refresh it only after the new scorer is healthy.
+- name: Install checksum-pinned Cosign
+  ansible.builtin.get_url:
+    url: https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64
+    dest: /usr/local/bin/cosign
+    checksum: sha256:c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74
+    mode: "0755"
+
+- name: Install the scorer updater
+  ansible.builtin.copy:
+    src: "{{ generator_scorer_checkout }}/scripts/generator-scorer-auto-update.sh"
+    dest: /usr/local/sbin/ditto-generator-scorer-auto-update
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Activate the supervised bootstrap revision
+  ansible.builtin.file:
+    src: "/opt/ditto-generator-scorer/releases/bootstrap-{{ generator_scorer_revision }}"
+    dest: /opt/ditto-generator-scorer/current
+    state: link
+  notify: restart generator scorer
+
+- name: Preserve the supervised rollback revision
+  ansible.builtin.file:
+    src: "/opt/ditto-generator-scorer/releases/bootstrap-{{ generator_scorer_revision }}"
+    dest: /opt/ditto-generator-scorer/last-good
+    state: link
+
 - name: Enable and start the scorer
   ansible.builtin.systemd:
     name: "{{ generator_scorer_unit }}"
     enabled: true
     state: started
+    daemon_reload: true
+
+- name: Flush bootstrap restart before enabling the updater
+  ansible.builtin.meta: flush_handlers
+
+- name: Install updater systemd units
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: "/etc/systemd/system/{{ item }}"
+    mode: "0644"
+  loop:
+    - ditto-generator-scorer-auto-update.service
+    - ditto-generator-scorer-auto-update.timer
+
+- name: Enable pull-based scorer updates
+  ansible.builtin.systemd:
+    name: ditto-generator-scorer-auto-update.timer
+    state: started
+    enabled: true
     daemon_reload: true

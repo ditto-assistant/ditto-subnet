@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/genrun"
@@ -231,5 +232,49 @@ func TestProcessOneDoesNotReportCancellation(t *testing.T) {
 	err := reportFault(ctx, fp.client(), faultReport{Work: "qualification", LeaseID: "lease-1"}, genrun.ErrSandbox)
 	if !errors.Is(err, genrun.ErrSandbox) || len(fp.faults) != 0 {
 		t.Fatalf("a stopping scorer must not report: err=%v faults=%d", err, len(fp.faults))
+	}
+}
+
+// Draining waits for an in-flight request and prevents a qualification claim.
+func TestServeDrainFinishesCurrentWorkBeforeExit(t *testing.T) {
+	t.Setenv(tokenEnv, "test-token")
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	requests := make(chan string, 2)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests <- r.URL.Path
+		close(entered)
+		select {
+		case <-release:
+			fmt.Fprint(w, `{"work":null}`)
+		case <-r.Context().Done():
+			t.Error("drain cancelled the in-flight request")
+		}
+	}))
+	defer srv.Close()
+	drain, stopDrain := context.WithCancel(context.Background())
+	defer stopDrain()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- serveWithDrain(ctx, drain, []string{"-platform", srv.URL, "-insecure-platform"}) }()
+	<-entered
+	stopDrain()
+	select {
+	case <-done:
+		t.Fatal("drain exited before work finished")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if path := <-requests; path != "/api/v1/generator-scorer/round-work" {
+		t.Fatal(path)
+	}
+	select {
+	case path := <-requests:
+		t.Fatalf("claimed more work after drain: %s", path)
+	default:
 	}
 }

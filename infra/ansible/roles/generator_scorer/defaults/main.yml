@@ -3,9 +3,8 @@ generator_scorer_owner: "{{ deploy_user | default('deploy') }}"
 generator_scorer_group: "{{ deploy_group | default('ditto') }}"
 generator_scorer_checkout: /opt/ditto-subnet
 generator_scorer_repo_url: https://github.com/ditto-assistant/ditto-subnet.git
-# Pin an exact released commit for production converges; main is the default
-# for a first bring-up only.
-generator_scorer_revision: main
+# A full released commit SHA is required for the supervised bootstrap.
+generator_scorer_revision: ""
 generator_scorer_state_dir: /var/lib/ditto-generator-scorer
 generator_scorer_config_dir: /etc/ditto-generator-scorer
 generator_scorer_binary: /usr/local/bin/challenge-scorer

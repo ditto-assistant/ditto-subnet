@@ -148,6 +148,9 @@ description = "DittoBench scorer and hosted API"
 depends_on = ["dittobench_datagen", "screening_protocol"]
 paths = [
   ".github/workflows/dittobench.yml",
+  "Dockerfile.generator-scorer-release",
+  "scripts/generator-scorer-auto-update.sh",
+  "infra/ansible/roles/generator_scorer/**",
   "services/dittobench-api/Dockerfile*",
   "services/dittobench-api/calibration/**",
   "services/dittobench-api/cmd/**",

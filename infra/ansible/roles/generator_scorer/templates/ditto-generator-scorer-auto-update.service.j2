@@ -1,0 +1,10 @@
+[Unit]
+Description=Pull and activate a signed generator scorer release
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ditto-generator-scorer-auto-update
+TimeoutStartSec=40min
+UMask=0022

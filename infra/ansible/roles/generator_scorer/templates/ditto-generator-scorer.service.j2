@@ -16,7 +16,7 @@ EnvironmentFile={{ generator_scorer_config_dir }}/scorer.env
 # and stay readable by the unprivileged container user.
 Environment=TMPDIR={{ generator_scorer_state_dir }}/tmp
 Environment=DOCKER_CONFIG={{ generator_scorer_state_dir }}/docker
-ExecStart={{ generator_scorer_binary }} serve \
+ExecStart=/opt/ditto-generator-scorer/current/challenge-scorer serve \
   -platform {{ generator_scorer_platform_url }} \
   -interval {{ generator_scorer_interval }}
 Restart=always

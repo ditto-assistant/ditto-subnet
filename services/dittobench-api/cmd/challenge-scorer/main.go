@@ -67,6 +67,8 @@ import (
 // executor produced it.
 const ScorerVersion = "challenge-scorer/4"
 
+var releaseRevision = "development"
+
 const tokenEnv = "DITTO_GENERATOR_SCORER_TOKEN"
 
 func main() {
@@ -78,6 +80,12 @@ func main() {
 	defer stop()
 	var err error
 	switch os.Args[1] {
+	case "version":
+		err = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"revision": releaseRevision, "update_protocol": 1,
+			"scorer_version": ScorerVersion, "max_cases": challenge.MaxCases,
+			"builder_image": genrun.BuilderImage, "runner_image": genrun.RunnerImage,
+		})
 	case "run":
 		err = runLocal(ctx, os.Args[2:])
 	case "serve":
@@ -482,6 +490,13 @@ func (c *platformClient) do(ctx context.Context, method, path string, body, out 
 }
 
 func serve(ctx context.Context, args []string) error {
+	// Drain only prevents the next claim; it must not cancel execution.
+	drain, stopDrain := signal.NotifyContext(context.Background(), syscall.SIGUSR1)
+	defer stopDrain()
+	return serveWithDrain(ctx, drain, args)
+}
+
+func serveWithDrain(ctx, drain context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	platform := fs.String("platform", "", "Platform base URL (required)")
 	interval := fs.Duration("interval", 30*time.Second, "idle poll interval")
@@ -504,13 +519,20 @@ func serve(ctx context.Context, args []string) error {
 		log.Printf("WARNING: -unsafe-local-sandbox runs untrusted generator code on this host")
 		sb = genrun.Local{}
 	}
+	log.Printf("scorer started revision=%s max_cases=%d", releaseRevision, challenge.MaxCases)
 	client := &platformClient{base: strings.TrimRight(*platform, "/"), token: token, http: &http.Client{Timeout: 120 * time.Second}}
 	for {
+		if drain.Err() != nil {
+			return nil
+		}
 		// Rounds first: a round's dataset gates every validator panel run, and
 		// its scoring gates the ledger. Qualification can wait a cycle.
 		roundBusy, roundErr := processRound(ctx, client, sb)
 		if roundErr != nil {
 			log.Printf("round cycle failed: %v", roundErr)
+		}
+		if drain.Err() != nil {
+			return nil
 		}
 		qualBusy, qualErr := processOne(ctx, client, sb)
 		if qualErr != nil {
@@ -528,6 +550,8 @@ func serve(ctx context.Context, args []string) error {
 		}
 		select {
 		case <-ctx.Done():
+			return nil
+		case <-drain.Done():
 			return nil
 		case <-time.After(*interval):
 		}
