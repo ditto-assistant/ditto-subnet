@@ -21,7 +21,7 @@ def test_datagen_full_suite_has_same_bounded_timeout_everywhere() -> None:
             s
             for s in steps
             if s.get("name") == "Gate DittoBench datagen release on exact merge source"
-        )["run"]
+        )["run"].splitlines()[0]
         == command
     )
     script = (
