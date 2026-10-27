@@ -275,6 +275,11 @@ func AtThreshold(r CaseRow, threshold float64) bool {
 	return math.Abs(r.MeanScore-floor) < 1e-9
 }
 
+// Judge applies the admission rule to one family row's rates and rounds. It
+// is what Evaluate uses, exported so a report that measures the rates another
+// way (internal/familypanel) is held to the same thresholds.
+func Judge(row FamilyRow, p Params) (string, []string) { return verdict(row, p) }
+
 func verdict(row FamilyRow, p Params) (string, []string) {
 	if row.Judged == 0 {
 		return HoldNoJudgedCases, []string{"no judged cases (every case was a duplicate or lacked a panel)"}
