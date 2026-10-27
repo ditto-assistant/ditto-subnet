@@ -195,6 +195,57 @@
 .gen-table tr.unpaid td {
   color: var(--text-dim);
 }
+/* The reader's own rows take the palette's selection tint; the "You" tag
+   carries the same fact for readers who cannot tell the tint apart. */
+.gen-table tr.mine td {
+  background: var(--selection);
+}
+.gen-you {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.gen-mine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 8px 0 12px;
+}
+.gen-mine label {
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.gen-mine .search-field {
+  flex: 0 1 420px;
+  min-width: 0;
+}
+.gen-mine .search-input.mono {
+  font-family: var(--mono);
+  font-weight: 400;
+}
+.generators-page .gen-mine-status {
+  margin: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.gen-mine-status:empty {
+  display: none;
+}
+.gen-round-link {
+  color: var(--text);
+  font-weight: 600;
+  text-underline-offset: 3px;
+}
+.gen-table tr.shown td:first-child {
+  box-shadow: inset 2px 0 0 var(--focus);
+}
+.gen-section h3[tabindex="-1"]:focus {
+  outline: none;
+}
 .gen-default {
   color: var(--text-dim);
   font-style: italic;

@@ -376,6 +376,13 @@ export function isSubmissionId(value: string | null | undefined): value is strin
   );
 }
 
+/** A round index from URL state: digits only, a positive safe integer. */
+export function parseRoundIndex(value: string | null | undefined): number | null {
+  if (typeof value !== "string" || !/^[0-9]{1,15}$/.test(value)) return null;
+  const index = Number(value);
+  return Number.isSafeInteger(index) && index > 0 ? index : null;
+}
+
 /** The newest scored round index any source knows about. The board's entries
  * name the round that scored them, so the latest results can load as soon as
  * either the board or the round list arrives. */

@@ -119,6 +119,7 @@ describe("PAGES registry", () => {
       "attempt",
       "bounty",
       "generator",
+      "round",
     ]);
   });
 });
