@@ -59,11 +59,17 @@ func (d *Deps) dittoRouterOnBehalfOf(ctx context.Context, agentID pgtype.UUID) (
 // dittoRouterHeaders builds the outbound headers. No inbound client header is
 // ever forwarded; the only identity is the link's verified user id.
 func dittoRouterHeaders(cfg config.DittoRouterConfig, onBehalfOf string) map[string]string {
-	return map[string]string{
+	headers := map[string]string{
 		"Authorization":      "Bearer " + cfg.APIKey,
 		"Content-Type":       "application/json",
 		cfg.OnBehalfOfHeader: onBehalfOf,
 	}
+	if cfg.RequireCompetitionAccount {
+		// This is a server billing requirement, never a forwarded miner header.
+		// The gateway must reject a sponsor-billed endpoint before paid work.
+		headers["X-Ditto-Require-User-Billing"] = "true"
+	}
+	return headers
 }
 
 func dittoRouterAttributedHeaders(cfg config.DittoRouterConfig, onBehalfOf string, attribution *dittoRouterAttribution) map[string]string {

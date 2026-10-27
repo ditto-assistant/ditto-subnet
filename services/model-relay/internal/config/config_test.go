@@ -548,6 +548,11 @@ func TestDittoRouterRequiredAccountNeedsCompetitionRouting(t *testing.T) {
 	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "identity header") {
 		t.Fatalf("account identity must not replace the Router credential: %v", err)
 	}
+	env["DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT"] = "false"
+	env["DITTO_ROUTER_ON_BEHALF_OF_HEADER"] = "x-ditto-require-user-billing"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "reserved user-billing") {
+		t.Fatalf("identity must not overwrite the billing requirement even outside required mode: %v", err)
+	}
 }
 
 func TestDittoRouterUpstreamHostAllowlist(t *testing.T) {

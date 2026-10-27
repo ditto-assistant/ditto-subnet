@@ -41,8 +41,12 @@ caller-supplied `uid` as a substitute for authentication.
   revert to sponsor spending.
 - Linked requests go to Ditto Router, which remains responsible for verifying
   the live app spending grant, account funds, caps, and the app endpoint's
-  billing mode. The flag alone cannot turn a sponsor-billed endpoint into a
-  user-billed endpoint. A Router 402 returns 402 to the broker and settles no
+  billing mode. Required-account mode adds the server-owned
+  `X-Ditto-Require-User-Billing: true` header, which the paired gateway must
+  enforce before paid work: a sponsor endpoint or absent app/grant refuses
+  with 402. The identity-header configuration cannot replace this reserved
+  header. The flag does not turn a sponsor-billed endpoint into a user-billed
+  endpoint; it refuses that configuration. A Router 402 returns 402 to the broker and settles no
   successful usage; it is never retried against the sponsor.
 
 Ansible renders the flag from
@@ -57,6 +61,7 @@ The relay adds these outbound headers from the verified grant/request:
 | Header | Source |
 | --- | --- |
 | `X-Ditto-On-Behalf-Of` | Active linked OIDC subject in Postgres |
+| `X-Ditto-Require-User-Billing` | Literal `true`, only in required competition-account mode |
 | `X-Ditto-Evaluation-Grant` | Inference grant UUID |
 | `X-Ditto-Evaluation-Request` | Signed request nonce UUID |
 | `X-Ditto-Evaluation-Agent` | Grant's agent UUID |

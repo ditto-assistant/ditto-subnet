@@ -72,6 +72,7 @@ func TestRequiredDittoAccountRefusesUnlinkedBeforeReservation(t *testing.T) {
 			headers["X-Ditto-On-Behalf-Of"] = "forged-funded-account"
 			headers["X-Ditto-Evaluation-Stage"] = "forged-stage"
 			headers["X-Ditto-Evaluation-Grant"] = "forged-grant"
+			headers["X-Ditto-Require-User-Billing"] = "false"
 			w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), headers))
 			if w.Code != http.StatusPaymentRequired {
 				t.Fatalf("unlinked account must refuse: %d %s", w.Code, w.Body.String())
@@ -136,6 +137,9 @@ func TestRequiredDittoAccountRoutesTrustedIdentityAndNeverFallsBack(t *testing.T
 				t.Fatalf("must call only Router once: router=%d sponsor=%d", routerCalls.Load(), sponsorCalls.Load())
 			}
 			gotHeaders := <-seenHeaders
+			if gotHeaders.Get("X-Ditto-Require-User-Billing") != "true" {
+				t.Fatalf("required billing mode must ignore inbound policy overrides: %+v", gotHeaders)
+			}
 			if gotHeaders.Get("X-Ditto-Evaluation-Grant") != f.grantID.String() || gotHeaders.Get("X-Ditto-Evaluation-Request") != nonce.String() || gotHeaders.Get("X-Ditto-Evaluation-Agent") != f.agentID.String() || gotHeaders.Get("X-Ditto-Evaluation-Stage") != "competition-chat" {
 				t.Fatalf("attribution must come from the verified grant and proof: %+v", gotHeaders)
 			}

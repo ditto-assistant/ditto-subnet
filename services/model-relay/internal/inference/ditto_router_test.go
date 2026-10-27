@@ -28,6 +28,20 @@ func TestDittoRouterHeadersCarryOnlyTheKeyAndTheLinkedUser(t *testing.T) {
 	}
 }
 
+func TestDittoRouterRequiresUserBillingOnlyInRequiredAccountMode(t *testing.T) {
+	_, router := dittoRouterTestConfig("https://inference.heyditto.ai/v1/chat/completions")
+	if _, present := dittoRouterHeaders(router, "ditto-user-1")["X-Ditto-Require-User-Billing"]; present {
+		t.Fatal("optional attribution must not opt in to user billing")
+	}
+	router.RequireCompetitionAccount = true
+	for _, identityHeader := range []string{"X-Ditto-On-Behalf-Of", "X-Ditto-Require-User-Billing"} {
+		router.OnBehalfOfHeader = identityHeader
+		if got := dittoRouterHeaders(router, "untrusted-replacement")["X-Ditto-Require-User-Billing"]; got != "true" {
+			t.Fatalf("billing requirement must be the server literal, got %q", got)
+		}
+	}
+}
+
 func TestCompleteChatViaDittoRouterShapesASuccess(t *testing.T) {
 	var seen *http.Request
 	var body map[string]any

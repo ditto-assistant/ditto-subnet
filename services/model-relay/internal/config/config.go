@@ -536,6 +536,9 @@ func loadDittoRouter(r *envReader) DittoRouterConfig {
 	if strings.TrimSpace(cfg.OnBehalfOfHeader) == "" {
 		r.fail("DITTO_ROUTER_ON_BEHALF_OF_HEADER must not be empty")
 	}
+	if strings.EqualFold(cfg.OnBehalfOfHeader, "X-Ditto-Require-User-Billing") {
+		r.fail("DITTO_ROUTER_ON_BEHALF_OF_HEADER cannot use the reserved user-billing requirement header")
+	}
 	if cfg.RequireCompetitionAccount && !cfg.RoutesLane(DittoRouterLaneCompetition) {
 		r.fail("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT requires the competition lane")
 	}
