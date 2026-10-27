@@ -115,6 +115,39 @@ image/source**, which may differ from this baseline.
 5. The operator reviews the shadow report, fleet capacity and rollback evidence
    before issuing any activation. Keep missing evidence as a blocker.
 
+## Generator-competition changes (SN-361)
+
+These change v14 generation only. V13 generation and grading stay
+byte-identical. Each change that moves the v14 vector makes the earlier
+v14 qualification evidence stale, including the 40-seed GIH diagnostic at
+`8f1005957` (#3179: quality 0.9501 over 14,000 cases). Rerun it on the new
+source before citing it.
+
+### SN-351 family-mix admission gate
+
+`research/dittobench-datagen/internal/familygate` (CLI `cmd/familygate`) folds
+per-case panel verdicts, labelled by family, into one row per family. A family
+is admitted only with at least 3 rounds of evidence, a trivial rate of at most
+0.60 and an unsolved rate of at most 1/3. A case counts as solved only when at
+least 2 distinct owners solve it, as in the generator competition's
+`min_solver_owners`. The rows come from a private operator column, an offline
+panel run or Backroom's generator round view. The column `at threshold` counts
+cases where every solver scored exactly 0.5 (SN-352).
+`universe.V14FamilyMix` lists every v14 program family with its origin and
+admission state. `universe.V14ExcludedShapes` lists the shapes SN-351 rules out,
+with round evidence: simple update chain, two-hop, single retraction,
+scattered list, single-hop as-of and needle as always trivial; conditional,
+alias-reroute and owner-alias-email as unsolved. Tests refuse a new v14 or
+generator-derived family that uses an excluded shape, and a generator-derived
+family that is generated before admission. Applied to the SN-351 evidence
+(`internal/familygate/testdata`), the gate holds the public default and
+needle/as-of shapes as trivial, holds conditional, alias-reroute,
+owner-alias-email and revised-cheapest as unsolved, and admits
+revert-to-original. This change adds no generation bytes.
+
+Qualification gate 4 must include the `familygate` table for every family
+`universe.V14FamiliesAwaitingPanel` returns, measured over at least 3 rounds.
+
 ## Ticket boundary and rollback
 
 Use the existing guarded benchmark rollout endpoints from Backroom. Record the

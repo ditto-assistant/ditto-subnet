@@ -190,6 +190,8 @@ func TestPoolCardinalityCanary(t *testing.T) {
 
 			// Configuration and filters.
 			"monetaryOracles":    poolcanary.Internal,
+			"V14ExcludedShapes":  poolcanary.Internal, // SN-351 admission ledger; never rendered
+			"V14FamilyMix":       poolcanary.Internal, // SN-351 admission ledger; never rendered
 			"storyDropRotation":  poolcanary.Internal,
 			"tripAliasForbidden": poolcanary.Internal, // words a trip alias must avoid
 
