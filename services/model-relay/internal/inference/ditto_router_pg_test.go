@@ -129,6 +129,7 @@ func TestRequiredDittoAccountRoutesTrustedIdentityAndNeverFallsBack(t *testing.T
 			headers["X-Ditto-On-Behalf-Of"] = "forged-funded-account"
 			headers["X-Ditto-Evaluation-Stage"] = "forged-stage"
 			headers["X-Ditto-Evaluation-Grant"] = "forged-grant"
+			headers["X-Ditto-Require-User-Billing"] = "false"
 			w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), headers))
 			if w.Code != routerStatus {
 				t.Fatalf("status: want %d, got %d %s", routerStatus, w.Code, w.Body.String())
