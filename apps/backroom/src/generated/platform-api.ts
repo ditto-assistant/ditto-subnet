@@ -22472,6 +22472,8 @@ export interface components {
             duplicate?: number | null;
             /** Generated */
             generated?: boolean | null;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
             /** Miner Hotkey */
             miner_hotkey: string | null;
             /** Name */
@@ -23363,6 +23365,8 @@ export interface components {
             discriminating: number;
             /** Duplicate */
             duplicate: number;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
             /** Panel Size */
             panel_size: number;
             /** Rank */
