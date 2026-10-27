@@ -284,7 +284,6 @@ def test_miner_docs_quote_the_rehearsal_live_fallback() -> None:
     )
 
 
-
 # --- generator rounds ----------------------------------------------------------
 
 
