@@ -49,17 +49,24 @@ _PREFIX = "/api/v1/public/"
 # World-readable reads outside ``/public/``: the generator board and rounds
 # serve every viewer the same body and declare ``max-age``, but without the
 # cache each dashboard poll recomputed the ledger against Postgres.
-_EXTRA_PREFIXES = (
-    "/api/v1/generator/board",
-    "/api/v1/generator/rounds",
-    "/api/v1/generator/submissions",
-)
+_EXTRA_PREFIXES = ("/api/v1/generator/board", "/api/v1/generator/rounds")
+# One generator's public detail is cacheable; the per-hotkey submission list
+# is not, so `ditto generator status` shows an upload immediately.
+_EXTRA_SUBPATH_PREFIXES = ("/api/v1/generator/submissions/",)
 
 
 def is_cacheable_path(path: str) -> bool:
     """Whether a GET on ``path`` may be served from the shared cache."""
-    return path.startswith(_PREFIX) or any(
-        path == prefix or path.startswith(prefix + "/") for prefix in _EXTRA_PREFIXES
+    return (
+        path.startswith(_PREFIX)
+        or any(
+            path == prefix or path.startswith(prefix + "/")
+            for prefix in _EXTRA_PREFIXES
+        )
+        or any(
+            path.startswith(prefix) and len(path) > len(prefix)
+            for prefix in _EXTRA_SUBPATH_PREFIXES
+        )
     )
 
 

@@ -554,6 +554,12 @@ class TestUpload:
         assert terms["blockers"] == [
             "handle 'taken' is reserved to another miner family"
         ]
+        # Terms check the same on-chain coldkey the upload will.
+        assert seen[-1] == (
+            "Taken v2",
+            _MINER.ss58_address,
+            f"{_MINER_COLDKEY[:-2]}00",
+        )
         body = {**_upload_body(_MINER, _archive("taken")), "name": "Taken v2"}
         refused = await client.post("/api/v1/generator/submissions", json=body)
         assert refused.status_code == 409

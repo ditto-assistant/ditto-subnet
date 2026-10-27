@@ -383,14 +383,40 @@ def test_generator_public_reads_are_cacheable() -> None:
     assert is_cacheable_path("/api/v1/generator/board")
     assert is_cacheable_path("/api/v1/generator/rounds")
     assert is_cacheable_path("/api/v1/generator/rounds/42")
-    assert is_cacheable_path("/api/v1/generator/submissions")
     assert is_cacheable_path(
         "/api/v1/generator/submissions/00000000-0000-4000-8000-000000000001"
     )
+    # A miner's own submission list must show an upload immediately.
+    assert not is_cacheable_path("/api/v1/generator/submissions")
+    assert not is_cacheable_path("/api/v1/generator/submissions/")
     # Upload terms are per-miner and no-store; the cache never holds them.
     assert not is_cacheable_path("/api/v1/generator/upload-terms")
     assert not is_cacheable_path("/api/v1/generator/boardx")
     assert not is_cacheable_path("/api/v1/admin/generator-rounds/rounds")
+
+
+async def test_a_generator_detail_response_is_stored(clock: _Clock) -> None:
+    app = FastAPI()
+    calls = {"detail": 0, "list": 0}
+
+    @app.get("/api/v1/generator/submissions/{submission_id}")
+    async def detail(submission_id: str, response: Response) -> dict:
+        calls["detail"] += 1
+        response.headers["Cache-Control"] = "public, max-age=30"
+        return {"id": submission_id}
+
+    @app.get("/api/v1/generator/submissions")
+    async def listing(response: Response) -> dict:
+        calls["list"] += 1
+        response.headers["Cache-Control"] = "public, max-age=30"
+        return {"n": calls["list"]}
+
+    app.add_middleware(PublicCacheMiddleware, now=clock, disabled=False)
+    async with _client(app) as client:
+        for _ in range(2):
+            await client.get("/api/v1/generator/submissions/abc")
+            await client.get("/api/v1/generator/submissions", params={"hotkey": "x"})
+    assert calls == {"detail": 1, "list": 2}
 
 
 async def test_query_string_is_part_of_the_key(clock: _Clock) -> None:

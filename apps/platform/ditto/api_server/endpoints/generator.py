@@ -246,6 +246,7 @@ async def upload_terms(
     request: Request,
     session: SessionDep,
     response: Response,
+    chain: ChainDep,
     hotkey: Annotated[str | None, Query(pattern=_SS58)] = None,
     source_sha256: Annotated[str | None, Query(pattern=r"^[0-9a-f]{64}$")] = None,
     name: Annotated[str | None, Query(max_length=256)] = None,
@@ -284,7 +285,11 @@ async def upload_terms(
                 )
     if name is not None:
         blocker = await _name_blocker(
-            session, request, name=name, hotkey=hotkey, coldkey=None
+            session,
+            request,
+            name=name,
+            hotkey=hotkey,
+            coldkey=await _registered_coldkey(request, chain, hotkey),
         )
         if blocker is not None:
             blockers.append(blocker)
@@ -306,6 +311,25 @@ async def upload_terms(
     )
 
 
+async def _registered_coldkey(
+    request: Request, chain: ChainClient, hotkey: str | None
+) -> str | None:
+    """The coldkey that owns ``hotkey`` on chain, as the upload checks it.
+
+    ``None`` when there is no hotkey, it is unregistered, or the chain read
+    fails; ``_name_blocker`` then falls back to the hotkey's payment binding.
+    """
+    if hotkey is None:
+        return None
+    try:
+        neurons = await chain.get_recent_neurons(request.app.state.config.chain.netuid)
+    except ChainError:
+        logger.warning("chain unreachable for generator upload terms", exc_info=True)
+        return None
+    neuron = next((n for n in neurons if n.hotkey == hotkey), None)
+    return (neuron.coldkey or None) if neuron is not None else None
+
+
 async def _name_blocker(
     session: AsyncSession,
     request: Request,
@@ -319,8 +343,9 @@ async def _name_blocker(
     The rules are the agent-name rules: 1-64 characters (here also no control
     or invisible characters), and never a handle another miner family holds
     a signed, endorsed reservation on. Without a hotkey only the shape is
-    checked. ``coldkey`` is the uploading coldkey; the terms read, which has
-    no chain lookup, uses the coldkey the hotkey last paid an upload from.
+    checked. ``coldkey`` is the coldkey that owns the hotkey on chain, the
+    same identity in upload terms and in the upload; only when the chain
+    read fails does it fall back to the coldkey the hotkey last paid from.
     """
     try:
         normalized = normalize_generator_name(name)
