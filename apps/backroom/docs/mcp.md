@@ -411,7 +411,9 @@ call, so a new capability is one `registerTool` entry:
    pass `props.session.email` so the platform records the real operator as the
    audit actor; artifact reads go through `artifact(() => …)`.
 3. Add the name to `WRITE_TOOL_NAMES` (or `TOOL_SCOPE_REQUIREMENTS` for artifact
-   scope) so the pre-flight scope challenge covers it.
+   scope) in `mcp-contract.server.ts` so the pre-flight scope challenge covers it.
+   This lightweight contract keeps OAuth and rejected requests independent of
+   the SDK and registry; authorized MCP calls load those modules on demand.
 4. Add it to the expected catalog list in `mcp.server.test.ts`. That list is
    exhaustive on purpose: a tool that is not named there fails the suite.
 
