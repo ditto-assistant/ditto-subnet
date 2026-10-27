@@ -46,11 +46,56 @@ import (
 // ContractV1 is the only pack contract this package accepts.
 const ContractV1 = "dittobench-challenge-pack/v1"
 
-// GradingBenchVersion is the memory grading policy every v1 pack case is
-// graded under. Pinning it means a pack is judged by exactly the grader the
-// agent competition's newest contract uses, and a case cannot select an older,
-// looser policy.
+// GradingBenchVersion is the baseline memory grading policy: the version a
+// v1 request always carries in grading_bench_version, and the version every
+// generator built before v14 packs emit. A v13 round accepts only it, so v13
+// requests, packs, and grading are byte-identical to the original contract.
+//
+// A pack declares its own policy in grading_bench_version, from
+// SupportedGradingBenchVersions, and every case in it is graded under exactly
+// that policy: a case cannot select an older, looser one.
 const GradingBenchVersion = protocol.BenchVersionV13
+
+// GradingBenchVersionV14 is the v14 memory grading policy (rendered reply
+// text, number punctuation bounds, percent claims; grade.gradingPolicy). A v14
+// pack is also validated against the v14 answer-text rule: every graded
+// answer, distractor, and dump-guard form must read the same as rendered text.
+const GradingBenchVersionV14 = protocol.BenchVersionV14
+
+// supportedGradingBenchVersions is the ordered set of policies a pack may
+// declare. It is also the set of bench versions a generator round can run at
+// (Platform's GENERATOR_ROUND_BENCH_VERSIONS; the pin test diffs them): a
+// round at version N accepts packs graded at any supported version <= N.
+var supportedGradingBenchVersions = []int{GradingBenchVersion, GradingBenchVersionV14}
+
+// SupportedGradingBenchVersions returns a copy of the ordered grading policies
+// a pack may declare.
+func SupportedGradingBenchVersions() []int {
+	return append([]int(nil), supportedGradingBenchVersions...)
+}
+
+// SupportsGradingBenchVersion reports whether a pack may declare v.
+func SupportsGradingBenchVersion(v int) bool {
+	for _, s := range supportedGradingBenchVersions {
+		if s == v {
+			return true
+		}
+	}
+	return false
+}
+
+// GradingBenchVersionsThrough returns the grading policies a round frozen at
+// roundBenchVersion accepts: every supported version at or below it, oldest
+// first. It is empty when roundBenchVersion predates every supported policy.
+func GradingBenchVersionsThrough(roundBenchVersion int) []int {
+	var out []int
+	for _, s := range supportedGradingBenchVersions {
+		if s <= roundBenchVersion {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // Bounds. They keep validation and execution cheap enough to run on every
 // upload and keep one pack from monopolizing a panel run.
@@ -198,10 +243,24 @@ func Fingerprint(c Case) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// GradingCase returns the MemoryCase the grader scores: the pack case with the
-// pinned grading policy, regardless of what the author wrote.
+// GradingCase returns the MemoryCase the grader scores under the baseline
+// policy (GradingBenchVersion). Generators built before v14 packs call it; a
+// version-aware caller grades a pack's case with GradingCaseAt or
+// Pack.GradingCase.
 func (c Case) GradingCase() protocol.MemoryCase {
+	return c.GradingCaseAt(GradingBenchVersion)
+}
+
+// GradingCaseAt returns the MemoryCase the grader scores under policy v,
+// regardless of the bench_version the author wrote on the case.
+func (c Case) GradingCaseAt(v int) protocol.MemoryCase {
 	mc := c.MemoryCase
-	mc.BenchVersion = GradingBenchVersion
+	mc.BenchVersion = v
 	return mc
+}
+
+// GradingCase returns case i as the grader scores it: under the policy the
+// pack declares.
+func (p Pack) GradingCase(i int) protocol.MemoryCase {
+	return p.Cases[i].GradingCaseAt(p.GradingBenchVersion)
 }

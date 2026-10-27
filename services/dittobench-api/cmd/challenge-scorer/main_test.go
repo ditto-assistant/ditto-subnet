@@ -42,6 +42,18 @@ func TestParseAgentFlag(t *testing.T) {
 // its request (or, with crash, exits non-zero), vendored like an upload.
 func generatorArchive(t *testing.T, crash bool) []byte {
 	t.Helper()
+	return generatorArchiveWith(t, crash, "")
+}
+
+// versionAwareArchive declares the newest pack grading policy each request
+// accepts.
+func versionAwareArchive(t *testing.T) []byte {
+	t.Helper()
+	return generatorArchiveWith(t, false, "p.GradingBenchVersion = req.NewestAccepted(nil)")
+}
+
+func generatorArchiveWith(t *testing.T, crash bool, extra string) []byte {
+	t.Helper()
 	datagen, err := filepath.Abs("../../../../research/dittobench-datagen")
 	if err != nil {
 		t.Fatal(err)
@@ -63,10 +75,12 @@ func main() {
 	}
 	p := challenge.ReferencePack(req.SeedInt64(), req.MinerHotkey)
 	p.Generator.Seed = req.Seed
+	EXTRA
 	_ = json.NewEncoder(os.Stdout).Encode(p)
 }
 `
 	body = strings.Replace(body, "CRASH", fmt.Sprint(crash), 1)
+	body = strings.Replace(body, "EXTRA", extra, 1)
 	gomod := "module example.com/gen\n\ngo 1.23\n\nrequire github.com/ditto-assistant/dittobench-datagen v0.0.0\n\nreplace github.com/ditto-assistant/dittobench-datagen => " + datagen + "\n"
 	for name, data := range map[string]string{"main.go": body, "go.mod": gomod} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(data), 0o644); err != nil {
@@ -158,6 +172,28 @@ func TestProcessOneQualifiesAndPosts(t *testing.T) {
 	processed, err = processOne(context.Background(), fp.client(), genrun.Local{})
 	if processed || err != nil {
 		t.Fatalf("idle cycle processed=%v err=%v", processed, err)
+	}
+}
+
+// Qualification follows the round contract Platform names: at v14 a
+// version-aware generator's packs declare v14; without bench_version the
+// request and the posted seeds are the original v13 ones.
+func TestProcessOneQualifiesAtTheNamedBenchVersion(t *testing.T) {
+	raw := versionAwareArchive(t)
+	for bench, want := range map[int]int{0: 0, 13: 0, 14: 14} {
+		item := work(raw, challenge.SeedFromInt64(1))
+		item.BenchVersion = bench
+		fp := newFakePlatform(t, item)
+		if processed, err := processOne(context.Background(), fp.client(), genrun.Local{}); err != nil || !processed {
+			t.Fatalf("bench %d: processed=%v err=%v", bench, processed, err)
+		}
+		got := fp.posted[0]
+		if !got.Seeds[0].Report.Valid || got.Seeds[0].GradingBenchVersion != want || got.Probe.GradingBenchVersion != want {
+			t.Fatalf("bench %d: seeds %+v probe %+v", bench, got.Seeds[0], got.Probe)
+		}
+		if got.Deterministic == nil || !*got.Deterministic {
+			t.Fatalf("bench %d: determinism %v", bench, got.Deterministic)
+		}
 	}
 }
 

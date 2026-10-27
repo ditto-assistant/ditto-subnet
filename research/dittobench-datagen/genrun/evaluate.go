@@ -21,6 +21,16 @@ type Plan struct {
 	Cases int
 	// CheckDeterminism re-runs the first seed and requires identical bytes.
 	CheckDeterminism bool
+	// RoundBenchVersion is the bench version the round (or qualification) is
+	// frozen at. Requests accept every grading policy through it
+	// (challenge.NewGenerateRequestFor); zero, or a v13 round, sends exactly
+	// the original v13 request.
+	RoundBenchVersion int
+}
+
+// request is the plan's request for one seed.
+func (p Plan) request(seed string) challenge.GenerateRequest {
+	return challenge.NewGenerateRequestFor(seed, p.MinerHotkey, p.Cases, p.RoundBenchVersion)
 }
 
 // Validate checks every request the plan would send, so a request this
@@ -35,7 +45,7 @@ func (p Plan) Validate() error {
 		seeds = append(append([]string(nil), p.Seeds...), p.ProbeSeed)
 	}
 	for _, seed := range seeds {
-		if err := challenge.NewGenerateRequest(seed, p.MinerHotkey, p.Cases).Validate(); err != nil {
+		if err := p.request(seed).Validate(); err != nil {
 			return fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 		}
 	}
@@ -48,8 +58,17 @@ type SeedOutput struct {
 	PackSHA256 string           `json:"pack_sha256,omitempty"`
 	Report     challenge.Report `json:"validation"`
 	// Error is the generator failure, when the run produced no pack.
-	Error      string `json:"error,omitempty"`
-	DurationMS int64  `json:"duration_ms"`
+	Error string `json:"error,omitempty"`
+	// GradingBenchVersion is the grading policy the pack declares. It is set
+	// only when the request accepted more than the baseline policy, so a v13
+	// round's output is byte-identical to the original contract.
+	GradingBenchVersion int `json:"grading_bench_version,omitempty"`
+	// LegacyRetry records why the request accepting newer policies failed when
+	// the output above is the retry on the original baseline request. A
+	// generator built before newer policies existed (or one whose newer path
+	// is broken) keeps its column at the baseline instead of being stranded.
+	LegacyRetry string `json:"legacy_retry,omitempty"`
+	DurationMS  int64  `json:"duration_ms"`
 	// Pack is the raw output (never serialized; the scorer runs it).
 	Pack []byte `json:"-"`
 }
@@ -116,9 +135,8 @@ func Evaluate(ctx context.Context, sb Sandbox, srcDir string, plan Plan) (Evalua
 	defer prog.Close()
 	ev.Build.OK, ev.Build.BinarySHA256 = true, prog.SHA256()
 
-	run := func(seed string) (SeedOutput, error) {
-		req := challenge.NewGenerateRequest(seed, plan.MinerHotkey, plan.Cases)
-		out := SeedOutput{Seed: seed}
+	attempt := func(req challenge.GenerateRequest) (SeedOutput, error) {
+		out := SeedOutput{Seed: req.Seed}
 		if err := req.Validate(); err != nil {
 			out.Error = err.Error()
 			return out, nil
@@ -137,18 +155,55 @@ func Evaluate(ctx context.Context, sb Sandbox, srcDir string, plan Plan) (Evalua
 		out.Pack = raw
 		out.PackSHA256 = challenge.Digest(raw)
 		out.Report = challenge.ValidateGenerated(raw, req)
+		if len(req.GradingBenchVersions) > 0 {
+			if p, derr := challenge.Decode(raw); derr == nil {
+				out.GradingBenchVersion = p.GradingBenchVersion
+			}
+		}
 		return out, nil
 	}
+	// run generates one seed and returns the request whose output it reports,
+	// so the determinism check repeats exactly that request.
+	run := func(seed string) (SeedOutput, challenge.GenerateRequest, error) {
+		req := plan.request(seed)
+		out, err := attempt(req)
+		if err != nil || out.Valid() || len(req.GradingBenchVersions) == 0 {
+			return out, req, err
+		}
+		legacy := challenge.NewGenerateRequest(seed, plan.MinerHotkey, plan.Cases)
+		retry, err := attempt(legacy)
+		if err != nil {
+			return out, req, err
+		}
+		if !retry.Valid() {
+			// Report the newer-policy attempt: the baseline did no better.
+			return out, req, nil
+		}
+		reason := out.Error
+		if reason == "" {
+			reason = fmt.Sprintf("invalid pack (%d issues)", len(out.Report.Issues))
+		}
+		if len(reason) > 500 {
+			reason = reason[:500]
+		}
+		retry.LegacyRetry = fmt.Sprintf("request accepting grading policies %v failed (%s); retried on the baseline v%d request", req.Accepted(), reason, legacy.GradingBenchVersion)
+		retry.GradingBenchVersion = legacy.GradingBenchVersion
+		return retry, legacy, nil
+	}
 
-	for _, seed := range plan.Seeds {
-		out, err := run(seed)
+	var firstReq challenge.GenerateRequest
+	for i, seed := range plan.Seeds {
+		out, req, err := run(seed)
 		if err != nil {
 			return ev, err
+		}
+		if i == 0 {
+			firstReq = req
 		}
 		ev.Seeds = append(ev.Seeds, out)
 	}
 	if plan.ProbeSeed != "" {
-		out, err := run(plan.ProbeSeed)
+		out, _, err := run(plan.ProbeSeed)
 		if err != nil {
 			return ev, err
 		}
@@ -156,7 +211,7 @@ func Evaluate(ctx context.Context, sb Sandbox, srcDir string, plan Plan) (Evalua
 		ev.Probe = &out
 	}
 	if plan.CheckDeterminism && len(ev.Seeds) > 0 && ev.Seeds[0].Error == "" {
-		again, err := run(plan.Seeds[0])
+		again, err := attempt(firstReq)
 		if err != nil {
 			return ev, err
 		}

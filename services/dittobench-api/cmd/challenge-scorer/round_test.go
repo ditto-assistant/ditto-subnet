@@ -165,3 +165,48 @@ func TestProcessRoundReportsUnsupportedCaseCountsAsFaults(t *testing.T) {
 		t.Fatalf("round fault: %+v", f)
 	}
 }
+
+// A v14 round offers every policy through v14: a version-aware column
+// declares v14, a generator that predates v14 keeps its v13 column, and the
+// dataset holds both. A round without bench_version (an older Platform) or at
+// v13 sends the original request, so no column reports a grading version.
+func TestProcessRoundGeneratesAtTheRoundBenchVersion(t *testing.T) {
+	legacy := generatorArchive(t, false)
+	aware := versionAwareArchive(t)
+	seed := challenge.SeedFromInt64(78)
+	for _, tc := range []struct {
+		bench int
+		want  map[string]int
+	}{
+		{0, map[string]int{"c0": 0, "c1": 0}},
+		{13, map[string]int{"c0": 0, "c1": 0}},
+		{14, map[string]int{"c0": 13, "c1": 14}},
+	} {
+		fp := newFakeRoundPlatform(t, &roundWork{
+			Kind: "generate", LeaseID: "lease-v", RoundIndex: 13, Seed: seed, CasesPerColumn: 16,
+			BenchVersion: tc.bench,
+			Columns:      []roundSourceCol{sourceCol("c0", legacy), sourceCol("c1", aware)},
+		})
+		if processed, err := processRound(context.Background(), fp.client(), genrun.Local{}); err != nil || !processed {
+			t.Fatalf("bench %d: processed=%v err=%v", tc.bench, processed, err)
+		}
+		got := fp.generated[0]
+		for _, col := range got.Columns {
+			if !col.OK || col.Seed.GradingBenchVersion != tc.want[col.ColumnID] || col.Seed.LegacyRetry != "" {
+				t.Fatalf("bench %d column %s: %+v", tc.bench, col.ColumnID, col.Seed)
+			}
+		}
+		raw, _ := base64.StdEncoding.DecodeString(got.DatasetBase64)
+		_, cols, err := challenge.DecodeRoundDataset(raw, got.DatasetSHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		round := tc.bench
+		if round == 0 {
+			round = 13
+		}
+		if err := challenge.CheckRoundGradingVersions(cols, round); err != nil {
+			t.Fatalf("bench %d: %v", tc.bench, err)
+		}
+	}
+}

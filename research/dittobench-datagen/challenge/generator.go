@@ -42,11 +42,21 @@ type GenerateRequest struct {
 	MinerHotkey string `json:"miner_hotkey"`
 	// Cases is the exact number of cases the pack must contain.
 	Cases int `json:"cases"`
-	// GradingBenchVersion is the grading policy cases are judged under.
+	// GradingBenchVersion is the baseline grading policy: the version a
+	// generator that knows only one policy emits (GradingBenchVersion, 13).
 	GradingBenchVersion int `json:"grading_bench_version"`
+	// GradingBenchVersions, when present, lists every grading policy the
+	// scorer accepts for this request, ascending, starting at
+	// GradingBenchVersion. A version-aware generator declares the newest one
+	// it supports in the pack's grading_bench_version (NewestAccepted). It is
+	// absent when only the baseline is accepted (every v13 round), so a v13
+	// request is byte-identical to the original contract, and a generator
+	// built before the field existed ignores it and emits the baseline.
+	GradingBenchVersions []int `json:"grading_bench_versions,omitempty"`
 }
 
-// NewGenerateRequest builds a v1 request.
+// NewGenerateRequest builds a v1 request that accepts only the baseline
+// grading policy: exactly the original v13 request.
 func NewGenerateRequest(seed, minerHotkey string, cases int) GenerateRequest {
 	return GenerateRequest{
 		Contract:            GeneratorContractV1,
@@ -55,6 +65,55 @@ func NewGenerateRequest(seed, minerHotkey string, cases int) GenerateRequest {
 		Cases:               cases,
 		GradingBenchVersion: GradingBenchVersion,
 	}
+}
+
+// NewGenerateRequestFor builds the request for a round (or a qualification)
+// frozen at roundBenchVersion: it accepts every supported grading policy at or
+// below that version. Zero, or a version that accepts only the baseline,
+// yields NewGenerateRequest exactly.
+func NewGenerateRequestFor(seed, minerHotkey string, cases, roundBenchVersion int) GenerateRequest {
+	req := NewGenerateRequest(seed, minerHotkey, cases)
+	if accepted := GradingBenchVersionsThrough(roundBenchVersion); len(accepted) > 1 {
+		req.GradingBenchVersions = accepted
+	}
+	return req
+}
+
+// Accepted returns the grading policies this request accepts, ascending.
+func (r GenerateRequest) Accepted() []int {
+	if len(r.GradingBenchVersions) == 0 {
+		return []int{r.GradingBenchVersion}
+	}
+	return append([]int(nil), r.GradingBenchVersions...)
+}
+
+// Accepts reports whether a pack graded at v satisfies this request.
+func (r GenerateRequest) Accepts(v int) bool {
+	for _, a := range r.Accepted() {
+		if a == v {
+			return true
+		}
+	}
+	return false
+}
+
+// NewestAccepted returns the newest grading policy the request accepts that
+// the generator also supports (supported lists the policies its families are
+// written for; nil means every policy this package supports). It falls back
+// to the baseline, which every request accepts.
+func (r GenerateRequest) NewestAccepted(supported []int) int {
+	if supported == nil {
+		supported = supportedGradingBenchVersions
+	}
+	best := r.GradingBenchVersion
+	for _, a := range r.Accepted() {
+		for _, s := range supported {
+			if a == s && a > best {
+				best = a
+			}
+		}
+	}
+	return best
 }
 
 // Validate rejects a malformed request.
@@ -70,6 +129,19 @@ func (r GenerateRequest) Validate() error {
 		return fmt.Errorf("request cases must be in %d..%d", MinCases, MaxCases)
 	case r.GradingBenchVersion != GradingBenchVersion:
 		return fmt.Errorf("request grading_bench_version must be %d", GradingBenchVersion)
+	}
+	if len(r.GradingBenchVersions) > 0 {
+		if r.GradingBenchVersions[0] != r.GradingBenchVersion {
+			return errors.New("request grading_bench_versions must start at grading_bench_version")
+		}
+		for i, v := range r.GradingBenchVersions {
+			if !SupportsGradingBenchVersion(v) {
+				return fmt.Errorf("request grading_bench_versions must be drawn from %v", supportedGradingBenchVersions)
+			}
+			if i > 0 && v <= r.GradingBenchVersions[i-1] {
+				return errors.New("request grading_bench_versions must be strictly ascending")
+			}
+		}
 	}
 	return nil
 }
@@ -127,6 +199,9 @@ func ValidateGenerated(raw []byte, req GenerateRequest) Report {
 	}
 	if p.MinerHotkey != req.MinerHotkey {
 		extra = append(extra, Issue{Rule: "binding.miner_hotkey", Message: "miner_hotkey must equal the request miner_hotkey"})
+	}
+	if !req.Accepts(p.GradingBenchVersion) {
+		extra = append(extra, Issue{Rule: "binding.grading_bench_version", Message: fmt.Sprintf("grading_bench_version %d is not one the request accepts %v", p.GradingBenchVersion, req.Accepted())})
 	}
 	if len(p.Cases) != req.Cases {
 		extra = append(extra, Issue{Rule: "binding.cases", Message: fmt.Sprintf("pack must have exactly %d cases (the request), got %d", req.Cases, len(p.Cases))})

@@ -126,6 +126,56 @@ after payment, it prints `--payment-block-*` flags. Rerun with them within 24
 hours to reuse the payment without paying again. See "Upload fee" in
 [generator-competition.md](../../research/dittobench-datagen/docs/generator-competition.md).
 
+## Grading policies (v13 and v14)
+
+Every pack declares the memory grading policy its cases are graded under in
+`grading_bench_version`. A v13 round's request accepts only 13 and is
+byte-identical to the original contract. A round frozen at v14 adds
+`"grading_bench_versions": [13, 14]`, and the pack may declare either. Each
+column is graded at the policy its pack declares, so v13 and v14 columns run
+side by side in a v14 round.
+
+The v14 policy reads the agent's reply as rendered text: markdown emphasis,
+code, links, headings, bullets and table pipes are stripped before matching,
+numbers end at sentence punctuation ("4471," names 4471), and "15%" reads as
+"15 percent" for percentage quantities. A v14 pack must also pass the v14
+answer-text rule (`v14_rendered_text`): state every answer, alternative,
+distractor and dump-guard entry as plain text, never as `**bold**`,
+`` `code` `` or a link.
+
+Kit version 4 declares the newest policy the request accepts
+(`req.NewestAccepted(GradingBenchVersions)`). Asked for v13 it emits exactly the
+version 3 pack apart from the version string. Rehearse a v14 round with
+`-round-bench 14`:
+
+```bash
+go run ./cmd/challenge rehearse -dir ../../miners/dittobench-generator-starter-kit \
+  -hotkey "$MY_HOTKEY" -seeds 3 -cases 80 -round-bench 14
+```
+
+### Migrating a fork to v14
+
+You do not have to migrate. A generator built before v14 ignores the new
+request field, emits v13, and keeps its columns in v14 rounds, graded at v13.
+If its decoder rejects unknown fields, or its v14 path fails, the scorer
+retries that seed once on the original v13 request (recorded as
+`legacy_retry`) instead of rejecting the generator. To declare v14:
+
+1. Pull this repository and rebuild against the current
+   `research/dittobench-datagen` (the upload vendors it), so your copy of the
+   `challenge` package knows the v14 policy and rule.
+2. Set the pack's `grading_bench_version` to
+   `req.NewestAccepted(yourSupportedPolicies)` after building it, as `main.go`
+   does. Keep calling `req.Validate()`.
+3. Self-check with `challenge.ValidateGenerated(raw, req)` (already in
+   `run`), then rehearse with `-round-bench 13` and `-round-bench 14`. Both
+   must pass, and the v13 output should not change.
+4. If you grade your own cases locally, use `Pack.GradingCase(i)` (or
+   `Case.GradingCaseAt(pack.GradingBenchVersion)`); `Case.GradingCase()` is
+   always the v13 baseline.
+5. Re-upload. Declaring v14 is worth it only where the v14 policy changes
+   what your cases measure; it never earns credit by itself.
+
 ## Rehearse against agents locally
 
 Run three or more agent harnesses, for example the

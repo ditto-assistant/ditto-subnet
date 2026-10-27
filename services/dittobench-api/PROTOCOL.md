@@ -190,6 +190,17 @@ to a validator whose value covers the round's largest column. A scorer without
 the feature is treated as running 32-case columns, the bound earlier
 validators enforce on a round job.
 
+The mode also advertises `generator-round-bench-<n>` for every bench version
+it runs a round at: the pack grading policies
+`challenge.SupportedGradingBenchVersions` (13 and 14). A round request's
+`bench_version` must be one of them. The harness is seeded and run at that
+version, and each case is graded at the `grading_bench_version` its pack
+declares, which must be at or below the round's version
+(`challenge.CheckRoundGradingVersions`; a dataset with any other column fails
+the run). The validator forwards the set as
+`scorer_benchmarks.generator_round_bench_versions`; a scorer without the
+features is treated as running only v13 rounds.
+
 ### Private V13 control-plane transport (default off)
 
 `DITTOBENCH_ALLOW_PRIVATE_DATASETS=1` enables the `platform-private-v1`

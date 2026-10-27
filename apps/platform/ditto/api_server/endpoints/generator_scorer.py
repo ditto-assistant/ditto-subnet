@@ -60,6 +60,7 @@ from ditto.api_server.generator_competition import (
 from ditto.api_server.generator_rounds import (
     RoundResultRejected,
     lease_round_work,
+    qualification_bench_version,
     record_generation,
     record_round_fault,
     record_round_score,
@@ -180,6 +181,7 @@ async def lease_work(
         probe_seed=lease.probe_seed,
         cases_per_seed=run.cases_per_seed,
         lease_expires_at=row.lease_expires_at,  # type: ignore[arg-type]
+        bench_version=await qualification_bench_version(session),
     )
     await session.commit()
     logger.info(

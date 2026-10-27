@@ -201,15 +201,15 @@ async def test_a_round_runs_at_the_bench_version_platform_froze(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The job carries the round's frozen contract; the worker runs at it
-    instead of a hard-wired v13."""
+    instead of a hard-wired v13, once its scorer's round mode runs v14."""
     import ditto.validator.worker as worker_mod
 
-    monkeypatch.setattr(worker_mod, "GENERATOR_ROUND_BENCH_VERSIONS", (13, 14))
     monkeypatch.setattr(worker_mod, "SUPPORTED_BENCH_VERSIONS", frozenset({13, 14}))
     job = _job(bench_version=14)
     dittobench = MagicMock()
     dittobench.run_generator_round = AsyncMock(return_value=("run-1", []))
     worker, platform = _worker(job, dittobench)
+    worker._scorer_round_bench_versions = (13, 14)
 
     assert await worker._run_generator_round_lane() is True
 
@@ -218,19 +218,29 @@ async def test_a_round_runs_at_the_bench_version_platform_froze(
 
 
 @pytest.mark.parametrize(
-    "bench_version",
+    ("bench_version", "scorer_round_versions"),
     [
-        12,  # older than every round contract
-        14,  # no round contract today (packs grade at v13)
+        (12, (13, 14)),  # older than every round contract
+        (15, (13, 14)),  # no pack grading policy at v15
+        # A scorer whose round mode advertises no versions runs only v13.
+        (14, (13,)),
     ],
 )
 async def test_a_round_job_outside_the_round_contracts_is_refused(
     bench_version: int,
+    scorer_round_versions: tuple[int, ...],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import ditto.validator.worker as worker_mod
+
+    monkeypatch.setattr(
+        worker_mod, "SUPPORTED_BENCH_VERSIONS", frozenset({12, 13, 14, 15})
+    )
     job = _job(bench_version=bench_version)
     dittobench = MagicMock()
     dittobench.run_generator_round = AsyncMock()
     worker, platform = _worker(job, dittobench)
+    worker._scorer_round_bench_versions = scorer_round_versions
 
     assert await worker._run_generator_round_lane() is True
 

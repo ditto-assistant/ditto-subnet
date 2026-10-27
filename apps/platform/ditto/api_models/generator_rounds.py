@@ -498,6 +498,9 @@ class GeneratorRoundWork(RoundModel):
     seed: str | None = None
     cases_per_column: int | None = None
     columns: list[RoundSourceColumn] | None = None
+    # The round's frozen bench contract: each column's request accepts every
+    # pack grading policy through it.
+    bench_version: int | None = None
     params: dict | None = None
     matrix: RoundMatrix | None = None
 

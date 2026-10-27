@@ -65,7 +65,7 @@ import (
 
 // ScorerVersion is reported with every result so Platform can audit which
 // executor produced it.
-const ScorerVersion = "challenge-scorer/4"
+const ScorerVersion = "challenge-scorer/5"
 
 var releaseRevision = "development"
 
@@ -376,6 +376,10 @@ type workItem struct {
 	Seeds        []string `json:"seeds"`
 	ProbeSeed    string   `json:"probe_seed"`
 	CasesPerSeed int      `json:"cases_per_seed"`
+	// BenchVersion is the generator-round contract new rounds open at; the
+	// requests accept every pack grading policy through it. Absent (a
+	// Platform that predates it) or 13 sends the original v13 request.
+	BenchVersion int `json:"bench_version,omitempty"`
 }
 
 type panelSlot struct {
@@ -584,11 +588,12 @@ func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox) 
 		return true, fmt.Errorf("run %s: served source hashes to %s, lease pins %s", item.RunID, got, item.SourceSHA256)
 	}
 	plan := genrun.Plan{
-		MinerHotkey:      item.MinerHotkey,
-		Seeds:            item.Seeds,
-		ProbeSeed:        item.ProbeSeed,
-		Cases:            item.CasesPerSeed,
-		CheckDeterminism: true,
+		MinerHotkey:       item.MinerHotkey,
+		Seeds:             item.Seeds,
+		ProbeSeed:         item.ProbeSeed,
+		Cases:             item.CasesPerSeed,
+		CheckDeterminism:  true,
+		RoundBenchVersion: item.BenchVersion,
 	}
 	ev, err := evaluateArchive(ctx, sb, raw, plan)
 	if err != nil {

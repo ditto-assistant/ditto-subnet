@@ -31,6 +31,8 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgressStage,
 )
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_FEATURE_PREFIX,
+    GENERATOR_ROUND_BENCH_VERSIONS,
     GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX,
     MAX_ROUND_COLUMN_CASES,
 )
@@ -104,6 +106,39 @@ def scorer_generator_round_max_cases(features: object) -> int | None:
     if not sizes:
         return None
     return min(max(sizes), MAX_ROUND_COLUMN_CASES)
+
+
+_ROUND_BENCH_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_BENCH_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_bench_versions(
+    features: object, observed_versions: tuple[int, ...]
+) -> tuple[int, ...] | None:
+    """The round bench versions both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-bench-<n>`` for each version its
+    ``generator-round-v1`` mode runs; this validator runs only its own round
+    contracts (``GENERATOR_ROUND_BENCH_VERSIONS``) that the scorer is also
+    verified for. ``None`` when the scorer advertises no version, which
+    Platform reads as the original v13-only round mode.
+    """
+    if not isinstance(features, list):
+        return None
+    advertised = {
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_BENCH_FEATURE.fullmatch(feature))
+    }
+    if not advertised:
+        return None
+    return tuple(
+        sorted(
+            advertised & set(GENERATOR_ROUND_BENCH_VERSIONS) & set(observed_versions)
+        )
+    )
 
 
 # Terminal job states reported by dittobench-api's store.
@@ -1229,6 +1264,13 @@ class DittobenchClient:
                 generator_rounds=generator_rounds,
                 generator_round_max_cases=(
                     scorer_generator_round_max_cases(payload.get("features"))
+                    if generator_rounds
+                    else None
+                ),
+                generator_round_bench_versions=(
+                    scorer_generator_round_bench_versions(
+                        payload.get("features"), observed_versions
+                    )
                     if generator_rounds
                     else None
                 ),

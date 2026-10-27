@@ -479,3 +479,26 @@ func RoundCaseRefs(columnID string, p Pack) []CaseRef {
 	}
 	return refs
 }
+
+// CheckRoundGradingVersions returns an error naming the first column whose
+// pack declares a grading policy a round frozen at roundBenchVersion does not
+// accept (GradingBenchVersionsThrough). The scorer that generated the round
+// requested only accepted policies, so a mismatch is an inconsistency, never a
+// column's choice.
+func CheckRoundGradingVersions(columns []RoundColumnPack, roundBenchVersion int) error {
+	accepted := GradingBenchVersionsThrough(roundBenchVersion)
+	for _, col := range columns {
+		ok := false
+		for _, v := range accepted {
+			if col.Pack.GradingBenchVersion == v {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return fmt.Errorf("round dataset: column %s pack grades at v%d, which a v%d round does not accept %v",
+				col.ColumnID, col.Pack.GradingBenchVersion, roundBenchVersion, accepted)
+		}
+	}
+	return nil
+}

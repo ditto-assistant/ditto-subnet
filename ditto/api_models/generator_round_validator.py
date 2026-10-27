@@ -54,13 +54,18 @@ GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX = "generator-round-max-cases-"
 # Bench versions a generator round can run at. A round freezes one of these
 # when it opens (the active version when it is listed, else the newest listed
 # version below it) and keeps it until it is scored. The set is the pack
-# contract's grading policy, not the agent benchmark: every v1 pack case is
-# graded at ``challenge.GradingBenchVersion`` (13), the generator scorer
-# validates packs at that version, and dittobench-api's ``generator-round-v1``
-# mode refuses any other ``bench_version``. A newer version joins this tuple
-# only together with a pack contract and scorer round mode that grade at it
-# (``ditto/tests/test_bench_version_pins.py`` diffs the Go pins).
-GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13,)
+# contract's grading policies (``challenge.SupportedGradingBenchVersions``): a
+# round at version N accepts packs graded at any listed version <= N, each
+# column at the policy its pack declares, so a generator that predates v14
+# keeps its v13 column in a v14 round. dittobench-api's ``generator-round-v1``
+# mode runs a round at every listed version and advertises each as
+# ``generator-round-bench-<n>``. ``ditto/tests/test_bench_version_pins.py``
+# diffs this tuple against the Go pack contract.
+GENERATOR_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13, 14)
+# The scorer feature naming one round bench version, and the versions a scorer
+# that advertises none runs (the original v13-only round mode).
+GENERATOR_ROUND_BENCH_FEATURE_PREFIX = "generator-round-bench-"
+LEGACY_SCORER_ROUND_BENCH_VERSIONS: tuple[int, ...] = (13,)
 # The version every round opened before rounds recorded one ran at.
 LEGACY_ROUND_BENCH_VERSION = 13
 

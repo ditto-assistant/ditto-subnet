@@ -6,9 +6,9 @@ the newest round contract below it otherwise, and is void when no validator
 can run any. The version is frozen on the round row: an activation mid-round
 never moves its tickets, jobs or capability routing.
 
-Today the only round contract is v13 (round packs grade at
-``challenge.GradingBenchVersion``), so the tests that exercise a v14 round
-widen the tuple to ``(13, 14)`` the way a future pack contract would.
+The round contracts are the pack grading policies v13 and v14
+(``challenge.SupportedGradingBenchVersions``): a v14 round accepts v13 and v14
+packs, each column graded at the policy its pack declares.
 """
 
 from __future__ import annotations
@@ -37,6 +37,7 @@ from ditto.api_server.generator_rounds import (
     round_bench_version,
     round_capable_validators,
     round_column_capacity,
+    round_contract_for,
 )
 from ditto.db.models import GeneratorRound, ValidatorTicket
 from ditto.tests.api_server.endpoints.test_generator_rounds import (
@@ -45,6 +46,7 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _advance,
     _apply_settings,
     _generate_round,
+    _generation,
     _install,
     _lease_job,
     _patch_lane,
@@ -145,7 +147,6 @@ class TestRoundBenchContract:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(rounds_mod, "GENERATOR_ROUND_BENCH_VERSIONS", (13, 14))
         _install(app, session_maker)
         fleet = _Fleet(monkeypatch, active=13)
         fleet.install_lane(monkeypatch)
@@ -194,7 +195,6 @@ class TestRoundBenchContract:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(rounds_mod, "GENERATOR_ROUND_BENCH_VERSIONS", (13, 14))
         _install(app, session_maker)
         fleet = _Fleet(monkeypatch, active=14)
         fleet.install_lane(monkeypatch)
@@ -251,7 +251,6 @@ class TestRoundBenchContract:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(rounds_mod, "GENERATOR_ROUND_BENCH_VERSIONS", (13, 14))
         _install(app, session_maker)
         fleet = _Fleet(monkeypatch, active=14)
         fleet.install_lane(monkeypatch)
@@ -267,24 +266,90 @@ class TestRoundBenchContract:
         job = await _lease_job(client)
         assert job is not None and job["bench_version"] == 14
 
-    async def test_active_v14_without_a_round_contract_falls_back_to_v13(
+    async def test_active_version_without_a_round_contract_falls_back(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """Today's tuple: v14 has no round contract, so rounds stay on v13 and
-        say why."""
-        assert GENERATOR_ROUND_BENCH_VERSIONS == (13,)
+        """A version with no pack grading policy (v15 today) keeps rounds on
+        the newest round contract below it, and the round says why."""
+        assert GENERATOR_ROUND_BENCH_VERSIONS == (13, 14)
+        _install(app, session_maker)
+        _Fleet(monkeypatch, active=15)
+        await _open_round(client, session_maker, monkeypatch)
+        row = await _round(session_maker)
+        assert row.status == "generating" and row.bench_version == 14
+        contract = (row.generation or {})["bench_contract"]
+        assert contract["active_version"] == 15 and contract["bench_version"] == 14
+        assert "v15 has no generator-round contract" in contract["reason"]
+
+    async def test_v14_round_generation_names_and_records_the_pack_policy(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The generate work names the round's version; each column records
+        the policy its pack declared, and a v13 column (a generator that
+        predates v14, here after the baseline retry) keeps its place."""
         _install(app, session_maker)
         _Fleet(monkeypatch, active=14)
         await _open_round(client, session_maker, monkeypatch)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["kind"] == "generate" and work["bench_version"] == 14
+        generated = _generation(work)
+        policies = [14, 13]
+        for column, policy in zip(generated["columns"], policies, strict=False):
+            column["seed"]["grading_bench_version"] = policy
+        assert len(generated["columns"]) >= 2, "need a v14 and a v13 column"
+        generated["columns"][1]["seed"]["legacy_retry"] = "retried on v13"
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code == 200 and resp.json()["status"] == "running", resp.text
         row = await _round(session_maker)
-        assert row.status == "generating" and row.bench_version == 13
-        contract = (row.generation or {})["bench_contract"]
-        assert contract["active_version"] == 14 and contract["bench_version"] == 13
-        assert "v14 has no generator-round contract" in contract["reason"]
+        summary = (row.generation or {})["columns"]
+        assert summary[0]["grading_bench_version"] == 14
+        assert summary[1]["grading_bench_version"] == 13
+        assert summary[1]["legacy_retry"] == "retried on v13"
+
+    async def test_v13_round_refuses_a_v14_pack(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        _Fleet(monkeypatch, active=13)
+        await _open_round(client, session_maker, monkeypatch)
+        work = (
+            await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
+        ).json()["work"]
+        assert work["bench_version"] == 13
+        generated = _generation(work)
+        generated["columns"][0]["seed"]["grading_bench_version"] = 14
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code != 200
+        assert "does not accept" in resp.text
+        # The original v13 shape records no policy.
+        generated["columns"][0]["seed"].pop("grading_bench_version")
+        resp = await client.post(
+            "/api/v1/generator-scorer/round-results", headers=_SCORER, json=generated
+        )
+        assert resp.status_code == 200, resp.text
+        row = await _round(session_maker)
+        assert all(
+            "grading_bench_version" not in column
+            for column in (row.generation or {})["columns"]
+        )
 
     async def test_falls_back_when_no_validator_runs_the_active_contract(
         self,
@@ -293,7 +358,6 @@ class TestRoundBenchContract:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(rounds_mod, "GENERATOR_ROUND_BENCH_VERSIONS", (13, 14))
         _install(app, session_maker)
         fleet = _Fleet(monkeypatch, active=14)
         fleet.capable = {13}
@@ -367,6 +431,34 @@ def test_round_capacity_is_gated_on_the_round_version() -> None:
     v13_only = _round_heartbeat("5" + "C" * 47, now, [7, 13])
     assert round_column_capacity(v13_only, now=now, bench_version=13) == 80
     assert round_column_capacity(v13_only, now=now, bench_version=14) is None
+
+
+def test_round_capacity_requires_the_scorer_round_mode_for_the_version() -> None:
+    """A scorer verified for v14 runs a v14 round only when its round mode
+    advertises v14; one advertising no round versions runs only v13 rounds."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    legacy_mode = _round_heartbeat("5" + "E" * 47, now, [7, 13, 14])
+    assert round_column_capacity(legacy_mode, now=now, bench_version=14) is None
+    assert round_column_capacity(legacy_mode, now=now, bench_version=13) == 80
+    v14_mode = _round_heartbeat("5" + "E" * 47, now, [7, 13, 14])
+    assert v14_mode.capabilities is not None
+    v14_mode.capabilities["scorer_benchmarks"]["generator_round_bench_versions"] = [
+        13,
+        14,
+    ]
+    assert round_column_capacity(v14_mode, now=now, bench_version=13) == 80
+    assert round_column_capacity(v14_mode, now=now, bench_version=14) == 80
+    v13_mode = _round_heartbeat("5" + "E" * 47, now, [7, 13, 14])
+    assert v13_mode.capabilities is not None
+    v13_mode.capabilities["scorer_benchmarks"]["generator_round_bench_versions"] = [13]
+    assert round_column_capacity(v13_mode, now=now, bench_version=14) is None
+
+
+@pytest.mark.parametrize(
+    ("active", "contract"), [(9, 13), (13, 13), (14, 14), (15, 14)]
+)
+def test_round_contract_for_the_active_version(active: int, contract: int) -> None:
+    assert round_contract_for(active) == contract
 
 
 async def test_capable_validators_count_by_version_and_v13_pin(

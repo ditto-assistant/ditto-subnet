@@ -115,6 +115,7 @@ func runRehearse(args []string) error {
 	sandbox := fs.String("sandbox", "local", "local (host toolchain, no isolation) or docker (the scorer's sandbox)")
 	outDir := fs.String("out-dir", "", "write each seed's pack here as <seed>.json")
 	asJSON := fs.Bool("json", false, "print the evaluation as JSON")
+	roundBench := fs.Int("round-bench", challenge.GradingBenchVersion, "bench version of the round to rehearse: requests accept every grading policy through it (13 sends the original v13 request; 14 also accepts v14 packs)")
 	_ = fs.Parse(args)
 	if (*dir == "") == (*archive == "") || *hotkey == "" || *seeds < 1 || *seeds > 8 {
 		return errors.New("rehearse: exactly one of -dir/-archive, -hotkey, and -seeds 1..8 are required")
@@ -152,7 +153,7 @@ func runRehearse(args []string) error {
 	if *firstSeed < 0 || *firstSeed > math.MaxInt64-int64(*seeds-1) {
 		return fmt.Errorf("rehearse: -seed must be in 0..%d for %d seeds", math.MaxInt64-int64(*seeds-1), *seeds)
 	}
-	plan := genrun.Plan{MinerHotkey: *hotkey, Cases: *cases, CheckDeterminism: true}
+	plan := genrun.Plan{MinerHotkey: *hotkey, Cases: *cases, CheckDeterminism: true, RoundBenchVersion: *roundBench}
 	for i := 0; i < *seeds; i++ {
 		plan.Seeds = append(plan.Seeds, challenge.SeedFromInt64(*firstSeed+int64(i)))
 	}
@@ -186,6 +187,19 @@ func runRehearse(args []string) error {
 	return nil
 }
 
+// gradingNote names the policy a pack declared when the request offered more
+// than the baseline, and any fallback to the baseline request.
+func gradingNote(s genrun.SeedOutput) string {
+	if s.GradingBenchVersion == 0 {
+		return ""
+	}
+	note := fmt.Sprintf(", graded at v%d", s.GradingBenchVersion)
+	if s.LegacyRetry != "" {
+		note += " (" + s.LegacyRetry + ")"
+	}
+	return note
+}
+
 func printEvaluation(ev genrun.Evaluation) {
 	if !ev.Build.OK {
 		fmt.Printf("build failed (%s sandbox, %dms):\n%s\n", ev.Sandbox, ev.Build.DurationMS, ev.Build.Error)
@@ -197,7 +211,7 @@ func printEvaluation(ev genrun.Evaluation) {
 		case s.Error != "":
 			fmt.Printf("seed %s…: %s\n", s.Seed[:12], s.Error)
 		case s.Report.Valid:
-			fmt.Printf("seed %s…: valid, %d cases, %d pairs, %dms\n", s.Seed[:12], s.Report.CaseCount, s.Report.PairCount, s.DurationMS)
+			fmt.Printf("seed %s…: valid, %d cases, %d pairs, %dms%s\n", s.Seed[:12], s.Report.CaseCount, s.Report.PairCount, s.DurationMS, gradingNote(s))
 		default:
 			fmt.Printf("seed %s…: invalid, %d issue(s)\n", s.Seed[:12], len(s.Report.Issues))
 			for _, is := range s.Report.Issues {
@@ -263,6 +277,7 @@ func runValidate(args []string) error {
 	seed := fs.String("seed", "", "also check the pack is bound to this request seed")
 	hotkey := fs.String("hotkey", "", "request hotkey for the binding check")
 	cases := fs.Int("cases", 0, "request case count for the binding check")
+	roundBench := fs.Int("round-bench", challenge.GradingBenchVersion, "bench version of the round for the binding check: the grading policies the request accepts")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
 		return errors.New("validate: expected one pack path")
@@ -276,7 +291,7 @@ func runValidate(args []string) error {
 		if err != nil {
 			return err
 		}
-		report = challenge.ValidateGenerated(raw, challenge.NewGenerateRequest(*seed, *hotkey, *cases))
+		report = challenge.ValidateGenerated(raw, challenge.NewGenerateRequestFor(*seed, *hotkey, *cases, *roundBench))
 	}
 	if *asJSON {
 		if err := writeJSON("", report); err != nil {

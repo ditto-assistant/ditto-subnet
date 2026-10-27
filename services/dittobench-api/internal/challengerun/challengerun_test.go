@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
+	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -302,5 +303,39 @@ func TestGradingUsesObservedCalls(t *testing.T) {
 		if asked[r.CaseID] != 1 {
 			t.Fatalf("case %s observed %d times; must be read once under its wire ID", r.CaseID, asked[r.CaseID])
 		}
+	}
+}
+
+// A pack is graded at the policy it declares, and the harness runs at the
+// round's bench version. The reply below ends in a non-breaking hyphen, which
+// the v14 typographic fold reads differently from v13, so the two policies
+// disagree on it.
+func TestExecuteGradesAtThePackPolicy(t *testing.T) {
+	reply := func(c challenge.Case) string { return gold(c) + "‑" }
+	differs := false
+	for _, version := range []int{13, 14} {
+		p := challenge.ReferencePack(4, testHotkey)
+		p.GradingBenchVersion = version
+		h := &fakeHarness{answer: answersByQuestion(p, reply)}
+		srv := httptest.NewServer(h)
+		out, err := Execute(context.Background(), srv.URL, p, Options{Nonce: []byte("pinned"), BenchVersion: 14})
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, o := range out {
+			resp := protocol.RunResponse{Answer: reply(p.Cases[i]), FinalText: reply(p.Cases[i])}
+			want := scorer.GradeMemory(p.Cases[i].GradingCaseAt(version), resp).Score
+			if o.Score != want {
+				t.Fatalf("v%d case %s: score %v, want the v%d grade %v", version, o.CaseID, o.Score, version, want)
+			}
+			other := 27 - version
+			if scorer.GradeMemory(p.Cases[i].GradingCaseAt(other), resp).Score != want {
+				differs = true
+			}
+		}
+	}
+	if !differs {
+		t.Fatal("the probe reply no longer separates the v13 and v14 policies; pick another")
 	}
 }

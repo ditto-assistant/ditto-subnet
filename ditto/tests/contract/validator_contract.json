@@ -7859,6 +7859,21 @@
             "default": false,
             "type": "boolean"
           },
+          "generator_round_bench_versions": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "generator_round_max_cases": {
             "anyOf": [
               {

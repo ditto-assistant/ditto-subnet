@@ -568,26 +568,29 @@ Open, and requiring an operator, release-owner or paid run:
 6. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
    recorded separately.
-7. **Generator-competition rounds stay on v13 at activation (explicit
-   fallback).** Rounds now freeze a bench version when they open and follow
-   the active version where a round contract exists. The Platform lane,
-   tickets, capability routing, V13 pin and the validator all run at the
-   round's frozen version, and in-flight rounds never change contract.
-   - What migrates automatically: nothing at v14 activation itself. A round
-     opened after activation records `bench_contract` ("active bench v14 has
-     no generator-round contract") and runs at v13. It is leased only to
-     validators verified for v13 that sign the V13 cohort authority packet.
-   - Still pinned to v13, and why: `GENERATOR_ROUND_BENCH_VERSIONS` is `(13,)`.
-     Round packs grade at `challenge.GradingBenchVersion = 13` (pack contract
-     v1, which miners' generators emit). dittobench-api's `generator-round-v1`
-     mode accepts only `bench_version` 13.
-   - Remaining step: ship a v14 pack contract and a scorer round mode that
-     accepts v14 and advertises it as a scorer feature. Then add 14 to the
-     tuple. The pin test in `ditto/tests/test_bench_version_pins.py` keeps
-     these in step.
-   - Until then, rounds depend on a staffed v13 cohort after v14 activates. A
-     round with no validator able to run v13 is void at opening with the
-     reason.
+7. **Generator-competition rounds follow activation (resolved in code).**
+   Rounds freeze a bench version when they open and follow the active version
+   where a round contract exists. The v14 pack contract adds v14 to the round
+   contracts (`GENERATOR_ROUND_BENCH_VERSIONS = (13, 14)`).
+   - What migrates automatically: a round opened after v14 activates runs at
+     v14 once a validator's scorer is verified for v14 and advertises
+     `generator-round-bench-14`. Until then it falls back to v13 with the
+     reason in `generation.bench_contract`, as before.
+   - Mixed generators: a v14 round offers v13 and v14 packs
+     (`grading_bench_versions: [13, 14]`). A generator built before v14 keeps
+     a v13 column, graded byte-identically; a v14-aware generator (starter kit
+     version 4) declares v14. A column whose v14-offering request fails is
+     retried once on the original v13 request. No generator is excluded by the
+     upgrade.
+   - Remaining before activation, operational only: release the scorer and
+     validator carrying the change, confirm v14-verified validators report
+     `generator_round_bench_versions` including 14, re-register the public
+     default generator from starter kit version 4, and announce the v14 pack
+     policy to generator miners (see the starter kit migration note). No live
+     setting changes.
+   - Rollback: deactivating v14 sends new rounds back to v13 at the next
+     opening; a round already frozen at v14 finishes at v14.
+
 8. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
    now reads `active_version` from the public rollout endpoint, so the
    default follows activation without a code change. The activation PR still

@@ -694,6 +694,27 @@ class TestScorer:
             await client.get("/api/v1/generator-scorer/work", headers=_SCORER)
         ).status_code == 503
 
+    async def test_qualification_follows_the_round_contract(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After v14 activates, a qualification run accepts v14 packs, so a
+        generator qualifies on the policy it will emit in rounds."""
+        import ditto.api_server.generator_rounds as rounds_mod
+
+        async def _active(_session: AsyncSession, **_: Any) -> int:
+            return 14
+
+        monkeypatch.setattr(rounds_mod, "active_bench_version", _active)
+        _install(app, session_maker)
+        await _open_lane(client)
+        await _upload(client, _archive("gen14"))
+        work = await _lease(client)
+        assert work["bench_version"] == 14
+
     async def test_qualification_loop(
         self,
         app: FastAPI,
@@ -713,6 +734,8 @@ class TestScorer:
         assert all(len(seed) == 64 for seed in [*work["seeds"], work["probe_seed"]])
         assert work["probe_seed"] not in work["seeds"] and work["cases_per_seed"] == 8
         assert "panel" not in work
+        # Qualification requests the round contract rounds open at now.
+        assert work["bench_version"] == 13
         # A second scorer gets nothing while the lease is live.
         assert (await _lease(client)) is None
 

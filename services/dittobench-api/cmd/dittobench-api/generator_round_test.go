@@ -22,8 +22,15 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 	if validatePrivateDatasetRequest(valid, true, false) == nil {
 		t.Fatal("disabled round mode admitted")
 	}
+	// A round runs at every supported pack grading policy.
+	v14 := valid
+	v14.BenchVersion = 14
+	if err := validatePrivateDatasetRequest(v14, false, true); err != nil {
+		t.Fatalf("v14 round request refused: %v", err)
+	}
 	for _, edit := range []func(*submitRequest){
 		func(r *submitRequest) { r.BenchVersion = 12 },
+		func(r *submitRequest) { r.BenchVersion = 15 },
 		func(r *submitRequest) { r.PrivateDatasetBytes = nil },
 		func(r *submitRequest) { r.ExpectedDatasetSHA256 = "ABC" },
 		func(r *submitRequest) { r.PrivateDatasetBytes = make([]byte, challenge.MaxRoundDatasetBytes+1) },
@@ -42,6 +49,25 @@ func TestGeneratorRoundAdmission(t *testing.T) {
 func TestGeneratorRoundMaxCasesFeatureNamesThePackContractBound(t *testing.T) {
 	if got := generatorRoundMaxCasesFeature(); got != "generator-round-max-cases-80" || challenge.MaxCases != 80 {
 		t.Fatalf("feature %q for challenge.MaxCases %d", got, challenge.MaxCases)
+	}
+}
+
+// The validator parses these features into generator_round_bench_versions,
+// and Platform leases a round frozen at version n only to a scorer that
+// advertises n: the spelling is a cross-component contract.
+func TestGeneratorRoundBenchFeaturesNameEverySupportedPolicy(t *testing.T) {
+	got := generatorRoundBenchFeatures()
+	want := []string{"generator-round-bench-13", "generator-round-bench-14"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("features %v, want %v", got, want)
+	}
+	for _, v := range challenge.SupportedGradingBenchVersions() {
+		if !runsGeneratorRoundAt(v) {
+			t.Fatalf("v%d is a pack policy but not a round version", v)
+		}
+	}
+	if runsGeneratorRoundAt(12) || runsGeneratorRoundAt(15) {
+		t.Fatal("round versions outside the pack policies")
 	}
 }
 

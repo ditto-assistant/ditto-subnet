@@ -455,6 +455,11 @@ class GeneratorWorkItem(GeneratorModel):
     probe_seed: str
     cases_per_seed: int
     lease_expires_at: datetime
+    # The generator-round contract rounds open at now: the requests accept
+    # every pack grading policy through it, so a generator qualifies on the
+    # policy it will emit in rounds. A scorer that predates it ignores it and
+    # sends the original v13 request.
+    bench_version: int | None = None
 
 
 class GeneratorWorkResponse(GeneratorModel):
@@ -513,6 +518,12 @@ class GeneratorSeedOutput(GeneratorModel):
     validation: ValidationReport = Field(default_factory=ValidationReport)
     error: Annotated[str | None, Field(max_length=8192)] = None
     duration_ms: int = 0
+    # The pack grading policy the pack declares. Set only when the request
+    # accepted more than the baseline (v13); absent means v13.
+    grading_bench_version: int | None = None
+    # Why the newer-policy request failed when this output is the retry on the
+    # baseline request.
+    legacy_retry: Annotated[str | None, Field(max_length=2000)] = None
 
     @property
     def valid(self) -> bool:

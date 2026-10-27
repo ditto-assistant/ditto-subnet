@@ -42,6 +42,7 @@ from ditto.api_models.confirmation_progress import (
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
     GENERATOR_ROUND_BENCH_VERSIONS,
+    LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
     GeneratorRoundJobResponse,
 )
@@ -218,12 +219,19 @@ def _supports_bench_version(bench_version: int | None) -> bool:
     return bench_version in SUPPORTED_BENCH_VERSIONS
 
 
-def _runs_generator_round_version(bench_version: int | None) -> bool:
+def _runs_generator_round_version(
+    bench_version: int | None,
+    scorer_round_versions: tuple[int, ...] = LEGACY_SCORER_ROUND_BENCH_VERSIONS,
+) -> bool:
     """Whether a round job at ``bench_version`` is executable here: a round
-    contract (the pack grading policy) this validator also supports."""
+    contract (the pack grading policies) this validator supports and its
+    scorer's round mode runs (``generator-round-bench-<n>``; a scorer that
+    advertises none runs only v13 rounds)."""
 
-    return bench_version in GENERATOR_ROUND_BENCH_VERSIONS and (
-        _supports_bench_version(bench_version)
+    return (
+        bench_version in GENERATOR_ROUND_BENCH_VERSIONS
+        and bench_version in scorer_round_versions
+        and _supports_bench_version(bench_version)
     )
 
 
@@ -898,6 +906,7 @@ class ValidatorWorker:
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
         self._scorer_runs_generator_rounds = False
+        self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
         # Re-zeroed at the top of every sweep; seeded here so a hand-back from
         # outside a sweep (a drain, or a test driving the method directly)
         # cannot raise AttributeError on a pure telemetry counter.
@@ -1755,6 +1764,11 @@ class ValidatorWorker:
             self._scorer_runs_generator_rounds = bool(
                 scorer_benchmarks.status == "fresh_verified"
                 and scorer_benchmarks.generator_rounds
+            )
+            self._scorer_round_bench_versions = (
+                scorer_benchmarks.generator_round_bench_versions
+                if scorer_benchmarks.generator_round_bench_versions is not None
+                else LEGACY_SCORER_ROUND_BENCH_VERSIONS
             )
             capabilities = capabilities.model_copy(
                 update={
@@ -3405,7 +3419,9 @@ class ValidatorWorker:
             or job.slot_id not in self._healthy_slots
             or self._slots[job.slot_id].active_agent_id
             # The round's frozen contract, issued by Platform per round.
-            or not _runs_generator_round_version(job.bench_version)
+            or not _runs_generator_round_version(
+                job.bench_version, self._scorer_round_bench_versions
+            )
         ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"

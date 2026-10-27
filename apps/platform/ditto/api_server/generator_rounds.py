@@ -70,6 +70,7 @@ from ditto.api_models.generator_round_validator import (
     GENERATOR_ROUND_BENCH_VERSIONS,
     LEGACY_ROUND_BENCH_VERSION,
     LEGACY_ROUND_COLUMN_CASES,
+    LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
     GeneratorRoundCommitmentJobResponse,
     GeneratorRoundCommitmentReportRequest,
@@ -873,6 +874,15 @@ def round_column_capacity(
         and scorer.generator_rounds
     ):
         return None
+    # The scorer's round mode must run this version: a scorer that advertises
+    # no ``generator-round-bench-<n>`` runs only the original v13 rounds.
+    round_versions = (
+        scorer.generator_round_bench_versions
+        if scorer.generator_round_bench_versions is not None
+        else LEGACY_SCORER_ROUND_BENCH_VERSIONS
+    )
+    if bench_version not in round_versions:
+        return None
     return scorer.generator_round_max_cases or LEGACY_ROUND_COLUMN_CASES
 
 
@@ -900,6 +910,22 @@ async def round_capable_validators(
             continue
         count += 1
     return count
+
+
+def round_contract_for(active: int) -> int:
+    """The round contract a round would open at under active bench ``active``,
+    before validator capacity: the active version when it is a round contract,
+    else the newest one below it, else the oldest (the contract rounds have
+    always run at). Qualification runs request it, so a generator qualifies on
+    the pack grading policies rounds will accept from it."""
+    below = [version for version in GENERATOR_ROUND_BENCH_VERSIONS if version <= active]
+    return max(below) if below else min(GENERATOR_ROUND_BENCH_VERSIONS)
+
+
+async def qualification_bench_version(session: AsyncSession) -> int:
+    """The round contract a qualification run requests now
+    (:func:`round_contract_for` the active benchmark version)."""
+    return round_contract_for(await active_bench_version(session))
 
 
 @dataclass(frozen=True)
@@ -1177,6 +1203,7 @@ async def lease_round_work(
             seed=row.seed,
             cases_per_column=row.cases_per_column,
             columns=await _source_columns(session, row),
+            bench_version=round_bench_version(row),
         )
     else:
         work = GeneratorRoundWork(
@@ -1243,7 +1270,18 @@ async def record_generation(
         return row
     column_cases: dict[str, list[dict[str, str]]] = {}
     summary: list[dict[str, Any]] = []
+    bench = round_bench_version(row)
     for result in payload.columns:
+        declared = result.seed.grading_bench_version if result.seed else None
+        if declared is not None and (
+            declared not in GENERATOR_ROUND_BENCH_VERSIONS or declared > bench
+        ):
+            # The scorer requested only policies through the round's version,
+            # so a pack outside them is a scorer inconsistency.
+            raise RoundResultRejected(
+                f"column {result.column_id} pack grades at v{declared}, which "
+                f"a v{bench} round does not accept"
+            )
         column = frozen[result.column_id]
         if str(result.submission_id) != column["submission_id"]:
             raise RoundResultRejected(
@@ -1278,6 +1316,12 @@ async def record_generation(
                 "generate_ms": result.seed.duration_ms if result.seed else None,
             }
         )
+        # Recorded only when the round offered more than the baseline policy,
+        # so a v13 round's summary keeps its original shape.
+        if declared is not None:
+            summary[-1]["grading_bench_version"] = declared
+        if result.seed is not None and result.seed.legacy_retry:
+            summary[-1]["legacy_retry"] = result.seed.legacy_retry[:500]
         if not ok and not column["public_default"]:
             sub = await session.get(
                 GeneratorSubmission, UUID(column["submission_id"]), with_for_update=True

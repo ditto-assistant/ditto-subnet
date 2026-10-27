@@ -287,28 +287,52 @@ def test_miner_docs_quote_the_rehearsal_live_fallback() -> None:
 # --- generator rounds ----------------------------------------------------------
 
 
+def _go_pack_grading_versions() -> tuple[int, list[int]]:
+    """The pack contract's baseline policy and ordered supported policies,
+    resolved from ``challenge/pack.go`` constant names to version numbers."""
+    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
+    consts = {
+        name: int(version)
+        for name, version in re.findall(
+            r"const (GradingBenchVersion\w*) = protocol\.BenchVersionV(\d+)", pack
+        )
+    }
+    assert "GradingBenchVersion" in consts, (
+        "challenge.GradingBenchVersion is no longer a V-constant"
+    )
+    listed = re.search(r"supportedGradingBenchVersions = \[\]int\{([^}]*)\}", pack)
+    assert listed, "challenge.supportedGradingBenchVersions is no longer a literal"
+    names = [name.strip() for name in listed.group(1).split(",") if name.strip()]
+    assert all(name in consts for name in names), names
+    return consts["GradingBenchVersion"], [consts[name] for name in names]
+
+
 def test_generator_round_contracts_match_pack_grading_and_scorer_mode() -> None:
     """A round freezes a version from ``GENERATOR_ROUND_BENCH_VERSIONS``; the
     pack contract must grade at it and the scorer's round mode must run it.
     Widening the tuple without both (or the reverse) strands rounds."""
     from ditto.api_models.generator_round_validator import (
         GENERATOR_ROUND_BENCH_VERSIONS,
+        LEGACY_ROUND_BENCH_VERSION,
+        LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     )
 
-    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
-    grading = re.search(
-        r"const GradingBenchVersion = protocol\.BenchVersionV(\d+)", pack
-    )
-    assert grading, "challenge.GradingBenchVersion is no longer a V-constant"
+    baseline, supported = _go_pack_grading_versions()
+    assert supported == sorted(set(supported)) and supported[0] == baseline
+    assert list(GENERATOR_ROUND_BENCH_VERSIONS) == supported
+    # A scorer that advertises no round versions runs the original mode: the
+    # baseline policy, which every pre-v14 generator emits.
+    assert (baseline,) == LEGACY_SCORER_ROUND_BENCH_VERSIONS
+    assert baseline == LEGACY_ROUND_BENCH_VERSION
     scorer = (
         ROOT / "services/dittobench-api/cmd/dittobench-api/generator_round.go"
     ).read_text()
-    mode = re.search(r"req\.BenchVersion != protocol\.BenchVersionV(\d+)", scorer)
-    assert mode, "generator-round-v1 no longer pins one bench version"
-    assert set(GENERATOR_ROUND_BENCH_VERSIONS) == {
-        int(grading.group(1)),
-        int(mode.group(1)),
-    }
+    assert "return challenge.SupportsGradingBenchVersion(v)" in scorer, (
+        "generator-round-v1 must run every pack grading policy"
+    )
+    assert not re.search(r"req\.BenchVersion != protocol\.BenchVersionV\d+", scorer), (
+        "generator-round-v1 pins one bench version again"
+    )
     assert set(GENERATOR_ROUND_BENCH_VERSIONS) <= set(SUPPORTED_BENCH_VERSIONS)
 
 

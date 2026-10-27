@@ -112,6 +112,25 @@ It writes one `GenerateRequest` to stdin:
  "miner_hotkey": "<ss58>", "cases": 32, "grading_bench_version": 13}
 ```
 
+That is the request of every v13 round, byte-identical to the original
+contract. A round frozen at v14 (and qualification while rounds open at v14)
+adds the grading policies it accepts:
+
+```json
+{"contract": "dittobench-generator/v1", "seed": "<64 hex>",
+ "miner_hotkey": "<ss58>", "cases": 32, "grading_bench_version": 13,
+ "grading_bench_versions": [13, 14]}
+```
+
+`grading_bench_version` stays the baseline policy (13). A version-aware
+generator declares the newest accepted policy it supports in the pack
+(`req.NewestAccepted(supported)`). A generator built before v14 ignores the new
+field and emits a v13 pack, which a v14 round accepts. If the v14-offering
+request fails (a strict decoder that rejects unknown fields, a crash, or an
+invalid pack), the scorer retries that seed once on the original v13 request and
+records why in `legacy_retry`, so no generator that works at v13 loses its
+column to the upgrade.
+
 and reads one pack from stdout (at most 4 MiB). Stderr is diagnostic only. The
 pack must be a pure function of the request. `GenerateRequest.Rand()` is a
 convenient seeded source.
@@ -125,9 +144,14 @@ map into its output, is rejected as `nondeterministic`.
 A generator's output, defined in `challenge/pack.go`. A pack contains:
 
 - `contract`: `"dittobench-challenge-pack/v1"`.
-- `grading_bench_version`: `13`. Every case is graded by the v13 memory grader
-  policy, the newest agent-competition contract. A case cannot opt into an older
-  policy.
+- `grading_bench_version`: the memory grader policy every case is graded
+  under, from `challenge.SupportedGradingBenchVersions` (13 or 14) and accepted
+  by the request. A case cannot pick another policy than its pack (its own
+  `bench_version` must be omitted or equal). A v14 pack is graded by the v14
+  policy (rendered reply text, number punctuation bounds, percent claims) and
+  must also pass the v14 answer-text rule (`v14_rendered_text`): every graded
+  answer form, distractor, and dump-guard entry must read the same as rendered
+  text, since the v14 grader strips markdown from the reply before matching.
 - `miner_hotkey`: must equal the request's.
 - `generator`: name, version, and `seed`, which must echo the request's seed.
 - `memory_waves`: the haystack. These are ordinary `protocol.SeedRequest` waves
@@ -256,10 +280,10 @@ Each round freezes one bench version when it opens, recorded on the round row
 (`generator_rounds.bench_version`, like `cases_per_column`). Every later step
 runs at that version: the panel tickets are the agents' `(agent, version,
 validator)` rows, leases go only to validators whose scorer is verified for
-that version and runs `generator_rounds` at the round's column size, the job
-and the scorer run carry it, and a v13 round keeps the V13 scorer-cohort pin.
-A round opened under one version finishes and is scored under it even if
-another version activates mid-round.
+that version and whose round mode runs it, the generate work, the job, and the
+scorer run carry it, and a v13 round keeps the V13 scorer-cohort pin. A round
+opened under one version finishes and is scored under it even if another
+version activates mid-round.
 
 At opening, Platform (`choose_round_bench_version`) picks:
 
@@ -270,26 +294,49 @@ At opening, Platform (`choose_round_bench_version`) picks:
 3. otherwise nothing: the round is void with the reason.
 
 The round contracts are `GENERATOR_ROUND_BENCH_VERSIONS` (Platform and
-validator `api_models/generator_round_validator.py`). Today that is only 13,
-because the round contract is the pack's grading policy, not the agent
-benchmark. Every v1 pack case is graded at `challenge.GradingBenchVersion`
-(13), the generator scorer validates packs at it, and dittobench-api's
-`generator-round-v1` mode refuses any other `bench_version`. Generator cases
-are never mixed into agent benchmark runs: a round run executes only the
-round dataset. So when v14 activates, rounds keep running at v13 and record
-that the active version has no round contract.
+validator `api_models/generator_round_validator.py`): 13 and 14, the pack
+grading policies `challenge.SupportedGradingBenchVersions`. The round version
+is the agents' runtime contract; the grading policy is per column:
 
-A version joins the round contracts only with all three of:
+- A round at version N accepts packs graded at any supported policy at or
+  below N (`challenge.GradingBenchVersionsThrough`). Each column's request
+  lists them, each column's pack declares one, and the validator grades every
+  case at its pack's declared policy. A v13 round accepts only v13, so its
+  requests, packs and grading are byte-identical to the original contract.
+- In a v14 round, a v14-aware generator's column grades at v14 and a generator
+  built before v14 keeps a v13 column. Neither is excluded. Credit is
+  per-column discrimination among the same panel, so columns graded under
+  different policies never compete on a shared scale.
+- Platform rejects a generation result whose column declares a policy the
+  round does not accept, and records each column's declared policy (and any
+  `legacy_retry`) in `generation.columns`. dittobench-api refuses a round
+  dataset with such a column (`challenge.CheckRoundGradingVersions`).
+- Qualification requests the round contract rounds open at now (the active
+  version's round contract, before validator capacity), so a generator
+  qualifies on the policy it will emit in rounds. Before v14 activates that is
+  v13 and qualification is unchanged.
 
-- a pack contract that grades at it (generator request, validation and
-  `ScoreCases` at that `grading_bench_version`, which miners' generators
-  must emit);
-- a scorer round mode that accepts it, advertised as a scorer feature so
-  Platform does not lease it to older scorers;
+Capability routing. dittobench-api's `generator-round-v1` mode advertises
+`generator-round-bench-<n>` for every supported policy. The validator forwards
+the set (capped at its own round contracts and its scorer's verified versions)
+as `scorer_benchmarks.generator_round_bench_versions`. Platform leases a round
+at version N only to a validator whose set contains N; a scorer without any of
+these features is treated as the original v13-only round mode. The generator
+scorer needs no new capability: one that predates `bench_version` on its work
+sends the original v13 request, and v13 packs are valid in a v14 round.
+
+So when v14 activates, rounds open at v14 as soon as a validator can run a
+v14 round, and fall back to v13 (with the reason) until then. A version joins
+the round contracts only with all three of:
+
+- a pack grading policy at it (`supportedGradingBenchVersions` in
+  `challenge/pack.go`, its validation rules, and the generator request);
+- the scorer round mode running it, advertised as
+  `generator-round-bench-<n>` so Platform does not lease it to older scorers;
 - the version added to `GENERATOR_ROUND_BENCH_VERSIONS`.
 
-`ditto/tests/test_bench_version_pins.py` fails if the tuple and the Go pins
-disagree. Rounds then follow activation with no further change.
+`ditto/tests/test_bench_version_pins.py` fails if the tuple and the Go pack
+policies disagree.
 
 ### Execution
 
@@ -416,7 +463,7 @@ Two gates protect a rollout of a larger size:
   from before this change stop at 32 (or less), and generators vendor the
   `challenge` package, so one built against the old 64-case contract refuses a
   larger request. Announce the change before applying it. The current starter
-  kit (version 3) fills 80, so the public default generator keeps its columns
+  kit (version 4) fills 80, so the public default generator keeps its columns
   once it is re-registered.
 
 Why each term is there:

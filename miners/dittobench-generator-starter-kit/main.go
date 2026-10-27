@@ -9,6 +9,7 @@
 //	cd ../../research/dittobench-datagen
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -seeds 3 -cases 80
 //	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -sandbox docker
+//	go run ./cmd/challenge rehearse -dir "$OLDPWD" -hotkey <ss58> -round-bench 14
 //
 // and submit the source with `uv run ditto generator upload --dir .`.
 //
@@ -28,10 +29,18 @@ import (
 )
 
 // Name and Version identify this generator in the pack's provenance.
+// Version 4 declares the newest grading policy the request accepts.
 const (
 	Name    = "starter-kit"
-	Version = "3"
+	Version = "4"
 )
+
+// GradingBenchVersions are the pack grading policies the default families are
+// written for. Every family states its answers, distractors, and dump guards
+// as plain text, so its cases pass the v14 answer-text rule unchanged. A v13
+// round's request accepts only v13 and gets exactly the v13 pack; a v14
+// round's request also accepts v14, and the kit declares v14.
+var GradingBenchVersions = []int{challenge.GradingBenchVersion, challenge.GradingBenchVersionV14}
 
 // MaxCases is the most cases the starter pools can fill without reusing a
 // value (twenty rounds of the four default families). It matches the pack
@@ -59,7 +68,9 @@ func Generate(req challenge.GenerateRequest) (challenge.Pack, error) {
 			families.Filler(b)
 		}
 	}
-	return b.Pack(req, Name, Version), nil
+	pack := b.Pack(req, Name, Version)
+	pack.GradingBenchVersion = req.NewestAccepted(GradingBenchVersions)
+	return pack, nil
 }
 
 func main() {

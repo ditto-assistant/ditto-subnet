@@ -39,6 +39,10 @@ const DefaultConcurrency = 4
 type Options struct {
 	// Concurrency bounds in-flight cases per wave (default DefaultConcurrency).
 	Concurrency int
+	// BenchVersion is the runtime contract the harness is seeded and run
+	// under: a round's frozen bench version. Zero uses the pack's declared
+	// grading policy. Grading always uses the pack's declared policy.
+	BenchVersion int
 	// Nonce keys the opaque ID projection. A fresh random nonce is used when
 	// empty; tests pin it for stable wire IDs.
 	Nonce []byte
@@ -95,6 +99,9 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
 	}
+	if opts.BenchVersion == 0 {
+		opts.BenchVersion = p.GradingBenchVersion
+	}
 	proj := newProjection(nonce)
 	waves := proj.waves(p.MemoryWaves)
 	buckets := runner.StageCasesByWave(len(waves), len(p.Cases), func(i int) int { return p.Cases[i].RunAfterWave })
@@ -102,13 +109,13 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	outcomes := make([]CaseOutcome, len(p.Cases))
 	err := runner.RunStagedWaves(ctx, waves, buckets,
 		func(ctx context.Context, _ int, wave protocol.SeedRequest) error {
-			_, err := runner.SeedForVersion(ctx, harnessURL, wave, challenge.GradingBenchVersion)
+			_, err := runner.SeedForVersion(ctx, harnessURL, wave, opts.BenchVersion)
 			return err
 		},
 		func(ctx context.Context, _ int, bucket []int) error {
 			runBounded(len(bucket), concurrency, func(j int) {
 				i := bucket[j]
-				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], proj, opts)
+				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], p.GradingCase(i), proj, opts)
 			})
 			return ctx.Err()
 		},
@@ -123,10 +130,10 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	return outcomes, nil
 }
 
-func runCase(ctx context.Context, harnessURL string, c challenge.Case, proj *projection, opts Options) CaseOutcome {
+func runCase(ctx context.Context, harnessURL string, c challenge.Case, graded protocol.MemoryCase, proj *projection, opts Options) CaseOutcome {
 	opaqueID := proj.id("case", c.ID)
 	opaqueUser := proj.id("user", c.UserID)
-	caseOpts := runner.CaseOptions{UserID: opaqueUser, BenchVersion: challenge.GradingBenchVersion}
+	caseOpts := runner.CaseOptions{UserID: opaqueUser, BenchVersion: opts.BenchVersion}
 	if opts.InferenceBaseURL != nil {
 		caseOpts.InferenceBaseURL = opts.InferenceBaseURL(opaqueID)
 	}
@@ -143,7 +150,7 @@ func runCase(ctx context.Context, harnessURL string, c challenge.Case, proj *pro
 	if opts.ObservedCalls != nil {
 		resp = withObservedCalls(resp, opts.ObservedCalls(opaqueID))
 	}
-	cs := scorer.GradeMemory(c.GradingCase(), resp)
+	cs := scorer.GradeMemory(graded, resp)
 	out.Score = cs.Score
 	out.Notes = cs.Notes
 	return out

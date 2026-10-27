@@ -23100,6 +23100,8 @@ export interface components {
         };
         /** GeneratorRoundWork */
         GeneratorRoundWork: {
+            /** Bench Version */
+            bench_version?: number | null;
             /** Cases Per Column */
             cases_per_column?: number | null;
             /** Columns */
@@ -23267,6 +23269,10 @@ export interface components {
             duration_ms: number;
             /** Error */
             error?: string | null;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /** Legacy Retry */
+            legacy_retry?: string | null;
             /** Pack Sha256 */
             pack_sha256?: string | null;
             /** Seed */
@@ -23478,6 +23484,8 @@ export interface components {
         };
         /** GeneratorWorkItem */
         GeneratorWorkItem: {
+            /** Bench Version */
+            bench_version?: number | null;
             /** Cases Per Seed */
             cases_per_seed: number;
             /**
@@ -34335,6 +34343,8 @@ export interface components {
              * @default false
              */
             deterministic_v13_datasets: boolean;
+            /** Generator Round Bench Versions */
+            generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
             generator_round_max_cases?: number | null;
             /**

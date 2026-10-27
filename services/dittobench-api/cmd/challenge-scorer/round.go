@@ -39,6 +39,11 @@ type roundWork struct {
 	Seed           string           `json:"seed,omitempty"`
 	CasesPerColumn int              `json:"cases_per_column,omitempty"`
 	Columns        []roundSourceCol `json:"columns,omitempty"`
+	// BenchVersion is the round's frozen bench contract: each column's
+	// request accepts every pack grading policy through it, and the encoded
+	// dataset is checked against it. Absent (a Platform that predates it) is
+	// the original v13 round.
+	BenchVersion int `json:"bench_version,omitempty"`
 
 	// score
 	Params *challenge.ScoreParams `json:"params,omitempty"`
@@ -135,9 +140,10 @@ func generateRound(ctx context.Context, sb genrun.Sandbox, w *roundWork) (roundG
 		}
 		seed := challenge.RoundColumnSeed(w.Seed, col.ColumnID)
 		ev, err := evaluateArchive(ctx, sb, raw, genrun.Plan{
-			MinerHotkey: col.MinerHotkey,
-			Seeds:       []string{seed},
-			Cases:       w.CasesPerColumn,
+			MinerHotkey:       col.MinerHotkey,
+			Seeds:             []string{seed},
+			Cases:             w.CasesPerColumn,
+			RoundBenchVersion: w.BenchVersion,
 		})
 		if err != nil {
 			return out, fmt.Errorf("column %s: %w", col.ColumnID, err)
@@ -160,6 +166,9 @@ func generateRound(ctx context.Context, sb genrun.Sandbox, w *roundWork) (roundG
 				res.OK = true
 				packs[col.ColumnID] = s.Pack
 			}
+		}
+		if res.Seed != nil && res.Seed.GradingBenchVersion != 0 {
+			log.Printf("round %d column %s: grading v%d %s", w.RoundIndex, col.ColumnID, res.Seed.GradingBenchVersion, res.Seed.LegacyRetry)
 		}
 		log.Printf("round %d column %s: ok=%t %s", w.RoundIndex, col.ColumnID, res.OK, res.Error)
 		out.Columns = append(out.Columns, res)
