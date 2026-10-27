@@ -1027,6 +1027,15 @@ def _bounded_efficiency_factor(entry: LedgerEntry) -> float | None:
         return None
     if _entry_version(entry) < 9:
         return 1.0
+    # Deliberately v9-only, unlike the receipt reads in ``_quality_composite``
+    # and ``_entry_seed_composites``. Bench v9 tied its bounded factor to the
+    # receipt from #675 on. Bench v10+ never did: Platform's KOTH projection
+    # (``koth._bounded_efficiency_factor``) honours the factor whether or not a
+    # receipt is served. Widening this would neutralize every live v10+ factor
+    # while confirmation is off or shadowing (no receipts are served then) and
+    # split the validator from the Platform pin on efficiency tie-breaks. Under
+    # enforce, every served confirmation-capable row carries a receipt, so the
+    # branch could not fire for v10+ anyway (#2989).
     if _entry_version(entry) == 9 and getattr(entry, "v9_confirmation", None) is None:
         return 1.0
     if (
@@ -1166,9 +1175,20 @@ def _effective_composite(entry: LedgerEntry) -> float:
 
 
 def _quality_composite(entry: LedgerEntry) -> float:
-    """Return authoritative quality before relative efficiency is applied."""
+    """Return authoritative quality before relative efficiency is applied.
+
+    A verified full-confirmation receipt is the quality authority for every
+    version with a receipt contract (:data:`RECEIPT_CONTRACT_VERSIONS`), not
+    only Bench v9. Platform crowns on ``full_effective_micros`` for each
+    confirmation-capable version (``koth_entries_from_ledger``); reading the
+    raw quorum composite here for v10+ crowned a different champion under
+    enforce and every weight receipt then failed ``ledger_pin_mismatch``
+    (#2989). Platform serves receipts only alongside an explicit enforce
+    marker, so a ledger served while confirmation is off or shadowing has no
+    receipt and still pays its continual aggregate, unchanged.
+    """
     receipt = getattr(entry, "v9_confirmation", None)
-    if _entry_version(entry) == 9 and receipt is not None:
+    if _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS and receipt is not None:
         value = getattr(receipt, "full_effective_micros", None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value / 1_000_000
@@ -1260,12 +1280,14 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     non-negative int seeds with no duplicate; anything else is treated as absent
     (a consensus-safe guard so two validators never pair off a differently-parsed
     map)."""
-    # A v9 full-confirmation receipt is a separate signed score authority. Its
-    # KOTH comparison must use that verified receipt, never legacy continual
-    # histories that the receipt does not bind and an untrusted Platform could
-    # otherwise attach to recreate the pre-v9 paired-dethrone path.
+    # A full-confirmation receipt is a separate signed score authority for
+    # every version with a receipt contract. Its KOTH comparison must use that
+    # verified receipt, never legacy continual histories that the receipt does
+    # not bind and an untrusted Platform could otherwise attach to recreate the
+    # pre-v9 paired-dethrone path. Platform already omits those histories from
+    # any row it serves with a receipt (#2989).
     if (
-        _entry_version(entry) == 9
+        _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS
         and getattr(entry, "v9_confirmation", None) is not None
     ):
         return None

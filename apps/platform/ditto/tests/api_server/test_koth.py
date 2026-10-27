@@ -202,6 +202,62 @@ def test_wire_projection_uses_modern_continual_history_for_the_crown() -> None:
     assert decision.dethrones
 
 
+@pytest.mark.parametrize("bench_version", [9, 13, 14])
+def test_wire_projection_crowns_on_the_receipt_for_every_confirmation_version(
+    bench_version: int,
+) -> None:
+    """The #2989 scenario: the pin crowns the receipt leader, not raw quorum.
+
+    The validator fold reads the same receipt for every confirmation-capable
+    version (``ditto/tests/validator/test_v9_reward_projection.py``); before
+    #2989 it read it only at v9 and crowned ``a`` here while this projection
+    crowned ``b``, so every weight receipt failed ``ledger_pin_mismatch``.
+    """
+    from ditto.api_models import LedgerEntry
+    from ditto.api_models.validator import V9ConfirmationReceipt
+
+    def wire(marker: int, raw: float, receipt_micros: int) -> LedgerEntry:
+        entry = LedgerEntry.model_validate(
+            {
+                "miner_hotkey": "5" + str(marker) * 47,
+                "agent_id": str(UUID(int=marker)),
+                "composite": raw,
+                "n": 351,
+                "first_seen": (_T0 + timedelta(minutes=marker)).isoformat(),
+                "sha256": "ab" * 32,
+                "run_id": f"run-{marker}",
+                "seed": 1,
+                "validator_hotkey": "5" + "9" * 47,
+                "status": "scored",
+                "bench_version": bench_version,
+                "score_proofs": [
+                    {
+                        "validator_hotkey": "5" + str(index + 1) * 47,
+                        "run_id": f"proof-{index}",
+                        "composite": raw,
+                        "seed": index,
+                    }
+                    for index in range(3)
+                ],
+            }
+        )
+        # Only ``full_effective_micros`` reaches the projection; signature and
+        # evidence-root verification is the validator transport's job.
+        receipt = V9ConfirmationReceipt.model_construct(
+            full_effective_micros=receipt_micros
+        )
+        return entry.model_copy(update={"v9_confirmation": receipt})
+
+    a = wire(1, 0.80, 700_000)
+    b = wire(2, 0.75, 780_000)
+    lifted = koth_entries_from_ledger([a, b])
+    projection = project_koth(lifted, incumbent_agent_id=None)
+
+    assert [entry.composite for entry in lifted] == [0.70, 0.78]
+    assert projection is not None
+    assert projection.champion.agent_id == b.agent_id
+
+
 def test_efficiency_bonus_multiplies_the_continual_score() -> None:
     entry = _entry(
         1,
