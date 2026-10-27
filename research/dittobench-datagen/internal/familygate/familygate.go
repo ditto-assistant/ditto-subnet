@@ -315,12 +315,12 @@ func Markdown(rows []FamilyRow, p Params) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Gate: >= %d rounds, trivial rate <= %.2f, unsolved rate <= %.2f, at-threshold share of solved cases <= %.2f (solved = >= %d owners at score >= %.2f).\n\n",
 		p.MinRounds, p.MaxTrivialRate, p.MaxUnsolvedRate, p.MaxAtThresholdRate, p.MinSolverOwners, p.SolveThreshold)
-	b.WriteString("| family | rounds | judged | discriminating | trivial | unsolved | trivial rate | unsolved rate | max solver owners | at threshold | verdict |\n")
-	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+	b.WriteString("| family | rounds | judged | discriminating | trivial | unsolved | trivial rate | unsolved rate | max solver owners | at threshold | at-threshold rate | verdict |\n")
+	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
 	for _, r := range rows {
-		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %.2f | %.2f | %d | %d | %s |\n",
+		fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %d | %.2f | %.2f | %d | %d | %.2f | %s |\n",
 			markdownCell(r.Family), r.Rounds, r.Judged, r.Discriminating, r.Trivial, r.Unsolved,
-			r.TrivialRate, r.UnsolvedRate, r.SolverOwners, r.AtThreshold, r.Verdict)
+			r.TrivialRate, r.UnsolvedRate, r.SolverOwners, r.AtThreshold, r.AtThresholdRate, r.Verdict)
 	}
 	return b.String()
 }

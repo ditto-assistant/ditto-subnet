@@ -224,6 +224,9 @@ func TestSN352HalfCreditCandidatesAreHeld(t *testing.T) {
 		t.Fatalf("families: %+v", got)
 	}
 	r := got[0]
+	if md := Markdown(got, DefaultParams()); !strings.Contains(md, "| 1.00 | "+HoldHalfCredit+" |") || !strings.Contains(md, "at-threshold rate") {
+		t.Fatalf("table omits the at-threshold rate:\n%s", md)
+	}
 	if r.AtThreshold != r.Discriminating+r.Trivial || r.AtThresholdRate != 1 || r.Verdict != HoldHalfCredit {
 		t.Fatalf("half-credit family not held: %+v", r)
 	}
