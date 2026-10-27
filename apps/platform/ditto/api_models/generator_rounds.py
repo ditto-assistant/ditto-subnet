@@ -429,6 +429,19 @@ class AdminDefaultGeneratorResponse(RoundModel):
     superseded: list[UUID] = Field(default_factory=list)
 
 
+class GeneratorRoundBenchContractPreview(RoundModel):
+    """The bench contract a round opened now would freeze, and why."""
+
+    active_version: int
+    bench_version: int | None
+    """``None`` when no validator can run any round contract (void)."""
+    reason: str | None = None
+    round_contracts: list[int]
+    """``GENERATOR_ROUND_BENCH_VERSIONS``: the pack grading policies."""
+    capable_validators: dict[str, int]
+    """Validators that could run a round of this column size, per contract."""
+
+
 class AdminGeneratorRoundPreview(RoundModel):
     """What a round opened now would freeze, and anything blocking it."""
 
@@ -439,6 +452,7 @@ class AdminGeneratorRoundPreview(RoundModel):
     awaiting_qualification: int
     blockers: list[str]
     skipped_panel_agents: list[GeneratorRoundSkippedAgent] = Field(default_factory=list)
+    bench_contract: GeneratorRoundBenchContractPreview | None = None
 
 
 class GeneratorRoundLoopStatus(RoundModel):

@@ -402,7 +402,10 @@ describe('generator competition MCP tools', () => {
         return Response.json({ schedule, rounds: [summary], counts_by_status: { running: 1 } })
       }
       if (path.endsWith('/rounds/preview')) {
-        return Response.json({ schedule, columns: [], panel: [], qualified_generators: 0, awaiting_qualification: 1, blockers: ['validator_rounds_enabled is false'] })
+        return Response.json({
+          schedule, columns: [], panel: [], qualified_generators: 0, awaiting_qualification: 1, blockers: ['validator_rounds_enabled is false'],
+          bench_contract: { active_version: 14, bench_version: 13, reason: 'no validator can run a 70-case round column at bench v14', round_contracts: [13, 14], capable_validators: { 13: 2, 14: 0 } },
+        })
       }
       if (path.endsWith('/rounds/loop')) {
         return Response.json({ available: true, status: { last_tick_at: null, last_success_at: null, last_error: null, last_actions: ['round 8: committed'], ticks: 3 }, schedule })
@@ -469,7 +472,10 @@ describe('generator competition MCP tools', () => {
         .toMatchObject({ seed: null, summary: { seed: null, secret_hex: null } })
       roundSeed = null
       expect(json(await reader.client.callTool({ name: 'preview_generator_round', arguments: {} })))
-        .toMatchObject({ blockers: ['validator_rounds_enabled is false'] })
+        .toMatchObject({
+          blockers: ['validator_rounds_enabled is false'],
+          bench_contract: { active_version: 14, bench_version: 13, round_contracts: [13, 14], capable_validators: { 13: 2, 14: 0 } },
+        })
       expect(json(await reader.client.callTool({ name: 'get_generator_round_loop', arguments: {} })))
         .toMatchObject({ available: true, status: { ticks: 3 } })
       const noArtifact = await reader.client.callTool({ name: 'get_generator_round_dataset', arguments: { roundIndex: 7 } })

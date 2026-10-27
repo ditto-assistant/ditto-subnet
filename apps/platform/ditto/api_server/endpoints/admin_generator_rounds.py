@@ -25,6 +25,7 @@ from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.generator import MAX_SOURCE_ARCHIVE_BYTES
+from ditto.api_models.generator_round_validator import GENERATOR_ROUND_BENCH_VERSIONS
 from ditto.api_models.generator_rounds import (
     DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
     DEFAULT_GENERATOR_UPLOAD_PREFIX,
@@ -40,6 +41,7 @@ from ditto.api_models.generator_rounds import (
     AdminGeneratorRoundLeaseReleaseRequest,
     AdminGeneratorRoundListResponse,
     AdminGeneratorRoundPreview,
+    GeneratorRoundBenchContractPreview,
     GeneratorRoundColumnSlot,
     GeneratorRoundLoopStatus,
     GeneratorRoundPanelSlot,
@@ -62,6 +64,7 @@ from ditto.api_server.generator_rounds import (
     ROUND_COMMITMENT_PUBLISHERS,
     GeneratorRoundLoop,
     attempt_views,
+    choose_round_bench_version,
     close_round,
     column_views,
     commitment_publication_views,
@@ -71,6 +74,7 @@ from ditto.api_server.generator_rounds import (
     pending_panel_agents,
     public_default_generator,
     result_views,
+    round_contract_capacity,
     round_counts_by_status,
     round_summaries,
     round_summary,
@@ -262,6 +266,15 @@ async def admin_round_preview(
             "validator_rounds_enabled is false: rounds generate but no validator "
             "runs the panel"
         )
+    now = datetime.now(UTC)
+    contract = await choose_round_bench_version(
+        session, cases_per_column=settings.cases_per_seed, now=now
+    )
+    if contract.bench_version is None:
+        blockers.append(f"no generator-round contract can run: {contract.reason}")
+    capable = await round_contract_capacity(
+        session, cases_per_column=settings.cases_per_seed, now=now
+    )
     return AdminGeneratorRoundPreview(
         schedule=_schedule(request, settings.mode, settings.epochs_per_round),
         columns=[GeneratorRoundColumnSlot(**c) for c in columns],
@@ -272,6 +285,13 @@ async def admin_round_preview(
         skipped_panel_agents=[
             GeneratorRoundSkippedAgent(**slot) for slot in frozen.skipped_agents
         ],
+        bench_contract=GeneratorRoundBenchContractPreview(
+            active_version=contract.active_version,
+            bench_version=contract.bench_version,
+            reason=contract.reason,
+            round_contracts=list(GENERATOR_ROUND_BENCH_VERSIONS),
+            capable_validators=capable,
+        ),
     )
 
 

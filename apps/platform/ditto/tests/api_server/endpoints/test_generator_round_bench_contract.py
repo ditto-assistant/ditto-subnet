@@ -41,6 +41,8 @@ from ditto.api_server.generator_rounds import (
 )
 from ditto.db.models import GeneratorRound, ValidatorTicket
 from ditto.tests.api_server.endpoints.test_generator_rounds import (
+    _ADMIN,
+    _ROUNDS_URL,
     _SCORER,
     _VALIDATOR,
     _advance,
@@ -57,6 +59,8 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _signed_score,
 )
 from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
+
+_PREVIEW_URL = f"{_ROUNDS_URL}/preview"
 
 
 class _Fleet:
@@ -390,6 +394,37 @@ class TestRoundBenchContract:
             await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
         ).json()
         assert work.get("work") is None
+
+
+class TestRoundPreviewBenchContract:
+    async def test_preview_names_the_contract_a_round_would_freeze(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Backroom's round preview shows the version a round opened now
+        would run at, why, and the capable validators per contract."""
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=14)
+        await _apply_settings(client, validator_rounds_enabled=True)
+        fleet.capable = {13}
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        contract = preview["bench_contract"]
+        assert contract["active_version"] == 14 and contract["bench_version"] == 13
+        assert contract["round_contracts"] == [13, 14]
+        assert contract["capable_validators"]["13"] > 0
+        assert contract["capable_validators"]["14"] == 0
+        assert "at bench v14" in contract["reason"]
+        fleet.capable = {13, 14}
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        assert preview["bench_contract"]["bench_version"] == 14
+        assert preview["bench_contract"]["reason"] is None
+        fleet.capable = set()
+        preview = (await client.get(_PREVIEW_URL, headers=_ADMIN)).json()
+        assert preview["bench_contract"]["bench_version"] is None
+        assert any("no generator-round contract" in b for b in preview["blockers"])
 
 
 async def test_choose_keeps_v13_when_the_active_version_predates_rounds(

@@ -912,6 +912,22 @@ async def round_capable_validators(
     return count
 
 
+async def round_contract_capacity(
+    session: AsyncSession, *, cases_per_column: int, now: datetime
+) -> dict[str, int]:
+    """Validators that could run a round of this column size now, per round
+    contract (Backroom's round preview)."""
+    return {
+        str(version): await round_capable_validators(
+            session,
+            bench_version=version,
+            cases_per_column=cases_per_column,
+            now=now,
+        )
+        for version in GENERATOR_ROUND_BENCH_VERSIONS
+    }
+
+
 def round_contract_for(active: int) -> int:
     """The round contract a round would open at under active bench ``active``,
     before validator capacity: the active version when it is a round contract,

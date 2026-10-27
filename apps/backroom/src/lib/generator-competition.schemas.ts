@@ -499,6 +499,16 @@ export const generatorRoundDetailSchema = z.object({
   columns_scored: z.array(columnViewSchema),
 }).transform((detail) => (detail.summary.revealed_at ? detail : { ...detail, seed: null }))
 
+// The bench contract a round opened now would freeze: the active version's
+// round contract when a validator can run it, else the newest one below it.
+export const roundBenchContractPreviewSchema = z.object({
+  active_version: z.number().int(),
+  bench_version: z.number().int().nullable(),
+  reason: z.string().nullable().optional().default(null),
+  round_contracts: z.array(z.number().int()),
+  capable_validators: z.record(z.string(), z.number().int()),
+})
+
 export const generatorRoundPreviewSchema = z.object({
   schedule: roundScheduleSchema,
   columns: z.array(columnSlotSchema),
@@ -507,6 +517,7 @@ export const generatorRoundPreviewSchema = z.object({
   awaiting_qualification: z.number().int(),
   blockers: z.array(z.string()),
   skipped_panel_agents: z.array(skippedPanelAgentSchema).optional().default([]),
+  bench_contract: roundBenchContractPreviewSchema.nullable().optional().default(null),
 })
 
 export const generatorRoundLoopSchema = z.object({

@@ -11880,6 +11880,7 @@ export interface components {
         AdminGeneratorRoundPreview: {
             /** Awaiting Qualification */
             awaiting_qualification: number;
+            bench_contract?: components["schemas"]["GeneratorRoundBenchContractPreview"] | null;
             /** Blockers */
             blockers: string[];
             /** Columns */
@@ -22385,6 +22386,24 @@ export interface components {
             ticket_deadline: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /**
+         * GeneratorRoundBenchContractPreview
+         * @description The bench contract a round opened now would freeze, and why.
+         */
+        GeneratorRoundBenchContractPreview: {
+            /** Active Version */
+            active_version: number;
+            /** Bench Version */
+            bench_version: number | null;
+            /** Capable Validators */
+            capable_validators: {
+                [key: string]: number;
+            };
+            /** Reason */
+            reason?: string | null;
+            /** Round Contracts */
+            round_contracts: number[];
         };
         /** GeneratorRoundCaseResult */
         GeneratorRoundCaseResult: {
