@@ -64,6 +64,13 @@ jobs:
             ditto/tests/test_validator_compose.py \
             ditto/tests/test_validator_stack_auto_update.py
 
+      # infra-ci is operator-dispatched (and currently disabled) for cost, so
+      # the cheap controller-only evaluation of the base role's Go version
+      # task rides the always-on root gate. No host, package or file changes.
+      - name: Evaluate the base role Go version task under the pinned ansible-core
+        working-directory: infra/ansible
+        run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/base-go-version.yml
+
   tests:
     needs: validate
     if: inputs.mode == 'full'

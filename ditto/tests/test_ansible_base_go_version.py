@@ -16,6 +16,7 @@ import yaml
 ROOT = Path(__file__).parents[2]
 ANSIBLE = ROOT / "infra" / "ansible"
 INFRA_CI = ROOT / ".github" / "workflows" / "infra-ci.yml"
+ROOT_VERIFY = ROOT / ".github" / "workflows" / "root-verify.yml"
 BACKREFERENCE_REGEX_FILTER = re.compile(r"regex_search\([^)]*,\s*['\"]\\{1,2}\d")
 
 
@@ -58,6 +59,19 @@ def test_infra_ci_evaluates_the_real_task_under_the_pinned_ansible_core() -> Non
     assert len(pins) == 1, f"infra-ci pins more than one ansible-core: {pins}"
     assert _ansible_core_pins(matching[0]) == pins
     assert "ansible-playbook -i localhost," in matching[0]
+
+    # infra-ci is operator-dispatched; the always-on root gate (PR CI and the
+    # release gate) must evaluate the same playbook under the same pin.
+    root_verify = yaml.safe_load(ROOT_VERIFY.read_text())
+    root_steps = root_verify["jobs"]["static"]["steps"]
+    root_matching = [
+        step
+        for step in root_steps
+        if "tests/base-go-version.yml" in step.get("run", "")
+    ]
+    assert len(root_matching) == 1
+    assert root_matching[0]["working-directory"] == "infra/ansible"
+    assert _ansible_core_pins(root_matching[0]["run"]) == pins
 
     test_playbook = yaml.safe_load((ANSIBLE / "tests/base-go-version.yml").read_text())
     case_file = yaml.safe_load((ANSIBLE / "tests/base-go-version-case.yml").read_text())
