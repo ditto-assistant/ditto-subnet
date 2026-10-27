@@ -43,7 +43,7 @@ if [ -n "${DATAGEN_VERIFIED_SOURCE_SHA:-}" ]; then
   git diff --exit-code "$DATAGEN_VERIFIED_SOURCE_SHA" HEAD -- "$module_dir" \
     ':!research/dittobench-datagen/internal/version/version.go'
 else
-  (cd "$module_dir" && go test -timeout 40m ./...)
+  (cd "$module_dir" && go test -timeout 15m ./...)
 fi
 (
   cd "$module_dir"

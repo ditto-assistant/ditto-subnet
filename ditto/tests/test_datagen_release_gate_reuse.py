@@ -61,6 +61,6 @@ def test_reuse_requires_unchanged_tested_source(tmp_path: Path, change: str) -> 
     else:
         assert result.returncode == 0, result.stderr
         commands = calls.read_text()
-        assert ("test -timeout 40m ./..." in commands) == (change == "no_gate")
+        assert ("test -timeout 15m ./..." in commands) == (change == "no_gate")
         assert "TestV7KnownVector" in commands
         assert "build --build-arg SOURCE_COMMIT=" in commands

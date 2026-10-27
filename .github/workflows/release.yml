@@ -635,12 +635,12 @@ jobs:
 
       - name: Gate DittoBench datagen release on exact merge source
         id: datagen_gate
-        # Match datagen PR CI: v13's complete seed sweeps exceed Go's default
-        # ten-minute package timeout. Keep all tests and a bounded deadline.
-        # With the v14 families and parser probe, gen alone measured 1,195 s
-        # on main, so 20m no longer leaves headroom.
+        # Match datagen CI: the shared seed sweeps generate each artifact once
+        # and the heavy tests run in parallel, so the suite fits well inside
+        # this bound. A timeout means a test-cost regression, not a reason to
+        # raise the bound.
         run: |
-          go test -timeout 40m ./...
+          go test -timeout 15m ./...
           echo "verified_sha=$(git rev-parse HEAD)" >>"$GITHUB_OUTPUT"
 
   verify-dittobench-coding-datagen:
