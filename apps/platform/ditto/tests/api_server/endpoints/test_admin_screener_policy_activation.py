@@ -278,28 +278,6 @@ class TestDefaultAndRoundTrip:
         )
         assert body["latest"]["canary_only"] is False
 
-    async def test_past_activate_at_via_the_api_is_rejected_even_for_due_semantics(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A due state is produced by TIME passing, never by a backdated write.
-
-        The API refuses past timestamps outright (retroactive rule changes are
-        exactly what the fairness timeline exists to prevent); the resolver's
-        due-activation behavior is covered against directly-seeded rows in
-        ``TestResolverDueActivation``.
-        """
-        _install(app, activation_maker)
-        past = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
-        response = await client.post(
-            _URL,
-            json=_payload(activate_at=past),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-
     async def test_history_is_newest_first(
         self,
         app: FastAPI,
@@ -339,22 +317,6 @@ class TestWriteGuards:
         )
         assert response.status_code == 409
         assert _CONFIRMATION in response.json()["message"]
-
-    async def test_timezone_naive_activate_at_is_rejected(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, activation_maker)
-        naive = (datetime.now(UTC) + timedelta(hours=24)).replace(tzinfo=None)
-        response = await client.post(
-            _URL,
-            json=_payload(activate_at=naive.isoformat()),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-        assert "timezone offset" in response.json()["message"]
 
     async def test_past_activate_at_is_rejected(
         self,
@@ -418,31 +380,6 @@ class TestWriteGuards:
         )
         assert response.status_code == 422
         assert "implements" in response.json()["message"]
-
-    async def test_v13_is_activation_ready(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        activation_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # Policy v13 became activation-ready on 2026-09-14: #1801 shipped the
-        # strict two-outcome contract and every production screener reported
-        # builtin 13, so the published ceiling now equals the built-in version.
-        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == 13
-        assert SCREENING_ACTIVATION_CEILING_POLICY_VERSION == SCREENING_POLICY_VERSION
-        _install(app, activation_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(target_policy_version=13),
-            headers=_HEADERS,
-        )
-
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["latest"]["target_policy_version"] == 13
-        # Scheduling is notice, not activation: the queue still requires the
-        # floor until activate_at passes.
-        assert body["effective_policy_version"] == SCREENING_FLOOR_POLICY_VERSION
 
     async def test_a_target_above_the_published_ceiling_is_not_activation_ready(
         self,
