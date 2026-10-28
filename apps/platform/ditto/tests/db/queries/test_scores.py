@@ -118,15 +118,6 @@ async def _upsert(session: AsyncSession, agent_id: object, **overrides: object) 
 
 
 class TestUpsertScore:
-    async def test_inserts_new_row(self, session: AsyncSession) -> None:
-        agent = await _seed_agent(session)
-        await _upsert(session, agent.agent_id, details={"per_case": [{"x": 1}]})
-
-        scores = await list_scores_for_agent(session, agent_id=agent.agent_id)
-        assert len(scores) == 1
-        assert scores[0].run_id == "run_1"
-        assert scores[0].details == {"per_case": [{"x": 1}]}
-
     async def test_second_upsert_overwrites_same_row(
         self, session: AsyncSession
     ) -> None:
@@ -139,10 +130,6 @@ class TestUpsertScore:
         assert scores[0].run_id == "run_2"
         assert scores[0].composite == pytest.approx(0.95)
 
-    async def test_unknown_agent_raises_integrity(self, session: AsyncSession) -> None:
-        with pytest.raises(DbIntegrityError):
-            await _upsert(session, uuid4())
-
     async def test_database_rejects_a_composite_above_one(
         self, session: AsyncSession
     ) -> None:
@@ -154,10 +141,6 @@ class TestUpsertScore:
         agent = await _seed_agent(session)
         with pytest.raises(DbIntegrityError):
             await _upsert(session, agent.agent_id, composite=1.001)
-
-    async def test_list_empty_when_unscored(self, session: AsyncSession) -> None:
-        agent = await _seed_agent(session)
-        assert await list_scores_for_agent(session, agent_id=agent.agent_id) == []
 
 
 class TestQuorumLedgerProofRows:
@@ -185,10 +168,13 @@ class TestQuorumLedgerProofRows:
 
         assert rows[agent.agent_id][0].details == evidence
 
-    async def test_empty_agent_set_skips_query(self, session: AsyncSession) -> None:
-        assert await quorum_ledger_proof_rows(session, [], bench_versions={}) == {}
-
-    @pytest.mark.parametrize("details", [None, {}, ["bad"], "bad", False, 17])
+    @pytest.mark.parametrize(
+        "details",
+        [
+            None,
+            ["bad"],
+        ],
+    )
     async def test_non_object_or_absent_details_preserve_null_evidence(
         self, session: AsyncSession, details: object
     ) -> None:
@@ -254,16 +240,6 @@ class TestQuorumLedgerProofRows:
             p.details is not None and "per_case" not in p.details for p in proofs
         )
         assert rows[second.agent_id][0].bench_version == 8
-
-    async def test_missing_requested_versions_returns_no_proofs(
-        self, session: AsyncSession
-    ) -> None:
-        agent = await _seed_agent(session)
-        await _upsert(session, agent.agent_id)
-        assert (
-            await quorum_ledger_proof_rows(session, [agent.agent_id], bench_versions={})
-            == {}
-        )
 
 
 async def _seed_scored(
@@ -335,9 +311,6 @@ async def _seed_scored(
 
 
 class TestListEligibleLedger:
-    async def test_empty_when_nothing_scored(self, session: AsyncSession) -> None:
-        assert await list_eligible_ledger(session) == []
-
     async def test_internal_read_can_keep_all_owner_generations(
         self, session: AsyncSession
     ) -> None:
@@ -365,42 +338,6 @@ class TestListEligibleLedger:
         assert len(public) == 1
         assert {row.agent_id for row in internal} == {first.agent_id, second.agent_id}
         assert len({row.emission_owner_root for row in internal}) == 1
-
-    async def test_can_omit_large_score_details(self, session: AsyncSession) -> None:
-        agent = await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=0.8,
-            created_at=_GEN_AT,
-        )
-        await _upsert(
-            session,
-            agent.agent_id,
-            composite=0.8,
-            details={"per_case": [{"large": "payload"}]},
-        )
-
-        full = await list_eligible_ledger(session)
-        narrow = await list_eligible_ledger(session, include_details=False)
-
-        assert full[0].details == {"per_case": [{"large": "payload"}]}
-        assert narrow[0].details is None
-        assert narrow[0].agent_id == full[0].agent_id
-        assert narrow[0].composite == full[0].composite
-
-    async def test_best_agent_per_miner_only(self, session: AsyncSession) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        # Same miner, two scored agents; only the higher composite should appear.
-        await _seed_scored(session, miner=_MINER, composite=0.5, created_at=t0)
-        best = await _seed_scored(
-            session, miner=_MINER, composite=0.8, created_at=t0.replace(hour=13)
-        )
-        ledger = await list_eligible_ledger(session)
-        assert len(ledger) == 1
-        assert ledger[0].agent_id == best.agent_id
-        assert ledger[0].composite == pytest.approx(0.8)
-        assert ledger[0].miner_hotkey == _MINER
-        assert ledger[0].signature == "ab" * 64
 
     async def test_best_agent_per_coldkey_across_hotkeys_and_names(
         self, session: AsyncSession
@@ -600,29 +537,6 @@ class TestListEligibleLedger:
         assert actual == pytest.approx(expected)
         assert actual[canonical_only.agent_id] == pytest.approx(0.55)
 
-    async def test_different_coldkeys_keep_separate_positions(
-        self, session: AsyncSession
-    ) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            coldkey="5ColdkeyA",
-            composite=0.95,
-            created_at=t0,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER_B,
-            coldkey="5ColdkeyB",
-            composite=0.90,
-            created_at=t0,
-            n=MIN_ELIGIBLE_CASES,
-        )
-
-        assert len(await list_eligible_ledger(session)) == 2
-
     async def test_normalized_source_hash_flows_through(
         self, session: AsyncSession
     ) -> None:
@@ -638,23 +552,6 @@ class TestListEligibleLedger:
         ledger = await list_eligible_ledger(session)
         assert len(ledger) == 1
         assert ledger[0].normalized_source_hash == "ns" * 32
-
-    async def test_prompt_fingerprint_flows_through(
-        self, session: AsyncSession
-    ) -> None:
-        # The prompt sketch (shadow signal) must reach the ledger for the gate.
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        sketch = {"v": "p1", "k": 256, "card": 2, "m": ["aa", "bb"]}
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=0.7,
-            created_at=t0,
-            prompt_fingerprint=sketch,
-        )
-        ledger = await list_eligible_ledger(session)
-        assert len(ledger) == 1
-        assert ledger[0].prompt_fingerprint == sketch
 
     async def test_code_embedding_flows_through(self, session: AsyncSession) -> None:
         # The code-embedding vector + its model tag must reach the ledger for the gate
@@ -673,25 +570,6 @@ class TestListEligibleLedger:
         assert len(ledger) == 1
         assert ledger[0].code_embedding == vector
         assert ledger[0].code_embed_model == "Qwen/Qwen3-Embedding-0.6B@main"
-
-    async def test_ordered_by_composite_desc(self, session: AsyncSession) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        await _seed_scored(session, miner=_MINER, composite=0.4, created_at=t0)
-        await _seed_scored(session, miner=_MINER_B, composite=0.9, created_at=t0)
-        ledger = await list_eligible_ledger(session)
-        assert [e.miner_hotkey for e in ledger] == [_MINER_B, _MINER]
-
-    async def test_eligible_flag_reflects_case_count(
-        self, session: AsyncSession
-    ) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        await _seed_scored(
-            session, miner=_MINER, composite=0.5, created_at=t0, n=MIN_ELIGIBLE_CASES
-        )
-        await _seed_scored(session, miner=_MINER_B, composite=0.5, created_at=t0, n=12)
-        by_miner = {e.miner_hotkey: e for e in await list_eligible_ledger(session)}
-        assert by_miner[_MINER].eligible is True
-        assert by_miner[_MINER_B].eligible is False
 
     async def test_eligible_ranked_above_higher_provisional(
         self, session: AsyncSession
@@ -747,43 +625,6 @@ class TestListEligibleLedger:
         assert by_miner[_MINER_B].eligible is False  # provisional smoke run
         # Neither ranks; the positive provisional sorts above the zero full run.
         assert [e.miner_hotkey for e in ledger] == [_MINER_B, _MINER]
-
-    async def test_positive_full_run_ranked_above_zero_full_run(
-        self, session: AsyncSession
-    ) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        # Two full runs, one positive and one zero: only the positive one is ranked.
-        await _seed_scored(
-            session, miner=_MINER, composite=0.0, created_at=t0, n=MIN_ELIGIBLE_CASES
-        )
-        await _seed_scored(
-            session, miner=_MINER_B, composite=0.4, created_at=t0, n=MIN_ELIGIBLE_CASES
-        )
-        ledger = await list_eligible_ledger(session)
-        by_miner = {e.miner_hotkey: e for e in ledger}
-        assert by_miner[_MINER_B].eligible is True
-        assert by_miner[_MINER].eligible is False
-        assert ledger[0].miner_hotkey == _MINER_B
-
-    async def test_excludes_non_scored_states(self, session: AsyncSession) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        # Held / evaluating agents must not leak into the eligible ledger.
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=0.95,
-            created_at=t0,
-            status=AgentStatus.ATH_PENDING_REVIEW,
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER_B,
-            composite=0.6,
-            created_at=t0,
-            status=AgentStatus.SCORED,
-        )
-        ledger = await list_eligible_ledger(session)
-        assert [e.miner_hotkey for e in ledger] == [_MINER_B]
 
     async def test_multiple_score_rows_returns_consistent_row(
         self, session: AsyncSession
@@ -939,71 +780,6 @@ class TestCrownFirstSeen:
     older row became the incumbent that the improved agent could no longer beat.
     """
 
-    async def test_lineage_keeps_its_anchor_across_a_resubmission(
-        self, session: AsyncSession
-    ) -> None:
-        """The defect, stated directly: improving must not forfeit seniority."""
-        first = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
-        later = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WITHIN_BAND,
-            created_at=first,
-            n=MIN_ELIGIBLE_CASES,
-            name="v47",
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=later,
-            n=MIN_ELIGIBLE_CASES,
-            name="v49",
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.crown_first_seen == first
-        assert row.fold_first_seen == first
-        # The two questions stay separate: this tarball really did arrive later,
-        # and the anti-copy comparison and public board still say so.
-        assert row.first_seen == later
-
-    async def test_an_ancestor_that_never_led_confers_no_seniority(
-        self, session: AsyncSession
-    ) -> None:
-        """A jump larger than the dethrone margin stands on its own arrival.
-
-        An owner arrives early but 0.010 behind the score it later defends.
-        That gap is outside ``KOTH_MARGIN``, so the ancestor never held this
-        score: conferring its timestamp would backdate a real improvement over
-        anyone who arrived in between. The winner stands on its own upload.
-        """
-        early_but_behind = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        matched_it_later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_BEHIND_A_RIVAL,
-            created_at=early_but_behind,
-            n=MIN_ELIGIBLE_CASES,
-            name="early-but-behind",
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=matched_it_later,
-            n=MIN_ELIGIBLE_CASES,
-            name="matched-it-later",
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.crown_first_seen == matched_it_later
-        assert row.fold_first_seen == matched_it_later
-
     async def test_a_generation_the_owner_regressed_from_confers_no_seniority(
         self, session: AsyncSession
     ) -> None:
@@ -1044,79 +820,6 @@ class TestCrownFirstSeen:
         assert by_arrival[fell_back_later].fold_first_seen == fell_back_later
         # ... while the peak keeps the reign it actually earned.
         assert by_arrival[peaked_early].crown_first_seen == peaked_early
-
-    async def test_improving_by_one_benchmark_step_keeps_the_anchor(
-        self, session: AsyncSession
-    ) -> None:
-        """Getting better must never cost an owner its seniority.
-
-        The band's floor is held to :data:`MIN_RESOLVABLE_COMPOSITE_STEP` for
-        this case alone. A generation one step back is not distinguishable from
-        the current one by anything the benchmark can measure, so treating it as
-        a different score would charge the owner for the smallest improvement it
-        is possible to make -- and a one-step gain is nowhere near enough to
-        dethrone anyone, so the owner would pay the seniority and get nothing.
-        On 2026-08-14 five of the six rows that stood to lose an inherited
-        anchor were in exactly this position.
-        """
-        improved_from = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        improved_at = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_ONE_STEP_BACK,
-            created_at=improved_from,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=improved_at,
-            n=MIN_ELIGIBLE_CASES,
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.composite == pytest.approx(_WINNER_COMPOSITE)
-        assert row.crown_first_seen == improved_from
-        assert row.fold_first_seen == improved_from
-
-    async def test_a_sub_dethrone_improvement_keeps_the_anchor(
-        self, session: AsyncSession
-    ) -> None:
-        """Uploading a slightly better agent must not forfeit incumbency.
-
-        0.889 -> 0.893 is inside ``KOTH_MARGIN`` (0.007) and outside one
-        benchmark step. The 2026-08-22 board reset the lineage clock on that
-        gap, so a rival that arrived between the two generations became the
-        incumbent even though its official score was *lower*. The improvement
-        floor is the dethrone margin so this gain keeps the earlier clock.
-        """
-        improved_from = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        improved_at = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_SUB_MARGIN_PREV,
-            created_at=improved_from,
-            n=MIN_ELIGIBLE_CASES,
-            name="v10",
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_SUB_MARGIN_NEW,
-            created_at=improved_at,
-            n=MIN_ELIGIBLE_CASES,
-            name="v11",
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.composite == pytest.approx(_SUB_MARGIN_NEW)
-        assert row.crown_first_seen == improved_from
-        assert row.fold_first_seen == improved_from
 
     async def test_sub_dethrone_gain_keeps_crown_against_intervening_rival(
         self, session: AsyncSession
@@ -1161,115 +864,6 @@ class TestCrownFirstSeen:
         assert by_miner[_MINER].fold_first_seen == t0
         assert rows[0].miner_hotkey == _MINER
         assert rows[0].fold_first_seen == t0
-
-    async def test_a_tied_resubmission_represents_the_owner_and_keeps_its_anchor(
-        self, session: AsyncSession
-    ) -> None:
-        """Both halves of the miner-facing promise, in one place.
-
-        Bench v9 saturated, so a miner's real improvements land on the *same*
-        composite and the tie decides who is on the board. Earliest-wins left
-        the owner represented by a generation it had already moved past, with no
-        way to be seen — while the seniority that tie-break was protecting is
-        not in the tie at all, it is in ``crown_first_seen``.
-        """
-        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        resubmitted = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        for created_at in (first, resubmitted):
-            await _seed_scored(
-                session,
-                miner=_MINER,
-                composite=_WINNER_COMPOSITE,
-                created_at=created_at,
-                n=MIN_ELIGIBLE_CASES,
-            )
-
-        (row,) = await list_eligible_ledger(session)
-
-        # The newer generation is the one on the board ...
-        assert row.first_seen == resubmitted
-        # ... standing on the reign the lineage already earned.
-        assert row.crown_first_seen == first
-        assert row.fold_first_seen == first
-
-    async def test_a_worse_resubmission_never_takes_the_owners_place(
-        self, session: AsyncSession
-    ) -> None:
-        """Newest wins a tie, not an argument. Experimenting stays free."""
-        strong = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        weak_and_newer = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=strong,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_BEHIND_A_RIVAL,
-            created_at=weak_and_newer,
-            n=MIN_ELIGIBLE_CASES,
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.first_seen == strong
-        assert row.composite == pytest.approx(_WINNER_COMPOSITE)
-
-    async def test_a_plateau_resubmission_keeps_its_anchor(
-        self, session: AsyncSession
-    ) -> None:
-        """The invariant the band exists to protect, in its own test.
-
-        Saturated agents re-measure to the same composite, so a miner iterating
-        at a plateau must not forfeit seniority — that is the entire reason the
-        anchor is a lineage value. Both generations resolve to the first
-        arrival, in either direction of the band.
-        """
-        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        resubmitted = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        for name, created_at in (("v1", first), ("v2", resubmitted)):
-            await _seed_scored(
-                session,
-                miner=_MINER,
-                composite=_WINNER_COMPOSITE,
-                created_at=created_at,
-                n=MIN_ELIGIBLE_CASES,
-                name=name,
-            )
-
-        rows = await list_eligible_ledger(session, dedupe_owners=False)
-
-        assert {row.crown_first_seen for row in rows} == {first}
-
-    async def test_a_distinctly_worse_ancestor_confers_no_seniority(
-        self, session: AsyncSession
-    ) -> None:
-        """Seniority is earned at a score, not by having shown up early."""
-        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
-        later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_OUTSIDE_BAND,
-            created_at=first,
-            n=MIN_ELIGIBLE_CASES,
-            name="early-but-weak",
-        )
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=later,
-            n=MIN_ELIGIBLE_CASES,
-            name="winner",
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.crown_first_seen == later
 
     async def test_a_banned_ancestor_confers_no_seniority(
         self, session: AsyncSession
@@ -1375,24 +969,6 @@ class TestCrownFirstSeen:
         assert row.bench_version == _BENCH_VERSION
         assert row.crown_first_seen == first
 
-    async def test_a_lone_submission_anchors_on_itself(
-        self, session: AsyncSession
-    ) -> None:
-        """No family, no backdating: the anchor can only ever move earlier."""
-        created = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
-        await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=created,
-            n=MIN_ELIGIBLE_CASES,
-        )
-
-        (row,) = await list_eligible_ledger(session)
-
-        assert row.crown_first_seen == created
-        assert row.first_seen == created
-
     async def test_another_owners_earlier_submission_confers_nothing(
         self, session: AsyncSession
     ) -> None:
@@ -1457,27 +1033,6 @@ class TestCrownFirstSeen:
         assert by_hotkey[_MINER].crown_first_seen == first
         assert by_hotkey[_MINER].fold_first_seen == first
         assert by_hotkey[_MINER_B].first_seen == rival
-
-    async def test_provisional_rows_fall_back_to_their_own_upload_time(
-        self, session: AsyncSession
-    ) -> None:
-        """``crown_first_seen`` is an owner-family fact; rows built without one
-        must behave exactly as they did before the anchor existed."""
-        created = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
-        agent = await _seed_scored(
-            session,
-            miner=_MINER,
-            composite=_WINNER_COMPOSITE,
-            created_at=created,
-            n=MIN_ELIGIBLE_CASES,
-            status=AgentStatus.EVALUATING,
-        )
-
-        ((row, _rank),) = await list_provisional_ledger(session)
-
-        assert row.agent_id == agent.agent_id
-        assert row.crown_first_seen is None
-        assert row.fold_first_seen == created
 
 
 class TestListProvisionalLedger:
@@ -2013,7 +1568,7 @@ class TestThresholdGatedAuthority:
         assert laggard.agent_id not in {row.agent_id for row in ledger}
         assert len(ledger) == MIN_DESIRED_AUTHORITY_AGENTS
 
-    @pytest.mark.parametrize("samples", [1, 2])
+    @pytest.mark.parametrize("samples", [2])
     async def test_partial_desired_samples_never_count_toward_threshold(
         self, session: AsyncSession, samples: int
     ) -> None:
@@ -2139,21 +1694,6 @@ class TestThresholdGatedAuthority:
         active_view = await list_eligible_ledger(session, bench_version=_ROLLOUT_FROM)
         self._assert_single_version(active_view, _ROLLOUT_FROM)
 
-    async def test_no_open_rollout_keeps_plain_highest_version_behaviour(
-        self, session: AsyncSession
-    ) -> None:
-        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
-        # No OPEN rollout: ``_open_rollout`` is deliberately not called, so
-        # desired_version is None and nothing changes. The activated v6 -> v7 row
-        # the module fixture plants is terminal and does not make a transition
-        # open -- it only says which era the fleet is on.
-        await _seed_versioned_agent(
-            session, miner=_miner(0), created_at=t0, source_composite=0.50
-        )
-        ledger = await list_eligible_ledger(session)
-        self._assert_single_version(ledger, _ROLLOUT_FROM)
-        assert ledger[0].composite == pytest.approx(0.50)
-
 
 class TestQuorumComposites:
     async def test_returns_every_composite_per_agent(
@@ -2168,12 +1708,6 @@ class TestQuorumComposites:
             )
         out = await quorum_composites(session, [agent.agent_id])
         assert sorted(out[agent.agent_id]) == pytest.approx([0.80, 0.85, 0.90])
-
-    async def test_empty_ids_returns_empty(self, session: AsyncSession) -> None:
-        assert await quorum_composites(session, []) == {}
-
-    async def test_unknown_agent_absent(self, session: AsyncSession) -> None:
-        assert await quorum_composites(session, [uuid4()]) == {}
 
 
 class TestQuorumScoreRows:

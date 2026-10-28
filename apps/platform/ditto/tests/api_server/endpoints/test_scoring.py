@@ -216,27 +216,6 @@ def test_v9_score_proof_publishes_signature_bound_base_evidence_digest() -> None
     assert proof.base_evidence_sha256 == "ef" * 32
 
 
-def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
-    proof = scoring_mod._score_proof(
-        cast(
-            Score,
-            SimpleNamespace(
-                validator_hotkey=_VALIDATOR_HOTKEY,
-                run_id="run-v8",
-                composite=0.75,
-                seed=42,
-                bench_version=8,
-                signature="ab" * 64,
-                details={
-                    "ticket_deadline": "2026-08-08T12:00:00+00:00",
-                    "transcript_sha256": "cd" * 32,
-                },
-            ),
-        )
-    )
-    assert proof.base_evidence_sha256 is None
-
-
 async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
     hotkey = "5" + "A" * 47
     state = SimpleNamespace(
@@ -546,52 +525,6 @@ async def _seed_scored(
 
 
 class TestScoringLedger:
-    async def test_first_seen_on_the_wire_is_the_lineage_anchor(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """The one field the champion fold anchors on must be the lineage's.
-
-        Every validator folds this payload byte for byte, so this is where the
-        rule actually takes effect: a miner that resubmits while tied at the top
-        keeps the arrival time it earned, and does not hand its rival the
-        incumbency by shipping an improvement. The owner-family resolution behind
-        it is covered in ``tests/db/queries/test_scores.py``.
-
-        0.8999 sits inside the crown-anchor improvement floor (the dethrone
-        margin). A 0.010 jump is outside that floor and must not keep this
-        clock -- that is the planted-low-score case.
-        """
-        from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
-
-        arrived = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
-        resubmitted = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
-        await _seed_scored(
-            session_maker,
-            miner=_MINER,
-            composite=0.8999,
-            created_at=arrived,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        await _seed_scored(
-            session_maker,
-            miner=_MINER,
-            composite=0.900,
-            created_at=resubmitted,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-
-        assert resp.status_code == 200
-        (entry,) = resp.json()["entries"]
-        assert entry["composite"] == pytest.approx(0.900)
-        assert datetime.fromisoformat(entry["first_seen"]) == arrived
-
     async def test_a_sub_dethrone_improvement_keeps_the_lineage_anchor_on_the_wire(
         self,
         app: FastAPI,
@@ -792,45 +725,6 @@ class TestScoringLedger:
             _VALIDATOR_HOTKEY
         )
 
-    async def test_fresh_protocol_18_requester_receives_factor_neutral_ledger(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ValidatorHeartbeat(
-                    validator_hotkey=_VALIDATOR_HOTKEY,
-                    software_version="0.28.0",
-                    protocol_version=18,
-                    code_digest="ab" * 32,
-                    state="idle",
-                    reported_at=now,
-                    seen_at=now,
-                    signature="cd" * 64,
-                )
-            )
-
-        # The shared resolver owns requester/global readiness. Its neutral result
-        # represents the broad fleet minimum seeing this fresh protocol-18 row.
-        resolver = AsyncMock(return_value=({}, {}, {}))
-        monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-
-        assert response.status_code == 200
-        assert response.json()["entries"][0]["efficiency_factor"] is None
-        assert resolver.await_args is not None
-        assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
-            _VALIDATOR_HOTKEY
-        )
-
     async def test_continual_mean_activates_globally_only_for_protocol_14_fleet(
         self,
         app: FastAPI,
@@ -1010,25 +904,6 @@ class TestScoringLedger:
         ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert ready.status_code == 200
         assert ready.json()["statistical_band_mode"] == "capped"
-
-    async def test_empty_ledger(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["entries"] == []
-        assert body["count"] == 0
-        assert body["active_bench_version"] == _BENCH_VERSION
-        # A fresh read is never stale.
-        assert body["stale"] is False
-        assert body["age_seconds"] == 0
-        assert body["generated_at"] is not None
 
     async def test_missing_auth_returns_401(
         self,

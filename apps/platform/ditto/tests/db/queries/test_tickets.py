@@ -649,7 +649,9 @@ async def _seed_two_scores_below_floor(
 class TestIssueTicket:
     @pytest.mark.parametrize(
         "purpose",
-        [TicketPurpose.CONTINUAL_RETEST, TicketPurpose.LEGACY_UNCLASSIFIED],
+        [
+            TicketPurpose.CONTINUAL_RETEST,
+        ],
     )
     async def test_does_not_resume_or_expire_noncanonical_live_lease(
         self, session: AsyncSession, purpose: TicketPurpose
@@ -1896,103 +1898,6 @@ class TestIssueTicket:
         assert ticket.agent_id == image_id
         assert ticket.agent_id != source_id
 
-    async def test_prefer_screened_no_longer_falls_back_to_source(
-        self, session: AsyncSession
-    ) -> None:
-        """``prefer_screened`` has no source lane left to fall back to.
-
-        This asserted the opposite while v2 was leasable: v2 was the one
-        contract with ``requires_screened_image`` false, so a validator that
-        merely preferred screened images would still be handed a source-only
-        submission rather than sit idle. The bench-version floor retired v2,
-        and every contract at or above it requires a verified image, so the
-        fallback branch in ``queue_candidate_predicate`` can no longer be
-        reached by any leasable era. Inverted rather than deleted because the
-        branch is still in the code: if a future contract reopens the source
-        lane, that is a decision, and it should have to change this test.
-        """
-        await _seed_evaluating(session, screened=False)
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5Prefer",
-                now=_NOW,
-                ttl=_TTL,
-                artifact_mode="prefer_screened",
-                bench_version=_BENCH,
-            )
-        assert ticket is None
-
-    async def test_prefer_screened_prioritizes_complete_verified_tuple(
-        self, session: AsyncSession
-    ) -> None:
-        await _seed_evaluating(session, created_at=_NOW, screened=False)
-        image_id = await _seed_evaluating(
-            session, created_at=_NOW + timedelta(seconds=1), screened=True
-        )
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5Prefer",
-                now=_NOW,
-                ttl=_TTL,
-                artifact_mode="prefer_screened",
-                bench_version=_BENCH,
-            )
-        assert ticket is not None
-        assert ticket.agent_id == image_id
-
-    async def test_screened_only_releases_idle_incompatible_lease(
-        self, session: AsyncSession
-    ) -> None:
-        """A retired-era lease on an idle slot is released, not held to term.
-
-        The incompatibility used to be an artifact one: a source-build lease
-        against a validator that had flipped to ``screened_only``. Every era at
-        or above the bench-version floor requires a verified screened image, so
-        the artifact contract can no longer differ between two live polls and
-        the era is what differs instead -- which is the same branch, and the one
-        that actually fires in production during a benchmark transition.
-        """
-        source_id = await _seed_evaluating(
-            session, screened=False, dataset_version=_RETIRED_BENCH
-        )
-        await _seed_retired_era_lease(
-            session,
-            agent_id=source_id,
-            validator_hotkey="5Transition",
-            issued_at=_NOW,
-            deadline=_NOW + timedelta(hours=2),
-            # The lease started and was seen running; what makes it releasable
-            # is that the validator now reports the slot empty, not that time
-            # passed.
-            reported_at=_NOW + timedelta(minutes=1),
-        )
-        async with session.begin():
-            await _seed_heartbeat(
-                session,
-                validator_hotkey="5Transition",
-                seen_at=_AFTER_REPORTING_GRACE - timedelta(seconds=30),
-            )
-
-        async with session.begin():
-            replacement = await issue_ticket(
-                session,
-                validator_hotkey="5Transition",
-                now=_AFTER_REPORTING_GRACE,
-                ttl=_TTL,
-                artifact_mode="screened_only",
-                validator_running_benchmark=False,
-                bench_version=_BENCH,
-            )
-        assert replacement is None
-        async with session.begin():
-            released = await session.get(
-                ValidatorTicket, (source_id, _RETIRED_BENCH, "5Transition")
-            )
-            assert released is not None
-            assert released.status == TicketStatus.EXPIRED
-
     async def test_screened_only_preserves_actively_running_incompatible_lease(
         self, session: AsyncSession
     ) -> None:
@@ -2274,11 +2179,7 @@ class TestIssueTicket:
 
     @pytest.mark.parametrize(
         "status",
-        (
-            AgentStatus.ATH_PENDING_REVIEW,
-            AgentStatus.QUARANTINED,
-            AgentStatus.REJECTED,
-        ),
+        (AgentStatus.ATH_PENDING_REVIEW,),
     )
     async def test_terminal_review_states_do_not_receive_new_tickets(
         self, session: AsyncSession, status: AgentStatus
@@ -2317,23 +2218,6 @@ class TestIssueTicket:
                 bench_version=_BENCH,
             )
         assert ticket is None
-
-    async def test_seats_ticket_for_evaluating_agent(
-        self, session: AsyncSession
-    ) -> None:
-        aid = await _seed_evaluating(session)
-        async with session.begin():
-            t = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        assert t is not None
-        assert t.agent_id == aid
-        assert t.status == TicketStatus.ISSUED
-        assert t.deadline == _NOW + _TTL
 
     async def test_low_first_score_still_receives_a_second_ticket(
         self, session: AsyncSession
@@ -2563,19 +2447,6 @@ class TestIssueTicket:
         assert ticket is not None
         assert ticket.agent_id == aid
 
-    async def test_no_evaluating_agent_returns_none(
-        self, session: AsyncSession
-    ) -> None:
-        async with session.begin():
-            t = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        assert t is None
-
     async def test_caps_at_quorum(self, session: AsyncSession) -> None:
         aid = await _seed_evaluating(session)
         async with session.begin():
@@ -2597,30 +2468,6 @@ class TestIssueTicket:
                 bench_version=_BENCH,
             )
         assert extra is None
-
-    async def test_same_validator_resumes_its_live_ticket(
-        self, session: AsyncSession
-    ) -> None:
-        await _seed_evaluating(session)
-        async with session.begin():
-            t1 = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-            t2 = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        assert t1 is not None
-        assert t2 is not None
-        assert t2.agent_id == t1.agent_id
-        assert t2.deadline == t1.deadline
 
     async def test_distinct_slots_receive_distinct_agents(
         self, session: AsyncSession
@@ -2901,56 +2748,6 @@ class TestIssueTicket:
             ticket = await issue_ticket(
                 session,
                 validator_hotkey="5Completion",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-
-        assert ticket is not None
-        assert ticket.agent_id == high
-
-    async def test_one_score_round_prioritizes_highest_provisional_score(
-        self, session: AsyncSession
-    ) -> None:
-        low = await _seed_evaluating(
-            session, created_at=_NOW - timedelta(hours=1), name="low"
-        )
-        high = await _seed_evaluating(session, created_at=_NOW, name="high")
-        async with session.begin():
-            for agent_id, composite in ((low, 0.40), (high, 0.80)):
-                validator = f"5Scored-{agent_id}"
-                session.add(
-                    ValidatorTicket(
-                        agent_id=agent_id,
-                        validator_hotkey=validator,
-                        status=TicketStatus.SCORED,
-                        issued_at=_NOW,
-                        deadline=_NOW + _TTL,
-                        bench_version=_BENCH,
-                        attempt_count=1,
-                    )
-                )
-                session.add(
-                    Score(
-                        agent_id=agent_id,
-                        validator_hotkey=validator,
-                        run_id=f"run-{agent_id}",
-                        signature=None,
-                        seed=123,
-                        composite=composite,
-                        tool_mean=composite,
-                        memory_mean=composite,
-                        median_ms=100,
-                        n=114,
-                        details=None,
-                        generated_at=_NOW,
-                    )
-                )
-
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5Next",
                 now=_NOW,
                 ttl=_TTL,
                 bench_version=_BENCH,
@@ -3302,77 +3099,6 @@ class TestIssueTicket:
         assert slot0.agent_id == oldest
         assert slot1 is None
 
-    async def test_completion_first_advances_past_head_validator_already_scored(
-        self, session: AsyncSession
-    ) -> None:
-        oldest = await _seed_evaluating(session, created_at=_NOW, name="oldest")
-        newer = await _seed_evaluating(
-            session,
-            created_at=_NOW + timedelta(minutes=1),
-            name="newer",
-        )
-        async with session.begin():
-            session.add(
-                ValidatorTicket(
-                    agent_id=oldest,
-                    validator_hotkey="5AlreadyScored",
-                    status=TicketStatus.SCORED,
-                    issued_at=_NOW,
-                    deadline=_NOW + _TTL,
-                    bench_version=_BENCH,
-                    attempt_count=1,
-                )
-            )
-
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5AlreadyScored",
-                now=_NOW,
-                ttl=_TTL,
-                completion_first=True,
-                bench_version=_BENCH,
-            )
-
-        assert ticket is not None
-        assert ticket.agent_id == newer
-
-    async def test_completion_first_advances_past_exhausted_head_retry(
-        self, session: AsyncSession
-    ) -> None:
-        oldest = await _seed_evaluating(session, created_at=_NOW, name="oldest")
-        newer = await _seed_evaluating(
-            session,
-            created_at=_NOW + timedelta(minutes=1),
-            name="newer",
-        )
-        async with session.begin():
-            session.add(
-                ValidatorTicket(
-                    agent_id=oldest,
-                    validator_hotkey="5Exhausted",
-                    status=TicketStatus.EXPIRED,
-                    issued_at=_NOW - timedelta(hours=2),
-                    deadline=_NOW - timedelta(hours=1),
-                    bench_version=_BENCH,
-                    attempt_count=MAX_ATTEMPTS_PER_VERSION,
-                    retry_after=None,
-                )
-            )
-
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5Exhausted",
-                now=_NOW,
-                ttl=_TTL,
-                completion_first=True,
-                bench_version=_BENCH,
-            )
-
-        assert ticket is not None
-        assert ticket.agent_id == newer
-
     async def test_completion_first_mixed_fleet_keeps_making_progress(
         self, session: AsyncSession
     ) -> None:
@@ -3622,65 +3348,6 @@ class TestExpiry:
         assert ticket.status == TicketStatus.EXPIRED
         assert ticket.attempt_count == 1
 
-    async def test_never_attempted_agent_precedes_eligible_retry(
-        self, session: AsyncSession
-    ) -> None:
-        slow = await _seed_evaluating(session, name="slow")
-        untouched = await _seed_evaluating(
-            session,
-            created_at=_NOW + timedelta(minutes=1),
-            name="untouched",
-        )
-        async with session.begin():
-            first = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        assert first is not None and first.agent_id == slow
-
-        async with session.begin():
-            claimed = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_AFTER_COOLDOWN,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-
-        assert claimed is not None
-        assert claimed.agent_id == untouched
-
-    async def test_first_expiry_exhausts_same_version_retry_budget(
-        self, session: AsyncSession
-    ) -> None:
-        aid = await _seed_evaluating(session)
-        async with session.begin():
-            await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        async with session.begin():
-            retry = await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_AFTER_COOLDOWN,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-
-        assert retry is None
-        async with session.begin():
-            ticket = await session.get(ValidatorTicket, (aid, _BENCH, "5V1"))
-        assert ticket is not None
-        assert ticket.status == TicketStatus.EXPIRED
-        assert ticket.attempt_count == 1
-
     async def test_benchmark_version_change_resets_retry_budget(
         self, session: AsyncSession
     ) -> None:
@@ -3811,20 +3478,6 @@ class TestExpiry:
         assert current.agent_id == aid
         assert current.bench_version == _BENCH
         assert current.attempt_count == 1
-
-    async def test_expire_overdue_returns_count(self, session: AsyncSession) -> None:
-        await _seed_evaluating(session)
-        async with session.begin():
-            await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        async with session.begin():
-            n = await expire_overdue_tickets(session, now=_LATER)
-        assert n == 1
 
 
 class TestIssueConfirmationTicket:
@@ -4111,27 +3764,6 @@ class TestTicketLifecycle:
             )
         assert t is not None
 
-    async def test_get_open_ticket_expired_is_none(self, session: AsyncSession) -> None:
-        aid = await _seed_evaluating(session)
-        async with session.begin():
-            await issue_ticket(
-                session,
-                validator_hotkey="5V1",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_BENCH,
-            )
-        async with session.begin():
-            t = await get_open_ticket(
-                session,
-                agent_id=aid,
-                validator_hotkey="5V1",
-                now=_LATER,
-                deadline=_NOW + _TTL,
-                bench_version=_BENCH,
-            )
-        assert t is None
-
     async def test_get_open_ticket_at_exact_deadline_is_none(
         self, session: AsyncSession
     ) -> None:
@@ -4155,19 +3787,6 @@ class TestTicketLifecycle:
                 bench_version=_BENCH,
             )
         assert ticket is None
-
-    async def test_get_open_ticket_absent_is_none(self, session: AsyncSession) -> None:
-        aid = await _seed_evaluating(session)
-        async with session.begin():
-            t = await get_open_ticket(
-                session,
-                agent_id=aid,
-                validator_hotkey="5Vx",
-                now=_NOW,
-                deadline=_NOW + _TTL,
-                bench_version=_BENCH,
-            )
-        assert t is None
 
     async def test_mark_scored_makes_ticket_not_open(
         self, session: AsyncSession

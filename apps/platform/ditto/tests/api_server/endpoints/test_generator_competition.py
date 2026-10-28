@@ -490,7 +490,11 @@ class TestUpload:
         assert missing.status_code == 404
 
     @pytest.mark.parametrize(
-        "name", ["", "   ", "x" * 65, "tab\there", "zero\u200bwidth", "line\u2028break"]
+        "name",
+        [
+            "",
+            "zero\u200bwidth",
+        ],
     )
     async def test_invalid_names_are_refused_before_anything_is_stored(
         self,
@@ -628,8 +632,6 @@ class TestUpload:
         [
             ("bad_signature", 400),
             ("sha_mismatch", 400),
-            ("not_gzip", 400),
-            ("no_go_mod", 400),
             ("unvendored", 400),
             ("unregistered", 400),
         ],

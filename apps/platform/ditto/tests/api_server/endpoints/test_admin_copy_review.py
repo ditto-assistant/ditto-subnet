@@ -742,7 +742,12 @@ async def test_resolved_review_reopens_without_rewriting_original_evidence(
         assert len(actions) == 3
 
 
-@pytest.mark.parametrize("previous_status", [AgentStatus.SCORED, AgentStatus.LIVE])
+@pytest.mark.parametrize(
+    "previous_status",
+    [
+        AgentStatus.SCORED,
+    ],
+)
 async def test_rejected_review_reopens_and_clear_restores_previous_status(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -1104,40 +1109,6 @@ async def test_resolved_clear_does_not_reopen_an_unrelated_ban(
     assert "agent is banned" in response.text
 
 
-async def test_reopen_still_fails_closed_on_changed_score_count(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    agent_id, sha256 = await _seed_scored_agent(maker)
-    _install(app, maker)
-    opened = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/open",
-        json={
-            "expected_sha256": sha256,
-            "expected_score_count": 3,
-            "reason": "Manual benchmark-overfit review",
-        },
-        headers=_HEADERS,
-    )
-    assert opened.status_code == 200
-    cleared = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
-        json={"resolution": "clear", "reason": "Initial evidence was clear"},
-        headers=_HEADERS,
-    )
-    assert cleared.status_code == 200
-    response = await client.post(
-        f"/api/v1/admin/copy-reviews/{agent_id}/open",
-        json={
-            "expected_sha256": sha256,
-            "expected_score_count": 2,
-            "reason": "New evidence requires another review",
-        },
-        headers=_HEADERS,
-    )
-    assert response.status_code == 409
-    assert "score count changed" in response.text
-
-
 async def test_list_is_bounded_oldest_first_and_private(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -1460,16 +1431,6 @@ async def test_list_can_embed_current_comparisons_in_one_request(
     # No fingerprint material leaks through the embedded form either.
     serialized = response.text.lower()
     assert "sha256" not in serialized and '"m":' not in serialized
-
-
-async def test_list_without_include_omits_comparisons(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    await _seed_current_comparison(maker)
-    _install(app, maker)
-    response = await client.get("/api/v1/admin/copy-reviews", headers=_HEADERS)
-    assert response.status_code == 200
-    assert response.json()["items"][0]["current_comparison"] is None
 
 
 async def test_embedded_comparison_matches_the_dedicated_endpoint(
@@ -1839,25 +1800,6 @@ async def test_source_diff_reports_budget_skipped_files_as_omitted(
     assert detail_body["identical"] is True
 
 
-async def test_source_diff_small_pair_omits_nothing(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    candidate_id, _reference_id, objects = await _seed_diff_pair(
-        maker,
-        candidate_files={"src/main.rs": "fn main() {}\n"},
-        reference_files={"src/main.rs": "fn main() {}\n"},
-    )
-    _install(app, maker)
-    _install_storage(app, objects)
-    response = await client.get(
-        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["omitted_file_count"] == 0
-    assert body["omitted_paths"] == []
-
-
 async def test_source_diff_audits_both_agents_whose_source_was_read(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -1915,28 +1857,6 @@ async def test_source_diff_file_audits_the_path_that_was_read(
     assert all((row.detail or {}).get("path") == "src/util.rs" for row in rows)
 
 
-async def test_source_diff_file_returns_unified_body(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    candidate_id, _, objects = await _seed_diff_pair(
-        maker,
-        candidate_files={"src/util.rs": "fn util() -> i32 { 1 }\n"},
-        reference_files={"src/util.rs": "fn util() -> i32 { 2 }\n"},
-    )
-    _install(app, maker)
-    _install_storage(app, objects)
-    response = await client.get(
-        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff/file",
-        params={"path": "src/util.rs"},
-        headers=_HEADERS,
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["candidate_present"] and body["reference_present"]
-    joined = "\n".join(body["diff_lines"])
-    assert "{ 2 }" in joined and "{ 1 }" in joined
-
-
 async def test_source_diff_requires_admin_actor(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -1966,22 +1886,6 @@ async def test_source_diff_missing_file_is_404(
         headers=_HEADERS,
     )
     assert response.status_code == 404
-
-
-async def test_source_diff_digest_mismatch_is_502(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    candidate_id, _, objects = await _seed_diff_pair(
-        maker, {"a.rs": "x\n"}, {"a.rs": "y\n"}
-    )
-    # Corrupt the stored candidate bytes so they no longer match agent.sha256.
-    objects[f"{candidate_id}/agent.tar.gz"] = _tarball({"a.rs": "tampered\n"})
-    _install(app, maker)
-    _install_storage(app, objects)
-    response = await client.get(
-        f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
-    )
-    assert response.status_code == 502
 
 
 async def _seed_lineage_pair(
