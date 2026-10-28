@@ -1473,8 +1473,12 @@ CREATE TABLE public.ath_copy_court_recommendations (
     model text,
     prompt_revision text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    triage_revision text DEFAULT 'rules-v1'::text NOT NULL,
+    application jsonb,
+    applied_at timestamp with time zone,
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_1d59 CHECK ((length(settings_checksum) = 64)),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_23b5 CHECK ((hold_class = ANY (ARRAY['near_duplicate'::text, 'rejected_resubmission_byte_identical'::text, 'rejected_resubmission_repack'::text, 'rejected_resubmission_cross_miner'::text, 'unknown'::text]))),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_2d55 CHECK (((length(TRIM(BOTH FROM triage_revision)) >= 1) AND (length(TRIM(BOTH FROM triage_revision)) <= 64))),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_66af CHECK ((length(TRIM(BOTH FROM reason)) >= 3)),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_7daa CHECK ((((model IS NULL) AND (prompt_revision IS NULL)) OR ((model IS NOT NULL) AND (prompt_revision IS NOT NULL)))),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_fded CHECK ((verdict = ANY (ARRAY['clear'::text, 'reject'::text, 'escalate'::text])))
@@ -7802,11 +7806,11 @@ ALTER TABLE ONLY public.artifact_release_settings_revisions
 
 
 --
--- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_triage_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
-    ADD CONSTRAINT ath_copy_court_recommendations_review_revision_key UNIQUE (review_id, settings_revision);
+    ADD CONSTRAINT ath_copy_court_recommendations_review_triage_key UNIQUE (review_id, settings_revision, triage_revision);
 
 
 --
