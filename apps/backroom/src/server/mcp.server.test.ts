@@ -974,8 +974,9 @@ describe('Backroom MCP tools', () => {
       // the eleven generator-round summaries to 27,023; keep about 200 chars
       // of headroom. The one-line emission allocation pair (SN-350) adds
       // about 150 chars. The one-line generator scorer capability read
-      // measures 27,441.
-      27_600,
+      // measures 27,441. The validator request-outcome read (job polls and
+      // the weight ledger, one line) brings the measured total to 27,653.
+      27_700,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
