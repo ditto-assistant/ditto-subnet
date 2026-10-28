@@ -1,7 +1,7 @@
 """Per-attempt screening review model usage telemetry.
 
 Revision ID: 5e2b9d7c4a18
-Revises: 5b8e2d4f6a13
+Revises: 8a31c6d4f902
 """
 
 import sqlalchemy as sa
@@ -10,7 +10,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "5e2b9d7c4a18"
-down_revision = "5b8e2d4f6a13"
+down_revision = "8a31c6d4f902"
 branch_labels = None
 depends_on = None
 
