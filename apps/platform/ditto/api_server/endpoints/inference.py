@@ -106,6 +106,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+from ditto.api_server.evaluation_billing import (begin_paid_evaluation, billing_enabled, confirmation_billing_agent)
+
 router = APIRouter(prefix="/inference", tags=["inference"])
 _EXCHANGE_MAX_AGE = timedelta(minutes=2)
 _PROXY_MAX_AGE = timedelta(seconds=30)
@@ -1990,7 +1992,7 @@ async def proxy_chat_completions(
     config = request.app.state.config.inference_proxy
     if not config.enabled or config.openrouter_api_key is None:
         raise HTTPException(status_code=404, detail="inference proxy is disabled")
-    if request.app.state.config.ditto_router_require_competition_account:
+    if request.app.state.config.ditto_router_require_competition_account and not billing_enabled(request):
         # Caddy may send requests here when relay ports are unset or during a
         # rollback. This Python route has no account-billed Router upstream:
         # refuse every request, linked or not, before reading a grant or
@@ -2174,6 +2176,10 @@ async def proxy_chat_completions(
     _attach_platform_middle_out(upstream_payload, original_body_bytes=len(body))
     if not reserved_grant.route_provider:
         raise HTTPException(status_code=409, detail="inference route unavailable")
+    paid_call = None
+    if billing_enabled(request):
+        async with session_maker() as billing_session:
+            paid_call = await begin_paid_evaluation(request, billing_session, agent_id=grant.agent_id, grant_id=x_ditto_grant, nonce=x_ditto_nonce, stage='competition-chat', model=model, provider=grant.route_provider, body=body)
     status = "failed"
     usage: tuple[int, int, int] | None = None
     raw: bytes | None = None
@@ -2221,6 +2227,8 @@ async def proxy_chat_completions(
             status_code=504 if timed_out else 502, detail=detail
         ) from error
     finally:
+        if paid_call is not None:
+            await paid_call.finish(response=httpx.Response(200, content=raw) if status == "completed" and raw else None, input_tokens=usage[0] if usage else 0, output_tokens=usage[1] if usage else 0, cost_microusd=usage[2] if usage else None)
         finished_at = datetime.now(UTC)
         async with session_maker() as session, session.begin():
             deliverable = await finish_inference_request(
@@ -2413,6 +2421,10 @@ async def proxy_embeddings(
         if isinstance(reserved, InferenceDecline):
             raise InferenceDeclinedError(reserved, lane="embedding")
 
+    paid_call = None
+    if billing_enabled(request):
+        async with session_maker() as billing_session:
+            paid_call = await begin_paid_evaluation(request, billing_session, agent_id=grant.agent_id, grant_id=x_ditto_grant, nonce=x_ditto_nonce, stage='competition-embedding', model=config.embedding_model, provider=config.embedding_provider, body=body)
     status = "failed"
     prompt_tokens = 0
     raw: bytes | None = None
@@ -2481,6 +2493,8 @@ async def proxy_embeddings(
             status_code=504 if timed_out else 502, detail=detail
         ) from error
     finally:
+        if paid_call is not None:
+            await paid_call.finish(response=upstream if "upstream" in locals() else None, input_tokens=prompt_tokens, cost_microusd=round(prompt_tokens * 0.004) if status == "completed" else None)
         finished_at = datetime.now(UTC)
         async with session_maker() as session, session.begin():
             deliverable = await finish_inference_request(
@@ -2718,6 +2732,11 @@ async def proxy_confirmation_chat_completions(
         expected_provider = reserved[0].receipt_provider
         expected_model = reserved[0].model
 
+    paid_call = None
+    if billing_enabled(request):
+        async with session_maker() as billing_session:
+            billing_agent = await confirmation_billing_agent(billing_session, grant.bundle_id)
+            paid_call = await begin_paid_evaluation(request, billing_session, agent_id=billing_agent, grant_id=grant_id, nonce=nonce, stage="confirmation-" + grant.lane, model=grant.model, provider=grant.receipt_provider, body=body, run_id=grant.ticket_id)
     status = "failed"
     prompt_tokens = completion_tokens = cost_microusd = 0
     receipt_provider: str | None = None
@@ -2799,6 +2818,8 @@ async def proxy_confirmation_chat_completions(
             status_code=502, detail="invalid provider response"
         ) from error
     finally:
+        if paid_call is not None:
+            await paid_call.finish(response=result.response if "result" in locals() else None, input_tokens=prompt_tokens, output_tokens=completion_tokens, cost_microusd=cost_microusd if status == "completed" else None)
         async with session_maker() as session, session.begin():
             deliverable = await finish_confirmation_inference_request(
                 session,
@@ -2895,6 +2916,11 @@ async def proxy_confirmation_embeddings(
         generation = reserved[0].generation
         expected_provider = reserved[0].receipt_provider
 
+    paid_call = None
+    if billing_enabled(request):
+        async with session_maker() as billing_session:
+            billing_agent = await confirmation_billing_agent(billing_session, grant.bundle_id)
+            paid_call = await begin_paid_evaluation(request, billing_session, agent_id=billing_agent, grant_id=grant_id, nonce=nonce, stage='confirmation-embedding', model=grant.model, provider=grant.receipt_provider, body=body, run_id=grant.ticket_id)
     status = "failed"
     prompt_tokens = 0
     raw: bytes | None = None
@@ -2923,6 +2949,8 @@ async def proxy_confirmation_embeddings(
             status_code=502, detail="invalid provider response"
         ) from error
     finally:
+        if paid_call is not None:
+            await paid_call.finish(response=upstream if "upstream" in locals() else None, input_tokens=prompt_tokens, cost_microusd=round(prompt_tokens * 0.004) if status == "completed" else None)
         async with session_maker() as session, session.begin():
             deliverable = await finish_confirmation_inference_request(
                 session,

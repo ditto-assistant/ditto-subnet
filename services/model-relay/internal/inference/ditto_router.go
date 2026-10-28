@@ -127,6 +127,9 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 		code := "upstream_http_" + strconv.Itoa(result.status)
 		if result.status == http.StatusPaymentRequired {
 			code = "ditto_router_payment_required"
+			failure := exhausted(code, result.attempts, false)
+			failure.routeObservable = false
+			return nil, failure
 		}
 		return nil, exhausted(code, result.attempts, result.status == 408 || result.status == 504)
 	}

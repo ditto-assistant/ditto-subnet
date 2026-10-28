@@ -98,12 +98,17 @@ type Config struct {
 // miners and change what the benchmark measures. Screener-side inference
 // (memories ON) is a different endpoint and a different lane.
 type DittoRouterConfig struct {
-	Enabled                   bool     // DITTO_ROUTER_UPSTREAM_ENABLED, default false
-	RequireCompetitionAccount bool     // DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT, default false; competition chat cannot fall back to sponsor inference
-	URL                       string   // DITTO_ROUTER_UPSTREAM_URL, default https://inference.heyditto.ai/v1/chat/completions
-	APIKey                    string   // DITTO_ROUTER_API_KEY; REQUIRED when Enabled (an owner-minted app endpoint key)
-	OnBehalfOfHeader          string   // DITTO_ROUTER_ON_BEHALF_OF_HEADER, default X-Ditto-On-Behalf-Of
-	Lanes                     []string // DITTO_ROUTER_LANES csv of {screener, competition}; default empty (nothing routed)
+	EvaluationBillingEnabled   bool // Full frozen-stage accounting; never also bill via Router inference.
+	EvaluationBillingURL       string
+	EvaluationEstimateMicrousd int64
+	EvaluationCapMicrousd      int64
+	EvaluationRequestMicrousd  int64
+	Enabled                    bool     // DITTO_ROUTER_UPSTREAM_ENABLED, default false
+	RequireCompetitionAccount  bool     // DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT, default false; competition chat cannot fall back to sponsor inference
+	URL                        string   // DITTO_ROUTER_UPSTREAM_URL, default https://inference.heyditto.ai/v1/chat/completions
+	APIKey                     string   // DITTO_ROUTER_API_KEY; REQUIRED when Enabled (an owner-minted app endpoint key)
+	OnBehalfOfHeader           string   // DITTO_ROUTER_ON_BEHALF_OF_HEADER, default X-Ditto-On-Behalf-Of
+	Lanes                      []string // DITTO_ROUTER_LANES csv of {screener, competition}; default empty (nothing routed)
 	// CompetitionAck is DITTO_ROUTER_COMPETITION_ACK and must equal
 	// CompetitionAckValue before "competition" may appear in Lanes.
 	CompetitionAck string
@@ -500,13 +505,27 @@ func loadDittoRouter(r *envReader) DittoRouterConfig {
 		}
 	}
 	cfg := DittoRouterConfig{
-		Enabled:                   r.boolval("DITTO_ROUTER_UPSTREAM_ENABLED", false),
-		RequireCompetitionAccount: r.boolval("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", false),
-		URL:                       r.str("DITTO_ROUTER_UPSTREAM_URL", "https://inference.heyditto.ai/v1/chat/completions"),
-		APIKey:                    r.str("DITTO_ROUTER_API_KEY", ""),
-		OnBehalfOfHeader:          r.str("DITTO_ROUTER_ON_BEHALF_OF_HEADER", "X-Ditto-On-Behalf-Of"),
-		Lanes:                     lanes,
-		CompetitionAck:            r.str("DITTO_ROUTER_COMPETITION_ACK", ""),
+		EvaluationBillingEnabled:   r.boolval("DITTO_EVALUATION_BILLING_ENABLED", false),
+		EvaluationBillingURL:       r.str("DITTO_EVALUATION_BILLING_URL", "https://api.heyditto.ai/v1/evaluation-billing"),
+		EvaluationEstimateMicrousd: r.int64val("DITTO_EVALUATION_ESTIMATE_MICROUSD", 1000000),
+		EvaluationCapMicrousd:      r.int64val("DITTO_EVALUATION_CAP_MICROUSD", 5000000),
+		EvaluationRequestMicrousd:  r.int64val("DITTO_EVALUATION_REQUEST_MICROUSD", 1000000),
+		Enabled:                    r.boolval("DITTO_ROUTER_UPSTREAM_ENABLED", false),
+		RequireCompetitionAccount:  r.boolval("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", false),
+		URL:                        r.str("DITTO_ROUTER_UPSTREAM_URL", "https://inference.heyditto.ai/v1/chat/completions"),
+		APIKey:                     r.str("DITTO_ROUTER_API_KEY", ""),
+		OnBehalfOfHeader:           r.str("DITTO_ROUTER_ON_BEHALF_OF_HEADER", "X-Ditto-On-Behalf-Of"),
+		Lanes:                      lanes,
+		CompetitionAck:             r.str("DITTO_ROUTER_COMPETITION_ACK", ""),
+	}
+	if cfg.EvaluationBillingEnabled {
+		u, err := url.Parse(cfg.EvaluationBillingURL)
+		if err != nil || u.Scheme != "https" || !dittoInferenceHost(u.Hostname()) || u.Path != "/v1/evaluation-billing" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+			r.fail("DITTO_EVALUATION_BILLING_URL must be a trusted Ditto https billing URL")
+		}
+		if cfg.APIKey == "" || cfg.EvaluationEstimateMicrousd < 1 || cfg.EvaluationCapMicrousd < cfg.EvaluationEstimateMicrousd || cfg.EvaluationCapMicrousd > 50000000 || cfg.EvaluationRequestMicrousd < 1 || cfg.EvaluationRequestMicrousd > cfg.EvaluationCapMicrousd {
+			r.fail("full evaluation billing requires a server endpoint key and bounded estimate/cap/request limits")
+		}
 	}
 	if !cfg.Enabled {
 		if cfg.RequireCompetitionAccount {

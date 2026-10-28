@@ -284,7 +284,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// reserving inference capacity. Missing/revoked links and lookup failures
 	// must never silently turn into Platform-sponsored OpenRouter calls.
 	var requiredDittoUser string
-	if d.Cfg != nil && d.Cfg.DittoRouter.RequireCompetitionAccount {
+	if d.Cfg != nil && d.Cfg.DittoRouter.RequireCompetitionAccount && !d.Cfg.DittoRouter.EvaluationBillingEnabled {
 		if !d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
 			relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "Ditto billing is unavailable", nil)
 			return
@@ -367,6 +367,13 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		quantization = reservedGrant.RouteQuantization.String
 	}
 
+	var evaluationRaw []byte
+	paid, billingErr := d.reserveEvaluation(ctx, reservedGrant.AgentID, headers, "competition-chat", model, reservedGrant.RouteProvider.String, body)
+	if billingErr != nil {
+		_, _ = d.settleRequest(ctx, headers, outcome)
+		writeHTTPError(w, r, billingErr)
+		return
+	}
 	started := time.Now()
 	settled := false
 	var deliverable bool
@@ -377,6 +384,10 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		settled = true
 		outcome.elapsed = time.Since(started)
+		if billingErr := paid.finish(ctx, outcome, evaluationRaw); billingErr != nil {
+			settleErr = billingErr
+			return
+		}
 		deliverable, settleErr = d.settleRequest(ctx, headers, outcome)
 		if settleErr != nil {
 			d.Logger.Error("chat: settle", slog.String("error", settleErr.Error()),
@@ -400,7 +411,11 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Ditto Router dogfood: only when the competition lane is explicitly on
 	// and this agent's miner linked a consenting Ditto account. Everyone else
 	// keeps the centralized OpenRouter path below, byte for byte.
-	if requiredDittoUser != "" {
+	if d.Cfg.DittoRouter.EvaluationBillingEnabled {
+		// Full evaluation accounting debits once through the approved run; the
+		// frozen direct route must not also charge through Router inference.
+		recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model, reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+	} else if requiredDittoUser != "" {
 		recovered, exhausted = completeChatViaDittoRouter(ctx, d.Upstream, cfg, d.Cfg.DittoRouter,
 			upstreamPayload, model, requiredDittoUser, dittoAttribution, d.sleep())
 	} else if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
@@ -437,6 +452,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		providerFailure = chatProviderFailure(exhausted)
 	} else {
 		raw = recovered.raw
+		evaluationRaw = raw
 		outcome.status = "completed"
 		outcome.usageAvailable = true
 		outcome.promptTokens = recovered.promptTokens
