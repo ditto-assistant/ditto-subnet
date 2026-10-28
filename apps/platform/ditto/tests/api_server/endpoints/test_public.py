@@ -160,6 +160,9 @@ SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 _MINER_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _VALIDATOR_C = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+# SS58-shaped witnesses that sort below and above every fixture hotkey, so the
+# fixture validator stays the lower-median row of a full quorum.
+_QUORUM_WITNESSES = ("5" + "1" * 47, "5" + "z" * 47)
 
 
 def _fake_validator_hotkey(index: int) -> str:
@@ -1561,34 +1564,32 @@ async def _seed_scored(
         )
         s.add(agent)
         await s.flush()
-        await upsert_score(
-            s,
-            agent_id=agent.agent_id,
-            validator_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-            run_id="run_1",
-            seed=42,
-            composite=composite,
-            tool_mean=tool_mean,
-            memory_mean=memory_mean,
-            median_ms=median_ms,
-            n=20,
-            generated_at=generated_at,
-            signature="ab" * 64,
-            details=details,
-            bench_version=bench_version,
-        )
-        if recorded_at is not None:
-            score = await s.get(
-                Score,
-                (
-                    agent.agent_id,
-                    bench_version,
-                    "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-                ),
+        # A full quorum: authority ledger reads omit sub-quorum rows.
+        for quorum_hotkey in (_VALIDATOR_C, *_QUORUM_WITNESSES):
+            await upsert_score(
+                s,
+                agent_id=agent.agent_id,
+                validator_hotkey=quorum_hotkey,
+                run_id="run_1",
+                seed=42,
+                composite=composite,
+                tool_mean=tool_mean,
+                memory_mean=memory_mean,
+                median_ms=median_ms,
+                n=20,
+                generated_at=generated_at,
+                signature="ab" * 64,
+                details=details,
+                bench_version=bench_version,
             )
-            assert score is not None
-            score.created_at = recorded_at
-            score.updated_at = recorded_at
+        if recorded_at is not None:
+            for quorum_hotkey in (_VALIDATOR_C, *_QUORUM_WITNESSES):
+                score = await s.get(
+                    Score, (agent.agent_id, bench_version, quorum_hotkey)
+                )
+                assert score is not None
+                score.created_at = recorded_at
+                score.updated_at = recorded_at
 
 
 async def _seed_k3(
@@ -5417,8 +5418,9 @@ class TestPublicLeaderboard:
         assert body["count"] == 2
         assert [e["rank"] for e in body["entries"]] == [1, 2]
         assert [e["miner_hotkey"] for e in body["entries"]] == [_MINER_B, _MINER_A]
-        assert all(e["finalized"] is False for e in body["entries"])
-        assert all(e["score_count"] == 1 for e in body["entries"])
+        # ``_seed_scored`` writes a full quorum; the board serves only those.
+        assert all(e["finalized"] is True for e in body["entries"])
+        assert all(e["score_count"] == 3 for e in body["entries"])
         top = body["entries"][0]
         assert top["agent_name"] == "agent"
         assert top["agent_version"] is None
@@ -5692,8 +5694,8 @@ class TestPublicHealth:
         assert body["miners"] == 3
         assert body["scored_miners"] == 2
         assert body["scored_agents"] == 2
-        assert body["total_scores"] == 2
-        assert body["scores_24h"] == 1  # only MINER_A is within 24h
+        assert body["total_scores"] == 6  # two full three-validator quorums
+        assert body["scores_24h"] == 3  # only MINER_A's quorum is within 24h
         assert body["avg_latency_ms"] == 600
         # last_scored_at is the newest platform write (MINER_A, ~5 min ago).
         last = datetime.fromisoformat(body["last_scored_at"])

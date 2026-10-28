@@ -37,6 +37,10 @@ from ditto.db.queries.scores import (
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _VALIDATOR = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+# SS58-shaped witnesses that sort below and above every fixture hotkey, so the
+# fixture validator stays the lower-median row of a full quorum.
+_QUORUM_WITNESSES = ("5" + "1" * 47, "5" + "z" * 47)
+
 _GEN_AT = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
 _FIRST_SEEN = datetime(2026, 6, 8, 9, 0, 0, tzinfo=UTC)
 # The generic "a benchmark version" fixture value. Nothing about the median,
@@ -310,21 +314,23 @@ async def _seed_scored(
                     timestamp=created_at,
                 )
             )
-        await upsert_score(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=_VALIDATOR,
-            bench_version=_BENCH_VERSION,
-            run_id="run_1",
-            seed=42,
-            composite=composite,
-            tool_mean=composite,
-            memory_mean=composite,
-            median_ms=500,
-            n=n,
-            generated_at=_GEN_AT,
-            signature="ab" * 64,
-        )
+        # A full quorum: authority ledger reads omit sub-quorum rows.
+        for quorum_hotkey in (_VALIDATOR, *_QUORUM_WITNESSES):
+            await upsert_score(
+                session,
+                agent_id=agent.agent_id,
+                validator_hotkey=quorum_hotkey,
+                bench_version=_BENCH_VERSION,
+                run_id="run_1",
+                seed=42,
+                composite=composite,
+                tool_mean=composite,
+                memory_mean=composite,
+                median_ms=500,
+                n=n,
+                generated_at=_GEN_AT,
+                signature="ab" * 64,
+            )
     return agent
 
 
@@ -482,19 +488,7 @@ class TestListEligibleLedger:
             n=MIN_ELIGIBLE_CASES,
         )
 
-        for agent, score in ((incumbent, 0.990), (challenger, 0.985)):
-            await _upsert(
-                session,
-                agent.agent_id,
-                validator_hotkey=_VALIDATOR + "-2",
-                composite=score,
-            )
-            await _upsert(
-                session,
-                agent.agent_id,
-                validator_hotkey=_VALIDATOR + "-3",
-                composite=score,
-            )
+        # ``_seed_scored`` already wrote each agent's full three-row quorum.
         async with session.begin():
             session.add(
                 ConfirmationScore(

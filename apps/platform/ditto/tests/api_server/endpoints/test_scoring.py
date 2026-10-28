@@ -54,6 +54,10 @@ from ditto.db.queries.validator_auth import VALIDATOR_NONCE_EXPIRY_MARGIN
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _BOB = bittensor.Keypair.create_from_uri("//Bob")
 _VALIDATOR_HOTKEY = _KEYPAIR.ss58_address
+# SS58-shaped witnesses that sort below and above every fixture hotkey, so the
+# fixture validator stays the lower-median row of a full quorum.
+_QUORUM_WITNESSES = ("5" + "1" * 47, "5" + "z" * 47)
+
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _AUTH_HEADER = {"X-Validator-Hotkey": _VALIDATOR_HOTKEY}
@@ -517,25 +521,27 @@ async def _seed_scored(
         )
         s.add(agent)
         await s.flush()
-        await upsert_score(
-            s,
-            agent_id=agent.agent_id,
-            validator_hotkey=_VALIDATOR_HOTKEY,
-            bench_version=_BENCH_VERSION,
-            run_id="run_1",
-            seed=42,
-            composite=composite,
-            tool_mean=composite,
-            memory_mean=composite,
-            median_ms=500,
-            n=n,
-            generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
-            signature="ab" * 64,
-            details={
-                "ticket_deadline": "2026-06-08T13:00:00+00:00",
-                "transcript_sha256": "cd" * 32,
-            },
-        )
+        # A full quorum: authority ledger reads omit sub-quorum rows.
+        for quorum_hotkey in (_VALIDATOR_HOTKEY, *_QUORUM_WITNESSES):
+            await upsert_score(
+                s,
+                agent_id=agent.agent_id,
+                validator_hotkey=quorum_hotkey,
+                bench_version=_BENCH_VERSION,
+                run_id="run_1",
+                seed=42,
+                composite=composite,
+                tool_mean=composite,
+                memory_mean=composite,
+                median_ms=500,
+                n=n,
+                generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
+                signature="ab" * 64,
+                details={
+                    "ticket_deadline": "2026-06-08T13:00:00+00:00",
+                    "transcript_sha256": "cd" * 32,
+                },
+            )
 
 
 class TestScoringLedger:
@@ -695,9 +701,10 @@ class TestScoringLedger:
         assert body["entries"][0]["bench_version"] == _BENCH_VERSION
         # No fleet capability evidence means the additive contract fails closed.
         assert body["entries"][0]["continual_aggregate_method"] is None
+        # Every quorum receipt rides the wire, ordered like the lower median.
         assert body["entries"][0]["score_proofs"] == [
             {
-                "validator_hotkey": _VALIDATOR_HOTKEY,
+                "validator_hotkey": hotkey,
                 "run_id": "run_1",
                 "composite": 0.9,
                 "seed": 42,
@@ -706,12 +713,17 @@ class TestScoringLedger:
                 "transcript_sha256": "cd" * 32,
                 "signature": "ab" * 64,
             }
+            for hotkey in (
+                _QUORUM_WITNESSES[0],
+                _VALIDATOR_HOTKEY,
+                _QUORUM_WITNESSES[1],
+            )
         ]
         # n rides the wire so the validator's eligibility floor can bite (a run
         # below MIN_ELIGIBLE_CASES is dropped from the fold rather than shadowing
         # a real full run.
         assert body["entries"][0]["n"] == 20
-        assert len(body["entries"][0]["score_proofs"]) == 1
+        assert body["entries"][0]["validator_hotkey"] == _VALIDATOR_HOTKEY
 
     async def test_absent_heartbeat_does_not_block_ledger_without_factor_candidates(
         self,
@@ -1882,21 +1894,22 @@ class TestScoringLedgerConfirmationHistory:
                 )
             )
             await s.flush()
-            await upsert_score(
-                s,
-                agent_id=aid,
-                validator_hotkey=_VALIDATOR_HOTKEY,
-                bench_version=_BENCH_VERSION,
-                run_id="run_1",
-                seed=42,
-                composite=0.9,
-                tool_mean=0.9,
-                memory_mean=0.9,
-                median_ms=500,
-                n=20,
-                generated_at=datetime(2026, 6, 8, tzinfo=UTC),
-                signature="ab" * 64,
-            )
+            for quorum_hotkey in (_VALIDATOR_HOTKEY, *_QUORUM_WITNESSES):
+                await upsert_score(
+                    s,
+                    agent_id=aid,
+                    validator_hotkey=quorum_hotkey,
+                    bench_version=_BENCH_VERSION,
+                    run_id="run_1",
+                    seed=42,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=20,
+                    generated_at=datetime(2026, 6, 8, tzinfo=UTC),
+                    signature="ab" * 64,
+                )
             # Two validators on seed 100, one on seed 200, all on the active era.
             await append_confirmation_scores(
                 s,

@@ -4413,9 +4413,46 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
         assert rollout.status == "activated"
         assert await open_rollout(session) is None
 
+        def unfinished_score(validator: int) -> Score:
+            return Score(
+                agent_id=unfinished_id,
+                bench_version=9,
+                validator_hotkey=f"validator-{validator}",
+                run_id=f"v4-unfinished-{validator}",
+                signature="cc",
+                seed=7,
+                composite=0,
+                tool_mean=0,
+                memory_mean=0,
+                median_ms=1,
+                n=114,
+                details={
+                    "bench_version": 9,
+                    "v9_base": {"semantic_gate_factor_bps": 0},
+                },
+                generated_at=now,
+            )
+
+        # Activation dropped the leftover cohort work while this scored member
+        # had only part of its desired-version quorum. The settled ledger must
+        # keep excluding it exactly as the collecting ledger did: a row with
+        # fewer than SCORING_QUORUM receipts fails validator proof
+        # verification and makes every validator reject the whole ledger.
+        session.add_all([unfinished_score(0), unfinished_score(1)])
+        await session.flush()
+        stranded_ledger = await list_eligible_ledger(session)
+        assert unfinished_id not in {row.agent_id for row in stranded_ledger}
+        assert {row.agent_id for row in stranded_ledger} == {
+            row.agent_id for row in collecting_ledger
+        }
+        # The historical single-version view still shows the partial median.
+        assert unfinished_id in {
+            row.agent_id for row in await list_eligible_ledger(session, bench_version=9)
+        }
+
         # Completing the last member with a legitimate semantic failure closes
         # the durable rollout record without requiring that failure to rank.
-        for validator in range(3):
+        for validator in range(2, 3):
             session.add(
                 Score(
                     agent_id=unfinished_id,
