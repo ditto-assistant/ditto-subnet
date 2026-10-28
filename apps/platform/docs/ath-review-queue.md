@@ -349,7 +349,7 @@ before any verdict:
   (`triage_revision = rules-v1`) — sha256 or normalized-source identity with
   an already rejected ancestor. "Check whether the cited behavior was removed"
   is false by construction; the recommendation cites the ancestor's reject.
-- `near_duplicate` (`triage_revision = family-diff-v1`) — the family diff in
+- `near_duplicate` (`triage_revision = family-diff-v2`) — the family diff in
   `copy_court_family.py` / `copy_court_triage.py`, the same procedure an
   operator runs by hand:
   1. Candidate bases: SHAs and UUIDs named in either side's
@@ -376,9 +376,12 @@ before any verdict:
   6. Verdict: CLEAR when the overlap is fully explained by proven-public
      bases and no distinctive line is present; REJECT (recommendation only)
      when at least three distinctive lines, or an unexplained file plus a
-     distinctive line, of the unreleased matched agent are present; otherwise
-     ESCALATE naming each unresolved check. Same-owner (coldkey) holds are a
-     same-owner clear.
+     distinctive line, of the unreleased matched agent are present and some
+     proven base shares a file with the matched agent (otherwise its
+     "distinctive" lines are just all of its lines); otherwise ESCALATE naming
+     each unresolved check. Same-owner (coldkey) holds are a same-owner clear.
+     The held owner's three latest uploads that predate the matched agent
+     count as the held owner's own lines and bytes (who came first).
 - `rejected_resubmission_cross_miner` and unknown classes escalate with the
   hold evidence. A storage read failure skips the hold for an hour (it never
   records) so a bad artifact cannot starve the oldest-first queue.

@@ -78,6 +78,7 @@ MAX_BASES = 6
 MAX_SIMILAR_PUBLIC = 4
 MAX_MATCHED_LINEAGE = 64
 MAX_DECLARED_NAMES = 16
+MAX_HELD_PRIORS = 3
 PRECEDENT_LIMIT = 3
 
 
@@ -376,17 +377,22 @@ async def triage_family(
         coldkeys.get(held.agent_id) is not None
         and coldkeys.get(held.agent_id) == coldkeys.get(matched.agent_id)
     )
-    held_prior = await session.scalar(
-        select(Agent)
-        .where(
-            Agent.miner_hotkey == held.miner_hotkey,
-            Agent.name == held.name,
-            Agent.created_at < matched.created_at,
-            Agent.agent_id != held.agent_id,
+    # The held owner's latest uploads that predate the matched agent: what
+    # they already carried is the held owner's own (who came first), even
+    # when a later version of theirs rewrote it.
+    held_priors = list(
+        await session.scalars(
+            select(Agent)
+            .where(
+                Agent.miner_hotkey == held.miner_hotkey,
+                Agent.created_at < matched.created_at,
+                Agent.agent_id != held.agent_id,
+            )
+            .order_by((Agent.name == held.name).desc(), Agent.created_at.desc())
+            .limit(MAX_HELD_PRIORS)
         )
-        .order_by(Agent.created_at.desc())
-        .limit(1)
     )
+    held_prior = held_priors[0] if held_priors else None
     screening = await _screening(session, held)
     matched_lineage = list(
         await session.scalars(
@@ -541,9 +547,9 @@ async def triage_family(
             )
         )
     prior_views: list[ArtifactView] = []
-    if held_prior is not None:
-        prior_views.append(await _view(held_prior, storage))
-        agents_read.append(held_prior)
+    for prior in held_priors:
+        prior_views.append(await _view(prior, storage))
+        agents_read.append(prior)
 
     kit_exact = _kit_digests()[0]
     facts = await asyncio.to_thread(
@@ -599,6 +605,14 @@ async def triage_family(
         },
         "same_owner": same_owner,
         "matched_after_held": matched_after_held,
+        "held_priors": [
+            {
+                "agent_id": str(prior.agent_id),
+                "label": _label(prior),
+                "uploaded_at": prior.created_at.isoformat(),
+            }
+            for prior in held_priors
+        ],
         "held_prior": (
             {
                 "agent_id": str(held_prior.agent_id),

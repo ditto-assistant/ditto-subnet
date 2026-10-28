@@ -35,7 +35,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import Any
 
-TRIAGE_REVISION = "family-diff-v1"
+TRIAGE_REVISION = "family-diff-v2"
 STARTER_KIT_BASE = "starter-kit"
 HELD_OWNER_PRIOR = "held-owner-prior"
 
@@ -171,6 +171,10 @@ class FamilyFacts:
     held_delta: dict[str, Any]
     incomplete: list[str]
     prior_explained_count: int = 0
+    # How many of the matched agent's files some proven base carries byte for
+    # byte. Zero means no proven base belongs to the matched family, so its
+    # "distinctive" lines are simply all of its lines and prove nothing.
+    matched_base_overlap: int = 0
 
     def as_evidence(self) -> dict[str, Any]:
         return {
@@ -187,6 +191,7 @@ class FamilyFacts:
             "distinctive_files": self.distinctive_files[:MAX_EVIDENCE_ROWS],
             "prior_suppressed": self.prior_suppressed,
             "prior_explained_count": self.prior_explained_count,
+            "matched_base_overlap": self.matched_base_overlap,
             "held_delta": self.held_delta,
             "incomplete": self.incomplete,
         }
@@ -394,6 +399,11 @@ def attribute_family(
         prior_suppressed=prior_suppressed,
         held_delta=_held_delta(held, primary.view if primary is not None else None),
         incomplete=incomplete,
+        matched_base_overlap=sum(
+            1
+            for digest in matched.digests.values()
+            if any(digest in digests for _agent_id, digests in base_sets)
+        ),
         prior_explained_count=sum(
             1
             for row in shared
@@ -606,7 +616,23 @@ def family_verdict(context: FamilyContext, facts: FamilyFacts) -> FamilyVerdict:
     copied_signal = facts.distinctive_present_count >= REJECT_MIN_DISTINCTIVE_LINES or (
         facts.unexplained and facts.distinctive_present_count > 0
     )
-    if not context.matched_public and copied_signal and proven:
+    if (
+        not context.matched_public
+        and copied_signal
+        and proven
+        and (facts.matched_base_overlap == 0)
+    ):
+        unresolved.append(
+            "no proven-public base shares a file with the matched agent, so its "
+            "distinctive lines cannot be separated from inherited code; find the "
+            "matched family's public base or the original author"
+        )
+    if (
+        not context.matched_public
+        and copied_signal
+        and proven
+        and facts.matched_base_overlap > 0
+    ):
         return FamilyVerdict(
             verdict="reject",
             basis="unreleased_distinctive_code_present",

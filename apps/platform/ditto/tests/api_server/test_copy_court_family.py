@@ -411,3 +411,35 @@ def test_held_owner_prior_explains_shared_bytes_but_blocks_auto_clear() -> None:
     assert verdict.verdict == "clear"
     assert not verdict.auto_clear_eligible
     assert any("who came first" in b for b in verdict.auto_clear_blockers)
+
+
+def test_unrelated_public_bases_cannot_carry_a_reject() -> None:
+    """A reformatted near-copy with no byte-shared files and only unrelated
+    public agents as bases: every matched line counts as distinctive, so the
+    court escalates rather than recommending a reject on that alone."""
+    unrelated = _view(
+        "u" * 32, "unrelated v3", {"lib/other.py": "OTHER = 'nothing in common'\n"}, 0
+    )
+    matched = _view("m" * 32, "matched", {"app/action.py": _ACTION_MATCHED}, 24)
+    held = _view(
+        "h" * 32,
+        "held",
+        {"app/action.py": _ACTION_MATCHED.replace("    ", "\t") + "# reformatted\n"},
+        48,
+    )
+    facts = attribute_family(
+        held=held,
+        matched=matched,
+        bases=[PublicBase(unrelated, "similar_public", _T0)],
+    )
+    assert facts.shared_count == 0
+    assert facts.matched_base_overlap == 0
+    assert facts.distinctive_present_count >= 3
+    verdict = family_verdict(
+        _context(
+            held, matched, [_proof(unrelated, proven=True, relation="similar_public")]
+        ),
+        facts,
+    )
+    assert verdict.verdict == "escalate"
+    assert any("matched family" in item for item in verdict.unresolved)
