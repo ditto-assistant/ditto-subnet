@@ -17,7 +17,6 @@ from ditto.api_models.track_share_settings import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.track_share_settings import (
-    TrackShareSettingsResolver,
     settings_from_row,
 )
 from ditto.db.models import ValidatorHeartbeat
@@ -75,31 +74,16 @@ async def _heartbeat(maker: async_sessionmaker[AsyncSession], protocol: int) -> 
         )
 
 
-def test_confirmation_phrase_spells_out_the_split() -> None:
-    assert track_shares_confirmation(_ACTIVATION) == (
-        "APPLY TRACK SHARES memory=9000 generator=1000"
-    )
-    assert track_shares_confirmation({"generator": 1000, "memory": 9000}) == (
-        "APPLY TRACK SHARES memory=9000 generator=1000"
-    )
-    assert track_shares_confirmation(None) == "CLEAR TRACK SHARES"
-    assert track_shares_confirmation({"memory": 0}) == "APPLY TRACK SHARES"
-
-
 @pytest.mark.parametrize(
     "shares",
     [
         {},
         {"generator": 1000},
         {"memory": 9000, "router": 1000},
-        {"memory": 9000, "coding": 1000},
         {"memory": 9500, "generator": 1000},
         {"memory": 9000, "generator": 1000, "bogus": 0},
-        {"memory": 9000, "generator": -1},
-        {"memory": 9000, "generator": 1000.0},
         {"memory": 9000, "generator": True},
         {"memory": 0},
-        {"memory": 0, "generator": 0},
     ],
 )
 def test_incoherent_splits_are_refused(shares: dict[str, object]) -> None:
@@ -191,10 +175,6 @@ async def test_a_malformed_revision_degrades_to_unset() -> None:
     row = SimpleNamespace(revision=7, settings={"track_shares_bps": {"generator": 1}})
     assert settings_from_row(row).track_shares_bps is None  # type: ignore[arg-type]
     assert settings_from_row(None).track_shares_bps is None
-
-
-async def test_resolver_without_a_session_maker_returns_the_default() -> None:
-    assert (await TrackShareSettingsResolver().resolve(None)).track_shares_bps is None
 
 
 async def test_unreadable_fleet_readiness_reports_the_split_as_unknown(

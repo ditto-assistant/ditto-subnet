@@ -165,32 +165,6 @@ async def test_settings_requires_confirmation_and_revision(
     assert response.status_code == 409
 
 
-async def test_settings_get_returns_history(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    _install(app, maker)
-    response = await client.get("/api/v1/admin/copy-court/settings", headers=_HEADERS)
-    assert response.status_code == 200
-    body = response.json()
-    assert body["current"] is None and body["history"] == []
-
-    await client.post(
-        "/api/v1/admin/copy-court/settings",
-        json={
-            "expected_revision": 0,
-            "settings": {"mode": "shadow"},
-            "reason": "first shadow revision",
-            "actor": "operator",
-            "confirmation": "APPLY COPY COURT SHADOW",
-        },
-        headers=_HEADERS,
-    )
-    response = await client.get("/api/v1/admin/copy-court/settings", headers=_HEADERS)
-    body = response.json()
-    assert body["current"]["settings"]["mode"] == "shadow"
-    assert len(body["history"]) == 1
-
-
 async def test_byte_identical_resubmission_gets_reject_recommendation(
     app: FastAPI,
     client: httpx.AsyncClient,

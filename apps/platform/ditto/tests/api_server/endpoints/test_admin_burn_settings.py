@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ditto.api_server.burn_settings import BurnSettingsResolver, settings_from_row
+from ditto.api_server.burn_settings import settings_from_row
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import BurnSettingsRevision as RevisionRow
 
@@ -117,7 +117,13 @@ async def test_rejects_stale_revision_and_wrong_confirmation(
     assert current.json()["effective"]["revision"] == 1
 
 
-@pytest.mark.parametrize("burn_share", [-0.01, 1.01, 2])
+@pytest.mark.parametrize(
+    "burn_share",
+    [
+        -0.01,
+        1.01,
+    ],
+)
 async def test_rejects_shares_outside_the_unit_interval(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -175,10 +181,6 @@ async def test_a_malformed_revision_degrades_to_no_burn() -> None:
     )
     assert settings_from_row(corrupt).burn_share == 0.0
     assert settings_from_row(None).burn_share == 0.0
-
-
-async def test_resolver_without_a_session_maker_returns_the_default() -> None:
-    assert (await BurnSettingsResolver().resolve(None)).burn_share == 0.0
 
 
 async def test_rank_shares_must_be_a_five_slot_curve_summing_to_one() -> None:

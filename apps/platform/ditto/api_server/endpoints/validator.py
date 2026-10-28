@@ -496,13 +496,6 @@ TRANSFORM_AUDIT_ENFORCE = os.environ.get(
 # gate is a no-op until an operator sets ``DITTO_OUTLIER_ESCALATION_MODE`` to
 # ``observe`` (record would-be holds) or ``enforce`` (open them). The bench-
 # version floor keeps v8-v11 behaviour byte-identical.
-def _outlier_escalation_settings_from_env() -> OutlierEscalationSettings:
-    """Build the escalation policy from the environment, falling back to shipped
-    defaults for any variable that is unset or unparseable (fail-safe: a bad
-    value degrades to the conservative default rather than crashing scoring)."""
-    return load_outlier_escalation_settings(os.environ).settings
-
-
 # Loaded once per process at import, like the transform-audit toggle. The load
 # record keeps each field's source (env / default / default_invalid_env) so the
 # admin posture read can show a silently-rejected variable; scoring only ever

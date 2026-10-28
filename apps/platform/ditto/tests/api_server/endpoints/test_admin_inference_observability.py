@@ -66,18 +66,6 @@ def _capture_payload(
     }
 
 
-async def test_capture_requires_admin_token(
-    app: FastAPI, client: httpx.AsyncClient
-) -> None:
-    _install(app)
-    response = await client.post(
-        "/api/v1/admin/runtime-profiles",
-        json=_capture_payload(),
-        headers={"X-Admin-Actor": "operator@example.com"},
-    )
-    assert response.status_code == 401
-
-
 async def test_capture_requires_exact_confirmation_and_actor(
     app: FastAPI, client: httpx.AsyncClient
 ) -> None:

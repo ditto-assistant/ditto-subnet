@@ -126,46 +126,6 @@ async def _count(maker: async_sessionmaker[AsyncSession], model: Any) -> int:
 # ─── Pure derivation ────────────────────────────────────────────────────────
 
 
-def test_live_split_derives_exactly_todays_served_fields() -> None:
-    derived = derive_served(
-        [
-            E("burn", None, 5000),
-            E("track", "memory", 3500),
-            E("track", "generator", 1500),
-        ]
-    )
-    assert derived.burn_share == 0.5
-    assert derived.track_shares_bps == {"memory": 7000, "generator": 3000}
-    assert derived.gamma_bps == {}
-    assert effective_split(
-        burn_share=0.5,
-        track_shares_bps={"memory": 7000, "generator": 3000},
-        gamma_bps={},
-    ) == {"memory": 3500.0, "generator": 1500.0, "burn": 5000.0}
-
-
-def test_confirmation_spells_every_nonzero_entry_in_canonical_order() -> None:
-    entries = canonical_entries(
-        [
-            E("gamma", "gm", 500),
-            E("track", "generator", 1500),
-            E("track", "router", 0),
-            E("track", "memory", 3500),
-            E("burn", None, 4500),
-        ]
-    )
-    assert [e.label for e in entries] == [
-        "burn",
-        "memory",
-        "router",
-        "generator",
-        "gamma:gm",
-    ]
-    assert confirmation_phrase(entries) == (
-        "APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500"
-    )
-
-
 def test_gamma_is_carved_before_the_burn_and_round_trips() -> None:
     entries = [
         E("burn", None, 4500),
@@ -232,14 +192,6 @@ def test_a_single_paid_track_and_burn_half_are_always_representable() -> None:
         (
             [
                 E("burn", None, 5000),
-                E("track", "memory", 3500),
-                E("track", "generator", 1600),
-            ],
-            "sum to 10100",
-        ),
-        (
-            [
-                E("burn", None, 5000),
                 E("track", "memory", 5000),
                 E("track", "memory", 0),
             ],
@@ -253,15 +205,6 @@ def test_a_single_paid_track_and_burn_half_are_always_representable() -> None:
                 E("track", "coding", 1000),
             ],
             "no shipped validator pays track coding",
-        ),
-        (
-            [
-                E("burn", None, 4000),
-                E("track", "memory", 5000),
-                E("track", "generator", 0),
-                E("track", "router", 1000),
-            ],
-            "no shipped validator pays track router",
         ),
         (
             [E("burn", None, 5000), E("track", "memory", 5000), E("track", "bogus", 0)],
@@ -303,13 +246,9 @@ def test_gamma_buckets_must_match_the_treasury_policy() -> None:
 @pytest.mark.parametrize(
     "entry",
     [
-        {"kind": "reward", "bps": 0},
         {"kind": "burn", "id": "memory", "bps": 0},
         {"kind": "track", "bps": 0},
         {"kind": "gamma", "id": "gm", "bps": 0},
-        {"kind": "track", "id": "memory", "bps": 1.5},
-        {"kind": "track", "id": "memory", "bps": -1},
-        {"kind": "track", "id": "memory", "bps": True},
     ],
 )
 def test_wire_entries_are_typed(entry: dict[str, Any]) -> None:

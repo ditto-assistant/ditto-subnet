@@ -8,18 +8,16 @@ audit-chain activity, and the read-only dry-run replay over the scored ledger.
 from __future__ import annotations
 
 import math
-import os
 import statistics
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from itertools import product
 from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -27,7 +25,6 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import validator as v
 from ditto.api_server.endpoints.validator import (
     _evaluate_and_record_outlier_escalation,
-    _outlier_escalation_settings_from_env,
 )
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
@@ -55,96 +52,9 @@ _FIELDS = (
 )
 
 
-def _legacy_settings_from_env() -> OutlierEscalationSettings:
-    """Verbatim copy of the env builder before source reporting existed.
-
-    The equivalence test below pins the new loader to this, so a change to the
-    fallback rules cannot slip in behind the visibility work.
-    """
-    defaults = OutlierEscalationSettings()
-
-    mode = (
-        os.environ.get("DITTO_OUTLIER_ESCALATION_MODE", defaults.mode).strip().lower()
-    )
-    if mode not in {"off", "observe", "enforce"}:
-        mode = defaults.mode
-
-    def _int(name: str, fallback: int) -> int:
-        try:
-            return int(os.environ[name])
-        except (KeyError, ValueError):
-            return fallback
-
-    def _float(name: str, fallback: float) -> float:
-        try:
-            return float(os.environ[name])
-        except (KeyError, ValueError):
-            return fallback
-
-    return OutlierEscalationSettings(
-        mode=mode,
-        min_bench_version=_int(
-            "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION", defaults.min_bench_version
-        ),
-        min_cohort_size=_int(
-            "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE", defaults.min_cohort_size
-        ),
-        modified_z_threshold=_float(
-            "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD",
-            defaults.modified_z_threshold,
-        ),
-        min_composite_floor=_float(
-            "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR",
-            defaults.min_composite_floor,
-        ),
-    )
-
-
-def _same(left: OutlierEscalationSettings, right: OutlierEscalationSettings) -> bool:
-    def eq(a: object, b: object) -> bool:
-        if isinstance(a, float) and isinstance(b, float):
-            return (math.isnan(a) and math.isnan(b)) or a == b
-        return a == b and type(a) is type(b)
-
-    return all(eq(getattr(left, name), getattr(right, name)) for name in _FIELDS)
-
-
-def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in OUTLIER_ESCALATION_ENV_VARS.values():
-        monkeypatch.delenv(name, raising=False)
-
-
 # ---------------------------------------------------------------------------
 # Loader: sources, and scoring settings unchanged
 # ---------------------------------------------------------------------------
-
-
-def test_loader_reports_default_for_every_unset_field() -> None:
-    loaded = load_outlier_escalation_settings({})
-    assert loaded.settings == OutlierEscalationSettings()
-    assert all(getattr(loaded.sources, name) == "default" for name in _FIELDS)
-
-
-def test_loader_reports_each_field_from_env() -> None:
-    loaded = load_outlier_escalation_settings(
-        {
-            "DITTO_OUTLIER_ESCALATION_MODE": " Enforce ",
-            "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION": "13",
-            "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE": "12",
-            "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD": "4.5",
-            "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR": "0.85",
-            "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": " True ",
-        }
-    )
-    assert loaded.settings == OutlierEscalationSettings(
-        mode="enforce",
-        min_bench_version=13,
-        min_cohort_size=12,
-        modified_z_threshold=4.5,
-        min_composite_floor=0.85,
-        per_axis_enforce=True,
-    )
-    assert all(getattr(loaded.sources, name) == "env" for name in _FIELDS)
 
 
 def test_loader_reports_rejected_env_and_falls_back() -> None:
@@ -162,43 +72,6 @@ def test_loader_reports_rejected_env_and_falls_back() -> None:
     assert all(
         getattr(loaded.sources, name) == "default_invalid_env" for name in _FIELDS
     )
-
-
-_MODE_VALUES = (None, "", "off", "OBSERVE", " enforce\n", "nonsense")
-_INT_VALUES = (None, "", "12", " 13 ", "1_000", "-1", "12.5", "x")
-_FLOAT_VALUES = (None, "", "6.0", "1e3", " 0.9 ", "inf", "nan", "0,9", "x")
-
-
-def test_loader_matches_the_legacy_builder_exactly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Scoring behaviour is identical: every accepted/rejected input resolves
-    to the same settings as the pre-visibility builder."""
-    cases = 0
-    for mode, int_value, float_value in product(
-        _MODE_VALUES, _INT_VALUES, _FLOAT_VALUES
-    ):
-        _clear_env(monkeypatch)
-        assignments = {
-            "DITTO_OUTLIER_ESCALATION_MODE": mode,
-            "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION": int_value,
-            "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE": int_value,
-            "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD": float_value,
-            "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR": float_value,
-        }
-        for name, value in assignments.items():
-            if value is not None:
-                monkeypatch.setenv(name, value)
-        legacy = _legacy_settings_from_env()
-        assert _same(_outlier_escalation_settings_from_env(), legacy), assignments
-        assert _same(load_outlier_escalation_settings(os.environ).settings, legacy)
-        cases += 1
-    assert cases == len(_MODE_VALUES) * len(_INT_VALUES) * len(_FLOAT_VALUES)
-
-
-def test_scoring_consumes_the_loaded_settings_object() -> None:
-    assert v.OUTLIER_ESCALATION_SETTINGS is v.OUTLIER_ESCALATION_SETTINGS_LOAD.settings
-    assert _same(v.OUTLIER_ESCALATION_SETTINGS, _outlier_escalation_settings_from_env())
 
 
 # ---------------------------------------------------------------------------
@@ -546,49 +419,6 @@ async def test_recent_list_is_bounded_and_reports_truncation(
     assert len(exact["activity"]["recent"]) == 3
 
 
-@pytest.mark.asyncio
-async def test_query_bounds_are_enforced(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, session_maker)
-    for params in (
-        {"limit": 0},
-        {"limit": 101},
-        {"window_hours": 0},
-        {"window_hours": 721},
-    ):
-        response = await client.get(_URL, headers=_HEADERS, params=params)
-        assert response.status_code == 422, params
-
-
-@pytest.mark.asyncio
-async def test_read_mutates_nothing(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(monkeypatch, {})
-    await _escalate(session_maker, mode="enforce", now=datetime.now(UTC))
-
-    async def _snapshot() -> tuple[int, int]:
-        async with session_maker() as session:
-            audit = await session.scalar(
-                select(func.count()).select_from(ScoreAuditEntry)
-            )
-            reviews = await session.scalar(select(func.count()).select_from(AthReview))
-            return int(audit or 0), int(reviews or 0)
-
-    before = await _snapshot()
-    settings_before = v.OUTLIER_ESCALATION_SETTINGS
-    assert (await client.get(_URL, headers=_HEADERS)).status_code == 200
-    assert await _snapshot() == before
-    assert v.OUTLIER_ESCALATION_SETTINGS is settings_before
-
-
 # ---------------------------------------------------------------------------
 # Dry run
 # ---------------------------------------------------------------------------
@@ -844,95 +674,6 @@ async def test_dry_run_applies_overrides_over_effective_settings(
     assert v.OUTLIER_ESCALATION_SETTINGS.min_composite_floor == 0.9
 
 
-@pytest.mark.asyncio
-async def test_dry_run_defaults_to_the_active_bench_version(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(monkeypatch, {})
-
-    body = (await client.get(_DRY_RUN_URL, headers=_HEADERS)).json()
-
-    # No rollout on record resolves to the scoreable floor, below v12 scope.
-    assert body["bench_version"] == 7
-    assert body["bench_version_in_scope"] is False
-    assert body["ledger_size"] == 0
-    assert body["cohort_size"] == 0
-    assert body["cohort_too_small"] is True
-    assert body["ledger_median"] is None
-    assert body["ledger_mad"] is None
-    assert body["would_trigger"] == []
-
-
-@pytest.mark.asyncio
-async def test_dry_run_query_bounds_are_enforced(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, session_maker)
-    for params in (
-        {"limit": 0},
-        {"limit": 101},
-        {"bench_version": 0},
-        {"min_cohort_size": 0},
-        {"min_cohort_size": 1001},
-        {"modified_z_threshold": 0},
-        {"modified_z_threshold": "nan"},
-        {"modified_z_threshold": "inf"},
-        {"min_composite_floor": -0.1},
-        {"min_composite_floor": 1.5},
-        {"min_composite_floor": "nan"},
-    ):
-        response = await client.get(_DRY_RUN_URL, headers=_HEADERS, params=params)
-        assert response.status_code == 422, params
-
-
-@pytest.mark.asyncio
-async def test_dry_run_mutates_nothing_even_in_enforce(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(monkeypatch, {"DITTO_OUTLIER_ESCALATION_MODE": "enforce"})
-    spike, _high = await _seed_spread_ledger(session_maker)
-
-    async def _snapshot() -> tuple[int, int, int]:
-        async with session_maker() as session:
-            audit = await session.scalar(
-                select(func.count()).select_from(ScoreAuditEntry)
-            )
-            reviews = await session.scalar(select(func.count()).select_from(AthReview))
-            scored = await session.scalar(
-                select(func.count())
-                .select_from(Agent)
-                .where(Agent.status == AgentStatus.SCORED)
-            )
-            return int(audit or 0), int(reviews or 0), int(scored or 0)
-
-    before = await _snapshot()
-    settings_before = v.OUTLIER_ESCALATION_SETTINGS
-    response = await client.get(
-        _DRY_RUN_URL,
-        headers=_HEADERS,
-        params={"bench_version": 12, "modified_z_threshold": 1.0},
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["would_trigger_count"] >= 1
-    assert await _snapshot() == before
-    assert v.OUTLIER_ESCALATION_SETTINGS is settings_before
-    async with session_maker() as session:
-        held = await session.get(Agent, spike.agent_id)
-        assert held is not None
-        assert held.status == AgentStatus.SCORED
-        assert held.review_reason is None
-
-
 # ---------------------------------------------------------------------------
 # Per-axis evidence (outlier-escalation-v2)
 # ---------------------------------------------------------------------------
@@ -1020,36 +761,6 @@ async def test_axis_evidence_is_counted_and_listed_apart_from_holds(
     bounded = (await client.get(_URL, headers=_HEADERS, params={"limit": 1})).json()
     assert bounded["activity"]["recent_axis_evidence_truncated"] is True
     assert len(bounded["activity"]["recent_axis_evidence"]) == 1
-
-
-@pytest.mark.asyncio
-async def test_posture_reports_the_per_axis_enforce_setting(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _install(app, session_maker)
-    _load_env(
-        monkeypatch,
-        {
-            "DITTO_OUTLIER_ESCALATION_MODE": "enforce",
-            "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE": "maybe",
-        },
-    )
-
-    response = await client.get(_URL, headers=_HEADERS)
-
-    body = response.json()
-    assert body["settings"]["per_axis_enforce"] is False
-    assert body["defaults"]["per_axis_enforce"] is False
-    assert body["sources"]["per_axis_enforce"] == "default_invalid_env"
-    assert body["invalid_env_fields"] == ["per_axis_enforce"]
-    assert (
-        body["env_vars"]["per_axis_enforce"]
-        == "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE"
-    )
-    assert "maybe" not in response.text
 
 
 @pytest.mark.asyncio

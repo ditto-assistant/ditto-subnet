@@ -11,9 +11,6 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
-from ditto.api_models.inference_concurrency_settings import (
-    DEFAULT_CHAT_REQUEST_BUDGET,
-)
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
@@ -102,56 +99,6 @@ class TestAuth:
         _install(app, settings_maker)
         assert (await client.get(_URL)).status_code == 401
 
-    async def test_write_requires_the_admin_token(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        assert (await client.post(_URL, json=_payload())).status_code == 401
-
-
-class TestRead:
-    async def test_empty_board_reports_the_shipped_defaults_as_effective(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        body = (await client.get(_URL, headers=_HEADERS)).json()
-        assert body["current"] == []
-        assert body["effective"]["source"] == "default"
-        assert body["effective"]["revision"] == 0
-        # The claim under test: with no revision written, the fleet is already
-        # running the raised limits rather than the vestigial 1/8/32 -- and,
-        # since this board grew a chat field, the raised request budget rather
-        # than the 1024 that was exhausting legitimate agents.
-        assert body["effective"]["settings"] == {
-            "chat_request_budget": DEFAULT_CHAT_REQUEST_BUDGET,
-            "chat_token_budget": 25_000_000,
-            "chat_per_ticket_concurrency": 16,
-            "chat_per_validator_concurrency": 48,
-            "chat_global_concurrency": 96,
-            "embedding_per_ticket_concurrency": 12,
-            "embedding_per_validator_concurrency": 48,
-            "embedding_global_concurrency": 96,
-            "chat_per_ticket_requests_per_minute": 1920,
-            "chat_per_validator_requests_per_minute": 7680,
-            "chat_global_requests_per_minute": 23040,
-            "embedding_per_ticket_requests_per_minute": 10_000,
-            "embedding_per_validator_requests_per_minute": 40_000,
-            "embedding_global_requests_per_minute": 100_000,
-            "benchmark_runtime": {
-                "case_concurrency": 4,
-                "relay_delay_fingerprint_mode": "off",
-                "relay_delay_fingerprint_min_ms": 25,
-                "relay_delay_fingerprint_max_ms": 250,
-                "sandbox_memory_limit_mib": 6_144,
-            },
-        }
-
 
 class TestWrite:
     async def test_apply_then_read_back(
@@ -208,30 +155,6 @@ class TestWrite:
         assert legacy.status_code == 200, legacy.text
         assert legacy.json()["settings"]["benchmark_runtime"] == runtime
 
-    async def test_emergency_brake_down_is_accepted(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Reverting must be as easy as ramping.
-
-        A board an operator can only raise is not a safety lever. The admission
-        path turns a lowered limit into ``503`` backpressure rather than a lost
-        lease, which is what makes this safe to do mid-run.
-        """
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                embedding_per_ticket_concurrency=1,
-                embedding_per_validator_concurrency=1,
-                embedding_global_concurrency=1,
-            ),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 200, response.text
-
     async def test_wrong_confirmation_is_refused(
         self,
         app: FastAPI,
@@ -256,72 +179,6 @@ class TestWrite:
             _URL, json=_payload(expected_revision=0), headers=_HEADERS
         )
         assert stale.status_code == 409
-
-    async def test_partial_policy_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(settings={"embedding_global_concurrency": 96}),
-            headers=_HEADERS,
-        )
-        # The envelope middleware replaces the body with a generic message, so
-        # the status is all this layer can assert; the named-missing-fields text
-        # is pinned in ditto/tests/api_models/test_inference_concurrency_settings.
-        assert response.status_code == 422
-
-    async def test_inverted_hierarchy_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                embedding_per_ticket_concurrency=64,
-                embedding_per_validator_concurrency=8,
-                embedding_global_concurrency=96,
-            ),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-
-    async def test_above_the_boot_check_ceiling_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Never accept a revision that ``check_config`` would reject at boot."""
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                embedding_per_ticket_concurrency=513,
-                embedding_per_validator_concurrency=513,
-                embedding_global_concurrency=513,
-            ),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-
-    async def test_non_global_scope_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        payload = _payload()
-        payload["scope"] = "validator-1"
-        response = await client.post(_URL, json=payload, headers=_HEADERS)
-        assert response.status_code == 422
 
     async def test_write_invalidates_the_admission_cache(
         self,

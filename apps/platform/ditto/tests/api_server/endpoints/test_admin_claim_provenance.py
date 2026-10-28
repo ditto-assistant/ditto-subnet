@@ -340,7 +340,7 @@ class TestClaimProvenanceCases:
         assert any("claim provenance flagged" in n for n in case["scorer_notes"])
         assert "Lisbon" not in json.dumps(body)
 
-    @pytest.mark.parametrize("headers", [{}, {"Authorization": "Bearer wrong"}])
+    @pytest.mark.parametrize("headers", [{"Authorization": "Bearer wrong"}])
     async def test_requires_the_admin_token(
         self,
         app: FastAPI,

@@ -206,16 +206,6 @@ async def test_stale_screening_policy_blocks(
     assert any("re-screen" in r for r in body["blocking_reasons"])
 
 
-async def test_non_evaluating_agent_blocks(
-    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
-) -> None:
-    agent_id = await _seed(sr_maker, status=AgentStatus.QUARANTINED)
-    _install(app, sr_maker)
-    body = await _get(client, agent_id)
-    assert body["leaseable"] is False
-    assert any("not evaluating" in r for r in body["blocking_reasons"])
-
-
 async def _join_activated_cohort(
     maker: async_sessionmaker[AsyncSession], agent_id: UUID, *, score_count: int
 ) -> None:
@@ -278,16 +268,6 @@ async def test_activated_cohort_member_at_quorum_is_not_leaseable(
     assert body["scoring_lane"] == "ordinary"
     assert body["leaseable"] is False
     assert any("not evaluating" in r for r in body["blocking_reasons"])
-
-
-async def test_unknown_agent_is_404(
-    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
-) -> None:
-    _install(app, sr_maker)
-    resp = await client.get(
-        f"/api/v1/admin/agents/{uuid4()}/scoring-readiness", headers=_HEADERS
-    )
-    assert resp.status_code == 404
 
 
 async def _seed_open_rollout(

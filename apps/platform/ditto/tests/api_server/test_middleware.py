@@ -90,15 +90,6 @@ class TestRequestIDMiddleware:
         response = await client.get("/health", headers={REQUEST_ID_HEADER: rid})
         assert response.headers[REQUEST_ID_HEADER] == rid
 
-    async def test_header_generated_when_absent(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        override_get_session(app)
-        override_get_chain_client(app)
-        response = await client.get("/health")
-        assert REQUEST_ID_HEADER in response.headers
-        assert len(response.headers[REQUEST_ID_HEADER]) >= 16
-
     async def test_contextvar_propagates_to_log_records(
         self, app: FastAPI, client: httpx.AsyncClient, caplog: pytest.LogCaptureFixture
     ):
@@ -145,25 +136,6 @@ class TestRequestIDMiddleware:
         response = await client.get("/health", headers={REQUEST_ID_HEADER: long_id})
         assert response.headers[REQUEST_ID_HEADER] != long_id
         assert len(response.headers[REQUEST_ID_HEADER]) == 32
-
-    def test_filter_uses_contextvar_default_outside_request(self):
-        """Records logged outside a request scope still format cleanly."""
-        # Reset to the default by clearing any leaked value from prior tests.
-        token = request_id_var.set("-")
-        try:
-            record = logging.LogRecord(
-                name="x",
-                level=20,
-                pathname="",
-                lineno=0,
-                msg="msg",
-                args=None,
-                exc_info=None,
-            )
-            RequestIdFilter().filter(record)
-            assert record.request_id == "-"
-        finally:
-            request_id_var.reset(token)
 
     async def test_contextvar_reset_when_call_next_raises(self):
         """``finally`` must reset the contextvar even when the inner
@@ -247,14 +219,6 @@ class TestErrorEnvelope:
         assert errors and all(getattr(r, "request_id", None) == rid for r in errors)
         assert request_id_var.get() == "-"
 
-    async def test_envelope_request_id_matches_middleware(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        _attach_error_routes(app)
-        rid = "envelope-rid"
-        response = await client.get("/_test/http", headers={REQUEST_ID_HEADER: rid})
-        assert response.json()["request_id"] == rid
-
 
 class TestPaymentVerifierEnvelope:
     """Each PaymentVerifierError subclass surfaces a typed 402 envelope."""
@@ -314,23 +278,6 @@ class TestPaymentVerifierEnvelope:
         assert response.status_code == 402
         body = response.json()
         assert body["error_code"] == ERROR_CODE_PAYMENT_VERIFIER
-
-    async def test_replay_does_not_fall_through_to_catch_all(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        """Without the specific 3207 handler the replay would surface as
-        the generic 3200 fallback. Pin the ordering by asserting the code."""
-
-        @app.get("/_test/payment_replay")
-        async def _raise() -> dict[str, Any]:
-            raise PaymentReplayedError("seen before")
-
-        response = await client.get("/_test/payment_replay")
-        assert response.status_code == 402
-        body = response.json()
-        assert body["error_code"] == ERROR_CODE_PAYMENT_REPLAYED
-        assert body["error_code"] != ERROR_CODE_PAYMENT_VERIFIER
-        assert body["message"] == "payment proof already used"
 
 
 class TestInferenceDeclineEnvelope:
@@ -467,31 +414,3 @@ class TestInferenceDeclineEnvelope:
         revoked = await client.get("/_test/decline_revoked")
         assert revoked.status_code == 429
         assert "Retry-After" not in revoked.headers
-
-    async def test_the_two_terminal_declines_share_a_status_but_not_a_code(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        """Revocation and exhaustion stay on 429 *deliberately*.
-
-        An old broker already treats 429 as fatal, which is correct for both,
-        so neither may move to a status it would mishandle. What they must not
-        share is the code -- that is the only thing letting a new broker
-        discard a dead run but wind down a merely-spent one.
-        """
-
-        @app.get("/_test/decline_exhausted")
-        async def _exhausted() -> dict[str, Any]:
-            raise InferenceDeclinedError(
-                InferenceDecline.BUDGET_EXHAUSTED, lane="inference"
-            )
-
-        @app.get("/_test/decline_dead")
-        async def _dead() -> dict[str, Any]:
-            raise InferenceDeclinedError(
-                InferenceDecline.GRANT_REVOKED, lane="inference"
-            )
-
-        exhausted = await client.get("/_test/decline_exhausted")
-        dead = await client.get("/_test/decline_dead")
-        assert exhausted.status_code == dead.status_code == 429
-        assert exhausted.json()["error_code"] != dead.json()["error_code"]

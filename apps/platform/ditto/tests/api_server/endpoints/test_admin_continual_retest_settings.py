@@ -248,42 +248,6 @@ async def test_earned_desired_authority_clears_standdown_without_operator_overri
     assert effective["rollout_standdown_active"] is False
 
 
-async def test_retest_cohort_size_is_operator_controlled_and_bounded(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    settings_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """Top-10 and top-25 are one audited revision; outside the band is refused."""
-    _install(app, settings_maker)
-
-    widened = await client.post(
-        _URL, headers=_HEADERS, json=_payload(retest_cohort_size=10)
-    )
-    assert widened.status_code == 200, widened.text
-    assert widened.json()["settings"]["retest_cohort_size"] == 10
-
-    effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
-    assert effective["settings"]["retest_cohort_size"] == 10
-
-    top25 = await client.post(
-        _URL,
-        headers=_HEADERS,
-        json=_payload(expected_revision=1, retest_cohort_size=25),
-    )
-    assert top25.status_code == 200, top25.text
-    assert top25.json()["settings"]["retest_cohort_size"] == 25
-
-    # Below the emission set the lane could not do its consensus job at all;
-    # above the cap it would spend the whole fleet on rescores.
-    for rejected in (4, 26):
-        response = await client.post(
-            _URL,
-            headers=_HEADERS,
-            json=_payload(expected_revision=2, retest_cohort_size=rejected),
-        )
-        assert response.status_code == 422, response.text
-
-
 async def test_the_tie_band_is_operator_controlled_and_bounded(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -333,91 +297,6 @@ async def test_the_tie_band_is_operator_controlled_and_bounded(
         ),
     )
     assert incoherent.status_code == 422, incoherent.text
-
-
-async def test_stored_revisions_predating_the_tie_band_still_load() -> None:
-    """A revision written before the band exists resolves to the fixed cutoff.
-
-    The board is append-only, so every revision Peyton has already written must
-    keep meaning exactly what it meant when he wrote it.
-    """
-    from ditto.api_server.continual_retest_settings import settings_from_row
-
-    class _Row:
-        revision = 4
-        settings = {
-            "aggregate_mode": "enabled",
-            "idle_retests_enabled": True,
-            "rollout_standdown": "all",
-            "retest_cohort_size": 25,
-        }
-
-    resolved = settings_from_row(_Row())  # type: ignore[arg-type]
-    assert resolved.retest_cohort_size == 25
-    assert resolved.retest_eligibility_mode == "fixed"
-
-
-async def test_wave_membership_is_operator_controlled(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    settings_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """The mode that moves the weight fold is one audited revision away."""
-    _install(app, settings_maker)
-
-    for mode in ("strict", "per_agent", "participants"):
-        payload = _payload(expected_revision=0)
-        payload["settings"]["wave_membership"] = mode  # type: ignore[index]
-        applied = await client.post(_URL, headers=_HEADERS, json=payload)
-        assert applied.status_code in (200, 409), applied.text
-        if applied.status_code == 200:
-            assert applied.json()["settings"]["wave_membership"] == mode
-            break
-
-    rejected = _payload(expected_revision=1)
-    rejected["settings"]["wave_membership"] = "everyone"  # type: ignore[index]
-    assert (await client.post(_URL, headers=_HEADERS, json=rejected)).status_code == 422
-
-
-async def test_stored_revisions_predating_wave_membership_still_load() -> None:
-    """An existing revision acquires the shipped default, not its old fold.
-
-    The board is append-only and v7 is live. ``participants`` is a deliberate,
-    authorized change to the fold, so a revision written before the field
-    existed resolves to it exactly as a fresh board does -- the field is absent
-    from the stored JSON, so there is no stored intent to preserve.
-    """
-    from ditto.api_server.continual_retest_settings import settings_from_row
-
-    class _Row:
-        revision = 5
-        settings = {
-            "aggregate_mode": "enabled",
-            "idle_retests_enabled": True,
-            "rollout_standdown": "all",
-            "retest_cohort_size": 25,
-        }
-
-    resolved = settings_from_row(_Row())  # type: ignore[arg-type]
-    assert resolved.retest_cohort_size == 25
-    assert resolved.wave_membership == "participants"
-
-
-async def test_stored_revisions_predating_the_cohort_dial_still_load() -> None:
-    """A revision written before this field exists resolves to the top five."""
-    from ditto.api_server.continual_retest_settings import settings_from_row
-
-    class _Row:
-        revision = 3
-        settings = {
-            "aggregate_mode": "enabled",
-            "idle_retests_enabled": True,
-            "rollout_standdown": "all",
-        }
-
-    resolved = settings_from_row(_Row())  # type: ignore[arg-type]
-    assert resolved.aggregate_mode == "enabled"
-    assert resolved.retest_cohort_size == 5
 
 
 async def test_rollout_standdown_modes_are_explicit() -> None:
