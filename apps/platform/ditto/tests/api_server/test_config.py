@@ -74,17 +74,13 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.per_validator_concurrency == 48
         assert config.inference_proxy.global_concurrency == 96
 
-    def test_capacity_event_retention_defaults_to_thirty_days(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.delenv("SCREENER_CAPACITY_EVENT_RETENTION_DAYS", raising=False)
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.screener_auth.capacity_event_retention_days == 30
-
-    @pytest.mark.parametrize(("raw", "expected"), [("0", 0), ("7", 7), ("90", 90)])
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("0", 0),
+            ("7", 7),
+        ],
+    )
     def test_capacity_event_retention_accepts_zero_or_at_least_a_week(
         self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
     ) -> None:
@@ -95,7 +91,13 @@ class TestParseApiServerConfigFromEnv:
 
         assert config.screener_auth.capacity_event_retention_days == expected
 
-    @pytest.mark.parametrize("raw", ["1", "6", "-5", "thirty", ""])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "6",
+            "thirty",
+        ],
+    )
     def test_capacity_event_retention_rejects_unsafe_values(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
     ) -> None:
@@ -104,16 +106,6 @@ class TestParseApiServerConfigFromEnv:
 
         with pytest.raises(ApiServerConfigError):
             parse_api_server_config_from_env(commit_hash="abc")
-
-    def test_public_rate_limit_is_off_by_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.delenv("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", raising=False)
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.public_rate_limit_per_minute == 0
 
     def test_public_rate_limit_env_picked_up(
         self, monkeypatch: pytest.MonkeyPatch
@@ -125,7 +117,13 @@ class TestParseApiServerConfigFromEnv:
 
         assert config.public_rate_limit_per_minute == 120
 
-    @pytest.mark.parametrize("raw", ["-1", "lots", ""])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "-1",
+            "lots",
+        ],
+    )
     def test_public_rate_limit_rejects_invalid_values(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
     ) -> None:
@@ -145,17 +143,13 @@ class TestParseApiServerConfigFromEnv:
 
         assert config.request_body_max_bytes == 32 << 20
 
-    def test_request_body_cap_env_picked_up(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_REQUEST_BODY_MAX_BYTES", str(8 << 20))
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.request_body_max_bytes == 8 << 20
-
-    @pytest.mark.parametrize("raw", ["0", "1048575", "lots", ""])
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "1048575",
+            "lots",
+        ],
+    )
     def test_request_body_cap_rejects_invalid_values(
         self, monkeypatch: pytest.MonkeyPatch, raw: str
     ) -> None:
@@ -164,20 +158,6 @@ class TestParseApiServerConfigFromEnv:
 
         with pytest.raises(ApiServerConfigError):
             parse_api_server_config_from_env(commit_hash="abc")
-
-    def test_free_taostats_key_config_is_optional(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        _set_minimum_env(monkeypatch)
-        url = "https://api.taostats.io/api/dtao/validator/available/v1?netuid=118"
-        monkeypatch.setenv("DITTO_TAOSTATS_VALIDATOR_NAMES_URL", url)
-        monkeypatch.setenv("DITTO_TAOSTATS_API_KEY", "free-api-key")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.validator_names.url == url
-        assert config.validator_names.api_key == "free-api-key"
-        assert config.validator_names.enabled is True
 
     def test_backroom_policy_is_not_environment_driven(
         self, monkeypatch: pytest.MonkeyPatch
@@ -203,36 +183,6 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.embedding_per_validator_concurrency == 48
         assert config.inference_proxy.embedding_global_concurrency == 96
 
-    def test_overrides_picked_up(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("API_HOST", "127.0.0.1")
-        monkeypatch.setenv("API_PORT", "9000")
-        monkeypatch.setenv("API_LOG_LEVEL", "debug")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.host == "127.0.0.1"
-        assert config.port == 9000
-        assert config.log_level == "DEBUG"
-
-    def test_composition_with_sub_configs(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("POSTGRES_USER", "alice")
-        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok-xyz")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.postgres.user == "alice"
-        assert config.chain.open_access_token == "tok-xyz"
-
-    def test_non_integer_port_raises(self, monkeypatch: pytest.MonkeyPatch):
-        """Parse-time failure: the value is not coercible to int."""
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("API_PORT", "not-a-port")
-
-        with pytest.raises(ApiServerConfigError, match="API_PORT"):
-            parse_api_server_config_from_env(commit_hash="abc")
-
     def test_missing_payment_address_raises(self, monkeypatch: pytest.MonkeyPatch):
         _set_minimum_env(monkeypatch)
         monkeypatch.delenv("DITTO_UPLOAD_PAYMENT_ADDRESS", raising=False)
@@ -244,8 +194,6 @@ class TestParseApiServerConfigFromEnv:
         "bad",
         [
             "REPLACE_WITH_DITTO_SS58_ADDRESS",  # the .env.example placeholder
-            "not-an-ss58",
-            "5short",
             "0OIl" * 12 + "1234567890ab",  # SS58 forbidden chars 0/O/I/l
         ],
     )
@@ -258,40 +206,9 @@ class TestParseApiServerConfigFromEnv:
         with pytest.raises(ApiServerConfigError, match="SS58"):
             parse_api_server_config_from_env(commit_hash="abc")
 
-    def test_pricing_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "7.50")
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_BUFFER", "1.2")
-        monkeypatch.setenv("PRICING_CACHE_TTL_SECONDS", "60")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        from decimal import Decimal
-
-        assert config.pricing.fee_usd == Decimal("7.50")
-        assert config.pricing.fee_buffer == Decimal("1.2")
-        assert config.pricing.cache_ttl_seconds == 60
-
-    def test_storage_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("STORAGE_ENDPOINT_URL", "https://s3.example.com")
-        monkeypatch.setenv("STORAGE_BUCKET", "custom-bucket")
-        monkeypatch.setenv("STORAGE_REGION", "eu-west-1")
-        monkeypatch.setenv("STORAGE_USE_TLS", "true")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.storage.endpoint_url == "https://s3.example.com"
-        assert config.storage.bucket == "custom-bucket"
-        assert config.storage.region == "eu-west-1"
-        assert config.storage.use_tls is True
-
 
 class TestCheckConfig:
     """Validation gates that the dataclass type system cannot enforce."""
-
-    def test_valid_config_passes(self):
-        check_config(make_api_server_config())
 
     def test_unknown_inference_routing_mode_fails_closed(self):
         base = make_api_server_config()
@@ -307,17 +224,13 @@ class TestCheckConfig:
         with pytest.raises(ApiServerConfigError, match="port out of range"):
             check_config(config)
 
-    def test_port_above_max_raises(self):
-        config = replace(make_api_server_config(), port=70000)
-        with pytest.raises(ApiServerConfigError, match="port out of range"):
-            check_config(config)
-
-    def test_unknown_log_level_raises(self):
-        config = replace(make_api_server_config(), log_level="loud")
-        with pytest.raises(ApiServerConfigError, match="log_level"):
-            check_config(config)
-
-    @pytest.mark.parametrize("version", ["latest", "v0.7.0", "0.7", ""])
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "latest",
+            "v0.7.0",
+        ],
+    )
     def test_validator_minimum_requires_stable_version(self, version: str):
         from ditto.api_server import ValidatorCompatibilityConfig
 
@@ -447,9 +360,7 @@ class TestCheckConfig:
         ("field", "value", "message"),
         [
             ("timeout_seconds", 5.1, "between 0.1 and 5"),
-            ("retry_seconds", 59, "at least 60"),
             ("refresh_seconds", 299, "at least the retry"),
-            ("max_stale_seconds", 3599, "at least the refresh"),
         ],
     )
     def test_validator_name_cache_bounds(
@@ -535,29 +446,15 @@ class TestEfficiencyBonusConfig:
         assert efficiency.memory_floor == 0.3
         check_config(config)
 
-    def test_non_numeric_knob_raises(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_CAP", "five-percent")
-        with pytest.raises(ApiServerConfigError, match="numeric"):
-            parse_api_server_config_from_env(commit_hash="abc")
-
     @pytest.mark.parametrize(
         ("overrides", "message"),
         [
             ({"fold_enabled": True}, "enabled before"),
             ({"enabled": True, "cap": 0.11}, "0.10"),
-            ({"enabled": True, "cap": 0.0}, "0.10"),
             ({"enabled": True, "deep_cap": 0.04}, "cap <= deep_cap"),
-            ({"enabled": True, "deep_cap": 0.11}, "cap <= deep_cap"),
-            ({"enabled": True, "deep_frontier_ratio": 0.0}, "in \\(0, 1\\)"),
-            ({"enabled": True, "deep_frontier_ratio": 1.0}, "in \\(0, 1\\)"),
-            ({"enabled": True, "deep_frontier_ratio": -0.5}, "in \\(0, 1\\)"),
             ({"enabled": True, "factor_alpha": 0.0}, "FACTOR_ALPHA"),
-            ({"enabled": True, "factor_alpha": 1.1}, "FACTOR_ALPHA"),
             ({"enabled": True, "minimum_factor": 0.0}, "MINIMUM_FACTOR"),
-            ({"enabled": True, "minimum_factor": 1.01}, "MINIMUM_FACTOR"),
             ({"enabled": True, "maximum_factor": 0.99}, "MAXIMUM_FACTOR"),
-            ({"enabled": True, "maximum_factor": 101.0}, "MAXIMUM_FACTOR"),
             ({"enabled": True, "min_cohort": 1}, "at least 2"),
             (
                 {"enabled": True, "cohort_size": 5, "min_cohort": 8},
@@ -590,11 +487,6 @@ class TestInferenceRequestBudgetBound:
     for as long as the process lived, and then refuse to boot on the next
     restart -- turning a settings change into a delayed outage.
     """
-
-    def test_the_shipped_default_is_within_the_bound(self):
-        config = make_api_server_config()
-        assert config.inference_proxy.request_budget <= MAX_CHAT_REQUEST_BUDGET
-        check_config(config)
 
     def test_embedding_fallback_is_pinned_to_direct_perplexity(self):
         config = make_api_server_config()

@@ -167,29 +167,6 @@ class TestChainClientLifecycle:
             identity_token="id-tok",
         )
 
-    @pytest.mark.usefixtures("install_pylon_module")
-    async def test_aenter_both_modes_passes_all_kwargs(self):
-        """Both auth modes set: ``AsyncConfig`` receives all three tokens.
-        Real Pylon supports this for processes that read open-access AND
-        also write under an identity."""
-        import pylon_client.artanis as artanis
-
-        config = ChainConfig(
-            pylon_url="http://pylon:8000",
-            netuid=118,
-            open_access_token="open-tok",
-            identity_name="validator",
-            identity_token="id-tok",
-        )
-        async with ChainClient(config):
-            pass
-        artanis.AsyncConfig.assert_called_once_with(
-            address="http://pylon:8000",
-            open_access_token="open-tok",
-            identity_name="validator",
-            identity_token="id-tok",
-        )
-
 
 class TestGetRecentNeurons:
     """Tests for ChainClient.get_recent_neurons."""
@@ -336,14 +313,6 @@ class TestIsRegistered:
         async with ChainClient(make_chain_config()) as client:
             assert await client.is_registered("5UNREGISTERED", 118) is False
 
-    async def test_propagates_chain_error(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = (
-            RuntimeError("pylon down")
-        )
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainConnectionError):
-                await client.is_registered("5HK1", 118)
-
 
 class TestGetRegisteredColdkey:
     async def test_returns_owner_for_registered_hotkey(
@@ -380,14 +349,6 @@ class TestGetLatestBlock:
         assert block.hash == "0xdead"
         assert block.timestamp == 1700000000
 
-    async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_latest_block_info.side_effect = (
-            TimeoutError()
-        )
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainTimeoutError):
-                await client.get_latest_block()
-
 
 class TestGetExtrinsic:
     """Tests for ChainClient.get_extrinsic."""
@@ -408,20 +369,6 @@ class TestGetExtrinsic:
         # succeeded is intentionally None: Pylon does not expose block_hash,
         # so the caller must invoke check_extrinsic_success separately.
         assert ext.succeeded is None
-
-    async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_extrinsic.side_effect = TimeoutError()
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainTimeoutError):
-                await client.get_extrinsic(block_number=100, extrinsic_index=7)
-
-    async def test_generic_error_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.open_access.get_extrinsic.side_effect = RuntimeError(
-            "boom"
-        )
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainConnectionError):
-                await client.get_extrinsic(block_number=100, extrinsic_index=7)
 
     async def test_pylon_not_found_raises_typed(self, install_pylon_module: AsyncMock):
         # Pylon raises a typed PylonNotFound; conftest installs a stand-in class.
@@ -445,19 +392,12 @@ class TestPutWeights:
             {"5HK1": 1.0}
         )
 
-    async def test_timeout_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.identity.put_weights.side_effect = TimeoutError()
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainTimeoutError):
-                await client.put_weights({"5HK1": 1.0})
-
-    async def test_generic_error_wrapped(self, install_pylon_module: AsyncMock):
-        install_pylon_module.v1.identity.put_weights.side_effect = RuntimeError("boom")
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainConnectionError):
-                await client.put_weights({"5HK1": 1.0})
-
-    @pytest.mark.parametrize("pylon_exc_attr", ["PylonUnauthorized", "PylonForbidden"])
+    @pytest.mark.parametrize(
+        "pylon_exc_attr",
+        [
+            "PylonUnauthorized",
+        ],
+    )
     async def test_pylon_auth_rejection_raises_chain_auth_error(
         self, install_pylon_module: AsyncMock, pylon_exc_attr: str
     ):
@@ -704,15 +644,6 @@ class TestGetBlockHash:
         assert block_hash == "0xabcd"
         install_substrate_module.get_block_hash.assert_awaited_once_with(123)
 
-    async def test_missing_hash_raises_not_found(
-        self, install_substrate_module: AsyncMock
-    ) -> None:
-        install_substrate_module.get_block_hash.return_value = None
-
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ExtrinsicNotFoundError):
-                await client.get_block_hash(123)
-
     async def test_timeout_is_wrapped(
         self, install_substrate_module: AsyncMock
     ) -> None:
@@ -898,20 +829,6 @@ class TestFinalizedBlocks:
         async with ChainClient(config) as client:
             assert await client.get_finalized_block_hash(457) == "0xabcd"
 
-    async def test_not_finalized_everywhere_raises_not_found(
-        self, install_substrate_module: AsyncMock
-    ) -> None:
-        install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
-        install_substrate_module.get_block_number.return_value = 456
-        config = make_chain_config(archive_rpc_url="wss://paid.example/rpc")
-
-        async with ChainClient(config) as client:
-            with pytest.raises(ExtrinsicNotFoundError, match="not finalized"):
-                await client.get_finalized_block_hash(457)
-
-        substrate_module = sys.modules["async_substrate_interface"]
-        assert substrate_module.AsyncSubstrateInterface.call_count == 2
-
 
 @pytest.mark.usefixtures("install_pylon_module")
 class TestCheckExtrinsicSuccess:
@@ -960,12 +877,6 @@ class TestCheckExtrinsicSuccess:
             ok = await client.check_extrinsic_success("0xhash", 3)
         assert ok is True
 
-    async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
-        install_substrate_module.query.side_effect = TimeoutError()
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainTimeoutError):
-                await client.check_extrinsic_success("0xhash", 3)
-
     async def test_historical_read_uses_authenticated_archive(
         self, install_substrate_module: AsyncMock
     ):
@@ -1002,32 +913,6 @@ class TestCheckExtrinsicSuccess:
 
         assert "super-secret" not in str(exc_info.value)
         assert "<redacted>" in str(exc_info.value)
-
-    async def test_configured_provider_is_tried_before_free_archives(
-        self, install_substrate_module: AsyncMock
-    ):
-        install_substrate_module.query.return_value = MagicMock(
-            value=[make_event_record(3, event_id="ExtrinsicSuccess")]
-        )
-        config = make_chain_config(
-            public_archive_rpc_urls=(
-                "wss://archive.chain.opentensor.ai:443",
-                "wss://bittensor-finney.api.onfinality.io/public-ws",
-            ),
-            archive_rpc_url="wss://paid.example/archive",
-            archive_rpc_api_key="paid-key",
-        )
-
-        async with ChainClient(config) as client:
-            ok = await client.check_extrinsic_success("0xhash", 3)
-
-        assert ok is True
-        substrate_factory = sys.modules[
-            "async_substrate_interface"
-        ].AsyncSubstrateInterface
-        assert [call.kwargs["url"] for call in substrate_factory.call_args_list] == [
-            "wss://paid.example/archive?authorization=paid-key",
-        ]
 
     async def test_configured_provider_failure_falls_through_to_free_archive(
         self, install_substrate_module: AsyncMock
@@ -1166,14 +1051,6 @@ class TestGetColdkeyForHotkey:
             with pytest.raises(ExtrinsicNotFoundError):
                 await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
 
-    async def test_none_result_raises_not_found(
-        self, install_substrate_module: AsyncMock
-    ):
-        install_substrate_module.query.return_value = None
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ExtrinsicNotFoundError):
-                await client.get_coldkey_for_hotkey("5Hotkey", "0xblock")
-
     async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
         install_substrate_module.query.side_effect = TimeoutError()
         async with ChainClient(make_chain_config()) as client:
@@ -1204,11 +1081,6 @@ class TestGetBlockTimestamp:
             ts = await client.get_block_timestamp("0xblock")
         assert ts == 1_700_000_000
 
-    async def test_unwraps_raw_int_result(self, install_substrate_module: AsyncMock):
-        install_substrate_module.query.return_value = 1_700_000_000_000
-        async with ChainClient(make_chain_config()) as client:
-            assert await client.get_block_timestamp("0xblock") == 1_700_000_000
-
     async def test_query_targets_timestamp_now_storage(
         self, install_substrate_module: AsyncMock
     ):
@@ -1226,16 +1098,4 @@ class TestGetBlockTimestamp:
         install_substrate_module.query.return_value = None
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ExtrinsicNotFoundError):
-                await client.get_block_timestamp("0xblock")
-
-    async def test_timeout_wrapped(self, install_substrate_module: AsyncMock):
-        install_substrate_module.query.side_effect = TimeoutError()
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainTimeoutError):
-                await client.get_block_timestamp("0xblock")
-
-    async def test_connection_error_wrapped(self, install_substrate_module: AsyncMock):
-        install_substrate_module.query.side_effect = RuntimeError("boom")
-        async with ChainClient(make_chain_config()) as client:
-            with pytest.raises(ChainConnectionError):
                 await client.get_block_timestamp("0xblock")

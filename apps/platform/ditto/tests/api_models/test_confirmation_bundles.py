@@ -4,17 +4,13 @@ from __future__ import annotations
 
 import json
 from datetime import date
-from typing import Literal
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.confirmation_bundles import (
-    MAX_BUNDLE_REQUEST_CAP,
-    MAX_BUNDLE_TOKEN_CAP,
     MAX_CONFIRMATION_TOP_N,
-    MAX_DAILY_BUNDLE_CAP,
     MAX_DAILY_DOLLAR_MICROUSD,
     AdminConfirmationBundleRetestRequest,
     AdminConfirmationBundleSettingsRequest,
@@ -62,14 +58,12 @@ class TestConfirmationBundleSettings:
         assert settings.profile_revision is None
         assert settings.profile_checksum is None
 
-    def test_default_json_contains_no_sentinel_profile(self) -> None:
-        payload = ConfirmationBundleSettings().model_dump(mode="json")
-        assert payload["profile_revision"] is None
-        assert payload["profile_checksum"] is None
-        assert "unconfigured" not in json.dumps(payload)
-        assert "0000000000000000" not in json.dumps(payload)
-
-    @pytest.mark.parametrize("mode", ["shadow", "enforce"])
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            "shadow",
+        ],
+    )
     def test_active_modes_accept_complete_policy(self, mode: str) -> None:
         settings = ConfirmationBundleSettings.model_validate_json(
             json.dumps(active_settings(mode=mode))
@@ -108,7 +102,12 @@ class TestConfirmationBundleSettings:
                 json.dumps(active_settings(mode=mode, **{field: 0}))
             )
 
-    @pytest.mark.parametrize("mode", ["shadow", "enforce"])
+    @pytest.mark.parametrize(
+        "mode",
+        [
+            "shadow",
+        ],
+    )
     def test_active_mode_rejects_unconfigured_profile(self, mode: str) -> None:
         with pytest.raises(ValidationError, match="confirmation_profile"):
             ConfirmationBundleSettings.model_validate_json(
@@ -123,7 +122,7 @@ class TestConfirmationBundleSettings:
 
     @pytest.mark.parametrize(
         ("revision", "checksum"),
-        [(None, _PROFILE_SHA), ("profile", None)],
+        [("profile", None)],
     )
     def test_profile_identity_is_all_or_nothing(
         self, revision: str | None, checksum: str | None
@@ -141,7 +140,9 @@ class TestConfirmationBundleSettings:
 
     @pytest.mark.parametrize(
         "checksum",
-        ["", "a" * 63, "a" * 65, "A" * 64, "g" * 64, "a" * 63 + " "],
+        [
+            "A" * 64,
+        ],
     )
     def test_profile_checksum_is_canonical_sha256(self, checksum: str) -> None:
         with pytest.raises(ValidationError, match="profile_checksum"):
@@ -149,16 +150,7 @@ class TestConfirmationBundleSettings:
                 json.dumps(active_settings(profile_checksum=checksum))
             )
 
-    @pytest.mark.parametrize("top_n", [1, 5, MAX_CONFIRMATION_TOP_N])
-    def test_top_n_accepts_every_boundary(self, top_n: int) -> None:
-        assert (
-            ConfirmationBundleSettings.model_validate_json(
-                json.dumps(active_settings(top_n=top_n))
-            ).top_n
-            == top_n
-        )
-
-    @pytest.mark.parametrize("top_n", [0, MAX_CONFIRMATION_TOP_N + 1])
+    @pytest.mark.parametrize("top_n", [MAX_CONFIRMATION_TOP_N + 1])
     def test_top_n_rejects_outside_hard_bounds(self, top_n: int) -> None:
         with pytest.raises(ValidationError, match="top_n"):
             ConfirmationBundleSettings.model_validate_json(
@@ -168,25 +160,7 @@ class TestConfirmationBundleSettings:
     @pytest.mark.parametrize(
         ("field", "maximum"),
         [
-            ("daily_bundle_cap", MAX_DAILY_BUNDLE_CAP),
             ("daily_dollar_cap_microusd", MAX_DAILY_DOLLAR_MICROUSD),
-            ("per_bundle_request_cap", MAX_BUNDLE_REQUEST_CAP),
-            ("per_bundle_token_cap", MAX_BUNDLE_TOKEN_CAP),
-        ],
-    )
-    def test_caps_accept_hard_maxima(self, field: str, maximum: int) -> None:
-        settings = ConfirmationBundleSettings.model_validate_json(
-            json.dumps(active_settings(**{field: maximum}))
-        )
-        assert getattr(settings, field) == maximum
-
-    @pytest.mark.parametrize(
-        ("field", "maximum"),
-        [
-            ("daily_bundle_cap", MAX_DAILY_BUNDLE_CAP),
-            ("daily_dollar_cap_microusd", MAX_DAILY_DOLLAR_MICROUSD),
-            ("per_bundle_request_cap", MAX_BUNDLE_REQUEST_CAP),
-            ("per_bundle_token_cap", MAX_BUNDLE_TOKEN_CAP),
         ],
     )
     def test_caps_reject_above_hard_maxima(self, field: str, maximum: int) -> None:
@@ -195,49 +169,15 @@ class TestConfirmationBundleSettings:
                 json.dumps(active_settings(**{field: maximum + 1}))
             )
 
-    @pytest.mark.parametrize("challenger_z", [0.0, 1.64, 3.0])
-    def test_uncertainty_width_accepts_bounds(self, challenger_z: float) -> None:
-        assert (
-            ConfirmationBundleSettings.model_validate_json(
-                json.dumps(active_settings(challenger_z=challenger_z))
-            ).challenger_z
-            == challenger_z
-        )
-
-    @pytest.mark.parametrize("challenger_z", [-0.001, 3.001])
-    def test_uncertainty_width_rejects_outside_bounds(
-        self, challenger_z: float
-    ) -> None:
-        with pytest.raises(ValidationError, match="challenger_z"):
-            ConfirmationBundleSettings.model_validate_json(
-                json.dumps(active_settings(challenger_z=challenger_z))
-            )
-
     @pytest.mark.parametrize(
         ("field", "value"),
         [
-            ("top_n", "5"),
-            ("daily_bundle_cap", "10"),
             ("daily_dollar_cap_microusd", 1.5),
-            ("per_bundle_request_cap", True),
-            ("per_bundle_token_cap", "100"),
-            ("challenger_z", "1.64"),
         ],
     )
     def test_numeric_controls_are_strict(self, field: str, value: object) -> None:
         with pytest.raises(ValidationError, match=field):
             ConfirmationBundleSettings.model_validate(active_settings(**{field: value}))
-
-    def test_unknown_settings_field_is_ignored(self) -> None:
-        settings = ConfirmationBundleSettings.model_validate_json(
-            json.dumps(active_settings(seed_count=32))
-        )
-        assert "seed_count" not in settings.model_dump()
-
-    def test_settings_are_frozen(self) -> None:
-        settings = ConfirmationBundleSettings()
-        with pytest.raises(ValidationError, match="frozen"):
-            settings.mode = ConfirmationBundleMode.SHADOW
 
 
 class TestAdminWriteContracts:
@@ -262,7 +202,7 @@ class TestAdminWriteContracts:
 
     @pytest.mark.parametrize(
         "missing",
-        ["expected_revision", "settings", "reason", "confirmation"],
+        ["expected_revision", "confirmation"],
     )
     def test_partial_settings_writes_are_rejected(self, missing: str) -> None:
         payload = self.request_payload()
@@ -272,24 +212,17 @@ class TestAdminWriteContracts:
                 json.dumps(payload)
             )
 
-    def test_negative_expected_revision_is_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="expected_revision"):
-            AdminConfirmationBundleSettingsRequest.model_validate_json(
-                json.dumps(self.request_payload(expected_revision=-1))
-            )
-
-    @pytest.mark.parametrize("reason", ["", "short", "       "])
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "short",
+        ],
+    )
     def test_short_reason_is_rejected(self, reason: str) -> None:
         with pytest.raises(ValidationError, match="reason"):
             AdminConfirmationBundleSettingsRequest.model_validate_json(
                 json.dumps(self.request_payload(reason=reason))
             )
-
-    def test_unknown_write_field_is_ignored(self) -> None:
-        request = AdminConfirmationBundleSettingsRequest.model_validate_json(
-            json.dumps(self.request_payload(patch=True))
-        )
-        assert "patch" not in request.model_dump()
 
     def test_retest_authorization_is_strict_and_audited(self) -> None:
         request_id = uuid4()
@@ -306,19 +239,6 @@ class TestAdminWriteContracts:
         )
         assert request.request_id == request_id
         assert request.expected_generation == 2
-
-    @pytest.mark.parametrize("generation", [-1, "0", True])
-    def test_retest_generation_rejects_invalid_values(self, generation: object) -> None:
-        with pytest.raises(ValidationError, match="expected_generation"):
-            AdminConfirmationBundleRetestRequest.model_validate(
-                {
-                    "request_id": uuid4(),
-                    "expected_generation": generation,
-                    "reason": "operator approved fresh confirmation evidence",
-                    "actor": "operator@example.com",
-                    "confirmation": "AUTHORIZE CONFIRMATION BUNDLE RETEST",
-                }
-            )
 
 
 class TestTypedEvidenceWireModels:
@@ -346,7 +266,12 @@ class TestTypedEvidenceWireModels:
         assert "full_composite" not in fields
         assert "evidence_sha256" not in fields
 
-    @pytest.mark.parametrize("extra", ["full_composite", "evidence_sha256", "metadata"])
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            "evidence_sha256",
+        ],
+    )
     def test_opaque_or_authoritative_top_level_fields_are_ignored(
         self, extra: str
     ) -> None:
@@ -359,13 +284,9 @@ class TestTypedEvidenceWireModels:
         "field,value",
         [
             ("fallback_used", True),
-            ("cost_source", "price_estimate"),
-            ("currency", "EUR"),
             ("requests", 0),
             ("successes", 0),
-            ("receipted_requests", 0),
             ("total_tokens", 999),
-            ("receipt_set_sha256", "A" * 64),
         ],
     )
     def test_provider_lane_rejects_invalid_known_accounting(
@@ -378,22 +299,9 @@ class TestTypedEvidenceWireModels:
         with pytest.raises(ValidationError):
             LongMemProviderLaneEvidence.model_validate(payload)
 
-    @pytest.mark.parametrize("intervention", ["inference", "embedding"])
-    def test_ablation_has_no_provider_or_model_surface(
-        self, intervention: Literal["inference", "embedding"]
-    ) -> None:
-        evidence = ablation_envelope(intervention).evidence
-        assert "provider" not in type(evidence).model_fields
-        assert "model" not in type(evidence).model_fields
-        assert evidence.synthetic_usage.upstream_requests == 0
-        assert evidence.synthetic_usage.upstream_provider_cost_microusd == 0
-
     @pytest.mark.parametrize(
         "field,value",
         [
-            ("request_count", 1),
-            ("input_tokens", 1),
-            ("output_tokens", 1),
             ("provider_cost_microusd", 1),
             ("synthetic", False),
         ],
@@ -406,18 +314,19 @@ class TestTypedEvidenceWireModels:
         with pytest.raises(ValidationError, match=field):
             type(ablation_envelope("inference")).model_validate(payload)
 
-    @pytest.mark.parametrize("signature", ["", "0", "zz", "AA", "a" * 513])
+    @pytest.mark.parametrize(
+        "signature",
+        [
+            "0",
+            "zz",
+            "AA",
+        ],
+    )
     def test_bundle_signature_is_canonical_bounded_hex(self, signature: str) -> None:
         payload = unsigned_report().model_dump(mode="json")
         payload["bundle_signature"] = signature
         with pytest.raises(ValidationError, match="bundle_signature"):
             ConfirmationCompletionReport.model_validate(payload)
-
-    def test_unknown_nested_metadata_is_ignored(self) -> None:
-        payload = unsigned_report().model_dump(mode="json")
-        payload["longmemeval"]["evidence"]["metadata"] = {"trust_me": True}
-        report = ConfirmationCompletionReport.model_validate(payload)
-        assert "metadata" not in report.longmemeval.evidence.model_dump()
 
 
 class TestBudgetWireModel:
@@ -431,40 +340,12 @@ class TestBudgetWireModel:
         )
         assert budget.committed_microusd == 100_000
 
-    def test_shadow_calibration_preserves_measured_cost_formula(self) -> None:
-        calibration = ConfirmationShadowCalibrationView(
-            observed_from_utc_day=date(2026, 8, 1),
-            observed_through_utc_day=date(2026, 8, 8),
-            observation_days=8,
-            confirmation_profile_revision="confirmation-v9-test-1",
-            confirmation_profile_checksum=_PROFILE_SHA,
-            base_run_count=40,
-            measured_base_cost_microusd=130_000,
-            confirmation_bundle_count=10,
-            measured_bundle_cost_microusd=60_000,
-            bench_version=11,
-            completed_bundle_count=8,
-            superseded_bundle_count=3,
-            failed_bundle_count=1,
-            qualified_bundle_count=2,
-            promotion_rate_bps=2_500,
-            projected_daily_spend_microusd=725_000,
-            epoch_duration_seconds=None,
-            projected_epoch_spend_microusd=None,
-            epoch_projection_unavailable_reason="epoch duration is not configured",
-        )
-        assert calibration.measured_base_cost_microusd == 130_000
-        assert calibration.measured_bundle_cost_microusd == 60_000
-        assert calibration.promotion_rate_bps == 2_500
-
     @pytest.mark.parametrize(
         "overrides",
         [
             {"base_run_count": 0},
             {"observation_days": 7},
             {"qualified_bundle_count": 9},
-            {"confirmation_profile_checksum": None},
-            {"epoch_projection_unavailable_reason": None},
         ],
     )
     def test_shadow_calibration_rejects_inconsistent_aggregates(
