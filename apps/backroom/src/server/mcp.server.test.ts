@@ -4697,6 +4697,20 @@ describe('Backroom MCP tools', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3)
     expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/admin/inference-grant-costs?hours=24')
 
+    fetchMock.mockResolvedValueOnce(Response.json(readJsonResult(response)))
+      .mockResolvedValueOnce(new Response('Cost view unavailable', { status: 503 }))
+    const withoutCosts = await client.callTool({
+      name: 'get_inference_runtime_metrics', arguments: { costWindowHours: 24 },
+    })
+    expect(withoutCosts.isError).not.toBe(true)
+    expect(readJsonResult(withoutCosts)).toMatchObject({
+      settings_revision: 14,
+      lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
+      grant_costs: null,
+      grant_costs_error: 'Cost view unavailable',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+
     await client.close()
     await server.close()
   })

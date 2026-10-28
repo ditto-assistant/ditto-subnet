@@ -3598,7 +3598,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     async ({ costWindowHours }) => {
       const metrics = await fetchInferenceRuntimeMetrics()
       if (costWindowHours === undefined) return result(metrics)
-      return result({ ...metrics, grant_costs: await fetchInferenceGrantCosts(costWindowHours) })
+      const costs = await fetchInferenceGrantCosts(costWindowHours).then(
+        (value) => ({ value, error: null }),
+        (error: unknown) => ({
+          value: null,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      )
+      return result({
+        ...metrics,
+        grant_costs: costs.value,
+        ...(costs.error === null ? {} : { grant_costs_error: costs.error }),
+      })
     },
   )
 
