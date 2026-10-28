@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -21,8 +22,10 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    Score,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
+from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.tests.legacy_era import retired_era_writes_allowed
 from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 
@@ -209,6 +212,70 @@ async def test_non_evaluating_agent_blocks(
     agent_id = await _seed(sr_maker, status=AgentStatus.QUARANTINED)
     _install(app, sr_maker)
     body = await _get(client, agent_id)
+    assert body["leaseable"] is False
+    assert any("not evaluating" in r for r in body["blocking_reasons"])
+
+
+async def _join_activated_cohort(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID, *, score_count: int
+) -> None:
+    """Make ``agent_id`` a frozen member of the activated rollout with scores."""
+    async with maker() as session, session.begin():
+        rollout_id = await session.scalar(select(BenchmarkRollout.rollout_id))
+        session.add(
+            BenchmarkRolloutMember(
+                rollout_id=rollout_id,
+                agent_id=agent_id,
+                position=1,
+                frozen_miner_hotkey="5Miner",
+                frozen_composite=0.9,
+            )
+        )
+        for index in range(score_count):
+            session.add(
+                Score(
+                    agent_id=agent_id,
+                    bench_version=MIN_SCOREABLE_BENCH_VERSION,
+                    validator_hotkey=f"validator-{index}",
+                    run_id=f"run-{index}",
+                    signature="aa",
+                    seed=index,
+                    composite=0.8,
+                    tool_mean=0.8,
+                    memory_mean=0.8,
+                    median_ms=1,
+                    n=114,
+                    details={"bench_version": MIN_SCOREABLE_BENCH_VERSION},
+                    generated_at=_T0,
+                )
+            )
+
+
+async def test_activated_cohort_member_below_quorum_is_leaseable_from_scored(
+    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """A frozen member left at 2/3 when its rollout closed is still served."""
+    agent_id = await _seed(sr_maker, status=AgentStatus.SCORED, historical=True)
+    await _join_activated_cohort(sr_maker, agent_id, score_count=SCORING_QUORUM - 1)
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    assert body["scoring_bench_version"] == MIN_SCOREABLE_BENCH_VERSION
+    assert body["scoring_lane"] == "rollout_cohort"
+    assert body["leaseable"] is True, body["blocking_reasons"]
+
+
+async def test_activated_cohort_member_at_quorum_is_not_leaseable(
+    app: FastAPI, client: httpx.AsyncClient, sr_maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed(sr_maker, status=AgentStatus.SCORED, historical=True)
+    await _join_activated_cohort(sr_maker, agent_id, score_count=SCORING_QUORUM)
+    _install(app, sr_maker)
+
+    body = await _get(client, agent_id)
+
+    assert body["scoring_lane"] == "ordinary"
     assert body["leaseable"] is False
     assert any("not evaluating" in r for r in body["blocking_reasons"])
 

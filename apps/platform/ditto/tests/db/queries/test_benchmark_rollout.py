@@ -65,6 +65,7 @@ from ditto.db.models import (
     V13ScorerCohortPin,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorQueueWithdrawal,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
@@ -93,6 +94,7 @@ from ditto.db.queries.benchmark_rollout import (
     historical_rescore_cohort,
     inference_activation_ready,
     issue_rollout_ticket,
+    issue_rollout_topup_ticket,
     maybe_activate_rollout,
     maybe_record_desired_authority,
     open_rollout,
@@ -1672,6 +1674,280 @@ async def test_rollout_ticket_respects_retry_cooldown_and_attempt_cap(
         assert granted is exhausted
         assert granted.status == TicketStatus.ISSUED
         assert granted.attempt_count == MAX_ATTEMPTS_PER_VERSION + 1
+
+
+async def _activate_with_short_tail(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    agent_ids: list[UUID],
+    now: datetime,
+) -> UUID:
+    """Close ``rollout`` with its last frozen member at 2/3 (validators a, b).
+
+    The shape production reached when an era activated on earned authority
+    while its tail was mid-rescore: the member stays ``scored`` with a short
+    desired-version quorum and no lane left that leases it.
+    """
+    version = rollout.desired_version
+    for agent_id in agent_ids[:-1]:
+        session.add_all(
+            _desired_quorum(
+                agent_id, desired_version=version, now=now, tag=str(agent_id)
+            )
+        )
+    tail_id = agent_ids[-1]
+    for index, hotkey in enumerate(("validator-a", "validator-b")):
+        session.add(
+            ValidatorTicket(
+                agent_id=tail_id,
+                bench_version=version,
+                validator_hotkey=hotkey,
+                slot_id="slot-0",
+                status=TicketStatus.SCORED,
+                purpose=TicketPurpose.CANONICAL_QUORUM,
+                purpose_revision=1,
+                issued_at=now - timedelta(hours=2),
+                deadline=now - timedelta(minutes=30),
+                attempt_count=1,
+                manual_retry_grants=0,
+            )
+        )
+        session.add(
+            Score(
+                agent_id=tail_id,
+                bench_version=version,
+                validator_hotkey=hotkey,
+                run_id=f"tail-{index}",
+                signature="bb",
+                seed=index,
+                composite=0.8,
+                tool_mean=0.8,
+                memory_mean=0.8,
+                median_ms=1,
+                n=114,
+                details={
+                    "bench_version": version,
+                    "v9_base": {"semantic_gate_factor_bps": 10_000},
+                },
+                generated_at=now,
+            )
+        )
+    rollout.status = "activated"
+    rollout.activated_at = now
+    await session.flush()
+    assert await open_rollout(session) is None
+    assert await active_bench_version(session) == version
+    return tail_id
+
+
+async def test_activated_rollout_topup_finishes_short_member_from_new_validator(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A member left at 2/3 by activation gets exactly one more distinct lease."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_rollout_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        tail_id = await _activate_with_short_tail(
+            session, rollout=rollout, agent_ids=agent_ids, now=now
+        )
+        version = rollout.desired_version
+        ttl = timedelta(minutes=90)
+        # The open-rollout lane is closed, which is how the tail was stranded.
+        assert (
+            await issue_rollout_ticket(
+                session, validator_hotkey="validator-c", now=now, ttl=ttl
+            )
+            is None
+        )
+        # Distinct-validator rule: the validators that scored it get nothing.
+        for hotkey in ("validator-a", "validator-b"):
+            assert (
+                await issue_rollout_topup_ticket(
+                    session,
+                    active_version=version,
+                    validator_hotkey=hotkey,
+                    now=now,
+                    ttl=ttl,
+                )
+                is None
+            )
+
+        ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-c",
+            now=now,
+            ttl=ttl,
+        )
+        assert ticket is not None
+        assert ticket.agent_id == tail_id
+        assert ticket.bench_version == version
+        assert ticket.status == TicketStatus.ISSUED
+        assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        assert ticket.purpose_revision == 1
+
+        # Its last quorum slot is in flight: no second lease from any slot.
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+                slot_id="slot-1",
+            )
+            is None
+        )
+
+        ticket.status = TicketStatus.SCORED
+        session.add(
+            Score(
+                agent_id=tail_id,
+                bench_version=version,
+                validator_hotkey="validator-c",
+                run_id="tail-c",
+                signature="cc",
+                seed=3,
+                composite=0.8,
+                tool_mean=0.8,
+                memory_mean=0.8,
+                median_ms=1,
+                n=114,
+                details={
+                    "bench_version": version,
+                    "v9_base": {"semantic_gate_factor_bps": 10_000},
+                },
+                generated_at=now,
+            )
+        )
+        await session.flush()
+        # At quorum the lane is inert for every validator.
+        for hotkey in ("validator-a", "validator-b", "validator-c"):
+            assert (
+                await issue_rollout_topup_ticket(
+                    session,
+                    active_version=version,
+                    validator_hotkey=hotkey,
+                    now=now,
+                    ttl=ttl,
+                    slot_id="slot-2",
+                )
+                is None
+            )
+
+
+async def test_activated_rollout_topup_never_displaces_or_collides(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Empty slots only, no lease beside another-version lease, queue rails hold."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _inherited_era_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        tail_id = await _activate_with_short_tail(
+            session, rollout=rollout, agent_ids=agent_ids, now=now
+        )
+        version = rollout.desired_version
+        ttl = timedelta(minutes=90)
+
+        # An idle same-era lease on this slot is the ordinary path's to resume;
+        # the top-up must neither take the slot nor revoke the lease.
+        ordinary = ValidatorTicket(
+            agent_id=agent_ids[0],
+            bench_version=version,
+            validator_hotkey="validator-c",
+            slot_id="slot-0",
+            status=TicketStatus.ISSUED,
+            purpose=TicketPurpose.CANONICAL_QUORUM,
+            purpose_revision=1,
+            issued_at=now - timedelta(minutes=5),
+            deadline=now + ttl,
+            attempt_count=1,
+            manual_retry_grants=0,
+        )
+        session.add(ordinary)
+        await session.flush()
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+                validator_running_benchmark=False,
+            )
+            is None
+        )
+        assert ordinary.status == TicketStatus.ISSUED
+        assert ordinary.deadline == now + ttl
+
+        # Lease-collision guard: a live lease on the member at another version
+        # on this validator keeps the top-up off every slot.
+        await session.delete(ordinary)
+        other_version = ValidatorTicket(
+            agent_id=tail_id,
+            bench_version=DEFAULT_BENCH_VERSION,
+            validator_hotkey="validator-c",
+            slot_id="slot-1",
+            status=TicketStatus.ISSUED,
+            issued_at=now - timedelta(minutes=5),
+            deadline=now + ttl,
+            attempt_count=1,
+            manual_retry_grants=0,
+        )
+        session.add(other_version)
+        await session.flush()
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+            )
+            is None
+        )
+
+        # An operator queue removal still pulls the member.
+        await session.delete(other_version)
+        withdrawal = ValidatorQueueWithdrawal(
+            withdrawal_id=uuid4(),
+            agent_id=tail_id,
+            bench_version=version,
+            actor="operator",
+            reason="test removal",
+            expected_snapshot="0" * 64,
+            score_count=2,
+            ticket_snapshot=[],
+        )
+        session.add(withdrawal)
+        await session.flush()
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+            )
+            is None
+        )
+        await session.delete(withdrawal)
+        await session.flush()
+        ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-c",
+            now=now,
+            ttl=ttl,
+        )
+        assert ticket is not None and ticket.agent_id == tail_id
 
 
 async def test_rollout_preempts_idle_source_lease_only_when_target_work_exists(

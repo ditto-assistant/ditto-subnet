@@ -39,7 +39,7 @@ from ditto.db.models import (
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-    from sqlalchemy.sql import Select
+    from sqlalchemy.sql import ColumnElement, Select
 
 
 # The version a rollout starts FROM when no rollout has ever activated. This
@@ -1721,28 +1721,47 @@ async def issue_rollout_ticket(
     # Retained as a keyword-compatible parameter for mixed platform callers;
     # the version contract, not an operator-wide routing flag, governs this.
     _ = artifact_mode
-    from ditto.db.queries.tickets import (
-        expire_overdue_tickets,
-        release_generator_round_dataset_pin,
-        retry_budget_spent,
-        ticket_attempt_cap,
-    )
-
     rollout = await open_rollout(session, for_update=True)
     if rollout is None:
         return None
-    # Mirrors the canonical issuance path. This lane could previously be entered
-    # without any sweep, so the only thing clearing an overdue lease off the slot
-    # was the revocation below -- which is why that query had to match overdue
-    # rows and could not carry a ``deadline > now`` filter. Sweeping first lets
-    # the revocation narrow to genuinely live leases without stranding the slot
-    # behind the one-issued-per-validator-slot unique index.
-    await expire_overdue_tickets(session, now=now)
-    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
-    if heartbeat is None or not heartbeat_supports_version(
-        heartbeat, now=now, version=rollout.desired_version
-    ):
-        return None
+    return await _issue_rollout_member_ticket(
+        session,
+        rollout=rollout,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        ttl=ttl,
+        validator_running_benchmark=validator_running_benchmark,
+        slot_id=slot_id,
+    )
+
+
+# ATH review is an emissions hold, not a scoring hold. The score endpoint
+# deliberately accepts reports for ATH_PENDING_REVIEW so evidence gathered
+# during review survives a later clear. Keep leasing the frozen member here as
+# well; authority/activation still excludes it until an operator clears the
+# hold via count_ranked_quorum_agents and maybe_activate_rollout.
+ROLLOUT_SCOREABLE_STATUSES = (
+    AgentStatus.SCORED,
+    AgentStatus.LIVE,
+    AgentStatus.ATH_PENDING_REVIEW,
+)
+
+
+def _rollout_member_candidates(
+    *,
+    rollout: BenchmarkRollout,
+    validator_hotkey: str,
+    now: datetime,
+    extra_predicates: Sequence[ColumnElement[bool]] = (),
+) -> tuple[Select, ColumnElement[int]]:
+    """Frozen members this validator may advance, and their quorum occupancy.
+
+    One candidate filter for the open rollout lane and its post-activation
+    top-up, so the distinct-validator rule, the retry budget and the
+    other-version lease guard cannot drift apart between them.
+    """
+    from ditto.db.queries.tickets import retry_budget_spent
+
     contract = benchmark_contract(rollout.desired_version)
     complete_screened_image = (
         Agent.screened_image_sha256.is_not(None)
@@ -1752,44 +1771,6 @@ async def issue_rollout_ticket(
         & Agent.screened_image_upload_id.is_not(None)
         & Agent.screened_image_verified_at.is_not(None)
     )
-    existing_statement = (
-        select(ValidatorTicket)
-        .join(
-            BenchmarkRolloutMember,
-            BenchmarkRolloutMember.agent_id == ValidatorTicket.agent_id,
-        )
-        .join(Agent, Agent.agent_id == ValidatorTicket.agent_id)
-        .where(
-            BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
-            ValidatorTicket.validator_hotkey == validator_hotkey,
-            ValidatorTicket.slot_id == slot_id,
-            ValidatorTicket.bench_version == rollout.desired_version,
-            ValidatorTicket.status == TicketStatus.ISSUED,
-            ValidatorTicket.purpose == TicketPurpose.CANONICAL_QUORUM,
-            ValidatorTicket.purpose_revision > 0,
-            ValidatorTicket.deadline > now,
-        )
-        .limit(1)
-        .with_for_update()
-    )
-    # ATH review is an emissions hold, not a scoring hold. The score endpoint
-    # deliberately accepts reports for ATH_PENDING_REVIEW so evidence gathered
-    # during review survives a later clear. Keep leasing the frozen member here
-    # as well; authority/activation still excludes it until an operator clears
-    # the hold via count_ranked_quorum_agents and maybe_activate_rollout.
-    rollout_scoreable_statuses = (
-        AgentStatus.SCORED,
-        AgentStatus.LIVE,
-        AgentStatus.ATH_PENDING_REVIEW,
-    )
-    existing_statement = existing_statement.where(
-        Agent.status.in_(rollout_scoreable_statuses),
-        Agent.screening_policy_version >= contract.minimum_screening_policy_version,
-        complete_screened_image,
-    )
-    existing = await session.scalar(existing_statement)
-    if existing is not None:
-        return existing
     score_count = (
         select(func.count(Score.validator_hotkey))
         .where(
@@ -1851,6 +1832,200 @@ async def issue_rollout_ticket(
         )
         .exists()
     )
+    statement = (
+        select(BenchmarkRolloutMember)
+        .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
+        .where(
+            BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+            Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
+            Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+            complete_screened_image,
+            ~already_scored,
+            ~already_ticketed,
+            ~live_at_other_version,
+            score_count + occupied_count < SCORING_QUORUM,
+            *extra_predicates,
+        )
+    )
+    return statement, score_count + occupied_count
+
+
+async def issue_rollout_topup_ticket(
+    session: AsyncSession,
+    *,
+    active_version: int,
+    validator_hotkey: str,
+    now: datetime,
+    ttl: timedelta,
+    validator_running_benchmark: bool = False,
+    slot_id: str = "slot-0",
+) -> ValidatorTicket | None:
+    """Finish a frozen member the activated rollout left below quorum.
+
+    Activation closes on earned authority (see :func:`_activate_earned_rollout`),
+    and frozen tails are deliberately not activation gates. But a member that
+    was mid-rescore keeps its status (``scored``/``live``), so once the
+    rollout stops being *open* neither lane can reach it: the cohort lane only
+    serves an open rollout and the ordinary queue leases only ``evaluating``.
+    The settled ledger serves full-quorum rows only, so such a member is
+    excluded from emissions until an unrelated operator action.
+
+    This is the cohort lane carried past activation for the active era only,
+    under the same candidate filter: one more lease from a validator that has
+    not scored, does not hold, and has not exhausted its budget on the member,
+    never beside a live lease at another version, and never past quorum.
+    Queue withdrawal and retirement still apply, so an operator can still pull
+    a member. Callers place it ahead of ordinary issuance, as the open lane
+    is, which bounds what it can claim to the tail's missing quorum slots. It
+    only fills an empty slot: unlike the open lane it never revokes a lease,
+    idle or not, to make room.
+
+    The fleet-wide existence check runs unlocked, so a steady state with no
+    incomplete member never takes the rollout row lock on a poll.
+    """
+    from ditto.db.queries.benchmark_admission import (
+        activated_rollout_for_version,
+        validator_queue_admission_predicate,
+    )
+    from ditto.db.queries.retirement import retirement_admission_predicate
+    from ditto.db.queries.validator_slot_occupancy import lock_validator_slot
+
+    if await open_rollout(session) is not None:
+        return None
+    # The same slot lock ``issue_ticket`` takes first (it is transaction-scoped
+    # and re-entrant), so the emptiness check below is authoritative against a
+    # concurrent claim on this slot through either lane. Lock order stays
+    # slot -> rollout row -> agent row.
+    await lock_validator_slot(
+        session, validator_hotkey=validator_hotkey, slot_id=slot_id
+    )
+    # A live lease on this slot -- ordinary work or an earlier top-up -- is
+    # the ordinary path's to resume. The open lane may revoke an idle
+    # source-era lease for cohort work; a top-up must never revoke same-era
+    # work to make room for itself.
+    if (
+        await session.scalar(
+            select(ValidatorTicket.agent_id)
+            .where(
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+                ValidatorTicket.slot_id == slot_id,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        return None
+    rollout = await activated_rollout_for_version(session, bench_version=active_version)
+    if rollout is None:
+        return None
+    extra_predicates = (
+        validator_queue_admission_predicate(bench_version=active_version),
+        retirement_admission_predicate(bench_version=active_version),
+    )
+    pending, _occupancy = _rollout_member_candidates(
+        rollout=rollout,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        extra_predicates=extra_predicates,
+    )
+    if (
+        await session.scalar(
+            pending.with_only_columns(BenchmarkRolloutMember.agent_id).limit(1)
+        )
+        is None
+    ):
+        return None
+    # Serialize top-up issuance exactly as the open lane serializes on its
+    # rollout row, so two validators cannot both read the last free quorum
+    # slot of one member.
+    locked = await session.scalar(
+        select(BenchmarkRollout)
+        .where(BenchmarkRollout.rollout_id == rollout.rollout_id)
+        .with_for_update()
+    )
+    if locked is None or locked.status != "activated":
+        return None
+    return await _issue_rollout_member_ticket(
+        session,
+        rollout=locked,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        ttl=ttl,
+        validator_running_benchmark=validator_running_benchmark,
+        slot_id=slot_id,
+        extra_predicates=extra_predicates,
+    )
+
+
+async def _issue_rollout_member_ticket(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    validator_hotkey: str,
+    now: datetime,
+    ttl: timedelta,
+    validator_running_benchmark: bool,
+    slot_id: str,
+    extra_predicates: Sequence[ColumnElement[bool]] = (),
+) -> ValidatorTicket | None:
+    """Lease one frozen ``rollout`` member to ``validator_hotkey``'s slot."""
+    from ditto.db.queries.tickets import (
+        expire_overdue_tickets,
+        release_generator_round_dataset_pin,
+        ticket_attempt_cap,
+    )
+
+    # Mirrors the canonical issuance path. This lane could previously be entered
+    # without any sweep, so the only thing clearing an overdue lease off the slot
+    # was the revocation below -- which is why that query had to match overdue
+    # rows and could not carry a ``deadline > now`` filter. Sweeping first lets
+    # the revocation narrow to genuinely live leases without stranding the slot
+    # behind the one-issued-per-validator-slot unique index.
+    await expire_overdue_tickets(session, now=now)
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    if heartbeat is None or not heartbeat_supports_version(
+        heartbeat, now=now, version=rollout.desired_version
+    ):
+        return None
+    contract = benchmark_contract(rollout.desired_version)
+    complete_screened_image = (
+        Agent.screened_image_sha256.is_not(None)
+        & Agent.screened_image_size_bytes.is_not(None)
+        & Agent.screened_image_id.is_not(None)
+        & Agent.screened_image_ref.is_not(None)
+        & Agent.screened_image_upload_id.is_not(None)
+        & Agent.screened_image_verified_at.is_not(None)
+    )
+    existing_statement = (
+        select(ValidatorTicket)
+        .join(
+            BenchmarkRolloutMember,
+            BenchmarkRolloutMember.agent_id == ValidatorTicket.agent_id,
+        )
+        .join(Agent, Agent.agent_id == ValidatorTicket.agent_id)
+        .where(
+            BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+            ValidatorTicket.validator_hotkey == validator_hotkey,
+            ValidatorTicket.slot_id == slot_id,
+            ValidatorTicket.bench_version == rollout.desired_version,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+            ValidatorTicket.purpose == TicketPurpose.CANONICAL_QUORUM,
+            ValidatorTicket.purpose_revision > 0,
+            ValidatorTicket.deadline > now,
+        )
+        .limit(1)
+        .with_for_update()
+    )
+    existing_statement = existing_statement.where(
+        Agent.status.in_(ROLLOUT_SCOREABLE_STATUSES),
+        Agent.screening_policy_version >= contract.minimum_screening_policy_version,
+        complete_screened_image,
+    )
+    existing = await session.scalar(existing_statement)
+    if existing is not None:
+        return existing
     # This rollout's frozen gate width, so retuning the live policy never
     # changes which members an in-flight rollout prioritises.
     priority_target = rollout.priority_cohort_target
@@ -1859,25 +2034,17 @@ async def issue_rollout_ticket(
         rollout=rollout,
         cohort_size=priority_target,
     )
-    member_statement = (
-        select(BenchmarkRolloutMember)
-        .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
-        .where(
-            BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
-            Agent.status.in_(rollout_scoreable_statuses),
-            Agent.screening_policy_version >= contract.minimum_screening_policy_version,
-            complete_screened_image,
-            ~already_scored,
-            ~already_ticketed,
-            ~live_at_other_version,
-            score_count + occupied_count < SCORING_QUORUM,
-        )
+    member_statement, occupancy = _rollout_member_candidates(
+        rollout=rollout,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        extra_predicates=extra_predicates,
     )
 
     def ordered_candidate(statement: Select) -> Select:
         return (
             statement.order_by(
-                (score_count + occupied_count).asc(),
+                occupancy.asc(),
                 BenchmarkRolloutMember.position,
             )
             .limit(1)

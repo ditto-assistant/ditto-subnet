@@ -4755,6 +4755,86 @@ class TestRequestJob:
         assert served.status_code == 200, served.text
         assert served.json()["agent_id"] == str(agent_id)
 
+    async def test_activated_rollout_tail_below_quorum_is_served_from_scored(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A frozen member stranded at 2/3 by activation gets its third lease.
+
+        Activation closes on earned authority, so the open cohort lane stops,
+        and the ordinary queue leases only ``evaluating``. The member must
+        still be finished from a validator that has not scored it -- ahead of
+        ordinary work, as the cohort was while the rollout was open.
+        """
+        rollout_id = await _seed_activated_era(session_maker)
+        tail_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            name="tail",
+            miner_hotkey="5TailMiner",
+            sha256="ab" * 32,
+            created_at=datetime.now(UTC) - timedelta(days=3),
+        )
+        ordinary_id = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, name="ordinary"
+        )
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRolloutMember(
+                    rollout_id=rollout_id,
+                    agent_id=tail_id,
+                    position=1,
+                    frozen_miner_hotkey="5TailMiner",
+                    frozen_composite=0.9,
+                )
+            )
+            for index, hotkey in enumerate(("5PeerOne", "5PeerTwo")):
+                session.add(
+                    Score(
+                        agent_id=tail_id,
+                        bench_version=_BENCH_VERSION,
+                        validator_hotkey=hotkey,
+                        run_id=f"tail-{index}",
+                        signature="aa",
+                        seed=index,
+                        composite=0.8,
+                        tool_mean=0.8,
+                        memory_mean=0.8,
+                        median_ms=100,
+                        n=114,
+                        details={"bench_version": _BENCH_VERSION},
+                        generated_at=now,
+                    )
+                )
+        await _seed_capable_pool(session_maker, keypairs=_KEYPAIRS[:1])
+        app.state.session_maker = session_maker
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        served = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+        assert served.status_code == 200, served.text
+        assert served.json()["agent_id"] == str(tail_id)
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket, (tail_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.status == TicketStatus.ISSUED
+            assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+            assert (
+                await session.get(
+                    ValidatorTicket, (ordinary_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+                )
+                is None
+            )
+
     async def test_paused_validator_can_resume_its_live_lease(
         self,
         app: FastAPI,

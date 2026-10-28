@@ -291,6 +291,7 @@ from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     heartbeat_supports_version,
     issue_rollout_ticket,
+    issue_rollout_topup_ticket,
     open_rollout,
     preserve_desired_authority,
     rollout_cohort_complete,
@@ -4276,9 +4277,23 @@ async def request_job(
                         )
                     )
                 )
+                if not gated:
+                    # The activated era's frozen tail, if any member was left
+                    # below quorum when the rollout closed. Bounded to that
+                    # tail's missing quorum slots, and inert (no lock) once
+                    # every member has settled.
+                    ticket = await issue_rollout_topup_ticket(
+                        session,
+                        active_version=canonical_version,
+                        validator_hotkey=payload.validator_hotkey,
+                        now=now,
+                        ttl=ticket_ttl,
+                        validator_running_benchmark=slot_running_benchmark,
+                        slot_id=slot_id,
+                    )
                 ticket = (
-                    None
-                    if gated
+                    ticket
+                    if gated or ticket is not None
                     else await issue_ticket(
                         session,
                         validator_hotkey=payload.validator_hotkey,
