@@ -29,10 +29,19 @@ tests. About 1 min per shard is setup (checkout, uv, Chromium, Postgres).
 
 | PR | Lever | Release before | Release after | Critical path after |
 |---|---|---|---|---|
-| this PR | Platform pytest: 6 hand-listed shards → 8 uniform round-robin shards | 20–27 min (remaining shard 20 min) | pending | pending |
+| #3249 | Platform pytest: 6 hand-listed shards → 8 uniform round-robin shards; deleted one timing-flaky log test | 20–27 min; full-stack 28 min (40721447774, verify ends 21.4 min) | 15.2 min full-stack (40746407609, verify ends 8.0 min) | Platform shard 7.4 min; full-stack image/deploy tail ~7 min |
+| #3251 | Observability only: Backroom `get_validator_request_outcomes` | — | pending | — |
+| #3252 | Test harness: reuse built routes and the OpenAPI document across per-test apps | — | pending | — |
+| #3253 | Delete 28 round-trip tests of migrations already applied in prod | — | pending | — |
+
+Operator steer (2026-10-28 18:40): no more sharding. The primary lever is
+deleting tests, keeping live known-vector/determinism, wire/OpenAPI, Alembic
+single-head, security/anti-tamper/treasury guards and this week's
+incident regressions. Caching, PR-CI reuse and supersession fixes are
+still fine.
 
 ## Next levers
 
-- Prune the slowest Platform tests (`--durations=25` now prints in every shard).
+- Delete low-value Platform tests file by file (`--durations=25` prints in every shard).
 - Reuse PR CI results when the release tree equals a verified PR merge tree.
 - Release concurrency that queues instead of superseding an in-flight publish.
