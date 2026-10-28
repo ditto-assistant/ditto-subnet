@@ -105,7 +105,7 @@ def test_one_time_reply_drafts_and_checks_are_w7_not_i3(render) -> None:
     for fragment in (
         "#### Clarification: one-time reply drafts and reply checks (2026-10-28)",
         "is a W7\nmodel-led critic, not an I3 violation",
-        "is not \"withholding a valid reply\"",
+        'is not "withholding a valid reply"',
         "It is still a violation when host code:",
         "A reviewer that finds only this resolves those I3 leads as refuted",
         "are withdrawn as\nprecedent",
