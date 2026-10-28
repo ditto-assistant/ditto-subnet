@@ -110,6 +110,7 @@ from ditto.api_server.endpoints import (
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
     admin_validator_capacity_router,
+    admin_validator_dispatch_outcomes_router,
     admin_validator_slot_settings_router,
     admin_validator_weights_router,
     attestation_router,
@@ -776,6 +777,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_retirement_router, prefix="/api/v1")
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
     app.include_router(admin_validator_capacity_router, prefix="/api/v1")
+    app.include_router(admin_validator_dispatch_outcomes_router, prefix="/api/v1")
     app.include_router(admin_scoring_readiness_router, prefix="/api/v1")
     app.include_router(admin_screener_review_settings_router, prefix="/api/v1")
     app.include_router(admin_screener_fanout_shadow_router, prefix="/api/v1")

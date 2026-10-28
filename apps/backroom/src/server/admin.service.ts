@@ -460,6 +460,7 @@ import {
   sourceReviewQueueSloSchema,
   athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
+  validatorDispatchOutcomeSummarySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
@@ -2454,6 +2455,19 @@ export async function fetchValidatorCapacity() {
     retries: 1,
   })
   return validatorCapacitySummarySchema.parse(payload)
+}
+
+const VALIDATOR_DISPATCH_OUTCOMES_PATH = '/api/v1/admin/validator-dispatch-outcomes'
+
+export async function fetchValidatorDispatchOutcomes(validatorHotkey?: string) {
+  const query = validatorHotkey
+    ? `?validator_hotkey=${encodeURIComponent(validatorHotkey)}`
+    : ''
+  const payload = await platformAdminRequest(`${VALIDATOR_DISPATCH_OUTCOMES_PATH}${query}`, {
+    timeoutMs: 8_000,
+    retries: 1,
+  })
+  return validatorDispatchOutcomeSummarySchema.parse(payload)
 }
 
 export async function fetchLedgerEpochSnapshots(limit = 24) {

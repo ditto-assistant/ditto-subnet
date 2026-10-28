@@ -180,6 +180,10 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.dispatch_outcomes import (
+    note_decline_reason,
+    track_dispatch_outcomes,
+)
 from ditto.api_server.efficiency import (
     audited_v9_run_token_total,
     ensure_current_efficiency_state,
@@ -1611,6 +1615,7 @@ def _record_dispatch_decline(
     operator lands once the metric has told them *which* gate to go read about.
     """
     VALIDATOR_DISPATCH_DECLINED.labels(reason=reason).inc()
+    note_decline_reason(reason)
     logger.info(
         "declined job reason=%s validator=%s slot=%s",
         reason,
@@ -3577,6 +3582,7 @@ async def _bind_unverified_v13_dataset(
         503: {"description": "Chain unavailable for the permit check."},
     },
 )
+@track_dispatch_outcomes("job", unauthenticated=(ValidatorAuthError,))
 async def request_job(
     payload: JobRequest,
     request: Request,
@@ -5553,6 +5559,7 @@ async def _canonical_tail_is_draining(
         503: {"description": "Chain unavailable for the permit / tempo check."},
     },
 )
+@track_dispatch_outcomes("top5_confirmation", unauthenticated=(ValidatorAuthError,))
 async def request_top5_confirmation_job(
     payload: Top5ConfirmationJobRequest,
     request: Request,
@@ -5587,6 +5594,7 @@ async def request_top5_confirmation_job(
     config = request.app.state.config
     if config.top5_backoff_base <= 0:
         if payload.slot_id is not None:
+            note_decline_reason("lane_disabled")
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
         raise HTTPException(
             status_code=409, detail="top-5 shared-seed rescore lane is disabled"
@@ -5698,6 +5706,7 @@ async def request_top5_confirmation_job(
                     payload.validator_hotkey,
                     payload.member_agent_id,
                 )
+                note_decline_reason("validator_paused")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             if not auto_routed:
                 # Legacy champion/member claims are not a slot poll. Returning
@@ -5757,6 +5766,7 @@ async def request_top5_confirmation_job(
                 continual_settings.rollout_standdown,
             )
             if auto_routed and live_retest is None:
+                note_decline_reason("rollout_standdown")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(status_code=409, detail=standdown)
         v7_calibration = None
@@ -5846,6 +5856,7 @@ async def request_top5_confirmation_job(
                         request_id=payload.nonce,
                         compensate=False,
                     )
+                note_decline_reason("member_left_cohort")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -5898,6 +5909,7 @@ async def request_top5_confirmation_job(
                     request_id=payload.nonce,
                     compensate=False,
                 )
+                note_decline_reason("member_left_cohort")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -6084,6 +6096,7 @@ async def request_top5_confirmation_job(
                     status_code=409,
                     detail=legacy_decline or "the requested retest is not claimable",
                 )
+            note_decline_reason("no_candidate")
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
         confirmation_datasets: list[ConfirmationDatasetPin] = []
@@ -6171,6 +6184,7 @@ async def request_top5_confirmation_job(
         )
         if retest_slot is None:
             if auto_routed:
+                note_decline_reason("slot_ceiling")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -6193,6 +6207,7 @@ async def request_top5_confirmation_job(
         )
         if ticket is None:
             if auto_routed:
+                note_decline_reason("no_ticket")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,

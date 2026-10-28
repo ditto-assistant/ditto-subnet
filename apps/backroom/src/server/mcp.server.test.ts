@@ -631,6 +631,7 @@ describe('Backroom MCP tools', () => {
         'get_scoring_lease_settings',
         'list_validator_assignments',
         'get_validator_capacity',
+        'get_validator_dispatch_outcomes',
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_track_share_settings',
@@ -4819,6 +4820,55 @@ describe('Backroom MCP tools', () => {
       body.validators[0]?.assignments.map((item) => item.estimated_remaining_slot_minutes),
     ).toEqual([120, null])
     expect(body.validators[0]).toMatchObject({ reserved_round_slots: 1 })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads per-validator job-poll outcomes through the admin endpoint', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        observed_at: '2026-10-28T18:00:00Z',
+        tracking_since: '2026-10-28T17:00:00Z',
+        recent_window_seconds: 900,
+        unauthenticated: { 'job:ValidatorAuthError': 2 },
+        validators: [
+          {
+            validator_hotkey: '5Validator',
+            lane: 'job',
+            last_poll_at: '2026-10-28T17:59:30Z',
+            last_outcome: 'http_428',
+            outcomes: [
+              {
+                outcome: 'http_428',
+                total: 14,
+                recent_15m: 9,
+                first_at: '2026-10-28T17:10:00Z',
+                last_at: '2026-10-28T17:59:30Z',
+                last_detail: 'validator heartbeat is stale',
+                last_slot_id: 'slot-1',
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validator_dispatch_outcomes',
+      arguments: { validatorHotkey: '5Validator' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/api/v1/admin/validator-dispatch-outcomes?validator_hotkey=5Validator',
+    )
+    expect(readJsonResult(response)).toMatchObject({
+      validators: [{ last_outcome: 'http_428', outcomes: [{ recent_15m: 9 }] }],
+    })
 
     await client.close()
     await server.close()
@@ -9921,7 +9971,7 @@ describe('Backroom MCP tools', () => {
         name: 'preview_copy_court_triage',
         arguments: { agentId },
       })
-      expect(response.isError, JSON.stringify(response.content)).not.toBe(true)
+      expect(response.isError).not.toBe(true)
       expect(readJsonResult(response)).toMatchObject({
         verdict: 'clear',
         triage_revision: 'family-diff-v1',

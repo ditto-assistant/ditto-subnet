@@ -5322,6 +5322,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/validator-dispatch-outcomes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Validator Dispatch Outcomes
+         * @description Per-validator job-poll outcomes since this API process started.
+         */
+        get: operations["get_validator_dispatch_outcomes_api_v1_admin_validator_dispatch_outcomes_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/validator-slot-settings": {
         parameters: {
             query?: never;
@@ -20806,6 +20826,38 @@ export interface components {
              * @enum {string}
              */
             mode: "off" | "observe" | "enforce" | "bypass";
+        };
+        /**
+         * DispatchOutcomeCount
+         * @description How often one outcome ended this validator's polls on one lane.
+         */
+        DispatchOutcomeCount: {
+            /** First At */
+            first_at: string | null;
+            /** Last At */
+            last_at: string | null;
+            /**
+             * Last Detail
+             * @description Last HTTP error detail for http_* outcomes, truncated.
+             */
+            last_detail: string | null;
+            /** Last Slot Id */
+            last_slot_id: string | null;
+            /**
+             * Outcome
+             * @description issued; a 204 decline gate (allocator_busy, not_accepting, slot_not_healthy, no_candidate, ...); http_<status> for a refused poll (http_428 stale heartbeat, http_426 upgrade, http_409 replay or stale claim); or error_<Exception>.
+             */
+            outcome: string;
+            /**
+             * Recent 15M
+             * @description Count in the last 15 min.
+             */
+            recent_15m: number;
+            /**
+             * Total
+             * @description Count since tracking_since.
+             */
+            total: number;
         };
         /**
          * DockerHealth
@@ -40888,6 +40940,53 @@ export interface components {
             version?: string | null;
         };
         /**
+         * ValidatorDispatchOutcomeSummary
+         * @description Process-local poll outcome tally; resets when Platform API restarts.
+         */
+        ValidatorDispatchOutcomeSummary: {
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Recent Window Seconds */
+            recent_window_seconds: number;
+            /**
+             * Tracking Since
+             * Format: date-time
+             * @description Platform API process start; counts reset then.
+             */
+            tracking_since: string;
+            /**
+             * Unauthenticated
+             * @description Polls that failed authentication, by lane:error.
+             */
+            unauthenticated: {
+                [key: string]: number;
+            };
+            /** Validators */
+            validators: components["schemas"]["ValidatorDispatchOutcomes"][];
+        };
+        /**
+         * ValidatorDispatchOutcomes
+         * @description Every outcome one validator saw on one dispatch lane, newest first.
+         */
+        ValidatorDispatchOutcomes: {
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "job" | "top5_confirmation";
+            /** Last Outcome */
+            last_outcome: string | null;
+            /** Last Poll At */
+            last_poll_at: string | null;
+            /** Outcomes */
+            outcomes: components["schemas"]["DispatchOutcomeCount"][];
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
          * ValidatorHeartbeatRequest
          * @description Signed proof of the validator build currently serving a hotkey.
          *
@@ -52619,6 +52718,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ValidatorCapacitySummary"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_validator_dispatch_outcomes_api_v1_admin_validator_dispatch_outcomes_get: {
+        parameters: {
+            query?: {
+                validator_hotkey?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ValidatorDispatchOutcomeSummary"];
                 };
             };
             /** @description Validation Error */

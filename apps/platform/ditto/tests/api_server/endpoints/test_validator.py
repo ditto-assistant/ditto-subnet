@@ -85,6 +85,7 @@ from ditto.api_models.validator_weights_fold import (
     WeightsFold,
     weights_fold_signing_token,
 )
+from ditto.api_server import dispatch_outcomes
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -5778,6 +5779,46 @@ class TestRequestJob:
 
         assert response.status_code == 428
         assert "heartbeat required" in response.json()["message"]
+
+    async def test_backroom_reads_the_validators_job_poll_outcomes(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        tally = dispatch_outcomes.DispatchOutcomeTally()
+        monkeypatch.setattr(dispatch_outcomes, "DISPATCH_OUTCOMES", tally)
+        await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        self._enable_compatibility_gate(app)
+        admin_token = "test-admin-token-at-least-32-characters"
+        app.state.config = replace(app.state.config, admin_api_token=admin_token)
+
+        refused = await client.post(
+            "/api/v1/validator/job", headers=_AUTH_HEADER, json=_job_payload()
+        )
+        forged = await client.post(
+            "/api/v1/validator/job",
+            headers={"X-Validator-Hotkey": "5Forged"},
+            json=_job_payload(),
+        )
+        read = await client.get(
+            "/api/v1/admin/validator-dispatch-outcomes",
+            headers={"Authorization": f"Bearer {admin_token}"},
+        )
+
+        assert refused.status_code == 428
+        assert forged.status_code == 401
+        body = read.json()
+        assert body["unauthenticated"] == {"job:ValidatorAuthError": 1}
+        [row] = body["validators"]
+        assert (row["validator_hotkey"], row["lane"]) == (_VALIDATOR_HOTKEY, "job")
+        assert row["last_outcome"] == "http_428"
+        [outcome] = row["outcomes"]
+        assert (outcome["total"], outcome["recent_15m"]) == (1, 1)
+        assert "heartbeat required" in outcome["last_detail"]
 
     @pytest.mark.parametrize(
         ("software_version", "protocol_version", "expected_detail"),
