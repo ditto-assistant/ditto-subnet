@@ -56,8 +56,12 @@ provider response remains unknown and held. It is never refunded merely because
 a timeout elapsed. Unknown outcomes require an authoritative receipt or explicit
 proof of no provider cost before an operator can settle or release them.
 
-The reconciler expires old leases and closes completed/expired runs only after
-all in-flight operations settle. It releases the unused whole-run hold and
+Cancellation persists stop_requested immediately, blocking new provider
+reservations even while prior operations remain held. The API reports the
+pending-receipt state clearly; existing settlements remain authorized. Platform
+expires only leases actually bound to that run, never a newer cycle. The
+reconciler closes completed, stopped or expired runs only after all in-flight
+operations settle. It releases the unused whole-run hold and
 unused app allowance. Settlement of an already-held operation remains available
 after user spending consent is revoked; new dispatch is refused. A deleted or
 disabled reporting key/app remains an operator recovery prerequisite.

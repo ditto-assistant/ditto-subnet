@@ -28,6 +28,63 @@ from ditto.tests.db.queries.test_tickets import _seed_evaluating
 
 
 @pytest.mark.asyncio
+async def test_cancel_requested_expires_bound_lease_but_keeps_unknown_hold(
+    session_maker,
+):
+    from ditto.api_server.paid_evaluation_plans import EvaluationPlanLoop
+    from ditto.db.models import PaidEvaluationPlan
+    from ditto.tests.db.queries.test_inference import _live_grant
+
+    http = BillingHTTP()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(http.handle)) as client:
+        state = SimpleNamespace(
+            config=SimpleNamespace(
+                evaluation_billing=EvaluationBillingConfig(
+                    enabled=True, api_key="isolated-test"
+                )
+            ),
+            inference_client=client,
+            session_maker=session_maker,
+        )
+        async with session_maker() as session, session.begin():
+            ticket, grant, _, _ = await _live_grant(session)
+            agent = await linked(session, ticket.agent_id)
+            plan = await propose_plan(
+                state,
+                session,
+                agent=agent,
+                phase="competition",
+                bench_version=grant.bench_version,
+            )
+            http.runs[str(plan.run_id)]["state"] = "approved"
+            await refresh_plan(state, session, plan)
+            await bind_grant(session, grant.grant_id, plan)
+            run_id, grant_id, ticket_key = (
+                plan.run_id,
+                grant.grant_id,
+                (ticket.agent_id, ticket.bench_version, ticket.validator_hotkey),
+            )
+        http.runs[str(run_id)]["stopRequested"] = True
+        loop = EvaluationPlanLoop(state)
+        await loop.tick()
+        async with session_maker() as session:
+            plan = await session.get(PaidEvaluationPlan, run_id)
+            ticket = await session.get(ValidatorTicket, ticket_key)
+            assert plan.state == "closing" and ticket.status == "expired"
+            with pytest.raises(HTTPException) as error:
+                await plan_for_grant(session, grant_id)
+            assert error.value.status_code == 402
+        http.unknown = True
+        await loop.tick()
+        async with session_maker() as session:
+            assert (await session.get(PaidEvaluationPlan, run_id)).state == "closing"
+        http.unknown = False
+        await loop.tick()
+        async with session_maker() as session:
+            assert (await session.get(PaidEvaluationPlan, run_id)).state == "closed"
+
+
+@pytest.mark.asyncio
 async def test_maintenance_cannot_reuse_started_cap_and_explicit_fresh_cycle_resumes(
     session_maker,
 ):

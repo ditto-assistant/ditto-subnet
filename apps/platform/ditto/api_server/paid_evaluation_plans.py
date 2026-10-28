@@ -21,6 +21,8 @@ from ditto.db.models import (
     ConfirmationBundle,
     ConfirmationBundleSubject,
     ConfirmationBundleTicket,
+    ConfirmationInferenceGrant,
+    InferenceGrant,
     MinerDittoLink,
     PaidEvaluationGrantBinding,
     PaidEvaluationPlan,
@@ -196,7 +198,7 @@ async def propose_plan(
                 409,
                 "Close the previous budget before changing its payer or purpose",
             )
-        return await refresh_plan(state, session, existing)
+        return existing
     if phase == "confirmation":
         bundle = await session.get(ConfirmationBundle, bundle_id)
         subjects = list(
@@ -282,6 +284,40 @@ async def propose_plan(
     return await refresh_plan(state, session, plan)
 
 
+async def _expire_plan_leases(session, plan: PaidEvaluationPlan, now: datetime) -> None:
+    """Revoke only leases actually bound to this run, never a newer cycle."""
+    grants = select(PaidEvaluationGrantBinding.grant_id).where(
+        PaidEvaluationGrantBinding.run_id == plan.run_id
+    )
+    if plan.phase == "competition":
+        bound = exists(
+            select(InferenceGrant.grant_id).where(
+                InferenceGrant.grant_id.in_(grants),
+                InferenceGrant.agent_id == ValidatorTicket.agent_id,
+                InferenceGrant.bench_version == ValidatorTicket.bench_version,
+                InferenceGrant.validator_hotkey == ValidatorTicket.validator_hotkey,
+                InferenceGrant.ticket_deadline == ValidatorTicket.deadline,
+            )
+        )
+        await session.execute(
+            update(ValidatorTicket)
+            .where(ValidatorTicket.status == "issued", bound)
+            .values(status="expired", deadline=now)
+        )
+    else:
+        ticket_ids = select(ConfirmationInferenceGrant.ticket_id).where(
+            ConfirmationInferenceGrant.grant_id.in_(grants)
+        )
+        await session.execute(
+            update(ConfirmationBundleTicket)
+            .where(
+                ConfirmationBundleTicket.status == "issued",
+                ConfirmationBundleTicket.ticket_id.in_(ticket_ids),
+            )
+            .values(status="expired", deadline=now)
+        )
+
+
 async def refresh_plan(state, _session, plan: PaidEvaluationPlan) -> PaidEvaluationPlan:
     config = state.config.evaluation_billing
     now = datetime.now(UTC)
@@ -308,8 +344,10 @@ async def refresh_plan(state, _session, plan: PaidEvaluationPlan) -> PaidEvaluat
         "closed": "closed",
         "canceled": "closed",
     }[run["state"]]
-    if plan.expires_at <= now and plan.state != "closed":
+    if (plan.expires_at <= now or run.get("stopRequested")) and plan.state != "closed":
         plan.state = "closing"
+    if plan.state in {"closed", "closing"}:
+        await _expire_plan_leases(_session, plan, now)
     return plan
 
 
@@ -354,27 +392,7 @@ async def reconcile_plan(state, session, plan: PaidEvaluationPlan) -> None:
             )
     if terminal:
         plan.state = "closing"
-        if plan.expires_at <= now and plan.phase == "competition":
-            # No new provider work may follow an expired approval. Existing
-            # in-flight receipts still reconcile against their old held run.
-            await session.execute(
-                update(ValidatorTicket)
-                .where(
-                    ValidatorTicket.agent_id == plan.agent_id,
-                    ValidatorTicket.bench_version == plan.bench_version,
-                    ValidatorTicket.status == "issued",
-                )
-                .values(status="expired", deadline=now)
-            )
-        if plan.expires_at <= now and plan.phase == "confirmation":
-            await session.execute(
-                update(ConfirmationBundleTicket)
-                .where(
-                    ConfirmationBundleTicket.bundle_id == plan.bundle_id,
-                    ConfirmationBundleTicket.status == "issued",
-                )
-                .values(status="expired", deadline=now)
-            )
+        await _expire_plan_leases(session, plan, now)
         try:
             await _post(
                 state.inference_client,
@@ -536,6 +554,44 @@ class EvaluationPlanLoop:
                     if snapshot.bundle_id is not None:
                         await session.get(
                             ConfirmationBundle, snapshot.bundle_id, with_for_update=True
+                        )
+                    # Job admission owns lease rows before the budget plan.
+                    # Match that order when cancellation expires those leases.
+                    grants = select(PaidEvaluationGrantBinding.grant_id).where(
+                        PaidEvaluationGrantBinding.run_id == run_id
+                    )
+                    if snapshot.phase == "competition":
+                        bound = exists(
+                            select(InferenceGrant.grant_id).where(
+                                InferenceGrant.grant_id.in_(grants),
+                                InferenceGrant.agent_id == ValidatorTicket.agent_id,
+                                InferenceGrant.bench_version
+                                == ValidatorTicket.bench_version,
+                                InferenceGrant.validator_hotkey
+                                == ValidatorTicket.validator_hotkey,
+                                InferenceGrant.ticket_deadline
+                                == ValidatorTicket.deadline,
+                            )
+                        )
+                        await session.scalars(
+                            select(ValidatorTicket)
+                            .where(bound)
+                            .order_by(
+                                ValidatorTicket.agent_id,
+                                ValidatorTicket.bench_version,
+                                ValidatorTicket.validator_hotkey,
+                            )
+                            .with_for_update()
+                        )
+                    else:
+                        ticket_ids = select(ConfirmationInferenceGrant.ticket_id).where(
+                            ConfirmationInferenceGrant.grant_id.in_(grants)
+                        )
+                        await session.scalars(
+                            select(ConfirmationBundleTicket)
+                            .where(ConfirmationBundleTicket.ticket_id.in_(ticket_ids))
+                            .order_by(ConfirmationBundleTicket.ticket_id)
+                            .with_for_update()
                         )
                     await session.get(Agent, snapshot.agent_id, with_for_update=True)
                     plan = await session.get(
