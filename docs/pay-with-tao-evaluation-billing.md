@@ -1,126 +1,131 @@
-# Pay with TAO: miner evaluation billing
+# Approved miner evaluation billing
 
-Tracking: [DITTO-75](https://omniaura-team.atlassian.net/browse/DITTO-75).
-This is the subnet integration checkpoint for product credit purchases.
-It does not activate production billing or claim every evaluation cost is paid
-by the miner.
+This change is inactive by default. It leaves the submission fee numerically
+unchanged and separates that fee from inference charges. The live fee observed
+by the coordinator was 0.05 TAO; this implementation does not lower the global
+fee or create a per-account discount.
 
-## Account and credit boundary
+## Admission and consent
 
-The existing two-sided Sign in with Ditto flow proves the hotkey from the miner
-session and the Ditto account from a verified OIDC subject. Neither a checkout
-query parameter nor an inference header supplied by a miner can select the
-account to credit or bill. Payment deposits belong to the authenticated Ditto
-account; multiple hotkeys can link to that same account.
+A linked submission receives a durable, cycle-keyed competition proposal before
+it can claim validator capacity. The linked Ditto user reviews the estimate and
+maximum in Ditto and explicitly approves it. Approval reserves the whole cap in
+the user's canonical credit wallet and app daily allowance. The Platform queue
+filters funded plans before choosing its first candidate, so an older unpaid
+proposal cannot starve a funded one. Preparing, approving and resuming a plan
+does not upload another submission or charge another submission fee.
 
-The Ditto top-up route is `/settings/usage?funding=tao`. A browser may already be
-signed into a different Ditto account: an ordinary hyperlink does not prove its
-session matches the miner's linked subject. Until there is a signed handoff,
-show/check the linked account and the account named at checkout. Do not add a
-caller-supplied `uid` as a substitute for authentication.
+The miner console shows budgets, the funding link, and comparisons waiting for
+a payer. `GET /api/v1/me/evaluation-budgets` returns only the signed-in miner's
+runs and payer candidates. `POST /api/v1/me/evaluation-budget` accepts
+`agent_id`, `phase` and an optional confirmation `bundle_id`. It creates a
+proposal, never a spending grant. Shared comparisons require an explicit
+candidate payer; adding an incumbent subject cannot redirect an approved payer.
+The full frozen reader, judge and embedding maxima appear in that candidate's
+confirmation quote. No subject is charged merely because it is compared.
 
-## Opt-in competition chat requirement
+An immutable grant-to-run binding prevents an old lease from spending a later
+cycle. Maintenance admission requires an unused approved cycle; canonical
+operator retests require a budget created after their queued request. A miner
+can prepare a fresh evaluation after old work finishes. Replacing an active or
+uncertain run is refused. Each new cycle requires a new explicit approval.
 
-`DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT` defaults to `false`. When enabled:
+## Metering and receipts
 
-- The relay refuses to boot unless the Ditto Router upstream and competition
-  lane are configured. The existing locked-model, memories-off acknowledgement
-  still applies.
-- Platform refuses to boot with linking disabled, and appends `credits:spend`
-  to the OAuth scopes requested for **new** sign-ins. Identity-only linking
-  retains its existing `openid email` defaults when the flag is off. Existing
-  links require a new consent flow; this code never manufactures a grant.
-- After checking the signed inference proof and before reserving request/token
-  capacity, the relay resolves the agent's active account link from Postgres.
-  Missing/revoked links return 402; lookup failures return 503. Neither invokes
-  OpenRouter as a sponsor fallback.
-- The Python competition-chat route, which Caddy can reach when relay ports
-  are unset or rolled back, returns 503 for **every** identity when the flag
-  is enabled. It has no account-billed upstream and refuses before account,
-  grant, reservation or provider access. Losing the Go route cannot silently
-  revert to sponsor spending.
-- Linked requests go to Ditto Router, which remains responsible for verifying
-  the live app spending grant, account funds, caps, and the app endpoint's
-  billing mode. Required-account mode adds the server-owned
-  `X-Ditto-Require-User-Billing: true` header, which the paired gateway must
-  enforce before paid work: a sponsor endpoint or absent app/grant refuses
-  with 402. The identity-header configuration cannot replace this reserved
-  header. The flag does not turn a sponsor-billed endpoint into a user-billed
-  endpoint; it refuses that configuration. A Router 402 returns 402 to the broker and settles no
-  successful usage; it is never retried against the sponsor.
+Competition chat, competition embeddings, confirmation reader, confirmation
+judge and confirmation embeddings reserve against one approved phase budget
+before provider dispatch. The full mode preserves the existing frozen provider
+and model paths. It bypasses the older competition-only Router inference path:
+accounting uses `/v1/evaluation-billing`, so the same call is not also charged
+through Router inference. Callers cannot choose their payer using HTTP headers.
+The linked identity and grant binding determine it.
 
-Ansible renders the flag from
-`platform_ditto_router_require_competition_account: false`. No host variable
-changes activate it in this PR. All activation still requires the independent
-OIDC origin, user consent, user-billed endpoint, and funded/empty/unconsented
-acceptance checks in
-[backend#2695](https://github.com/ditto-assistant/backend/issues/2695).
+The trusted app server settles usage and provider-cost receipts. Browser users
+cannot submit provider charges. Canonical receipts contain run, agent, grant,
+operation, stage, provider route, observed provider, receipt identity, model,
+usage and cost. Costs use trusted provider usage and the frozen lane's pricing
+contract; a derived usage receipt is identified as such when the provider gives
+no external receipt ID. Actual provider cost above the individual reservation
+is recorded as an overrun, cannot exceed the miner's approved charge, and stops
+further dispatch on that run.
 
-The relay adds these outbound headers from the verified grant/request:
+Temporary occupancy by in-flight calls returns retryable 503 with Retry-After;
+unapproved or truly exhausted caps return 402. Neither is a provider-health
+failure. Duplicate operation IDs cannot dispatch twice. A lost or canceled
+provider response remains unknown and held. It is never refunded merely because
+a timeout elapsed. Unknown outcomes require an authoritative receipt or explicit
+proof of no provider cost before an operator can settle or release them.
 
-| Header | Source |
-| --- | --- |
-| `X-Ditto-On-Behalf-Of` | Active linked OIDC subject in Postgres |
-| `X-Ditto-Require-User-Billing` | Literal `true`, only in required competition-account mode |
-| `X-Ditto-Evaluation-Grant` | Inference grant UUID |
-| `X-Ditto-Evaluation-Request` | Signed request nonce UUID |
-| `X-Ditto-Evaluation-Agent` | Grant's agent UUID |
-| `X-Ditto-Evaluation-Stage` | Server constant `competition-chat` |
+The reconciler expires old leases and closes completed/expired runs only after
+all in-flight operations settle. It releases the unused whole-run hold and
+unused app allowance. Settlement of an already-held operation remains available
+after user spending consent is revoked; new dispatch is refused. A deleted or
+disabled reporting key/app remains an operator recovery prerequisite.
 
-These are correlation inputs. The backend must persist/echo them on its
-authoritative billing receipt before claiming a joined run/stage cost ledger.
-They are not an idempotency promise from the gateway, and ambiguous provider
-transport outcomes are not automatically re-sent by the relay.
+Canonical wallet debits also see the evaluation hold. Ordinary Router app
+reservations use a volatile PostgreSQL function that locks the wallet first,
+then reads shared holds with a fresh statement snapshot, then reserves daily
+allowance. A single locking CTE is insufficient: its pre-lock snapshot can miss
+a concurrently committed cap approval.
 
-## Evaluation stage coverage
+## Configuration and bounded live-test prerequisites
 
-The frozen confirmation profile remains unchanged. Its source is
-`packages/ditto-screening-protocol/ditto_screening_protocol/data/confirmation_execution_profile_v9_shadow.json`.
+Platform/model-relay use `DITTO_EVALUATION_BILLING_ENABLED=false` by default,
+a trusted Ditto HTTPS billing URL, an app-owned user-billed server endpoint key,
+and bounded estimate/cap/request limits (see `.env.example`). Backend separately
+requires the enable flag and `DITTO_EVALUATION_BILLING_APP_ID` pin. Its default
+maximum is USD 5; whole confirmation profiles can quote more, so the backend
+maximum must be explicitly large enough for the exact frozen quote, never more
+than USD 50. Competition estimates are configured operating estimates, not a
+new live cost measurement; qualify them against the exact dataset before use.
 
-| Stage | Current frozen route | This checkpoint |
-| --- | --- | --- |
-| Competition chat | Grant-locked model; optional Ditto Router upstream | Required account gate and trusted attribution; real debit requires user-billed app endpoint and live spend consent |
-| Competition embeddings | `perplexity/pplx-embed-v1-0.6b`, 768 dimensions, Perplexity; OpenRouter/direct fallback policy | Existing sponsor route; not covered by the competition chat flag |
-| Confirmation reader | `openai/gpt-oss-20b`, throughput with ZDR and no fallback | Existing frozen route; no user debit integration |
-| Confirmation judge | `deepseek/deepseek-v4.1-flash`, Together, receipt provider `Together` | Existing frozen route; no user debit integration |
-| Confirmation embeddings | `perplexity/pplx-embed-v1-0.6b`, 768 dimensions, Perplexity | Existing frozen route; no user debit integration |
+Before a live test:
 
-Do not label this flag "miner-paid evaluation" or enable it as a substitute for
-full stage coverage. Full paid evaluation requires either a trusted,
-consent-checked reserve/settle billing API around these existing provider calls,
-or Router endpoints preserving every stage's exact model/provider/profile.
-The latter also requires an authenticated, user-billed embeddings operation
-(the product Router currently exposes no public `/v1/embeddings` route) and
-authoritative provider/cost metadata for frozen confirmation settlement.
+1. Verify the deployed Platform OIDC client ID, the owning app, its user-billed
+   endpoint, callback origin, credits:spend rationale and the consenting linked
+   miner. A similarly named CLI-visible app is not proof of that binding.
+2. Use an isolated Platform/relay instance and a dedicated test miner, or add
+   and qualify a cohort gate before enabling this global flag on shared
+   production. No production activation or secret movement is included here.
+3. Pin exact backend, Platform and relay commits, active benchmark version,
+   frozen comparison profile, payer UID/hotkey, test artifact and treasury
+   destination. Record the approved credit cap, payment amount, chain quote,
+   slippage and gas limits before signing anything.
+4. Prove proposal -> explicit approval -> real queue admission -> all five
+   stage receipts -> run closure and unused-credit release, with exactly one
+   submission fee. Assert the app-owner wallet stays unchanged. Recheck live
+   identity and app consent immediately before provider dispatch.
+5. Compare canonical receipts, provider receipts and wallet deltas. Unknown
+   costs remain held and block closure. A successful API status alone is not
+   acceptance. TAO/alpha conversion and treasury stake proof are qualified by
+   the separate payment-worker runbook.
 
-Before complete activation, prove each stage reserves a bounded amount before
-billable work, settles actual cost on the linked user's canonical credit
-ledger, joins a run/stage receipt, and refuses empty or unconsented accounts
-without falling back to Platform funds. Replays, uncertain outcomes,
-concurrent evaluations and account unlinking need their own failure tests.
-Code-level routing fixtures do not establish real provider charges or account
-debits.
+No live chain transfer, provider-paid inference, global fee change, merge,
+deployment or production activation was performed for these tests. The miner
+budget component has automated interaction coverage; hosted browser acceptance
+and a single unified live five-stage run remain to be performed after those
+configuration and bounded-spend prerequisites are satisfied.
 
-## Submission access and inference are separate charges
+## Qualification evidence
 
-The submission fee remains a separate, low admission/spam fee. Inference and
-evaluation usage are metered against the miner's Ditto credits in addition to
-that fee. This checkpoint does not change the live submission amount, remove
-payment-proof checks, or waive the fee when an account is linked or funded.
-No new numeric admission fee has been selected.
-
-Complete miner-paid evaluation must show an upfront usage estimate and an
-enforced spending cap. Receipts and economic reporting must distinguish
-submission access fees from actual inference debits; a top-up is prepaid
-credit, not proof that an evaluation consumed it. This distinction is needed
-to compare predictable per-run operating costs with the separate access fee.
-
-## Treasury boundary
-
-Deposits, conversion to DITTO, and staking under a dedicated payment treasury
-belong to the product payment rail. The Gamma collector/GM holding wallets are
-separate operational identities and are not automatically payment treasury
-accounts. Production validator identity is supplied as `VALIDATOR_PROD_HOTKEY`
-to the validator playbook; the committed dev validator hotkey is not evidence
-of the requested production staking destination. Verify the exact public
-treasury coldkey and validator hotkey before any real transfer or stake.
+- Real PostgreSQL backend tests cover aggregate cap races, simultaneous wallet
+  approvals, legacy debit protection, ordinary Router reservation serialization,
+  consent revocation, receipt replay/deduplication, unknown reconciliation,
+  provider overruns and lock order. The real HTTP-handler test covers trusted
+  service authentication, wrong-user/cap refusal, approval, all five stage
+  receipts, retryable occupied funds, revocation, unknown closure refusal and
+  safe unused release. It asserts exactly five receipts and no owner debit.
+- Real Alembic/Platform tests cover funded queue filtering, expiry/replacement,
+  immutable grant binding, explicit whole-comparison payer binding, and fresh
+  maintenance/operator-retest approvals. Five lane refusal tests cover local
+  permit cleanup without provider-health observation.
+- Model-relay tests cover frozen direct-provider dispatch, accounting-only
+  requests, no duplicate Router dispatch, unknown holds, cancellation and
+  credential-safe redirect refusal.
+- Negative controls remove queue filtering, explicit shared payer binding,
+  payment-health separation and ordinary-wallet hold protection. Each failed
+  the corresponding real check; restored source passed again.
+- Schema mirrors are generated from the real Alembic/migration chains; Backroom
+  types are generated from the actual new OpenAPI schema. Exact commands and
+  run identifiers are included in the PR, with remaining CI/hosted checks stated
+  separately.

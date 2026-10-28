@@ -35,8 +35,11 @@ from ditto.api_server.embedding import (
     EmbeddingConfig,
     parse_embedding_config_from_env,
 )
-from ditto.api_server.evaluation_billing import EvaluationBillingConfig, parse_evaluation_billing_config
 from ditto.api_server.errors import ApiServerConfigError
+from ditto.api_server.evaluation_billing import (
+    EvaluationBillingConfig,
+    parse_evaluation_billing_config,
+)
 from ditto.api_server.github_link import GithubLinkConfig
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
 from ditto.api_server.private_benchmark_preparation import (
@@ -400,7 +403,9 @@ class ApiServerConfig:
     )
     """Sign in with Ditto relying-party settings; disabled until configured."""
 
-    evaluation_billing: EvaluationBillingConfig = field(default_factory=EvaluationBillingConfig)
+    evaluation_billing: EvaluationBillingConfig = field(
+        default_factory=EvaluationBillingConfig
+    )
 
     ditto_router_require_competition_account: bool = False
     """Require the account-billed Go relay; Python chat fails closed when set."""
@@ -960,11 +965,11 @@ def parse_ditto_link_config_from_env() -> DittoLinkConfig:
     """``DITTO_LINK_*``: Sign in with Ditto as a relying party. Off by default."""
     enabled = os.environ.get("DITTO_LINK_ENABLED", "false").strip().lower() in _TRUTHY
     require_competition_account = (
-        (os.environ.get("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", "false") if os.environ.get("DITTO_EVALUATION_BILLING_ENABLED", "false").strip().lower() not in _TRUTHY else "true")
-        .strip()
-        .lower()
-        in _TRUTHY
-    )
+        os.environ.get("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", "false")
+        if os.environ.get("DITTO_EVALUATION_BILLING_ENABLED", "false").strip().lower()
+        not in _TRUTHY
+        else "true"
+    ).strip().lower() in _TRUTHY
     if require_competition_account and not enabled:
         raise ApiServerConfigError(
             "DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT requires DITTO_LINK_ENABLED"

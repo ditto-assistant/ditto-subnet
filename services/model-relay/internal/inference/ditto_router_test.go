@@ -90,7 +90,7 @@ func TestCompleteChatViaDittoRouterReportsPaymentRequiredDistinctly(t *testing.T
 	if result != nil || exhausted == nil {
 		t.Fatalf("expected an exhausted outcome, got %+v / %+v", result, exhausted)
 	}
-	if exhausted.terminalErrorCode != "ditto_router_payment_required" || exhausted.timedOut {
+	if exhausted.terminalErrorCode != "ditto_router_payment_required" || exhausted.timedOut || exhausted.routeObservable {
 		t.Fatalf("exhausted: %+v", exhausted)
 	}
 	if calls != 1 {

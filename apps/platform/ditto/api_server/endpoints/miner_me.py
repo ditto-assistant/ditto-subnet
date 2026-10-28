@@ -26,6 +26,10 @@ from ditto.api_models.miner_screening_feedback import MinerScreeningFeedbackResp
 from ditto.api_models.miner_session import (
     MinerArtifactDownload,
     MinerCommand,
+    MinerEvaluationBudgetRequest,
+    MinerEvaluationBudgetResponse,
+    MinerEvaluationBudgetsResponse,
+    MinerEvaluationPayerCandidate,
     MinerMeResponse,
     MinerMeReviewsResponse,
     MinerProfileLinks,
@@ -84,6 +88,131 @@ from ditto.db.queries.name_claims import active_handle_claims
 router = APIRouter(prefix="/me", tags=["miner-me"], dependencies=[Depends(no_store)])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 StorageDep = Annotated[S3StorageClient, Depends(get_storage_client)]
+
+
+def _budget_view(plan) -> MinerEvaluationBudgetResponse:
+    return MinerEvaluationBudgetResponse(
+        run_id=plan.run_id,
+        agent_id=plan.agent_id,
+        phase=plan.phase,
+        cycle=plan.cycle,
+        state=plan.state,
+        estimate_microusd=plan.estimate_microusd,
+        cap_microusd=plan.cap_microusd,
+        expires_at=plan.expires_at,
+        approval_url="https://app.heyditto.ai/settings/usage?evaluation="
+        + str(plan.run_id),
+    )
+
+
+@router.get("/evaluation-budgets", response_model=MinerEvaluationBudgetsResponse)
+async def evaluation_budgets(
+    request: Request, session: SessionDep
+) -> MinerEvaluationBudgetsResponse:
+    """Private miner status, including comparisons awaiting an explicit payer."""
+    from sqlalchemy import exists, select
+
+    from ditto.db.models import (
+        Agent,
+        ConfirmationBundle,
+        ConfirmationBundleSubject,
+        PaidEvaluationPlan,
+    )
+
+    async with session.begin():
+        miner, _ = await resolve_miner_session(request, session)
+        require_scope(miner, "read")
+        enabled = request.app.state.config.evaluation_billing.enabled
+        if not enabled:
+            return MinerEvaluationBudgetsResponse(
+                enabled=False, runs=[], payer_candidates=[]
+            )
+        plans = (
+            await session.scalars(
+                select(PaidEvaluationPlan)
+                .join(Agent, Agent.agent_id == PaidEvaluationPlan.agent_id)
+                .where(Agent.miner_hotkey == miner.miner_hotkey)
+                .order_by(PaidEvaluationPlan.created_at.desc())
+                .limit(100)
+            )
+        ).all()
+        waiting = (
+            await session.execute(
+                select(ConfirmationBundleSubject.agent_id, ConfirmationBundle.bundle_id)
+                .join(
+                    ConfirmationBundle,
+                    ConfirmationBundle.bundle_id == ConfirmationBundleSubject.bundle_id,
+                )
+                .join(Agent, Agent.agent_id == ConfirmationBundleSubject.agent_id)
+                .where(
+                    Agent.miner_hotkey == miner.miner_hotkey,
+                    ConfirmationBundle.state.in_(["pending", "blocked_budget"]),
+                    ~exists(
+                        select(PaidEvaluationPlan.run_id).where(
+                            PaidEvaluationPlan.bundle_id
+                            == ConfirmationBundle.bundle_id,
+                            PaidEvaluationPlan.state != "closed",
+                        )
+                    ),
+                )
+                .limit(100)
+            )
+        ).all()
+        return MinerEvaluationBudgetsResponse(
+            enabled=True,
+            runs=[_budget_view(p) for p in plans],
+            payer_candidates=[
+                MinerEvaluationPayerCandidate(agent_id=a, bundle_id=b)
+                for a, b in waiting
+            ],
+        )
+
+
+@router.post("/evaluation-budget", response_model=MinerEvaluationBudgetResponse)
+async def evaluation_budget(
+    request: Request, session: SessionDep, body: MinerEvaluationBudgetRequest
+) -> MinerEvaluationBudgetResponse:
+    """An owning miner may explicitly fund a whole comparison or a fresh retest.
+
+    This only proposes a budget; actual credit authority is approved by the
+    signed-in Ditto account on Ditto's own consent surface.
+    """
+    from sqlalchemy import select
+
+    from ditto.api_server.paid_evaluation_plans import propose_plan
+    from ditto.db.models import Agent
+    from ditto.db.queries.benchmark_rollout import active_bench_version
+
+    if not request.app.state.config.evaluation_billing.enabled:
+        raise HTTPException(404, "Paid evaluation is not enabled")
+    try:
+        async with session.begin():
+            miner, _ = await resolve_miner_session(request, session)
+            require_scope(miner, "upload")
+            agent = await session.scalar(
+                select(Agent)
+                .where(
+                    Agent.agent_id == body.agent_id,
+                    Agent.miner_hotkey == miner.miner_hotkey,
+                )
+                .with_for_update()
+            )
+            if agent is None:
+                raise HTTPException(404, "Submission is unavailable")
+            plan = await propose_plan(
+                request.app.state,
+                session,
+                agent=agent,
+                phase=body.phase,
+                bench_version=await active_bench_version(session),
+                bundle_id=body.bundle_id,
+                explicit=True,
+            )
+    except IntegrityError as error:
+        raise HTTPException(
+            409, "This evaluation already has a pending budget"
+        ) from error
+    return _budget_view(plan)
 
 
 def _session_view(row, *, now: datetime) -> MinerSessionView:

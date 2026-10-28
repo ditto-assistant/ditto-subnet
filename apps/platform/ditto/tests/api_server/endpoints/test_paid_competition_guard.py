@@ -1,15 +1,96 @@
 """The Python fallback must not bypass required account billing."""
 
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from ditto.api_server.endpoints import inference
+from ditto.api_server.evaluation_billing import EvaluationBillingConfig
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stage",
+    [
+        "competition-chat",
+        "competition-embedding",
+        "confirmation-reader",
+        "confirmation-judge",
+        "confirmation-embedding",
+    ],
+)
+async def test_billing_refusal_releases_local_request_without_provider_observation(
+    monkeypatch, stage
+):
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        def begin(self):
+            return transaction()
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                session_maker=Session,
+                config=SimpleNamespace(
+                    evaluation_billing=EvaluationBillingConfig(enabled=True)
+                ),
+            )
+        )
+    )
+    monkeypatch.setattr(
+        inference,
+        "begin_paid_evaluation",
+        AsyncMock(side_effect=HTTPException(402, "Approve budget")),
+    )
+    monkeypatch.setattr(
+        inference, "confirmation_billing_agent", AsyncMock(return_value=uuid4())
+    )
+    competition = AsyncMock()
+    confirmation = AsyncMock()
+    health = AsyncMock(side_effect=AssertionError("billing is not provider health"))
+    monkeypatch.setattr(inference, "finish_inference_request", competition)
+    monkeypatch.setattr(
+        inference, "finish_confirmation_inference_request", confirmation
+    )
+    monkeypatch.setattr(inference, "record_route_observation", health)
+    shared = stage.startswith("confirmation-")
+    with pytest.raises(HTTPException) as error:
+        await inference._begin_paid_reserved_call(
+            request,
+            agent_id=uuid4(),
+            bundle_id=uuid4() if shared else None,
+            grant_id=uuid4(),
+            nonce=uuid4(),
+            generation=1,
+            stage=stage,
+            model="frozen/model",
+            provider="Frozen",
+            body=b"trusted",
+        )
+    assert error.value.status_code == 402
+    finished = confirmation if shared else competition
+    finished.assert_awaited_once()
+    assert (
+        finished.await_args.kwargs["cost_microusd"] == 0
+        and finished.await_args.kwargs["status"] == "failed"
+    )
+    health.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -493,6 +493,24 @@ async def activate_next_score_retest(
             continue
         if not supports_version(bench_version):
             continue
+        from ditto.api_server.paid_evaluation_plans import (
+            ready_predicate,
+        )
+        from ditto.api_server.paid_evaluation_plans import (
+            required as paid_required,
+        )
+
+        if paid_required(session) and not await session.scalar(
+            select(
+                ready_predicate(
+                    bench_version=bench_version,
+                    now=now,
+                    agent_column=entry.agent_id,
+                    minimum_created_at=entry.recorded_at,
+                )
+            )
+        ):
+            continue
         agent = await session.get(Agent, entry.agent_id)
         ticket = await session.get(
             ValidatorTicket,

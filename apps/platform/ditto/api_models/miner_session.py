@@ -13,6 +13,40 @@ from ditto.api_models.name_claim import NameClaimProof, PublicNameHandle
 MinerScope = Literal["read", "profile", "download", "upload", "handle", "challenges"]
 
 
+class MinerEvaluationBudgetRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    agent_id: UUID
+    phase: Literal["competition", "confirmation"] = "competition"
+    bundle_id: UUID | None = None
+
+
+class MinerEvaluationBudgetResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    run_id: UUID
+    agent_id: UUID
+    phase: Literal["competition", "confirmation"]
+    cycle: int
+    state: str
+    estimate_microusd: int
+    cap_microusd: int
+    expires_at: datetime
+    approval_url: str
+
+
+class MinerEvaluationPayerCandidate(BaseModel):
+    agent_id: UUID
+    bundle_id: UUID
+    phase: Literal["confirmation"] = "confirmation"
+    state: Literal["payer_binding_required"] = "payer_binding_required"
+    scope: Literal["whole_comparison"] = "whole_comparison"
+
+
+class MinerEvaluationBudgetsResponse(BaseModel):
+    enabled: bool
+    runs: list[MinerEvaluationBudgetResponse]
+    payer_candidates: list[MinerEvaluationPayerCandidate]
+
+
 class MinerDeviceStartRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 

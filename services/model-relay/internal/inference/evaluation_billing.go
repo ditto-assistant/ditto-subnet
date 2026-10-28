@@ -71,18 +71,13 @@ func (d *Deps) reserveEvaluation(ctx context.Context, agentID pgtype.UUID, h *pr
 	if err != nil || link.DittoUserID == "" {
 		return nil, httpErrorf(402, "Sign in with Ditto and link your miner account before evaluation")
 	}
-	agent := pgUUIDString(agentID)
-	var run struct {
-		State string `json:"state"`
-	}
-	if e := evaluationPost(ctx, d.Upstream, cfg, link.DittoUserID, "/runs", map[string]any{"runId": h.grant.String(), "agentId": agent, "estimateMicrousd": cfg.EvaluationEstimateMicrousd, "capMicrousd": cfg.EvaluationCapMicrousd}, &run); e != nil {
-		return nil, e
-	}
-	if run.State != "approved" {
-		return nil, httpErrorf(402, "Approve the evaluation spending cap in Ditto before this evaluation can start")
+	var runID, payer string
+	err = d.Pool.QueryRow(ctx, `SELECT p.run_id::text,p.payer_uid FROM paid_evaluation_grant_bindings b JOIN paid_evaluation_plans p ON p.run_id=b.run_id WHERE b.grant_id=$1 AND p.agent_id=$2 AND p.phase='competition' AND p.state='approved' AND p.expires_at>now()`, h.grant.String(), agentID).Scan(&runID, &payer)
+	if err != nil || payer != link.DittoUserID {
+		return nil, httpErrorf(402, "This evaluation needs its approved spending budget")
 	}
 	sum := sha256.Sum256(body)
-	payload := map[string]any{"runId": h.grant.String(), "id": h.nonce.String(), "grantId": h.grant.String(), "stage": stage, "model": model, "provider": provider, "requestSha256": hex.EncodeToString(sum[:]), "maxCostMicrousd": cfg.EvaluationRequestMicrousd}
+	payload := map[string]any{"runId": runID, "id": h.nonce.String(), "grantId": h.grant.String(), "stage": stage, "model": model, "provider": provider, "requestSha256": hex.EncodeToString(sum[:]), "maxCostMicrousd": cfg.EvaluationRequestMicrousd}
 	if e := evaluationPost(ctx, d.Upstream, cfg, link.DittoUserID, "/reservations", payload, nil); e != nil {
 		return nil, e
 	}
@@ -111,6 +106,9 @@ func (b *evaluationBill) finish(parent context.Context, o *settleOutcome, raw []
 	payload := map[string]any{"state": state}
 	if state == "settled" {
 		payload["actualMicrousd"] = o.costMicrousd
+		if o.upstreamProvider.Valid {
+			payload["provider"] = o.upstreamProvider.String
+		}
 		payload["providerReceiptId"] = b.provider + ":" + receipt
 		payload["inputTokens"] = o.promptTokens
 		payload["outputTokens"] = o.completionTokens
