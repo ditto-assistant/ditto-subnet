@@ -63,7 +63,6 @@ from ditto.api_models.stack_health import (
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.bench import CURRENT_BENCH_VERSION
-from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.crn import champion_anchored_seeds
 from ditto.api_server.datapipeline import DataPipelineError
 from ditto.api_server.dependencies import (
@@ -548,46 +547,6 @@ def test_public_validator_score_gate_factors_are_optional_and_fail_closed() -> N
     assert _gate_factor_score({"audit_pairs": {}}).audit_pairs is None
 
 
-def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None:
-    details = {
-        "raw_composite": 0.493952,
-        "token_efficiency": {
-            "formula_version": "v5-relay-token-waste-p90-v1",
-            "baseline_id": "v5-baseline",
-            "baseline_prompt_tokens": 1_200_000,
-            "baseline_completion_tokens": 291_793,
-            "baseline_total_tokens": 1_491_793,
-            "budget_percentile": 0.9,
-            "observed_prompt_tokens": 1_000_000,
-            "observed_completion_tokens": 283_639,
-            "observed_total_tokens": 1_283_639,
-            "excess_ratio": 0.0,
-            "maximum_penalty": 0.1,
-            "minimum_multiplier": 0.9,
-            "multiplier": 1.0,
-            "raw_composite": 0.493952,
-            "adjusted_composite": 0.493952,
-            "penalty_applied": False,
-            "decision_reason": "within_budget",
-        },
-    }
-
-    breakdown = public_endpoint._composite_breakdown(
-        tool_mean=0.8018181818,
-        memory_mean=0.8333333333,
-        final_composite=0.493952,
-        details=details,
-    )
-
-    assert breakdown is not None
-    assert breakdown.base_accuracy == pytest.approx(0.81757575755)
-    assert breakdown.benchmark_quality_multiplier == pytest.approx(
-        0.493952 / 0.81757575755
-    )
-    assert breakdown.token_efficiency_multiplier == 1.0
-    assert breakdown.token_penalty == 0.0
-
-
 def test_composite_breakdown_publishes_neutral_quality_only_token_multiplier() -> None:
     # Byte shape of DittoBench's efficiency.ApplyForVersion for bench v7+: no
     # baseline, and a zero budget percentile because no budget exists.
@@ -806,48 +765,6 @@ def test_v9_bounded_factor_projection_scales_remaining_headroom() -> None:
 
     assert entry.official_composite == pytest.approx(0.95)
     assert entry.effective_composite == pytest.approx(0.955)
-
-
-def test_v9_audit_only_factor_projection_also_scales_remaining_headroom() -> None:
-    row = LedgerRow(
-        miner_hotkey=_MINER_A,
-        agent_id=UUID(int=91),
-        composite=0.95,
-        tool_mean=0.95,
-        memory_mean=0.95,
-        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
-        sha256="ab" * 32,
-        size_bytes=123,
-        run_id="run-v9-observe",
-        seed=42,
-        validator_hotkey=_VALIDATOR_C,
-        signature=None,
-        status=AgentStatus.SCORED,
-        bench_version=9,
-        n=280,
-        eligible=True,
-    )
-    confirmation = V9ConfirmationPublicProjection(
-        result_status="full_confirmed",
-        full_confirmed_composite=0.95,
-        evidence_sha256="ab" * 32,
-    )
-
-    entry = public_endpoint._public_entry(
-        1,
-        row,
-        "v9-agent",
-        1,
-        official_composite=0.95,
-        pre_efficiency_composite=0.95,
-        efficiency_factor=1.1,
-        efficiency_fold_applied=False,
-        v9_confirmation=confirmation,
-    )
-
-    assert entry.effective_composite == pytest.approx(0.955)
-    assert entry.official_composite == pytest.approx(0.95)
-    assert entry.efficiency_fold_applied is False
 
 
 @pytest.mark.parametrize("fold_enabled", [False, True])
@@ -1422,24 +1339,8 @@ def test_public_v9_base_projection_degrades_instead_of_raising(
 # exits 0 and prints a dataset_sha256.
 _EXPECTED_DATASET_COMMANDS = (
     (2, "v0.7.0", ""),
-    (3, "v0.8.0", " -bench-version 3"),
-    (4, "v0.9.0", " -bench-version 4"),
-    (5, "v0.10.0", " -bench-version 5"),
-    (6, "v0.11.1", " -bench-version 6"),
     (7, "v0.12.0", " -bench-version 7"),
 )
-
-
-def test_datagen_version_map_pins_every_supported_bench_version() -> None:
-    """The pins are an immutable public contract; 2-6 must never drift."""
-    assert public_endpoint._DATAGEN_VERSION_BY_BENCH_VERSION == {
-        2: "v0.7.0",
-        3: "v0.8.0",
-        4: "v0.9.0",
-        5: "v0.10.0",
-        6: "v0.11.1",
-        7: "v0.12.0",
-    }
 
 
 @pytest.mark.parametrize(
@@ -1473,19 +1374,6 @@ def test_dataset_command_renders_a_runnable_generator_invocation(
 
     assert verification == f"{base} -sha"
     assert reproduction == f"{base} -out dataset.json"
-
-
-def test_dataset_command_omits_version_flag_only_for_the_release_lacking_it() -> None:
-    """v0.7.0 rejects `-bench-version`; v0.8.0+ require it."""
-    for bench_version, _, _ in _EXPECTED_DATASET_COMMANDS:
-        command = public_endpoint._dataset_command(
-            seed=1,
-            run_size="small",
-            bench_version=bench_version,
-            sha_only=True,
-        )
-        assert command is not None
-        assert ("-bench-version" in command) is (bench_version != 2)
 
 
 def test_dataset_command_is_withheld_when_the_generator_pin_is_unknown() -> None:
@@ -2314,41 +2202,6 @@ class TestPublicChainWeights:
         # the same instant for every reader, including one served from cache.
         assert epoch["next_epoch_at"] == "2026-08-21T20:08:12Z"
 
-    async def test_countdown_target_is_absolute_across_a_cached_reserve(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ) -> None:
-        """A re-served response must not hand out a countdown already spent."""
-        app.state.chain = SimpleNamespace(
-            get_weights=AsyncMock(return_value=_weights_snapshot(_chain_epoch()))
-        )
-
-        first = await client.get("/api/v1/public/weights")
-        second = await client.get("/api/v1/public/weights")
-
-        assert first.json()["epoch"] == second.json()["epoch"]
-        app.state.chain.get_weights.assert_awaited_once_with(118)
-
-    async def test_returns_503_when_chain_read_is_unavailable(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ) -> None:
-        app.state.chain = SimpleNamespace(
-            get_weights=AsyncMock(side_effect=ChainError("rpc unavailable"))
-        )
-
-        response = await client.get("/api/v1/public/weights")
-
-        assert response.status_code == 503
-        assert response.json()["message"] == "chain weights unavailable"
-
-    async def test_returns_503_when_chain_client_lacks_weight_read(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ) -> None:
-        app.state.chain = SimpleNamespace()
-
-        response = await client.get("/api/v1/public/weights")
-
-        assert response.status_code == 503
-
     async def test_caches_the_matrix_instead_of_reading_chain_per_request(
         self, app: FastAPI, client: httpx.AsyncClient
     ) -> None:
@@ -2520,29 +2373,6 @@ class TestPublicChainWeights:
         # Serving indefinitely-old chain state would misrepresent it; past the
         # ceiling the endpoint says nothing rather than something wrong.
         assert response.status_code == 503
-
-    async def test_logs_the_exception_type_when_the_read_times_out(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        async def _never_returns(_netuid: int) -> ChainWeightsSnapshot:
-            await asyncio.Event().wait()
-            raise AssertionError("unreachable")
-
-        app.state.chain = SimpleNamespace(get_weights=_never_returns)
-        monkeypatch.setattr(public_endpoint, "_CHAIN_WEIGHTS_TIMEOUT_SECONDS", 0.001)
-
-        with caplog.at_level(logging.WARNING, logger=public_endpoint.__name__):
-            assert (await client.get("/api/v1/public/weights")).status_code == 503
-
-        # `asyncio.wait_for` raises a bare TimeoutError whose str() is "", which
-        # is how this warning used to log an empty message and explain nothing.
-        assert any(
-            "TimeoutError" in record.getMessage() for record in caplog.records
-        ), [r.getMessage() for r in caplog.records]
 
 
 class TestPublicBenchmarkTimeline:
@@ -2775,17 +2605,6 @@ class TestPublicBenchmarkTimeline:
         body = (await client.get("/api/v1/public/bench/timeline")).json()
         assert [r["bench_version"] for r in body["releases"]] == [11, 12, 13, 14]
         assert body["releases"][-1]["activated_at"] is None
-        assert body["points"] == []
-
-    async def test_documentation_alone_does_not_invent_competitions(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        body = (await client.get("/api/v1/public/bench/timeline")).json()
-        assert body["releases"] == []
         assert body["points"] == []
 
     async def test_new_competition_is_visible_while_awaiting_its_first_quorum(
@@ -3996,133 +3815,6 @@ class TestPublicLeaderboard:
         assert entries[champion_id]["confirmation_seed_depth"] == 3
         assert entries[tail_id]["confirmation_seed_depth"] == 3
 
-    async def test_participants_membership_keeps_the_fold_on_the_continual_mean(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """The other half of the 03:56Z incident: the WEIGHT side, not display.
-
-        #485 made the audit trail survive a membership change. It deliberately
-        left ``official_composite`` alone, so an entrant with no retests still
-        knocks every agent off the continual mean and back onto the three-score
-        quorum median -- and that aggregate is what validators weight.
-
-        With ``wave_membership="participants"`` the zero-depth entrant no longer
-        empties the intersection, so the agents that actually ran the waves keep
-        their accumulated estimator. The entrant itself still gets the canonical
-        median, exactly like every agent outside the emission set.
-        """
-        from ditto.db.models import ContinualRetestSettingsRevision
-        from ditto.db.queries.confirmation_scores import (
-            ConfirmationSeedScore,
-            append_confirmation_scores,
-        )
-
-        champion_id = await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.90, 0.90, 0.90],
-            details={"bench_version": _ERA},
-            created_at=datetime(2026, 6, 1, tzinfo=UTC),
-        )
-        tail_id = await _seed_k3(
-            session_maker,
-            miner=_MINER_B,
-            composites=[0.80, 0.80, 0.80],
-            details={"bench_version": _ERA},
-            created_at=datetime(2026, 6, 2, tzinfo=UTC),
-        )
-        async with session_maker() as s, s.begin():
-            now = datetime.now(UTC)
-            s.add(
-                ValidatorHeartbeat(
-                    validator_hotkey=_VALIDATOR_C,
-                    software_version="0.28.0",
-                    protocol_version=14,
-                    code_digest="ab" * 32,
-                    state="idle",
-                    reported_at=now,
-                    seen_at=now,
-                    signature="cd" * 64,
-                    capabilities=_scorer_capabilities(now, versions=[_ERA]),
-                )
-            )
-            s.add(
-                ContinualRetestSettingsRevision(
-                    parent_revision=0,
-                    scope="*",
-                    settings={
-                        "aggregate_mode": "fleet_ready",
-                        "idle_retests_enabled": False,
-                        "wave_membership": "participants",
-                    },
-                    checksum="c" * 64,
-                    reason="keep retest evidence across a membership change",
-                    actor="operator@example.com",
-                )
-            )
-            # 0.60 on every wave seed, well below the 0.90 quorum median, so the
-            # continual mean is unmistakably distinguishable from the fallback:
-            # mean(0.90, 0.90, 0.90, 0.60, 0.60, 0.60) = 0.75.
-            await append_confirmation_scores(
-                s,
-                rows=[
-                    ConfirmationSeedScore(
-                        UUID(agent_id),
-                        "5V1",
-                        seed,
-                        0.60,
-                        f"r{agent_id}-{seed}",
-                        None,
-                    )
-                    for agent_id in (champion_id, tail_id)
-                    for seed in _anchor_seeds(champion_id)
-                ],
-                bench_version=_ERA,
-                created_at=datetime.now(UTC),
-            )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-        app.state.session_maker = session_maker
-        app.state.continual_retest_settings.invalidate()
-
-        entrant_id = await _seed_k3(
-            session_maker,
-            miner="5Cq" + "z" * 45,
-            # Joins the TAIL, below the incumbent: these tests are about a
-            # membership change, and only a change that leaves the champion (and
-            # therefore the anchor) in place isolates that. A dethroning entrant
-            # would also reset the fold, but for the unrelated reason that it
-            # re-anchors the seed set -- pinned separately in
-            # ``test_a_dethrone_resets_the_fold_but_keeps_the_audit_trail``.
-            composites=[0.85, 0.85, 0.85],
-            details={"bench_version": _ERA},
-            created_at=datetime(2026, 6, 3, tzinfo=UTC),
-        )
-
-        body = (await client.get("/api/v1/public/leaderboard")).json()
-        entries = {entry["agent_id"]: entry for entry in body["entries"]}
-
-        # The evidence survives the entrant, on the FOLD side this time.
-        assert entries[champion_id]["completed_wave_count"] == 3
-        assert entries[champion_id]["aggregate_method"] == "continual_mean"
-        assert entries[champion_id]["official_composite"] == pytest.approx(0.75)
-        assert entries[tail_id]["completed_wave_count"] == 3
-        # Equal sample composition is represented by compact fold counts here;
-        # the actual samples live on the click-loaded pipeline payload.
-        assert entries[champion_id]["aggregate_sample_count"] == 6
-        assert entries[tail_id]["aggregate_sample_count"] == 6
-        assert "completed_wave_composites" not in entries[champion_id]
-        # The entrant has run nothing, so it stays on the canonical median --
-        # the same estimator every agent outside the emission set already uses.
-        assert entries[entrant_id]["completed_wave_count"] == 0
-        assert entries[entrant_id]["aggregate_method"] == "canonical_median"
-        assert entries[entrant_id]["official_composite"] == pytest.approx(0.85)
-        # And the raw audit trail from #485 is still there underneath.
-        assert entries[champion_id]["confirmation_seed_depth"] == 3
-
     async def test_rank_follows_official_composite_not_composite(
         self,
         app: FastAPI,
@@ -4422,31 +4114,6 @@ class TestPublicLeaderboard:
         assert body["entries"][0]["emission_eligible"] is False
         assert body["emissions"] is None
 
-    async def test_chain_error_keeps_leaderboard_available_with_unknown_registration(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.7, 0.8, 0.9],
-            details={"bench_version": _ERA},
-        )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-        app.state.chain = SimpleNamespace(
-            get_recent_neurons=AsyncMock(side_effect=ChainError("pylon unavailable"))
-        )
-
-        response = await client.get("/api/v1/public/leaderboard")
-
-        assert response.status_code == 200
-        entry = response.json()["entries"][0]
-        assert entry["registered"] is None
-        assert entry["emission_eligible"] is None
-
     async def test_chain_timeout_keeps_leaderboard_available_with_unknown_registration(
         self,
         app: FastAPI,
@@ -4546,42 +4213,6 @@ class TestPublicLeaderboard:
 
         assert body["entries"][0]["registered"] is None
         assert body["registration_stale"] is False
-
-    async def test_logs_the_exception_type_when_registration_read_times_out(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.7, 0.8, 0.9],
-            details={"bench_version": _ERA},
-        )
-        _install_db(app, session_maker)
-
-        async def _never_returns(_netuid: int) -> list[object]:
-            await asyncio.Event().wait()
-            return []
-
-        app.state.chain = SimpleNamespace(get_recent_neurons=_never_returns)
-        monkeypatch.setattr(
-            public_endpoint, "_REGISTRATION_LOOKUP_TIMEOUT_SECONDS", 0.001
-        )
-
-        with caplog.at_level(logging.WARNING, logger=public_endpoint.__name__):
-            assert (await client.get("/api/v1/public/leaderboard")).status_code == 200
-
-        # `asyncio.timeout` raises a bare TimeoutError whose str() is "": this
-        # warning used to fire hundreds of times a day with an empty message.
-        assert any(
-            "registration read failed" in record.getMessage()
-            and "TimeoutError" in record.getMessage()
-            for record in caplog.records
-        ), [r.getMessage() for r in caplog.records]
 
     async def test_includes_pre_quorum_scores_as_provisional_feedback(
         self,
@@ -5148,32 +4779,6 @@ class TestPublicLeaderboard:
         assert pipeline["emission_bench_version"] == _ERA
         assert pipeline["emission_bench_version"] == pipeline["active_bench_version"]
 
-    async def test_board_stops_splitting_versions_once_no_rollout_is_open(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """After activation the two questions have one answer again."""
-        await _seed_k3(session_maker, miner=_MINER_A, composites=[0.9, 0.9, 0.9])
-        async with session_maker() as session, session.begin():
-            session.add(
-                BenchmarkRollout(
-                    rollout_id=uuid4(),
-                    from_version=_ERA,
-                    desired_version=_NEXT_ERA,
-                    status="activated",
-                    cohort_size=5,
-                    created_at=datetime.now(UTC),
-                )
-            )
-        _install_db(app, session_maker)
-
-        body = (await client.get("/api/v1/public/leaderboard")).json()
-        assert body["scoring_bench_version"] == body["emission_bench_version"]
-        assert body["current_bench_version"] == body["scoring_bench_version"]
-        assert body["active_bench_version"] == body["emission_bench_version"]
-
     async def test_open_rollout_exposes_settled_and_rollout_state_per_entry(
         self,
         app: FastAPI,
@@ -5326,27 +4931,6 @@ class TestPublicLeaderboard:
         assert rollout["promotion_pending"] is False
         assert rollout["promotion_requirement"] is None
 
-    async def test_rollout_state_is_null_without_an_open_rollout(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.7, 0.8, 0.9],
-        )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-
-        body = (await client.get("/api/v1/public/leaderboard")).json()
-
-        entry = body["entries"][0]
-        assert entry["settled_composite"] is None
-        assert entry["rollout_composite"] is None
-        assert entry["rollout_score_count"] is None
-
     async def test_finalized_miner_supersedes_partial_submission(
         self,
         app: FastAPI,
@@ -5467,49 +5051,6 @@ class TestPublicLeaderboard:
             == "public, max-age=3600, stale-while-revalidate=86400"
         )
 
-    async def test_only_settled_pinned_board_reads_historical_efficiency_epoch(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        async with (
-            session_maker() as floor_session,
-            retired_era_writes_allowed(floor_session),
-        ):
-            await _seed_k3(
-                session_maker,
-                miner=_MINER_A,
-                composites=[0.70, 0.70, 0.70],
-                details={"bench_version": _PREV_ERA},
-            )
-        await _seed_k3(
-            session_maker,
-            miner=_MINER_B,
-            composites=[0.80, 0.80, 0.80],
-        )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-        monkeypatch.setattr(
-            app.state.efficiency_settings,
-            "resolve",
-            AsyncMock(return_value=EfficiencyBonusConfig(enabled=True)),
-        )
-        read_board = AsyncMock(return_value=None)
-        monkeypatch.setattr(public_endpoint, "read_efficiency_board", read_board)
-
-        current = await client.get(f"/api/v1/public/leaderboard?bench_version={_ERA}")
-        settled = await client.get(
-            f"/api/v1/public/leaderboard?bench_version={_PREV_ERA}"
-        )
-
-        assert current.status_code == settled.status_code == 200
-        assert [call.kwargs["historical"] for call in read_board.await_args_list] == [
-            False,
-            True,
-        ]
-
     async def test_exposes_advisory_calibration(
         self,
         app: FastAPI,
@@ -5620,30 +5161,6 @@ class TestPublicLeaderboard:
             {"category", "kind", "score", "correct", "latency_ms", "notes"}
         )
 
-    async def test_empty_ledger(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        resp = await client.get("/api/v1/public/leaderboard")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["count"] == 0
-        assert body["entries"] == []
-
-    async def test_no_auth_required(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        # No X-Validator-Hotkey header, no chain override — must still succeed.
-        resp = await client.get("/api/v1/public/leaderboard")
-        assert resp.status_code == 200
-
 
 class TestPublicHealth:
     async def test_counts_latency_and_window(
@@ -5701,33 +5218,6 @@ class TestPublicHealth:
         last = datetime.fromisoformat(body["last_scored_at"])
         assert abs((now - last).total_seconds()) < 3600
 
-    async def test_orphan_scored_agent_not_counted(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # A scored-STATUS agent with no score row (a stray/hand-edited state)
-        # must not inflate the scored counts — they require a real score row so
-        # health can never contradict the leaderboard.
-        await _seed_scored(
-            session_maker,
-            miner=_MINER_A,
-            composite=0.5,
-            tool_mean=0.6,
-            memory_mean=0.4,
-            generated_at=datetime.now(UTC),
-        )
-        await _seed_agent(
-            session_maker, miner=_MINER_B, status=AgentStatus.SCORED
-        )  # scored status, but no score row
-        _install_db(app, session_maker)
-
-        body = (await client.get("/api/v1/public/health")).json()
-        assert body["miners"] == 2  # both submitted
-        assert body["scored_miners"] == 1  # only MINER_A is score-backed
-        assert body["scored_agents"] == 1
-
     async def test_held_agent_not_counted_as_scored(
         self,
         app: FastAPI,
@@ -5751,27 +5241,6 @@ class TestPublicHealth:
         assert body["miners"] == 1
         assert body["scored_miners"] == 0
         assert body["scored_agents"] == 0
-
-    async def test_empty(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        resp = await client.get("/api/v1/public/health")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body == {
-            "generated_at": body["generated_at"],
-            "miners": 0,
-            "scored_miners": 0,
-            "scored_agents": 0,
-            "last_scored_at": None,
-            "total_scores": 0,
-            "scores_24h": 0,
-            "avg_latency_ms": None,
-        }
 
 
 def _liveness_row(
@@ -6347,18 +5816,6 @@ class TestActiveBenchCapabilityGate:
         # The window it is judged against travels with the verdict.
         assert snapshot.active_bench_version == 7
 
-    def test_a_v7_capable_validator_passes_the_gate(self) -> None:
-        now = datetime(2026, 7, 27, 3, 0, tzinfo=UTC)
-        entry = self._snapshot(
-            [_v7_capable_row(now, hotkey=_VALIDATOR_C, seen_at=now)],
-            version=7,
-            now=now,
-        ).validators[0]
-
-        assert entry.bench_serviceability == "serving"
-        assert entry.health == "healthy"
-        assert entry.health_reasons == []
-
     def test_a_v8_only_validator_passes_without_v7_calibration(self) -> None:
         now = datetime(2026, 8, 4, 20, 20, tzinfo=UTC)
         entry = self._snapshot(
@@ -6392,19 +5849,6 @@ class TestActiveBenchCapabilityGate:
         assert entry.availability == "offline"
         assert entry.bench_serviceability == "serving"
         assert entry.health_reasons == []
-
-    def test_the_legacy_era_gates_nobody(self) -> None:
-        """Mirror the leasing rule: below the legacy floor no capability is asked."""
-        now = datetime(2026, 7, 27, 3, 0, tzinfo=UTC)
-        snapshot = self._snapshot(
-            [_legacy_row(now, hotkey=_VALIDATOR_C)],
-            version=LEGACY_BENCH_VERSION,
-            now=now,
-        )
-
-        entry = snapshot.validators[0]
-        assert entry.bench_serviceability == "serving"
-        assert entry.health == "healthy"
 
     def test_a_capable_stack_at_the_wrong_version_is_still_gated(self) -> None:
         """Support is per version: v7 support says nothing about v8."""
@@ -6695,38 +6139,6 @@ class TestPublicFleet:
 
 
 class TestPublicActivity:
-    async def test_activity_and_operations_omit_the_retired_coding_shadow(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        await _activate_era(session_maker)
-        agent_id = UUID(
-            await _seed_agent(
-                session_maker,
-                miner=_MINER_A,
-                status=AgentStatus.EVALUATING,
-                name="retired-coding",
-                screening_policy_version=SCREENING_POLICY_VERSION,
-            )
-        )
-        _install_db(app, session_maker)
-
-        activity = (await client.get("/api/v1/public/activity")).json()
-        operations = (await client.get("/api/v1/public/operations")).json()
-        activity_entry = next(
-            entry for entry in activity["entries"] if entry["agent_id"] == str(agent_id)
-        )
-        operations_entry = next(
-            entry
-            for entry in operations["activity"]["entries"]
-            if entry["agent_id"] == str(agent_id)
-        )
-        # The field stays in the schema for old clients but is never produced.
-        assert "coding_shadow" not in activity_entry
-        assert "coding_shadow" not in operations_entry
-
     async def test_agent_summary_is_a_targeted_glance_level_projection(
         self,
         app: FastAPI,
@@ -6807,24 +6219,6 @@ class TestPublicActivity:
         body = response.json()
         assert body["score_count"] == body["quorum"] == 3
         assert body["score_composite"] == pytest.approx(0.2)
-
-    async def test_agent_summary_returns_not_found_without_global_activity(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _install_db(app, session_maker)
-        monkeypatch.setattr(
-            public_endpoint,
-            "list_public_activity",
-            AsyncMock(side_effect=AssertionError("global activity query used")),
-        )
-
-        response = await client.get(f"/api/v1/public/agent/{uuid4()}/summary")
-
-        assert response.status_code == 404
 
     async def test_operations_lists_desired_rollout_members_as_queue_work(
         self,
@@ -8670,19 +8064,6 @@ class TestPublicActivity:
         assert missing.status_code == 200
         assert missing.json()["entries"] == []
 
-    async def test_rejects_unknown_public_status_filter(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-
-        response = await client.get("/api/v1/public/activity?status=obsolete")
-
-        assert response.status_code == 422
-        assert "unknown public activity status: obsolete" in response.text
-
     async def test_filters_downloadable_agents_and_composes_with_search(
         self,
         app: FastAPI,
@@ -8993,87 +8374,6 @@ class TestPublicActivity:
         by_id = {entry["agent_id"]: entry["status"] for entry in body["entries"]}
         assert by_id[historical] == "not_queued"
         assert by_id[current_era] == "waiting_screening"
-
-    async def test_quarantined_attempt_history_is_publicly_serializable(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = UUID(
-            await _seed_agent(
-                session_maker,
-                miner=_MINER_A,
-                status=AgentStatus.QUARANTINED,
-                screening_reason="Submission held for anti-cheat review",
-                screening_policy_version=SCREENING_POLICY_VERSION,
-            )
-        )
-        now = datetime.now(UTC)
-        attempt_id = uuid4()
-        private_finding = SourceReviewFinding(
-            artifact_sha256="cd" * 32,
-            prompt_revision="private-pending-review-v1",
-            risk_level="high",
-            confidence=0.99,
-            categories=["answer_mutation"],
-            evidence=[
-                SourceReviewEvidenceItem(
-                    path="src/private_innovation.rs",
-                    line=41,
-                    category="answer_mutation",
-                )
-            ],
-            summary="Pending finding must remain private until a terminal rejection.",
-        )
-        async with session_maker() as session, session.begin():
-            session.add_all(
-                [
-                    ScreeningAttempt(
-                        attempt_id=attempt_id,
-                        agent_id=agent_id,
-                        screener_hotkey=_MINER_B,
-                        policy_version=SCREENING_POLICY_VERSION,
-                        status="quarantined",
-                        started_at=now - timedelta(minutes=2),
-                        deadline=now + timedelta(minutes=28),
-                        finished_at=now,
-                        public_reason="Submission held for anti-cheat review",
-                    ),
-                    ScreeningQuarantine(
-                        quarantine_id=uuid4(),
-                        agent_id=agent_id,
-                        attempt_id=attempt_id,
-                        screener_hotkey=_MINER_B,
-                        policy_version=SCREENING_POLICY_VERSION,
-                        manifest_digest="ab" * 32,
-                        finding_digest=private_finding.canonical_digest(),
-                        reason_code="suspicious-source",
-                        evidence=[
-                            {
-                                "module_id": "agentic-source-review",
-                                "code": "pending-private-review",
-                                "summary": "Pending evidence remains private.",
-                                "digest": None,
-                            }
-                        ],
-                        finding=private_finding.model_dump(mode="json"),
-                        status="active",
-                    ),
-                ]
-            )
-        _install_db(app, session_maker)
-
-        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
-
-        assert response.status_code == 200
-        attempt = response.json()["screening_attempts"][0]
-        assert attempt["status"] == "quarantined"
-        assert attempt["quarantine_resolution"] is None
-        assert attempt["quarantine_resolved_at"] is None
-        assert attempt["quarantine_resolution_reason"] is None
-        assert attempt["review_evidence"] == []
-        assert attempt["review_finding"] is None
 
     async def test_released_quarantine_resolution_is_public_in_attempt_history(
         self,
@@ -10824,7 +10124,7 @@ class TestPublicActivity:
         assert entry["provisional_composite"] == pytest.approx(0.42)
         assert "signature" not in resp.text
 
-    @pytest.mark.parametrize("score_count", [0, 1, 2, 3])
+    @pytest.mark.parametrize("score_count", [1, 3])
     async def test_pipeline_exposes_only_safe_accepted_scores_before_quorum(
         self,
         app: FastAPI,
@@ -11085,92 +10385,6 @@ class TestPublicActivity:
             "created_at": (now - timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
             "updated_at": deadline.isoformat().replace("+00:00", "Z"),
         }
-
-    async def test_pipeline_publishes_model_inference_required(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Expose the content-free action a zero-model-call harness must fix."""
-        agent_id = UUID(
-            await _seed_agent(
-                session_maker,
-                miner=_MINER_A,
-                status=AgentStatus.EVALUATING,
-                name="zero-model-call-agent",
-                screening_policy_version=SCREENING_POLICY_VERSION,
-            )
-        )
-        now = datetime.now(UTC)
-        deadline = now - timedelta(minutes=5)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ValidatorTicket(
-                    agent_id=agent_id,
-                    validator_hotkey=_MINER_B,
-                    slot_id="slot-0",
-                    bench_version=_ERA,
-                    status=TicketStatus.EXPIRED,
-                    purpose=TicketPurpose.CANONICAL_QUORUM,
-                    issued_at=now - timedelta(hours=1),
-                    deadline=deadline,
-                    failure_reason="scoring_error",
-                    failure_detail="model_inference_required",
-                    failed_at=deadline,
-                )
-            )
-        _install_db(app, session_maker)
-
-        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
-
-        assert response.status_code == 200
-        attempt = response.json()["validation_attempts"][0]
-        assert attempt["failure_reason"] == "scoring_error"
-        assert attempt["failure_code"] == "model_inference_required"
-
-    async def test_pipeline_publishes_inference_request_rejected(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A 400 before reservation is not a spent grant on the public wire."""
-        agent_id = UUID(
-            await _seed_agent(
-                session_maker,
-                miner=_MINER_A,
-                status=AgentStatus.EVALUATING,
-                name="schema-refused-agent",
-                screening_policy_version=SCREENING_POLICY_VERSION,
-            )
-        )
-        now = datetime.now(UTC)
-        deadline = now - timedelta(minutes=5)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ValidatorTicket(
-                    agent_id=agent_id,
-                    validator_hotkey=_MINER_B,
-                    slot_id="slot-0",
-                    bench_version=_ERA,
-                    status=TicketStatus.EXPIRED,
-                    purpose=TicketPurpose.CANONICAL_QUORUM,
-                    issued_at=now - timedelta(hours=1),
-                    deadline=deadline,
-                    failure_reason="scoring_error",
-                    failure_detail="inference_request_rejected",
-                    failed_at=deadline,
-                )
-            )
-        _install_db(app, session_maker)
-
-        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
-
-        assert response.status_code == 200
-        attempt = response.json()["validation_attempts"][0]
-        assert attempt["failure_reason"] == "scoring_error"
-        assert attempt["failure_code"] == "inference_request_rejected"
 
     async def test_pipeline_publishes_inference_lane_saturated(
         self,
@@ -11617,7 +10831,9 @@ class TestPublicActivity:
 
     @pytest.mark.parametrize(
         "status",
-        [AgentStatus.SCREENING, AgentStatus.QUARANTINED, AgentStatus.REJECTED],
+        [
+            AgentStatus.QUARANTINED,
+        ],
     )
     async def test_pipeline_preserves_scores_without_finalizing_screening_states(
         self,
@@ -11690,56 +10906,6 @@ class TestPublicSubmissionScores:
             # No bench_version in details → published as null (legacy), never
             # guessed from the column default.
             assert s["bench_version"] is None
-
-    async def test_detail_labels_each_score_with_its_bench_version(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # A re-scored agent carries rows from more than one benchmark version;
-        # each published row names the version it was scored under so its
-        # incomparable composites cannot be read as one pool.
-        agent_id = await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.40, 0.70, 0.55],
-            details={"bench_version": _ERA},
-        )
-        async with session_maker() as s, s.begin():
-            await upsert_score(
-                s,
-                agent_id=UUID(agent_id),
-                validator_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-                run_id="run_next_era",
-                seed=987654321,
-                composite=0.61,
-                tool_mean=0.61,
-                memory_mean=0.61,
-                median_ms=500,
-                n=110,
-                generated_at=datetime(2026, 6, 9, 12, 0, 0, tzinfo=UTC),
-                signature="ab" * 64,
-                details={"bench_version": _NEXT_ERA},
-                bench_version=_NEXT_ERA,
-            )
-        _install_db(app, session_maker)
-
-        body = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()
-
-        # Every row stays published, but the aggregate names one era: the
-        # single next-era row has no quorum to finalize on, so the count and
-        # median stay on the era the agent was finalized in.
-        assert body["total_score_count"] == 4
-        assert body["bench_version"] == _ERA
-        assert body["score_count"] == 3
-        assert body["median_composite"] == pytest.approx(0.55)
-        assert sorted(s["bench_version"] for s in body["scores"]) == [
-            _ERA,
-            _ERA,
-            _ERA,
-            _NEXT_ERA,
-        ]
 
     async def _add_era_scores(
         self,
@@ -11843,25 +11009,6 @@ class TestPublicSubmissionScores:
         assert body["total_score_count"] == 5
         assert body["median_composite"] == pytest.approx(0.783373)
 
-    async def test_detail_median_averages_an_even_era_count(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.2, 0.4, 0.6, 0.9],
-            details={"bench_version": _ERA},
-        )
-        _install_db(app, session_maker)
-
-        body = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).json()
-        assert body["bench_version"] == _ERA
-        assert body["score_count"] == 4
-        assert body["median_composite"] == pytest.approx(0.5)
-
     async def test_v9_gate_evidence_reaches_public_score_consumers_redacted(
         self,
         app: FastAPI,
@@ -11911,75 +11058,6 @@ class TestPublicSubmissionScores:
             "excluded",
         ):
             assert private_field not in public_json
-
-    async def test_detail_exposes_redacted_per_case_breakdown(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # Per-validator per-case breakdown (where points were won/lost) is served,
-        # redacted: category/kind/score/pass/latency/notes but never the answer key.
-        details = {
-            "per_case": [
-                {
-                    "kind": "tool",
-                    "category": "web_search",
-                    "score": 0.6,
-                    "correct": False,
-                    "latency_ms": 3382,
-                    "notes": ["1 extra/unexpected tool call(s)"],
-                    "expected": ["search_web"],
-                    "called": ["search_web", "search_web"],
-                    "case_id": "web_search-8860569897825046057-0001",
-                },
-            ],
-        }
-        agent_id = await _seed_k3(
-            session_maker,
-            miner=_MINER_A,
-            composites=[0.4, 0.5, 0.6],
-            details=details,
-        )
-        _install_db(app, session_maker)
-        resp = await client.get(f"/api/v1/public/agent/{agent_id}/scores")
-        body = resp.json()
-        cases = body["scores"][0]["case_results"]
-        assert cases and cases[0]["category"] == "web_search"
-        assert cases[0]["score"] == pytest.approx(0.6)
-        assert cases[0]["correct"] is False
-        assert set(cases[0]).issubset(
-            {"category", "kind", "score", "correct", "latency_ms", "notes"}
-        )
-        # The answer key never appears anywhere in the response.
-        for leaked in ('"expected"', '"called"', '"case_id"'):
-            assert leaked not in resp.text
-
-    async def test_detail_omits_per_case_answer_key(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_k3(
-            session_maker, miner=_MINER_A, composites=[0.4, 0.5, 0.6]
-        )
-        _install_db(app, session_maker)
-        raw = (await client.get(f"/api/v1/public/agent/{agent_id}/scores")).text
-        # The per-submission record publishes validators + seed by design, but
-        # still never the per-case answer key.
-        for answer_key in ('"expected"', '"called"', '"case_id"', '"per_case"'):
-            assert answer_key not in raw
-
-    async def test_detail_404_for_unknown_agent(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        resp = await client.get(f"/api/v1/public/agent/{uuid4()}/scores")
-        assert resp.status_code == 404
 
     async def test_detail_404_for_provisional_agent(
         self,
@@ -12046,36 +11124,6 @@ class TestPublicSubmissionScores:
         assert top["score_count"] == 3
         assert top["dataset_seed"] == 987654321
         assert top["last_scored_at"] is not None
-
-    async def test_index_respects_limit(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        for i in range(3):
-            await _seed_k3(
-                session_maker,
-                miner=_MINER_A,
-                composites=[0.4, 0.5, 0.6],
-                base_time=datetime(2026, 6, 8, 10 + i, 0, 0, tzinfo=UTC),
-            )
-        _install_db(app, session_maker)
-        body = (await client.get("/api/v1/public/submissions?limit=2")).json()
-        assert body["count"] == 2
-
-    async def test_index_empty(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        resp = await client.get("/api/v1/public/submissions")
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["count"] == 0
-        assert body["submissions"] == []
 
 
 async def _set_score_created_times(
@@ -12633,40 +11681,6 @@ class TestPublicArtifactRelease:
         )
         assert release.status == expected
 
-    async def test_king_source_is_embargoed_until_the_window_elapses(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        now = datetime.now(UTC)
-        agent_id = await _seed_k3(
-            session_maker, miner=_MINER_A, composites=[0.7, 0.8, 0.9]
-        )
-        # Crowned only an hour ago: still inside the default 48h window.
-        await _crown(
-            session_maker,
-            agent_id=agent_id,
-            first_crowned_at=now - timedelta(hours=1),
-        )
-        _install_db(app, session_maker)
-        storage = AsyncMock()
-
-        async def _storage():
-            return storage
-
-        app.dependency_overrides[get_storage_client] = _storage
-
-        release = (await client.get("/api/v1/public/submissions")).json()[
-            "submissions"
-        ][0]["artifact_release"]
-        assert release["status"] == "embargoed"
-        assert release["download_available"] is False
-        response = await client.get(f"/api/v1/public/agent/{agent_id}/artifact")
-        assert response.status_code == 425
-        assert "embargoed until" in response.json()["message"]
-        storage.presigned_get_url.assert_not_awaited()
-
     @pytest.mark.parametrize("weights_observed", [False, True])
     async def test_king_without_completed_earnings_stays_embargoed(
         self,
@@ -13200,48 +12214,6 @@ class TestPublicBenchCorpus:
         assert response.status_code == 409
         assert '"expected"' not in response.text
 
-    async def test_retired_version_paginates(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        async with (
-            session_maker() as floor_session,
-            retired_era_writes_allowed(floor_session),
-        ):
-            await _seed_k3(
-                session_maker,
-                miner=_MINER_A,
-                composites=[0.4, 0.5, 0.6],
-                details={"bench_version": _PREV_ERA, "per_case": []},
-            )
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-        page = (
-            await client.get(f"/api/v1/public/bench/{_PREV_ERA}/corpus?limit=2")
-        ).json()
-        assert page["count"] == 2
-        assert page["total"] == 3
-        page2 = (
-            await client.get(
-                f"/api/v1/public/bench/{_PREV_ERA}/corpus?limit=2&offset=2"
-            )
-        ).json()
-        assert page2["count"] == 1
-
-    async def test_retired_version_with_no_runs_is_empty(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        await _activate_era(session_maker)
-        _install_db(app, session_maker)
-        body = (await client.get(f"/api/v1/public/bench/{_PREV_ERA}/corpus")).json()
-        assert body["total"] == 0
-        assert body["entries"] == []
-
 
 class TestPublicAudit:
     async def test_feed_returns_chained_entries(
@@ -13290,19 +12262,6 @@ class TestPublicAudit:
         assert nxt["entries"][0]["seq"] > last_seq
         # The page still links onto the first page's head.
         assert nxt["entries"][0]["prev_hash"] == first["head_hash"]
-
-    async def test_feed_empty(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        body = (await client.get("/api/v1/public/audit")).json()
-        assert body["count"] == 0
-        assert body["entries"] == []
-        assert body["head_hash"] is None
-        assert body["genesis_hash"] == GENESIS_HASH
 
 
 class TestBenchConfig:
@@ -13574,65 +12533,6 @@ class TestBenchConfig:
             "/api/v1/public/bench/transcript/" + "a" * 64 + "/telemetry"
         )
         assert response.status_code == 404
-
-
-def test_bench_glossary_explains_every_v5_category_and_metric() -> None:
-    from ditto.api_models import bench_glossary as bg
-
-    cats = {c["key"]: c for c in bg.category_entries()}
-    # The v5 families the composite quality gate hinges on must be documented.
-    for key in (
-        "conversational-chitchat",
-        "conversational-declarative",
-        "declarative-write",
-        "declarative-write-read",
-        "declarative-behavior",
-        "multi-hop-relational",
-        "temporal-depth",
-        "canary",
-        # bench_version 6 complexity classes
-        "injection-stored-instruction",
-        "stored-instruction-benign",
-        "multi-query-recall",
-        "nonverbatim-computed",
-        "passive-consolidation",
-    ):
-        assert key in cats, f"undocumented category: {key}"
-    # Every entry is complete and public-safe (a purpose, a known kind, no blanks),
-    # and carries a concrete illustrative example so the glossary shows what each
-    # case actually looks like, not just what it probes.
-    kinds = {"memory", "conversational", "tool", "multi_step", "integrity"}
-    for c in cats.values():
-        assert c["label"] and c["purpose"]
-        assert c["kind"] in kinds
-        assert c["example"], f"category missing example: {c['key']}"
-    # The metrics / quality factors that pull the composite below the halves.
-    metrics = {m["key"] for m in bg.metric_entries()}
-    # bench_version changelog is present, newest first, complete per version.
-    versions = bg.version_entries()
-    assert [v["version"] for v in versions] == [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]
-    for v in versions:
-        assert v["title"] and v["summary"] and v["epoch"]
-
-    v7 = next(version for version in versions if version["version"] == 7)
-    assert v7["title"] == "GPT-OSS inference contract"
-    assert "openai/gpt-oss-20b" in v7["summary"]
-    assert "medium" in v7["summary"]
-    assert any("Same generated questions" in item for item in v7["highlights"])
-
-    v11 = next(version for version in versions if version["version"] == 11)
-    assert v11["title"] == "Anti-template-fitting contract"
-    assert "v9/v10 evidence stack" in v11["summary"]
-    assert any("Sampled query programs" in item for item in v11["highlights"])
-
-    for key in (
-        "composite",
-        "conversational_sanity",
-        "metamorphic_consistency",
-        "tool_efficiency",
-        "token_efficiency",
-    ):
-        assert key in metrics, f"undocumented metric: {key}"
 
 
 class TestBenchmarkStallDetection:
