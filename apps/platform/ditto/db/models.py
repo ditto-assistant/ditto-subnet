@@ -11394,7 +11394,17 @@ class ConfirmationBundleTicket(Base):
             "'longmem_run_tool_endpoint', 'longmem_seed_http_status', "
             "'longmem_seed_incomplete_ack', 'longmem_seed_malformed_json', "
             "'longmem_seed_request', 'longmem_seed_response_read', "
-            "'longmem_seed_response_too_large')",
+            "'longmem_seed_response_too_large', "
+            "'longmem_exec_ablation_dataset', 'longmem_exec_broker_session', "
+            "'longmem_exec_dimension_execution', 'longmem_exec_embedding_phase', "
+            "'longmem_exec_execution', 'longmem_exec_harness_health', "
+            "'longmem_exec_installation_validation', 'longmem_exec_longmem_dataset', "
+            "'longmem_exec_provider_capabilities', 'longmem_exec_provider_session', "
+            "'longmem_exec_runtime_acquire', 'longmem_exec_runtime_close', "
+            "'longmem_exec_runtime_material', 'longmem_exec_runtime_validation', "
+            "'longmem_exec_sandbox_availability', 'longmem_exec_sandbox_start', "
+            "'longmem_exec_sandbox_stop', 'longmem_exec_screened_image', "
+            "'longmem_exec_source_validation')",
             name="confirmation_tickets_failure_class_check",
         ),
         CheckConstraint(

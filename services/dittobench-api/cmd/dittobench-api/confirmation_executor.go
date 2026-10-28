@@ -355,15 +355,74 @@ func confirmationExecutionStage(err error) string {
 	return "execution"
 }
 
+// confirmationExecutorStageClasses is the complete set of executor stages that
+// may be reported as a bounded failure class, mapping each to its wire slug.
+//
+// Every value here is a literal already passed to
+// wrapConfirmationExecutionFailure somewhere in this binary, so this is an
+// allowlist of a closed vocabulary the code itself defines -- not an open
+// channel. A stage missing from this map degrades to "unclassified" exactly as
+// before rather than inventing a slug, which is what keeps the validator's
+// shared CONFIRMATION_FAILURE_CLASS_VALUES authoritative: a reporter must never
+// be handed a value Platform would reject at the moment it reports a failure.
+//
+// "tool_endpoint" is deliberately ABSENT: it is answered above as
+// longmem_run_tool_endpoint, the more specific result (bind or advertise
+// failed before /run), so an entry here would be unreachable and would offer
+// a second slug for one stage.
+//
+// "execution" is deliberately included: it is confirmationExecutionStage's own
+// fallback for an error carrying no stage at all, and distinguishing "failed
+// somewhere unwrapped" from "sent no diagnostic" is the entire point here.
+var confirmationExecutorStageClasses = map[string]string{
+	"ablation_dataset":        "longmem_exec_ablation_dataset",
+	"broker_session":          "longmem_exec_broker_session",
+	"dimension_execution":     "longmem_exec_dimension_execution",
+	"embedding_phase":         "longmem_exec_embedding_phase",
+	"execution":               "longmem_exec_execution",
+	"harness_health":          "longmem_exec_harness_health",
+	"installation_validation": "longmem_exec_installation_validation",
+	"longmem_dataset":         "longmem_exec_longmem_dataset",
+	"provider_capabilities":   "longmem_exec_provider_capabilities",
+	"provider_session":        "longmem_exec_provider_session",
+	"runtime_acquire":         "longmem_exec_runtime_acquire",
+	"runtime_close":           "longmem_exec_runtime_close",
+	"runtime_material":        "longmem_exec_runtime_material",
+	"runtime_validation":      "longmem_exec_runtime_validation",
+	"sandbox_availability":    "longmem_exec_sandbox_availability",
+	"sandbox_start":           "longmem_exec_sandbox_start",
+	"sandbox_stop":            "longmem_exec_sandbox_stop",
+	"screened_image":          "longmem_exec_screened_image",
+	"source_validation":       "longmem_exec_source_validation",
+}
+
 func confirmationExecutionDiagnostic(err error) (string, int) {
 	diagnostic, ok := longmemeval.FailureDiagnostic(err)
 	if ok {
 		return "longmem_" + diagnostic.Operation + "_" + diagnostic.Kind, diagnostic.StatusCode
 	}
+	stage := confirmationExecutionStage(err)
 	// Bind/advertise failed before /run. This is infrastructure, not a scored
 	// harness case, so it must not become HarnessCaseFailure or unclassified.
-	if confirmationExecutionStage(err) == "tool_endpoint" {
+	if stage == "tool_endpoint" {
 		return "longmem_run_tool_endpoint", 0
+	}
+	// Anything the harness allowlist does not recognize broke in the executor's
+	// own scaffolding rather than at the harness boundary, and until now that
+	// produced "unclassified" -- which the handler suppresses, so the one piece
+	// of information still available (WHICH stage) never left the host. That is
+	// not a hypothetical: every bundle in the 2026-10 generation failed this
+	// way, and bundle 9d764326 reproduced it under the harness-class
+	// passthrough with failure_class=dittobench and no status, proving by
+	// elimination that no seed call, /run call, or case failure was involved.
+	// The stage is what remains, it is already computed and already logged one
+	// frame below, and it is drawn from a closed set -- so report it.
+	//
+	// Status stays 0: a stage failure has no HTTP status behind it, and 0 is
+	// this contract's existing value for "the boundary broke before a status
+	// existed". Inventing one would be worse than omitting it.
+	if class, allowed := confirmationExecutorStageClasses[stage]; allowed {
+		return class, 0
 	}
 	return "unclassified", 0
 }

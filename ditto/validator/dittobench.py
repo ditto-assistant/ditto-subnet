@@ -73,6 +73,9 @@ from ditto_screening_protocol.bench_v9 import (
     SUPPORTED_BENCH_VERSIONS as _SHARED_SUPPORTED_BENCH_VERSIONS,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
+from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+)
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -161,6 +164,13 @@ _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
         "longmem_run_response_too_large",
         "longmem_run_missing_final_text",
         "longmem_run_tool_endpoint",
+        # Executor-stage classes. These name a stage of the scorer's own
+        # pipeline rather than a harness boundary, so there is no HTTP exchange
+        # behind them and 0 is the only status they may carry. Imported rather
+        # than restated: this set is the admission gate, and a class the shared
+        # contract allows but this gate rejects is silently unreportable --
+        # which is the exact blindness the executor classes exist to remove.
+        *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
     }
 )
 _CONFIRMATION_HTTP_STATUS_FAILURES = frozenset(

@@ -67,6 +67,7 @@ from ditto.validator.signing import (
 from ditto.validator.worker import ValidatorWorker
 from ditto_screening_protocol.confirmation import canonical_json, evidence_digest
 from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
     CONFIRMATION_FAILURE_CLASS_VALUES,
     CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
@@ -2284,6 +2285,122 @@ async def test_worker_does_not_retry_a_hand_back_that_sent_no_scorer_class() -> 
     await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
 
     assert platform.fail_v9_confirmation_job.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_executor_stage_class_reaches_the_signed_hand_back() -> None:
+    """An executor-stage failure must be reportable, not just loggable.
+
+    This is the case that bundle 9d764326 proved was invisible: the scorer
+    classified nothing, the handler suppressed the headers, and the hand-back
+    carried ``dittobench`` with no status while the failing stage stayed on the
+    host. The class now crosses the boundary, so assert the whole path --
+    header admission, exception attribute, and the signed hand-back field.
+    """
+    job = _job().model_copy(update={"deadline": datetime.now(UTC) + timedelta(hours=1)})
+    artifact = ArtifactResponse.model_validate(_artifact_payload())
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={"error": "confirmation execution failed at dimension_execution"},
+            headers={
+                "X-Ditto-Confirmation-Failure-Class": (
+                    "longmem_exec_dimension_execution"
+                ),
+                "X-Ditto-Confirmation-Failure-Status": "0",
+            },
+        )
+
+    config = cast(
+        Any,
+        SimpleNamespace(
+            dittobench_api_url="http://dittobench.test",
+            dittobench_control_token="control-token",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)
+        with pytest.raises(ConfirmationScorerError) as raised:
+            await client.execute_v9_confirmation(
+                job=job,
+                artifact=artifact,
+                inference_session_id=_CONFIRMATION_SESSION.session_id,
+            )
+
+    error = raised.value
+    assert error.scorer_failure_class == "longmem_exec_dimension_execution"
+    assert error.scorer_failure_status == 0
+    # And the reporter forwards it rather than collapsing to the type-derived
+    # class, which for every scorer error is "dittobench".
+    assert (
+        worker_module.confirmation_failure_class(error)
+        == "longmem_exec_dimension_execution"
+    )
+    assert worker_module.confirmation_failure_status(error) == 0
+
+
+@pytest.mark.asyncio
+async def test_executor_stage_class_is_refused_with_a_nonzero_status() -> None:
+    """A stage failure has no HTTP exchange, so a status would be fabricated.
+
+    The admission gate must reject the pair outright rather than keeping the
+    class and dropping the status: a scorer sending one is drifting from this
+    contract, and silently repairing it would hide that.
+    """
+    job = _job().model_copy(update={"deadline": datetime.now(UTC) + timedelta(hours=1)})
+    artifact = ArtifactResponse.model_validate(_artifact_payload())
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={"error": "confirmation execution failed at runtime_close"},
+            headers={
+                "X-Ditto-Confirmation-Failure-Class": "longmem_exec_runtime_close",
+                "X-Ditto-Confirmation-Failure-Status": "502",
+            },
+        )
+
+    config = cast(
+        Any,
+        SimpleNamespace(
+            dittobench_api_url="http://dittobench.test",
+            dittobench_control_token="control-token",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)
+        with pytest.raises(DittobenchError) as raised:
+            await client.execute_v9_confirmation(
+                job=job,
+                artifact=artifact,
+                inference_session_id=_CONFIRMATION_SESSION.session_id,
+            )
+
+    # Rejected shape: a plain DittobenchError with no forwarded class at all.
+    assert not isinstance(raised.value, ConfirmationScorerError)
+    assert worker_module.confirmation_failure_class(raised.value) == "dittobench"
+
+
+def test_executor_classes_are_admitted_with_zero_status_only() -> None:
+    """The producer's vocabulary and the admission gate must be the same set.
+
+    A class the shared contract allows but this gate rejects is silently
+    unreportable, which is the precise blindness these classes exist to remove.
+    """
+    accepted = dittobench_module._CONFIRMATION_ZERO_STATUS_FAILURES
+    assert set(CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES) <= accepted
+    assert set(CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES) <= set(
+        CONFIRMATION_FAILURE_CLASS_VALUES
+    )
+    # None of them may appear in a status-bearing set, or a fabricated status
+    # would be admitted.
+    for bearing in (
+        dittobench_module._CONFIRMATION_HTTP_STATUS_FAILURES,
+        dittobench_module._CONFIRMATION_MALFORMED_STATUS_FAILURES,
+        dittobench_module._CONFIRMATION_RESPONSE_READ_FAILURES,
+    ):
+        assert not (set(CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES) & bearing)
 
 
 def test_scorer_failure_classes_match_the_headers_the_validator_accepts() -> None:

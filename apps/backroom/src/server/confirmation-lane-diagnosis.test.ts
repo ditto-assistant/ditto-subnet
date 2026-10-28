@@ -261,6 +261,43 @@ function itStates() {
     )
   })
 
+  it('names an executor stage the same way it names a harness boundary', () => {
+    // longmem_exec_<stage> is how a failure reports that the harness was never
+    // involved. It must drive the same specific diagnosis rather than falling
+    // through to the generic execution_after_preparing.
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        pages: pages({
+          failed: {
+            count: 3,
+            items: [1, 2, 3].map((index) => ({
+              ...failedBundle(index, 14),
+              tickets: [
+                ticket({
+                  ticket_id: `40000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+                  failure_class: 'longmem_exec_dimension_execution',
+                  failure_stage: 'running_confirmation',
+                  failure_status: 0,
+                  issued_at: '2026-10-28T18:57:23.000Z',
+                  failed_at: '2026-10-28T18:57:45.000Z',
+                }),
+              ],
+            })),
+          },
+        }),
+      }),
+    )
+
+    expect(diagnosis.likely_cause.code).toBe('scorer_boundary_failure')
+    expect(diagnosis.likely_cause.evidence).toEqual(
+      expect.arrayContaining([
+        'dominant_scorer_class=longmem_exec_dimension_execution',
+        'dominant_scorer_class_count=3',
+        'scorer_statuses=0',
+      ]),
+    )
+  })
+
   it('keeps a scorer status of zero distinct from no status at all', () => {
     const diagnosis = diagnoseConfirmationLane(
       baseInput({

@@ -471,7 +471,40 @@ CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES = (
 # scorer->validator response as a header; forwarding them costs no new channel
 # and no new vocabulary. Still a closed set: a reporter that sees an unknown
 # slug must fall back to its type-derived class rather than pass it through.
-CONFIRMATION_SCORER_FAILURE_CLASS_VALUES = (
+# Executor-stage classes. The harness slugs below name a boundary the submitted
+# harness reached; these name a stage of the scorer's OWN pipeline, reported
+# when the harness allowlist matches nothing. Before they existed the scorer
+# returned "unclassified" in that case and the handler suppressed the header
+# entirely, so the stage -- already computed, already in the scorer's local log
+# -- never crossed the boundary. Measured 2026-10-28 on bundle 9d764326: the
+# harness passthrough shipped and the failure still reported `dittobench` with
+# no status, because no seed call, /run call, or case failure was involved at
+# all. The vocabulary is closed: Go reports only stages present in its own
+# `confirmationExecutorStageClasses` map, which a source-parsing test holds
+# against every `wrapConfirmationExecutionFailure` call site in the binary.
+CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES = (
+    "longmem_exec_ablation_dataset",
+    "longmem_exec_broker_session",
+    "longmem_exec_dimension_execution",
+    "longmem_exec_embedding_phase",
+    "longmem_exec_execution",
+    "longmem_exec_harness_health",
+    "longmem_exec_installation_validation",
+    "longmem_exec_longmem_dataset",
+    "longmem_exec_provider_capabilities",
+    "longmem_exec_provider_session",
+    "longmem_exec_runtime_acquire",
+    "longmem_exec_runtime_close",
+    "longmem_exec_runtime_material",
+    "longmem_exec_runtime_validation",
+    "longmem_exec_sandbox_availability",
+    "longmem_exec_sandbox_start",
+    "longmem_exec_sandbox_stop",
+    "longmem_exec_screened_image",
+    "longmem_exec_source_validation",
+)
+
+CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES = (
     "longmem_run_http_status",
     "longmem_run_malformed_json",
     "longmem_run_missing_final_text",
@@ -485,6 +518,14 @@ CONFIRMATION_SCORER_FAILURE_CLASS_VALUES = (
     "longmem_seed_request",
     "longmem_seed_response_read",
     "longmem_seed_response_too_large",
+)
+
+# Everything the trusted scorer may assign itself, harness boundary or own
+# pipeline stage. The reporter forwards any member unchanged and degrades
+# anything else to its type-derived class.
+CONFIRMATION_SCORER_FAILURE_CLASS_VALUES = (
+    *CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
+    *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
 )
 
 CONFIRMATION_FAILURE_CLASS_VALUES = (
@@ -517,6 +558,25 @@ ConfirmationFailureClass = Literal[
     "longmem_seed_request",
     "longmem_seed_response_read",
     "longmem_seed_response_too_large",
+    "longmem_exec_ablation_dataset",
+    "longmem_exec_broker_session",
+    "longmem_exec_dimension_execution",
+    "longmem_exec_embedding_phase",
+    "longmem_exec_execution",
+    "longmem_exec_harness_health",
+    "longmem_exec_installation_validation",
+    "longmem_exec_longmem_dataset",
+    "longmem_exec_provider_capabilities",
+    "longmem_exec_provider_session",
+    "longmem_exec_runtime_acquire",
+    "longmem_exec_runtime_close",
+    "longmem_exec_runtime_material",
+    "longmem_exec_runtime_validation",
+    "longmem_exec_sandbox_availability",
+    "longmem_exec_sandbox_start",
+    "longmem_exec_sandbox_stop",
+    "longmem_exec_screened_image",
+    "longmem_exec_source_validation",
 ]
 
 # The tuple is what Platform's CHECK constraint and the reporter's fallback are
@@ -628,7 +688,9 @@ __all__ = [
     "ConfirmationExecutionProfile",
     "ConfirmationInferenceGrantOffer",
     "ConfirmationProviderLaneProfile",
+    "CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES",
     "CONFIRMATION_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES",
     "CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES",
     "CONFIRMATION_SCORER_FAILURE_CLASS_VALUES",
     "MAX_BUNDLE_REQUEST_CAP",

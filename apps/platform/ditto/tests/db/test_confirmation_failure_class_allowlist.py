@@ -23,7 +23,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
     CONFIRMATION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
     CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
 
@@ -76,12 +78,21 @@ async def test_the_scorer_classes_are_actually_present(engine: AsyncEngine) -> N
     """Guards the guard: a regex that matched nothing would pass the test above.
 
     An empty ``stored`` set compared against an empty allowlist is a vacuous
-    pass, and the allowlist is never empty -- so assert the thirteen scorer
-    slugs are individually there, which cannot hold unless both the parse and
-    the migration worked.
+    pass, and the allowlist is never empty -- so assert each scorer slug is
+    individually there, which cannot hold unless both the parse and the
+    migration worked.
     """
     definition = await _check_definition(engine, "failure_class = ANY")
-    assert len(CONFIRMATION_SCORER_FAILURE_CLASS_VALUES) == 13
+    # Both families must be individually present. Asserting a count here would
+    # only restate the tuple and would have to be edited every time the scorer
+    # gains a kind -- which is the edit most likely to be made without checking
+    # the schema, i.e. exactly the drift this file exists to catch.
+    assert (
+        *CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
+        *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+    ) == CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
+    assert CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES
+    assert CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES
     missing = [
         value
         for value in CONFIRMATION_SCORER_FAILURE_CLASS_VALUES

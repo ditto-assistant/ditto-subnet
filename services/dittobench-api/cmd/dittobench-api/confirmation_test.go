@@ -927,6 +927,47 @@ func TestConfirmationExecutePublishesToolEndpointBindFailureHeader(t *testing.T)
 func TestConfirmationExecuteOmitsDiagnosticHeadersForUnclassifiedFailure(t *testing.T) {
 	executor := readyConfirmationExecutor()
 	executor.execute = func(context.Context, confirmationExecutionRequest) (confirmationExecutionResult, error) {
+		// An undeclared stage is the remaining unclassified case: a declared
+		// stage now reports longmem_exec_<stage> (see
+		// TestConfirmationExecuteSendsTheExecutorStageClass), so the header
+		// suppression this test guards is reached only when the stage itself is
+		// outside the reviewed map.
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure(
+			"a_stage_nobody_declared",
+			errors.New("private submitted response credential-material"),
+		)
+	}
+	recorder := executeConfirmationRequest(
+		t,
+		&server{confirmation: executor},
+		nil,
+		confirmationRequestBody(t, validConfirmationRequest()),
+	)
+	assertConfirmationError(
+		t,
+		recorder,
+		http.StatusUnprocessableEntity,
+		"confirmation execution failed at a_stage_nobody_declared",
+	)
+	if got := recorder.Header().Get(confirmationFailureClassHeader); got != "" {
+		t.Fatalf("unclassified failure exposed class header %q", got)
+	}
+	if got := recorder.Header().Get(confirmationFailureStatusHeader); got != "" {
+		t.Fatalf("unclassified failure exposed status header %q", got)
+	}
+	for _, forbidden := range []string{"private", "credential-material"} {
+		if strings.Contains(recorder.Body.String(), forbidden) {
+			t.Fatalf("private failure leaked %q through response: %s", forbidden, recorder.Body.String())
+		}
+	}
+}
+
+func TestConfirmationExecuteSendsTheExecutorStageClass(t *testing.T) {
+	// The whole point of the change: a declared executor stage reaches the
+	// validator as a bounded class, so the failing stage is readable off-host
+	// instead of surviving only in this scorer's local log.
+	executor := readyConfirmationExecutor()
+	executor.execute = func(context.Context, confirmationExecutionRequest) (confirmationExecutionResult, error) {
 		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure(
 			"dimension_execution",
 			errors.New("private submitted response credential-material"),
@@ -944,15 +985,26 @@ func TestConfirmationExecuteOmitsDiagnosticHeadersForUnclassifiedFailure(t *test
 		http.StatusUnprocessableEntity,
 		"confirmation execution failed at dimension_execution",
 	)
-	if got := recorder.Header().Get(confirmationFailureClassHeader); got != "" {
-		t.Fatalf("unclassified failure exposed class header %q", got)
+	if got := recorder.Header().Get(confirmationFailureClassHeader); got != "longmem_exec_dimension_execution" {
+		t.Fatalf("class header = %q, want longmem_exec_dimension_execution", got)
 	}
-	if got := recorder.Header().Get(confirmationFailureStatusHeader); got != "" {
-		t.Fatalf("unclassified failure exposed status header %q", got)
+	// A stage failure has no HTTP exchange behind it, and the validator admits
+	// these classes only with status 0.
+	if got := recorder.Header().Get(confirmationFailureStatusHeader); got != "0" {
+		t.Fatalf("status header = %q, want 0", got)
 	}
+	// The response body stays stage-only and the private cause must not ride
+	// along in either the body or the headers.
 	for _, forbidden := range []string{"private", "credential-material"} {
 		if strings.Contains(recorder.Body.String(), forbidden) {
-			t.Fatalf("private failure leaked %q through response: %s", forbidden, recorder.Body.String())
+			t.Fatalf("private failure leaked %q through the body: %s", forbidden, recorder.Body.String())
+		}
+		for key, values := range recorder.Header() {
+			for _, value := range values {
+				if strings.Contains(value, forbidden) {
+					t.Fatalf("private failure leaked %q through header %s", forbidden, key)
+				}
+			}
 		}
 	}
 }
