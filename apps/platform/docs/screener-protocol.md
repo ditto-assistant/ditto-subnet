@@ -268,6 +268,28 @@ the classic packet omits it, so its digest is unchanged. Each bind also records
 `screening_attempts.lineage_reference_kind` and
 `lineage_full_review_reasons` (empty for `diff`) for Backroom.
 
+## Review usage telemetry
+
+Before it submits a verdict, the worker posts the model usage of the attempt's
+source review to `POST /api/v1/screener/agent/{agent_id}/review-usage`
+(`ScreeningReviewUsageRequest` in `ditto-screening-protocol`): one entry per
+(stage, model) for L1 and the L2 analyst/critic, L3 adjudicator and tiebreak
+turns, with requests, input/cached/output/reasoning tokens, the worker's cost
+estimate and the gateway-reported cost when every request in the stage
+reported one, plus elapsed time and the lineage scope the review ran with.
+Ownership mirrors the shadow-review telemetry: the caller must hold the
+running, non-build-only attempt for this exact artifact inside its lease; an
+identical retry is accepted, a different second report is refused. The row
+(`screening_review_usage`) is telemetry only: it is not signed, never changes
+an outcome, and a failed post is logged by type and ignored.
+
+`GET /api/v1/admin/screening-review-cost?lookback_days=N` (Backroom MCP
+`get_screening_review_cost`) aggregates attempts in the window by lineage scope
+(`diff`, `full`, `none`) and terminal status: attempt counts, how many carried
+telemetry, input-token mean/p50/p90, output tokens, mean and total cost,
+`*budget*` reason-code stops and mean wall-clock minutes. Attempts before the
+telemetry shipped carry none, so their cost reads as unavailable, not zero.
+
 ## Miner disputes
 
 A miner may dispute a resolved quarantine rejection exactly once per submission.

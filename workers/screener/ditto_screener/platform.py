@@ -64,6 +64,8 @@ from ditto_screening_protocol import (
     ScreenerQueueResponse,
     ScreenerReviewSettingsOverride,
     ScreenEvidenceItem,
+    ScreeningReviewUsageRequest,
+    ScreeningReviewUsageResponse,
     ScreenResultOutcome,
     ScreenResultRequest,
     ScreenResultResponse,
@@ -437,6 +439,25 @@ class PlatformClient:
                 f"shadow review rejected ({resp.status_code}): {resp.text[:200]}"
             )
         return ShadowReviewObservationResponse.model_validate(resp.json())
+
+    async def submit_review_usage(
+        self, agent_id: UUID, request: ScreeningReviewUsageRequest
+    ) -> ScreeningReviewUsageResponse:
+        """Persist the attempt's model usage telemetry; never changes outcome."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-usage"
+        try:
+            resp = await self._client.post(
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"review usage submission failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"review usage rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ScreeningReviewUsageResponse.model_validate(resp.json())
 
     async def submit_probe_battery(
         self, agent_id: UUID, request: ProbeBatteryObservationRequest

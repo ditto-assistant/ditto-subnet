@@ -34,6 +34,7 @@ from ditto_screener.causal_evidence import (
 from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.review_lineage_prompt import lineage_dossier
+from ditto_screener.review_usage import l2_stage_for_role, record_usage
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
@@ -4960,6 +4961,16 @@ class TerraSolSourceReviewAgent:
                     _response_fault_subcode(payload),
                 ) from error
             usage = _add_usage(usage, turn_usage)
+            record_usage(
+                l2_stage_for_role(role),
+                model=response_model or model,
+                input_tokens=turn_usage.input_tokens,
+                output_tokens=turn_usage.output_tokens,
+                cached_input_tokens=turn_usage.cached_input_tokens,
+                reasoning_tokens=turn_usage.reasoning_tokens,
+                estimated_cost_usd=turn_usage.estimated_cost_usd,
+                reported_cost_usd=turn_usage.reported_cost_usd,
+            )
             if self._terminal_verdict_required:
                 self._audit.record(
                     {

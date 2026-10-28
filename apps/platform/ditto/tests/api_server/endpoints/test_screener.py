@@ -111,6 +111,7 @@ from ditto.db.models import (
     ScreeningRetryOverride,
     ScreeningReviewDeadlineActivation,
     ScreeningReviewEvent,
+    ScreeningReviewUsage,
     ScreeningReviewWindow,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
@@ -16158,3 +16159,265 @@ def test_shadow_v13_clearance_requires_complete_specialist_invariant_shapes(faul
     elif fault == "malformed":
         rows[0] = None
     assert _fanout_obligations_complete(report, "low") is (fault is None)
+
+
+class TestReviewUsage:
+    """Per-attempt review usage telemetry and the admin cost read."""
+
+    @staticmethod
+    def _payload(attempt_id: UUID, **overrides: object) -> dict:
+        return {
+            "attempt_id": str(attempt_id),
+            "artifact_sha256": _SHA256,
+            "stages": [
+                {
+                    "stage": "l1",
+                    "model": "openai/gpt-6-luna",
+                    "requests": 40,
+                    "input_tokens": 900_000,
+                    "cached_input_tokens": 600_000,
+                    "output_tokens": 30_000,
+                    "reasoning_tokens": 12_000,
+                    "estimated_cost_usd": 0.0,
+                    "reported_cost_usd": 1.25,
+                },
+                {
+                    "stage": "l2_analyst",
+                    "model": "openai/gpt-6-sol",
+                    "requests": 20,
+                    "input_tokens": 1_500_000,
+                    "cached_input_tokens": 1_000_000,
+                    "output_tokens": 40_000,
+                    "reasoning_tokens": 20_000,
+                    "estimated_cost_usd": 3.2,
+                    "reported_cost_usd": None,
+                },
+            ],
+            "elapsed_ms": 1_200_000,
+            "lineage_scope": "diff",
+            **overrides,
+        }
+
+    @staticmethod
+    async def _running_attempt(
+        session_maker: async_sessionmaker[AsyncSession],
+        agent_id: UUID,
+        *,
+        screener_hotkey: str = _SCREENER_HOTKEY,
+        build_only: bool = False,
+    ) -> UUID:
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    artifact_sha256=_SHA256,
+                    screener_hotkey=screener_hotkey,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=30),
+                    build_only=build_only,
+                )
+            )
+        return attempt_id
+
+    async def test_usage_is_attempt_owned_idempotent_and_non_authoritative(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="usage-agent"
+        )
+        attempt_id = await self._running_attempt(session_maker, agent_id)
+        url = f"/api/v1/screener/agent/{agent_id}/review-usage"
+        payload = self._payload(attempt_id)
+
+        first = await client.post(url, json=payload)
+        second = await client.post(url, json=payload)
+        assert first.status_code == second.status_code == 200, first.text
+        async with session_maker() as session:
+            row = await session.get(ScreeningReviewUsage, attempt_id)
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert row is not None
+        assert row.total_input_tokens == 2_400_000
+        assert row.total_output_tokens == 70_000
+        # Reported cost wins where present, the estimate fills the rest.
+        assert float(row.total_cost_usd) == pytest.approx(4.45)
+        assert row.lineage_scope == "diff"
+        assert [stage["stage"] for stage in row.stages] == ["l1", "l2_analyst"]
+        assert agent is not None and agent.status == AgentStatus.SCREENING
+        assert attempt is not None and attempt.status == "running"
+
+        conflicting = self._payload(attempt_id, elapsed_ms=5)
+        assert (await client.post(url, json=conflicting)).status_code == 409
+
+    async def test_usage_refuses_foreign_stale_and_mismatched_attempts(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="usage-refusals"
+        )
+        url = f"/api/v1/screener/agent/{agent_id}/review-usage"
+
+        async def finish(attempt_id: UUID) -> None:
+            async with session_maker() as session, session.begin():
+                attempt = await session.get(ScreeningAttempt, attempt_id)
+                assert attempt is not None
+                attempt.status = "failed"
+                attempt.finished_at = datetime.now(UTC)
+
+        foreign = await self._running_attempt(
+            session_maker, agent_id, screener_hotkey="5ForeignScreenerHotkey"
+        )
+        assert (await client.post(url, json=self._payload(foreign))).status_code == 409
+        await finish(foreign)
+        # A finished attempt no longer takes telemetry either.
+        assert (await client.post(url, json=self._payload(foreign))).status_code == 409
+
+        build_only = await self._running_attempt(
+            session_maker, agent_id, build_only=True
+        )
+        response = await client.post(url, json=self._payload(build_only))
+        assert response.status_code == 409
+        await finish(build_only)
+
+        attempt_id = await self._running_attempt(session_maker, agent_id)
+        mismatched = self._payload(attempt_id, artifact_sha256="cd" * 32)
+        assert (await client.post(url, json=mismatched)).status_code == 409
+
+        other_agent = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            name="usage-other",
+            agent_id=uuid4(),
+        )
+        wrong_agent_url = f"/api/v1/screener/agent/{other_agent}/review-usage"
+        response = await client.post(wrong_agent_url, json=self._payload(attempt_id))
+        assert response.status_code == 409
+
+        malformed = self._payload(
+            attempt_id,
+            stages=[
+                {
+                    "stage": "l1",
+                    "model": "openai/gpt-6-luna",
+                    "input_tokens": 10,
+                    "cached_input_tokens": 20,
+                }
+            ],
+        )
+        assert (await client.post(url, json=malformed)).status_code == 422
+
+        async with session_maker() as session, session.begin():
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            attempt.started_at = datetime.now(UTC) - timedelta(minutes=2)
+            attempt.deadline = datetime.now(UTC) - timedelta(minutes=1)
+        assert (
+            await client.post(url, json=self._payload(attempt_id))
+        ).status_code == 409
+        async with session_maker() as session:
+            assert await session.get(ScreeningReviewUsage, attempt_id) is None
+
+    async def test_admin_cost_read_groups_by_scope_and_counts_budget_stops(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="usage-cost"
+        )
+        diff_attempt = await self._running_attempt(session_maker, agent_id)
+        url = f"/api/v1/screener/agent/{agent_id}/review-usage"
+        assert (
+            await client.post(url, json=self._payload(diff_attempt))
+        ).status_code == 200
+        now = datetime.now(UTC)
+        budget_attempt = uuid4()
+        old_attempt = uuid4()
+        async with session_maker() as session, session.begin():
+            attempt = await session.get(ScreeningAttempt, diff_attempt)
+            assert attempt is not None
+            attempt.status = "passed"
+            attempt.finished_at = attempt.started_at + timedelta(minutes=20)
+            attempt.lineage_parent_agent_id = agent_id
+            attempt.lineage_scope = "diff"
+            attempt.lineage_packet_sha256 = "ef" * 32
+            session.add_all(
+                [
+                    ScreeningAttempt(
+                        attempt_id=budget_attempt,
+                        agent_id=agent_id,
+                        artifact_sha256=_SHA256,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="quarantined",
+                        reason_code="l3-adjudicator-model-total-budget",
+                        started_at=now - timedelta(hours=2),
+                        deadline=now - timedelta(hours=1),
+                        finished_at=now - timedelta(hours=1),
+                    ),
+                    ScreeningAttempt(
+                        attempt_id=old_attempt,
+                        agent_id=agent_id,
+                        artifact_sha256=_SHA256,
+                        screener_hotkey=_SCREENER_HOTKEY,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="passed",
+                        started_at=now - timedelta(days=20),
+                        deadline=now - timedelta(days=20) + timedelta(hours=1),
+                        finished_at=now - timedelta(days=20) + timedelta(minutes=9),
+                    ),
+                ]
+            )
+        response = await client.get(
+            "/api/v1/admin/screening-review-cost", headers=_ADMIN_HEADERS
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["lookback_days"] == 7
+        groups = {(g["lineage_scope"], g["status"]): g for g in body["groups"]}
+        assert set(groups) == {("diff", "passed"), ("none", "quarantined")}
+        diff = groups[("diff", "passed")]
+        assert diff["attempts"] == diff["attempts_with_telemetry"] == 1
+        assert diff["mean_input_tokens"] == 2_400_000
+        assert diff["total_cost_usd"] == pytest.approx(4.45)
+        assert diff["mean_wall_minutes"] == pytest.approx(20.0)
+        budget = groups[("none", "quarantined")]
+        assert budget["attempts_with_telemetry"] == 0
+        assert budget["mean_cost_usd"] is None
+        assert budget["budget_exhausted"] == 1
+        assert body["budget_reasons"] == [
+            {
+                "reason_code": "l3-adjudicator-model-total-budget",
+                "lineage_scope": "none",
+                "attempts": 1,
+            }
+        ]
+        wide = await client.get(
+            "/api/v1/admin/screening-review-cost?lookback_days=30",
+            headers=_ADMIN_HEADERS,
+        )
+        assert sum(g["attempts"] for g in wide.json()["groups"]) == 3
+        too_wide = await client.get(
+            "/api/v1/admin/screening-review-cost?lookback_days=31",
+            headers=_ADMIN_HEADERS,
+        )
+        assert too_wide.status_code == 422

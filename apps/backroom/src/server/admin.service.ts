@@ -353,6 +353,8 @@ import {
   screeningFailureDiagnosticSchema,
   adjudicationAttemptsInputSchema,
   adjudicationAttemptsSchema,
+  screeningReviewCostInputSchema,
+  screeningReviewCostSchema,
   screeningVerificationReadinessSchema,
   screeningReviewDeadlineDiagnosticSchema,
   screeningSubmissionLookupInputSchema,
@@ -2909,6 +2911,15 @@ export async function fetchAdjudicationAttempts(rawInput: unknown) {
     `/api/v1/admin/screening-adjudication-attempts?${query.toString()}`,
   )
   return adjudicationAttemptsSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewCost(rawInput: unknown) {
+  const input = screeningReviewCostInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ lookback_days: String(input.lookbackDays) })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-review-cost?${query.toString()}`,
+  )
+  return screeningReviewCostSchema.parse(payload)
 }
 
 export async function fetchScreeningVerificationReadiness(rawInput: unknown, actor: string) {

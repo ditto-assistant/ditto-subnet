@@ -116,6 +116,9 @@ from ditto.api_server.endpoints.admin_screener_review_settings import (
 from ditto.api_server.endpoints.admin_screening_infra_retry import (
     router as admin_screening_infra_retry_router,
 )
+from ditto.api_server.endpoints.admin_screening_review_cost import (
+    router as admin_screening_review_cost_router,
+)
 from ditto.api_server.endpoints.admin_source_review_queue_slo import (
     router as admin_source_review_queue_slo_router,
 )
@@ -232,6 +235,7 @@ __all__ = [
     "admin_lease_revocations_router",
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
+    "admin_screening_review_cost_router",
     "admin_copy_review_router",
     "admin_claim_provenance_router",
     "admin_confirmation_bundles_router",

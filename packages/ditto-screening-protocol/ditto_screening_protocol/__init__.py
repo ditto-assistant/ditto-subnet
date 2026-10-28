@@ -82,6 +82,11 @@ from ditto_screening_protocol.review_lineage import (
     review_lineage_packet_digest,
     seal_review_lineage_packet,
 )
+from ditto_screening_protocol.review_usage import (
+    ReviewUsageStageEntry,
+    ScreeningReviewUsageRequest,
+    ScreeningReviewUsageResponse,
+)
 from ditto_screening_protocol.router_source_screen import (
     GENERALIZATION_GAP_DENY_BPS,
     GENERALIZATION_GAP_QUARANTINE_BPS,
@@ -194,4 +199,7 @@ __all__ = [
     "ReviewLineageScope",
     "review_lineage_packet_digest",
     "seal_review_lineage_packet",
+    "ReviewUsageStageEntry",
+    "ScreeningReviewUsageRequest",
+    "ScreeningReviewUsageResponse",
 ]

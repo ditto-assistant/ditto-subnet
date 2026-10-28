@@ -158,6 +158,7 @@ import {
   screeningFailureDiagnosticInputSchema,
   v13GenerationGroupInputSchema,
   adjudicationAttemptsInputSchema,
+  screeningReviewCostInputSchema,
   screeningSubmissionLookupInputSchema,
   sourceSearchInputSchema,
   ownerAttestationLookupInputSchema,
@@ -263,6 +264,7 @@ import {
   fetchScreeningDisputes,
   fetchScreeningFailureDiagnostic,
   fetchAdjudicationAttempts,
+  fetchScreeningReviewCost,
   fetchScreeningVerificationReadiness,
   fetchV13GenerationGroup,
   listV13BenignApprovals,
@@ -974,6 +976,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Page screener quarantines (active | resolved | all), newest first; sort=oldest for chronology, detail=full for every evidence row. Active rows are open operator holds (anti-cheat or inconclusive); resolve with resolve_screening_quarantine. ATH holds: get_screening_review_queue.',
   list_screening_review_events:
     'Read append-only source-review decisions with exact attempt, artifact SHA, policy version, model or actor, evidence and receipt snapshots, and state transitions.',
+  get_screening_review_cost:
+    'Review tokens/cost per attempt by lineage scope and status; budget stops.',
   list_screening_adjudication_attempts:
     'Recent L4 outcomes with attempt SHA, manifest and pinned settings; observed timing/provider only when recorded. Null success telemetry is unavailable, not zero.',
   get_screening_quarantine_context:
@@ -1506,6 +1510,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       artifact(() =>
         fetchScreeningFailureDiagnostic(input, props.session.email),
       ),
+  )
+
+  registerTool(
+    'get_screening_review_cost',
+    {
+      title: 'Get screening review cost',
+      description:
+        'Aggregate screening review spend over the last lookbackDays (default 7, max 30) per (lineage_scope, terminal status). lineage_scope is the bound lineage packet scope: diff (review focused on the delta from a reviewed parent), full (a lineage packet whose prior review could not carry), or none (no lineage packet; an ordinary full review). attempts counts every non-build-only attempt started in the window; mean/p50/p90 input tokens, mean output tokens and mean/total cost cover only attempts_with_telemetry, the attempts whose screener posted per-attempt review usage (L1 source review plus L2 analyst/critic, L3 adjudicator and tiebreak turns; gateway-reported cost when every request in a stage reported one, otherwise the worker estimate). Attempts before the telemetry shipped have none, so a null cost is unavailable, not zero. budget_exhausted and budget_reasons count reason codes containing "budget" (for example l3-adjudicator-model-total-budget, source-review-lease-budget-exhausted), which exist with or without telemetry. mean_wall_minutes is started-to-finished time. Telemetry never changed an outcome. Requires backroom:read.',
+      inputSchema: screeningReviewCostInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningReviewCost(input)),
   )
 
   registerTool(

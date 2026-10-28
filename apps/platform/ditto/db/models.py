@@ -7027,6 +7027,60 @@ class SourceEmissionPayoutResolution(Base):
     )
 
 
+class ScreeningReviewUsage(Base):
+    """Per-attempt model usage of the source review stages (telemetry only).
+
+    Posted by the screener holding the attempt before its verdict. It never
+    participates in the signed decision or any queue transition; it exists so
+    review cost can be compared across lineage scopes and reviewer postures.
+    """
+
+    __tablename__ = "screening_review_usage"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    stages: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    total_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    elapsed_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screening_review_usage_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screening_review_usage_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screening_review_usage_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "total_input_tokens >= 0 AND total_output_tokens >= 0 "
+            "AND total_cost_usd >= 0 AND (elapsed_ms IS NULL OR elapsed_ms >= 0)",
+            name="screening_review_usage_totals_check",
+        ),
+        CheckConstraint(
+            "lineage_scope IS NULL OR lineage_scope IN ('diff', 'full')",
+            name="screening_review_usage_lineage_scope_check",
+        ),
+        Index("screening_review_usage_recorded_idx", "recorded_at"),
+    )
+
+
 class ScreenerShadowReview(Base):
     """Non-authoritative L2/L3 telemetry bound to one live attempt."""
 

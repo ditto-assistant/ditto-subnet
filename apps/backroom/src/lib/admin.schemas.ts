@@ -10,6 +10,8 @@ type PlatformResponseShape<Response extends object> = {
   [Field in keyof Response]-?: z.ZodType<Response[Field]>
 }
 
+type GeneratedScreeningReviewCost =
+  PlatformComponents['schemas']['ScreeningReviewCostResponse']
 type GeneratedConfirmationBundleView =
   PlatformComponents['schemas']['ConfirmationBundleView']
 type GeneratedConfirmationBundleList =
@@ -5902,6 +5904,43 @@ export const screeningFailureDiagnosticSchema = z.object({
     completion_tokens: z.number().int().min(0).max(10_000_000).nullable(),
   }).nullish().default(null),
 })
+
+// Review spend per screening attempt grouped by lineage scope and status.
+export const screeningReviewCostInputSchema = z.object({
+  lookbackDays: z.number().int().min(1).max(30).default(7),
+})
+
+const reviewCostScopeSchema = z.enum(['diff', 'full', 'none'])
+
+export const screeningReviewCostSchema: z.ZodType<GeneratedScreeningReviewCost> =
+  z.object({
+    lookback_days: z.number().int(),
+    window_start: z.string(),
+    read_at: z.string(),
+    groups: z.array(
+      z.object({
+        lineage_scope: reviewCostScopeSchema,
+        status: z.string(),
+        attempts: z.number().int().nonnegative(),
+        attempts_with_telemetry: z.number().int().nonnegative(),
+        mean_input_tokens: z.number().nullable(),
+        p50_input_tokens: z.number().nullable(),
+        p90_input_tokens: z.number().nullable(),
+        mean_output_tokens: z.number().nullable(),
+        mean_cost_usd: z.number().nullable(),
+        total_cost_usd: z.number().nullable(),
+        budget_exhausted: z.number().int().nonnegative(),
+        mean_wall_minutes: z.number().nullable(),
+      }),
+    ),
+    budget_reasons: z.array(
+      z.object({
+        reason_code: z.string(),
+        lineage_scope: reviewCostScopeSchema,
+        attempts: z.number().int().nonnegative(),
+      }),
+    ),
+  })
 
 export const adjudicationAttemptsInputSchema = z.object({
   limit: z.number().int().min(1).max(100).default(50),

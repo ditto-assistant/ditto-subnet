@@ -3578,6 +3578,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-review-cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Review Cost
+         * @description Review spend per attempt grouped by lineage scope and terminal status.
+         */
+        get: operations["get_screening_review_cost_api_v1_admin_screening_review_cost_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-review-events": {
         parameters: {
             query?: never;
@@ -7728,6 +7748,31 @@ export interface paths {
          *     falls back to an ordinary full review rather than mixing two histories.
          */
         post: operations["agent_review_lineage_api_v1_screener_agent__agent_id__review_lineage_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/agent/{agent_id}/review-usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Review Usage
+         * @description Persist one attempt's review model usage without mutating its state.
+         *
+         *     Same ownership rules as the shadow-review telemetry: the caller must hold
+         *     the running, non-build-only attempt for this exact artifact, inside its
+         *     lease. A retry with identical content is accepted; a different second
+         *     report for the same attempt is refused rather than overwriting the first.
+         */
+        post: operations["submit_review_usage_api_v1_screener_agent__agent_id__review_usage_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -33798,6 +33843,54 @@ export interface components {
          * @enum {string}
          */
         ReviewLineageScope: "diff" | "full";
+        /**
+         * ReviewUsageStageEntry
+         * @description Usage one review stage spent on one model.
+         */
+        ReviewUsageStageEntry: {
+            /**
+             * Cached Input Tokens
+             * @default 0
+             */
+            cached_input_tokens: number;
+            /**
+             * Estimated Cost Usd
+             * @default 0
+             */
+            estimated_cost_usd: number;
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Model
+             * @default unknown
+             */
+            model: string;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
+            /** Reported Cost Usd */
+            reported_cost_usd?: number | null;
+            /**
+             * Requests
+             * @default 0
+             */
+            requests: number;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "l1" | "l2_analyst" | "l2_critic" | "l3_adjudicator" | "l2_tiebreak" | "l2_total";
+        };
         /** RotateV13ScorerCohortRequest */
         RotateV13ScorerCohortRequest: {
             /** Actor */
@@ -36565,6 +36658,102 @@ export interface components {
             generated_at: string;
             policy: components["schemas"]["InfraRetryPolicy"];
             summary: components["schemas"]["InfraRetrySummary"];
+        };
+        /** ScreeningReviewBudgetReason */
+        ScreeningReviewBudgetReason: {
+            /** Attempts */
+            attempts: number;
+            /**
+             * Lineage Scope
+             * @enum {string}
+             */
+            lineage_scope: "diff" | "full" | "none";
+            /** Reason Code */
+            reason_code: string;
+        };
+        /**
+         * ScreeningReviewCostGroup
+         * @description One (lineage scope, terminal status) cell of the window.
+         */
+        ScreeningReviewCostGroup: {
+            /** Attempts */
+            attempts: number;
+            /** Attempts With Telemetry */
+            attempts_with_telemetry: number;
+            /** Budget Exhausted */
+            budget_exhausted: number;
+            /**
+             * Lineage Scope
+             * @enum {string}
+             */
+            lineage_scope: "diff" | "full" | "none";
+            /** Mean Cost Usd */
+            mean_cost_usd: number | null;
+            /** Mean Input Tokens */
+            mean_input_tokens: number | null;
+            /** Mean Output Tokens */
+            mean_output_tokens: number | null;
+            /** Mean Wall Minutes */
+            mean_wall_minutes: number | null;
+            /** P50 Input Tokens */
+            p50_input_tokens: number | null;
+            /** P90 Input Tokens */
+            p90_input_tokens: number | null;
+            /** Status */
+            status: string;
+            /** Total Cost Usd */
+            total_cost_usd: number | null;
+        };
+        /**
+         * ScreeningReviewCostResponse
+         * @description Review spend per screening attempt over a lookback window.
+         *
+         *     ``attempts`` counts every non-build-only attempt started in the window;
+         *     token and cost figures cover only the attempts whose screener reported
+         *     review usage telemetry (``attempts_with_telemetry``). ``none`` is an
+         *     attempt with no bound lineage packet (an ordinary full review).
+         */
+        ScreeningReviewCostResponse: {
+            /** Budget Reasons */
+            budget_reasons: components["schemas"]["ScreeningReviewBudgetReason"][];
+            /** Groups */
+            groups: components["schemas"]["ScreeningReviewCostGroup"][];
+            /** Lookback Days */
+            lookback_days: number;
+            /**
+             * Read At
+             * Format: date-time
+             */
+            read_at: string;
+            /**
+             * Window Start
+             * Format: date-time
+             */
+            window_start: string;
+        };
+        /**
+         * ScreeningReviewUsageRequest
+         * @description One attempt's review usage, posted by the screener that holds it.
+         */
+        ScreeningReviewUsageRequest: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Elapsed Ms */
+            elapsed_ms?: number | null;
+            /** Lineage Scope */
+            lineage_scope?: ("diff" | "full") | null;
+            /** Stages */
+            stages: components["schemas"]["ReviewUsageStageEntry"][];
+        };
+        /** ScreeningReviewUsageResponse */
+        ScreeningReviewUsageResponse: {
+            /** Accepted */
+            accepted: boolean;
         };
         /**
          * ScreeningVerificationReceiptRequest
@@ -49089,6 +49278,39 @@ export interface operations {
             };
         };
     };
+    get_screening_review_cost_api_v1_admin_screening_review_cost_get: {
+        parameters: {
+            query?: {
+                lookback_days?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningReviewCostResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_screening_review_events_api_v1_admin_screening_review_events_get: {
         parameters: {
             query?: {
@@ -56695,6 +56917,44 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_review_usage_api_v1_screener_agent__agent_id__review_usage_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreeningReviewUsageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningReviewUsageResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

@@ -6121,6 +6121,28 @@ CREATE TABLE public.screening_review_events (
 
 
 --
+-- Name: screening_review_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_review_usage (
+    attempt_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    screener_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    stages jsonb NOT NULL,
+    total_input_tokens bigint NOT NULL,
+    total_output_tokens bigint NOT NULL,
+    total_cost_usd numeric(14,6) NOT NULL,
+    elapsed_ms bigint,
+    lineage_scope text,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_artifa_6670 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_lineag_ac7c CHECK (((lineage_scope IS NULL) OR (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])))),
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_totals_check CHECK (((total_input_tokens >= 0) AND (total_output_tokens >= 0) AND (total_cost_usd >= (0)::numeric) AND ((elapsed_ms IS NULL) OR (elapsed_ms >= 0))))
+);
+
+
+--
 -- Name: screening_review_windows; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9884,6 +9906,14 @@ ALTER TABLE ONLY public.screening_review_events
 
 
 --
+-- Name: screening_review_usage pk_screening_review_usage; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT pk_screening_review_usage PRIMARY KEY (attempt_id);
+
+
+--
 -- Name: screening_review_windows pk_screening_review_windows; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12247,6 +12277,13 @@ CREATE UNIQUE INDEX screening_quarantines_one_active_agent_idx ON public.screeni
 --
 
 CREATE INDEX screening_retry_overrides_agent_created_idx ON public.screening_retry_overrides USING btree (agent_id, created_at, override_id);
+
+
+--
+-- Name: screening_review_usage_recorded_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screening_review_usage_recorded_idx ON public.screening_review_usage USING btree (recorded_at);
 
 
 --
@@ -15361,6 +15398,22 @@ ALTER TABLE ONLY public.screening_retry_overrides
 
 ALTER TABLE ONLY public.screening_retry_overrides
     ADD CONSTRAINT screening_retry_overrides_review_settings_revision_fkey FOREIGN KEY (review_settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_review_usage screening_review_usage_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT screening_review_usage_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_review_usage screening_review_usage_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT screening_review_usage_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
 
 
 --

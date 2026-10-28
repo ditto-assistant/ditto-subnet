@@ -42,6 +42,7 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, cast
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
@@ -206,6 +207,7 @@ from ditto.db.models import (
     ScreenerShadowReview,
     ScreeningAttempt,
     ScreeningQuarantine,
+    ScreeningReviewUsage,
     ScreeningVerificationReceipt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -255,6 +257,8 @@ from ditto_screening_protocol import (
     AdjudicationCompletionReceipt,
     ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
+    ScreeningReviewUsageRequest,
+    ScreeningReviewUsageResponse,
     ScreenResultOutcome,
     SourceReviewFinding,
     completion_receipt_signing_message,
@@ -2690,6 +2694,74 @@ async def submit_shadow_review(
             return ShadowReviewObservationResponse(accepted=True)
         session.add(ScreenerShadowReview(attempt_id=payload.attempt_id, **values))
     return ShadowReviewObservationResponse(accepted=True)
+
+
+@router.post(
+    "/agent/{agent_id}/review-usage",
+    response_model=ScreeningReviewUsageResponse,
+)
+async def submit_review_usage(
+    agent_id: UUID,
+    payload: ScreeningReviewUsageRequest,
+    screener_hotkey: ScreenerDep,
+    session: SessionDep,
+) -> ScreeningReviewUsageResponse:
+    """Persist one attempt's review model usage without mutating its state.
+
+    Same ownership rules as the shadow-review telemetry: the caller must hold
+    the running, non-build-only attempt for this exact artifact, inside its
+    lease. A retry with identical content is accepted; a different second
+    report for the same attempt is refused rather than overwriting the first.
+    """
+    async with session.begin():
+        attempt = await get_screening_attempt(
+            session, attempt_id=payload.attempt_id, for_update=True
+        )
+        if (
+            attempt is None
+            or attempt.agent_id != agent_id
+            or attempt.screener_hotkey != screener_hotkey
+            or attempt.status != "running"
+            or attempt.build_only
+        ):
+            raise AgentNotScreenableError(
+                "review usage does not match an active screening attempt"
+            )
+        deadline = attempt.deadline
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        if datetime.now(UTC) > deadline:
+            raise AgentNotScreenableError("review usage arrived after lease expiry")
+        agent = await get_agent_by_id(session, agent_id=agent_id)
+        if agent is None:
+            raise AgentNotFoundError(f"no agent with id={agent_id}")
+        if agent.sha256.lower() != payload.artifact_sha256 or (
+            attempt.artifact_sha256 is not None
+            and attempt.artifact_sha256.lower() != payload.artifact_sha256
+        ):
+            raise AgentNotScreenableError(
+                "review usage artifact does not match the claimed submission"
+            )
+        values = {
+            "agent_id": agent_id,
+            "screener_hotkey": screener_hotkey,
+            "artifact_sha256": payload.artifact_sha256,
+            "stages": [entry.model_dump(mode="json") for entry in payload.stages],
+            "total_input_tokens": payload.total_input_tokens,
+            "total_output_tokens": payload.total_output_tokens,
+            "total_cost_usd": Decimal(str(round(payload.total_cost_usd, 6))),
+            "elapsed_ms": payload.elapsed_ms,
+            "lineage_scope": payload.lineage_scope,
+        }
+        existing = await session.get(ScreeningReviewUsage, payload.attempt_id)
+        if existing is not None:
+            if any(getattr(existing, key) != value for key, value in values.items()):
+                raise AgentNotScreenableError(
+                    "review usage conflicts with the stored attempt telemetry"
+                )
+            return ScreeningReviewUsageResponse(accepted=True)
+        session.add(ScreeningReviewUsage(attempt_id=payload.attempt_id, **values))
+    return ScreeningReviewUsageResponse(accepted=True)
 
 
 @router.get(

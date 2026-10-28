@@ -96,6 +96,7 @@ from ditto.api_server.endpoints import (
     admin_screener_policy_activation_router,
     admin_screener_review_settings_router,
     admin_screening_infra_retry_router,
+    admin_screening_review_cost_router,
     admin_source_review_queue_slo_router,
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
@@ -790,6 +791,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
+    app.include_router(admin_screening_review_cost_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")

@@ -654,6 +654,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_review_deadline',
         'get_screening_failure_diagnostic',
         'list_screening_adjudication_attempts',
+        'get_screening_review_cost',
         'get_screening_verification_readiness',
         'get_v13_private_generation_group',
         'get_v13_benign_approval',
@@ -9937,6 +9938,58 @@ describe('Backroom MCP tools', () => {
     } finally {
       await granted.client.close()
       await granted.server.close()
+    }
+  })
+
+  it('reads screening review cost by lineage scope with read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const payload = {
+      lookback_days: 14,
+      window_start: '2026-10-14T00:00:00Z',
+      read_at: '2026-10-28T00:00:00Z',
+      groups: [
+        {
+          lineage_scope: 'diff', status: 'passed', attempts: 4, attempts_with_telemetry: 2,
+          mean_input_tokens: 1_200_000, p50_input_tokens: 1_100_000, p90_input_tokens: 1_900_000,
+          mean_output_tokens: 40_000, mean_cost_usd: 3.1, total_cost_usd: 6.2,
+          budget_exhausted: 0, mean_wall_minutes: 19.5,
+        },
+        {
+          lineage_scope: 'full', status: 'quarantined', attempts: 1, attempts_with_telemetry: 0,
+          mean_input_tokens: null, p50_input_tokens: null, p90_input_tokens: null,
+          mean_output_tokens: null, mean_cost_usd: null, total_cost_usd: null,
+          budget_exhausted: 1, mean_wall_minutes: 57,
+        },
+      ],
+      budget_reasons: [
+        { reason_code: 'l3-adjudicator-model-total-budget', lineage_scope: 'full', attempts: 1 },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const tooWide = await client.callTool({
+        name: 'get_screening_review_cost',
+        arguments: { lookbackDays: 31 },
+      })
+      expect(tooWide.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await client.callTool({
+        name: 'get_screening_review_cost',
+        arguments: { lookbackDays: 14 },
+      })
+      expect(response.isError, JSON.stringify(response.content)).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        lookback_days: 14,
+        budget_reasons: [{ reason_code: 'l3-adjudicator-model-total-budget' }],
+      })
+      expect(String(fetchMock.mock.calls[0][0])).toContain(
+        '/api/v1/admin/screening-review-cost?lookback_days=14',
+      )
+    } finally {
+      await client.close()
+      await server.close()
     }
   })
 
