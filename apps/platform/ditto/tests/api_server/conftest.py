@@ -155,14 +155,35 @@ def _create_app_reusing_routes(config: ApiServerConfig) -> FastAPI:
     if template is None:
         app = create_api_server(config)
         _INCLUDED_ROUTES[role] = list(app.router.routes)
-        return app
-    with patch.object(FastAPI, "include_router", lambda *_args, **_kwargs: None):
-        app = create_api_server(config)
-    direct = {_route_identity(route): route for route in app.router.routes}
-    app.router.routes = [
-        direct.get(_route_identity(route)) or _rebind(route, app) for route in template
-    ]
+    else:
+        with patch.object(FastAPI, "include_router", lambda *_a, **_k: None):
+            app = create_api_server(config)
+        direct = {_route_identity(route): route for route in app.router.routes}
+        app.router.routes = [
+            direct.get(_route_identity(route)) or _rebind(route, app)
+            for route in template
+        ]
+    _share_openapi_schema(app, role)
     return app
+
+
+# One generated OpenAPI document per worker and role. Generating it walks
+# every route and model (5-10 s on a CI runner); the schema-contract tests
+# only read it, and each app gets its own deep copy.
+_OPENAPI_SCHEMAS: dict[str, dict[str, Any]] = {}
+
+
+def _share_openapi_schema(app: FastAPI, role: str) -> None:
+    generate = app.openapi
+
+    def openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            if role not in _OPENAPI_SCHEMAS:
+                _OPENAPI_SCHEMAS[role] = generate()
+            app.openapi_schema = copy.deepcopy(_OPENAPI_SCHEMAS[role])
+        return app.openapi_schema
+
+    app.openapi = openapi  # type: ignore[method-assign]
 
 
 @pytest.fixture
