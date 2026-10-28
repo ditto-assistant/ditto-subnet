@@ -335,6 +335,10 @@ class ConfirmationBundleTicketView(BaseModel):
     # reporter predating the contract, so a consumer must not require them.
     failure_class: str | None = None
     failure_stage: str | None = None
+    # The scorer's bounded status behind a forwarded ``longmem_*`` class. Null
+    # when the reporter sent none; ``0`` means the boundary broke before a
+    # status existed, so a consumer must not collapse the two.
+    failure_status: int | None = None
     failed_at: datetime | None
     # Allowlisted Go→Python prepare-report rejection. Written when convert or
     # rebuild 409s; null when prepare never ran or succeeded. Not an error

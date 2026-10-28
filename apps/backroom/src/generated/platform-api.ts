@@ -19325,6 +19325,8 @@ export interface components {
             failure_reason: string | null;
             /** Failure Stage */
             failure_stage?: string | null;
+            /** Failure Status */
+            failure_status?: number | null;
             /**
              * Issued At
              * Format: date-time
@@ -39997,9 +39999,11 @@ export interface components {
         /** V9ConfirmationFailRequest */
         V9ConfirmationFailRequest: {
             /** Failure Class */
-            failure_class?: ("sandbox_oom" | "lease_revoked" | "validator_infrastructure" | "platform_infrastructure" | "dittobench" | "platform" | "validator" | "evidence_schema" | "timeout" | "transport" | "unclassified") | null;
+            failure_class?: ("sandbox_oom" | "lease_revoked" | "validator_infrastructure" | "platform_infrastructure" | "dittobench" | "platform" | "validator" | "evidence_schema" | "timeout" | "transport" | "unclassified" | "longmem_run_http_status" | "longmem_run_malformed_json" | "longmem_run_missing_final_text" | "longmem_run_request" | "longmem_run_response_read" | "longmem_run_response_too_large" | "longmem_run_tool_endpoint" | "longmem_seed_http_status" | "longmem_seed_incomplete_ack" | "longmem_seed_malformed_json" | "longmem_seed_request" | "longmem_seed_response_read" | "longmem_seed_response_too_large") | null;
             /** Failure Stage */
             failure_stage?: ("preparing" | "running_confirmation" | "finalizing" | "submitting_result" | "failed_retrying" | "unknown") | null;
+            /** Failure Status */
+            failure_status?: number | null;
             /**
              * Nonce
              * Format: uuid

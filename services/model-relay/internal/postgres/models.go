@@ -192,6 +192,7 @@ type ConfirmationBundleTicket struct {
 	FailureStage      pgtype.Text        `json:"failureStage"`
 	PrepareRejection  pgtype.Text        `json:"prepareRejection"`
 	PrepareRejectedAt pgtype.Timestamptz `json:"prepareRejectedAt"`
+	FailureStatus     pgtype.Int4        `json:"failureStatus"`
 }
 
 type ConfirmationInferenceGrant struct {

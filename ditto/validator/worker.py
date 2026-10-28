@@ -171,6 +171,7 @@ from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
 from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -451,6 +452,7 @@ CONFIRMATION_FAILURE_CLASSES: dict[str, str] = {
     "ServerTimeoutError": "timeout",
 }
 _UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
+_DITTOBENCH_CONFIRMATION_FAILURE = CONFIRMATION_FAILURE_CLASSES["DittobenchError"]
 
 # These slugs are now persisted by Platform and shown to operators, so they are
 # a wire contract, not local telemetry. Fail at import if this map ever emits a
@@ -460,6 +462,19 @@ _UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
 assert set(CONFIRMATION_FAILURE_CLASSES.values()) | {
     _UNCLASSIFIED_CONFIRMATION_FAILURE
 } <= set(CONFIRMATION_FAILURE_CLASS_VALUES)
+
+# The map above classifies an exception TYPE, which is the right instrument for
+# a failure raised in this process and the wrong one for a failure raised in the
+# scorer: the whole scorer arrives as ``DittobenchError``, so every distinct
+# break it reports -- seeding, the harness run, provider accounting -- collapses
+# into one slug. The scorer already classifies itself, and
+# ``ConfirmationScorerError`` carries that class up from the response headers;
+# this set is what the reporter will forward unchanged. Anything outside it
+# falls back to the type-derived class rather than widening the wire contract
+# from the far side of an HTTP boundary.
+_SCORER_CONFIRMATION_FAILURE_CLASSES = frozenset(
+    CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
+)
 
 
 def _ledger_seed_anchors(ledger: LedgerResponse) -> list[object]:
@@ -523,14 +538,44 @@ def _confirmation_pin_binding_mismatch(
 def confirmation_failure_class(error: BaseException) -> str:
     """Map an exception to an allowlisted, low-cardinality failure slug.
 
-    Walks the MRO so a subclass of a known error still classifies, and falls
-    back to ``unclassified`` rather than leaking an arbitrary type name.
+    Prefers a class the trusted scorer assigned itself, because the alternative
+    for those is ``dittobench`` -- true, and true of every scorer failure there
+    has ever been, which is why a repeatable lane break stayed invisible outside
+    one host's logs. Otherwise walks the MRO so a subclass of a known error
+    still classifies, and falls back to ``unclassified`` rather than leaking an
+    arbitrary type name.
+
+    The forwarded value is re-checked against the shared allowlist here rather
+    than trusted from the header: the admission gate and the thing that gets
+    signed must be the same decision, and an unrecognized slug has to degrade to
+    the type-derived class instead of failing the hand-back it is attached to.
     """
+    scorer_class = getattr(error, "scorer_failure_class", None)
+    if (
+        isinstance(scorer_class, str)
+        and scorer_class in _SCORER_CONFIRMATION_FAILURE_CLASSES
+    ):
+        return scorer_class
     for klass in type(error).__mro__:
         slug = CONFIRMATION_FAILURE_CLASSES.get(klass.__name__)
         if slug is not None:
             return slug
     return _UNCLASSIFIED_CONFIRMATION_FAILURE
+
+
+def confirmation_failure_status(error: BaseException) -> int | None:
+    """The scorer's bounded status, or ``None`` when it assigned no class.
+
+    Returns ``None`` -- never ``0`` -- for anything the scorer did not classify.
+    ``0`` is the scorer's own value for "the boundary broke before a status
+    existed", so substituting it for absence would invent a measurement.
+    """
+    if confirmation_failure_class(error) not in _SCORER_CONFIRMATION_FAILURE_CLASSES:
+        return None
+    status = getattr(error, "scorer_failure_status", None)
+    if isinstance(status, int) and not isinstance(status, bool) and 0 <= status <= 599:
+        return status
+    return None
 
 
 _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
@@ -2898,27 +2943,73 @@ class ValidatorWorker:
                 failure_stage = (
                     self._confirmation_stage(slot_id) if error is not None else None
                 )
+                failure_status = (
+                    confirmation_failure_status(error) if error is not None else None
+                )
                 await self._publish_confirmation_progress(job, "failed_retrying")
-                try:
+
+                async def report(
+                    reported_class: str | None, reported_status: int | None
+                ) -> None:
                     await asyncio.wait_for(
                         asyncio.shield(
                             self._platform.fail_v9_confirmation_job(
                                 job,
                                 reason=reason,
-                                failure_class=failure_class,
+                                failure_class=reported_class,
                                 failure_stage=failure_stage,
+                                failure_status=reported_status,
                             )
                         ),
                         timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
                     )
+
+                try:
+                    await report(failure_class, failure_status)
                 except Exception as hand_back_error:  # noqa: BLE001
+                    # A forwarded scorer class is the one part of this report a
+                    # Platform predating the widened allowlist will refuse, and
+                    # refusing it costs far more than the diagnostic is worth:
+                    # the ticket is not handed back at all, so it holds its slot
+                    # and its reservation until the deadline hours later. Retry
+                    # once with the class that Platform has always accepted. The
+                    # ordering is deliberate -- ask for the better diagnostic
+                    # first, keep the hand-back either way -- and it also covers
+                    # any future allowlist drift, not just this rollout.
+                    coarse_class = (
+                        _DITTOBENCH_CONFIRMATION_FAILURE
+                        if failure_class in _SCORER_CONFIRMATION_FAILURE_CLASSES
+                        else None
+                    )
+                    if coarse_class is None:
+                        logger.warning(
+                            "v9 confirmation failure hand-back did not land "
+                            "bundle=%s ticket=%s: %s",
+                            job.bundle_id,
+                            job.ticket_id,
+                            hand_back_error,
+                        )
+                        return
                     logger.warning(
-                        "v9 confirmation failure hand-back did not land "
-                        "bundle=%s ticket=%s: %s",
+                        "v9 confirmation failure hand-back with scorer class %s "
+                        "was refused for bundle=%s ticket=%s (%s); retrying as "
+                        "%s so the ticket is still handed back",
+                        failure_class,
                         job.bundle_id,
                         job.ticket_id,
                         hand_back_error,
+                        coarse_class,
                     )
+                    try:
+                        await report(coarse_class, None)
+                    except Exception as retry_error:  # noqa: BLE001
+                        logger.warning(
+                            "v9 confirmation failure hand-back did not land "
+                            "bundle=%s ticket=%s: %s",
+                            job.bundle_id,
+                            job.ticket_id,
+                            retry_error,
+                        )
 
             try:
                 # Prepare the trusted broker key before asking Platform for

@@ -42,9 +42,14 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
+from ditto.validator import dittobench as dittobench_module
 from ditto.validator import worker as worker_module
 from ditto.validator.dittobench import DittobenchClient, InferenceBrokerSession
-from ditto.validator.errors import DittobenchError, PlatformError
+from ditto.validator.errors import (
+    ConfirmationScorerError,
+    DittobenchError,
+    PlatformError,
+)
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
     rebuild_v9_confirmation_evidence_root,
@@ -63,6 +68,7 @@ from ditto.validator.worker import ValidatorWorker
 from ditto_screening_protocol.confirmation import canonical_json, evidence_digest
 from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
 from ditto_screening_protocol.confirmation_wire import (
     completion_report_from_go_dimensions,
@@ -2124,6 +2130,238 @@ async def test_worker_rejects_platform_root_tampering_before_sign_or_submit(
     assert handed_back["failure_stage"] is not None
 
 
+def _confirmation_worker(
+    platform: MagicMock, error: Exception, job: V9ConfirmationJobResponse
+) -> ValidatorWorker:
+    """A worker whose only confirmation outcome is ``error``."""
+    platform.request_v9_confirmation_job = AsyncMock(return_value=job)
+    platform.get_v9_confirmation_artifact = AsyncMock(
+        return_value=ArtifactResponse.model_validate(_artifact_payload())
+    )
+    platform.submit_v9_confirmation_report = AsyncMock()
+    dittobench = MagicMock()
+    _configure_confirmation_session(dittobench)
+    dittobench.v9_confirmation_readiness = AsyncMock(
+        return_value=V9ConfirmationScorerReadiness(
+            ready=True,
+            profile_revision=_PROFILE_REVISION,
+            profile_checksum=_PROFILE_CHECKSUM,
+        )
+    )
+    dittobench.execute_v9_confirmation = AsyncMock(side_effect=error)
+    return ValidatorWorker(
+        config=cast(
+            Any,
+            SimpleNamespace(
+                validator_hotkey=_HOTKEY,
+                netuid=118,
+                benchmark_capacity=1,
+            ),
+        ),
+        platform=platform,
+        dittobench=dittobench,
+        chain=MagicMock(),
+        keypair=MagicMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_forwards_the_scorer_failure_class_and_status() -> None:
+    """The whole point: the scorer's own class survives to the signed ledger.
+
+    Without this the hand-back carries ``dittobench`` -- true of every scorer
+    failure there has ever been -- and the boundary that actually broke lives
+    only in a log line on whichever validator claimed the ticket.
+    """
+    job = _job().model_copy(
+        update={
+            "slot_id": "longmem-0",
+            "deadline": datetime.now(UTC) + timedelta(hours=1),
+        }
+    )
+    platform = MagicMock()
+    platform.fail_v9_confirmation_job = AsyncMock()
+    worker = _confirmation_worker(
+        platform,
+        ConfirmationScorerError(
+            "v9 confirmation execution rejected (422)",
+            scorer_failure_class="longmem_run_http_status",
+            scorer_failure_status=502,
+        ),
+        job,
+    )
+
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
+
+    platform.fail_v9_confirmation_job.assert_awaited_once_with(
+        job,
+        reason="execution_failed",
+        failure_class="longmem_run_http_status",
+        failure_stage="running_confirmation",
+        failure_status=502,
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_keeps_a_scorer_status_of_zero() -> None:
+    """``0`` is a measurement, not an absence, and must not become ``None``.
+
+    The scorer reports 0 when the boundary broke before any status existed --
+    a refused connection rather than a 5xx -- which is exactly the distinction
+    an operator needs and the one a falsy check would erase.
+    """
+    job = _job().model_copy(
+        update={
+            "slot_id": "longmem-0",
+            "deadline": datetime.now(UTC) + timedelta(hours=1),
+        }
+    )
+    platform = MagicMock()
+    platform.fail_v9_confirmation_job = AsyncMock()
+    worker = _confirmation_worker(
+        platform,
+        ConfirmationScorerError(
+            "v9 confirmation execution rejected (422)",
+            scorer_failure_class="longmem_run_request",
+            scorer_failure_status=0,
+        ),
+        job,
+    )
+
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
+
+    handed_back = platform.fail_v9_confirmation_job.await_args.kwargs
+    assert handed_back["failure_class"] == "longmem_run_request"
+    assert handed_back["failure_status"] == 0
+
+
+@pytest.mark.asyncio
+async def test_worker_degrades_an_unknown_scorer_class_to_the_type_derived_one() -> (
+    None
+):
+    """A slug outside the shared allowlist must not be forwarded.
+
+    Platform rejects an unrecognized class exactly when a failure is being
+    reported, so passing one through would trade a coarse diagnostic for no
+    hand-back at all. The admission decision belongs on this side.
+    """
+    job = _job().model_copy(
+        update={
+            "slot_id": "longmem-0",
+            "deadline": datetime.now(UTC) + timedelta(hours=1),
+        }
+    )
+    platform = MagicMock()
+    platform.fail_v9_confirmation_job = AsyncMock()
+    worker = _confirmation_worker(
+        platform,
+        ConfirmationScorerError(
+            "v9 confirmation execution rejected (422)",
+            scorer_failure_class="longmem_run_invented_kind",
+            scorer_failure_status=500,
+        ),
+        job,
+    )
+
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
+
+    platform.fail_v9_confirmation_job.assert_awaited_once_with(
+        job,
+        reason="execution_failed",
+        failure_class="dittobench",
+        failure_stage="running_confirmation",
+        failure_status=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_retries_the_hand_back_with_the_coarse_class() -> None:
+    """A Platform that refuses the new class must still get the ticket back.
+
+    During a rolling upgrade the reporter can forward a class the running
+    Platform does not accept yet. Losing the hand-back over it is strictly
+    worse than losing the diagnostic: the ticket keeps its slot and its
+    reservation until the deadline hours later.
+    """
+    job = _job().model_copy(
+        update={
+            "slot_id": "longmem-0",
+            "deadline": datetime.now(UTC) + timedelta(hours=1),
+        }
+    )
+    platform = MagicMock()
+    platform.fail_v9_confirmation_job = AsyncMock(
+        side_effect=[
+            PlatformError("v9 confirmation failure rejected (422): failure_class"),
+            None,
+        ]
+    )
+    worker = _confirmation_worker(
+        platform,
+        ConfirmationScorerError(
+            "v9 confirmation execution rejected (422)",
+            scorer_failure_class="longmem_seed_incomplete_ack",
+            scorer_failure_status=0,
+        ),
+        job,
+    )
+
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
+
+    assert platform.fail_v9_confirmation_job.await_count == 2
+    first, second = platform.fail_v9_confirmation_job.await_args_list
+    assert first.kwargs["failure_class"] == "longmem_seed_incomplete_ack"
+    assert first.kwargs["failure_status"] == 0
+    # The retry drops both diagnostics rather than guessing which one offended:
+    # the coarse pair is what every Platform release has always accepted.
+    assert second.kwargs["failure_class"] == "dittobench"
+    assert second.kwargs["failure_status"] is None
+    assert second.kwargs["failure_stage"] == "running_confirmation"
+
+
+@pytest.mark.asyncio
+async def test_worker_does_not_retry_a_hand_back_that_sent_no_scorer_class() -> None:
+    """Only a forwarded class can be the thing Platform refused.
+
+    Retrying any other rejection would double a hand-back that failed for an
+    unrelated reason -- a stale timestamp, a signature, an outage -- and hide
+    the real cause behind a second identical error.
+    """
+    job = _job().model_copy(
+        update={
+            "slot_id": "longmem-0",
+            "deadline": datetime.now(UTC) + timedelta(hours=1),
+        }
+    )
+    platform = MagicMock()
+    platform.fail_v9_confirmation_job = AsyncMock(
+        side_effect=PlatformError("v9 confirmation failure rejected (409)")
+    )
+    worker = _confirmation_worker(platform, DittobenchError("bad evidence"), job)
+
+    await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
+
+    assert platform.fail_v9_confirmation_job.await_count == 1
+
+
+def test_scorer_failure_classes_match_the_headers_the_validator_accepts() -> None:
+    """The producer gate and the wire allowlist must describe the same set.
+
+    ``dittobench.py`` decides which header values are admitted at all; the
+    shared tuple decides which may be signed and stored. A slug in one and not
+    the other is either a diagnostic that can never be reported or one that is
+    reported and then rejected -- both silent, and both only at failure time.
+    """
+    accepted = (
+        dittobench_module._CONFIRMATION_ZERO_STATUS_FAILURES
+        | dittobench_module._CONFIRMATION_HTTP_STATUS_FAILURES
+        | dittobench_module._CONFIRMATION_MALFORMED_STATUS_FAILURES
+        | dittobench_module._CONFIRMATION_RESPONSE_READ_FAILURES
+    )
+    assert accepted == set(CONFIRMATION_SCORER_FAILURE_CLASS_VALUES)
+    assert accepted <= set(CONFIRMATION_FAILURE_CLASS_VALUES)
+
+
 @pytest.mark.parametrize(
     ("error", "reason", "failure_class"),
     [
@@ -2186,6 +2424,9 @@ async def test_worker_hands_private_failure_back_with_typed_reason(
         reason=reason,
         failure_class=failure_class,
         failure_stage="running_confirmation",
+        # None, not 0: every error in this table is classified from its Python
+        # type, and a type-derived class has no scorer status behind it.
+        failure_status=None,
     )
     platform.submit_v9_confirmation_report.assert_not_awaited()
 
@@ -2245,7 +2486,11 @@ async def test_worker_cancellation_hands_back_then_reraises() -> None:
 
     # Cancellation is not a diagnosable failure, so it reports no class.
     platform.fail_v9_confirmation_job.assert_awaited_once_with(
-        job, reason="cancelled", failure_class=None, failure_stage=None
+        job,
+        reason="cancelled",
+        failure_class=None,
+        failure_stage=None,
+        failure_status=None,
     )
 
 

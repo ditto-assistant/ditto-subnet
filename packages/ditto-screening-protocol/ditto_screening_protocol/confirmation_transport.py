@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from ipaddress import ip_address
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -444,7 +444,10 @@ class V9ConfirmationPreparedReport(BaseModel):
 # ever becoming an error-string channel. Anything a reporter cannot classify
 # arrives as "unclassified" rather than as an arbitrary type or message. Both
 # sides read this one list so a validator can never widen it unilaterally.
-CONFIRMATION_FAILURE_CLASS_VALUES = (
+#
+# The first group classifies the reporter's own exception TYPE, which localizes
+# the failing process but not the failing boundary inside it.
+CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES = (
     "sandbox_oom",
     "lease_revoked",
     "validator_infrastructure",
@@ -456,6 +459,37 @@ CONFIRMATION_FAILURE_CLASS_VALUES = (
     "timeout",
     "transport",
     "unclassified",
+)
+
+# The second group is the trusted scorer's OWN bounded diagnostic, forwarded
+# unchanged. Every scorer error reaches the reporter as one exception type, so
+# the type-derived class above collapses each of them to "dittobench" and the
+# boundary that actually broke survives only in that one validator's host logs
+# -- unreadable for a managed or third-party validator, which is every host but
+# ours. These slugs are the scorer's existing ``longmem_<operation>_<kind>``
+# allowlist (``longmemeval.FailureDiagnostic``), already crossing the protected
+# scorer->validator response as a header; forwarding them costs no new channel
+# and no new vocabulary. Still a closed set: a reporter that sees an unknown
+# slug must fall back to its type-derived class rather than pass it through.
+CONFIRMATION_SCORER_FAILURE_CLASS_VALUES = (
+    "longmem_run_http_status",
+    "longmem_run_malformed_json",
+    "longmem_run_missing_final_text",
+    "longmem_run_request",
+    "longmem_run_response_read",
+    "longmem_run_response_too_large",
+    "longmem_run_tool_endpoint",
+    "longmem_seed_http_status",
+    "longmem_seed_incomplete_ack",
+    "longmem_seed_malformed_json",
+    "longmem_seed_request",
+    "longmem_seed_response_read",
+    "longmem_seed_response_too_large",
+)
+
+CONFIRMATION_FAILURE_CLASS_VALUES = (
+    *CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES,
+    *CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
 
 ConfirmationFailureClass = Literal[
@@ -470,7 +504,33 @@ ConfirmationFailureClass = Literal[
     "timeout",
     "transport",
     "unclassified",
+    "longmem_run_http_status",
+    "longmem_run_malformed_json",
+    "longmem_run_missing_final_text",
+    "longmem_run_request",
+    "longmem_run_response_read",
+    "longmem_run_response_too_large",
+    "longmem_run_tool_endpoint",
+    "longmem_seed_http_status",
+    "longmem_seed_incomplete_ack",
+    "longmem_seed_malformed_json",
+    "longmem_seed_request",
+    "longmem_seed_response_read",
+    "longmem_seed_response_too_large",
 ]
+
+# The tuple is what Platform's CHECK constraint and the reporter's fallback are
+# written against; the Literal is what rejects an unknown slug at the signed
+# wire boundary. A value added to one and not the other produces a request that
+# validates but cannot be stored, at the exact moment a failure is being
+# reported -- so bind them here rather than trusting two hand-edited lists.
+assert get_args(ConfirmationFailureClass) == CONFIRMATION_FAILURE_CLASS_VALUES
+
+# Highest HTTP status the scorer's bounded diagnostic can carry.  0 means the
+# boundary broke before any status existed (a connection error, an unreadable
+# body, a missing final message), which is itself discriminating and must stay
+# distinguishable from "the reporter did not send a status at all".
+MAX_CONFIRMATION_FAILURE_STATUS = 599
 
 # The last progress stage the slot published before it broke, plus "unknown"
 # for a slot that failed before publishing any stage at all.
@@ -497,6 +557,15 @@ class V9ConfirmationFailRequest(BaseModel):
     # old Platform fails its signature check — deploy Platform first.
     failure_class: ConfirmationFailureClass | None = None
     failure_stage: ConfirmationFailureStage | None = None
+    # Present only alongside a scorer-forwarded class, which is the only kind
+    # that has a status: it is the scorer's own bounded HTTP status for the
+    # harness boundary that broke, and without it a ``*_http_status`` class
+    # says a status was the problem while leaving which one on the host. A
+    # reporter predating this field signs the v2 message and Platform verifies
+    # v2; one that sends a status signs v3, which binds it like the other two.
+    failure_status: (
+        Annotated[int, Field(ge=0, le=MAX_CONFIRMATION_FAILURE_STATUS)] | None
+    ) = None
     nonce: UUID
     requested_at: datetime
     signature: SignatureHex
@@ -505,6 +574,17 @@ class V9ConfirmationFailRequest(BaseModel):
     def _diagnostics_travel_together(self) -> V9ConfirmationFailRequest:
         if (self.failure_class is None) != (self.failure_stage is None):
             raise ValueError("failure class and stage must be reported together")
+        if (
+            self.failure_status is not None
+            and self.failure_class not in CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
+        ):
+            # A type-derived class has no status behind it, so a status next to
+            # one would be invented rather than measured. Refuse it here: the
+            # ledger this lands in is read by an operator deciding whether to
+            # spend the next bounded canary.
+            raise ValueError(
+                "failure status may only accompany a scorer-reported class"
+            )
         return self
 
     @field_validator("requested_at")
@@ -548,8 +628,12 @@ __all__ = [
     "ConfirmationExecutionProfile",
     "ConfirmationInferenceGrantOffer",
     "ConfirmationProviderLaneProfile",
+    "CONFIRMATION_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_SCORER_FAILURE_CLASS_VALUES",
     "MAX_BUNDLE_REQUEST_CAP",
     "MAX_BUNDLE_TOKEN_CAP",
+    "MAX_CONFIRMATION_FAILURE_STATUS",
     "SignatureHex",
     "V9ConfirmationClaimRequest",
     "V9ConfirmationCompletionReport",

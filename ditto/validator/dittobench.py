@@ -21,7 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -63,6 +63,7 @@ from ditto.validator.config import (
     run_budget_seconds,
 )
 from ditto.validator.errors import (
+    ConfirmationScorerError,
     DittobenchError,
     LeaseDeadlineError,
     SandboxOomError,
@@ -197,28 +198,50 @@ _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
 }
 
 
-def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
+class ConfirmationFailureDiagnostic(NamedTuple):
+    """One accepted scorer class/status pair, ready for the signed hand-back."""
+
+    failure_class: str
+    failure_status: int
+
+    def suffix(self) -> str:
+        """The host-log form, kept so an operator on the box reads it unchanged."""
+        return (
+            f" [failure_class={self.failure_class} "
+            f"failure_status={self.failure_status}]"
+        )
+
+
+def _confirmation_failure_diagnostic(
+    response: httpx.Response,
+) -> ConfirmationFailureDiagnostic | None:
     """Return one bounded scorer diagnostic, or nothing for any drift.
 
     The confirmation response body deliberately remains stage-only. These
     purpose-specific headers cross only the protected local scorer boundary,
     and are accepted solely when their class/status pair matches a shape the
     Go scorer can emit from its reviewed allowlist.
+
+    Returned structurally rather than pre-formatted because the caller now owes
+    this pair to Platform as well as to the log line: formatting it into the
+    message first is what made the class unrecoverable from anywhere but the
+    host. The four shape checks below are the only admission gate, so whatever
+    survives them is exactly what may be signed.
     """
     failure_class = response.headers.get(_CONFIRMATION_FAILURE_CLASS_HEADER)
     raw_status = response.headers.get(_CONFIRMATION_FAILURE_STATUS_HEADER)
     if failure_class is None or raw_status is None:
-        return ""
+        return None
     if (
         not raw_status
         or len(raw_status) > 3
         or not raw_status.isascii()
         or not raw_status.isdecimal()
     ):
-        return ""
+        return None
     status = int(raw_status)
     if raw_status != str(status) or status > 599:
-        return ""
+        return None
     if failure_class in _CONFIRMATION_ZERO_STATUS_FAILURES:
         valid = status == 0
     elif failure_class in _CONFIRMATION_HTTP_STATUS_FAILURES:
@@ -230,8 +253,8 @@ def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
     else:
         valid = False
     if not valid:
-        return ""
-    return f" [failure_class={failure_class} failure_status={status}]"
+        return None
+    return ConfirmationFailureDiagnostic(failure_class, status)
 
 
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -817,9 +840,16 @@ class DittobenchClient:
                 await asyncio.wait({poll_task})
         if response.status_code != 200:
             diagnostic = _confirmation_failure_diagnostic(response)
-            raise DittobenchError(
+            message = (
                 "v9 confirmation execution rejected "
-                f"({response.status_code}): {response.text[:200]}{diagnostic}"
+                f"({response.status_code}): {response.text[:200]}"
+            )
+            if diagnostic is None:
+                raise DittobenchError(message)
+            raise ConfirmationScorerError(
+                f"{message}{diagnostic.suffix()}",
+                scorer_failure_class=diagnostic.failure_class,
+                scorer_failure_status=diagnostic.failure_status,
             )
         try:
             return V9ConfirmationScorerResult.model_validate(response.json())

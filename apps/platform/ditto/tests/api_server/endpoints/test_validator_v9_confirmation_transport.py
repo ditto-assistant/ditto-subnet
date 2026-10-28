@@ -1997,6 +1997,17 @@ def _report_payload(
     }
 
 
+class _Unset:
+    """Sentinel letting a caller sign ``None`` where ``None`` means "default to
+    the sent value". Without it ``sign_status=None`` is indistinguishable from
+    "not overridden", and a test meant to prove a stripped status fails the
+    signature would quietly sign the very status it claims to omit -- passing
+    while asserting nothing."""
+
+
+_UNSET = _Unset()
+
+
 def _fail_payload(
     *,
     bundle_id: UUID,
@@ -2004,8 +2015,10 @@ def _fail_payload(
     reason: str = "execution_failed",
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
     sign_class: str | None = None,
     sign_stage: str | None = None,
+    sign_status: int | None | _Unset = _UNSET,
     nonce: UUID | None = None,
     requested_at: datetime | None = None,
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
@@ -2026,6 +2039,9 @@ def _fail_payload(
             reason=reason,
             failure_class=sign_class if sign_class is not None else failure_class,
             failure_stage=sign_stage if sign_stage is not None else failure_stage,
+            failure_status=(
+                failure_status if isinstance(sign_status, _Unset) else sign_status
+            ),
             nonce=failure_nonce,
             requested_at=failed_at,
         )
@@ -2041,6 +2057,8 @@ def _fail_payload(
     if failure_class is not None:
         payload["failure_class"] = failure_class
         payload["failure_stage"] = failure_stage
+    if failure_status is not None:
+        payload["failure_status"] = failure_status
     return payload
 
 
@@ -3531,7 +3549,7 @@ class TestV9ConfirmationFailureRecovery:
         nonce = UUID("33333333-3333-3333-3333-333333333333")
         requested_at = datetime(2026, 8, 8, 12, 34, 56, 789, tzinfo=UTC)
 
-        def message(**diagnostics: str) -> bytes:
+        def message(**diagnostics: Any) -> bytes:
             return v9_confirmation_fail_signing_message(
                 validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
                 bundle_id=bundle_id,
@@ -3555,6 +3573,193 @@ class TestV9ConfirmationFailureRecovery:
 
         with pytest.raises(ValueError, match="travel together"):
             message(failure_class="dittobench")
+
+    async def test_scorer_status_binds_a_v3_message_without_breaking_v2(
+        self,
+    ) -> None:
+        """v2 stays byte-identical; a status gets its own bound message.
+
+        All three versions must remain simultaneously valid: the fleet upgrades
+        one validator at a time, and a reporter that has not adopted the status
+        keeps handing work back on the message it already signs.
+        """
+        bundle_id = UUID("11111111-1111-1111-1111-111111111111")
+        ticket_id = UUID("22222222-2222-2222-2222-222222222222")
+        nonce = UUID("33333333-3333-3333-3333-333333333333")
+        requested_at = datetime(2026, 8, 8, 12, 34, 56, 789, tzinfo=UTC)
+
+        def message(**diagnostics: Any) -> bytes:
+            return v9_confirmation_fail_signing_message(
+                validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
+                bundle_id=bundle_id,
+                ticket_id=ticket_id,
+                reason="execution_failed",
+                nonce=nonce,
+                requested_at=requested_at,
+                **diagnostics,
+            )
+
+        assert message(
+            failure_class="longmem_run_http_status",
+            failure_stage="running_confirmation",
+        ).startswith(b"validator-v9-confirmation-fail:v2:")
+        assert (
+            message(
+                failure_class="longmem_run_http_status",
+                failure_stage="running_confirmation",
+                failure_status=502,
+            )
+            == (
+                "validator-v9-confirmation-fail:v3:"
+                f"{VALIDATOR_KEYPAIR.ss58_address}:{bundle_id}:{ticket_id}:"
+                "execution_failed:longmem_run_http_status:running_confirmation:"
+                f"502:{nonce}:2026-08-08T12:34:56.000789Z"
+            ).encode()
+        )
+        # 0 is a real measurement, so it must select v3 like any other status.
+        assert message(
+            failure_class="longmem_run_request",
+            failure_stage="running_confirmation",
+            failure_status=0,
+        ).startswith(b"validator-v9-confirmation-fail:v3:")
+
+        with pytest.raises(ValueError, match="requires a failure class"):
+            message(failure_status=502)
+
+    async def test_forwarded_scorer_class_and_status_are_persisted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The scorer's own class must reach the ledger, not just the host log.
+
+        A class derived from the reporter's exception type is ``dittobench``
+        for every scorer failure that exists, so this is the only field that
+        can tell one repeatable lane break from another without shell access to
+        whichever validator happened to claim the ticket.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="longmem_run_http_status",
+                failure_stage="running_confirmation",
+                failure_status=502,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_class == "longmem_run_http_status"
+            assert stored.failure_stage == "running_confirmation"
+            assert stored.failure_status == 502
+
+    async def test_a_scorer_status_of_zero_is_stored_rather_than_dropped(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """``0`` means the boundary broke before a status existed.
+
+        That is a different finding from "the reporter sent no status", and a
+        falsy check anywhere on this path would merge the two.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="longmem_run_request",
+                failure_stage="running_confirmation",
+                failure_status=0,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_status == 0
+
+    async def test_an_unsigned_scorer_status_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Stripping or forging the status must fail closed like class and stage.
+
+        Platform rebuilds the message from what it received, so a status added
+        in flight downgrades nothing: it changes the rebuilt message to v3 and
+        the v2 signature no longer verifies.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="longmem_run_http_status",
+                failure_stage="running_confirmation",
+                failure_status=502,
+                # Signed without the status: a v2 signature on a v3 payload.
+                sign_status=None,
+            ),
+        )
+
+        assert response.status_code == 401, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_status is None
+
+    async def test_a_status_without_a_scorer_class_is_rejected(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A type-derived class has no status behind it, so one would be invented.
+
+        This ledger is read by an operator deciding whether to spend the next
+        bounded canary; a fabricated status is worse than none.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="dittobench",
+                failure_stage="running_confirmation",
+                failure_status=502,
+            ),
+        )
+
+        assert response.status_code == 422, response.text
 
     async def test_signed_failure_diagnostics_are_persisted_for_operators(
         self,

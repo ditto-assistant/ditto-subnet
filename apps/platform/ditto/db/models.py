@@ -11270,6 +11270,16 @@ class ConfirmationBundleTicket(Base):
     failure_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Last progress stage the slot published before it broke, or ``unknown``."""
 
+    failure_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Bounded HTTP status behind a scorer-forwarded :attr:`failure_class`.
+
+    Only the scorer's own ``longmem_*`` classes have one, and only some of
+    those: ``0`` means the boundary broke before a status existed. Null means
+    the reporter sent no status at all -- an older reporter, or a class derived
+    from the reporter's exception type, which has no status behind it. The two
+    are deliberately distinguishable: ``0`` is a measurement, null is silence.
+    """
+
     failed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -11323,8 +11333,20 @@ class ConfirmationBundleTicket(Base):
             "failure_class IS NULL OR failure_class IN ("
             "'sandbox_oom', 'lease_revoked', 'validator_infrastructure', "
             "'platform_infrastructure', 'dittobench', 'platform', 'validator', "
-            "'evidence_schema', 'timeout', 'transport', 'unclassified')",
+            "'evidence_schema', 'timeout', 'transport', 'unclassified', "
+            "'longmem_run_http_status', 'longmem_run_malformed_json', "
+            "'longmem_run_missing_final_text', 'longmem_run_request', "
+            "'longmem_run_response_read', 'longmem_run_response_too_large', "
+            "'longmem_run_tool_endpoint', 'longmem_seed_http_status', "
+            "'longmem_seed_incomplete_ack', 'longmem_seed_malformed_json', "
+            "'longmem_seed_request', 'longmem_seed_response_read', "
+            "'longmem_seed_response_too_large')",
             name="confirmation_tickets_failure_class_check",
+        ),
+        CheckConstraint(
+            "failure_status IS NULL OR "
+            "(failure_class IS NOT NULL AND failure_status BETWEEN 0 AND 599)",
+            name="confirmation_tickets_failure_status_check",
         ),
         CheckConstraint(
             "failure_stage IS NULL OR failure_stage IN ("

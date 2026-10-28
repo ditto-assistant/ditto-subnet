@@ -4321,6 +4321,13 @@ const confirmationBundleTicketSchema = z.strictObject({
   // ticket in the same list must still parse.
   failure_class: z.string().min(1).nullable().default(null),
   failure_stage: z.string().min(1).nullable().default(null),
+  // The scorer's own bounded status behind a forwarded `longmem_*` class, so
+  // a `*_http_status` failure says WHICH status without a host log. Absent for
+  // every reporter and class that has no status behind it; `0` is the scorer's
+  // value for "broke before a status existed" and is not the same as absent.
+  // This object is strict, so the field must be declared here before Platform
+  // can return it -- an undeclared key fails the whole ticket parse.
+  failure_status: z.number().int().min(0).max(599).nullable().default(null),
   failed_at: confirmationTimestampSchema.nullable(),
   // Allowlisted Go→Python prepare-report 409. Null when prepare never ran or
   // succeeded; a consumer must not require it of historical tickets.

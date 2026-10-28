@@ -500,7 +500,20 @@
               "evidence_schema",
               "timeout",
               "transport",
-              "unclassified"
+              "unclassified",
+              "longmem_run_http_status",
+              "longmem_run_malformed_json",
+              "longmem_run_missing_final_text",
+              "longmem_run_request",
+              "longmem_run_response_read",
+              "longmem_run_response_too_large",
+              "longmem_run_tool_endpoint",
+              "longmem_seed_http_status",
+              "longmem_seed_incomplete_ack",
+              "longmem_seed_malformed_json",
+              "longmem_seed_request",
+              "longmem_seed_response_read",
+              "longmem_seed_response_too_large"
             ],
             "type": "string"
           },
@@ -522,6 +535,19 @@
               "unknown"
             ],
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "failure_status": {
+        "anyOf": [
+          {
+            "maximum": 599,
+            "minimum": 0,
+            "type": "integer"
           },
           {
             "type": "null"

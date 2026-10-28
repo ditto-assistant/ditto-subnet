@@ -55,6 +55,36 @@ class ValidatorInfrastructureError(DittobenchError):
     """
 
 
+class ConfirmationScorerError(DittobenchError):
+    """A v9 confirmation execution the trusted scorer itself classified.
+
+    ``scorer_failure_class`` is the scorer's own allowlisted
+    ``longmem_<operation>_<kind>`` slug and ``scorer_failure_status`` its
+    bounded HTTP status, both lifted off the protected scorer response. They
+    exist as attributes rather than only as message text because the hand-back
+    to Platform carries an allowlisted class, and deriving that class from the
+    exception *type* collapses every scorer break into ``dittobench`` -- which
+    is what left a repeatable lane failure readable only in one validator's
+    host logs. Attributes survive that derivation; a message suffix does not.
+
+    Deliberately a :class:`DittobenchError`: it is still a scorer failure for
+    every existing handler, and a reporter that does not know about the
+    forwarded class still classifies it by type exactly as before.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        scorer_failure_class: str,
+        scorer_failure_status: int,
+        code: str | None = None,
+        container_log_tail: str | None = None,
+    ) -> None:
+        super().__init__(*args, code=code, container_log_tail=container_log_tail)
+        self.scorer_failure_class = scorer_failure_class
+        self.scorer_failure_status = scorer_failure_status
+
+
 class LeaseDeadlineError(DittobenchError):
     """The attempt ran out of lease before the scorer returned a verdict.
 
