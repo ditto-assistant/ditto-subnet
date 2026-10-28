@@ -680,7 +680,10 @@ Holding a no-call reply back for one extra deciding turn with an advisory note
 that lists the drafted calls is not "withholding a valid reply" or replacing
 "a valid final no-call decision" under I3, when the deciding model can send
 the same reply again and that reply then ships. The deciding model still makes
-the final call. A draft or check that sees the request, the records and the
+the final call. A W7 critic's "first valid result ships" condition is met by
+the deciding model's reply after the note; it does not require the reply that
+came before the note to ship, and "reopening" that reply for the one advisory
+turn is not a ground on its own. A draft or check that sees the request, the records and the
 catalog is a declared critic under W7, which allows advisory input that the
 deciding model may reject. The host acting on the draft or check result to
 decide whether a note is shown is not, by itself, semantic selection.

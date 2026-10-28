@@ -81,7 +81,9 @@ or shape normalization), and host code never chooses, rewrites, withholds and
 replaces, or retries the reply on its own. Holding a no-call reply for one
 extra deciding turn with a note listing drafted calls, when the model can
 resend the same reply, is not withholding a valid reply; the host deciding
-whether to show the note is not semantic selection by itself. A draft step
+whether to show the note is not semantic selection by itself. The model's
+reply after the note is the first valid result that W7 requires to ship;
+reopening the pre-note reply for that one turn is not a ground. A draft step
 plus a check step is one behavior, not a second factor; resolve such I3 leads
 as refuted, not unresolved. Still charge host code that discards the reply or
 ships a draft's call or text (I3, I4), forces a tool or narrows the catalog to
