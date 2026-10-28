@@ -67,7 +67,6 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import (
     CONTAINER_LOG_TAIL_MAX_LENGTH,
     FAILURE_DETAIL_MAX_LENGTH,
-    LEGACY_FAILURE_DETAIL_MAX_LENGTH,
 )
 from ditto.api_models.validator_capabilities import (
     InferenceCalibrationRoute,
@@ -127,7 +126,6 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     Score,
     ScoreAuditEntry,
-    ScreenerHeartbeat,
     TranscriptMirrorSettingsRevision,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
@@ -137,7 +135,6 @@ from ditto.db.models import (
 )
 from ditto.db.queries.artifact_fetch_audit import (
     AUDIT_WRITE_FAILED,
-    record_artifact_fetch,
 )
 from ditto.db.queries.audit import (
     EVENT_COPY_NO_OPPORTUNITY,
@@ -161,7 +158,6 @@ from ditto.db.queries.queue_policy_settings import (
 from ditto.db.queries.retry_budget import (
     INFRA_RETRY_BACKOFF_CAP,
     MAX_AGENT_INFRA_RETRY_GRANTS,
-    MAX_INFRA_RETRY_GRANTS,
 )
 from ditto.db.queries.rollout_dispatch import ROLLOUT_DISPATCH_LOCK_KEY
 from ditto.db.queries.scoring_lease_settings import (
@@ -199,69 +195,6 @@ _BENCH_VERSION = 7
 # ``None`` and the lane answers 503 with nothing pointing at the mismatch.
 _V7_ROUTE_PROFILE = "openrouter-route-test-v1"
 _V7_CALIBRATION_MANIFEST = "c" * 64
-
-
-def test_v4_heartbeat_canonical_vector() -> None:
-    """Freeze the cross-repository v4 bytes independently of test helpers."""
-    agent_id = UUID("11111111-2222-4333-8444-555555555555")
-    progress = BenchmarkProgress(
-        stage="running_benchmark",
-        completed=51,
-        total=114,
-        ticket_deadline=_TICKET_DEADLINE,
-    )
-    actual = _heartbeat_signing_message(
-        validator_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-        software_version="1.2.3",
-        protocol_version=4,
-        code_digest="ab" * 32,
-        state="running_benchmark",
-        active_agent_id=agent_id,
-        system_metrics=None,
-        benchmark_progress=progress,
-        timestamp=1784020800,
-    )
-    assert actual == (
-        b"ditto-validator-heartbeat:v4:"
-        b"5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY:"
-        b"1.2.3:4:"
-        b"abababababababababababababababababababababababababababababababab:"
-        b"running_benchmark:11111111-2222-4333-8444-555555555555:-:"
-        b"running_benchmark,51,114,2030-01-01T00:00:00.000000+00:00:"
-        b"1784020800"
-    )
-
-
-@pytest.mark.parametrize(
-    ("protocol_version", "domain", "suffix"),
-    [
-        (1, "v1", "idle:1784020800"),
-        (2, "v2", "idle::1784020800"),
-        (3, "v3", "idle::-:1784020800"),
-        (5, "v4", "idle::-:-:1784020800"),
-        (6, "v4", "idle::-:-:1784020800"),
-    ],
-)
-def test_v1_v2_v3_v5_v6_heartbeat_domains_are_frozen(
-    protocol_version: int, domain: str, suffix: str
-) -> None:
-    hotkey = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-    digest = "ab" * 32
-    actual = _heartbeat_signing_message(
-        validator_hotkey=hotkey,
-        software_version="1.2.3",
-        protocol_version=protocol_version,
-        code_digest=digest,
-        state="idle",
-        timestamp=1784020800,
-    )
-    assert (
-        actual
-        == (
-            f"ditto-validator-heartbeat:{domain}:{hotkey}:1.2.3:"
-            f"{protocol_version}:{digest}:{suffix}"
-        ).encode()
-    )
 
 
 def test_v7_heartbeat_matches_shared_cross_repo_vector() -> None:
@@ -1750,151 +1683,6 @@ def _screener_heartbeat_payload(
 
 
 class TestHeartbeat:
-    async def test_v8_requires_signed_scorer_capability_and_v7_rejects_it(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-        scorer = {
-            "status": "fresh_verified",
-            "supported_bench_versions": [2, 3],
-            "observed_at": int(datetime.now(UTC).timestamp()),
-            "software_version": "1.2.2",
-            "source_revision": "2" * 40,
-        }
-        capabilities = {**_V7_CAPABILITIES, "scorer_benchmarks": scorer}
-
-        rejected_v7 = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=7,
-                capabilities=capabilities,
-                stack=_V7_STACK,
-            ),
-        )
-        assert rejected_v7.status_code == 422
-
-        accepted_v8 = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=8,
-                capabilities=capabilities,
-                stack=_V7_STACK,
-            ),
-        )
-        assert accepted_v8.status_code == 200, accepted_v8.text
-        async with session_maker() as session:
-            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
-            assert row is not None
-            assert row.protocol_version == 8
-            assert row.capabilities is not None
-            assert row.capabilities["scorer_benchmarks"][
-                "supported_bench_versions"
-            ] == [2, 3]
-
-    async def test_v9_persists_and_publishes_component_stack_health(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        accepted = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=9,
-                capabilities=_V9_CAPABILITIES,
-                stack=_V7_STACK,
-                stack_health=_V9_STACK_HEALTH,
-            ),
-        )
-        assert accepted.status_code == 200, accepted.text
-
-        expected_health = ValidatorStackHealth.model_validate_json(
-            json.dumps(_V9_STACK_HEALTH)
-        ).model_dump(mode="json", exclude_none=True)
-        async with session_maker() as session:
-            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
-            assert row is not None
-            assert row.protocol_version == 9
-            assert row.stack_health == expected_health
-
-        public = (await client.get("/api/v1/public/validators")).json()["validators"][0]
-        health = public["stack_health"]
-        assert health is not None
-        assert health["ditto_subnet"]["health"] == "healthy"
-        assert health["sandbox_docker"]["health"] == "unknown"
-        assert health["model_relay"]["health"] == "identity_mismatch"
-        assert health["model_relay"]["observed_identity"]["source_revision"] == "c" * 40
-        assert health["pylon"]["health"] == "degraded"
-        assert health["ollama"]["health"] == "unreachable"
-        # Probe URLs and host identity have no schema slot; belt-and-braces
-        # regression that nothing network-shaped leaked into the public view.
-        assert "://" not in json.dumps(health)
-
-    async def test_v9_requires_stack_health_and_v8_rejects_it(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        missing = _heartbeat_payload(
-            protocol_version=9,
-            capabilities=_V9_CAPABILITIES,
-            stack=_V7_STACK,
-            stack_health=_V9_STACK_HEALTH,
-        )
-        missing.pop("stack_health")
-        assert (
-            await client.post(
-                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=missing
-            )
-        ).status_code == 422
-
-        downgraded = _heartbeat_payload(
-            protocol_version=8,
-            capabilities=_V9_CAPABILITIES,
-            stack=_V7_STACK,
-        )
-        downgraded["stack_health"] = _V9_STACK_HEALTH
-        assert (
-            await client.post(
-                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=downgraded
-            )
-        ).status_code == 422
-
-        tampered = _heartbeat_payload(
-            protocol_version=9,
-            capabilities=_V9_CAPABILITIES,
-            stack=_V7_STACK,
-            stack_health=_V9_STACK_HEALTH,
-        )
-        upgraded_health = json.loads(json.dumps(_V9_STACK_HEALTH))
-        upgraded_health["ollama"] = {
-            "health": "healthy",
-            "required": True,
-            "observed_at": 1_784_017_200,
-            "ready": True,
-            "model_ready": True,
-        }
-        tampered["stack_health"] = upgraded_health
-        assert (
-            await client.post(
-                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
-            )
-        ).status_code == 401
-
     async def test_v23_persists_and_publicly_projects_only_closed_updater_state(
         self,
         app: FastAPI,
@@ -2744,75 +2532,6 @@ class TestHeartbeat:
             assert stored.benchmark_capacity is None
             assert stored.active_agent_id is None
 
-    async def test_v10_accepts_v7_scorer_advertisement_without_v11_calibration(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A newer source scorer must not invalidate its legacy validator."""
-        _install_db(app, session_maker)
-        _install_chain(app)
-        capabilities = json.loads(json.dumps(_V9_CAPABILITIES))
-        capabilities["scorer_benchmarks"]["supported_bench_versions"] = [2, 7]
-        capacity = {
-            "configured_slots": 1,
-            "healthy_slots": ["slot-0"],
-            "admission": "accepting",
-            "active": [],
-        }
-
-        accepted = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=10,
-                capabilities=capabilities,
-                stack=_V7_STACK,
-                stack_health=_V9_STACK_HEALTH,
-                benchmark_capacity=capacity,
-            ),
-        )
-        assert accepted.status_code == 200, accepted.text
-
-        rejected_v11 = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=11,
-                capabilities=capabilities,
-                stack=_V7_STACK,
-                stack_health=_V9_STACK_HEALTH,
-                benchmark_capacity=capacity,
-            ),
-        )
-        assert rejected_v11.status_code == 422, rejected_v11.text
-        assert rejected_v11.json()["message"] == "request validation failed"
-
-        capabilities["scorer_benchmarks"]["v7_calibration"] = {
-            "manifest_sha256": "c" * 64,
-            "supported_routes": [
-                {
-                    "provider": "openrouter",
-                    "profile_revision": "openrouter-route-8efde5ce9f5a4e58-v1",
-                    "model": "openai/gpt-oss-20b",
-                }
-            ],
-        }
-        capabilities["ticket_inference"] = True
-        accepted_v11 = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=11,
-                capabilities=capabilities,
-                stack=_V7_STACK,
-                stack_health=_V9_STACK_HEALTH,
-                benchmark_capacity=capacity,
-            ),
-        )
-        assert accepted_v11.status_code == 200, accepted_v11.text
-
     async def test_v15_publishes_the_evidence_behind_the_scorer_status(
         self,
         app: FastAPI,
@@ -3000,38 +2719,6 @@ class TestHeartbeat:
         public = (await client.get("/api/v1/public/validators")).json()["validators"][0]
         assert public["stack_health"] is None
 
-    async def test_v7_persists_and_publishes_typed_capabilities(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-        payload = _heartbeat_payload(
-            protocol_version=7,
-            capabilities=_V7_CAPABILITIES,
-            stack=_V7_STACK,
-        )
-
-        response = await client.post(
-            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=payload
-        )
-
-        assert response.status_code == 200, response.text
-        async with session_maker() as session:
-            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
-            assert row is not None
-            assert row.capabilities == _V7_CAPABILITIES
-            expected_stack = ValidatorStackIdentity.model_validate(
-                _V7_STACK
-            ).model_dump(mode="json")
-            assert row.stack == expected_stack
-        public = (await client.get("/api/v1/public/validators")).json()["validators"][0]
-        assert public["capabilities"] == _V7_CAPABILITIES
-        assert public["stack"] == expected_stack
-        assert "signature" not in public
-
     async def test_v7_rejects_missing_contradictory_and_tampered_identity(
         self,
         app: FastAPI,
@@ -3162,46 +2849,6 @@ class TestHeartbeat:
         assert any("stalled" in reason for reason in validator["health_reasons"]), (
             validator["health_reasons"]
         )
-
-    async def test_v2_reports_current_agent_publicly(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        payload = _heartbeat_payload(
-            protocol_version=2,
-            state="running_benchmark",
-            active_agent_id=agent_id,
-        )
-
-        response = await client.post(
-            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=payload
-        )
-        assert response.status_code == 200, response.text
-        public = (await client.get("/api/v1/public/validators")).json()
-        assert public["validators"][0]["active_agent_id"] == str(agent_id)
-        active_benchmark = public["validators"][0]["active_benchmark"]
-        started_at = datetime.fromisoformat(
-            active_benchmark.pop("started_at").replace("Z", "+00:00")
-        )
-        assert started_at.tzinfo == UTC
-        assert active_benchmark == {
-            "slot_id": "slot-0",
-            "agent_id": str(agent_id),
-            "agent_name": "alpha-agent",
-            "bench_version": _BENCH_VERSION,
-            "stage": None,
-            "completed_checks": None,
-            "total_checks": None,
-            "percent": None,
-            "stalled": False,
-            "purpose": "canonical_quorum",
-        }
 
     async def test_operations_snapshot_is_atomic_and_synchronized(
         self,
@@ -3483,478 +3130,6 @@ class TestHeartbeat:
         activity = (await client.get("/api/v1/public/activity")).json()
         assert activity["entries"][0]["active_benchmarks"] == []
 
-    async def test_v4_fail_open_regression_omission_and_signature_tampering(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        timestamp = int(datetime.now(UTC).timestamp())
-
-        initial = _heartbeat_payload(
-            protocol_version=4,
-            timestamp=timestamp,
-            state="running_benchmark",
-            active_agent_id=agent_id,
-            benchmark_progress=_progress("running_benchmark", completed=51, total=114),
-        )
-        assert (
-            await client.post(
-                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=initial
-            )
-        ).status_code == 200
-
-        # A same-run regression must NOT be rejected (fail-open). The signed
-        # liveness report is accepted (200) and the public display keeps the last
-        # good progress (51/114) instead of moving backward.
-        regressions = [
-            _progress("starting_harness"),
-            _progress("running_benchmark", completed=40, total=114),
-            _progress("running_benchmark", completed=52, total=120),
-        ]
-        for offset, progress in enumerate(regressions, start=1):
-            accepted = await client.post(
-                "/api/v1/validator/heartbeat",
-                headers=_AUTH_HEADER,
-                json=_heartbeat_payload(
-                    protocol_version=4,
-                    timestamp=timestamp + offset,
-                    state="running_benchmark",
-                    active_agent_id=agent_id,
-                    benchmark_progress=progress,
-                ),
-            )
-            assert accepted.status_code == 200, accepted.text
-            shown = (await client.get("/api/v1/public/validators")).json()[
-                "validators"
-            ][0]["active_benchmark"]
-            assert shown["stage"] == "running_benchmark"
-            assert shown["completed_checks"] == 51
-            assert shown["total_checks"] == 114
-
-        omitted = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 4,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-            ),
-        )
-        assert omitted.status_code == 200, omitted.text
-        public_unknown = (await client.get("/api/v1/public/validators")).json()
-        active_benchmark = public_unknown["validators"][0]["active_benchmark"]
-        started_at = datetime.fromisoformat(
-            active_benchmark.pop("started_at").replace("Z", "+00:00")
-        )
-        assert started_at.tzinfo == UTC
-        assert active_benchmark == {
-            "slot_id": "slot-0",
-            "agent_id": str(agent_id),
-            "agent_name": "alpha-agent",
-            "bench_version": _BENCH_VERSION,
-            "stage": None,
-            "completed_checks": None,
-            "total_checks": None,
-            "percent": None,
-            "stalled": False,
-            "purpose": "canonical_quorum",
-        }
-
-        downgraded = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=3,
-                timestamp=timestamp + 5,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-            ),
-        )
-        assert downgraded.status_code == 200, downgraded.text
-        public_unknown = (await client.get("/api/v1/public/validators")).json()
-        assert public_unknown["validators"][0]["active_benchmark"]["stage"] is None
-
-        lower_after_downgrade = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 6,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress(
-                    "running_benchmark", completed=50, total=114
-                ),
-            ),
-        )
-        # Fail-open: a regression after the reported flag toggled is accepted and
-        # the stored progress floor is kept.
-        assert lower_after_downgrade.status_code == 200, lower_after_downgrade.text
-
-        tampered = _heartbeat_payload(
-            protocol_version=4,
-            timestamp=timestamp + 7,
-            state="running_benchmark",
-            active_agent_id=agent_id,
-            benchmark_progress=_progress("running_benchmark", completed=52, total=114),
-        )
-        assert isinstance(tampered["benchmark_progress"], dict)
-        tampered["benchmark_progress"]["completed"] = 53
-        rejected = await client.post(
-            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
-        )
-        assert rejected.status_code == 401
-
-        cleared = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(protocol_version=4, timestamp=timestamp + 8),
-        )
-        assert cleared.status_code == 200, cleared.text
-        fleet = (await client.get("/api/v1/public/validators")).json()
-        assert fleet["validators"][0]["active_benchmark"] is None
-
-        lower_after_idle = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 9,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress(
-                    "running_benchmark", completed=1, total=114
-                ),
-            ),
-        )
-        # Fail-open: accepted even though it regresses the stored floor.
-        assert lower_after_idle.status_code == 200, lower_after_idle.text
-
-        other_agent_id = await _seed_agent(
-            session_maker, status=AgentStatus.EVALUATING, name="new-agent"
-        )
-        async with session_maker() as session, session.begin():
-            previous = await session.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert previous is not None
-            previous.status = TicketStatus.SCORED
-        await _seed_ticket(session_maker, other_agent_id)
-        different_agent = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 10,
-                state="running_benchmark",
-                active_agent_id=other_agent_id,
-                benchmark_progress=_progress(
-                    "running_benchmark", completed=1, total=114
-                ),
-            ),
-        )
-        assert different_agent.status_code == 200, different_agent.text
-
-    async def test_v4_failed_retrying_explicitly_restarts_at_preparing(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        timestamp = int(datetime.now(UTC).timestamp())
-
-        sequence = [
-            _progress("running_benchmark", completed=51, total=114),
-            _progress("failed_retrying", completed=51, total=114),
-        ]
-        for offset, progress in enumerate(sequence):
-            response = await client.post(
-                "/api/v1/validator/heartbeat",
-                headers=_AUTH_HEADER,
-                json=_heartbeat_payload(
-                    protocol_version=4,
-                    timestamp=timestamp + offset,
-                    state="running_benchmark",
-                    active_agent_id=agent_id,
-                    benchmark_progress=progress,
-                ),
-            )
-            assert response.status_code == 200, response.text
-
-        same_lease_restart = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 2,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress("preparing"),
-            ),
-        )
-        assert same_lease_restart.status_code == 200, same_lease_restart.text
-
-        resumed = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 3,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress(
-                    "running_benchmark", completed=1, total=114
-                ),
-            ),
-        )
-        assert resumed.status_code == 200, resumed.text
-
-        new_deadline = _TICKET_DEADLINE + timedelta(hours=1)
-        await _seed_ticket(session_maker, agent_id, deadline=new_deadline)
-        restarted = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 4,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress("preparing", ticket_deadline=new_deadline),
-            ),
-        )
-        assert restarted.status_code == 200, restarted.text
-
-    async def test_v4_next_confirmation_seed_restarts_at_preparing(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # Multi-seed confirmation runs several evaluations under ONE ticket lease.
-        # A completed run (finalizing) followed by the next seed (preparing) must
-        # rebaseline, not read as a regression — otherwise every heartbeat of the
-        # next seed is rejected and the validator freezes into heartbeat_stale
-        # while it is in fact scoring normally.
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        timestamp = int(datetime.now(UTC).timestamp())
-
-        sequence = [
-            _progress("running_benchmark", completed=114, total=114),
-            _progress("finalizing", completed=114, total=114),
-            # Next confirmation seed in the same lease: fresh run, progress resets.
-            _progress("preparing"),
-            _progress("running_benchmark", completed=1, total=114),
-        ]
-        for offset, progress in enumerate(sequence):
-            response = await client.post(
-                "/api/v1/validator/heartbeat",
-                headers=_AUTH_HEADER,
-                json=_heartbeat_payload(
-                    protocol_version=4,
-                    timestamp=timestamp + offset,
-                    state="running_benchmark",
-                    active_agent_id=agent_id,
-                    benchmark_progress=progress,
-                ),
-            )
-            assert response.status_code == 200, response.text
-
-    @pytest.mark.parametrize("status", [AgentStatus.SCORED, AgentStatus.LIVE])
-    async def test_v4_preserves_rollout_progress_for_scored_and_live_agents(
-        self,
-        status: AgentStatus,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=status)
-        await _seed_ticket(session_maker, agent_id, bench_version=_BENCH_VERSION)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress(
-                    "running_benchmark", completed=51, total=114
-                ),
-            ),
-        )
-
-        assert response.status_code == 200, response.text
-        fleet = (await client.get("/api/v1/public/validators")).json()
-        validator = fleet["validators"][0]
-        assert validator["active_agent_id"] == str(agent_id)
-        assert validator["active_benchmark"]["stage"] == "running_benchmark"
-        assert validator["active_benchmark"]["bench_version"] == _BENCH_VERSION
-
-        pipeline = (
-            await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
-        ).json()
-        attempt = pipeline["validation_attempts"][0]
-        assert attempt["bench_version"] == _BENCH_VERSION
-        assert attempt["actively_running"] is True
-        assert attempt["benchmark_progress"]["completed_checks"] == 51
-
-    async def test_v4_drops_progress_for_non_scoreable_agent_with_live_ticket(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress("preparing"),
-            ),
-        )
-
-        assert response.status_code == 200, response.text
-        fleet = (await client.get("/api/v1/public/validators")).json()
-        validator = fleet["validators"][0]
-        assert validator["active_agent_id"] is None
-        assert validator["active_benchmark"] is None
-
-    async def test_v4_drops_progress_without_matching_live_ticket_but_stays_live(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        timestamp = int(datetime.now(UTC).timestamp())
-
-        missing = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress("preparing"),
-            ),
-        )
-        assert missing.status_code == 200, missing.text
-        assert missing.json()["accepted"] is True
-
-        async with session_maker() as session:
-            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
-            assert heartbeat is not None
-            assert heartbeat.state == "running_benchmark"
-            assert heartbeat.active_agent_id is None
-            assert heartbeat.benchmark_progress_reported is False
-
-        await _seed_ticket(session_maker, agent_id)
-        wrong_deadline = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp + 1,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress(
-                    "preparing", ticket_deadline=_TICKET_DEADLINE + timedelta(days=1)
-                ),
-            ),
-        )
-        assert wrong_deadline.status_code == 200, wrong_deadline.text
-        assert wrong_deadline.json()["accepted"] is True
-
-        async with session_maker() as session:
-            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
-            assert heartbeat is not None
-            assert heartbeat.active_agent_id is None
-            assert heartbeat.benchmark_progress_reported is False
-            ticket = await session.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            assert ticket.status == TicketStatus.ISSUED
-            assert ticket.deadline.replace(tzinfo=UTC) == _TICKET_DEADLINE
-
-    async def test_v4_expired_ticket_progress_cannot_block_heartbeat_recovery(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        deadline = datetime.now(UTC) - timedelta(minutes=1)
-        await _seed_ticket(session_maker, agent_id, deadline=deadline)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        timestamp = int(datetime.now(UTC).timestamp())
-
-        recovered = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers=_AUTH_HEADER,
-            json=_heartbeat_payload(
-                protocol_version=4,
-                timestamp=timestamp,
-                state="running_benchmark",
-                active_agent_id=agent_id,
-                benchmark_progress=_progress(
-                    "running_benchmark",
-                    completed=51,
-                    total=114,
-                    ticket_deadline=deadline,
-                ),
-            ),
-        )
-
-        assert recovered.status_code == 200, recovered.text
-        assert recovered.json()["accepted"] is True
-        fleet = (await client.get("/api/v1/public/validators")).json()
-        validator = fleet["validators"][0]
-        assert validator["availability"] == "available"
-        assert validator["online"] is True
-        assert validator["active_agent_id"] is None
-        assert validator["active_benchmark"] is None
-
-        async with session_maker() as session:
-            ticket = await session.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
-            assert ticket is not None
-            assert ticket.status == TicketStatus.ISSUED
-            assert ticket.deadline.replace(tzinfo=UTC) == deadline
-            assert heartbeat is not None
-            assert heartbeat.seen_at is not None
-            assert heartbeat.active_agent_id is None
-            assert heartbeat.benchmark_progress is None
-            assert heartbeat.benchmark_progress_reported is False
-
     async def test_v3_binds_coarse_metrics_and_public_response_is_redacted(
         self,
         app: FastAPI,
@@ -4080,115 +3255,6 @@ class TestHeartbeat:
         )
         assert response.status_code == 401
         assert response.json()["error_code"] == ERROR_CODE_VALIDATOR_AUTH
-
-    @pytest.mark.e2e
-    async def test_mixed_fleet_and_malformed_telemetry(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Exercise reporter ingestion through both public fleet views."""
-        _install_db(app, session_maker)
-        _install_chain(app)
-        now = datetime.now(UTC)
-        timestamp = int(now.timestamp())
-        metrics = {**_SYSTEM_METRICS, "collected_at": timestamp}
-
-        old_validator = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers={"X-Validator-Hotkey": _KEYPAIRS[1].ss58_address},
-            json=_heartbeat_payload(keypair=_KEYPAIRS[1], protocol_version=2),
-        )
-        assert old_validator.status_code == 200, old_validator.text
-
-        metric_validator = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers={"X-Validator-Hotkey": _KEYPAIRS[2].ss58_address},
-            json=_heartbeat_payload(
-                keypair=_KEYPAIRS[2],
-                protocol_version=3,
-                timestamp=timestamp,
-                system_metrics=metrics,
-            ),
-        )
-        assert metric_validator.status_code == 200, metric_validator.text
-
-        screener_headers = {
-            "Authorization": "Bearer test-screener-token-at-least-32-characters",
-            "X-Screener-Hotkey": _KEYPAIR.ss58_address,
-        }
-        healthy_screener = await client.post(
-            "/api/v1/screener/heartbeat",
-            headers=screener_headers,
-            json=_screener_heartbeat_payload(
-                timestamp=timestamp, system_metrics=metrics
-            ),
-        )
-        assert healthy_screener.status_code == 200, healthy_screener.text
-
-        stale_at = now - timedelta(minutes=10)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ScreenerHeartbeat(
-                    screener_hotkey=_DAVE.ss58_address,
-                    software_version="0.4.1",
-                    protocol_version=1,
-                    policy_version=SCREENING_POLICY_VERSION,
-                    state="polling",
-                    active_agent_id=None,
-                    first_seen_at=stale_at - timedelta(hours=2),
-                    system_metrics=metrics,
-                    reported_at=stale_at,
-                    seen_at=stale_at,
-                    signature="ab" * 64,
-                )
-            )
-
-        additive = _heartbeat_payload(
-            keypair=_KEYPAIRS[2],
-            protocol_version=3,
-            timestamp=timestamp,
-            system_metrics=metrics,
-        )
-        additive_metrics = additive["system_metrics"]
-        assert isinstance(additive_metrics, dict)
-        additive_metrics["hostname"] = "must-never-be-published"
-        accepted = await client.post(
-            "/api/v1/validator/heartbeat",
-            headers={"X-Validator-Hotkey": _KEYPAIRS[2].ss58_address},
-            json=additive,
-        )
-        assert accepted.status_code == 200, accepted.text
-
-        validators = (await client.get("/api/v1/public/validators")).json()
-        assert validators["reported_count"] == 2
-        old = next(v for v in validators["validators"] if v["protocol_version"] == 2)
-        current = next(
-            v for v in validators["validators"] if v["protocol_version"] == 3
-        )
-        assert old["availability"] == "available"
-        assert old["system_metrics"] is None
-        assert current["availability"] == "available"
-        assert "hostname" not in json.dumps(current)
-        # Both are legacy reporters (protocol 2 and 3) and the floor for
-        # advertising v7 is protocol 12, so neither can serve the era being
-        # scored and both are graded on that before their host metrics are
-        # considered at all. The metric-driven split this pair used to show --
-        # "unknown" with nothing reported, "healthy" with good numbers -- is no
-        # longer expressible by any protocol old enough to omit them. What the
-        # metrics still decide is whether they are PUBLISHED, which is asserted
-        # above and is the redaction claim this test carries.
-        assert old["health"] == "critical"
-        assert current["health"] == "critical"
-
-        screeners = (await client.get("/api/v1/public/screeners")).json()
-        assert screeners["reported_count"] == 2
-        available = next(s for s in screeners["screeners"] if s["online"])
-        stale = next(s for s in screeners["screeners"] if not s["online"])
-        assert available["availability"] == "available"
-        assert available["health"] == "healthy"
-        assert stale["availability"] == "stale"
 
     async def test_rejects_tampered_digest(
         self,
@@ -4395,35 +3461,6 @@ class TestArtifactFetchAudit:
             assert (
                 await s.scalar(select(func.count()).select_from(ArtifactFetchAudit))
             ) == 0
-
-    async def test_audit_write_failure_is_swallowed_and_logged(
-        self,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        """The helper itself never raises, and never fails silently."""
-        # Reproduce the xdist order where earlier logging configuration left
-        # this already-imported named logger disabled in the worker.
-        monkeypatch.setattr(
-            logging.getLogger("ditto.db.queries.artifact_fetch_audit"),
-            "disabled",
-            True,
-        )
-        with _capture_artifact_audit_logs(caplog):
-            async with session_maker() as s:
-                wrote = await record_artifact_fetch(
-                    s,
-                    agent_id=uuid4(),
-                    endpoint="validator.agent_artifact",
-                    requester_kind="validator",
-                    # Violates the requester_id presence CHECK for a non-public
-                    # kind, so the INSERT fails inside the database.
-                    requester_id=None,
-                )
-
-        assert wrote is False
-        assert AUDIT_WRITE_FAILED in caplog.text
 
 
 class TestArtifact:
@@ -5072,60 +4109,6 @@ class TestRequestJob:
         issue.assert_not_awaited()
         session.scalar.assert_not_awaited()
 
-    async def test_source_backfill_never_tickets_a_retired_era(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """After activation the source era is not last, it is closed.
-
-        Every other gate is deliberately wide open here -- the desired era is
-        drained, the cohort is complete, the heartbeat serves v6 -- so the only
-        thing that can decline is the era itself. This is the shape the fleet
-        was actually in when three of one validator's four slots were running
-        v6 benchmarks whose scores no quorum would ever accept.
-        """
-        now = datetime.now(UTC)
-        rollout = MagicMock(
-            rollout_id=uuid4(), from_version=6, desired_version=7, cohort_size=10
-        )
-        session = AsyncMock()
-        session.get_bind = MagicMock(
-            return_value=MagicMock(dialect=MagicMock(name="sqlite"))
-        )
-        session.scalar = AsyncMock(return_value=None)
-        issue = AsyncMock(return_value=MagicMock())
-        outstanding = AsyncMock(return_value=False)
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.heartbeat_supports_version",
-            MagicMock(return_value=True),
-        )
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.rollout_cohort_complete",
-            AsyncMock(return_value=True),
-        )
-        monkeypatch.setattr("ditto.api_server.endpoints.validator.issue_ticket", issue)
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.desired_era_work_outstanding",
-            outstanding,
-        )
-
-        blocked = await _issue_source_backfill_ticket(
-            session,
-            rollout=rollout,
-            heartbeat=MagicMock(),
-            validator_hotkey="validator-a",
-            now=now,
-            active_version=7,
-            artifact_mode="screened_only",
-            validator_running_benchmark=False,
-            slot_id="slot-1",
-            carryover_settings=PrevGenCarryoverSettings(enabled=True),
-        )
-
-        assert blocked is None
-        issue.assert_not_awaited()
-        # Refused on the era, before the priority question is even asked.
-        outstanding.assert_not_awaited()
-
     async def test_source_backfill_honors_relaxed_open_rollout_policy(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -5187,72 +4170,6 @@ class TestRequestJob:
         assert ticket is issued
         complete.assert_not_awaited()
         issue.assert_awaited_once()
-
-    async def test_no_operator_setting_can_reopen_the_retired_era_backfill(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """There is no field left that turns a retired era back on.
-
-        This test used to assert the opposite: one field
-        (``allow_retired_era_backfill``) re-opened the lane, so the fix was
-        undoable without a deploy. That knob was reachable from Backroom, which
-        made "v6 is closed" a statement about a default rather than about the
-        system. v2-v6 are retired for good, so the widest carryover settings the
-        model can still express must not move this lane at all.
-        """
-        now = datetime.now(UTC)
-        rollout = MagicMock(
-            rollout_id=uuid4(), from_version=6, desired_version=7, cohort_size=10
-        )
-        session = AsyncMock()
-        session.get_bind = MagicMock(
-            return_value=MagicMock(dialect=MagicMock(name="sqlite"))
-        )
-        session.scalar = AsyncMock(return_value=None)
-        session.scalars = AsyncMock(
-            return_value=MagicMock(all=MagicMock(return_value=[]))
-        )
-        issued = MagicMock()
-        issue = AsyncMock(return_value=issued)
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.heartbeat_supports_version",
-            MagicMock(return_value=True),
-        )
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.rollout_cohort_complete",
-            AsyncMock(return_value=True),
-        )
-        monkeypatch.setattr("ditto.api_server.endpoints.validator.issue_ticket", issue)
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.desired_era_work_outstanding",
-            AsyncMock(return_value=False),
-        )
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator._desired_era_capable_hotkeys",
-            AsyncMock(return_value={"validator-a"}),
-        )
-
-        ticket = await _issue_source_backfill_ticket(
-            session,
-            rollout=rollout,
-            heartbeat=MagicMock(),
-            validator_hotkey="validator-a",
-            now=now,
-            active_version=7,
-            artifact_mode="screened_only",
-            validator_running_benchmark=False,
-            slot_id="slot-1",
-            carryover_settings=PrevGenCarryoverSettings(
-                enabled=True,
-                include_exhausted=True,
-                dedupe_scope="none",
-                require_cohort_complete=False,
-                require_desired_era_drained=False,
-            ),
-        )
-
-        assert ticket is None
-        issue.assert_not_awaited()
 
     async def test_source_backfill_will_not_resume_a_retired_era_lease(
         self, monkeypatch: pytest.MonkeyPatch
@@ -5320,285 +4237,6 @@ class TestRequestJob:
         issue.assert_not_awaited()
         # Refused on the era, before the resume lookup or the priority question.
         outstanding.assert_not_awaited()
-
-    async def test_source_backfill_waits_for_top_ten_then_reuses_v6_allocator(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        now = datetime.now(UTC)
-        rollout = MagicMock(
-            from_version=_BENCH_VERSION,
-            desired_version=_BENCH_VERSION + 1,
-            cohort_size=10,
-        )
-        heartbeat = MagicMock()
-        session = AsyncMock()
-        session.get_bind = MagicMock(
-            return_value=MagicMock(dialect=MagicMock(name="sqlite"))
-        )
-        complete = AsyncMock(side_effect=(False, True))
-        issued = MagicMock()
-        issue = AsyncMock(return_value=issued)
-        supports_version = MagicMock(return_value=True)
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.heartbeat_supports_version",
-            supports_version,
-        )
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.validator.rollout_cohort_complete", complete
-        )
-        monkeypatch.setattr("ditto.api_server.endpoints.validator.issue_ticket", issue)
-
-        blocked = await _issue_source_backfill_ticket(
-            session,
-            rollout=rollout,
-            heartbeat=heartbeat,
-            validator_hotkey="validator-a",
-            now=now,
-            active_version=_BENCH_VERSION,
-            artifact_mode="screened_only",
-            validator_running_benchmark=False,
-            slot_id="slot-1",
-            carryover_settings=PrevGenCarryoverSettings(enabled=True),
-        )
-        assert blocked is None
-        issue.assert_not_awaited()
-
-        ticket = await _issue_source_backfill_ticket(
-            session,
-            rollout=rollout,
-            heartbeat=heartbeat,
-            validator_hotkey="validator-a",
-            now=now,
-            active_version=_BENCH_VERSION,
-            artifact_mode="screened_only",
-            validator_running_benchmark=False,
-            slot_id="slot-1",
-            carryover_settings=PrevGenCarryoverSettings(enabled=True),
-        )
-        assert ticket is issued
-        supports_version.assert_any_call(heartbeat, now=now, version=_BENCH_VERSION)
-        issue.assert_awaited_once_with(
-            session,
-            validator_hotkey="validator-a",
-            now=now,
-            ttl=timedelta(minutes=180),
-            bench_version=_BENCH_VERSION,
-            artifact_mode="screened_only",
-            validator_running_benchmark=False,
-            slot_id="slot-1",
-            # The retired-era lane answers to the same operator ceiling as the
-            # desired-era one; a backfill slot is still fleet capacity.
-            owner_concurrent_submission_limit=2,
-            # And to the same similarity budget, for the same reason: a family
-            # that can spill onto the retired-era lane has simply moved the
-            # monopoly rather than lost it. This call site names no policy, so
-            # the helper's default (the rail off) is what reaches the allocator.
-            similarity_policy=None,
-            similarity_concurrent_submission_limit=1,
-            efficiency_config=None,
-        )
-
-    async def test_activated_v7_retires_v6_permanently(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """v6 is retired, and there is no longer a knob that un-retires it.
-
-        The rollout below has ACTIVATED, so no v6 score will ever join a quorum
-        again, and every ticket the source-backfill lane could issue here is a
-        validator slot spent on a number nobody will read.
-
-        This test used to continue past the assertions below: it turned on
-        ``allow_retired_era_backfill`` and asserted the whole v6 contract came
-        back -- lease, resume, quorum, a finalized v6 ledger entry. That half is
-        gone with the setting. It was the proof that "v6 is closed" was a
-        statement about a default rather than about the system, which is exactly
-        what the floor replaced. What survives is the half that is still true,
-        and now permanently: the lane issues nothing, and nothing can ask it to.
-        """
-        now = datetime.now(UTC)
-        cohort = (
-            await _seed_top5_emission_set(
-                session_maker,
-                bench_version=7,
-                seed_heartbeats=False,
-            )
-        )[:5]
-        source_agent = await _seed_agent(
-            session_maker,
-            status=AgentStatus.EVALUATING,
-            name="waiting-v6",
-            created_at=now - timedelta(days=1),
-        )
-        capabilities = {
-            **_V7_CAPABILITIES,
-            "require_screened_image": True,
-            "source_build_fallback": False,
-            "ticket_inference": True,
-            "signed_score_quorum": True,
-            "scorer_benchmarks": {
-                "status": "fresh_verified",
-                "supported_bench_versions": [6, 7],
-                "observed_at": int(now.timestamp()),
-                "software_version": "1.2.2",
-                "source_revision": "2" * 40,
-                "v7_calibration": {
-                    "manifest_sha256": "c" * 64,
-                    "supported_routes": [
-                        {
-                            "provider": "openrouter",
-                            "profile_revision": "openrouter-route-test-v1",
-                            "model": "openai/gpt-oss-20b",
-                        }
-                    ],
-                },
-            },
-        }
-        await _seed_validator_heartbeat(
-            session_maker,
-            protocol_version=12,
-            capabilities=capabilities,
-            stack=_V7_STACK,
-        )
-        source_only_capabilities = {
-            **capabilities,
-            "ticket_inference": False,
-            "scorer_benchmarks": {
-                "status": "fresh_verified",
-                "supported_bench_versions": [6],
-                "observed_at": int(now.timestamp()),
-                "software_version": "1.2.2",
-                "source_revision": "2" * 40,
-            },
-        }
-        await _seed_validator_heartbeat(
-            session_maker,
-            keypair=_DAVE,
-            protocol_version=12,
-            capabilities=source_only_capabilities,
-            stack=_V7_STACK,
-        )
-        # The v6 -> v7 activation is already on record -- the autouse
-        # ``_current_era`` fixture seeds it and (from_version, desired_version)
-        # is unique -- so attach the cohort to that row instead of inserting a
-        # duplicate transition.
-        async with session_maker() as probe:
-            rollout_id = await probe.scalar(
-                select(BenchmarkRollout.rollout_id).where(
-                    BenchmarkRollout.desired_version == _BENCH_VERSION
-                )
-            )
-        assert rollout_id is not None
-        # The v6 rows this test needs are HISTORY. In production they are
-        # grandfathered by the NOT VALID floor; a fresh test database has to
-        # write them beneath a lifted floor, which the helper restores before
-        # the assertions run against a live one.
-        async with (
-            session_maker() as session,
-            retired_era_writes_allowed(session),
-            session.begin(),
-        ):
-            for position, agent_id in enumerate(cohort, start=1):
-                session.add(
-                    BenchmarkRolloutMember(
-                        rollout_id=rollout_id,
-                        agent_id=agent_id,
-                        position=position,
-                        frozen_miner_hotkey=f"5TopMiner{position - 1}",
-                        frozen_composite=1 - position / 100,
-                    )
-                )
-            agent = await session.get(Agent, source_agent)
-            assert agent is not None
-            agent.screened_image_sha256 = "12" * 32
-            agent.screened_image_size_bytes = 123
-            agent.screened_image_id = "sha256:" + "34" * 32
-            agent.screened_image_ref = f"ditto-screen/{source_agent}:latest"
-            agent.screened_image_upload_id = uuid4()
-            agent.screened_image_verified_at = now
-            session.add(
-                BenchmarkDataset(
-                    agent_id=source_agent,
-                    bench_version=6,
-                    seed=8675309,
-                    sha256="cd" * 32,
-                    run_size="full",
-                )
-            )
-            session.add(
-                ValidatorTicket(
-                    agent_id=source_agent,
-                    bench_version=6,
-                    validator_hotkey=_DAVE.ss58_address,
-                    status=TicketStatus.SCORED,
-                    issued_at=now - timedelta(minutes=10),
-                    deadline=now - timedelta(minutes=5),
-                    attempt_count=1,
-                )
-            )
-            session.add(
-                Score(
-                    agent_id=source_agent,
-                    bench_version=6,
-                    validator_hotkey=_DAVE.ss58_address,
-                    run_id="historical-v6-1",
-                    signature="aa",
-                    seed=8675309,
-                    composite=0.71,
-                    tool_mean=0.7,
-                    memory_mean=0.7,
-                    median_ms=100,
-                    n=114,
-                    details={"bench_version": 6},
-                    generated_at=now,
-                )
-            )
-            for hotkey in (_VALIDATOR_HOTKEY, _DAVE.ss58_address):
-                heartbeat = await session.get(ValidatorHeartbeat, hotkey)
-                assert heartbeat is not None
-                heartbeat.benchmark_capacity = {
-                    "configured_slots": 1,
-                    "healthy_slots": ["slot-0"],
-                    "admission": "accepting",
-                    "active": [],
-                }
-
-        _install_db(app, session_maker)
-        _install_chain(app, extra_keypairs=(_DAVE,))
-        storage = _install_storage(app)
-        storage.public_bucket = "ditto-public"
-        storage.put_object = AsyncMock()
-
-        ineligible_source_only = await client.post(
-            "/api/v1/validator/job",
-            headers={"X-Validator-Hotkey": _DAVE.ss58_address},
-            json=_job_payload(_DAVE, slot_id="slot-0"),
-        )
-        assert ineligible_source_only.status_code == 204
-
-        # Default policy: the era is retired, so the lane issues nothing --
-        # even though every other gate it has (cohort complete, capable
-        # heartbeat, an empty v7 queue, spare fleet capacity) is wide open.
-        retired = await client.post(
-            "/api/v1/validator/job",
-            headers=_AUTH_HEADER,
-            json=_job_payload(slot_id="slot-0"),
-        )
-        assert retired.status_code == 204
-        async with session_maker() as session:
-            assert (
-                await session.scalar(
-                    select(func.count())
-                    .select_from(ValidatorTicket)
-                    .where(
-                        ValidatorTicket.bench_version == 6,
-                        ValidatorTicket.status == TicketStatus.ISSUED,
-                    )
-                )
-                == 0
-            )
 
     async def test_fresh_submission_lane_uses_three_of_four_completed_jobs(
         self, session_maker: async_sessionmaker[AsyncSession]
@@ -6442,85 +5080,6 @@ class TestRequestJob:
         assert issued.json()["agent_id"] == str(agent_id)
         assert issued.json()["inference"]["grant_id"]
 
-    async def test_retired_era_only_validator_is_permanently_unserviceable(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A validator that can only serve a retired era never works again.
-
-        This used to be a statement about a moment -- v2 had just been
-        superseded, so a v2-only validator was idle until it upgraded. The floor
-        makes it a statement about the system: v2 through v6 cannot be written
-        at all, so there is no future rollout, setting or backfill lane that
-        gives this validator work. Permanently unserviceable is the intended
-        consequence of the floor, not an accident of the fixture.
-
-        The full arc, and all of it terminal: it is OFFERED nothing (204 with an
-        active-era agent sitting in the queue), it LEASES nothing (204 again,
-        with no new ticket cut in any era), it DRAINS what it already holds (the
-        grandfathered v2 lease it is carrying moves to EXPIRED, which is the one
-        transition the ticket trigger still permits below the floor), and then it
-        STAYS IDLE, with nothing left to drain and nothing it can be given.
-
-        The v2 lease is seeded beneath a lifted floor because that is the only
-        way such a row can exist now -- exactly like the real pre-floor leases
-        production is still draining. The floor is live again by the time the
-        endpoint is called, so the drain asserted below is a real drain.
-        """
-        active_agent = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await self._activate_benchmark(
-            session_maker, active_agent, bench_version=_BENCH_VERSION
-        )
-        await _seed_validator_heartbeat(
-            session_maker,
-            protocol_version=7,
-            capabilities=_V7_CAPABILITIES,
-            stack=_V7_STACK,
-        )
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        no_new_work = await client.post(
-            "/api/v1/validator/job", headers=_AUTH_HEADER, json=_job_payload()
-        )
-        assert no_new_work.status_code == 204
-
-        legacy_agent = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, legacy_agent, bench_version=2)
-        resumed = await client.post(
-            "/api/v1/validator/job", headers=_AUTH_HEADER, json=_job_payload()
-        )
-        assert resumed.status_code == 204, resumed.text
-        async with session_maker() as session:
-            ticket = await session.get(
-                ValidatorTicket, (legacy_agent, 2, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            assert ticket.status == TicketStatus.EXPIRED
-            # Nothing was cut to replace it, in any era. The drain is the end of
-            # this validator's work, not a handover to a new lease.
-            live = (
-                (
-                    await session.execute(
-                        select(ValidatorTicket).where(
-                            ValidatorTicket.validator_hotkey == _VALIDATOR_HOTKEY,
-                            ValidatorTicket.status == TicketStatus.ISSUED,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            assert live == []
-
-        # Asked again with nothing left to drain, it is still offered nothing.
-        still_idle = await client.post(
-            "/api/v1/validator/job", headers=_AUTH_HEADER, json=_job_payload()
-        )
-        assert still_idle.status_code == 204, still_idle.text
-
     # Parametrized over the RETIRED era, not the active one.
     #
     # It used to range over active_version [3, 4] to show the behaviour held
@@ -6530,143 +5089,6 @@ class TestRequestJob:
     # era, not a weakening -- and moving the parameter to the retired side keeps
     # two cases exercising both halves of the boundary, which is what the test
     # was really about.
-    @pytest.mark.parametrize("legacy_version", [5, 6])
-    async def test_after_activation_capable_validator_replaces_retired_ticket(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        legacy_version: int,
-    ) -> None:
-        active_version = _BENCH_VERSION
-        active_agent = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await self._activate_benchmark(
-            session_maker, active_agent, bench_version=active_version
-        )
-        legacy_agent = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, legacy_agent, bench_version=legacy_version)
-        # A protocol-8 heartbeat was enough to be handed work in the v2/v3 era
-        # this test was written for. It is not enough now: a v7 lease requires
-        # the v10 capacity blob and a ticket-scoped inference grant, so the
-        # capable-pool helper is the only shape that still gets a job issued.
-        # The autouse ``_current_era`` fixture already installed the routing
-        # policy; only the capable heartbeat is missing.
-        await _seed_capable_pool(session_maker, keypairs=[_KEYPAIR])
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.post(
-            "/api/v1/validator/job",
-            headers=_AUTH_HEADER,
-            json=_job_payload(slot_id="slot-0"),
-        )
-
-        assert response.status_code == 200, response.text
-        assert response.json()["agent_id"] == str(active_agent)
-        assert response.json()["bench_version"] == active_version
-        async with session_maker() as session:
-            legacy_ticket = await session.get(
-                ValidatorTicket, (legacy_agent, legacy_version, _VALIDATOR_HOTKEY)
-            )
-            assert legacy_ticket is not None
-            assert legacy_ticket.status == TicketStatus.EXPIRED
-
-    async def test_after_activation_new_submission_finalizes_on_three_scores(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await self._activate_benchmark(
-            session_maker, agent_id, bench_version=_BENCH_VERSION
-        )
-        # These three used to be protocol-8 heartbeats advertising
-        # ``supported_bench_versions: [2, 3]``. Neither half survives the floor:
-        # a validator that offers only retired eras is offered nothing, and a
-        # protocol-8 validator cannot take a v7 lease at all (inference is not
-        # treated as ready below protocol 11, and protocol >= 10 makes published
-        # capacity and a named slot mandatory). The quorum-of-three behaviour
-        # under test is unchanged -- only the shape of a validator that can
-        # reach it is, so the fixture is the capable pool the rest of the class
-        # leases through.
-        await _seed_capable_pool(session_maker)
-        _install_db(app, session_maker)
-        _install_chain(app, extra_keypairs=tuple(_KEYPAIRS[1:]))
-
-        for index, keypair in enumerate(_KEYPAIRS, start=1):
-            job = await client.post(
-                "/api/v1/validator/job",
-                headers={"X-Validator-Hotkey": keypair.ss58_address},
-                json=_job_payload(keypair, slot_id=_SLOT_ID),
-            )
-            assert job.status_code == 200, job.text
-            assert job.json()["bench_version"] == _BENCH_VERSION
-            assert job.json()["minimum_screening_policy_version"] == 9
-            assert job.json()["requires_screened_image"] is True
-            deadline = datetime.fromisoformat(job.json()["deadline"])
-            score = await client.post(
-                f"/api/v1/validator/agent/{agent_id}/score",
-                json=_score_payload(
-                    agent_id,
-                    run_id=f"v3-{index}",
-                    keypair=keypair,
-                    ticket_deadline=deadline,
-                    bench_version=_BENCH_VERSION,
-                    n=114,
-                    details={"bench_version": 3},
-                ),
-            )
-            assert score.status_code == 200, score.text
-            expected = AgentStatus.SCORED if index == 3 else AgentStatus.EVALUATING
-            assert score.json()["status"] == expected
-
-        async with session_maker() as session:
-            scores = (
-                (
-                    await session.execute(
-                        select(Score).where(
-                            Score.agent_id == agent_id,
-                            Score.bench_version == _BENCH_VERSION,
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            assert len(scores) == 3
-
-    async def test_v7_screened_only_does_not_claim_source_only_work(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # No verified screened image: that is what makes this work source-only,
-        # and ``_seed_agent`` now supplies one unless asked not to.
-        await _seed_agent(
-            session_maker, status=AgentStatus.EVALUATING, screened_image=False
-        )
-        capabilities = {
-            **_V7_CAPABILITIES,
-            "require_screened_image": True,
-            "source_build_fallback": False,
-        }
-        await _seed_validator_heartbeat(
-            session_maker,
-            protocol_version=7,
-            capabilities=capabilities,
-            stack=_V7_STACK,
-        )
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.post(
-            "/api/v1/validator/job", headers=_AUTH_HEADER, json=_job_payload()
-        )
-
-        assert response.status_code == 204
-
     @pytest.mark.parametrize(
         ("slot_reported_active", "expected_status"),
         [
@@ -7514,39 +5936,6 @@ class TestFailJob:
             # stays the one thing an operator can GROUP BY.
             assert ticket.failure_detail is None
 
-    async def test_fail_job_without_a_tail_stores_null(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """A validator predating the field omits the key and stays valid.
-
-        `FailJobRequest` does not forbid extras and the field defaults to None,
-        so an un-upgraded validator's byte-identical payload must still be
-        accepted and simply leave the column NULL -- never a 422, which would
-        lose the whole hand-back and strand the lease until its deadline.
-        """
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        payload = _job_fail_payload(agent_id, reason="scoring_error")
-        assert "container_log_tail" not in payload
-
-        failed = await client.post(
-            "/api/v1/validator/job/fail", headers=_AUTH_HEADER, json=payload
-        )
-
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as session:
-            ticket = await session.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            assert ticket.container_log_tail is None
-
     async def test_overlong_container_log_tail_is_rejected(
         self,
         app: FastAPI,
@@ -7637,36 +6026,6 @@ class TestFailJob:
             assert ticket.infra_retry_grants == 0
             assert ticket.failure_reason == "scoring_error"
 
-    async def test_scoring_error_without_a_revoked_lease_still_bills_the_agent(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # The other half of the guarantee. A genuinely broken harness -- one
-        # that crashed the scorer with its lease perfectly healthy -- must keep
-        # consuming its own attempts, or one bad agent burns fleet capacity
-        # forever. An `exhausted` grant is the agent spending the budget it was
-        # given, so it is deliberately not treated as a platform fault.
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        await _seed_revoked_grant(session_maker, agent_id, status="exhausted")
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        failed = await client.post(
-            "/api/v1/validator/job/fail",
-            headers=_AUTH_HEADER,
-            json=_job_fail_payload(agent_id, reason="scoring_error"),
-        )
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            assert ticket.infra_retry_grants == 0
-
     async def test_spent_grant_reported_as_infra_is_billed_to_the_agent(
         self,
         app: FastAPI,
@@ -7753,38 +6112,6 @@ class TestFailJob:
                 == "model_relay_unavailable:budget_evidence_absent"
             )
 
-    async def test_infra_retry_grants_are_bounded(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # A persistent validator-side outage cannot re-lease one agent forever:
-        # infra grants stop climbing at the cap.
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        async with session_maker() as s, s.begin():
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            ticket.infra_retry_grants = MAX_INFRA_RETRY_GRANTS
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        failed = await client.post(
-            "/api/v1/validator/job/fail",
-            headers=_AUTH_HEADER,
-            json=_job_fail_payload(agent_id, reason="infrastructure"),
-        )
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            assert ticket.infra_retry_grants == MAX_INFRA_RETRY_GRANTS
-
     async def test_failure_detail_is_recorded_on_the_ticket(
         self,
         app: FastAPI,
@@ -7819,39 +6146,6 @@ class TestFailJob:
             assert ticket.failure_reason == "infrastructure"
             assert ticket.failure_detail == "sandbox_network_unavailable"
 
-    async def test_validator_omitting_failure_detail_still_succeeds(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # Backward compatibility, pinned. A validator built before the field
-        # exists sends a body with no `failure_detail` key at all. That must
-        # still resolve the lease: a hand-back rejected as 422 would leave the
-        # ticket to expire silently, which is precisely the ambiguity the field
-        # was added to remove. No heartbeat protocol bump gates this -- the fail
-        # route has its own signature and does not read protocol_version.
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        body = _job_fail_payload(agent_id, reason="scoring_error")
-        assert "failure_detail" not in body
-        failed = await client.post(
-            "/api/v1/validator/job/fail", headers=_AUTH_HEADER, json=body
-        )
-        assert failed.status_code == 200, failed.text
-        assert failed.json()["reopened"] is True
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            assert ticket.status == TicketStatus.EXPIRED
-            assert ticket.failure_reason == "scoring_error"
-            assert ticket.failure_detail is None
-
     async def test_overlong_failure_detail_is_rejected(
         self,
         app: FastAPI,
@@ -7875,53 +6169,6 @@ class TestFailJob:
             ),
         )
         assert failed.status_code == 422, failed.text
-
-    async def test_diagnostic_message_past_the_old_bound_survives_intact(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # The regression this widening exists for. This is the real 2026-07-27
-        # value, the one that finally named a root cause three investigations had
-        # missed. At the old 200-char bound it arrived cut at "inference r",
-        # losing the clause that said what the platform actually did -- and the
-        # surviving half read as a finished sentence, so nothing signalled that
-        # anything was missing. Asserted end to end (HTTP body -> ticket row),
-        # character for character, because a cap that truncates *quietly* is the
-        # failure mode, not a cap as such.
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        detail = (
-            "DittobenchError: run 2b7c6b6c-ae45-493d-b8f5-b1a4a6ff8b3a failed: "
-            "harness exhausted its inference allowance: agent-attributable "
-            "inference decline: the platform rejected 81 of the harness's "
-            "inference request(s) outright, before reserving any capacity"
-        )
-        assert len(detail) > LEGACY_FAILURE_DETAIL_MAX_LENGTH
-        assert len(detail) <= FAILURE_DETAIL_MAX_LENGTH
-
-        failed = await client.post(
-            "/api/v1/validator/job/fail",
-            headers=_AUTH_HEADER,
-            json=_job_fail_payload(
-                agent_id, reason="infrastructure", failure_detail=detail
-            ),
-        )
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
-            # The whole message, not a prefix of it. `endswith` is asserted
-            # separately so a future silent re-truncation fails loudly on the
-            # clause that was lost, rather than on an opaque length mismatch.
-            assert ticket.failure_detail == detail
-            assert ticket.failure_detail.endswith("before reserving any capacity")
 
     async def test_a_detail_at_the_widened_cap_round_trips(
         self,
@@ -7954,39 +6201,6 @@ class TestFailJob:
             assert ticket is not None
             assert ticket.failure_detail is not None
             assert len(ticket.failure_detail) == FAILURE_DETAIL_MAX_LENGTH
-            assert ticket.failure_detail == detail
-
-    async def test_legacy_validator_detail_at_the_old_bound_still_validates(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        # Fleet version skew, pinned in the direction that actually ships first.
-        # Validators run mixed versions (0.34.1 through 0.37.3 concurrently at
-        # time of writing) and every one of them truncates to 200 before sending.
-        # Widening a max_length only ever admits more, so those reports must keep
-        # validating byte-identically -- this is the test that says the widening
-        # is additive rather than a re-specification of the field.
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        detail = "z" * LEGACY_FAILURE_DETAIL_MAX_LENGTH
-        failed = await client.post(
-            "/api/v1/validator/job/fail",
-            headers=_AUTH_HEADER,
-            json=_job_fail_payload(
-                agent_id, reason="infrastructure", failure_detail=detail
-            ),
-        )
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert ticket is not None
             assert ticket.failure_detail == detail
 
     async def test_repeated_infrastructure_stops_minting_grants_per_agent(
@@ -8044,69 +6258,6 @@ class TestFailJob:
             assert retry_after - datetime.now(UTC) > INFRA_RETRY_BACKOFF_CAP / 2
             # The diagnosis is still recorded; only the billing changed.
             assert ticket.failure_detail == "model_relay_unavailable"
-
-    async def test_infrastructure_failure_never_mints_a_grant(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        await _seed_ticket(session_maker, agent_id, keypair=_KEYPAIRS[1])
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        second_hotkey = _KEYPAIRS[1].ss58_address
-        failed = await client.post(
-            "/api/v1/validator/job/fail",
-            headers={"X-Validator-Hotkey": second_hotkey},
-            json=_job_fail_payload(
-                agent_id, keypair=_KEYPAIRS[1], reason="infrastructure"
-            ),
-        )
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, second_hotkey)
-            )
-            assert ticket is not None
-            assert ticket.infra_retry_grants == 0
-
-    async def test_platform_revocation_never_mints_a_grant(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _seed_ticket(session_maker, agent_id)
-        await _seed_ticket(session_maker, agent_id, keypair=_KEYPAIRS[1])
-        await _seed_revoked_grant(session_maker, agent_id, keypair=_KEYPAIRS[1])
-        async with session_maker() as s, s.begin():
-            first = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert first is not None
-            first.infra_retry_grants = MAX_AGENT_INFRA_RETRY_GRANTS
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        second_hotkey = _KEYPAIRS[1].ss58_address
-        failed = await client.post(
-            "/api/v1/validator/job/fail",
-            headers={"X-Validator-Hotkey": second_hotkey},
-            json=_job_fail_payload(
-                agent_id, keypair=_KEYPAIRS[1], reason="scoring_error"
-            ),
-        )
-        assert failed.status_code == 200, failed.text
-        async with session_maker() as s:
-            ticket = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, second_hotkey)
-            )
-            assert ticket is not None
-            assert ticket.infra_retry_grants == 0
 
     async def test_no_live_ticket_is_a_noop(
         self,
@@ -8589,7 +6740,9 @@ class TestSubmitScore:
 
     @pytest.mark.parametrize(
         "purpose",
-        [TicketPurpose.CONTINUAL_RETEST, TicketPurpose.LEGACY_UNCLASSIFIED],
+        [
+            TicketPurpose.CONTINUAL_RETEST,
+        ],
     )
     async def test_rejects_noncanonical_ticket_purpose(
         self,
@@ -9883,23 +8036,6 @@ class TestPublicMirror:
         assert all(sc["signature"] for sc in record["scores"])
         assert record["status"] == AgentStatus.SCORED.value
 
-    async def test_finalize_skips_publish_when_unconfigured(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-        storage = _install_storage(app)
-        storage.public_bucket = None
-        storage.put_object = AsyncMock()
-        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
-        await _score_to_quorum(
-            client, agent_id, maker=session_maker, run_id="run_nopub", composite=0.5
-        )
-        storage.put_object.assert_not_awaited()
-
     async def test_migrated_scored_agent_publishes_new_version_at_quorum(
         self,
         app: FastAPI,
@@ -10273,37 +8409,6 @@ class TestTranscriptPublication:
             for call in storage.put_object.await_args_list
         )
 
-    async def test_quorum_mirror_copies_eligible_public_transcript(self) -> None:
-        storage = MagicMock()
-        storage.public_bucket = "ditto-public"
-        storage.object_exists = AsyncMock(side_effect=[False, True])
-        storage.get_object = AsyncMock(return_value=self._TRANSCRIPT)
-        storage.put_object = AsyncMock()
-        session = AsyncMock(spec=AsyncSession)
-        session.scalar.return_value = None
-
-        await validator_endpoint._mirror_quorum_transcripts(
-            storage,
-            session,
-            [
-                Score(
-                    bench_version=7,
-                    details={
-                        "dataset_sha256": "cd" * 32,
-                        "transcript_sha256": self._digest,
-                    },
-                )
-            ],
-        )
-
-        key = f"transcripts/{self._digest}.json"
-        storage.put_object.assert_awaited_once_with(
-            key=key,
-            body=self._TRANSCRIPT,
-            content_type="application/json",
-            bucket="ditto-public",
-        )
-
     async def test_score_signature_binds_transcript_digest(
         self,
         app: FastAPI,
@@ -10405,7 +8510,12 @@ class TestTranscriptPublication:
         assert response.status_code == 200
         assert storage.put_object.await_count == 1
 
-    @pytest.mark.parametrize("bench_version", [13, 14])
+    @pytest.mark.parametrize(
+        "bench_version",
+        [
+            13,
+        ],
+    )
     async def test_v13_transcript_is_private_even_without_dataset_metadata(
         self,
         bench_version: int,
@@ -11205,54 +9315,6 @@ class TestTop5ConfirmationLane:
         assert ticket.seed == bound_family[0]
         assert ticket.seed_block == 100 + CRN_ANCHOR_BLOCK_DELTA
         assert ticket.seed_block_hash == block_hash
-
-    async def test_legacy_version_issues_unbound_seeds_and_pins_no_anchor(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Below the floor the lane is byte-identical to before: the unbound
-        champion-anchored seed, no binding fields, no anchor row."""
-        from ditto.api_server.crn import champion_anchored_seeds
-        from ditto.db.models import ConfirmationSeedAnchor
-
-        champion, *_ = await _seed_top5_emission_set(session_maker)
-        _install_db(app, session_maker)
-        chain = _install_chain_with_finalized_hash(
-            app, block_number=1, finalized_hash="0x" + "ab" * 32
-        )
-
-        response = await client.post(
-            "/api/v1/validator/top5-confirmation-job",
-            headers=_AUTH_HEADER,
-            json=_auto_top5_job_payload("slot-0"),
-        )
-
-        assert response.status_code == 200, response.text
-        (pin,) = response.json()["confirmation_datasets"]
-        assert (
-            pin["seed"]
-            == champion_anchored_seeds(champion, version=_BENCH_VERSION, max_seeds=1)[0]
-        )
-        assert {
-            key: pin[key]
-            for key in (
-                "anchor_agent_id",
-                "seed_index",
-                "seed_block",
-                "seed_block_hash",
-            )
-        } == dict.fromkeys(
-            ("anchor_agent_id", "seed_index", "seed_block", "seed_block_hash")
-        )
-        chain.get_finalized_block_hash.assert_not_awaited()
-        async with session_maker() as session:
-            assert (await session.scalars(select(ConfirmationSeedAnchor))).all() == []
-            ticket = await session.scalar(
-                select(ValidatorTicket).where(ValidatorTicket.agent_id == champion)
-            )
-        assert ticket is not None and ticket.seed_block is None
 
     async def test_paused_validator_gets_no_new_continual_retest(
         self,
@@ -12199,7 +10261,9 @@ class TestTop5ConfirmationLane:
 
     @pytest.mark.parametrize(
         "purpose",
-        [TicketPurpose.CANONICAL_QUORUM, TicketPurpose.LEGACY_UNCLASSIFIED],
+        [
+            TicketPurpose.CANONICAL_QUORUM,
+        ],
     )
     async def test_rejects_nonconfirmation_ticket_purpose(
         self,
@@ -12519,34 +10583,6 @@ class TestTop5ConfirmationLane:
         assert ticket is not None
         assert ticket.purpose == TicketPurpose.CONTINUAL_RETEST
 
-    async def test_a_tie_at_the_cutoff_is_refused_under_a_fixed_rank(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """The defect, stated as a test: identical scores, opposite outcomes.
-
-        Rank five and rank six hold the same composite. The fixed rank keeps one
-        and refuses the other purely on the ``first_seen`` tiebreak.
-        """
-        agent_ids = await _seed_top5_emission_set(
-            session_maker,
-            composites=[0.90, 0.89, 0.88, 0.87, 0.86, 0.86, 0.80],
-        )
-        champion, sixth = agent_ids[0], agent_ids[5]
-        _install_db(app, session_maker)
-        _install_chain_with_block(app, block_number=0)
-
-        response = await client.post(
-            "/api/v1/validator/top5-confirmation-job",
-            headers=_AUTH_HEADER,
-            json=_top5_job_payload(champion, sixth),
-        )
-
-        assert response.status_code == 409
-        assert "retest cohort (top 5)" in response.json()["message"]
-
     async def test_the_statistical_band_admits_the_tied_agent(
         self,
         app: FastAPI,
@@ -12718,7 +10754,7 @@ class TestTop5ConfirmationLane:
         assert {raw_cutoff, folded_entrant} <= cohort_ids
         assert len(cohort) == 6
 
-    @pytest.mark.parametrize("bench_version", [_BENCH_VERSION, 13, 14])
+    @pytest.mark.parametrize("bench_version", [14])
     async def test_stronger_same_owner_generation_can_catch_up_outside_raw_top_five(
         self,
         app: FastAPI,
@@ -13217,26 +11253,6 @@ class TestTop5RolloutStanddown:
             )
         assert issued == 0
 
-    async def test_stands_down_while_rollout_is_blocked_ineligible(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        champion, member = await _seed_top5_rollout_standdown_fixture(
-            session_maker, rollout_status="blocked_ineligible"
-        )
-        self._install(app, session_maker)
-
-        response = await client.post(
-            "/api/v1/validator/top5-confirmation-job",
-            headers=_AUTH_HEADER,
-            json=_top5_job_payload(champion, member),
-        )
-
-        assert response.status_code == 409
-        assert "standing down" in response.json()["message"]
-
     async def test_resumes_after_rollout_activates(
         self,
         app: FastAPI,
@@ -13258,46 +11274,6 @@ class TestTop5RolloutStanddown:
         generator = MagicMock(run_size="full")
         generator.generate = AsyncMock(return_value="ab" * 32)
         app.dependency_overrides[get_dataset_generator] = lambda: generator
-
-        response = await client.post(
-            "/api/v1/validator/top5-confirmation-job",
-            headers=_AUTH_HEADER,
-            json=_top5_job_payload(champion, member),
-        )
-
-        assert response.status_code == 200, response.text
-        assert response.json()["agent_id"] == str(member)
-
-    async def test_resumes_after_rollout_is_superseded(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        champion, member = await _seed_top5_rollout_standdown_fixture(
-            session_maker, rollout_status="superseded"
-        )
-        self._install(app, session_maker)
-
-        response = await client.post(
-            "/api/v1/validator/top5-confirmation-job",
-            headers=_AUTH_HEADER,
-            json=_top5_job_payload(champion, member),
-        )
-
-        assert response.status_code == 200, response.text
-        assert response.json()["agent_id"] == str(member)
-
-    async def test_no_open_rollout_leaves_the_lane_untouched(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        champion, member = await _seed_top5_rollout_standdown_fixture(
-            session_maker, rollout_status=None
-        )
-        self._install(app, session_maker)
 
         response = await client.post(
             "/api/v1/validator/top5-confirmation-job",
@@ -13664,49 +11640,6 @@ class TestUnmatchableWorkClaimIsLoud:
             for record in caplog.records
             if record.levelno >= logging.WARNING
         ), "the wrong-slot heartbeat produced no warning"
-
-    async def test_running_benchmark_with_no_active_slot_warns_and_is_accepted(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        caplog: pytest.LogCaptureFixture,
-    ) -> None:
-        # The wire model constrains ``state`` only when ``active`` is non-empty,
-        # so this contradiction validates cleanly. The lease gate ignores
-        # ``state`` under v10+ and reads the empty capacity as idle.
-        _install_db(app, session_maker)
-        _install_chain(app)
-        capacity = {
-            "configured_slots": 2,
-            "healthy_slots": ["slot-0", "slot-1"],
-            "admission": "accepting",
-            "active": [],
-        }
-        # A distinct validator, so this never races the sibling test's row for
-        # the same wall-clock second (a same-second repeat stores nothing).
-        with caplog.at_level(logging.WARNING):
-            response = await client.post(
-                "/api/v1/validator/heartbeat",
-                headers={"X-Validator-Hotkey": _KEYPAIRS[1].ss58_address},
-                json=_heartbeat_payload(
-                    keypair=_KEYPAIRS[1],
-                    protocol_version=10,
-                    state="running_benchmark",
-                    capabilities=_V9_CAPABILITIES,
-                    stack=_V7_STACK,
-                    stack_health=_V9_STACK_HEALTH,
-                    benchmark_capacity=capacity,
-                ),
-            )
-
-        assert response.status_code == 200, response.text
-        assert response.json()["accepted"] is True
-        assert any(
-            "self-contradictory" in record.message
-            for record in caplog.records
-            if record.levelno >= logging.WARNING
-        ), "the contradictory heartbeat produced no warning"
 
 
 async def _seed_catchup_board(
