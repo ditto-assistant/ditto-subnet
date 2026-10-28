@@ -10,9 +10,8 @@ as one composite through the existing scoring and consensus path. Generators
 also earn their own track (10% share) from rounds. Round columns move to about
 70 cases (5 counted columns, about 350 cases).
 
-The version number is **15**. v13 is the live contract and v14 is in
-qualification (`protocol.BenchVersionV14`, [benchmark-v14-rollout.md](../../../docs/benchmark-v14-rollout.md)).
-Version numbers are immutable, so v15 is next even if v14 never activates.
+The version number is **15**. v14 is the live contract (`protocol.BenchVersionV14`,
+activated 2026-10-28; [benchmark-v14-rollout.md](../../../docs/benchmark-v14-rollout.md)).
 
 ## Accepted amendments (2026-10-27)
 

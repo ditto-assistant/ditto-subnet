@@ -14,7 +14,7 @@ another's release string.
 
 SN118 runs two competitions on one benchmark:
 
-- **Agents** are scored on a `bench_version` (v13 active, v14 built). A version
+- **Agents** are scored on a `bench_version` (v14 active since 2026-10-28). A version
   is an immutable generation and scoring contract, moved by
   `start_benchmark_rollout` and activated when the rollout earns authority.
 - **Generators** emit challenge packs. Each round, a panel of top agents plays
@@ -205,6 +205,16 @@ across a pack policy change. They extend the v15 checklist in
    slices to a scorer that cannot grade the declared policies.
 
 ## Runbook: activating v14 for both competitions
+
+**Done: v14 activated at 2026-10-28 01:28:21 UTC.** Rounds now open at v14.
+At 01:51 UTC `preview_generator_round` showed `active_version` 14,
+`bench_version` 14, no reason, `capable_validators` {13: 4, 14: 5} against
+`min_round_validators` 3, and `scorer_grading_versions` [13, 14]; the next
+round was epoch 25988. Steps 6 and 7 below (first-round checks and the
+three-round watch) are the remaining post-activation verification. The agent
+side is recorded in
+[benchmark-v14-rollout.md](../../../docs/benchmark-v14-rollout.md)
+"Activation record".
 
 Preconditions: the agent-side v14 qualification gates in
 [benchmark-v14-rollout.md](../../../docs/benchmark-v14-rollout.md) are closed

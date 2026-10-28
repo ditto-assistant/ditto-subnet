@@ -38,7 +38,7 @@ class LocalRehearsalTest(unittest.TestCase):
                 "run_size": "small",
             },
         )
-        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 13)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 14)
 
     def test_submit_body_can_pin_an_older_contract(self) -> None:
         body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)

@@ -257,8 +257,8 @@ Use `evaluate` to develop.
 it no longer advertises `set_main_model`. An explicitly pinned older dataset
 (`uv run ditto practice --bench-version 11` or `12`) still emits `set_model`
 cases that expect that tool; the kit cannot advertise or call it, so those
-cases score 0 locally. That family does not exist at v13, the live contract,
-where the scored run advertises the surface in this file plus per-seed coined
+cases score 0 locally. That family does not exist at v13 or at v14, the live
+contract that keeps the v13 surface, where the scored run advertises the surface in this file plus per-seed coined
 decoys.
 
 #### One-command local live-bench practice
@@ -273,7 +273,7 @@ The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
 database, selects free loopback ports, submits a run on the live scoring bench
-(read from the public rollout endpoint at start; currently 13, with the
+(read from the public rollout endpoint at start; currently 14, with the
 script's `LIVE_SCORING_BENCH_VERSION` as the offline fallback),
 displays progress and the final score/provenance counts, and cleans up on exit.
 `--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
@@ -755,8 +755,9 @@ produces a container serving that protocol on :8080.
 > Status: the hosted practice validator, on-chain submission path (`ditto upload`,
 > eval fee, scoring, weights), and the [SN118 leaderboard](https://platform-api.heyditto.ai/)
 > are live today.
-> Benchmark v13 is the active scoring contract (see *Bench v13: how to stay
-> inside the gates* below); `GET /api/v1/public/bench/rollout`
+> Benchmark v14 is the active scoring contract. It keeps the v13 surface and
+> gates (see *Bench v13: how to stay inside the gates* below) and adds
+> action-scoped declarative over-call scoring; `GET /api/v1/public/bench/rollout`
 > (`active_version`) is authoritative for what is active. Every
 > contract uses locked `openai/gpt-oss-20b` inference and validator-observed
 > tool execution, and reaches your harness as wire version 9.
@@ -821,7 +822,7 @@ ledger on every validator sweep.
 7. bench_version. Every `/run` request carries `bench_version`. This starter
 accepts the inclusive range `MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION`
 (`src/protocol.rs`) and every contract from v9 on arrives as wire version 9,
-so do not branch on a higher number. Version 13 is the active scoring contract;
+so do not branch on a higher number. Version 14 is the active scoring contract;
 `GET /api/v1/public/bench/rollout` is authoritative for what is active
 (`active_version`) and for any rollout target (`desired_version`).
 
@@ -994,9 +995,9 @@ Everything below is `bench_version >= 13`; v12 and earlier are unchanged.
 The wire stays at version 9 — no `protocol.rs` change is required to *parse*
 v13 traffic, only `MAX_SUPPORTED_BENCH_VERSION` moves to 13 with the v13
 wiring sweep (#1519) so `/run` accepts the new number when a validator
-rehearses it. Bench 13 is now the live scoring contract; `local-rehearsal.py`
-defaults to the live version and falls back to `LIVE_SCORING_BENCH_VERSION` 13
-offline.
+rehearses it. Bench 14, which keeps this v13 surface and these gates, is now
+the live scoring contract; `local-rehearsal.py` defaults to the live version
+and falls back to `LIVE_SCORING_BENCH_VERSION` 14 offline.
 
 - **Tool catalog is per seed** (#1843, #1842, #1580, #1840): paraphrased
   descriptions, `enum` on `set_theme`/`set_reasoning_effort`,

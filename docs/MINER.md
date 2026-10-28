@@ -64,7 +64,7 @@ uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
 ```
 
 The command starts and tears down the harness, the live-bench scorer (the
-active version from the public rollout endpoint, currently 13),
+active version from the public rollout endpoint, currently 14),
 trusted local reader/judge proxies, and isolated LongMemEval stores. Default
 `--run-size small` is a smoke profile, not the on-chain case count. Nothing is
 exposed to the public internet. LongMemEval remains a separately labeled
@@ -359,8 +359,8 @@ result.
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
-  choice is not a miner lever: on the current contract (**Bench v13** — see
-  the starter kit's [*Bench v13: how to stay inside the
+  choice is not a miner lever: on the current contract (**Bench v14**, which
+  keeps the v13 gates — see the starter kit's [*Bench v13: how to stay inside the
   gates*](../miners/dittobench-starter-kit/README.md#bench-v13-how-to-stay-inside-the-gates))
   that is **`openai/gpt-oss-20b`**, served through the platform-owned
   OpenRouter inference boundary. Reasoning effort is an intentional v9 strategy: a harness

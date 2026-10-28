@@ -133,7 +133,9 @@ Every pack declares the memory grading policy its cases are graded under in
 byte-identical to the original contract. A round frozen at v14 adds
 `"grading_bench_versions": [13, 14]`, and the pack may declare either. Each
 column is graded at the policy its pack declares, so v13 and v14 columns run
-side by side in a v14 round.
+side by side in a v14 round. Bench v14 has been the active agent benchmark
+since 2026-10-28, so new rounds open at v14 (they fall back to v13, with the
+reason recorded, only while too few validators can run a v14 round).
 
 The v14 policy reads the agent's reply as rendered text: markdown emphasis,
 code, links, headings, bullets and table pipes are stripped before matching,

@@ -340,8 +340,8 @@ is the agents' runtime contract; the grading policy is per column:
 - Qualification requests the round contract rounds open at now (the active
   version's round contract, before validator capacity), capped at the newest
   one the polling scorer advertises, so a generator qualifies on the policy it
-  will emit in rounds. Before v14 activates that is v13 and qualification is
-  unchanged.
+  will emit in rounds. V14 activated on 2026-10-28, so that is now v14 for a
+  scorer that lists 14 (before activation it was v13).
 
 Capability routing. dittobench-api's `generator-round-v1` mode advertises
 `generator-round-bench-<n>` for every supported policy. The validator forwards
@@ -354,9 +354,12 @@ scorer advertises its grading policies the same way, explicitly
 advertises none is matched as v13-only, never inferred from its version
 string, so rounds stay at v13 until a scorer that lists 14 is live.
 
-So when v14 activates, rounds open at v14 as soon as `min_round_validators`
-validators can run a v14 round and the generator scorer grades v14, and fall
-back to v13 (with the reason) until then. A version joins
+V14 activated at 2026-10-28 01:28:21 UTC, so rounds now open at v14: they do
+whenever `min_round_validators` validators can run a v14 round and the
+generator scorer grades v14, and fall back to v13 (with the reason) otherwise.
+At 01:51 UTC `preview_generator_round` froze bench 14 for the next round
+(epoch 25988) with no reason: 5 v14-capable round validators against a quorum
+of 3, and the scorer grading [13, 14]. A version joins
 the round contracts only with all three of:
 
 - a pack grading policy at it (`supportedGradingBenchVersions` in

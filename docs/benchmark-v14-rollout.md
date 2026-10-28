@@ -1,9 +1,43 @@
 # Bench v14 qualification and rollout
 
-Status: compatibility implementation; **activation blocked pending qualification**.
-This plan is part of #2508. It supersedes #2405's proposal to change scored v13
+Status: **activated 2026-10-28 01:28:21 UTC** (see *Activation record*).
+Before that: compatibility implementation, activation blocked pending
+qualification. This plan is part of #2508. It supersedes #2405's proposal to change scored v13
 outputs. It grants no authority to deploy, rotate the v13 cohort, regrade scores,
 alter emissions, or change a production setting.
+
+## Activation record
+
+V14 is the active scoring contract. Backroom `get_benchmark_rollout_control`
+reads `active_version` 14, `desired_version` 14, `status` `activated`.
+
+- **Start.** `start_benchmark_rollout` (desired 14) succeeded at
+  2026-10-28 00:30:26 UTC on Platform v0.400.2. The first attempt, at
+  2026-10-27 23:40 UTC, returned a 500: the cohort-freeze statement hit its
+  statement timeout. #3232 (released in v0.400.2) narrowed the freeze to the
+  ranking columns, and the retry succeeded.
+- **Activation.** The rollout earned desired authority at
+  2026-10-28 01:28:21 UTC, with 12 ranked quorum agents (minimum 5) and the
+  priority cohort complete (5 of 5 positions at 3 distinct-validator scores).
+  At activation 12 of the 15 cohort members held a quorum and 5 validators
+  were v14-capable.
+- **Operator-delegated waivers.** Two qualification requirements were waived
+  under operator delegation, not closed with evidence:
+  - *No family hold-out.* Gate 4 closed as MEDIUM with no family held out of
+    v14 generation (#3231; see *Gate 4 (family admission): measured from
+    executed canaries*). The familygate tuning follow-up targets v15.
+  - *No separate v14 cohort.* V14 activated on the shared validator cohort
+    that also serves v13 (blocker 2 below). No separate v14 cohort was
+    stood up.
+- **Generator rounds.** At 01:51 UTC `preview_generator_round` froze bench 14
+  for the next round (epoch 25988), with no reason, `capable_validators`
+  {13: 4, 14: 5} against `min_round_validators` 3, and
+  `scorer_grading_versions` [13, 14]. Rounds now open at v14.
+- **Miner rehearsal.** The offline fallback `LIVE_SCORING_BENCH_VERSION` and
+  the `mine` skill's live bench moved to 14 in the post-activation PR. The
+  starter kit change ships the next staged provenance manifest (v16).
+
+The activation block number was not captured in this record.
 
 ## Immutable boundary
 
@@ -340,7 +374,7 @@ on October 27:
 
 1. *Rounds cannot open at v14 yet.* `choose_round_bench_version` only
    considers round contracts at or below the active version, so every round
-   opens at v13 while v13 is active, and a column can only declare a policy at
+   opened at v13 while v13 was active, and a column can only declare a policy at
    or below its round. A v14 pack column needs v14 active first.
 2. *The default generator holds no column.* `select_columns` gives the public
    default only counted columns that miners leave empty. Fifteen miner
@@ -708,10 +742,11 @@ required for this compatibility change.
 
 ## Open activation blockers
 
-This is the October 27 readiness audit. V13 is active and confirmation runs in
-`shadow`. Each item below must be closed with evidence, or explicitly waived
-by the operator, before anyone calls `start_benchmark_rollout` for v14. An
-item listed here is a blocker. It is not a claim that the work has started.
+This is the October 27 readiness audit, kept for the record. V14 activated on
+2026-10-28 (see *Activation record*). Each item now carries its disposition at
+activation. An item marked "not closed at activation" was not recorded here
+as closed or waived. It stays an open follow-up, and this record does not
+claim the work was done.
 
 Closed in code:
 
@@ -734,7 +769,8 @@ Closed in code:
 
 Open, and requiring an operator, release-owner or paid run:
 
-1. **Anti-template qualification (#1832).** The steps are in
+1. **Anti-template qualification (#1832).** *Not closed at activation; open
+   follow-up.* The steps are in
    [the handoff](benchmark-v14-template-resistance.md):
    - an advisory-guidance carrier run
    - paired cases with fresh phrasing and misleading cues, plus paired cases
@@ -749,7 +785,9 @@ Open, and requiring an operator, release-owner or paid run:
    decisions, so no code is merged for them here. The latest offline public
    GIH diagnostic, at `7852c80c3` on the final vector, still inverts v14 at a
    quality of 0.9498. Comments on #1832 give the report SHA.
-2. **Release packet and a separate v14 cohort (#2508).** Candidate packet,
+2. **Release packet and a separate v14 cohort (#2508).** *Separate cohort
+   waived by operator delegation at activation; v14 runs on the shared
+   cohort.* Candidate packet,
    observed on October 27 at 21:20 UTC. It is not reviewed or accepted:
    - Merge source `8730e77d45e828c47c2a7f34969986a59453ed2a` (#3222).
      Release v0.399.0, release commit
@@ -777,17 +815,21 @@ Open, and requiring an operator, release-owner or paid run:
    Either stand up a separate v14 cohort, or have the operator explicitly
    waive that requirement and hold automatic stack updates on the v13
    members.
-3. **Gate 3 controls.** The honest-agent canaries pass on all five of the
+3. **Gate 3 controls.** *Not closed at activation; open follow-up.
+   LongMem at subject version 14 is now a during-rollout shadow check.* The
+   honest-agent canaries pass on all five of the
    current hybrid top five. Still missing: known-benign and adversarial
    harness canaries (no control agent row exists to canary), and the
    persistence, no-call, unrelated and mixed action and non-declarative write
    probes as executed runs (unit-pinned only). LongMem confirmation at subject
    version 14 cannot run before `start_benchmark_rollout` (see gate 3 above).
    Accept it as a during-rollout shadow check or waive it.
-4. **Gate 4 family admission (SN-351): closed as MEDIUM, no hold-out.** See
+4. **Gate 4 family admission (SN-351): closed as MEDIUM, no hold-out
+   (operator-delegated, #3231).** See
    *Gate 4 (family admission): measured from executed canaries* above. The
    familygate tuning follow-up targets v15.
-5. **Fleet depth.** During October 27 one of the four v13 cohort members
+5. **Fleet depth.** *At activation rollout control counted 5 v14-capable
+   validators.* During October 27 one of the four v13 cohort members
    (`5HEouuDa...`) dropped out of v14 capability for several hours with a live
    v13 ticket, leaving three. That equals the three-validator quorum, so one
    more outage would have stalled every v14 rollout member. It returned on
@@ -796,15 +838,18 @@ Open, and requiring an operator, release-owner or paid run:
    `local_unverified` provenance. Before the start, confirm that at least 4
    managed, signed-descriptor validators are capable. Do not rely on the
    paused source-mode one.
-6. **Shadow replay report (gates 4 and 5).** The no-spend part is measured:
+6. **Shadow replay report (gates 4 and 5).** *Not closed at activation; open
+   follow-up.* The no-spend part is measured:
    the v14 composite rule replayed on 684 accepted v13 per-case rows (see
    *Gate 5 (partial)* above), and five same-seed top-five canaries. Still no
    executed-transcript replay into separate v14 rows, no full rank-impact
    report, no operator review.
-7. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
+7. **Confirmation at v14.** *Unchanged by activation: confirmation stays
+   `shadow`.* Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
    recorded separately.
-8. **Generator-competition rounds follow activation (resolved in code).**
+8. **Generator-competition rounds follow activation (resolved; rounds open
+   at v14).**
    Rounds freeze a bench version when they open and follow the active version
    where a round contract exists. The v14 pack contract adds v14 to the round
    contracts (`GENERATOR_ROUND_BENCH_VERSIONS = (13, 14)`).
@@ -818,7 +863,11 @@ Open, and requiring an operator, release-owner or paid run:
      version 4) declares v14. A column whose v14-offering request fails is
      retried once on the original v13 request. No generator is excluded by the
      upgrade.
-   - Remaining before activation, operational only: release the scorer and
+   - Live after activation: `preview_generator_round` freezes bench 14 with
+     no reason, 5 v14-capable round validators and the scorer grading
+     [13, 14] (see *Activation record*). The first v14 round's checks are in
+     tandem-upgrades.md runbook steps 6 and 7.
+   - Was remaining before activation, operational only: release the scorer and
      validator carrying the change, confirm v14-verified validators report
      `generator_round_bench_versions` including 14, re-register the public
      default generator from starter kit version 4, and announce the v14 pack
@@ -827,12 +876,12 @@ Open, and requiring an operator, release-owner or paid run:
    - Rollback: deactivating v14 sends new rounds back to v13 at the next
      opening; a round already frozen at v14 finishes at v14.
 
-9. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
-   now reads `active_version` from the public rollout endpoint, so the
-   default follows activation without a code change. The activation PR still
-   bumps the offline fallback `LIVE_SCORING_BENCH_VERSION` (now 13) and the
-   bench number quoted in `.agents/skills/mine/SKILL.md` (bump checklist
-   step 8).
+9. **Miner rehearsal default (resolved for v14).** `local-rehearsal.py`
+   reads `active_version` from the public rollout endpoint, so the default
+   followed activation without a code change. The post-activation PR bumped
+   the offline fallback `LIVE_SCORING_BENCH_VERSION` to 14 and the bench
+   number quoted in `.agents/skills/mine/SKILL.md` (bump checklist step 8),
+   and staged starter-kit provenance manifest v16 for the kit change.
 
 All v14 vector work has landed (SN-351 to SN-360, answer normalization
 #3189). The final vector is

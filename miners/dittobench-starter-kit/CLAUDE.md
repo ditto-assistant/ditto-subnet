@@ -4,7 +4,7 @@ Load `/mine` before editing, scoring, or uploading this harness.
 
 `cargo run -- evaluate` is not on-chain scoring. From the repository root,
 `uv run ditto practice --run-size small|medium|full` is the real rehearsal
-(the live scoring bench, 13, observed tools). `full` is the on-chain envelope and is required
+(the live scoring bench, 14, observed tools). `full` is the on-chain envelope and is required
 before upload. It still uses local `.env` inference.
 
 Read `.agents/skills/mine/SKILL.md`.

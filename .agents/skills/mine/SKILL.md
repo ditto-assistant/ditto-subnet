@@ -21,7 +21,7 @@ The numbers below drift. For the live scoring bench, emission split, payout
 curve, champion, next epoch, and your own agents' status, run `$subnet-status`
 (`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
 
-Live scoring is **bench 13**, `run_size=full`, observed tools, locked
+Live scoring is **bench 14**, `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
 the live scoring version (`active_version`) from the public rollout endpoint
 (`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the
@@ -29,14 +29,13 @@ default follows Platform activation. `LIVE_SCORING_BENCH_VERSION` in
 `miners/dittobench-starter-kit/scripts/local-rehearsal.py` is only the offline
 fallback (also used when `DITTOBENCH_PUBLIC_ROLLOUT_URL=off`); bump it with
 each activation. A live version newer than the checkout's `MAX_BENCH_VERSION`
-fails loudly: update ditto-subnet. Bench 13's gates are shadow and replayed
-locally with `--gates` (below). The wire `bench_version` a harness receives
+fails loudly: update ditto-subnet. The wire `bench_version` a harness receives
 stays 9 in every contract.
 
-Bench 14 is accepted for explicit preactivation rehearsal
-(`--bench-version 14 --gates`) when the local scorer advertises it. It carries
-the v13 surface and gates with action-scoped declarative over-call scoring. It
-is not the default until Platform activates it. See
+Bench 14 activated on 2026-10-28. It carries the v13 surface and gates
+(shadow, replayed locally with `--gates`, below) with action-scoped
+declarative over-call scoring. Pin `--bench-version 13` only to compare
+against the previous contract. See
 [`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md).
 
 ## Practice loops (do not collapse these)
@@ -46,7 +45,7 @@ is not the default until Platform activates it. See
 | `cargo run -- mem-eval --k 10` | Retrieval only, no chat model | Retrieval/reranker iteration |
 | `cargo run -- evaluate` | Fixed local subset, **name-only** tool scorer, **no** `tool_endpoint` | Fast prompt/tool-name iteration |
 | `cargo run -- practice --n 20` | Rotating kit templates, still name-only, still no observer | Slightly less overfit than `evaluate` |
-| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, live bench (13) | Smoke after a harness change |
+| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, live bench (14) | Smoke after a harness change |
 | `uv run ditto practice --run-size medium` | Same path, deeper seeding and isolation | Development once small is healthy |
 | `uv run ditto practice --run-size full` | Same path, **on-chain envelope** | Required before upload |
 | `uv run ditto practice --gates` | Same path on the live contract + shadow replay of the public v13 gates with per-case notes | Before upload; after any answer, prompt, catalog, or tool-execution change |
@@ -64,10 +63,10 @@ is ~0.7 is expected. Name-only local scoring plus a tiny template pool is not
 
 ## Run sizes (teach these; do not skip full)
 
-From the **repository root**. All three use the live bench (13) and a
+From the **repository root**. All three use the live bench (14) and a
 validator-visible `tool_endpoint`. Only the envelope changes.
 
-| `--run-size` | Bench 13 envelope | When the agent should run it |
+| `--run-size` | Bench 13/14 envelope | When the agent should run it |
 |---|---|---|
 | `small` | 6 tool + 27 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
 | `medium` | 48 tool + 95 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
@@ -164,9 +163,9 @@ would fail `$backroom-review`.
 
 Require all of:
 
-- `bench_version` is the live scoring version (13; the rehearsal prints
-  `rehearsing bench_version N` up front), or 14 only when you passed
-  `--bench-version 14` to rehearse the pre-activation contract
+- `bench_version` is the live scoring version (14; the rehearsal prints
+  `rehearsing bench_version N` up front), or 13 only when you passed
+  `--bench-version 13` to compare against the previous contract
 - `run_size` is the one you asked for
 - `capped_tool_cases` is 0 (or explain why)
 - `observed_tool_cases` is > 0 on a tool-heavy run
