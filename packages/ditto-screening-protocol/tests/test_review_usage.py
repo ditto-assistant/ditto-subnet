@@ -57,9 +57,7 @@ def test_totals_prefer_reported_cost() -> None:
         {"stages": [{"stage": "l1", "input_tokens": 10**12}]},
         {"stages": [{"stage": "l1", "estimated_cost_usd": 1e6}]},
         {"stages": [{"stage": "l1", "model": "has space"}]},
-        {"stages": [{"stage": "l1", "prompt": "never carried"}]},
         {"stages": [{"stage": "l1"}, {"stage": "l1"}]},
-        {"extra_field": 1},
     ],
 )
 def test_out_of_bounds_reports_are_refused(overrides: dict[str, object]) -> None:
@@ -79,3 +77,13 @@ def test_same_stage_on_two_models_is_allowed() -> None:
         "z-ai/glm-5.2",
     ]
     assert ReviewUsageStageEntry(stage="l1").cost_usd == 0.0
+
+
+def test_unknown_fields_are_ignored_not_stored() -> None:
+    request = _request(
+        future_field=1,
+        stages=[{"stage": "l1", "input_tokens": 1, "prompt": "never carried"}],
+    )
+    dumped = request.model_dump(mode="json")
+    assert "future_field" not in dumped
+    assert "prompt" not in dumped["stages"][0]

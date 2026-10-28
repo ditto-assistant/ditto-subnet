@@ -33,7 +33,7 @@ MAX_REVIEW_ELAPSED_MS = 24 * 3_600_000
 class ReviewUsageStageEntry(BaseModel):
     """Usage one review stage spent on one model."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     stage: ReviewUsageStage
     model: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9/._:-]{0,127}$")] = (
@@ -69,7 +69,7 @@ class ReviewUsageStageEntry(BaseModel):
 class ScreeningReviewUsageRequest(BaseModel):
     """One attempt's review usage, posted by the screener that holds it."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     attempt_id: UUID
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
