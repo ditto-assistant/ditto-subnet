@@ -5123,7 +5123,8 @@ class TestClaim:
                 return_value=SimpleNamespace(
                     deferred_source_review=SimpleNamespace(
                         mode="enforce", integrity_double_check_mode="off"
-                    )
+                    ),
+                    lineage_reference_mode="same_owner_version",
                 )
             ),
         )
