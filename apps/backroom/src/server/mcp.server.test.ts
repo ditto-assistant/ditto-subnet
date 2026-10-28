@@ -927,7 +927,10 @@ describe('Backroom MCP tools', () => {
     // The queue policy's lineage_reference_mode enum (three values on the
     // set_queue_policy_settings input) adds about 55 bytes on top; keep the
     // same headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(212_900)
+    // The screening review cost read (one bounded integer input, one-line
+    // summary, detail in tool help) brings the measured catalog to 212,797
+    // bytes; keep about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(213_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
