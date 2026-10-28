@@ -59,6 +59,7 @@ from ditto.validator.dittobench import (
 from ditto.validator.errors import (
     DittobenchError,
     PlatformError,
+    PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
     SandboxOomError,
     ValidatorInfrastructureError,
@@ -6531,3 +6532,170 @@ async def test_weight_epoch_refreshes_an_active_heartbeat_before_the_ledger_read
 
     assert order[:2] == ["active_heartbeat", "ledger"]
     assert "updating_weights" not in order
+
+
+def _stale_gate() -> PlatformHeartbeatRequiredError:
+    return PlatformHeartbeatRequiredError(
+        "job request rejected (428): validator heartbeat is stale"
+    )
+
+
+def _heartbeat_worker(platform: MagicMock, *, slots: int = 1) -> ValidatorWorker:
+    config = _config()
+    config.benchmark_capacity = slots
+    dittobench = MagicMock()
+    dittobench.full_run_capacity = slots
+    return ValidatorWorker(
+        config=config,
+        platform=platform,
+        dittobench=dittobench,
+        chain=MagicMock(),
+        keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+    )
+
+
+class TestJobHeartbeatFreshness:
+    """Platform 428s a job claim once the last heartbeat is past its window.
+
+    Idle slots re-poll inside one sweep without heartbeating, so a sweep that
+    outlived the window used to lose every slot to the stale-heartbeat gate.
+    """
+
+    async def test_stale_heartbeat_is_refreshed_before_the_claim(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        order: list[str] = []
+        platform.submit_heartbeat.side_effect = lambda _request: (
+            order.append("heartbeat")
+            or ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
+        )
+        platform.request_job = AsyncMock(
+            side_effect=lambda **_: order.append("job") or None
+        )
+        worker = _heartbeat_worker(platform)
+        clock = worker._heartbeat_clock
+        assert await worker._report_heartbeat("polling")
+        order.clear()
+
+        clock.now += worker_mod._JOB_HEARTBEAT_REFRESH_SECONDS - 1
+        assert await worker._request_job_with_fresh_heartbeat("slot-0") is None
+        assert order == ["job"]
+
+        clock.now += 2
+        assert await worker._request_job_with_fresh_heartbeat("slot-0") is None
+        assert order == ["job", "heartbeat", "job"]
+
+    async def test_rejected_heartbeat_does_not_count_as_fresh(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_heartbeat.return_value = ValidatorHeartbeatResponse(
+            accepted=False, seen_at=datetime.now(UTC)
+        )
+        platform.request_job = AsyncMock(return_value=None)
+        worker = _heartbeat_worker(platform)
+        await worker._report_heartbeat("polling")
+        sent = platform.submit_heartbeat.await_count
+
+        await worker._request_job_with_fresh_heartbeat("slot-0")
+
+        assert platform.submit_heartbeat.await_count == sent + 1
+
+    async def test_stale_gate_refreshes_once_and_retries_the_claim(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        job = _job("5MinerA" + "x" * 41, slot_id="slot-0")
+        platform.request_job = AsyncMock(side_effect=[_stale_gate(), job])
+        worker = _heartbeat_worker(platform)
+        await worker._report_heartbeat("polling")
+        sent = platform.submit_heartbeat.await_count
+
+        assert await worker._request_job_with_fresh_heartbeat("slot-0") is job
+
+        assert platform.request_job.await_count == 2
+        assert platform.submit_heartbeat.await_count == sent + 1
+
+    async def test_second_stale_gate_propagates_without_looping(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=_stale_gate())
+        worker = _heartbeat_worker(platform)
+        await worker._report_heartbeat("polling")
+        sent = platform.submit_heartbeat.await_count
+
+        with pytest.raises(PlatformHeartbeatRequiredError):
+            await worker._request_job_with_fresh_heartbeat("slot-0")
+
+        assert platform.request_job.await_count == 2
+        assert platform.submit_heartbeat.await_count == sent + 1
+
+    async def test_slots_rejected_together_share_one_refresh(self) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        rejected: set[str] = set()
+        all_sent = asyncio.Event()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            if slot_id in rejected:
+                return None
+            rejected.add(slot_id)
+            if len(rejected) == 4:
+                all_sent.set()
+            await all_sent.wait()
+            raise _stale_gate()
+
+        platform.request_job = AsyncMock(side_effect=request_job)
+        worker = _heartbeat_worker(platform, slots=4)
+        await worker._report_heartbeat("polling")
+        sent = platform.submit_heartbeat.await_count
+
+        results = await asyncio.gather(
+            *(
+                worker._request_job_with_fresh_heartbeat(f"slot-{index}")
+                for index in range(4)
+            )
+        )
+
+        assert results == [None] * 4
+        assert platform.submit_heartbeat.await_count == sent + 1
+
+    async def test_sweep_keeps_a_slot_whose_claim_hit_the_stale_gate(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=[_stale_gate(), None])
+        worker = _heartbeat_worker(platform)
+
+        with caplog.at_level("WARNING", logger=worker_mod.logger.name):
+            await worker.run_once(set_weights=False)
+
+        assert platform.request_job.await_count == 2
+        assert "slot is isolated" not in caplog.text
+
+    async def test_idle_slots_stop_repolling_each_other_after_the_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mutually pending idle claims alone must not keep a sweep alive.
+
+        slot-1's claim never resolves until the test releases it, so slot-0
+        always sees a sibling claim in flight: without the idle bound it
+        re-polls for as long as that lasts.
+        """
+        monkeypatch.setattr(worker_mod, "_IDLE_SLOT_REPOLL_SECONDS", 0.01)
+        monkeypatch.setattr(worker_mod, "_IDLE_SWEEP_MAX_SECONDS", 0.05)
+        polls: list[str] = []
+        release = asyncio.Event()
+
+        async def request_job(*, slot_id: str) -> JobResponse | None:
+            polls.append(slot_id)
+            if slot_id == "slot-1":
+                await release.wait()
+            return None
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.request_job = AsyncMock(side_effect=request_job)
+        worker = _heartbeat_worker(platform, slots=2)
+
+        sweep = asyncio.create_task(worker.run_once(set_weights=False))
+        await asyncio.sleep(0.3)
+        settled = polls.count("slot-0")
+        await asyncio.sleep(0.1)
+
+        assert settled >= 2
+        assert polls.count("slot-0") == settled
+        release.set()
+        await asyncio.wait_for(sweep, timeout=2)

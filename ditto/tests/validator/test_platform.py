@@ -70,7 +70,11 @@ from ditto.api_models.validator import (
 from ditto.tests.validator.test_v9_reward_projection import (
     _entry as _v9_confirmed_entry,
 )
-from ditto.validator.errors import PlatformError, PlatformInfrastructureError
+from ditto.validator.errors import (
+    PlatformError,
+    PlatformHeartbeatRequiredError,
+    PlatformInfrastructureError,
+)
 from ditto.validator.platform import PlatformClient
 from ditto.validator.signing import (
     artifact_signing_message,
@@ -190,6 +194,30 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [(428, PlatformHeartbeatRequiredError), (426, PlatformError)],
+)
+async def test_job_claim_types_the_stale_heartbeat_gate(
+    status: int, expected: type[PlatformError]
+) -> None:
+    """Only 428 is the refreshable heartbeat gate; 426 still means upgrade."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"detail": "gate"})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
+        with pytest.raises(expected) as raised:
+            await platform.request_job(slot_id="slot-0")
+    assert (type(raised.value) is PlatformHeartbeatRequiredError) is (status == 428)
 
 
 async def test_coding_authoring_client_posts_signed_request_and_parses_lease() -> None:

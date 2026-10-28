@@ -89,6 +89,7 @@ from ditto.validator.errors import (
     LeaseDeadlineError,
     LeaseRevokedError,
     PlatformError,
+    PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
     SandboxOomError,
     ValidatorInfrastructureError,
@@ -585,6 +586,17 @@ _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
 # how many slots actually receive tickets. Short enough that a quorum opening is
 # picked up promptly, long enough that seven idle slots are not a poll storm.
 _IDLE_SLOT_REPOLL_SECONDS = 15.0
+# Platform refuses ``/validator/job`` once the last accepted heartbeat is older
+# than its compatibility window (300s by default). Idle slots re-poll inside one
+# sweep without heartbeating, so refresh before a claim once the last accepted
+# heartbeat is this old: under half the window, leaving room for a slow request.
+_JOB_HEARTBEAT_REFRESH_SECONDS = 120.0
+# An idle sweep ends once no lease has run for this long. Idle slots re-poll
+# while sibling claims are in flight, and with eight slots and slow polls some
+# claim almost always is, so without this bound an idle sweep never ends and
+# never re-dispatches its once-per-sweep retest lane. Until the heartbeat refresh
+# above, the stale-heartbeat 428 ended these sweeps at about this age.
+_IDLE_SWEEP_MAX_SECONDS = 300.0
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -905,6 +917,10 @@ class ValidatorWorker:
             netuid=config.netuid,
         )
         self._last_heartbeat_timestamp = 0
+        # Heartbeat-clock time at which the newest accepted heartbeat was sent.
+        # Platform stamped ``seen_at`` no earlier, so this bounds its age.
+        self._last_accepted_heartbeat_sent_at: float | None = None
+        self._job_heartbeat_lock = asyncio.Lock()
         self._heartbeat_clock = heartbeat_clock or _new_heartbeat_clock()
         self._pending_heartbeat_state: ValidatorRuntimeState | None = None
         self._pending_heartbeat_progress: dict[str, BenchmarkProgress] = {}
@@ -1238,11 +1254,15 @@ class ValidatorWorker:
             # together with ``running``, ``pending_claims``, and the retest
             # dispatch state, which makes the wakeup impossible to miss.
             lease_state_changed = asyncio.Event()
+            # When this sweep last finished leased work (or started). Bounds
+            # how long idle slots keep re-polling one another; see
+            # ``_IDLE_SWEEP_MAX_SECONDS``.
+            idle_since = started
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
                 nonlocal claimed, pending_claims, retest_dispatching
                 nonlocal retest_work_claimed, round_dispatching
-                nonlocal retests_dispatched, running
+                nonlocal retests_dispatched, running, idle_since
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
@@ -1255,7 +1275,7 @@ class ValidatorWorker:
                             claimed += 1
                             pending_claims += 1
                         try:
-                            job = await self._platform.request_job(slot_id=slot_id)
+                            job = await self._request_job_with_fresh_heartbeat(slot_id)
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
@@ -1328,6 +1348,8 @@ class ValidatorWorker:
                                     async with budget_lock:
                                         retest_work_claimed = retest_claimed
                                         retest_dispatching = False
+                                        if retest_claimed:
+                                            idle_since = time.monotonic()
                                         lease_state_changed.set()
                                 if not retest_claimed:
                                     # No retest: this slot may still ask for
@@ -1371,6 +1393,8 @@ class ValidatorWorker:
                                 finally:
                                     async with budget_lock:
                                         round_dispatching = False
+                                        if round_claimed:
+                                            idle_since = time.monotonic()
                                         lease_state_changed.set()
                                 if round_claimed:
                                     # The round run has settled; ask for
@@ -1416,7 +1440,17 @@ class ValidatorWorker:
                                     and not running
                                     and not pending_claims
                                 )
-                            if no_retest_work:
+                                # Idle siblings' own claims are always in flight
+                                # on a slow Platform, so they alone must not keep
+                                # an idle sweep alive forever.
+                                idle_sweep_expired = bool(
+                                    not running
+                                    and not retest_dispatching
+                                    and not round_dispatching
+                                    and time.monotonic() - idle_since
+                                    >= _IDLE_SWEEP_MAX_SECONDS
+                                )
+                            if no_retest_work or idle_sweep_expired:
                                 break
                             continue
                         async with budget_lock:
@@ -1558,6 +1592,7 @@ class ValidatorWorker:
                         finally:
                             async with budget_lock:
                                 running -= 1
+                                idle_since = time.monotonic()
                                 lease_state_changed.set()
                     return slot_scored, slot_failed, slot_claimed
                 finally:
@@ -1663,6 +1698,50 @@ class ValidatorWorker:
             )
             return False
 
+    async def _refresh_heartbeat_for_job(
+        self, *, sent_after: float | None = None
+    ) -> None:
+        """Send a heartbeat unless Platform already has a fresh enough one.
+
+        Without ``sent_after`` the bar is :data:`_JOB_HEARTBEAT_REFRESH_SECONDS`.
+        With it, only a heartbeat accepted after that instant counts, so every
+        slot rejected by the same stale gate shares one refresh.
+        """
+        async with self._job_heartbeat_lock:
+            last = self._last_accepted_heartbeat_sent_at
+            if last is not None and (
+                last > sent_after
+                if sent_after is not None
+                else self._heartbeat_clock.time() - last
+                < _JOB_HEARTBEAT_REFRESH_SECONDS
+            ):
+                return
+            await self._report_heartbeat("polling")
+
+    async def _request_job_with_fresh_heartbeat(
+        self, slot_id: str
+    ) -> JobResponse | None:
+        """Claim canonical work, refreshing a stale heartbeat at most once.
+
+        Platform's compatibility gate refuses a claim (428) when this hotkey's
+        last heartbeat is older than its window. An idle sweep can outlive that
+        window, so refresh first; if Platform still answers 428, refresh once
+        more and retry once. A second refusal propagates and isolates the slot.
+        """
+        await self._refresh_heartbeat_for_job()
+        requested_at = self._heartbeat_clock.time()
+        try:
+            return await self._platform.request_job(slot_id=slot_id)
+        except PlatformHeartbeatRequiredError as error:
+            logger.info(
+                "job request for %s needs a fresh heartbeat; refreshing and "
+                "retrying once: %s",
+                slot_id,
+                error,
+            )
+        await self._refresh_heartbeat_for_job(sent_after=requested_at)
+        return await self._platform.request_job(slot_id=slot_id)
+
     async def _report_heartbeat(
         self,
         state: ValidatorRuntimeState,
@@ -1761,7 +1840,8 @@ class ValidatorWorker:
             return True
         try:
             build = validator_build_info()
-            timestamp = int(self._heartbeat_clock.time())
+            sent_at = self._heartbeat_clock.time()
+            timestamp = int(sent_at)
             if timestamp <= self._last_heartbeat_timestamp:
                 raise RuntimeError("heartbeat wall-clock rate limit was bypassed")
             self._last_heartbeat_timestamp = timestamp
@@ -1882,6 +1962,8 @@ class ValidatorWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
+            if response.accepted:
+                self._last_accepted_heartbeat_sent_at = sent_at
             # Update safety requires fresh platform acceptance. A later
             # rejection must revoke an earlier success instead of leaving the
             # updater-visible state permanently sticky.

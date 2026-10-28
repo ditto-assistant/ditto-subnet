@@ -137,6 +137,7 @@ from ditto.validator.coding_publication import (
 )
 from ditto.validator.errors import (
     PlatformError,
+    PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
     WeightReceiptConflictError,
 )
@@ -453,6 +454,12 @@ class PlatformClient:
             raise PlatformError(f"job request failed: {e}") from e
         if resp.status_code == 204:
             return None
+        if resp.status_code == 428:
+            # The compatibility gate wants a fresh signed heartbeat. Typed so the
+            # worker can refresh once and retry instead of isolating the slot.
+            raise PlatformHeartbeatRequiredError(
+                f"job request rejected (428): {resp.text[:200]}"
+            )
         if resp.status_code != 200:
             raise PlatformError(
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"

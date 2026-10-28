@@ -133,6 +133,10 @@ class PlatformInfrastructureError(PlatformError):
     """A platform dependency failure unrelated to the submission."""
 
 
+class PlatformHeartbeatRequiredError(PlatformError):
+    """Platform refused a work claim (428) until it sees a fresh heartbeat."""
+
+
 class WeightReceiptConflictError(PlatformError):
     """Platform refused a weight receipt that conflicts with an immutable identity.
 
