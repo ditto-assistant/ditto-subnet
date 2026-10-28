@@ -3449,9 +3449,18 @@ class ValidatorWorker:
         slot_token = _CURRENT_SLOT.set(job.slot_id)
         slot = self._slot_state()
         slot.revoked.clear()
+        # A panel run can hold the slot for most of an epoch. Without this
+        # refresh the validator heartbeat goes stale mid-run, and Platform's
+        # treasury fleet gate then refuses every validator's ledger read (428)
+        # while this managed weight setter looks offline.
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task: asyncio.Task[None] | None = None
         try:
             await self._begin_active_ticket(
                 job.agent_id, job.deadline, job.bench_version
+            )
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_while_active(heartbeat_stop)
             )
             run_id, per_case = await self._run_within_lease(
                 lambda: self._execute_generator_round(job, lease),
@@ -3500,6 +3509,9 @@ class ValidatorWorker:
                 job, reason="scoring_error", detail=failure_detail(exc)
             )
         finally:
+            heartbeat_stop.set()
+            if heartbeat_task is not None:
+                await heartbeat_task
             self._clear_active_ticket()
             await self._report_heartbeat("polling")
             _CURRENT_SLOT.reset(slot_token)
@@ -5150,9 +5162,13 @@ class ValidatorWorker:
                 self._weights_active = True
                 # Do not overwrite an active benchmark heartbeat with the
                 # short weight state; benchmark progress remains the useful
-                # public current-work signal.
+                # public current-work signal. Still refresh it: the treasury
+                # ledger read requires a fresh managed-validator heartbeat, and
+                # a lane that stopped heartbeating must not freeze weights.
                 if self._active_agent_id is None:
                     await self._report_heartbeat("updating_weights")
+                else:
+                    await self._emit_active_heartbeat()
                 outcome = await self._update_weights()
                 logger.info(
                     "weight request accepted by Pylon: accepted=%s miner(s)=%d; "

@@ -335,3 +335,41 @@ async def test_dittobench_round_submission_uses_the_round_mode(
     assert (run_id, per_case) == ("run-9", [{"case_id": "c0/a", "score": 1.0}])
     assert submitted["private_dataset_mode"] == "generator-round-v1"
     assert submitted["bench_version"] == 13
+
+
+async def test_round_run_keeps_the_validator_heartbeat_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel run must refresh ``running_benchmark`` while it holds the slot.
+
+    It used to heartbeat only after the run ended. A run that held the slot for
+    most of an epoch let the managed weight setter's heartbeat go stale, and
+    Platform's treasury fleet gate then refused every validator's ledger read.
+    """
+    import asyncio
+
+    import ditto.validator.worker as worker_module
+
+    monkeypatch.setattr(worker_module, "_ACTIVE_HEARTBEAT_SECONDS", 0.01)
+    job = _job()
+    dittobench = MagicMock()
+
+    async def slow_round(*_args: object, **_kwargs: object):
+        await asyncio.sleep(0.1)
+        return ("run-1", [{"case_id": "c0/a", "score": 1.0}])
+
+    dittobench.run_generator_round = AsyncMock(side_effect=slow_round)
+    worker, _platform = _worker(job, dittobench)
+    states: list[str] = []
+
+    async def record(state: str, **_kwargs: object) -> bool:
+        states.append(state)
+        return True
+
+    monkeypatch.setattr(worker, "_report_heartbeat", record)
+
+    assert await worker._run_generator_round_lane() is True
+
+    assert states.count("running_benchmark") >= 2
+    assert states[-1] == "polling"
+    assert worker._active_agent_id is None

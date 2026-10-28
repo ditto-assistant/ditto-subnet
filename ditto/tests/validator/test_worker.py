@@ -6482,3 +6482,52 @@ class TestResourceConstrainedAdmission:
         assert capacity.admission == "resource_constrained"
         assert capacity.healthy_slots == []
         assert [slot.slot_id for slot in capacity.active] == ["slot-1"]
+
+
+async def test_weight_epoch_refreshes_an_active_heartbeat_before_the_ledger_read() -> (
+    None
+):
+    """Busy slots must not let the treasury ledger read follow a stale heartbeat.
+
+    The weight loop keeps the ``running_benchmark`` state while a benchmark is
+    active. It used to skip the heartbeat entirely then, so a lane that stopped
+    heartbeating left Platform's managed fleet gate refusing the ledger (428).
+    """
+    worker = ValidatorWorker(
+        config=_config(),
+        platform=MagicMock(),
+        dittobench=MagicMock(),
+        chain=MagicMock(),
+        keypair=MagicMock(),
+    )
+    stop = asyncio.Event()
+    order: list[str] = []
+    worker._active_agent_id = uuid4()
+    worker._chain_min_epoch_seconds = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+    worker._seconds_until_weight_window = AsyncMock(return_value=0.0)  # type: ignore[method-assign]
+    worker._observe_onchain_weight_state = AsyncMock(return_value=(None, None))  # type: ignore[method-assign]
+
+    async def emit_active() -> bool:
+        order.append("active_heartbeat")
+        return True
+
+    async def report(state: str, **_kwargs: object) -> bool:
+        order.append(state)
+        return True
+
+    async def update() -> object:
+        order.append("ledger")
+        stop.set()
+        from ditto.validator.worker import _WeightOutcome
+
+        return _WeightOutcome()
+
+    worker._emit_active_heartbeat = emit_active  # type: ignore[method-assign]
+    worker._report_heartbeat = report  # type: ignore[method-assign]
+    worker._update_weights = update  # type: ignore[method-assign]
+    worker._sleep_or_stop_or_drain = AsyncMock()  # type: ignore[method-assign]
+
+    await worker._run_weight_epochs(stop)
+
+    assert order[:2] == ["active_heartbeat", "ledger"]
+    assert "updating_weights" not in order
