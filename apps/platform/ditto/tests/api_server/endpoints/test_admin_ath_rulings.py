@@ -2486,3 +2486,65 @@ async def test_court_keeps_uncertain_outcome_when_writer_commits_then_raises(
     assert "private" not in response.text
     assert await _status(maker, first_id) == "ath_pending_review"
     assert await _status(maker, next_id) == "scored"
+
+
+async def test_court_clear_applies_below_the_crown_and_skips_crown_moves(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The copy-hold court's apply path: one guarded clear, never a crown move."""
+    await _activate(maker)
+    await _seed_scored(
+        maker,
+        hotkey="5Champion",
+        name="champion",
+        composite=0.9,
+        created_at=_T0 - timedelta(hours=3),
+    )
+    below, below_sha = await _seed_held(
+        maker, hotkey="5Below", composite=0.5, created_at=_T0 - timedelta(hours=2)
+    )
+    above, above_sha = await _seed_held(
+        maker, hotkey="5Above", composite=0.95, created_at=_T0 - timedelta(hours=1)
+    )
+    _install(app, maker)
+
+    async with maker() as session:
+        moved = await rulings_mod.apply_court_clear(
+            session,
+            app.state,
+            agent_id=above,
+            expected_sha256=above_sha,
+            reason="court clear that would take the crown",
+            actor="platform:copy-hold-court",
+        )
+    assert moved["status"] == "skipped"
+    assert moved["would_change_crown"] is True
+    assert await _status(maker, above) == "ath_pending_review"
+
+    async with maker() as session:
+        stale = await rulings_mod.apply_court_clear(
+            session,
+            app.state,
+            agent_id=below,
+            expected_sha256="0" * 64,
+            reason="court clear against a stale artifact",
+            actor="platform:copy-hold-court",
+        )
+    assert stale["status"] == "skipped"
+    assert stale["disposition"] == "stale_guard"
+
+    async with maker() as session:
+        applied = await rulings_mod.apply_court_clear(
+            session,
+            app.state,
+            agent_id=below,
+            expected_sha256=below_sha,
+            reason="court clear below the crown",
+            actor="platform:copy-hold-court",
+        )
+    assert applied["status"] == "applied", applied
+    assert applied["steps"] == ["clear"]
+    assert await _status(maker, below) == "scored"
+    review, _ = await _review(maker, below)
+    assert review is not None and review.resolution == "clear"
+    assert review.resolved_by == "platform:copy-hold-court"

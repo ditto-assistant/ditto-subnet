@@ -513,6 +513,8 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  copyCourtTriagePreviewInputSchema,
+  copyCourtTriagePreviewSchema,
   confirmationSeedAnchorListSchema,
   confirmationSeedAnchorsInputSchema,
   screenerCapacityViewSchema,
@@ -996,12 +998,22 @@ export async function fetchCopyCourtRecommendations(rawInput: unknown) {
   const input = copyCourtRecommendationsInputSchema.parse(rawInput)
   const params = new URLSearchParams()
   params.set('pending_only', String(input.pendingOnly))
+  if (input.agentId !== undefined) params.set('agent_id', input.agentId)
   params.set('limit', String(input.limit))
   params.set('offset', String(input.offset))
   const payload = await platformAdminRequest(
     `/api/v1/admin/copy-court/recommendations?${params.toString()}`,
   )
   return copyCourtRecommendationListSchema.parse(payload)
+}
+
+export async function fetchCopyCourtTriagePreview(rawInput: unknown, actor: string) {
+  const input = copyCourtTriagePreviewInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-court/triage/${encodeURIComponent(input.agentId)}/preview`,
+    { actor },
+  )
+  return copyCourtTriagePreviewSchema.parse(payload)
 }
 
 export async function applyCopyCourtSettings(actor: string, rawInput: unknown) {

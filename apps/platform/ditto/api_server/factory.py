@@ -475,7 +475,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             # Copy-hold triage court. Settings-gated: with no revision (or
             # mode off) each tick is a cheap no-op, so the loop runs on the
             # platform role unconditionally like the nonce janitor.
-            copy_court = CopyHoldCourt(session_maker=app.state.session_maker)
+            copy_court = CopyHoldCourt(
+                session_maker=app.state.session_maker,
+                storage=getattr(app.state, "storage", None),
+                app_state=app.state,
+            )
             stack.push_async_callback(copy_court.aclose)
             if _process_role() == PLATFORM_ROLE:
                 await copy_court.start()

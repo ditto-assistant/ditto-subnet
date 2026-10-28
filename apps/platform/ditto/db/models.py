@@ -1507,6 +1507,17 @@ class AthCopyCourtRecommendation(Base):
     settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Engine that produced the verdict (``rules-v1`` resubmission rules,
+    # ``family-diff-v1`` near-duplicate attribution). Part of the unique key,
+    # so an improved engine re-triages a hold under the same settings.
+    triage_revision: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'rules-v1'")
+    )
+    # Enforce-mode outcome: ``{"status": "applied"|"skipped", "detail", ...}``.
+    application: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1548,7 +1559,12 @@ class AthCopyCourtRecommendation(Base):
         UniqueConstraint(
             "review_id",
             "settings_revision",
-            name="ath_copy_court_recommendations_review_revision_key",
+            "triage_revision",
+            name="ath_copy_court_recommendations_review_triage_key",
+        ),
+        CheckConstraint(
+            "length(trim(triage_revision)) BETWEEN 1 AND 64",
+            name="ath_copy_court_recommendations_triage_revision_check",
         ),
         Index(
             "ath_copy_court_recommendations_agent_idx",

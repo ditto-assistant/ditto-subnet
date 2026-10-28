@@ -1312,6 +1312,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-court/triage/{agent_id}/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview Copy Court Triage
+         * @description Dry-run the court's triage for one copy-kind ATH review.
+         *
+         *     Works on pending and resolved reviews alike, so operators can calibrate
+         *     the court against settled precedents. Records no recommendation and
+         *     applies nothing; the artifact reads are audited under the court actor.
+         *     The evidence carries paths, line numbers and line digests, never source.
+         */
+        get: operations["preview_copy_court_triage_api_v1_admin_copy_court_triage__agent_id__preview_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-reviews": {
         parameters: {
             query?: never;
@@ -10824,6 +10849,12 @@ export interface components {
         AdminCopyCourtRecommendation: {
             /** Agent Id */
             agent_id: string;
+            /** Application */
+            application?: {
+                [key: string]: unknown;
+            } | null;
+            /** Applied At */
+            applied_at?: string | null;
             /** Citations */
             citations: unknown[];
             /**
@@ -10849,6 +10880,11 @@ export interface components {
             review_id: string;
             /** Settings Revision */
             settings_revision: number;
+            /**
+             * Triage Revision
+             * @default rules-v1
+             */
+            triage_revision: string;
             /** Verdict */
             verdict: string;
         };
@@ -10862,6 +10898,30 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+        };
+        /**
+         * AdminCopyCourtRuntime
+         * @description The in-process court loop's last tick, as this Platform process saw it.
+         */
+        AdminCopyCourtRuntime: {
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Last Hold Errors */
+            last_hold_errors?: {
+                [key: string]: string;
+            }[];
+            /** Last Tick Counters */
+            last_tick_counters?: {
+                [key: string]: number;
+            };
+            /** Last Tick Error */
+            last_tick_error?: string | null;
+            /** Last Tick Finished At */
+            last_tick_finished_at?: string | null;
+            /** Last Tick Started At */
+            last_tick_started_at?: string | null;
+            /** Running */
+            running: boolean;
         };
         /** AdminCopyCourtSettingsRequest */
         AdminCopyCourtSettingsRequest: {
@@ -10883,6 +10943,35 @@ export interface components {
             current: components["schemas"]["CopyCourtSettingsRevision"] | null;
             /** History */
             history: components["schemas"]["CopyCourtSettingsRevision"][];
+            runtime?: components["schemas"]["AdminCopyCourtRuntime"] | null;
+        };
+        /**
+         * AdminCopyCourtTriagePreview
+         * @description A dry-run family triage for one copy-kind ATH review. Records nothing.
+         */
+        AdminCopyCourtTriagePreview: {
+            /** Agent Id */
+            agent_id: string;
+            /** Auto Clear Eligible */
+            auto_clear_eligible: boolean;
+            /** Citations */
+            citations: unknown[];
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Hold Class */
+            hold_class: string;
+            /** Reason */
+            reason: string;
+            /** Review Id */
+            review_id: string;
+            /** Review Status */
+            review_status: string;
+            /** Triage Revision */
+            triage_revision: string;
+            /** Verdict */
+            verdict: string;
         };
         /**
          * AdminCopyLanguageInventory
@@ -44739,6 +44828,7 @@ export interface operations {
         parameters: {
             query?: {
                 pending_only?: boolean;
+                agent_id?: string | null;
                 limit?: number;
                 offset?: number;
             };
@@ -44835,6 +44925,60 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
+            };
+        };
+    };
+    preview_copy_court_triage_api_v1_admin_copy_court_triage__agent_id__preview_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCopyCourtTriagePreview"];
+                };
+            };
+            /** @description No copy-kind ATH review for this agent. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The family triage cannot run in this process. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description An artifact could not be read; retry later. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

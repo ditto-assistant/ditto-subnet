@@ -192,6 +192,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // Lineage diffs render the same two-submission source for any operator-named
   // pair, so they gate identically.
   ['get_lineage_source_diff', BACKROOM_ARTIFACT_SCOPE],
+  // The court's dry-run triage reads both submissions' source server-side
+  // (audited) and returns file paths and line locations, so it gates the same.
+  ['preview_copy_court_triage', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_review_lineage', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.

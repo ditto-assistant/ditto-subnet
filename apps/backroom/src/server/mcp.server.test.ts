@@ -715,6 +715,7 @@ describe('Backroom MCP tools', () => {
         'list_stuck_submissions',
         'list_lease_revocations',
         'list_copy_court_recommendations',
+        'preview_copy_court_triage',
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
@@ -919,7 +920,10 @@ describe('Backroom MCP tools', () => {
     // 210,748 bytes; keep about 0.5 KB headroom.
     // The lineage-scoped review packet read (one UUID input, one-line summary)
     // adds about 0.5 KB on top; keep the same ~0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(211_800)
+    // The copy-court family triage preview (one uuid input, one-line summary,
+    // artifact scope) and the recommendation feed's agentId filter measure
+    // 212,328 bytes; keep the same ~0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(212_850)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1679,6 +1683,7 @@ describe('Backroom MCP tools', () => {
       for (const [name, fragment, scope, readOnly] of [
         ['get_copy_review_source_diff', 'per-file diff manifest', BACKROOM_ARTIFACT_SCOPE, true],
         ['get_lineage_source_diff', 'rejected ancestor', BACKROOM_ARTIFACT_SCOPE, true],
+        ['preview_copy_court_triage', 'without recording', BACKROOM_ARTIFACT_SCOPE, true],
         ['get_screening_review_lineage', 'never a verdict', BACKROOM_ARTIFACT_SCOPE, true],
         ['apply_copy_court_settings', 'complete', BACKROOM_WRITE_SCOPE, false],
         ['expand_benchmark_rollout_cohort', 'exact next ranked suffix', BACKROOM_WRITE_SCOPE, false],
@@ -9856,6 +9861,72 @@ describe('Backroom MCP tools', () => {
           headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
         }),
       )
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
+  })
+
+  it('previews copy court triage only with artifact scope and records nothing', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'a1a1a1a1-b2b2-4c3c-8d4d-e5e5e5e5e5e5'
+    const payload = {
+      agent_id: agentId,
+      review_id: 'f6f6f6f6-a7a7-4b8b-9c9c-d0d0d0d0d0d0',
+      review_status: 'resolved',
+      hold_class: 'near_duplicate',
+      triage_revision: 'family-diff-v1',
+      verdict: 'clear',
+      reason: 'Recommend CLEAR: every shared file is explained by released source.',
+      citations: [{ kind: 'resolved_ath_review', agent_id: '12121212-3434-4565-8787-909090909090' }],
+      evidence: {
+        basis: 'released_base_explains_overlap',
+        attribution: { unexplained: [], distinctive_present_count: 0 },
+      },
+      auto_clear_eligible: true,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refused = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const denied = await refused.client.callTool({
+      name: 'preview_copy_court_triage',
+      arguments: { agentId },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refused.client.close()
+    await refused.server.close()
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const malformed = await granted.client.callTool({
+        name: 'preview_copy_court_triage',
+        arguments: { agentId: 'not-a-uuid' },
+      })
+      expect(malformed.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await granted.client.callTool({
+        name: 'preview_copy_court_triage',
+        arguments: { agentId },
+      })
+      expect(response.isError, JSON.stringify(response.content)).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        verdict: 'clear',
+        triage_revision: 'family-diff-v1',
+        auto_clear_eligible: true,
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toContain(`/api/v1/admin/copy-court/triage/${agentId}/preview`)
+      expect(init.method ?? 'GET').toBe('GET')
+
+      fetchMock.mockResolvedValue(Response.json({ items: [], count: 0, limit: 50, offset: 0 }))
+      const listed = await granted.client.callTool({
+        name: 'list_copy_court_recommendations',
+        arguments: { agentId, pendingOnly: false },
+      })
+      expect(listed.isError).not.toBe(true)
+      expect(String(fetchMock.mock.calls[1][0])).toContain(`agent_id=${agentId}`)
     } finally {
       await granted.client.close()
       await granted.server.close()

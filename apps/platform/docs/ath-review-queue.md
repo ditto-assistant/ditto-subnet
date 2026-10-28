@@ -335,41 +335,82 @@ only an operator resolution changes state.
 
 `CopyHoldCourt` (`ditto/api_server/copy_hold_court.py`) is an in-process
 platform loop that periodically triages every pending copy-kind hold and
-records one **non-authoritative recommendation** per (review, settings
-revision) in `ath_copy_court_recommendations`: a verdict (`clear` / `reject` /
+records one recommendation per (review, settings revision, triage revision)
+in `ath_copy_court_recommendations`: a verdict (`clear` / `reject` /
 `escalate`), a hold class, the miner-visible reason, citations, and evidence.
-A recommendation never changes `agents.status` or the review's resolution.
+Whenever the master `mode` is not `off` every pending copy hold is triaged; a
+class mode only gates what the court may *apply*.
 
 Classification is data-verified, not reason-string regex. The court loads the
-matched reference (`AthReview.original_duplicate_of`) and re-checks sha256 /
-normalized-source identity before any mechanical verdict:
+matched reference (`AthReview.original_duplicate_of`) and re-checks identity
+before any verdict:
 
-- `rejected_resubmission_byte_identical` — the upload's sha256 equals the
-  rejected ancestor's. "Check whether the cited behavior was removed" is false
-  by construction; the recommendation cites the ancestor's own resolved reject
-  reason. Mechanically decidable.
-- `rejected_resubmission_repack` — normalized-source identity. Same rule.
-- `near_duplicate` and `rejected_resubmission_cross_miner` — not mechanically
-  decidable; the court records an `escalate` with the hold evidence. The
-  escalation itself is always recorded whenever the court runs, because it is
-  operator evidence rather than a resolution.
-- Any evidence-gathering failure escalates. Fail closed.
+- `rejected_resubmission_byte_identical` / `rejected_resubmission_repack`
+  (`triage_revision = rules-v1`) — sha256 or normalized-source identity with
+  an already rejected ancestor. "Check whether the cited behavior was removed"
+  is false by construction; the recommendation cites the ancestor's reject.
+- `near_duplicate` (`triage_revision = family-diff-v1`) — the family diff in
+  `copy_court_family.py` / `copy_court_triage.py`, the same procedure an
+  operator runs by hand:
+  1. Candidate bases: SHAs and UUIDs named in either side's
+     DECLARATION / BASE / ATTRIBUTION documents, every earlier upload of the
+     matched owner, and the four agents most similar to the held one whose
+     exact SHA was public before the held upload. A matched agent uploaded
+     after the held one is replaced by its owner's latest earlier version
+     (who came first); with none, the hold is a time-order clear.
+  2. Disclosure: each candidate's earliest exact-SHA public handoff
+     (`artifact_fetch_audit`, the proof `get_agent_source_release_evidence`
+     reads) against the held upload. Only proven candidates are bases; a
+     missing handoff never proves privacy but cannot support a clear.
+  3. Attribution: every file the held agent shares byte-for-byte (by content
+     digest) with the matched agent must be byte-identical to a proven base or
+     published starter-kit content. The matched agent's **distinctive lines**
+     are its lines in no proven base and not in the held owner's earlier
+     version that predates it; each one found in the held agent is reported
+     by path:line and line digest (never source text).
+  4. Delta read: the held agent's own changes from its primary base, and the
+     passed screening attempt of this exact artifact under its current policy
+     that read them under I1-I8 / S1-S3.
+  5. Precedent: resolved copy-hold rulings from the live store (released-base
+     clears, non-public-copy rejects), preferring ones naming the same base.
+  6. Verdict: CLEAR when the overlap is fully explained by proven-public
+     bases and no distinctive line is present; REJECT (recommendation only)
+     when at least three distinctive lines, or an unexplained file plus a
+     distinctive line, of the unreleased matched agent are present; otherwise
+     ESCALATE naming each unresolved check. Same-owner (coldkey) holds are a
+     same-owner clear.
+- `rejected_resubmission_cross_miner` and unknown classes escalate with the
+  hold evidence. A storage read failure skips the hold for an hour (it never
+  records) so a bad artifact cannot starve the oldest-first queue.
 
 Posture lives in `copy_court_settings_revisions`, written through
 `POST /admin/copy-court/settings` with the confirmation
-`APPLY COPY COURT {MODE}` and an `expected_revision` guard. The master
-`mode` caps every per-class mode; classes start `off` and move
-`off → shadow → enforce` one at a time after shadow-vs-operator calibration.
-In enforce mode the court resolves through the same guarded callable an
-operator uses, with actor `platform:copy-hold-court` and the recommendation
-id cited in the resolution reason so the append-only `AthReviewAction`
-chain shows the court basis. Enforce is never bulk and never touches
-stranded holds.
+`APPLY COPY COURT {MODE}` and an `expected_revision` guard. Only
+`near_duplicate_mode` accepts `enforce` (422 otherwise). With master and
+`near_duplicate_mode` both `enforce`, the court applies exactly one thing: a
+family CLEAR whose triage marked it `auto_clear_eligible` (released-base
+attribution, zero distinctive lines, exact artifact screened under its current
+policy, no open quarantine), through `apply_court_clear` in
+`admin_ath_rulings.py` — the batch preview's guards, a single `clear` step on
+a pending hold, and never when `would_change_crown` is true. The actor is
+`platform:copy-hold-court` and the reason cites the recommendation id. The
+court never applies a reject, an escalation, a same-owner or time-order clear.
+Every applied or skipped outcome is written to `application` / `applied_at`.
 
 Reads: `GET /admin/copy-court/recommendations` (Backroom MCP
-`list_copy_court_recommendations`) pages the shadow feed, newest first,
-`pending_only` by default; `GET /admin/copy-court/settings` is the posture
-and its history (Backroom MCP `get_copy_court_settings`).
+`list_copy_court_recommendations`, optional `agent_id`) pages the feed, newest
+first, `pending_only` by default; `GET /admin/copy-court/settings` is the
+posture, its history and `runtime` (this process's last tick: counters and
+per-hold errors; Backroom MCP `get_copy_court_settings`);
+`GET /admin/copy-court/triage/{agent_id}/preview` (Backroom MCP
+`preview_copy_court_triage`, artifact scope) dry-runs the triage for any
+copy review, pending or resolved, and records nothing.
+
+From 2026-10-05 to this change the loop recorded nothing: the oldest pending
+hold already had a recommendation at the current settings revision, its insert
+hit the unique key on every tick, and `suppress(Exception)` hid the failure.
+Selection now skips holds already triaged by their engine, a failing hold is
+isolated and logged, and the tick summary is visible in Backroom.
 
 ## Generation is not a queue filter
 

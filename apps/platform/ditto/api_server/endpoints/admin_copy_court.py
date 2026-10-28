@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,10 +15,13 @@ from ditto.api_models.copy_court_settings import (
     AdminCopyCourtRecommendationList,
     AdminCopyCourtSettingsRequest,
     AdminCopyCourtSettingsResponse,
+    AdminCopyCourtTriagePreview,
     CopyCourtSettings,
     CopyCourtSettingsRevision,
     copy_court_checksum,
 )
+from ditto.api_server.copy_court_triage import TriageUnavailableError
+from ditto.api_server.copy_hold_court import CopyHoldCourt
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import (
@@ -51,6 +55,7 @@ def _revision(row: CopyCourtSettingsRevisionRow) -> CopyCourtSettingsRevision:
 
 @router.get("/settings", response_model=AdminCopyCourtSettingsResponse)
 async def get_copy_court_settings(
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
     history_limit: Annotated[int, Query(ge=0, le=200)] = 50,
@@ -64,9 +69,11 @@ async def get_copy_court_settings(
         )
     )
     current = rows[0] if rows else None
+    court = getattr(request.app.state, "copy_hold_court", None)
     return AdminCopyCourtSettingsResponse(
         current=_revision(current) if current is not None else None,
         history=[_revision(row) for row in rows[:history_limit]],
+        runtime=court.runtime() if isinstance(court, CopyHoldCourt) else None,
     )
 
 
@@ -124,6 +131,7 @@ async def list_copy_court_recommendations(
     _admin: AdminDep,
     session: SessionDep,
     pending_only: bool = True,
+    agent_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminCopyCourtRecommendationList:
@@ -150,6 +158,8 @@ async def list_copy_court_recommendations(
                 Agent.status == AgentStatus.ATH_PENDING_REVIEW,
             )
         )
+    if agent_id is not None:
+        query = query.where(AthCopyCourtRecommendation.agent_id == agent_id)
     rows = list(await session.scalars(query.limit(limit).offset(offset)))
     return AdminCopyCourtRecommendationList(
         items=[_recommendation(row) for row in rows],
@@ -170,7 +180,79 @@ def _recommendation(row: AthCopyCourtRecommendation) -> AdminCopyCourtRecommenda
         citations=row.citations,
         evidence=row.evidence,
         settings_revision=row.settings_revision,
+        triage_revision=row.triage_revision,
+        application=row.application,
+        applied_at=row.applied_at,
         model=row.model,
         prompt_revision=row.prompt_revision,
         created_at=row.created_at,
+    )
+
+
+@router.get(
+    "/triage/{agent_id}/preview",
+    response_model=AdminCopyCourtTriagePreview,
+    responses={
+        404: {"description": "No copy-kind ATH review for this agent."},
+        409: {"description": "The family triage cannot run in this process."},
+        503: {"description": "An artifact could not be read; retry later."},
+    },
+)
+async def preview_copy_court_triage(
+    agent_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminCopyCourtTriagePreview:
+    """Dry-run the court's triage for one copy-kind ATH review.
+
+    Works on pending and resolved reviews alike, so operators can calibrate
+    the court against settled precedents. Records no recommendation and
+    applies nothing; the artifact reads are audited under the court actor.
+    The evidence carries paths, line numbers and line digests, never source.
+    """
+    court = getattr(request.app.state, "copy_hold_court", None)
+    if not isinstance(court, CopyHoldCourt):
+        raise HTTPException(status_code=409, detail="copy hold court is not running")
+    stored_kind = AthReview.algorithm_provenance["review_kind"].as_string()
+    review = await session.scalar(
+        select(AthReview)
+        .where(AthReview.agent_id == agent_id)
+        .where(
+            stored_kind.is_(None)
+            | stored_kind.not_in(
+                (
+                    "copy",
+                    "benchmark_overfit",
+                    "deferred_source_review",
+                    "anomalous_score",
+                )
+            )
+            | (stored_kind == "copy")
+        )
+        .order_by(AthReview.opened_at.desc())
+        .limit(1)
+    )
+    if review is None:
+        raise HTTPException(status_code=404, detail="no copy-kind ATH review")
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    try:
+        verdict, triage_revision, auto_clear = await court.preview(
+            session, review, agent
+        )
+    except TriageUnavailableError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return AdminCopyCourtTriagePreview(
+        agent_id=str(agent_id),
+        review_id=str(review.review_id),
+        review_status=review.status,
+        hold_class=verdict.hold_class,
+        triage_revision=triage_revision,
+        verdict=verdict.verdict,
+        reason=verdict.reason,
+        citations=verdict.citations,
+        evidence=verdict.evidence,
+        auto_clear_eligible=auto_clear,
     )

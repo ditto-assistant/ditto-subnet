@@ -39,6 +39,8 @@ type GeneratedCopyCourtRecommendation =
   PlatformComponents['schemas']['AdminCopyCourtRecommendation']
 type GeneratedCopyCourtRecommendationList =
   PlatformComponents['schemas']['AdminCopyCourtRecommendationList']
+type GeneratedCopyCourtTriagePreview =
+  PlatformComponents['schemas']['AdminCopyCourtTriagePreview']
 type GeneratedConfirmationSeedAnchorList =
   PlatformComponents['schemas']['AdminConfirmationSeedAnchorList']
 
@@ -9670,10 +9672,23 @@ export const copyCourtRevisionSchema = z.object({
   checksum: z.string().regex(/^[0-9a-f]{64}$/),
 })
 
+export const copyCourtRuntimeSchema = z.object({
+  running: z.boolean(),
+  interval_seconds: z.number(),
+  last_tick_started_at: z.string().nullish(),
+  last_tick_finished_at: z.string().nullish(),
+  last_tick_counters: z.record(z.string(), z.number().int()).optional(),
+  last_tick_error: z.string().nullish(),
+  last_hold_errors: z
+    .array(z.object({ agent_id: z.string(), error: z.string() }))
+    .optional(),
+})
+
 export const copyCourtControlSchema: z.ZodType<GeneratedCopyCourtSettingsResponse> =
   z.object({
     current: copyCourtRevisionSchema.nullable(),
     history: z.array(copyCourtRevisionSchema),
+    runtime: copyCourtRuntimeSchema.nullish(),
   })
 
 export const copyCourtRecommendationSchema: z.ZodType<GeneratedCopyCourtRecommendation> =
@@ -9693,6 +9708,9 @@ export const copyCourtRecommendationSchema: z.ZodType<GeneratedCopyCourtRecommen
     citations: z.array(z.unknown()),
     evidence: z.record(z.string(), z.unknown()),
     settings_revision: z.number().int().nonnegative(),
+    triage_revision: z.string().default('rules-v1'),
+    application: z.record(z.string(), z.unknown()).nullish(),
+    applied_at: z.string().nullish(),
     model: z.string().nullable(),
     prompt_revision: z.string().nullable(),
     created_at: z.string(),
@@ -9708,6 +9726,7 @@ export const copyCourtRecommendationListSchema: z.ZodType<GeneratedCopyCourtReco
 
 export const copyCourtRecommendationsInputSchema = z.object({
   pendingOnly: z.boolean().default(true),
+  agentId: z.string().uuid().optional(),
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
 })
@@ -9718,6 +9737,24 @@ export const applyCopyCourtSettingsInputSchema = z.object({
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
+
+export const copyCourtTriagePreviewInputSchema = z.object({
+  agentId: z.string().uuid(),
+})
+
+export const copyCourtTriagePreviewSchema: z.ZodType<GeneratedCopyCourtTriagePreview> =
+  z.object({
+    agent_id: z.string().uuid(),
+    review_id: z.string().uuid(),
+    review_status: z.string(),
+    hold_class: z.string(),
+    triage_revision: z.string(),
+    verdict: z.enum(['clear', 'reject', 'escalate']),
+    reason: z.string(),
+    citations: z.array(z.unknown()),
+    evidence: z.record(z.string(), z.unknown()),
+    auto_clear_eligible: z.boolean(),
+  })
 
 export type CopyCourtControl = z.infer<typeof copyCourtControlSchema>
 export type CopyCourtRecommendationList = z.infer<

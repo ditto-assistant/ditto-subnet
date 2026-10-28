@@ -366,6 +366,7 @@ import {
   scheduleCanonicalStarter,
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
+  fetchCopyCourtTriagePreview,
   fetchConfirmationSeedAnchors,
   applyCopyCourtSettings,
   applyScreenerReviewSettings,
@@ -714,11 +715,13 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   schedule_canonical_starter_fixture:
     'Queue one bounded source-only report after independent review; no screening/score/admission authority.',
   get_copy_court_settings:
-    'Read the copy-hold triage court posture and revision history.',
+    'Read copy-court posture, history and last tick.',
+  preview_copy_court_triage:
+    'Dry-run copy-hold family triage; records nothing. Artifact scope.',
   get_confirmation_seed_anchors:
     'Read V13+ pinned/waiting confirmation anchors and floors.',
   list_copy_court_recommendations:
-    'Page the shadow court\'s non-authoritative verdicts for pending copy holds.',
+    'Page court verdicts and evidence for copy holds.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -2782,7 +2785,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get copy court settings',
       description:
-        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, and the append-only revision history (newest first, opt-in historyLimit). The master mode caps every class; enforce is designed but not yet wired and resolves through resolve_ath_review. Requires backroom:read.',
+        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, the append-only revision history (newest first), and runtime: this Platform process\'s last tick (started/finished, counters recommended/unavailable/errors/applied/apply_skipped, last_tick_error, and up to ten per-hold errors). Whenever the master mode is not off, every pending copy hold gets a recommendation; a class mode only gates what the court may apply. near_duplicate_mode=enforce is the only accepted enforce: it auto-applies the narrow deterministic family CLEAR (overlap fully explained by a proven-public base, zero distinctive lines of the unreleased matched agent present, exact artifact passed screening under its current policy, no open quarantine, ATH ruling preview ready with would_change_crown=false). The court never applies a reject or an escalation. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchCopyCourtControl()),
@@ -2805,11 +2808,29 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List copy court recommendations',
       description:
-        'Page the copy-hold triage court\'s shadow recommendations, newest first: one non-authoritative verdict (clear | reject | escalate) per pending copy-kind ATH hold, with hold_class, the miner-visible reason, citations, and evidence. pendingOnly=true (default) keeps only recommendations whose review is still pending and whose agent is still held; set false to page the full calibration record including holds an operator has since resolved. Recommendations never changed agent state — resolve_ath_review stays the only resolution path. Pair with get_screening_review_queue reviewKind=copy. Requires backroom:read.',
-      inputSchema: copyCourtRecommendationsInputSchema,
+        'Page the copy-hold triage court\'s recommendations, newest first: one verdict (clear | reject | escalate) per copy-kind ATH hold per settings revision and triage_revision (rules-v1 for resubmission classes, family-diff-v1 for near-duplicate holds), with hold_class, the miner-visible reason, citations (resolved copy-hold precedents), and evidence. family-diff-v1 evidence carries: held/matched identity and coldkeys, time order (matched_after_held, substituted_from), disclosures (each candidate base\'s earliest exact-SHA public handoff vs the held upload and publication_proven_by_reference_time), attribution (every file shared byte-for-byte with the matched agent and the proven-public base that explains it, unexplained paths, the matched agent\'s distinctive_total and each distinctive_present held/matched path:line with a line digest, never source text), the held delta vs its primary base, screening (the passed exact-artifact attempt that read that delta under I1-I8), unresolved checks, auto_clear_eligible and blockers. application/applied_at show what an enforce-mode court did (applied or skipped with the guard). agentId filters to one agent; pendingOnly=true (default) keeps only still-held reviews. Pair with get_screening_review_queue reviewKind=copy. Requires backroom:read.',
+      // Catalog form publishes agentId as plain format uuid; the service
+      // parses the strict schema before any Platform request.
+      inputSchema: {
+        ...copyCourtRecommendationsInputSchema.shape,
+        agentId: sourceAgentId().optional(),
+      },
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCopyCourtRecommendations(input)),
+  )
+
+  registerTool(
+    'preview_copy_court_triage',
+    {
+      title: 'Preview copy court triage',
+      description:
+        'Run the copy-hold court\'s triage for one agent\'s copy-kind ATH review, pending or resolved, without recording or applying anything: the same verdict, reason, citations and evidence a tick would record (see list_copy_court_recommendations), plus auto_clear_eligible. Use it to calibrate the court against settled precedents or to see the family diff before ruling. Near-duplicate holds run the family-diff-v1 attribution against candidate bases (declared in DECLARATION/BASE/ATTRIBUTION documents, the matched owner\'s lineage, and the most similar agents public before the held upload); other classes run rules-v1. Platform reads both submissions\' source and audits the read under platform.copy_court_triage; the response carries paths, line numbers and line digests, never source text. 409 when the court is not running in this Platform process, 503 when an artifact cannot be read. Requires the dedicated backroom:artifact:read scope.',
+      inputSchema: { agentId: sourceAgentId() },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(() => fetchCopyCourtTriagePreview(input, props.session.email)),
   )
 
   registerTool(
@@ -2817,7 +2838,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Apply copy court settings',
       description:
-        'Write one copy-hold triage court posture revision. Settings must be complete (master mode plus all four per-class modes and the tick budget knobs); classes move off → shadow → enforce one at a time after shadow-vs-operator calibration, and the master mode caps every class. Confirmation is APPLY COPY COURT {MODE} with the master mode. In enforce mode the court itself resolves holds with actor platform:copy-hold-court; shadow only records recommendations. Requires backroom:write.',
+        'Write one copy-hold triage court posture revision. Settings must be complete (master mode plus all four per-class modes and the tick budget knobs); the master mode caps every class. Confirmation is APPLY COPY COURT {MODE} with the master mode. Recording needs only a master mode other than off. Only near_duplicate_mode accepts enforce (Platform answers 422 otherwise): with master and near_duplicate_mode both enforce, the court applies the deterministic family CLEAR alone, as actor platform:copy-hold-court through the guarded ATH ruling path, and never when the crown would move; it never applies a reject or an escalation. Every applied or skipped outcome is written to the recommendation. Requires backroom:write.',
       inputSchema: applyCopyCourtSettingsInputSchema,
       annotations: toolAnnotations('write', true),
     },
