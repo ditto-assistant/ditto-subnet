@@ -6515,11 +6515,11 @@ async def test_weight_epoch_refreshes_an_active_heartbeat_before_the_ledger_read
         order.append(state)
         return True
 
-    async def update() -> object:
+    from ditto.validator.worker import _WeightOutcome
+
+    async def update() -> _WeightOutcome:
         order.append("ledger")
         stop.set()
-        from ditto.validator.worker import _WeightOutcome
-
         return _WeightOutcome()
 
     worker._emit_active_heartbeat = emit_active  # type: ignore[method-assign]
