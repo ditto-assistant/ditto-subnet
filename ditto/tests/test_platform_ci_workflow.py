@@ -89,72 +89,25 @@ def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
     }
 
 
-def test_shared_verification_shards_the_complete_suite_without_deselection() -> None:
-    workflow = _load(SHARED_WORKFLOW)
-    test_job = workflow["jobs"]["test"]
-    shards = {
-        entry["suite"]: (entry["pytest_args"], entry["object_storage"])
-        for entry in test_job["strategy"]["matrix"]["include"]
-    }
-    endpoint_root = "ditto/tests/api_server/endpoints/"
-
-    assert shards == {
-        "public-validator-endpoints": (
-            "ditto/tests/api_server/endpoints/test_public.py "
-            "ditto/tests/api_server/endpoints/test_validator.py",
-            False,
-        ),
-        "screener-inference-endpoints": (
-            "ditto/tests/api_server/endpoints/test_screener.py "
-            "ditto/tests/api_server/endpoints/test_inference.py",
-            False,
-        ),
-        "other-endpoints-large": (
-            f"{endpoint_root}test_validator_v9_confirmation_transport.py "
-            "ditto/tests/api_server/endpoints/test_upload.py "
-            "ditto/tests/api_server/endpoints/test_admin_validation_retry.py "
-            "ditto/tests/api_server/endpoints/test_scoring.py "
-            "ditto/tests/api_server/endpoints/test_admin_copy_review.py "
-            "ditto/tests/api_server/endpoints/test_validator_slot_cap.py "
-            "ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py "
-            "ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py "
-            "ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py "
-            "ditto/tests/api_server/endpoints/test_gate_notes.py",
-            False,
-        ),
-        # Every file split into another shard must be ignored here, so the
-        # union remains complete and no endpoint test runs twice.
-        "other-endpoints-remaining": (
-            "ditto/tests/api_server/endpoints "
-            "--ignore=ditto/tests/api_server/endpoints/test_public.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_validator.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_screener.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_inference.py "
-            f"--ignore={endpoint_root}test_validator_v9_confirmation_transport.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_upload.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_admin_validation_retry.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_scoring.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_admin_copy_review.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_validator_slot_cap.py "
-            f"--ignore={endpoint_root}test_admin_queue_policy_settings.py "
-            f"--ignore={endpoint_root}test_admin_validator_slot_settings.py "
-            f"--ignore={endpoint_root}test_admin_confirmation_bundles.py "
-            "--ignore=ditto/tests/api_server/endpoints/test_gate_notes.py",
-            True,
-        ),
-        "api-server": (
-            "ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints",
-            False,
-        ),
-        "data-contract-integration": ("--ignore=ditto/tests/api_server", True),
-    }
+def test_shared_verification_deals_the_complete_suite_across_uniform_shards() -> None:
+    test_job = _load(SHARED_WORKFLOW)["jobs"]["test"]
+    shards = test_job["strategy"]["matrix"]["shard"]
     pytest_step = _step(test_job, "pytest")
-    assert pytest_step["run"] == (
-        "uv run --group browser pytest ${{ matrix.pytest_args }}"
-    )
+
+    assert shards == list(range(8))
+    # The count in DITTO_TEST_SHARD must equal the matrix width, or a slice
+    # of the suite silently never runs.
+    expected_shard = "${{ matrix.shard }}/" + str(len(shards))
+    assert pytest_step["env"]["DITTO_TEST_SHARD"] == expected_shard
+    assert pytest_step["run"] == "uv run --group browser pytest --durations=25"
     assert pytest_step["env"]["DITTO_REQUIRE_POSTGRES"] == "1"
     assert pytest_step["env"]["DITTO_REQUIRE_OBJECT_STORAGE"] == "1"
-    assert _step(test_job, "Start MinIO")["if"] == "matrix.object_storage"
+    assert pytest_step["env"]["DITTO_REQUIRE_BROWSER"] == "1"
+    assert "if" not in _step(test_job, "Start MinIO")
+    chromium = _step(
+        test_job, "Install Chromium for the GitHub OAuth browser regression"
+    )
+    assert chromium["if"] == "matrix.shard == 0"
 
 
 def test_shared_verification_keeps_static_database_and_security_gates() -> None:
