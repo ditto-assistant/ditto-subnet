@@ -443,3 +443,46 @@ def test_unrelated_public_bases_cannot_carry_a_reject() -> None:
     )
     assert verdict.verdict == "escalate"
     assert any("matched family" in item for item in verdict.unresolved)
+
+
+def test_one_convergent_edit_of_a_base_line_clears_without_auto_apply() -> None:
+    """Held and matched both made the same one-token edit to a base line."""
+    base_line = (
+        "    return LEAD_HEADER + '\\n' + '\\n'.join(f'{n}. {t}' for n, t in rows)\n"
+    )
+    edited = base_line.replace("LEAD_HEADER", "header")
+    base = _view("b" * 32, "base", {"app/short.py": "def lead(rows):\n" + base_line}, 0)
+    matched = _view(
+        "m" * 32,
+        "matched",
+        {"app/short.py": "def lead(rows):\n" + edited + "\n".join(_MATCHED_SENTENCES)},
+        24,
+    )
+    held = _view("h" * 32, "held", {"app/short.py": "def lead(rows):\n" + edited}, 48)
+    facts = attribute_family(
+        held=held, matched=matched, bases=[PublicBase(base, "declared_by_held", _T0)]
+    )
+    assert facts.distinctive_present_count == 0
+    assert len(facts.convergent_edits) == 1
+    verdict = family_verdict(
+        _context(
+            held, matched, [_proof(base, proven=True, relation="declared_by_held")]
+        ),
+        facts,
+    )
+    assert verdict.verdict == "clear"
+    assert "convergent" in verdict.reason
+    assert not verdict.auto_clear_eligible
+
+
+def test_many_convergent_edits_count_as_present() -> None:
+    base_lines = [f"VALUE_{i} = compute_value_{i}(record, request)\n" for i in range(5)]
+    edited = [line.replace("request", "req") for line in base_lines]
+    base = _view("b" * 32, "base", {"app/x.py": "".join(base_lines)}, 0)
+    matched = _view("m" * 32, "matched", {"app/x.py": "".join(edited)}, 24)
+    held = _view("h" * 32, "held", {"app/x.py": "".join(edited) + "OWN = 1\n"}, 48)
+    facts = attribute_family(
+        held=held, matched=matched, bases=[PublicBase(base, "similar_public", _T0)]
+    )
+    assert facts.convergent_edits == []
+    assert facts.distinctive_present_count == 5

@@ -50,6 +50,14 @@ DISTINCTIVE_LINE_MIN_TOKENS = 3
 # A reject recommendation needs at least this many present distinctive lines
 # (or a non-trivial shared file no public base carries).
 REJECT_MIN_DISTINCTIVE_LINES = 3
+# A present distinctive line this close to a line of the same file in a public
+# base is a small edit of released code (one renamed variable, one added
+# argument) that two authors can make independently. A few of them are
+# reported apart as convergent edits; this many or more are a pattern and
+# count as present distinctive code.
+CONVERGENT_EDIT_MIN_RATIO = 0.85
+CONVERGENT_EDIT_MAX = 2
+CONVERGENT_SCAN_MAX_HITS = 24
 MAX_EVIDENCE_ROWS = 64
 
 _METADATA_DOC = re.compile(
@@ -171,6 +179,7 @@ class FamilyFacts:
     held_delta: dict[str, Any]
     incomplete: list[str]
     prior_explained_count: int = 0
+    convergent_edits: list[dict[str, Any]] = field(default_factory=list)
     # How many of the matched agent's files some proven base carries byte for
     # byte. Zero means no proven base belongs to the matched family, so its
     # "distinctive" lines are simply all of its lines and prove nothing.
@@ -191,6 +200,7 @@ class FamilyFacts:
             "distinctive_files": self.distinctive_files[:MAX_EVIDENCE_ROWS],
             "prior_suppressed": self.prior_suppressed,
             "prior_explained_count": self.prior_explained_count,
+            "convergent_edits": self.convergent_edits[:MAX_EVIDENCE_ROWS],
             "matched_base_overlap": self.matched_base_overlap,
             "held_delta": self.held_delta,
             "incomplete": self.incomplete,
@@ -222,6 +232,26 @@ def _keys(view: ArtifactView, *, skip_metadata: bool) -> dict[str, tuple[str, in
             if key and key not in out:
                 out[key] = (path, number)
     return out
+
+
+def _closest_base_ratio(key: str, path: str, bases: Sequence[PublicBase]) -> float:
+    """Best similarity of ``key`` to any line of ``path`` in a public base."""
+    best = 0.0
+    for base in bases:
+        text = base.view.texts.get(path)
+        if text is None:
+            continue
+        matcher = difflib.SequenceMatcher(autojunk=False)
+        matcher.set_seq2(key)
+        for raw in text.splitlines():
+            other = line_key(raw)
+            if not other or abs(len(other) - len(key)) > len(key) // 2:
+                continue
+            matcher.set_seq1(other)
+            if matcher.real_quick_ratio() <= best or matcher.quick_ratio() <= best:
+                continue
+            best = max(best, matcher.ratio())
+    return best
 
 
 def _all_keys(views: Iterable[ArtifactView]) -> set[str]:
@@ -351,6 +381,7 @@ def attribute_family(
     held_index = _keys(held, skip_metadata=True)
     distinctive_total = prior_suppressed = 0
     present: list[dict[str, Any]] = []
+    convergent: list[dict[str, Any]] = []
     distinctive_files: set[str] = set()
     for key, (path, number) in _keys(matched, skip_metadata=True).items():
         if not _is_candidate_line(key) or key in base_keys:
@@ -362,13 +393,28 @@ def attribute_family(
         distinctive_files.add(path)
         hit = held_index.get(key)
         if hit is not None:
-            present.append(
-                {
-                    "matched_location": f"{path}:{number}",
-                    "held_location": f"{hit[0]}:{hit[1]}",
-                    "line_sha256": line_digest(key),
-                }
+            row = {
+                "matched_location": f"{path}:{number}",
+                "held_location": f"{hit[0]}:{hit[1]}",
+                "line_sha256": line_digest(key),
+            }
+            # Past a few dozen hits the overlap is a pattern, not a
+            # coincidence; skip the similarity scan (it is the costly part).
+            ratio = (
+                _closest_base_ratio(key, path, bases)
+                if len(present) + len(convergent) < CONVERGENT_SCAN_MAX_HITS
+                else 0.0
             )
+            if ratio >= CONVERGENT_EDIT_MIN_RATIO:
+                convergent.append({**row, "base_similarity": round(ratio, 3)})
+            else:
+                present.append(row)
+    if len(convergent) > CONVERGENT_EDIT_MAX:
+        present.extend(
+            {key: value for key, value in row.items() if key != "base_similarity"}
+            for row in convergent
+        )
+        convergent = []
 
     incomplete: list[str] = []
     if held.omitted:
@@ -399,6 +445,7 @@ def attribute_family(
         prior_suppressed=prior_suppressed,
         held_delta=_held_delta(held, primary.view if primary is not None else None),
         incomplete=incomplete,
+        convergent_edits=convergent,
         matched_base_overlap=sum(
             1
             for digest in matched.digests.values()
@@ -660,6 +707,12 @@ def family_verdict(context: FamilyContext, facts: FamilyFacts) -> FamilyVerdict:
             blockers.append(
                 "matched agent public: clear rests on the matched agent, not a base"
             )
+        if facts.convergent_edits:
+            blockers.append(
+                f"{len(facts.convergent_edits)} matched-agent line(s) in the held "
+                "agent are small edits of a public base line (convergent edits); "
+                "an operator should glance at them"
+            )
         if facts.prior_explained_count:
             blockers.append(
                 f"{facts.prior_explained_count} shared file(s) are explained only by "
@@ -678,7 +731,16 @@ def family_verdict(context: FamilyContext, facts: FamilyFacts) -> FamilyVerdict:
                 f"{facts.explained_count} explained, {facts.trivial_count} trivial) "
                 f"is explained by released source; {base_note}. None of the "
                 f"matched agent's {facts.distinctive_total} distinctive line(s) "
-                f"appear in the held agent. Publication: "
+                f"appear in the held agent"
+                + (
+                    f" beyond {len(facts.convergent_edits)} convergent one-line "
+                    "edit(s) of a public base line ("
+                    + ", ".join(row["held_location"] for row in facts.convergent_edits)
+                    + ")"
+                    if facts.convergent_edits
+                    else ""
+                )
+                + ". Publication: "
                 + "; ".join(
                     f"{p.label} {p.agent_id[:8]} public by exact-SHA handoff at "
                     f"{p.publication_at.isoformat() if p.publication_at else '?'}"

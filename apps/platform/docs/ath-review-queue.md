@@ -381,7 +381,11 @@ before any verdict:
      "distinctive" lines are just all of its lines); otherwise ESCALATE naming
      each unresolved check. Same-owner (coldkey) holds are a same-owner clear.
      The held owner's three latest uploads that predate the matched agent
-     count as the held owner's own lines and bytes (who came first).
+     count as the held owner's own lines and bytes (who came first). Up to
+     two present lines that are each a small edit (similarity >= 0.85) of a
+     line in the same file of a public base are reported as
+     `convergent_edits` instead: the clear stands but is not auto-applied.
+     Three or more are a pattern and count as present.
 - `rejected_resubmission_cross_miner` and unknown classes escalate with the
   hold evidence. A storage read failure skips the hold for an hour (it never
   records) so a bad artifact cannot starve the oldest-first queue.
