@@ -4046,7 +4046,7 @@ def test_prompt_teaches_independent_versioned_invariants(policy_version) -> None
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v38-policy-v13"
+    assert _prompt_revision(13) == "source-review-v39-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I3 MODEL DISSENT",

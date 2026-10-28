@@ -655,6 +655,60 @@ certainty, or refusal state.
 
 Genuine model-led refinement satisfying W7 is permitted.
 
+#### Clarification: one-time reply drafts and reply checks (2026-10-28)
+
+A one-time **reply-draft** or **pre-send reply-check** step is a W7
+model-led critic, not an I3 violation, when the only thing it does is return
+an advisory note to the deciding model. In a reply-draft step, separate model
+drafts of the next step are sampled. In a reply-check step, a separate model
+call reads the reply before it is sent. Either may run after the deciding
+model writes a reply, including a parseable reply with no tool call. If the
+drafts propose a call, or the check says a call is still needed, the host adds
+the model's reply and a note listing what was proposed, and asks the deciding
+model again. This holds when all of the following are true:
+
+- the deciding model can take another step or send its reply unchanged, and
+  the note says so;
+- each step fires at most once per turn: once for the request, not once per
+  model turn and not until a draft or check agrees;
+- after the step, the deciding model's own next reply ships, with only the
+  typography or shape normalization W8 allows; and
+- host code never chooses, rewrites, or withholds and replaces the reply, and
+  never retries it on its own.
+
+Holding a no-call reply back for one extra deciding turn with an advisory note
+that lists the drafted calls is not "withholding a valid reply" or replacing
+"a valid final no-call decision" under I3, when the deciding model can send
+the same reply again and that reply then ships. The deciding model still makes
+the final call. A draft or check that sees the request, the records and the
+catalog is a declared critic under W7, which allows advisory input that the
+deciding model may reject. The host acting on the draft or check result to
+decide whether a note is shown is not, by itself, semantic selection.
+
+These elements are one behavior. A reply-draft step and a reply-check step
+together, each once, are not a second factor.
+
+It is still a violation when host code:
+
+- discards the deciding model's reply, or ships a draft's call or text in its
+  place (I3, I4);
+- forces a tool, pins `tool_choice` or narrows the catalog to the drafted call
+  (I7);
+- loops, re-drafts or re-checks until a draft or check agrees, or until the
+  model takes a call (I3); or
+- acts on the check result without the deciding model choosing, for example
+  by executing a drafted call or blocking the reply (I3, I7).
+
+A reviewer that finds only this resolves those I3 leads as refuted under this
+clarification rather than leaving them unresolved. A reject of a submission
+that has such a step needs an independent ground, proven under its own
+condition.
+
+The 2026-10 screening rejects that rested only on this mechanism (the
+`drafted_steps` / `reply_drafts` / `REPLY_DRAFTS_NOTE` / `REPLY_CHECK_NOTE`
+action-lane step first released in dan0l v24 and v25) are withdrawn as
+precedent. A holding that also proved an independent ground keeps that ground.
+
 ### I4: unauthorized authority transfer
 
 Reject when host processing changes a finalized `answer`, `final_text`,

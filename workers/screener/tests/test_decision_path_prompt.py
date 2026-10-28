@@ -91,6 +91,36 @@ def test_routed_instruction_guidance_is_not_rejectable_alone(render) -> None:
 @pytest.mark.parametrize(
     "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
 )
+def test_one_time_reply_drafts_and_checks_are_w7_not_i3(render) -> None:
+    prompt = render(13)
+    assert "I3 reply-draft and reply-check safe harbor (2026-10-28)." in prompt
+    assert "resolve such I3 leads\nas refuted, not unresolved" in prompt
+    assert "each step fires at\nmost once per turn" in prompt
+    assert "loops until a draft or check agrees (I3)" in prompt
+    assert "reply-draft and reply-check safe harbor" not in render(12)
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    i3 = policy.split("### I3:", 1)[1].split("### I4:", 1)[0]
+    for fragment in (
+        "#### Clarification: one-time reply drafts and reply checks (2026-10-28)",
+        "is a W7\nmodel-led critic, not an I3 violation",
+        "is not \"withholding a valid reply\"",
+        "It is still a violation when host code:",
+        "A reviewer that finds only this resolves those I3 leads as refuted",
+        "are withdrawn as\nprecedent",
+    ):
+        assert fragment in i3
+    probe = (
+        Path(__file__).resolve().parents[1]
+        / "ditto_screener/probe_review/reviewer_prompt.md"
+    ).read_text()
+    assert "one-time reply-draft or pre-send reply-check step" in probe
+
+
+@pytest.mark.parametrize(
+    "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
+)
 def test_record_selection_is_not_rejectable_alone(render) -> None:
     prompt = render(13)
     assert "W3 record-selection safe harbor." in prompt

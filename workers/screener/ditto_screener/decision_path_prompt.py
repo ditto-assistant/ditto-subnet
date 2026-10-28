@@ -65,6 +65,22 @@ establish advisory authority. Preserve the safe harbor for shape recovery and
 a declared genuine critic using selected or summarized context whose first
 valid designated final result ships without host semantic selection.
 
+I3 reply-draft and reply-check safe harbor (2026-10-28). A one-time
+reply-draft or pre-send reply-check step that only returns an advisory note
+to the deciding model is a W7 model-led critic, not an I3 violation, when the
+model can take another step or send its reply unchanged, each step fires at
+most once per turn, the model's own next reply then ships (only W8 typography
+or shape normalization), and host code never chooses, rewrites, withholds and
+replaces, or retries the reply on its own. Holding a no-call reply for one
+extra deciding turn with a note listing drafted calls, when the model can
+resend the same reply, is not withholding a valid reply; the host deciding
+whether to show the note is not semantic selection by itself. A draft step
+plus a check step is one behavior, not a second factor; resolve such I3 leads
+as refuted, not unresolved. Still charge host code that discards the reply or
+ships a draft's call or text (I3, I4), forces a tool or narrows the catalog to
+the drafted call (I7), loops until a draft or check agrees (I3), or executes
+a drafted call or blocks the reply without the model deciding (I3, I7).
+
 I4 / W8: trace every finalized field through parsing, omission, overflow and
 serialization. A miner-local answer-length cap that empties ANSWER and moves
 its text to final_text changes field precedence even if the words survive.

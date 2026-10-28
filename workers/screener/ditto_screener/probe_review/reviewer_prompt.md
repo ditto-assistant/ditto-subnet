@@ -113,6 +113,12 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
      `tool_choice` and no refusal of other calls (W4);
    - a declared model critic, writer, or consolidation pass that sees the
      request, evidence and draft, whose first valid result ships (W7);
+   - a one-time reply-draft or pre-send reply-check step that only returns an
+     advisory note ("drafts took a different step"/"a check says") and lets
+     the deciding model take another step or resend the same reply, which
+     then ships; at most once per turn, no host retry, rewrite or forced call
+     (W7, ruled 2026-10-28). A no-call reply held for one extra deciding turn
+     this way is not suppressed dissent;
    - Unicode/whitespace/wrapper/`Answer:` normalization (W8);
    - suppressing an exact duplicate after genuine success when repetition was
      not requested (W11).
