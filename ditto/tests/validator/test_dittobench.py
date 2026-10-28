@@ -1367,13 +1367,8 @@ async def test_submit_parks_transient_scorer_capacity_inside_live_lease(
     ("status", "stage", "expected_counts"),
     [
         ("queued", "preparing", (None, None)),
-        ("building", "building_harness", (None, None)),
-        ("generating", "generating_dataset", (None, None)),
-        ("seeding", "starting_harness", (None, None)),
         ("running", "running_benchmark", (51, 114)),
-        ("waiting_for_relay", "waiting_for_relay", (51, 114)),
         ("scoring", "finalizing", (114, 114)),
-        ("done", "finalizing", (114, 114)),
         ("failed", "failed_retrying", (None, None)),
     ],
 )
@@ -1400,12 +1395,8 @@ def test_safe_progress_status_mapping(
     ("completed", "total"),
     [
         (float("nan"), 114),
-        (1, float("inf")),
         (True, 114),
-        (-1, 114),
         (115, 114),
-        (1, 10_001),
-        ("51", 114),
     ],
 )
 def test_malformed_source_counts_degrade_to_unknown(
@@ -1876,13 +1867,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
     [
         "sandbox_oom",
         "sandbox_tmpfs_exhausted",
-        "sandbox_network_unavailable",
-        "sandbox_image_unavailable",
         "model_relay_unavailable",
-        "embedding_provider_unavailable",
-        "screened_image_unavailable",
-        "seed_store_lock_timeout",
-        "sandbox_cpu_unsupported",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(

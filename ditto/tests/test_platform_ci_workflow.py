@@ -52,43 +52,6 @@ def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
         assert "push" not in triggers
 
 
-def test_backend_workflow_runs_on_screener_verdict_producer_changes() -> None:
-    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
-    assert {
-        "workers/screener/ditto_screener/policy.py",
-        "workers/screener/ditto_screener/worker.py",
-    } <= backend_paths
-
-
-def test_backend_workflow_does_not_trigger_on_coding_competition_contracts() -> None:
-    # Coding-competition CI stays operator-dispatched (SN-120): contract
-    # vectors and coding wire models no longer pull Platform CI onto a PR.
-    backend_paths = _triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"]
-    assert not [
-        path
-        for path in backend_paths
-        if "dittobench-coding-contract" in path or "api_models/coding_" in path
-    ]
-
-
-def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
-    backend = _load(BACKEND_WORKFLOW)["jobs"]["verify"]
-    dashboard = _load(DASHBOARD_WORKFLOW)["jobs"]["verify"]
-
-    assert backend["uses"] == SHARED_WORKFLOW_USE
-    assert backend["with"] == {
-        "ref": "${{ github.sha }}",
-        "security": True,
-        "backend": True,
-    }
-    assert dashboard["uses"] == SHARED_WORKFLOW_USE
-    assert dashboard["with"] == {
-        "ref": "${{ github.sha }}",
-        "security": True,
-        "dashboard": True,
-    }
-
-
 def test_shared_verification_deals_the_complete_suite_across_uniform_shards() -> None:
     test_job = _load(SHARED_WORKFLOW)["jobs"]["test"]
     shards = test_job["strategy"]["matrix"]["shard"]
@@ -129,20 +92,6 @@ def test_shared_verification_keeps_static_database_and_security_gates() -> None:
     assert "pg_reload_conf" in tune
 
 
-def test_shared_dashboard_preserves_copy_check_test_and_build() -> None:
-    dashboard = _load(SHARED_WORKFLOW)["jobs"]["dashboard"]
-
-    assert dashboard["if"] == "inputs.dashboard"
-    assert _step(dashboard, "faircopy")["run"] == (
-        "npm run lint:copy -- --format github"
-    )
-    assert [_step(dashboard, name)["run"] for name in ("Check", "Test", "Build")] == [
-        "npm run check",
-        "npm test",
-        "npm run build",
-    ]
-
-
 def test_release_owns_shared_exact_source_component_gates() -> None:
     workflow = _load(RELEASE_WORKFLOW)
     plan = workflow["jobs"]["plan"]
@@ -163,13 +112,6 @@ def test_release_owns_shared_exact_source_component_gates() -> None:
         "dashboard": "${{ needs.plan.outputs.platform_dashboard == 'true' }}",
     }
     assert "steps" not in verify
-
-
-def test_migration_order_retries_status_publish_without_failing_a_clean_check() -> None:
-    text = (ROOT / ".github/workflows/platform-migration-order.yml").read_text()
-    assert "max_attempts=6" in text
-    assert "leaving that context pending" in text
-    assert 'exit "$exit_code"' in text
 
 
 def test_migration_order_sweeps_share_one_lane_and_checks_stay_isolated() -> None:

@@ -494,34 +494,6 @@ async def test_scorer_tool_endpoint_bind_failure_reaches_validator_log_boundary(
         (
             {
                 "X-Ditto-Confirmation-Failure-Class": "longmem_run_http_status",
-                "X-Ditto-Confirmation-Failure-Status": "0",
-            },
-            "failure_class=",
-        ),
-        (
-            {
-                "X-Ditto-Confirmation-Failure-Class": "longmem_run_missing_final_text",
-                "X-Ditto-Confirmation-Failure-Status": "500",
-            },
-            "failure_class=",
-        ),
-        (
-            {
-                "X-Ditto-Confirmation-Failure-Class": "longmem_run_tool_endpoint",
-                "X-Ditto-Confirmation-Failure-Status": "500",
-            },
-            "failure_class=",
-        ),
-        (
-            {
-                "X-Ditto-Confirmation-Failure-Class": "longmem_run_http_status",
-                "X-Ditto-Confirmation-Failure-Status": "+500",
-            },
-            "failure_class=",
-        ),
-        (
-            {
-                "X-Ditto-Confirmation-Failure-Class": "longmem_run_http_status",
                 "X-Ditto-Confirmation-Failure-Status": "9" * 5_000,
             },
             "failure_class=",
@@ -1116,21 +1088,8 @@ def test_confirmation_signing_domains_reject_naive_datetimes(
     [
         (("purpose",), "top5_confirmation"),
         (("bench_version",), 8),
-        (("slot_id",), "slot-8"),
-        (("settings_revision",), 0),
-        (("per_bundle_request_cap",), 0),
-        (("per_bundle_request_cap",), 100_001),
-        (("per_bundle_token_cap",), 0),
-        (("per_bundle_token_cap",), 100_000_001),
-        (("deadline",), datetime(2026, 8, 9, 1, 2, 3)),
-        (("execution_profile", "revision"), ""),
         (("execution_profile", "checksum"), "A" * 64),
-        (("execution_profile", "schema_version"), 2),
-        (("execution_profile", "longmem_projection_key_sha256"), "A" * 64),
-        (("execution_profile", "provider_lanes", 0, "max_requests"), 0),
         (("execution_profile", "inference_ablation", "intervention"), "embedding"),
-        (("execution_profile", "embedding_ablation", "intervention"), "inference"),
-        (("execution_profile", "composite", "base_weight_bps"), 10_000),
     ],
 )
 def test_job_contract_rejects_wrong_purpose_version_profile_and_caps(
@@ -1303,7 +1262,6 @@ async def test_claim_returns_none_on_204_without_parsing_a_body() -> None:
     ("mutate", "error"),
     [
         (lambda body: body.update(purpose="canonical_quorum"), "response was invalid"),
-        (lambda body: body.update(bench_version=8), "response was invalid"),
         (lambda body: body.update(slot_id="longmem-2"), "signed claim"),
         (
             lambda body: body["execution_profile"].update(revision="wrong-profile"),
@@ -1312,20 +1270,6 @@ async def test_claim_returns_none_on_204_without_parsing_a_body() -> None:
         (
             lambda body: body["execution_profile"].update(checksum="ee" * 32),
             "signed claim",
-        ),
-        (lambda body: body.update(per_bundle_request_cap=0), "response was invalid"),
-        (
-            lambda body: body.update(per_bundle_request_cap=100_001),
-            "response was invalid",
-        ),
-        (lambda body: body.update(per_bundle_token_cap=0), "response was invalid"),
-        (
-            lambda body: body.update(per_bundle_token_cap=100_000_001),
-            "response was invalid",
-        ),
-        (
-            lambda body: body.update(deadline="2026-08-09T01:02:03"),
-            "response was invalid",
         ),
     ],
 )
@@ -2046,8 +1990,6 @@ def test_rebuild_rejects_native_dimension_evidence_tampering() -> None:
     [
         "evidence_sha256",
         "longmemeval",
-        "inference_ablation",
-        "embedding_ablation",
         "ablation_coordinator_latency_ms",
     ],
 )

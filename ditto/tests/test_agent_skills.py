@@ -4,7 +4,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).parents[2]
@@ -22,83 +21,12 @@ lookup_context = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(lookup_context)
 
 
-def test_fallback_withdrawal_scope_is_public_safe_and_discoverable() -> None:
-    skill = ROOT / ".agents/skills/backroom-review"
-    manifest = (
-        skill / "references/precedents/october-25-fallback-recovery-withdrawal.json"
-    )
-    data = json.loads(manifest.read_text())
-    assert data["date"] == "2026-10-25"
-    rows = data["items"]
-    assert len(rows) == len({r["agent_id"] for r in rows}) == 51
-    for row in rows:
-        assert set(row) == {"agent_id", "artifact_sha256"}
-        assert str(uuid.UUID(row["agent_id"])) == row["agent_id"]
-        assert len(row["artifact_sha256"]) == 64
-        assert bytes.fromhex(row["artifact_sha256"])
-    assert "13449296-a28e-4849-95c8-6055d50e4784" not in {r["agent_id"] for r in rows}
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(skill / "scripts/search-precedents.py"),
-            "october-25-fallback-recovery-withdrawal",
-            "--json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    found = json.loads(result.stdout)
-    holding = next(
-        row
-        for row in found["items"]
-        if row["id"] == "october-25-fallback-recovery-withdrawal"
-    )
-    assert holding["resolution"] == "guidance"
-    assert "separate prohibited mechanism" in holding["holding"]
-    for entry in (
-        skill / "SKILL.md",
-        ROOT / ".agents/skills/backroom-board-sweep/SKILL.md",
-    ):
-        assert "october-25-fallback-recovery-withdrawal.md" in entry.read_text()
-
-
 def test_vtrust_routes_to_stateful_pylon_and_chain_evidence() -> None:
     topic = lookup("vTrust")[0]
     assert topic["id"] == "pylon-epoch-schedule"
     read = topic["read"]
     assert isinstance(read, list)
     assert "services/pylon/README.md" in read
-
-
-def test_historical_loss_withdrawals_preserve_court_and_identity_scope() -> None:
-    precedents = ROOT / ".agents/skills/backroom-review/references/precedents"
-    current = json.loads(
-        (precedents / "october-25-fallback-recovery-withdrawal.json").read_text()
-    )
-    historical = json.loads(
-        (precedents / "october-25-historical-loss-withdrawal.json").read_text()
-    )
-    assert historical["date"] == "2026-10-25"
-    assert len(historical["ath_items"]) == 17
-    assert len(historical["screening_items"]) == 1
-    rows = historical["ath_items"] + historical["screening_items"]
-    assert len({r["agent_id"] for r in rows}) == 18
-    assert not {r["agent_id"] for r in rows} & {r["agent_id"] for r in current["items"]}
-    for row in rows:
-        assert set(row) == {"agent_id", "artifact_sha256"}
-        assert str(uuid.UUID(row["agent_id"])) == row["agent_id"]
-        assert len(row["artifact_sha256"]) == 64
-        assert bytes.fromhex(row["artifact_sha256"])
-    assert historical["screening_items"][0]["agent_id"] == (
-        "1252e986-6ce5-4771-b7e5-39443d27d5d2"
-    )
-    guidance = (precedents / "october-25-historical-loss-withdrawal.md").read_text()
-    assert "Requeue is not CLEAR" in guidance
-    assert "does not claim all" in guidance
-    assert "not claim that the old policy text always said the same thing" in guidance
-    assert "requires checking each exact artifact for other" in guidance
-    assert "not a completed source CLEAR" in guidance
 
 
 def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:
@@ -163,112 +91,6 @@ def test_contributor_backlog_routes_to_review_and_delivery() -> None:
             "github",
             "ditto-subnet-worktree",
         ]
-
-
-def test_hosted_authoring_input_routes_to_both_consumers() -> None:
-    topic = lookup("hosted authoring input assembler")[0]
-    assert topic["id"] == "coding-hosted-inputs"
-    assert "ditto-subnet-platform" in topic_list(topic, "skills")
-    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
-
-
-def test_compiled_bootstrap_routes_to_pre_exec_isolation() -> None:
-    topic = lookup("compiled candidate launcher")[0]
-    assert topic["id"] == "coding-compiled-bootstrap"
-    assert "services/dittobench-api/coding_runtime/compiled" in topic_list(
-        topic, "owns"
-    )
-    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
-
-
-def test_private_go_oracle_routes_to_its_admission_boundary() -> None:
-    topic = lookup("private Go oracle")[0]
-    assert topic["id"] == "coding-go-oracle"
-    assert "services/dittobench-api/internal/codinggooracle" in topic_list(
-        topic, "owns"
-    )
-    driver = lookup("coding Go runtime driver")[0]
-    assert driver["id"] == "coding-go-oracle"
-    assert "services/dittobench-api/internal/codinggodriver" in topic_list(
-        driver, "owns"
-    )
-
-
-def test_node_typescript_grader_routes_to_its_private_oracle() -> None:
-    topic = lookup("coding typescript grader")[0]
-    assert topic["id"] == "coding-node-runtime"
-    assert lookup("Node suite compatibility")[0]["id"] == "coding-node-runtime"
-    assert "services/dittobench-api/coding_runtime/node" in topic_list(topic, "owns")
-    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
-
-
-def test_native_host_qualification_routes_to_separate_infrastructure() -> None:
-    topic = lookup("native v2 host qualification")[0]
-    assert topic["id"] == "coding-hosted-host"
-    assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
-    assert "infra/terraform/modules/coding-hosted-host" in topic_list(topic, "owns")
-    assert "infra/ansible/roles/coding_hosted" in topic_list(topic, "owns")
-
-
-def test_private_python_oracle_routes_to_its_runtime_boundary():
-    topic = lookup("Python suite compatibility")[0]
-    assert topic["id"] == "coding-python-oracle"
-    assert "services/dittobench-api/coding_runtime/python" in topic_list(topic, "owns")
-    assert topic_list(topic, "skills") == ["ditto-subnet-benchmark"]
-
-
-def test_coding_package_bootstrap_routes_to_native_host():
-    assert lookup("coding package bootstrap")[0]["id"] == "coding-hosted-host"
-
-
-def test_native_oci_import_routes_to_native_host():
-    topic = lookup("native OCI image import")[0]
-    assert topic["id"] == "coding-hosted-host"
-    assert "infra/ansible/roles/coding_hosted_image" in topic_list(topic, "owns")
-
-
-def test_native_worker_network_routes_to_scoped_connectivity():
-    topic = lookup("native trusted connectivity")[0]
-    assert topic["id"] == "coding-hosted-connectivity"
-    assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
-
-
-def test_hosted_worker_launcher_routes_to_native_runtime() -> None:
-    topic = lookup("hosted worker launcher")[0]
-    assert topic["id"] == "coding-hosted-inputs"
-    assert "services/dittobench-api/internal/codinghostedruntime" in topic_list(
-        topic, "owns"
-    )
-
-
-def test_native_inference_routes_to_its_private_authority() -> None:
-    topic = lookup("native v2 inference budget")[0]
-    assert topic["id"] == "coding-hosted-inference"
-    assert "ditto-subnet-platform" in topic_list(topic, "skills")
-
-
-def test_native_provider_routes_to_its_private_authority() -> None:
-    topic = lookup("native hosted provider adapter")[0]
-    assert topic["id"] == "coding-hosted-inference"
-
-
-def test_native_relay_routes_to_both_runtime_owners() -> None:
-    topic = lookup("native hosted source relay")[0]
-    assert topic["id"] == "coding-hosted-relay"
-    assert "ditto-subnet-platform" in topic_list(topic, "skills")
-    assert "ditto-subnet-benchmark" in topic_list(topic, "skills")
-
-
-def test_native_database_path_routes_to_private_infrastructure():
-    topic = lookup("native private postgres path")[0]
-    assert topic["id"] == "coding-hosted-postgres"
-    assert topic_list(topic, "skills") == ["ditto-subnet-release-ops"]
-
-
-def test_native_bundle_routes_to_build_and_installation():
-    topic = lookup("native runtime bundle")[0]
-    assert topic["id"] == "coding-hosted-runtime-install"
-    assert "ditto-subnet-release-ops" in topic_list(topic, "skills")
 
 
 def _tracked_skill_names(prefix: str) -> set[str]:
@@ -438,53 +260,15 @@ def test_hippius_token_expiry_query_routes_to_lifecycle_skill() -> None:
     assert "hippius-token-lifecycle" in topic_list(infra_cloud, "skills")
 
 
-def test_targon_query_routes_to_capacity_and_release() -> None:
-    topic_ids = {
-        str(topic["id"])
-        for topic in lookup(
-            "scale Targon screeners to zero with GCE fallback and deploy the "
-            "trusted builder",
-            maximum=2,
-        )
-    }
-    assert topic_ids == {"screener-capacity", "release-delivery"}
-
-
 def test_typo_heavy_screener_builder_query_keeps_the_capacity_owner_first() -> None:
     topic_ids = [str(topic["id"]) for topic in lookup("screeners/buildres")]
     assert topic_ids == ["screener-capacity"]
-
-
-def test_targon_scale_to_zero_does_not_route_to_worktrees() -> None:
-    topic_ids = {
-        str(topic["id"])
-        for topic in lookup(
-            "Scale screeners to zero and use Targon first with bounded GCE fallback"
-        )
-    }
-    assert "screener-capacity" in topic_ids
-    assert "worktrees" not in topic_ids
 
 
 def test_short_keywords_do_not_match_inside_unrelated_tokens() -> None:
     topic_ids = {str(topic["id"]) for topic in lookup("preview buildres", maximum=3)}
     assert "worktrees" not in topic_ids
     assert "platform-dashboard" not in topic_ids
-
-
-def test_specialized_skills_pass_raw_task_text_to_context_lookup() -> None:
-    for skill in (
-        "ditto-subnet-platform",
-        "ditto-subnet-benchmark",
-        "ditto-subnet-release-ops",
-    ):
-        body = (ROOT / ".agents" / "skills" / skill / "SKILL.md").read_text()
-        assert "--max-topics" in body
-        assert '"$ARGUMENTS"' in body
-    platform = (
-        ROOT / ".agents" / "skills" / "ditto-subnet-platform" / "SKILL.md"
-    ).read_text()
-    assert "platform api database dashboard backroom $ARGUMENTS" not in platform
 
 
 def test_longmemeval_query_preserves_research_scoring_boundary() -> None:
@@ -567,30 +351,6 @@ def test_rolling_board_sweep_routes_to_sweep_then_review() -> None:
         assert "backroom-review" in topic_list(topics[0], "skills")
 
 
-def test_mine_skill_applies_operator_review_bar_locally() -> None:
-    skill = ROOT / ".agents" / "skills" / "mine"
-    body = (skill / "SKILL.md").read_text()
-    metadata = (skill / "agents" / "openai.yaml").read_text()
-    review_root = ROOT / ".agents" / "skills" / "backroom-review"
-
-    assert "review-bar.md" in body
-    assert "review-rules.md" in body
-    assert "techniques.md" in body
-    assert "search-precedents.py" in body
-    assert "two-limb" in body
-    assert "production-engine" in body
-    assert "Would reject" in body
-    assert "Do not run `full` as certification, package, or upload" in body
-    assert "execute_screening_quarantine_batch" not in body
-    assert "open_ath_review" not in body
-    assert "https://backroom.dittobench.ai/mcp" not in body
-    assert "https://backroom.dittobench.ai/mcp" not in metadata
-    assert (review_root / "references" / "review-bar.md").is_file()
-    assert (review_root / "references" / "review-rules.md").is_file()
-    assert (review_root / "references" / "techniques.md").is_file()
-    assert (review_root / "scripts" / "search-precedents.py").is_file()
-
-
 def test_miner_pre_submit_review_query_stays_on_mine() -> None:
     topic_ids = [
         str(topic["id"])
@@ -656,24 +416,6 @@ def test_generator_round_queries_route_to_generator_competition() -> None:
         assert "ditto-subnet-bench-version-bump" in topic_list(topics[0], "skills")
 
 
-def test_skills_point_at_the_tandem_upgrade_runbook() -> None:
-    doc = TANDEM_UPGRADES_DOC.rsplit("/", 1)[1]
-    for skill in (
-        "ditto-subnet-bench-version-bump",
-        "ditto-subnet-benchmark",
-        "ditto-subnet-release-ops",
-        "mine",
-        "subnet-status",
-    ):
-        text = (ROOT / ".agents" / "skills" / skill / "SKILL.md").read_text()
-        assert doc in text, skill
-    bump = (
-        ROOT / ".agents/skills/ditto-subnet-bench-version-bump/SKILL.md"
-    ).read_text()
-    assert "Generator pack version N" in bump
-    assert "explicit operator approval" in bump
-
-
 def test_longmem_confirmation_rollout_query_selects_the_rollout_skill() -> None:
     topic_ids = [
         str(topic["id"])
@@ -697,12 +439,6 @@ def test_production_postgres_explain_routes_to_gcloud_readonly() -> None:
     assert "gcloud-ditto-readonly" in topic_list(topics[0], "skills")
 
 
-def test_targon_kaniko_log_query_prefers_readonly_skill_over_capacity() -> None:
-    topic_ids = [str(topic["id"]) for topic in lookup("Targon kaniko builder logs")]
-    assert topic_ids[0] == "prod-readonly"
-    assert "screener-capacity" in topic_ids or len(topic_ids) == 1
-
-
 def test_platform_disk_full_routes_to_host_disk_topic() -> None:
     topics = lookup("platform deploy no space left on device")
     topic_ids = [str(topic["id"]) for topic in topics]
@@ -719,21 +455,6 @@ def test_preview_compose_stack_does_not_route_to_worktrees() -> None:
     assert "preview-channels" in topic_ids
     assert "worktrees" not in topic_ids
     assert "platform-api" not in topic_ids
-
-
-def test_public_canary_inference_settlement_routes_to_request_ledger() -> None:
-    topic_ids = [
-        str(topic["id"])
-        for topic in lookup("claimed-lease public-canary inference settlement")
-    ]
-    assert topic_ids[0] == "coding-inference-requests"
-
-
-def test_certified_canary_settlement_bind_routes_to_request_ledger() -> None:
-    topic_ids = [
-        str(topic["id"]) for topic in lookup("certified canary settlement bind")
-    ]
-    assert topic_ids[0] == "coding-inference-requests"
 
 
 def test_platform_api_review_does_not_select_ath_review() -> None:

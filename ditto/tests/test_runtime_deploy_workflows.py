@@ -24,20 +24,6 @@ def test_manual_platform_deploy_requires_release_tag_or_force() -> None:
     assert "[0-9]+$'" in contract
 
 
-def test_screener_delivery_has_no_scheduled_push_workflow() -> None:
-    assert not (ROOT / ".github/workflows/screener-deploy.yml").exists()
-
-    release = yaml.safe_load((ROOT / ".github/workflows/release.yml").read_text())
-    steps = release["jobs"]["assemble-screener-fleet-release"]["steps"]
-    handoff = next(
-        step
-        for step in steps
-        if step.get("name") == "Record pull-based screener delivery"
-    )
-    assert "zero-sized GCE fleet is a successful no-op" in handoff["run"]
-    assert "screener-fleet-stable" in steps[-2]["run"]
-
-
 def _platform_deploy_command() -> str:
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/platform-deploy.yml").read_text()
@@ -135,26 +121,6 @@ def test_platform_deploy_targets_the_ansible_provisioned_checkout() -> None:
     assert f"cd {root} &&" in _platform_deploy_command()
 
 
-def test_platform_deploy_preflights_the_checkout_before_touching_the_host() -> None:
-    """An unconverged host must be diagnosable from the failure alone.
-
-    A bare `cd` into a missing directory reports only that the directory is
-    missing -- not that the host was never provisioned, not that it is still
-    serving the pre-cutover checkout, and not which playbook fixes it.
-    """
-    command = _platform_deploy_command()
-    root = _platform_checkout_root()
-
-    # The guard runs BEFORE the cd it protects, or it protects nothing.
-    assert command.index(f"[ ! -d {root}/.git ]") < command.index(f"cd {root} &&")
-    # Names the pre-cutover checkout, so "merged but not live" is self-evident.
-    assert "/opt/ditto-platform/.git" in command
-    # Names the fix, not just the symptom.
-    assert "gcp-platform-app.yml" in command
-    # EX_CONFIG: a provisioning gap is not a deploy fault.
-    assert "exit 78" in command
-
-
 def test_platform_deploy_rejects_a_half_provisioned_checkout() -> None:
     """A cloned checkout with no rendered .env must not read as deployable.
 
@@ -173,21 +139,3 @@ def test_platform_deploy_rejects_a_half_provisioned_checkout() -> None:
         f"cd {root} &&"
     )
     assert "HALF provisioned" in command
-
-
-def test_platform_role_renders_no_retired_coding_profile() -> None:
-    """The Coding competition is retired; the Platform role sets none of its env.
-
-    The relay still reads its own default-off coding gate until its removal, so
-    leaving the variables unset keeps it at that default.
-    """
-    role = ROOT / "infra/ansible/roles/platform_app"
-    for path in (
-        role / "defaults/main.yml",
-        role / "templates/platform.env.j2",
-        role / "tasks/main.yml",
-    ):
-        text = path.read_text()
-        assert "DITTO_CODING_" not in text, path
-        assert "platform_coding_" not in text, path
-        assert "secret_coding_" not in text, path

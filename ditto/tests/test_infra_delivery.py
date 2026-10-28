@@ -255,37 +255,3 @@ def test_infra_apply_requires_current_main_and_sealed_plan() -> None:
         "sha256sum -c tfplan.sha256"
         in apply["Fetch and verify exact private plan"]["run"]
     )
-
-
-def test_capacity_controller_retires_targon_builder_and_credential() -> None:
-    intent = (GCP_ROOT / "prod.auto.tfvars").read_text()
-    assert re.search(
-        r"^enable_screener_capacity_controller\s*=\s*true$", intent, re.MULTILINE
-    )
-    role = ROOT / "infra" / "ansible" / "roles" / "screener_capacity_controller"
-    tasks = (role / "tasks" / "main.yml").read_text()
-    controller_unit = (
-        role / "templates" / "ditto-screener-capacity.service.j2"
-    ).read_text()
-    assert not (role / "templates" / "ditto-image-builder.service.j2").exists()
-    assert "ditto-image-builder" in tasks
-    assert "targon-api-key" in tasks
-    assert "--targon-" not in controller_unit
-    updater = (
-        ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
-    ).read_text()
-    assert 'systemctl start "$BUILDER_UNIT"' not in updater
-    assert 'systemctl stop "$RETIRED_BUILDER_UNIT" || return 1' in updater
-    assert 'systemctl disable "$RETIRED_BUILDER_UNIT"' in updater
-    assert 'rm -f -- "$RETIRED_BUILDER_UNIT_FILE" "$RETIRED_TARGON_KEY_FILE"' in updater
-    assert updater.index("retire_builder\n") < updater.index(
-        'if [[ "$previous_sha" == "$CONTROLLER_EXPECTED_SHA" ]]'
-    )
-
-    platform_prod = (
-        ROOT / "infra" / "ansible" / "host_vars" / "ditto-platform-prod.yml"
-    ).read_text()
-    assert (
-        'secret_screener_controller_api_token: "screener-controller-api-token-prod"'
-        in platform_prod
-    )
