@@ -904,7 +904,11 @@ async def arrival_bench_version(session: AsyncSession, *, agent: Agent) -> int:
 
     This mirrors :func:`ditto.db.queries.benchmark_admission.
     benchmark_admission_predicate`'s ``created_at >= rollout.created_at`` and
-    carryover disjuncts, in Python, for one already-loaded agent.
+    carryover disjuncts, in Python, for one already-loaded agent. The
+    first-queued-in-era disjunct is deliberately not mirrored: while the rollout
+    is open such a submission is served by the active era like any other
+    in-flight work, and once the rollout activates the active version is the
+    desired one, so this already answers the era it is admitted to.
     """
     bench_version = await active_bench_version(session)
     rollout = await open_rollout(session)
