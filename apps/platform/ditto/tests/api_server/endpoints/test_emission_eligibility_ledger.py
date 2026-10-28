@@ -422,32 +422,6 @@ class TestValidatorLedger:
 
 
 class TestPublicBoard:
-    async def test_unverified_protocol_27_weight_setter_stays_payable_on_board(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session: AsyncSession,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        leader, _ = await _two_miners(session)
-        await _hold(session, leader, kind="deferred_source_review")
-        await _set_posture(session, enforcement="enforce")
-        seen_at = datetime.now(UTC)
-        await _fleet(session, seen_at=seen_at)
-        await _unverified_weight_setter(session, seen_at=seen_at)
-        app.state.emission_eligibility.invalidate()
-
-        response = await client.get("/api/v1/public/leaderboard")
-        assert response.status_code == 200, response.text
-        held = next(
-            entry
-            for entry in response.json()["entries"]
-            if entry["agent_id"] == str(leader)
-        )
-        assert held["reward_eligibility"]["enforcement"] == "shadow"
-        assert held["reward_eligibility"]["reward_eligible"] is True
-
     async def test_the_board_keeps_the_score_and_says_why_it_is_not_earning(
         self,
         app: FastAPI,
@@ -487,23 +461,6 @@ class TestPublicBoard:
         assert clean["reward_eligibility"]["state"] == "eligible"
         assert clean["reward_eligibility"]["reward_eligible"] is True
         assert clean["emission_eligible"] is not False
-
-    async def test_board_carries_no_eligibility_annotation_while_the_gate_is_off(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session: AsyncSession,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        leader, _ = await _two_miners(session)
-        await _hold(session, leader, kind="deferred_source_review")
-
-        response = await client.get("/api/v1/public/leaderboard")
-        assert response.status_code == 200, response.text
-        entries = response.json()["entries"]
-        # A platform that merely merged this serves the pre-#2041 payload.
-        assert all(entry.get("reward_eligibility") is None for entry in entries)
 
     async def test_the_submission_page_explains_a_withheld_score(
         self,

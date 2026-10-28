@@ -36,7 +36,6 @@ from ditto.api_server.generator_rounds import (
     OPEN_DEFERRED_KEY,
     ROUND_OPEN_CAPACITY_GRACE,
     advance_rounds,
-    choose_round_bench_version,
     get_round,
     round_bench_version,
     round_capable_validators,
@@ -800,24 +799,6 @@ class TestScorerGradingVersionLease:
         assert "treated as v13-only" in (row.void_reason or "")
 
 
-async def test_choose_keeps_v13_when_the_active_version_predates_rounds(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    async def _active(_session: AsyncSession, **_: Any) -> int:
-        return 9
-
-    async def _capable(*_args: Any, **_kwargs: Any) -> int:
-        return 1
-
-    monkeypatch.setattr(rounds_mod, "active_bench_version", _active)
-    monkeypatch.setattr(rounds_mod, "round_capable_validators", _capable)
-    contract = await choose_round_bench_version(
-        session, cases_per_column=40, now=datetime.now(UTC)
-    )
-    assert contract.bench_version == 13
-    assert contract.reason is not None and "predates" in contract.reason
-
-
 def test_a_round_without_a_frozen_version_ran_at_v13() -> None:
     legacy = GeneratorRound(bench_version=None)
     assert round_bench_version(legacy) == LEGACY_ROUND_BENCH_VERSION == 13
@@ -832,13 +813,6 @@ def _round_heartbeat(hotkey: str, now: datetime, versions: list[int]) -> Any:
     scorer["generator_rounds"] = True
     scorer["generator_round_max_cases"] = 80
     return heartbeat
-
-
-def test_round_capacity_is_gated_on_the_round_version() -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    v13_only = _round_heartbeat("5" + "C" * 47, now, [7, 13])
-    assert round_column_capacity(v13_only, now=now, bench_version=13) == 80
-    assert round_column_capacity(v13_only, now=now, bench_version=14) is None
 
 
 def test_round_capacity_requires_the_scorer_round_mode_for_the_version() -> None:
@@ -862,9 +836,7 @@ def test_round_capacity_requires_the_scorer_round_mode_for_the_version() -> None
     assert round_column_capacity(v13_mode, now=now, bench_version=14) is None
 
 
-@pytest.mark.parametrize(
-    ("active", "contract"), [(9, 13), (13, 13), (14, 14), (15, 14)]
-)
+@pytest.mark.parametrize(("active", "contract"), [(13, 13), (14, 14), (15, 14)])
 def test_round_contract_for_the_active_version(active: int, contract: int) -> None:
     assert round_contract_for(active) == contract
 

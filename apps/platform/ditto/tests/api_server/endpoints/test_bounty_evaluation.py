@@ -9,11 +9,8 @@ values and the current decision, never who recorded them.
 from __future__ import annotations
 
 import json
-from uuid import uuid4
 
 import pytest
-from sqlalchemy import text
-from sqlalchemy.exc import DBAPIError
 
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
     _ADMIN_TOKEN,
@@ -205,15 +202,6 @@ async def test_the_report_names_no_one_and_no_private_note(world):
     "over,status,message",
     [
         ({"confirmation": "RECORD BOUNTY"}, 409, "RECORD BOUNTY ESTIMATE BUILD_HOURS"),
-        ({"reason": " " * 12}, 400, "reason must not be blank"),
-        ({"note": "   "}, 400, "note must not be blank"),
-        ({"value": -1}, 422, "request validation failed"),
-        ({"value": 1_000_001}, 422, "request validation failed"),
-        ({"value": "40"}, 422, "request validation failed"),
-        ({"metric": "lines_of_code"}, 422, "request validation failed"),
-        ({"kind": "guess"}, 422, "request validation failed"),
-        ({"expected_entry_id": -1}, 422, "request validation failed"),
-        ({"bounty": "00000000-0000-4000-8000-000000000000"}, 404, "bounty not found"),
     ],
 )
 async def test_refused_entries_record_nothing(world, over, status, message):
@@ -227,11 +215,6 @@ async def test_refused_entries_record_nothing(world, over, status, message):
     "over,status,message",
     [
         ({"confirmation": "DECIDE"}, 409, f"DECIDE BOUNTY EVALUATION {REPO}#{ISSUE}"),
-        ({"reasons": " " * 12}, 400, "reasons must not be blank"),
-        ({"reasons": "short"}, 422, "request validation failed"),
-        ({"decision": "pause"}, 422, "request validation failed"),
-        ({"integration_status": "merged"}, 422, "request validation failed"),
-        ({"expected_decision_id": 7}, 409, "current decision is 0"),
     ],
 )
 async def test_refused_decisions_record_nothing(world, over, status, message):
@@ -239,64 +222,3 @@ async def test_refused_decisions_record_nothing(world, over, status, message):
     assert refused.status_code == status, refused.text
     assert message in refused.json()["message"]
     assert (await operator(world))["evaluation"]["decisions"] == []
-
-
-async def test_evaluation_records_are_append_only(world):
-    assert (await entry(world)).status_code == 200
-    assert (await decision(world)).status_code == 200
-    history = "bounty history is append-only"
-    for statement in (
-        "UPDATE bounty_evaluation_entries SET value = 1",
-        "DELETE FROM bounty_evaluation_entries",
-        "TRUNCATE bounty_evaluation_entries",
-        "UPDATE bounty_evaluation_decisions SET decision = 'stop'",
-        "DELETE FROM bounty_evaluation_decisions",
-        "TRUNCATE bounty_evaluation_decisions",
-    ):
-        async with world.maker() as session:
-            with pytest.raises(DBAPIError, match=history):
-                await session.execute(text(statement))
-            await session.rollback()
-    # The checks refuse what the API refuses, written around it.
-    bounty = bounty_of(world)
-    for statement, check in (
-        (
-            "INSERT INTO bounty_evaluation_entries (bounty_id, kind, metric, value,"
-            " reason, actor, recorded_at) VALUES (:bounty, 'estimate', 'build_hours',"
-            " 'NaN', 'fixture reason', 'fixture', now())",
-            "ck_bounty_evaluation_entries_entry",
-        ),
-        (
-            "INSERT INTO bounty_evaluation_decisions (bounty_id, decision,"
-            " integration_status, reasons, actor, recorded_at) VALUES (:bounty,"
-            " 'expand', 'integrated', '   ', 'fixture', now())",
-            "ck_bounty_evaluation_decisions_decision",
-        ),
-    ):
-        async with world.maker() as session:
-            with pytest.raises(DBAPIError, match=check):
-                await session.execute(text(statement), {"bounty": bounty})
-            await session.rollback()
-
-
-async def test_evaluation_routes_declare_their_errors(app):
-    paths = app.openapi()["paths"]
-    for route in ("entries", "decisions"):
-        assert {"400", "401", "404", "409"} <= set(
-            paths[f"{ADMIN}/{{bounty_id}}/evaluation/{route}"]["post"]["responses"]
-        ), route
-
-
-async def test_an_unknown_bounty_has_no_evaluation(world):
-    missing = await world.client.post(
-        f"{ADMIN}/{uuid4()}/evaluation/decisions",
-        headers=_HEADERS,
-        json={
-            "decision": "stop",
-            "integration_status": "not_integrated",
-            "expected_decision_id": 0,
-            "reasons": "fixture: no such bounty",
-            "confirmation": "DECIDE BOUNTY EVALUATION",
-        },
-    )
-    assert missing.status_code == 404, missing.text

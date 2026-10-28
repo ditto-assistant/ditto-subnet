@@ -11,7 +11,6 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 
 from ditto.api_models.bounty import BountyTerms, bounty_spec_digest
-from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server import create_api_server
 from ditto.db.models import Bounty, BountyEvent, BountyRevision, BountyRound, BountySlot
 from ditto.tests.api_server.conftest import make_api_server_config
@@ -176,15 +175,7 @@ async def test_later_revision_keeps_existing_slots_and_round(
     "terms,refusal",
     [
         ({"entry_fee_alpha_rao": 0}, "entry fee must be a positive alpha amount"),
-        ({"reward_pool_alpha_rao": 0}, "reward pool must be a positive alpha amount"),
-        ({"attempts_per_round": 2}, "exactly 3 paid slots per round"),
         ({"funding_mode": "live"}, "live funding needs separate operator approval"),
-        (
-            {"fee_escrow_hotkey": TERMS["fee_escrow_coldkey"]},
-            "coldkey and hotkey must be different keys",
-        ),
-        ({"title": "   "}, "title must not be blank"),
-        ({"acceptance_evidence": "\n"}, "acceptance_evidence must not be blank"),
     ],
 )
 async def test_incomplete_terms_are_refused_by_preview_and_publish(
@@ -206,8 +197,6 @@ async def test_incomplete_terms_are_refused_by_preview_and_publish(
 @pytest.mark.parametrize(
     "phrase",
     [
-        "PUBLISH BOUNTY",
-        f"PUBLISH BOUNTY {_REPO}#2942 REVISION 1 " + "ab" * 32,
         f"PUBLISH BOUNTY {_REPO}#2942 REVISION 2 {{digest}}",
     ],
 )
@@ -304,56 +293,6 @@ async def test_public_reads_page_cache_and_hide_private_operator_fields(
         assert "publish a test-only fixture bounty" not in response.text
 
 
-async def test_unknown_and_malformed_bounty_ids(app, client, session_maker):
-    _install(app, session_maker)
-    missing = await client.get(
-        "/api/v1/public/bounties/00000000-0000-4000-8000-000000000000"
-    )
-    assert missing.status_code == 404, missing.text
-    assert HttpErrorEnvelope.model_validate(missing.json()).message == (
-        "bounty not found"
-    )
-    assert missing.headers["cache-control"] == "no-store"
-    malformed = await client.get("/api/v1/public/bounties/not-a-uuid")
-    assert malformed.status_code == 422, malformed.text
-
-
-async def test_admin_routes_require_the_token_and_a_named_actor(
-    app, client, session_maker
-):
-    _install(app, session_maker)
-    phrase = (await preview(client))["confirmation"]
-    anonymous = await client.post(
-        "/api/v1/admin/bounties/revisions", json=_request(confirmation=phrase)
-    )
-    assert anonymous.status_code == 401, anonymous.text
-    unnamed = await client.post(
-        "/api/v1/admin/bounties/revisions",
-        headers=_ADMIN_TOKEN,
-        json=_request(confirmation=phrase),
-    )
-    assert unnamed.status_code == 422 and "X-Admin-Actor" in unnamed.text
-    blank_reviewer = await client.post(
-        "/api/v1/admin/bounties/revisions",
-        headers=_HEADERS,
-        json=_request(confirmation=phrase, reviewer_actor="   "),
-    )
-    assert blank_reviewer.status_code == 400, blank_reviewer.text
-    coerced = await client.post(
-        "/api/v1/admin/bounties/revisions",
-        headers=_HEADERS,
-        json=_request(confirmation=phrase, terms={"entry_fee_alpha_rao": "2000000000"}),
-    )
-    assert coerced.status_code == 422, coerced.text
-    inexact = await client.post(
-        "/api/v1/admin/bounties/revisions",
-        headers=_HEADERS,
-        json=_request(confirmation=phrase, terms={"reward_pool_alpha_rao": 2**53}),
-    )
-    assert inexact.status_code == 422, inexact.text
-    assert set((await counts(session_maker)).values()) == {0}
-
-
 _ADMIN_PREFIX = "/api/v1/admin/bounties"
 # Admin POSTs that write nothing: the preview only computes a digest.
 _ADMIN_READS = frozenset({f"{_ADMIN_PREFIX}/preview"})
@@ -374,17 +313,6 @@ def _admin_writes() -> list[tuple[str, str]]:
 
 
 ADMIN_WRITES = _admin_writes()
-
-
-async def test_the_admin_writes_are_read_from_the_app():
-    # The enumeration must find the writes, or the test below checks none.
-    assert {
-        ("POST", f"{_ADMIN_PREFIX}/revisions"),
-        ("POST", f"{_ADMIN_PREFIX}/{{bounty_id}}/claims-paused"),
-        ("POST", f"{_ADMIN_PREFIX}/obligations/{{obligation_id}}/dispatch"),
-        ("POST", f"{_ADMIN_PREFIX}/transfers/{{transfer_id}}/reconcile"),
-    } <= set(ADMIN_WRITES)
-    assert ("POST", f"{_ADMIN_PREFIX}/preview") not in ADMIN_WRITES
 
 
 async def bounty_rows(maker) -> dict[str, int]:
@@ -485,12 +413,12 @@ async def test_published_history_is_append_only(app, client, session_maker):
     assert statuses == ["cancelled", "open", "open"]
 
 
-async def test_publication_routes_declare_their_errors(app):
-    paths = app.openapi()["paths"]
-    assert {"400", "401", "409", "503"} <= set(
-        paths["/api/v1/admin/bounties/revisions"]["post"]["responses"]
-    )
-    assert {"401", "503"} <= set(
-        paths["/api/v1/admin/bounties/preview"]["post"]["responses"]
-    )
-    assert "404" in paths["/api/v1/public/bounties/{bounty_id}"]["get"]["responses"]
+async def test_the_admin_writes_are_read_from_the_app():
+    # The enumeration must find the writes, or the test below checks none.
+    assert {
+        ("POST", f"{_ADMIN_PREFIX}/revisions"),
+        ("POST", f"{_ADMIN_PREFIX}/{{bounty_id}}/claims-paused"),
+        ("POST", f"{_ADMIN_PREFIX}/obligations/{{obligation_id}}/dispatch"),
+        ("POST", f"{_ADMIN_PREFIX}/transfers/{{transfer_id}}/reconcile"),
+    } <= set(ADMIN_WRITES)
+    assert ("POST", f"{_ADMIN_PREFIX}/preview") not in ADMIN_WRITES

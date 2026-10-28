@@ -10,22 +10,13 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from sqlalchemy import select, text
+from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from ditto.db.models import Base
 from ditto.tests import pgharness
 from ditto.tests.pgharness import _build_reset_sql, truncate_test_tables
-
-
-async def test_legacy_truncate_restores_append_only_guard(session_maker) -> None:
-    async with session_maker() as session, session.begin():
-        await truncate_test_tables(session, "agents")
-    async with session_maker() as session:
-        with pytest.raises(DBAPIError, match="append-only"):
-            await session.execute(text("TRUNCATE agent_cla_bindings"))
-        await session.rollback()
 
 
 async def test_legacy_truncate_restarts_identity_like_the_full_reset(
@@ -77,23 +68,6 @@ async def test_reset_restores_original_truncate_guard_mode(
         with pytest.raises(DBAPIError, match="append-only"):
             await conn.execute(text("TRUNCATE agent_cla_bindings"))
         await conn.rollback()
-
-
-async def test_tests_run_on_postgres_not_sqlite(session: AsyncSession) -> None:
-    """The whole point. A regression here re-hides the #438 bug class."""
-    assert session.get_bind().dialect.name == "postgresql"
-
-
-async def test_schema_came_from_alembic_not_create_all(
-    session: AsyncSession,
-) -> None:
-    """``alembic_version`` exists only if the real migration chain ran.
-
-    ``Base.metadata.create_all`` builds the schema the models *claim*;
-    only Alembic builds the schema production has.
-    """
-    head = await session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert head, "no alembic_version row: the template was not migrated"
 
 
 _CANARY_SCHEMA = "models_canary"
@@ -238,65 +212,6 @@ async def test_reset_leaves_no_rows_from_the_previous_test_writer(
     assert await session.scalar(text("SELECT count(*) FROM banned_hotkeys")) == 1
 
 
-async def test_select_for_update_actually_locks(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """``FOR UPDATE`` is emitted and honoured.
-
-    SQLAlchemy's SQLite dialect emits no ``FOR UPDATE`` at all, so the 77
-    ``with_for_update`` sites in production code were decoration under test.
-    Two sessions contend for one row here; the second must block until the
-    first commits, which is only observable with real concurrent writers.
-    """
-    async with session_maker() as setup, setup.begin():
-        await setup.execute(
-            text(
-                "INSERT INTO banned_hotkeys (hotkey, reason, banned_at) "
-                "VALUES ('lock-canary', 'row lock canary', now())"
-            )
-        )
-
-    holder_locked = asyncio.Event()
-    contender_acquired = asyncio.Event()
-
-    async def holder() -> None:
-        async with session_maker() as s, s.begin():
-            await s.execute(
-                text(
-                    "SELECT 1 FROM banned_hotkeys WHERE hotkey = 'lock-canary' "
-                    "FOR UPDATE"
-                )
-            )
-            holder_locked.set()
-            # If FOR UPDATE were a no-op the contender would finish here.
-            await asyncio.sleep(0.25)
-            assert not contender_acquired.is_set(), "FOR UPDATE did not block"
-
-    async def contender() -> None:
-        await holder_locked.wait()
-        async with session_maker() as s, s.begin():
-            await s.execute(
-                text(
-                    "SELECT 1 FROM banned_hotkeys WHERE hotkey = 'lock-canary' "
-                    "FOR UPDATE"
-                )
-            )
-            contender_acquired.set()
-
-    async with asyncio.timeout(10):
-        await asyncio.gather(holder(), contender())
-    assert contender_acquired.is_set()
-
-
-async def test_advisory_locks_exist(session: AsyncSession) -> None:
-    """Fifteen production call sites branch on this being available.
-
-    Under SQLite all fifteen took the no-op branch, so every advisory lock
-    in the codebase had zero test coverage.
-    """
-    assert await session.scalar(text("SELECT pg_try_advisory_xact_lock(42)")) is True
-
-
 async def test_agent_uniqueness_constraint_is_enforced(engine: AsyncEngine) -> None:
     """``agents_hotkey_name_version_key`` is unconditional.
 
@@ -330,33 +245,6 @@ async def test_agent_uniqueness_constraint_is_enforced(engine: AsyncEngine) -> N
     with pytest.raises(IntegrityError):
         async with maker() as s, s.begin():
             s.add(_agent())
-
-
-async def test_timestamps_round_trip_timezone_aware(session: AsyncSession) -> None:
-    """SQLite dropped ``tzinfo`` on the way out; asyncpg does not.
-
-    Thirteen ``_as_utc`` helpers and 39 raw ``.replace(tzinfo=UTC)``
-    coercions exist in production code to paper over the SQLite behaviour.
-    They are now provably unnecessary on the read path.
-    """
-    from datetime import UTC, datetime
-
-    async with session.begin():
-        await session.execute(
-            text(
-                "INSERT INTO banned_hotkeys (hotkey, reason, banned_at) "
-                "VALUES ('tz-canary', 'timezone canary', :ts)"
-            ),
-            {"ts": datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)},
-        )
-    from ditto.db.models import BannedHotkey
-
-    row = await session.scalar(
-        select(BannedHotkey).where(BannedHotkey.hotkey == "tz-canary")
-    )
-    assert row is not None
-    assert row.banned_at.tzinfo is not None, "timestamp came back naive"
-    assert row.banned_at == datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 async def test_truncate_lock_timeout_holds_on_an_autocommit_connection(

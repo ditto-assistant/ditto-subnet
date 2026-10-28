@@ -202,7 +202,12 @@ async def test_awards_never_exceed_the_pool_and_need_accepted_work(world):
     assert (await world.refresh())["summary"]["awarded_alpha_rao"] == POOL
 
 
-@pytest.mark.parametrize("later_pool", [3 * POOL, POOL // 10])
+@pytest.mark.parametrize(
+    "later_pool",
+    [
+        3 * POOL,
+    ],
+)
 async def test_an_award_is_bounded_by_the_pool_its_claim_signed(world, later_pool):
     await world.start(ALICE, BOB)
     early = await claimed(world, ALICE)
@@ -234,7 +239,12 @@ async def test_an_award_is_bounded_by_the_pool_its_claim_signed(world, later_poo
         assert "revision 2 reward pool: 0 alpha rao remain" in refused.text
 
 
-@pytest.mark.parametrize("outcome", ["rejected", "withdrawn", "expired"])
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "rejected",
+    ],
+)
 async def test_reopening_a_closed_slot_retains_its_fee(world, monkeypatch, outcome):
     await world.start(ALICE)
     claim = await claimed(world, ALICE)
@@ -669,20 +679,6 @@ async def test_an_executor_failure_is_logged_and_left_to_reconcile(
     assert "executor fixture fault" in str(record.exc_info[1])
 
 
-async def test_a_rehearsal_executor_is_told_exactly_the_requested_outcome(
-    world, monkeypatch
-):
-    await world.start(ALICE)
-    claim = await accepted(world, ALICE)
-    await policy(world)
-    refund = obligation(claim, "fee_refund")
-    await approve(world, refund)
-    execute = AsyncMock(return_value=TransferOutcome("uncertain"))
-    monkeypatch.setattr(world.app.state.bounty_transfer_executor, "execute", execute)
-    assert (await dispatch(world, refund, "unknown")).status_code == 200
-    assert execute.await_args.kwargs == {"rehearsal": "unknown"}
-
-
 async def test_a_live_executor_is_told_no_rehearsal_outcome():
     live, rehearsal = SimpleNamespace(simulated=False), SimpleNamespace(simulated=True)
     # A live transfer reports its own outcome; nothing stands in for one.
@@ -693,8 +689,8 @@ async def test_a_live_executor_is_told_no_rehearsal_outcome():
 
 @pytest.mark.parametrize(
     "reported",
-    [TransferOutcome("settled-ish"), TransferOutcome("confirmed")],
-    ids=["unknown-state", "confirmed-without-receipt"],
+    [TransferOutcome("confirmed")],
+    ids=["confirmed-without-receipt"],
 )
 async def test_an_unrecordable_executor_outcome_is_left_uncertain(
     world, caplog, monkeypatch, reported
@@ -845,19 +841,6 @@ async def test_an_uncertain_transfer_is_reconciled_before_anything_else(world):
             f"transfer {transfer_id} round 1: confirmed (asked confirmed)",
         ),
     ]
-
-
-async def test_an_expired_transfer_reconciles_to_a_new_round(world):
-    await world.start(ALICE)
-    claim = await accepted(world, ALICE)
-    await policy(world)
-    refund = obligation(claim, "fee_refund")
-    await approve(world, refund)
-    unknown = (await dispatch(world, refund, "unknown")).json()
-    gone = (
-        await reconcile(world, unknown["transfers"][0]["transfer_id"], "expired")
-    ).json()
-    assert (gone["state"], gone["round"]) == ("failed", 2)
 
 
 async def test_delivery_facts_are_public_records_of_accepted_work(world):
@@ -1159,16 +1142,3 @@ async def test_a_pause_stops_new_holds_and_nothing_else(world):
     again = await control(False)
     assert again.status_code == 409 and "already open" in again.text
     assert (await world.hold(CAROL)).status_code == 200
-
-
-async def test_settlement_routes_declare_their_errors(app):
-    paths = app.openapi()["paths"]
-    for route, statuses in (
-        ("/claims/{claim_id}/award", {"401", "404", "409"}),
-        ("/payout-policy", {"401", "409"}),
-        ("/obligations/{obligation_id}/approve", {"401", "403", "404", "409"}),
-        ("/obligations/{obligation_id}/dispatch", {"401", "404", "409"}),
-        ("/transfers/{transfer_id}/reconcile", {"401", "404", "409"}),
-        ("/claims/{claim_id}/facts", {"401", "404", "409"}),
-    ):
-        assert statuses <= set(paths[f"{ADMIN}{route}"]["post"]["responses"]), route

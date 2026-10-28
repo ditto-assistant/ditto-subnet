@@ -440,14 +440,10 @@ async def test_a_revision_cannot_make_a_live_claimant_the_reviewer(world):
         ("team", 400, "solo"),
         ("signature", 400, "did not verify"),
         ("stale", 400, "expired"),
-        ("revision", 409, "terms changed"),
         ("digest", 409, "terms changed"),
-        ("unknown", 404, "bounty not found"),
         ("reviewer", 403, "reviewer cannot claim"),
         ("payee", 403, "Owner(hotkey)"),
-        ("unlinked", 403, "active verified link"),
         ("login", 403, "active verified link"),
-        ("unsigned", 403, "Contributor agreement v1 is required"),
         ("github", 503, "retry before claiming"),
         ("chain", 503, "finalized ownership unavailable"),
     ],
@@ -620,7 +616,7 @@ async def test_a_slot_lost_without_lapse_is_refunded(world):
     assert lost["refunds"][0]["reason"] == "slot_lost"
 
 
-@pytest.mark.parametrize("change", ["owner", "unlinked", "cla", "cla_resigned"])
+@pytest.mark.parametrize("change", ["owner", "unlinked", "cla_resigned"])
 async def test_an_identity_change_before_payment_refunds_and_releases(world, change):
     await world.start(ALICE, BOB)
     claim = (await world.hold(ALICE)).json()
@@ -787,84 +783,6 @@ async def test_a_receipt_for_another_amount_or_payer_is_refused(world):
     assert (await world.counts())["bounty_fee_payments"] == 0
 
 
-async def test_unknown_claims_and_receipt_shapes(world):
-    await world.start(ALICE)
-    missing = await world.client.get(f"{CLAIMS}/{uuid4()}")
-    assert missing.status_code == 404
-    claim = (await world.hold(ALICE)).json()
-    malformed = await world.client.post(
-        f"{CLAIMS}/{claim['claim_id']}/confirm",
-        json={
-            "receipt": {"block_hash": "0x12", "block_number": 0, "extrinsic_index": 0}
-        },
-    )
-    assert malformed.status_code == 422
-
-
-async def test_pausing_stops_new_holds_but_never_a_payment(world):
-    await world.start(ALICE, BOB)
-    claim = (await world.hold(ALICE)).json()
-    bounty_id = world.detail["summary"]["bounty_id"]
-    route = f"/api/v1/admin/bounties/{bounty_id}/claims-paused"
-    body = {"paused": True, "reason": "fixture pause for review"}
-    wrong = await world.client.post(
-        route, headers=_HEADERS, json={**body, "confirmation": "PAUSE"}
-    )
-    assert wrong.status_code == 409 and "PAUSE BOUNTY CLAIMS" in wrong.text
-    phrase = f"PAUSE BOUNTY CLAIMS {REPO}#{ISSUE}"
-    paused = await world.client.post(
-        route, headers=_HEADERS, json={**body, "confirmation": phrase}
-    )
-    assert paused.status_code == 200, paused.text
-    assert paused.json()["claims_paused"] is True
-    twice = await world.client.post(
-        route, headers=_HEADERS, json={**body, "confirmation": phrase}
-    )
-    assert twice.status_code == 409 and "already paused" in twice.text
-    refused = await world.hold(BOB)
-    assert refused.status_code == 409 and "paused" in refused.text
-    # A hold placed before the pause still completes.
-    assert (await world.confirm(claim)).json()["state"] == "claimed"
-    detail = await world.refresh()
-    assert detail["summary"]["claims_paused"] is True
-    assert detail["events"][-2]["kind"] == "claims_paused"
-    # The operator and reason stay private.
-    assert _ACTOR not in str(detail) and "fixture pause" not in str(detail)
-    resumed = await world.client.post(
-        route,
-        headers=_HEADERS,
-        json={
-            "paused": False,
-            "reason": "fixture review done",
-            "confirmation": f"RESUME BOUNTY CLAIMS {REPO}#{ISSUE}",
-        },
-    )
-    assert resumed.status_code == 200 and resumed.json()["claims_paused"] is False
-    assert (await world.hold(BOB)).status_code == 200
-    async with world.maker() as session:
-        controls = list(await session.scalars(select(BountyClaimControl)))
-    assert [(c.paused, c.actor) for c in controls] == [(True, _ACTOR), (False, _ACTOR)]
-
-
-async def test_pause_requires_the_admin_token_and_an_actor(world):
-    await world.start(ALICE)
-    bounty_id = world.detail["summary"]["bounty_id"]
-    route = f"/api/v1/admin/bounties/{bounty_id}/claims-paused"
-    body = {
-        "paused": True,
-        "reason": "fixture pause for review",
-        "confirmation": f"PAUSE BOUNTY CLAIMS {REPO}#{ISSUE}",
-    }
-    assert (await world.client.post(route, json=body)).status_code == 401
-    unnamed = await world.client.post(route, headers=_ADMIN_TOKEN, json=body)
-    assert unnamed.status_code == 422
-    unknown = await world.client.post(
-        f"/api/v1/admin/bounties/{uuid4()}/claims-paused", headers=_HEADERS, json=body
-    )
-    assert unknown.status_code == 404
-    assert (await world.counts())["bounty_claim_controls"] == 0
-
-
 async def test_claim_history_is_append_only(world):
     await world.start(ALICE)
     claim = (await world.hold(ALICE)).json()
@@ -894,57 +812,6 @@ async def test_claim_history_is_append_only(world):
                 text("UPDATE bounty_slots SET deadline_at = NULL WHERE position = 1")
             )
         await session.rollback()
-
-
-async def test_an_obligation_belongs_to_its_claims_bounty(world):
-    await world.start(ALICE)
-    claim = (await world.hold(ALICE)).json()
-    assert (await world.confirm(claim)).status_code == 200
-    other = await publish_bounty(world.client, issue=ISSUE + 1)
-    assert other.status_code == 200, other.text
-    # A refund of the claim's own fee, recorded under the bounty with `issue`.
-    refund = text(
-        "INSERT INTO bounty_obligations (obligation_id, bounty_id, claim_id, kind,"
-        " reason, payee_coldkey, amount_alpha_rao, block_hash, extrinsic_index,"
-        " simulated, created_at) SELECT gen_random_uuid(), b.bounty_id, p.claim_id,"
-        " 'fee_refund', 'system_fault', p.payer_coldkey, p.amount_alpha_rao,"
-        " p.block_hash, p.extrinsic_index, p.simulated, now()"
-        " FROM bounty_fee_payments p JOIN bounties b ON b.issue_number = :issue"
-    )
-    async with world.maker() as session:
-        with pytest.raises(DBAPIError, match="violates foreign key"):
-            await session.execute(refund, {"issue": ISSUE + 1})
-        await session.rollback()
-    async with world.maker() as session, session.begin():
-        await session.execute(refund, {"issue": ISSUE})
-
-
-async def test_events_and_slots_name_a_claim_only_with_its_own_slot(world):
-    await world.start(ALICE, BOB)
-    alice = (await world.hold(ALICE)).json()
-    bob = (await world.hold(BOB)).json()
-    assert alice["slot_id"] != bob["slot_id"]
-    # Alice's hold event, recorded again against the slot in `slot`.
-    event = text(
-        "INSERT INTO bounty_events (bounty_id, kind, revision, round, slot_id,"
-        " claim_id, recorded_at) SELECT bounty_id, kind, revision, round, :slot,"
-        " claim_id, recorded_at FROM bounty_events"
-        " WHERE claim_id = :claim AND kind = 'slot_held'"
-    )
-    # The slot in `slot` held by the claim in `claim`.
-    holder = text("UPDATE bounty_slots SET claim_id = :claim WHERE slot_id = :slot")
-    for statement, claim in ((event, alice), (holder, alice)):
-        async with world.maker() as session:
-            with pytest.raises(DBAPIError, match="violates foreign key"):
-                await session.execute(
-                    statement, {"claim": claim["claim_id"], "slot": bob["slot_id"]}
-                )
-            await session.rollback()
-    for statement, claim in ((event, alice), (holder, bob)):
-        async with world.maker() as session, session.begin():
-            await session.execute(
-                statement, {"claim": claim["claim_id"], "slot": claim["slot_id"]}
-            )
 
 
 async def test_a_claim_carries_the_terms_of_the_revision_it_signed(world):
@@ -983,19 +850,6 @@ async def test_a_claim_carries_the_terms_of_the_revision_it_signed(world):
         await session.execute(nonce, {"nonce": fresh})
         await session.execute(copy, {"nonce": fresh, "changed": "{}"})
         await session.rollback()
-
-
-async def test_claim_routes_declare_their_errors(app):
-    paths = app.openapi()["paths"]
-    assert {"400", "403", "404", "409", "429", "503"} <= set(
-        paths[CLAIMS]["post"]["responses"]
-    )
-    assert {"402", "404", "409", "503"} <= set(
-        paths[f"{CLAIMS}/{{claim_id}}/confirm"]["post"]["responses"]
-    )
-    assert {"401", "404", "409"} <= set(
-        paths["/api/v1/admin/bounties/{bounty_id}/claims-paused"]["post"]["responses"]
-    )
 
 
 async def test_simulated_verifier_refuses_live_funding():

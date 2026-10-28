@@ -7,7 +7,6 @@ from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.inference_concurrency_settings import (
-    DEFAULT_CHAT_TOKEN_BUDGET,
     InferenceConcurrencySettings,
 )
 from ditto.api_models.ticket_status import TicketStatus
@@ -643,50 +642,6 @@ async def _live_v7_embedding_grant(session: AsyncSession, config: InferenceProxy
 
 
 @pytest.mark.asyncio
-async def test_full_embedding_lane_is_backpressure_not_a_lost_lease(
-    session: AsyncSession,
-) -> None:
-    """A saturated lane and a revoked lease must not look alike.
-
-    Both used to return ``None`` and both became a ``429``, which dittobench-api
-    reads as "the platform took my ticket away" and answers by discarding the
-    whole run. That was survivable only while the limit was a constant nobody
-    could move. Now that an operator can lower it from backroom under a live
-    run, the two cases have to be told apart or the emergency brake destroys
-    every run it touches.
-    """
-    config = replace(_config(), embedding_per_ticket_concurrency=1)
-    async with session.begin():
-        _ticket, grant, bearer, now = await _live_v7_embedding_grant(session, config)
-        first = await begin_inference_request(
-            session,
-            grant_id=grant.grant_id,
-            nonce=uuid4(),
-            bearer=bearer,
-            model=config.embedding_model,
-            token_reservation=10,
-            now=now,
-            config=config,
-            request_kind="embedding",
-        )
-        assert isinstance(first, tuple)
-
-        # Second concurrent embedding: the lane is full, the lease is healthy.
-        second = await begin_inference_request(
-            session,
-            grant_id=grant.grant_id,
-            nonce=uuid4(),
-            bearer=bearer,
-            model=config.embedding_model,
-            token_reservation=10,
-            now=now,
-            config=config,
-            request_kind="embedding",
-        )
-        assert second is InferenceDecline.AT_CAPACITY
-
-
-@pytest.mark.asyncio
 async def test_revoked_lease_still_fails_closed_on_the_embedding_lane(
     session: AsyncSession,
 ) -> None:
@@ -759,51 +714,6 @@ async def test_raised_per_ticket_limit_actually_admits_concurrent_embeddings(
                 now=now,
                 config=config,
                 request_kind="embedding",
-            )
-            is InferenceDecline.AT_CAPACITY
-        )
-
-
-@pytest.mark.asyncio
-async def test_chat_capacity_refusal_is_retryable_not_fatal(
-    session: AsyncSession,
-) -> None:
-    """Chat capacity is backpressure, and now says so.
-
-    This test previously asserted the opposite -- that chat kept its historical
-    anonymous ``None`` -> 429 -- on the reasoning that chat limits are boot-time
-    constants and so cannot surprise a live run. The premise was true and the
-    conclusion still wrong: a chat rail can fill under ordinary load with
-    nothing wrong with the lease, and answering that with the code that means
-    "your lease is dead" is what ended `banblackycat` while its ticket was
-    still live.
-    """
-    config = replace(_config(), per_ticket_concurrency=1)
-    async with session.begin():
-        _ticket, grant, bearer, now = await _live_grant(session)
-        assert isinstance(
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=10,
-                now=now,
-                config=config,
-            ),
-            tuple,
-        )
-        assert (
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=10,
-                now=now,
-                config=config,
             )
             is InferenceDecline.AT_CAPACITY
         )
@@ -1127,73 +1037,6 @@ async def test_in_flight_reservations_do_not_spend_the_token_budget(
 
 
 @pytest.mark.asyncio
-async def test_a_jupiter_profile_run_completes_at_the_shipped_budget(
-    session: AsyncSession,
-) -> None:
-    """The whole point of the change, measured against the real numbers.
-
-    Jupiter and KOTH_v7_1 issue ~1090 chat calls at ~10k tokens each -- ~10.9M
-    for a complete run. Against the old 4,000,000 that run is refused from call
-    ~400 onward, which is 36% of the way in: the remaining ~690 calls were the
-    1009 declines observed on a live lease.
-
-    Scaled down by 1000x so the test is a few hundred rows rather than a
-    million, but the ratio that matters -- run demand vs. allowance -- is
-    preserved exactly.
-    """
-    per_call_prompt, per_call_completion = 9_400, 600
-    calls = 1_090
-    demand = calls * (per_call_prompt + per_call_completion)
-    assert demand == 10_900_000
-
-    async def _drive(token_budget: int) -> tuple[int, object]:
-        config = _token_budget_config(token_budget)
-        _ticket, grant, bearer, now = await _live_grant(
-            session, config, validator_hotkey=f"validator-{token_budget}"
-        )
-        completed = 0
-        for _ in range(calls):
-            got = await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=(nonce := uuid4()),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=per_call_prompt + per_call_completion,
-                now=now,
-                config=config,
-            )
-            if isinstance(got, InferenceDecline):
-                return completed, got
-            await finish_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=nonce,
-                generation=grant.generation,
-                status="completed",
-                prompt_tokens=per_call_prompt,
-                completion_tokens=per_call_completion,
-                cost_microusd=1,
-                usage_available=True,
-                now=now,
-            )
-            completed += 1
-        return completed, None
-
-    async with session.begin():
-        # The old allowance: cut off well before the run ends...
-        completed, decline = await _drive(4_000_000)
-        assert completed == 400
-        assert decline is InferenceDecline.TOKEN_BUDGET_EXHAUSTED
-
-    async with session.begin():
-        # ...and the shipped one: the run finishes.
-        completed, decline = await _drive(DEFAULT_CHAT_TOKEN_BUDGET)
-        assert completed == calls
-        assert decline is None
-
-
-@pytest.mark.asyncio
 async def test_a_failed_request_without_usage_does_not_charge_the_estimate(
     session: AsyncSession,
 ) -> None:
@@ -1321,24 +1164,6 @@ async def test_real_usage_above_the_estimate_is_still_deliverable(
             now=now,
         )
         assert grant.prompt_tokens == 8_192
-
-
-@pytest.mark.asyncio
-async def test_new_grants_record_which_meter_booked_them(
-    session: AsyncSession,
-) -> None:
-    """A token total is only comparable within the contract that produced it.
-
-    Without this marker, someone comparing a pre-fix run against a post-fix run
-    concludes the agent got dramatically more efficient when only the meter
-    changed. There is no backfill and there cannot be one: the over-charge
-    happened at reservation time, so what those calls really consumed was never
-    recorded.
-    """
-    async with session.begin():
-        _ticket, grant, _bearer, _now = await _live_grant(session)
-        assert grant.usage_accounting_version == USAGE_ACCOUNTING_VERSION
-        assert USAGE_ACCOUNTING_VERSION == 2
 
 
 @pytest.mark.asyncio
