@@ -554,3 +554,77 @@ def test_cached_ledger_refuses_legacy_fallback_when_enforcing(configured, has_v2
             request, pin().fleet[0].validator_hotkey, RuntimeError("db down")
         )
     assert refused.value.status_code == 503
+
+
+def _generator_ledger(track_shares_bps):
+    from ditto.api_server.ledger_pin import LedgerPin, canonical_entries, ledger_digest
+    from ditto.tests.api_server.test_ledger_pin import _entry
+
+    p = pin()
+    now = datetime.now(UTC)
+    entries = (_entry("memory", 0.8, first_seen=now),)
+    served = {"treasury_pin": p.model_dump(mode="json"), "burn_share": 0.5}
+    if track_shares_bps is not None:
+        served["track_shares_bps"] = track_shares_bps
+    return p, LedgerPin(
+        netuid=118,
+        epoch_index=p.epoch_index,
+        last_epoch_block=p.first_block,
+        pinned_block=p.pinned_block,
+        pinned_block_hash=p.pinned_block_hash,
+        pinned_at=now,
+        bench_version=13,
+        entries=entries,
+        context={"served": served},
+        ledger_digest=ledger_digest(canonical_entries(entries), served),
+    )
+
+
+@pytest.mark.parametrize(
+    "case,matches",
+    [
+        ("memory_only", True),
+        ("generator_paid", True),
+        ("generator_paid_unserved", False),
+        ("burn_short", False),
+        ("service_short", False),
+        ("memory_short", False),
+    ],
+)
+def test_treasury_vector_accepts_the_served_generator_split_only(case, matches):
+    from ditto.api_server.ledger_pin import (
+        pin_generator_fraction,
+        treasury_vector_matches_pin,
+    )
+
+    served_split = (
+        None
+        if case == "generator_paid_unserved"
+        else {
+            "memory": 7000,
+            "generator": 3000,
+        }
+    )
+    p, ledger = _generator_ledger(served_split)
+    collector = p.policy.collector_hotkey
+    # 10% service; half of the remaining 90% burns; 45% pays miners.
+    vector = {
+        "memory_only": {collector: 0.1, "memory": 0.45, "burn": 0.45},
+        "generator_paid": {collector: 0.1, "memory": 0.315, "gen": 0.135, "burn": 0.45},
+        "generator_paid_unserved": {
+            collector: 0.1,
+            "memory": 0.315,
+            "gen": 0.135,
+            "burn": 0.45,
+        },
+        "burn_short": {collector: 0.1, "memory": 0.315, "gen": 0.185, "burn": 0.4},
+        "service_short": {collector: 0.05, "memory": 0.315, "gen": 0.185, "burn": 0.45},
+        "memory_short": {collector: 0.1, "memory": 0.25, "gen": 0.2, "burn": 0.45},
+    }[case]
+    fraction = pin_generator_fraction(ledger.context["served"])
+    assert (
+        treasury_vector_matches_pin(
+            vector, ledger, burn_hotkey="burn", generator_fraction=fraction
+        )
+        is matches
+    )

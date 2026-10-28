@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.endpoints.public import _public_artifact_release
-from ditto.api_server.ledger_pin import ledger_digest
+from ditto.api_server.ledger_pin import LedgerPin, canonical_entries, ledger_digest
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.chain.models import (
     ChainMinerEarning,
@@ -1805,3 +1805,134 @@ async def test_catchup_bounds_payout_resolution_after_the_replay(
     # 600 s of budget, but the replay's trailing resolution gets 90 s at most.
     deadline = resolve.await_args.kwargs["deadline"]
     assert started < deadline <= finished + module._CATCHUP_RESOLUTION_SECONDS
+
+
+async def _enforcing_generator_claim(app, maker, *, short_memory=False):
+    """A V2 treasury claim under a served 70/30 memory/generator split.
+
+    The pin freezes the memory entries and the split, not the generator
+    ledger, so the paid generator hotkey appears nowhere in the pin.
+    """
+    from ditto.tests.api_server.endpoints.test_weight_receipts import (
+        _setup_enforcing,
+    )
+
+    raw = await _setup_enforcing(app, maker, empty=False)
+    collector = raw["treasury_pin"]["policy"]["collector_hotkey"]
+    async with maker() as session, session.begin():
+        row = await session.get(
+            LedgerEpochSnapshot, UUID(raw["provenance"]["ledger_snapshot_id"])
+        )
+        served = {
+            **row.context["served"],
+            "track_shares_bps": {"memory": 7000, "generator": 3000},
+        }
+        # The collector replays the digest over canonical entries.
+        row.entries = canonical_entries(LedgerPin.from_row(row).entries)
+        row.context = {"served": served}
+        row.ledger_digest = ledger_digest(row.entries, served)
+        raw["provenance"]["ledger_digest"] = row.ledger_digest
+        session.add(
+            Agent(
+                agent_id=UUID(raw["provenance"]["champion_agent_id"]),
+                miner_hotkey="miner",
+                name="memory-champion",
+                sha256=raw["provenance"]["champion_artifact_sha256"],
+                size_bytes=500000,
+                status=AgentStatus.SCORED,
+            )
+        )
+        await advance_source_emission_cursor(
+            session,
+            netuid=raw["netuid"],
+            block=199,
+            block_hash=_hash(199),
+            expected_block=None,
+            expected_block_hash=None,
+            now=datetime.now(UTC),
+        )
+    # 10% service, 10% of the rest burns, and the 81% miner pool splits 70/30
+    # between the memory champion and an unpinned generator.
+    memory, generator = (0.5, 0.31) if short_memory else (0.567, 0.243)
+    weights = {collector: 0.1, "miner": memory, "generator": generator, "owner": 0.09}
+    from ditto.api_models.weight_receipt import weight_vector_digest
+    from ditto.tests.api_server.endpoints.test_weight_receipts import _digest as dig
+
+    raw["weights"] = weights
+    raw["provenance"]["vector_digest"] = weight_vector_digest(weights)
+    uids = {"owner": 0, "miner": 1, collector: 3, "generator": 4}
+    top = max(weights.values())
+    raw["attempt"]["normalized_weights"] = [
+        [uids[hotkey], round(value / top * 65535)] for hotkey, value in weights.items()
+    ]
+    raw["request_digest"] = dig(
+        {
+            name: raw[name]
+            for name in (
+                "schema_version",
+                "mechanism_id",
+                "weights",
+                "provenance",
+                "treasury_pin",
+            )
+        }
+    )
+    hotkeys = {uid: hotkey for hotkey, uid in uids.items()}
+    payout = ChainMinerEmissionReceipt(
+        raw["netuid"],
+        201,
+        _hash(201),
+        1_789_680_000 + 201 * 12,
+        125,
+        191,
+        "owner",
+        (ChainMinerEarning(1, "miner", 567), ChainMinerEarning(4, "generator", 243)),
+        (
+            ChainWeightVector(
+                2,
+                raw["validator_hotkey"],
+                tuple(
+                    ChainWeight(uid, hotkeys[uid], value)
+                    for uid, value in sorted(raw["attempt"]["normalized_weights"])
+                ),
+            ),
+        ),
+        (),
+        (),
+    )
+    return raw, payout
+
+
+@pytest.mark.parametrize("short_memory", [False, True])
+async def test_enforcing_claim_with_paid_generator_share_backs_the_memory_champion(
+    app, client, session_maker, monkeypatch, short_memory
+):
+    """Every V2 backing failed once a generator share was served (SN118 epoch
+    25962): the check demanded the memory-only vector the pin projects, which
+    no validator paying generators can commit. The champion's emission was
+    then never confirmed and its disclosure clock never started."""
+    monkeypatch.setattr(
+        "ditto.chain.source_emission_verifier.verify_finalized_weight_commit",
+        AsyncMock(),
+    )
+    raw, payout = await _enforcing_generator_claim(
+        app, session_maker, short_memory=short_memory
+    )
+    posted = await _post(client, _signed(raw))
+    assert posted.status_code == 200, posted.text
+    collector = _collector(app, session_maker)
+    await collector.process_block(_observed(raw, 200, reveal=True), None)
+    await collector.process_block(_observed(raw, 201, payout=True), payout)
+    confirmed = await collector.resolve_pending_payouts(SimpleNamespace())
+    champion = UUID(raw["provenance"]["champion_agent_id"])
+    async with session_maker() as session:
+        reveal = (await get_king_reveal(session, agent_ids=[champion])).get(champion)
+    if short_memory:
+        # Memory paid below its 70% slice is not the pin's fold.
+        assert confirmed == 0
+        assert reveal is None or reveal.emission_confirmed_at is None
+    else:
+        assert confirmed == 1
+        assert reveal.emission_confirmed_at == datetime.fromtimestamp(
+            payout.block_timestamp, UTC
+        )
