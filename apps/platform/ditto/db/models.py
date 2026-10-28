@@ -578,6 +578,12 @@ class ScreeningAttempt(Base):
     )
     lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     lineage_packet_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why a bound packet went full (reason strings; empty for diff) and which
+    # kind of reference it was diffed against. NULL before this was recorded.
+    lineage_full_review_reasons: Mapped[list | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    lineage_reference_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     """This attempt only rebuilds an already-adjudicated submission's missing
     prerequisites (screened image / dataset); the screener must NOT re-run the
     anti-cheat source review and cannot quarantine. Set when an EVALUATING agent
@@ -617,6 +623,16 @@ class ScreeningAttempt(Base):
             "AND lineage_scope IN ('diff', 'full') "
             "AND length(lineage_packet_sha256) = 64)",
             name="screening_attempts_lineage_binding_check",
+        ),
+        CheckConstraint(
+            "lineage_scope IS NOT NULL OR (lineage_full_review_reasons IS NULL "
+            "AND lineage_reference_kind IS NULL)",
+            name="screening_attempts_lineage_record_check",
+        ),
+        CheckConstraint(
+            "lineage_reference_kind IS NULL OR lineage_reference_kind IN "
+            "('same_owner_version', 'same_owner', 'released_base')",
+            name="screening_attempts_lineage_reference_kind_check",
         ),
         CheckConstraint(
             "policy_version > 0",

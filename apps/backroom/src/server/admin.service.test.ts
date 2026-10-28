@@ -2633,6 +2633,7 @@ describe('queue policy administration', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    lineage_reference_mode: 'same_owner_version',
   }
   const control = {
     current: [],

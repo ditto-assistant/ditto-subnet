@@ -676,8 +676,13 @@ carry (`build-surface-changed`, `diff-too-large`, `too-many-files-changed`,
 `no-review-history`). History is context, never a verdict.
 
 `get_screening_submission` attempts carry `lineage_parent_agent_id`,
-`lineage_scope` and `lineage_packet_sha256`. A parent with a null scope means
-the worker never fetched the packet and reviewed in full.
+`lineage_scope`, `lineage_packet_sha256`, `lineage_reference_kind`
+(`same_owner_version`, `same_owner` or `released_base`) and
+`lineage_full_review_reasons` (why a bound packet went full; empty for diff).
+A parent with a null scope means the worker never fetched the packet and
+reviewed in full. The queue policy's `lineage_reference_mode` decides whether
+same-coldkey uploads and declared released bases may be references
+(`set_queue_policy_settings` help has the rules; default off).
 `get_screening_review_lineage(attemptId)` rebuilds the exact packet (artifact
 scope, audited as `admin.get_screening_review_lineage` for both agents) and
 answers 409 when the history has moved since the packet was bound.

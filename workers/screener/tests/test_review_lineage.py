@@ -47,6 +47,7 @@ def _packet(
     sha256: str = "de" * 32,
     *,
     scope: str = "diff",
+    reference_kind: str | None = None,
 ) -> ReviewLineagePacket:
     now = datetime.now(UTC)
     parent = {
@@ -92,6 +93,7 @@ def _packet(
                 }
             ],
             "findings": [],
+            "reference_kind": reference_kind,
         }
     )
 
@@ -206,16 +208,46 @@ async def test_unavailable_packet_falls_back_to_a_full_review(
     assert gate.calls == [item.agent_id]
 
 
-async def test_no_parent_never_fetches_a_packet(
+async def test_no_claim_parent_still_asks_for_a_released_base_packet(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
-    item = _item(uuid4())
-    platform = _LineagePlatform(None)
+    """Platform may bind a declared released base at packet time."""
+    agent_id = uuid4()
+    item = _item(agent_id)
+    packet = _packet(agent_id, item.attempt_id, reference_kind="released_base")
+    platform = _LineagePlatform(packet)
     gate = _RecordingGate()
     worker = _worker(make_config(), platform, gate)
     await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
-    assert platform.lineage_calls == []
+    assert platform.lineage_calls == [item.attempt_id]
+    assert gate.lineages == [packet]
+
+
+async def test_no_claim_parent_and_no_reference_is_a_full_review(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    item = _item(uuid4())
+    platform = _LineagePlatform(PlatformError("lineage packet rejected (409)"))
+    gate = _RecordingGate()
+    worker = _worker(make_config(), platform, gate)
+    await worker._screen_one(item, policy_version=SCREENING_POLICY_VERSION)
+    assert platform.lineage_calls == [item.attempt_id]
     assert gate.lineages == [None]
+    assert gate.calls == [item.agent_id]
+
+
+def test_released_base_dossier_names_the_reference_and_byte_identity() -> None:
+    section = lineage_dossier(_packet(reference_kind="released_base"))
+    assert section["reference_kind"] == "released_base"
+    instructions = str(section["instructions"])
+    assert "released, already-screened public base" in instructions
+    assert "byte-identical to that screened artifact" in instructions
+    assert "never a verdict" in instructions
+    classic = lineage_dossier(_packet())
+    assert classic["reference_kind"] == "same_owner_version"
+    assert "public base" not in str(classic["instructions"])
+    same_owner = lineage_dossier(_packet(reference_kind="same_owner"))
+    assert "same owner" in str(same_owner["instructions"])
 
 
 def _archive(tmp_path: Path) -> Path:

@@ -32,6 +32,21 @@ FULL_SCOPE_INSTRUCTIONS = (
     "cannot carry, so review the whole served path as for a new submission, "
     "using the history only to prioritize leads."
 )
+# The reference is not this agent's own prior version. History stays context.
+REFERENCE_INSTRUCTIONS = {
+    "same_owner": (
+        "Reference: the parent is an earlier upload paid by the same owner "
+        "under another hotkey or agent name, already screened; review the "
+        "delta from it the same way. "
+    ),
+    "released_base": (
+        "Reference: this submission declares a released, already-screened "
+        "public base, and the parent is that base. Review the delta from it: "
+        "every unchanged file is byte-identical to that screened artifact, and "
+        "every changed, added or removed file is in changes. The base's "
+        "rulings and findings are about the base, not this miner. "
+    ),
+}
 DIFF_SCOPE_INSTRUCTIONS = (
     "Scope is diff: focus the budget on the changed files, their callers on "
     "the decision path, and the open leads in the history."
@@ -42,12 +57,14 @@ def lineage_dossier(packet: ReviewLineagePacket) -> dict[str, object]:
     """Bounded dossier section for the L2/L3 trajectories."""
     return {
         "instructions": LINEAGE_REVIEW_INSTRUCTIONS
+        + REFERENCE_INSTRUCTIONS.get(packet.reference_kind or "", "")
         + (
             FULL_SCOPE_INSTRUCTIONS
             if packet.scope == ReviewLineageScope.FULL
             else DIFF_SCOPE_INSTRUCTIONS
         ),
         "packet_sha256": packet.packet_sha256,
+        "reference_kind": packet.reference_kind or "same_owner_version",
         "scope": packet.scope.value,
         "full_review_reasons": [reason.value for reason in packet.full_review_reasons],
         "parent": packet.parent.model_dump(mode="json"),
@@ -74,6 +91,7 @@ def lineage_l1_text(packet: ReviewLineagePacket) -> str:
 
 __all__ = [
     "LINEAGE_REVIEW_INSTRUCTIONS",
+    "REFERENCE_INSTRUCTIONS",
     "lineage_dossier",
     "lineage_l1_text",
 ]

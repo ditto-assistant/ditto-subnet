@@ -474,6 +474,8 @@ class TestReviewLineage:
             assert attempt is not None
             attempt.lineage_scope = None
             attempt.lineage_packet_sha256 = None
+            attempt.lineage_full_review_reasons = None
+            attempt.lineage_reference_kind = None
         response = await client.post(
             url, headers=_AUTH_HEADER, params={"attempt_id": item["attempt_id"]}
         )

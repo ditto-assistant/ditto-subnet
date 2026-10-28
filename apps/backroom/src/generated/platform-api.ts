@@ -13775,15 +13775,25 @@ export interface components {
             /** Finished At */
             finished_at: string | null;
             /**
+             * Lineage Full Review Reasons
+             * @description Why the bound packet could not carry the reference's review (build-surface-changed, diff-too-large, too-many-files-changed, opaque-file-changed, source-not-compared, parent-policy-differs, no-review-history). Empty for a diff scope; null when no packet was bound or it predates this field.
+             */
+            lineage_full_review_reasons?: string[] | null;
+            /**
              * Lineage Packet Sha256
              * @description Digest of the exact packet the worker received.
              */
             lineage_packet_sha256?: string | null;
             /**
              * Lineage Parent Agent Id
-             * @description Same-hotkey prior version whose diff and review history scoped this attempt's model review. Null is an ordinary full review.
+             * @description Reference whose diff and review history scoped this attempt's model review (see lineage_reference_kind). Null is an ordinary full review.
              */
             lineage_parent_agent_id?: string | null;
+            /**
+             * Lineage Reference Kind
+             * @description What the bound reference was: the same hotkey's prior version, an earlier upload by the same payment coldkey, or a released, already-screened public base. Null when no packet was bound or it predates this field.
+             */
+            lineage_reference_kind?: ("same_owner_version" | "same_owner" | "released_base") | null;
             /**
              * Lineage Scope
              * @description Scope the bound lineage packet selected. Null with a parent means the worker never fetched the packet and reviewed in full.
@@ -33057,6 +33067,12 @@ export interface components {
              */
             lane_cycle_size: number;
             /**
+             * Lineage Reference Mode
+             * @default same_owner_version
+             * @enum {string}
+             */
+            lineage_reference_mode: "same_owner_version" | "same_owner" | "released_base";
+            /**
              * Owner Concurrent Submission Limit
              * @default 2
              */
@@ -33727,6 +33743,8 @@ export interface components {
             parent: components["schemas"]["ReviewLineageAgent"];
             /** Policy Version */
             policy_version: number;
+            /** Reference Kind */
+            reference_kind?: ("same_owner" | "released_base") | null;
             /**
              * Rulings
              * @default []

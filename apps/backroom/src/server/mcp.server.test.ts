@@ -923,7 +923,10 @@ describe('Backroom MCP tools', () => {
     // The copy-court family triage preview (one uuid input, one-line summary,
     // artifact scope) and the recommendation feed's agentId filter measure
     // 212,328 bytes; keep the same ~0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(212_850)
+    // The queue policy's lineage_reference_mode enum (three values on the
+    // set_queue_policy_settings input) adds about 55 bytes on top; keep the
+    // same headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(212_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -4426,6 +4429,7 @@ describe('Backroom MCP tools', () => {
         require_cohort_complete: true,
         require_desired_era_drained: true,
       },
+      lineage_reference_mode: 'same_owner_version',
     }
     const control = {
       current: [],
@@ -4531,6 +4535,7 @@ describe('Backroom MCP tools', () => {
             require_cohort_complete: true,
             require_desired_era_drained: true,
           },
+          lineage_reference_mode: 'same_owner_version',
         },
         reason: 'lengthen the lane cycle for the onboarding wave',
         confirmation: 'APPLY QUEUE POLICY SETTINGS',
@@ -8282,6 +8287,8 @@ describe('Backroom MCP tools', () => {
           lineage_parent_agent_id: null,
           lineage_scope: null,
           lineage_packet_sha256: null,
+          lineage_full_review_reasons: null,
+          lineage_reference_kind: null,
         },
       ],
     }

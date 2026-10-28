@@ -2944,6 +2944,7 @@ describe('queue policy settings schemas', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    lineage_reference_mode: 'same_owner_version',
   }
 
   function input(overrides: Record<string, unknown> = {}) {
@@ -3061,6 +3062,7 @@ describe('queue policy settings schemas', () => {
       'deferred_source_review',
       'fresh_submission_slots',
       'lane_cycle_size',
+      'lineage_reference_mode',
       'owner_concurrent_submission_limit',
       'prev_gen_carryover',
       'priority_cohort_size',
@@ -3072,6 +3074,14 @@ describe('queue policy settings schemas', () => {
   it('requires every policy field on write, because a revision stores the whole object', () => {
     const { owner_concurrent_submission_limit: _limit, ...missingLimit } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingLimit)).toThrow()
+    const { lineage_reference_mode: _mode, ...missingMode } = settings
+    expect(() => queuePolicySettingsWriteSchema.parse(missingMode)).toThrow()
+    expect(queuePolicySettingsSchema.parse(missingMode).lineage_reference_mode).toBe(
+      'same_owner_version',
+    )
+    expect(() =>
+      queuePolicySettingsWriteSchema.parse({ ...settings, lineage_reference_mode: 'anyone' }),
+    ).toThrow()
 
     const { prev_gen_carryover: _carryover, ...missingCarryover } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingCarryover)).toThrow()

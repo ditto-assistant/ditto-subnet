@@ -2940,6 +2940,12 @@ const similarityBudgetWriteSchema = similarityBudgetSchema.extend({
     .max(SIMILARITY_THRESHOLD_MAX),
 })
 
+export const lineageReferenceModeSchema = z.enum([
+  'same_owner_version',
+  'same_owner',
+  'released_base',
+])
+
 const queuePolicySettingsBaseSchema = z.object({
   rescore_cohort_size: z.number().int().min(5).max(25).default(10),
   priority_cohort_size: z.number().int().min(5).max(25).default(5),
@@ -2980,6 +2986,10 @@ const queuePolicySettingsBaseSchema = z.object({
   // about who a miner is -- and this board must describe what the platform
   // actually accepts, nothing more.
   prev_gen_carryover: prevGenCarryoverSchema.default(PREV_GEN_CARRYOVER_DEFAULT),
+  // Which already-screened artifact a screening attempt may be diffed
+  // against: the same hotkey's prior version only (default), also a same-
+  // coldkey earlier upload, or also a declared released public base.
+  lineage_reference_mode: lineageReferenceModeSchema.default('same_owner_version'),
 })
 
 const refineQueuePolicyCoherence = (
@@ -3055,6 +3065,7 @@ export const queuePolicySettingsWriteSchema = queuePolicySettingsBaseSchema
     similarity_budget: similarityBudgetWriteSchema,
     deferred_source_review: deferredSourceReviewWriteSchema,
     prev_gen_carryover: prevGenCarryoverWriteSchema,
+    lineage_reference_mode: lineageReferenceModeSchema,
   })
   .superRefine(refineQueuePolicyCoherence)
 
@@ -5771,6 +5782,13 @@ export const screeningAttemptSchema = z.object({
   lineage_parent_agent_id: z.string().nullish().default(null),
   lineage_scope: z.enum(['diff', 'full']).nullish().default(null),
   lineage_packet_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullish().default(null),
+  // Why a bound packet went full (empty for diff) and which kind of reference
+  // it was diffed against; null before a packet binds or on older rows.
+  lineage_full_review_reasons: z.array(z.string()).nullish().default(null),
+  lineage_reference_kind: z
+    .enum(['same_owner_version', 'same_owner', 'released_base'])
+    .nullish()
+    .default(null),
 })
 
 export const adjudicationRequestAttemptDiagnosticSchema = z.object({

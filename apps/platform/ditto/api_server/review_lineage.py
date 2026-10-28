@@ -1,7 +1,11 @@
 """Build the lineage-scoped review packet for one screening attempt.
 
 A resubmission's lineage parent is the same hotkey's prior version of the same
-agent name (highest lower ``version``), chosen when the attempt is claimed. The
+agent name (highest lower ``version``), chosen when the attempt is claimed.
+Under the queue policy's ``lineage_reference_mode`` the reference may instead
+be an earlier upload by the same payment coldkey (``same_owner``) or a
+released, already-screened base the submission declares (``released_base``);
+see :func:`ditto.db.queries.review_lineage.classify_lineage_reference`. The
 packet the worker fetches carries three things, all bounded:
 
 * the source diff from the parent (per-file unified diffs);
@@ -23,7 +27,7 @@ import asyncio
 import hashlib
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Any
@@ -51,6 +55,10 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningReviewEvent,
+)
+from ditto.db.queries.review_lineage import (
+    REFERENCE_SAME_OWNER_VERSION,
+    classify_lineage_reference,
 )
 from ditto_screening_protocol import (
     ReviewLineageFullReviewReason,
@@ -119,6 +127,52 @@ def is_dockerfile(path: str) -> bool:
     return name.startswith(("dockerfile", "containerfile")) or name.endswith(
         ".dockerfile"
     )
+
+
+# Declaration documents a submission names its base in. Only these are read
+# for base declarations: a 64-hex constant inside code is a hash, not a base.
+_DECLARATION_DOC = re.compile(
+    r"(?i)(^|/)(declaration|base|attribution|readme)[^/]*\.(md|txt)$"
+)
+_DECLARED_SHA = re.compile(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])")
+_DECLARED_UUID = re.compile(
+    r"(?i)(?<![0-9a-f-])[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}(?![0-9a-f-])"
+)
+_DECLARED_NAME_VERSION = re.compile(r"(?<![\w-])([A-Za-z][\w.-]{1,63}) v(\d{1,5})\b")
+
+
+@dataclass(frozen=True)
+class DeclaredReferences:
+    """Base identities named in a submission's declaration documents."""
+
+    shas: frozenset[str]
+    agent_ids: frozenset[UUID]
+    name_versions: frozenset[tuple[str, int]]
+
+    @property
+    def empty(self) -> bool:
+        return not (self.shas or self.agent_ids or self.name_versions)
+
+
+def declared_references(texts: Mapping[str, str]) -> DeclaredReferences:
+    shas: set[str] = set()
+    ids: set[UUID] = set()
+    pairs: set[tuple[str, int]] = set()
+    for path, text in texts.items():
+        if not _DECLARATION_DOC.search(path):
+            continue
+        shas.update(match.lower() for match in _DECLARED_SHA.findall(text))
+        for match in _DECLARED_UUID.findall(text):
+            try:
+                ids.add(UUID(match))
+            except ValueError:
+                continue
+        pairs.update(
+            (name, int(version))
+            for name, version in _DECLARED_NAME_VERSION.findall(text)
+        )
+    return DeclaredReferences(frozenset(shas), frozenset(ids), frozenset(pairs))
 
 
 # Dockerfile instructions that only set metadata or the served process's
@@ -536,6 +590,15 @@ async def _findings(session: AsyncSession, parent: Agent) -> list[dict[str, Any]
     ]
 
 
+async def read_declared_references(
+    agent_id: UUID, sha256: str, storage: S3StorageClient
+) -> DeclaredReferences:
+    """Open one candidate archive and read its declared bases. No database."""
+    inspector = await _open(_ArtifactRef(agent_id, sha256), storage)
+    snapshot = await asyncio.to_thread(inspector.read_text_snapshot)
+    return declared_references(snapshot.texts)
+
+
 @dataclass(frozen=True)
 class ReviewLineageContext:
     """Everything the packet needs from the database, read in one transaction.
@@ -555,12 +618,18 @@ class ReviewLineageContext:
     history: list[dict[str, Any]]
     rulings: list[dict[str, Any]]
     findings: list[dict[str, Any]]
+    reference_kind: str = REFERENCE_SAME_OWNER_VERSION
+
+    @property
+    def parent_agent_id(self) -> UUID:
+        return self.parent.agent_id
 
     def history_digest(self) -> str:
         """Digest of the database half of the packet, so a caller can re-read
         the history under a lock and refuse to bind a packet built before a
         ruling landed."""
         payload = {
+            "reference_kind": self.reference_kind,
             "parent": self.parent_row,
             "history": self.history,
             "rulings": self.rulings,
@@ -572,39 +641,52 @@ class ReviewLineageContext:
 
 
 async def load_review_lineage(
-    session: AsyncSession, *, agent: Agent, attempt: ScreeningAttempt
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    attempt: ScreeningAttempt,
+    parent_id: UUID | None = None,
 ) -> ReviewLineageContext:
-    """Read the lineage parent, history, rulings and findings for an attempt."""
-    if attempt.lineage_parent_agent_id is None:
+    """Read the reference, its history, rulings and findings for an attempt.
+
+    ``parent_id`` overrides the attempt's claim-time parent (a released base
+    considered at packet time). The reference must classify as a same-hotkey
+    version, a same-coldkey earlier upload, or an eligible released base.
+    """
+    reference_id = parent_id or attempt.lineage_parent_agent_id
+    if reference_id is None:
         raise ReviewLineageUnavailableError("attempt has no lineage parent")
-    parent = await session.get(Agent, attempt.lineage_parent_agent_id)
-    # A parent must be an earlier version of this same hotkey's agent; any other
-    # row would put unrelated review context and a foreign artifact in the
-    # packet.
-    if (
-        parent is None
-        or parent.version is None
-        or agent.version is None
-        or parent.miner_hotkey != agent.miner_hotkey
-        or parent.name != agent.name
-        or parent.version >= agent.version
-    ):
+    parent = await session.get(Agent, reference_id)
+    if parent is None:
+        raise ReviewLineageUnavailableError("lineage parent does not exist")
+    # Any other row would put unrelated review context and a foreign artifact
+    # in the packet.
+    kind = await classify_lineage_reference(
+        session, agent=agent, reference=parent, policy_version=attempt.policy_version
+    )
+    if kind is None:
         raise ReviewLineageUnavailableError(
-            "lineage parent is not a prior version of this agent"
+            "lineage parent is not a prior version, same-owner upload or "
+            "eligible released base of this agent"
         )
-    history = (
-        await session.scalars(
-            select(Agent)
-            .where(
-                Agent.miner_hotkey == agent.miner_hotkey,
-                Agent.name == agent.name,
-                Agent.version.is_not(None),
-                Agent.version <= parent.version,
-            )
-            .order_by(Agent.version.desc())
-            .limit(MAX_LINEAGE_HISTORY)
+    if parent.version is None:
+        history: list[Agent] = [parent]
+    else:
+        history = list(
+            (
+                await session.scalars(
+                    select(Agent)
+                    .where(
+                        Agent.miner_hotkey == parent.miner_hotkey,
+                        Agent.name == parent.name,
+                        Agent.version.is_not(None),
+                        Agent.version <= parent.version,
+                    )
+                    .order_by(Agent.version.desc())
+                    .limit(MAX_LINEAGE_HISTORY)
+                )
+            ).all()
         )
-    ).all()
     versions = {row.agent_id: int(row.version or 0) for row in history}
     return ReviewLineageContext(
         agent_id=agent.agent_id,
@@ -617,6 +699,7 @@ async def load_review_lineage(
         history=[_history_row(row) for row in history],
         rulings=await _rulings(session, versions),
         findings=await _findings(session, parent),
+        reference_kind=kind,
     )
 
 
@@ -655,6 +738,13 @@ async def assemble_review_lineage_packet(
             "changed_line_count": diff.changed_line_count,
             "rulings": context.rulings,
             "findings": context.findings,
+            # Absent for the classic same-hotkey parent so its digest is
+            # unchanged; named for every widened reference.
+            "reference_kind": (
+                None
+                if context.reference_kind == REFERENCE_SAME_OWNER_VERSION
+                else context.reference_kind
+            ),
         }
     )
 
@@ -675,8 +765,34 @@ async def build_review_lineage_packet(
     return await assemble_review_lineage_packet(context, storage)
 
 
+def choose_reference_packet(
+    claimed: ReviewLineagePacket | None,
+    alternates: Iterable[ReviewLineagePacket],
+) -> ReviewLineagePacket | None:
+    """The diff-scoped packet with the fewest changed lines.
+
+    The claim-time packet wins ties and is kept when no packet is diff-scoped:
+    a released base is used only when it actually narrows the review.
+    """
+    best = (
+        claimed
+        if claimed is not None and claimed.scope == ReviewLineageScope.DIFF
+        else None
+    )
+    for packet in alternates:
+        if packet.scope != ReviewLineageScope.DIFF:
+            continue
+        if best is None or packet.changed_line_count < best.changed_line_count:
+            best = packet
+    return best if best is not None else claimed
+
+
 __all__ = [
     "MAX_SCOPED_CHANGED_LINES",
+    "DeclaredReferences",
+    "choose_reference_packet",
+    "declared_references",
+    "read_declared_references",
     "ReviewLineageContext",
     "ReviewLineageUnavailableError",
     "assemble_review_lineage_packet",

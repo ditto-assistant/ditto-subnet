@@ -365,8 +365,8 @@ class AdminScreeningAttempt(BaseModel):
     lineage_parent_agent_id: UUID | None = Field(
         default=None,
         description=(
-            "Same-hotkey prior version whose diff and review history scoped this "
-            "attempt's model review. Null is an ordinary full review."
+            "Reference whose diff and review history scoped this attempt's model "
+            "review (see lineage_reference_kind). Null is an ordinary full review."
         ),
     )
     lineage_scope: Literal["diff", "full"] | None = Field(
@@ -378,6 +378,27 @@ class AdminScreeningAttempt(BaseModel):
     )
     lineage_packet_sha256: str | None = Field(
         default=None, description="Digest of the exact packet the worker received."
+    )
+    lineage_full_review_reasons: list[str] | None = Field(
+        default=None,
+        description=(
+            "Why the bound packet could not carry the reference's review "
+            "(build-surface-changed, diff-too-large, too-many-files-changed, "
+            "opaque-file-changed, source-not-compared, parent-policy-differs, "
+            "no-review-history). Empty for a diff scope; null when no packet "
+            "was bound or it predates this field."
+        ),
+    )
+    lineage_reference_kind: (
+        Literal["same_owner_version", "same_owner", "released_base"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "What the bound reference was: the same hotkey's prior version, "
+            "an earlier upload by the same payment coldkey, or a released, "
+            "already-screened public base. Null when no packet was bound or "
+            "it predates this field."
+        ),
     )
 
 

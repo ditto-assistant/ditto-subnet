@@ -775,25 +775,37 @@ class ScreenerWorker:
 
         A packet that cannot be fetched never blocks screening: the attempt
         falls back to the full review it would have had without a lineage.
+
+        The packet is requested even when the claim named no parent: under
+        the released-base lineage mode Platform may bind a declared, already
+        screened public base at packet time, and otherwise answers 409. The
+        bound reference may also differ from the claim-time parent.
         """
-        if item.lineage_parent_agent_id is None:
-            return None
         try:
             packet = await self._platform.get_review_lineage(
                 item.agent_id, attempt_id=attempt_id, artifact_sha256=item.sha256
             )
         except (PlatformError, ValidationError, ValueError) as error:
-            logger.warning(
-                "agent_id=%s lineage packet unavailable; full review: %s",
-                item.agent_id,
-                str(error)[:200],
-            )
+            if item.lineage_parent_agent_id is None:
+                # The ordinary case for a first submission: no reference.
+                logger.info(
+                    "agent_id=%s no lineage reference; full review: %s",
+                    item.agent_id,
+                    str(error)[:120],
+                )
+            else:
+                logger.warning(
+                    "agent_id=%s lineage packet unavailable; full review: %s",
+                    item.agent_id,
+                    str(error)[:200],
+                )
             return None
         logger.info(
-            "agent_id=%s lineage parent=%s scope=%s changed_files=%d "
+            "agent_id=%s lineage parent=%s reference=%s scope=%s changed_files=%d "
             "rulings=%d findings=%d",
             item.agent_id,
             packet.parent.agent_id,
+            packet.reference_kind or "same_owner_version",
             packet.scope.value,
             packet.changed_file_count,
             len(packet.rulings),

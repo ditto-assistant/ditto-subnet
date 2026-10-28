@@ -126,6 +126,8 @@ const quarantineContext: ScreeningQuarantineContext = {
       lineage_parent_agent_id: null,
       lineage_scope: null,
       lineage_packet_sha256: null,
+      lineage_full_review_reasons: null,
+      lineage_reference_kind: null,
     },
   ],
   miner: {
@@ -266,6 +268,8 @@ const submission: ScreeningSubmission = {
       lineage_parent_agent_id: null,
       lineage_scope: null,
       lineage_packet_sha256: null,
+      lineage_full_review_reasons: null,
+      lineage_reference_kind: null,
     },
   ],
 }

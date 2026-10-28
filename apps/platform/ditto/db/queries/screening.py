@@ -1220,6 +1220,7 @@ async def claim_screening_attempts(
     review_settings_enrolled_node_id: str | None = None,
     canary_policy_version: int | None = None,
     claim_lock_held: bool = False,
+    lineage_reference_mode: str = "same_owner_version",
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -1842,7 +1843,7 @@ async def claim_screening_attempts(
         # review history. Duplicates, mechanical rebuilds, canaries and forced
         # full reviews keep the ordinary full review.
         lineage_parent = (
-            await select_lineage_parent(session, agent)
+            await select_lineage_parent(session, agent, mode=lineage_reference_mode)
             if not build_only
             and duplicate_of is None
             # A canary or integrity double-check pins its own posture.

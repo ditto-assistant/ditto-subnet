@@ -11,6 +11,13 @@ open leads in the history, and ``full`` when Platform found a reason the
 parent's review cannot carry (``full_review_reasons``). Under either scope the
 reviewer can read any file, and unchanged code inherits only what the history
 settles. A cleared parent is context, never an automatic pass.
+
+``reference_kind`` names a reference other than the same hotkey's prior
+version: ``same_owner`` (an earlier upload paid by the same coldkey under
+another hotkey or name) or ``released_base`` (an already-screened artifact
+whose exact SHA was public before this upload, typically the base the
+submission declares). It is absent for the classic same-hotkey parent, so those
+packets keep their digests.
 """
 
 from __future__ import annotations
@@ -145,6 +152,7 @@ class ReviewLineagePacketBody(BaseModel):
     findings: Annotated[
         list[ReviewLineageFinding], Field(max_length=MAX_LINEAGE_FINDINGS)
     ] = []
+    reference_kind: Literal["same_owner", "released_base"] | None = None
 
     @model_validator(mode="after")
     def validate_shape(self) -> Self:
@@ -184,6 +192,10 @@ def _canonical(value: dict[str, Any]) -> bytes:
 def review_lineage_packet_digest(packet: ReviewLineagePacketBody) -> str:
     """SHA-256 over the canonical packet JSON, excluding the digest field."""
     body = packet.model_dump(mode="json", exclude={"packet_sha256"})
+    # A classic same-hotkey packet carries no reference kind; leaving the key
+    # out keeps its digest byte-identical to packets sealed before the field.
+    if body.get("reference_kind") is None:
+        body.pop("reference_kind", None)
     return hashlib.sha256(_canonical(body)).hexdigest()
 
 

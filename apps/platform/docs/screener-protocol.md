@@ -237,6 +237,37 @@ and the L2/L3 dossier (`review_lineage` section) carry the packet, and the L2
 result and analyst caches include its digest, so an ordinary review's caches are
 unchanged.
 
+### Wider references (`lineage_reference_mode`)
+
+The queue policy field `lineage_reference_mode` decides which already-screened
+artifact an attempt may be diffed against. Every full-review rule above applies
+to every reference: unchanged files are attested by member digest equality to a
+screened artifact, and every changed, added, removed or unread file is in the
+diff or forces `full`.
+
+- `same_owner_version` (default, the behaviour above): only the same hotkey's
+  prior version of the agent name.
+- `same_owner`: with no such version, the claim names the latest earlier upload
+  paid by the same coldkey (`evaluation_payments.miner_coldkey`, any hotkey or
+  name) that passed a non-rebuild screening and is not banned or rejected.
+- `released_base`: additionally, at packet time, before the first bind and only
+  when the claim-time packet is `full` or there is no claim-time parent,
+  Platform reads the candidate's DECLARATION / BASE / ATTRIBUTION / README
+  documents for 64-hex SHAs, UUIDs and `name vN` pairs and considers up to three
+  declared agents uploaded earlier whose exact SHA had a public handoff
+  (`artifact_fetch_audit`, `public.agent_artifact`) at or before this upload,
+  that are not banned or rejected, and that passed a non-rebuild screening under
+  the attempt's policy. The packet with `scope: diff` and the fewest changed
+  lines wins; the claim-time packet wins ties and is kept when none is `diff`.
+  The bind rewrites `lineage_parent_agent_id` to the chosen reference under the
+  same lock and history-digest re-check. Workers request a packet even when the
+  claim named no parent; Platform answers 409 when there is no reference.
+
+A widened packet carries `reference_kind` (`same_owner` or `released_base`);
+the classic packet omits it, so its digest is unchanged. Each bind also records
+`screening_attempts.lineage_reference_kind` and
+`lineage_full_review_reasons` (empty for `diff`) for Backroom.
+
 ## Miner disputes
 
 A miner may dispute a resolved quarantine rejection exactly once per submission.

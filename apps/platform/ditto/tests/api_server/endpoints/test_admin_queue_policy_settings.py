@@ -85,6 +85,7 @@ def _settings(**overrides: object) -> dict[str, object]:
             "min_composite_delta": 0.10,
             "min_axis_delta": 0.15,
         },
+        "lineage_reference_mode": "same_owner_version",
     }
     settings.update(overrides)
     return settings
@@ -398,6 +399,28 @@ class TestWholePolicyWrites:
         assert created.status_code == 200, created.text
         effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
         assert effective["settings"]["prev_gen_carryover"] == carryover
+
+    async def test_lineage_reference_mode_round_trips_and_defaults(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        before = (await client.get(_URL, headers=_HEADERS)).json()
+        assert before["default"]["lineage_reference_mode"] == "same_owner_version"
+        refused = await client.post(
+            _URL, headers=_HEADERS, json=_payload(lineage_reference_mode="anyone")
+        )
+        assert refused.status_code == 422, refused.text
+        created = await client.post(
+            _URL,
+            headers=_HEADERS,
+            json=_payload(lineage_reference_mode="released_base"),
+        )
+        assert created.status_code == 200, created.text
+        effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
+        assert effective["settings"]["lineage_reference_mode"] == "released_base"
 
     async def test_bypass_mode_round_trips_and_is_attributed(
         self,

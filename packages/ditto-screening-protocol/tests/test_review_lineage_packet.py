@@ -85,3 +85,32 @@ def test_full_scope_names_its_reasons() -> None:
         seal_review_lineage_packet(_body(scope="full"))
     with pytest.raises(ValueError, match="name its reasons"):
         seal_review_lineage_packet(_body(full_review_reasons=["diff-too-large"]))
+
+
+def test_a_classic_packet_digest_ignores_the_absent_reference_kind() -> None:
+    """Packets without a reference kind keep the digest they had before it."""
+    import hashlib
+    import json
+
+    from ditto_screening_protocol.review_lineage import ReviewLineagePacketBody
+
+    body = _body()
+    packet = seal_review_lineage_packet(body)
+    assert packet.reference_kind is None
+    legacy = ReviewLineagePacketBody.model_validate(body).model_dump(
+        mode="json", exclude={"reference_kind"}
+    )
+    expected = hashlib.sha256(
+        json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    assert packet.packet_sha256 == expected
+
+
+def test_a_reference_kind_is_sealed_into_the_digest() -> None:
+    body = _body()
+    plain = seal_review_lineage_packet(body)
+    released = seal_review_lineage_packet({**body, "reference_kind": "released_base"})
+    assert released.reference_kind == "released_base"
+    assert released.packet_sha256 != plain.packet_sha256
+    with pytest.raises(ValueError):
+        seal_review_lineage_packet({**body, "reference_kind": "someone_else"})
