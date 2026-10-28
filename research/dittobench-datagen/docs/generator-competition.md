@@ -296,7 +296,19 @@ At opening, Platform (`choose_round_bench_version`) picks:
 2. otherwise the newest round contract below the active version that passes
    the same checks, recording why on the round (`generation.bench_contract`;
    below quorum, rounds stay on the previous round's version);
-3. otherwise nothing: the round is void with the reason.
+3. otherwise nothing. When validator capacity is the only blocker (no
+   validator, or too few for the quorum, can run any candidate the scorer
+   grades, usually because heartbeats are missing, stale or mid-update at
+   that tick), the round stays committed with a `generation.open_deferred`
+   record and each later tick of its opening epoch retries for up to 10
+   minutes (`ROUND_OPEN_CAPACITY_GRACE`). It opens on the same seed, since
+   the seed binds the opening epoch's boundary block. After the grace, or if
+   the epoch ends first, it is void with an `infra:` reason. Any other
+   blocker voids it at once with the reason.
+
+A void round scores no generator, so a challenger that held its challenger
+column is still unscored and keeps first claim on the next round's
+challenger column.
 
 The quorum mirrors the agent competition: a bench version takes emission
 authority only once each priority-cohort position holds `SCORING_QUORUM` (3)

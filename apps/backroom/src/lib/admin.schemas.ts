@@ -3142,6 +3142,26 @@ const inferenceRequestKindSchema = z.enum(['chat', 'embedding'])
 const runtimeProfileTargetSchema = z.enum(['platform-relay-1', 'platform-relay-2'])
 const runtimeProfileTypeSchema = z.enum(['cpu', 'heap', 'allocs', 'goroutine'])
 
+// Grant creation cohorts contain lifetime counters, not service-period invoices.
+export const inferenceGrantCostsSchema = z.object({
+  observed_at: z.string(),
+  window_start: z.string(),
+  window_end: z.string(),
+  aggregation_basis: z.literal('grant_created_at_full_lifetime'),
+  provider_bill_reconciled: z.literal(false),
+  total_cost_microusd: z.number().int().nonnegative(),
+  unclassified_cost_microusd: z.number().int().nonnegative(),
+  grants: z.number().int().nonnegative(),
+  unclassified_grants: z.number().int().nonnegative(),
+  groups: z.array(z.object({
+    purpose: z.string(), classification_basis: z.string(), bench_version: z.number().int(),
+    grants: z.number().int().nonnegative(), chat_calls: z.number().int().nonnegative(),
+    prompt_tokens: z.number().int().nonnegative(), completion_tokens: z.number().int().nonnegative(),
+    chat_cost_microusd: z.number().int().nonnegative(), embedding_calls: z.number().int().nonnegative(),
+    embedding_tokens: z.number().int().nonnegative(), embedding_cost_microusd: z.number().int().nonnegative(),
+  })),
+})
+
 export const inferenceRuntimeMetricsSchema = z.object({
   observed_at: z.string(),
   settings_revision: z.number().int().nonnegative(),

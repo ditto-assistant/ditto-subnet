@@ -1654,9 +1654,16 @@ class DittobenchClient:
             )
         body["dataset_sha256"] = dataset_sha256
         if private_dataset_mode is not None or private_dataset_bytes is not None:
+            # The Platform-private artifact is a v13 contract; a generator round
+            # runs at any round contract (the pack grading policies) it froze.
+            allowed_versions = (
+                GENERATOR_ROUND_BENCH_VERSIONS
+                if private_dataset_mode == "generator-round-v1"
+                else (13,)
+            )
             if (
                 private_dataset_mode not in _PRIVATE_DATASET_MODES
-                or bench_version != 13
+                or bench_version not in allowed_versions
                 or not private_dataset_bytes
                 or len(private_dataset_bytes) > 32 << 20
             ):

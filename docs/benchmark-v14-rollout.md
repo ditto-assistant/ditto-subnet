@@ -253,26 +253,69 @@ source `0b46da26f`). They are the same validators that serve v13; no separate
 v14 cohort exists. `start_ready` is a mechanical check, not qualification.
 
 **Gate 3 (diagnostic canaries).** Isolated, non-authoritative full-profile v14
-canaries on the exact scored artifact and screened image, validator
-`5HT9U1J8...`, scorer `0b46da26f`. The v13 column is the agent's accepted
-3-score composite on different seeds, so the delta mixes the v14 grading
-change with generation variance.
+canaries on the exact scored artifact and screened image of each agent in the
+current hybrid top five, all on validator `5HT9U1J8...` (the first three on
+scorer `0b46da26f`, the last two on v0.398.0 `b96737ea7`, which changes no
+scored bytes). A canary's seed is derived from the agent's seed block, the
+agent and the validator, never the bench version, so each v14 canary ran on
+the same seed as that validator's own canonical v13 score. The v13 column is
+that score, not the 3-validator mean. Every v14 dataset digest below was
+reproduced offline with `cmd/generate -bench-version 14 -seed <seed> -run-size
+full`.
 
-| Canary | Agent (v13 raw rank) | v13 composite | v14 composite | v14 memory | v14 tools | Run time |
-| --- | --- | --- | --- | --- | --- | --- |
-| `b91b551d` | 1 | 0.9308 | 0.8850 | 0.8240 | 0.9500 | 9 min |
-| `f7884ad9` | 2 | 0.9164 | 0.8459 | 0.8860 | 0.9480 | 9 min |
-| `11d45359` | 3 | 0.9043 | 0.8597 | 0.8653 | 0.9267 | 10 min |
+The same seed is only partly the same test. Regenerating v13 and v14 at these
+five seeds, 195 to 212 of 250 memory cases (78% to 85%) keep the same
+question and expected answer, while the histories, epoch dates and 93% to 98%
+of tool prompts change (case-file story order #3088, the SN-353 to SN-360
+families, the v14 epoch). The delta therefore mixes the grading change with
+the new cases, but much less seed variance than the earlier "different seeds"
+reading assumed.
 
-All three are lower at v14, by 0.046, 0.071 and 0.045, and the order changes
-(rank 3 passes rank 2). Three single-seed runs cannot separate the stricter
-over-call rule from seed variance (v13 stderr is about 0.013 to 0.015). The
-gate 5 shadow replay must measure the rank impact.
+| Canary | Agent (v13 raw rank) | v13 composite (same seed) | v14 composite | Delta | v13 memory | v14 memory | v13 tools | v14 tools | v14 inference |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `b91b551d` | 1 | 0.9308 | 0.8850 | -0.046 | 0.9040 | 0.8240 | 0.9700 | 0.9500 | $1.09 |
+| `f7884ad9` | 2 | 0.9164 | 0.8459 | -0.071 | 0.9120 | 0.8860 | 0.9413 | 0.9480 | $1.09 |
+| `11d45359` | 3 | 0.9043 | 0.8597 | -0.045 | 0.8527 | 0.8653 | 0.9600 | 0.9267 | $1.09 |
+| `0e84f29a` | top five | 0.9064 | 0.7957 | -0.111 | 0.8567 | 0.7907 | 0.9600 | 0.9700 | $0.34 |
+| `1bcc87ee` | top five | 0.9231 | 0.8439 | -0.079 | 0.8847 | 0.8440 | 0.9700 | 0.9287 | $1.10 |
+
+All five are lower at v14 (mean -0.070). The leader stays first on both
+versions; the other four reorder (on this validator's seeds the v13 fifth
+rises to second and the v13 second falls to fourth). The memory axis carries most of
+the loss; tools move by at most 0.041. The v13 `memory_over_call` factors on
+these agents' accepted scores are 0.993 to 1.0, which suggests the v14
+over-call rule is a small part of the loss and that the new cases and the
+rendered-text grading carry the rest. The fourth agent's 0.111 drop
+is more than twice the v13 cross-validator spread for that agent (0.853 to
+0.914). These are five single-seed runs, so they bound the rank impact but do
+not measure it: gate 5 must. Platform keeps each canary's per-case report
+(`benchmark_canaries.result.per_case`). Gate 4 below splits it by family.
 
 Each run completed with signed evidence and no scorer error. These are clean
 runs of honest, top-ranked agents. Known-benign and adversarial control
 harnesses, the persistence and over-call probes, and LongMem confirmation at
-subject version 14 have not been exercised. Gate 3 is therefore partly met.
+subject version 14 have not been exercised:
+
+- *Control harnesses.* `issue_benchmark_canary` accepts only a `scored` or
+  `live` agent row with a verified screened image. The canonical starter
+  fixture (`get_v13_official_controls`) is a screener control identity, not an
+  agent row, and no adversarial harness is registered as one. Running either
+  needs a control agent row (an upload, or a Platform path that admits an
+  official control image as a canary target) or the local phase-1 stack.
+  The local stack does not build on macOS (the coding packages are
+  Linux-only), so run it in a Linux container.
+- *Probes.* The persistence, no-call, unrelated, mixed-action and
+  non-declarative-write behaviours are pinned at unit level
+  (`internal/scorer/v14_overcall_test.go`, `TestV14DeclarativeOverCallContract`,
+  `TestV14DenominatorAndHistoricalScoring`), not by an executed harness.
+- *LongMem at subject version 14.* Confirmation bundles are selected from the
+  live leaderboard and a retest keeps its source bundle's subject version, so
+  no v14-subject bundle can exist before v14 canonical scores do, which needs
+  `start_benchmark_rollout`. This item cannot precede the start. Either accept
+  it as a during-rollout check (confirmation stays `shadow`, so it cannot move
+  weights) or waive it.
+
+Gate 3 is therefore partly met.
 
 **Gate 4 (family admission).** `universe.V14FamiliesAwaitingPanel` now returns
 14 families. The SN-359 and SN-360 role families were missing from
@@ -290,6 +333,169 @@ evidence is the public parser above: each of the seven business families
 awaiting the panel is solved 100% wire-only (seeds 1 to 10). That shows a
 template matcher can invert them; it is not the trivial/unsolved panel the gate
 requires.
+
+**Can the v14 pack contract (#3212) supply gate 4 before activation?** No,
+for three independent reasons, checked against `main` and live Backroom state
+on October 27:
+
+1. *Rounds cannot open at v14 yet.* `choose_round_bench_version` only
+   considers round contracts at or below the active version, so every round
+   opens at v13 while v13 is active, and a column can only declare a policy at
+   or below its round. A v14 pack column needs v14 active first.
+2. *The default generator holds no column.* `select_columns` gives the public
+   default only counted columns that miners leave empty. Fifteen miner
+   generators are qualified and fill all five counted columns plus the
+   challenger column (`preview_generator_round`). Making room for it means
+   changing `counted_columns` or `challenger_columns`, which reshapes the
+   generator track's paid columns (the generator share is 30% of
+   non-burn emission).
+3. *Wrong cases and no labels.* Starter kit version 4 emits its own
+   competition families, not the `universe.V14FamilyMix` program families,
+   and a round's per-case verdicts carry no family label.
+
+So re-registering the default generator from kit version 4 is still right
+(it keeps the default ready for v14 rounds), but it produces no gate 4 rows.
+The operator's choices are unchanged:
+
+- *Operator column (new code plus a setting).* An uncounted operator column
+  whose pack is v14 datagen program cases with a family label on each case,
+  outside generator scoring. Because of point 1, before activation it would
+  have to run in v13 rounds with v14 cases graded at policy 13. That measures
+  family difficulty but not the v14 grading. Cost: about one sixth more panel
+  inference per round. Blast radius: adds no paid column, but changes
+  round composition and needs a Platform change before any setting.
+- *Offline panel (spend).* Run at least two independently owned harnesses
+  (the top five are five owners) on the same v14 seeds and join per-case
+  results to `V14FamilyMix` labels. One full-profile v14 run cost $0.34 to
+  $1.09 of locked-model inference in the canaries above. About 3 to 4
+  program cases per family per full seed means roughly 10 seeds for 3+
+  rounds of 30+ judged cases per family: about 5 x 10 x $1.09, or $55,
+  plus a Linux host. The per-case-to-family join tool does not exist yet.
+- *Waiver.* Waive gate 4 for the structural families (SN-353 to SN-358 and
+  SN-360). Identity-join (SN-359) should not ship on a waiver. Without a
+  panel it would need a code change that holds it out of v14 generation,
+  which moves the v14 vector and reopens gate 1 and the GIH diagnostic.
+
+**Gate 4 (family admission): measured from executed canaries, closed as
+MEDIUM (October 27).** Rounds cannot supply the table before activation (see
+above), so the evidence comes from isolated v14 canaries. A canary's seed
+derives from the agent and validator, so no two agents share a case and
+familygate's per-case panel verdict cannot be formed directly.
+`cmd/familypanel` (#3228) fills that gap:
+
+- it regenerates each run's dataset from its seed and checks the digest;
+- it labels every program case with its v14 family: the business group's
+  `V13FamilyOfVersion`, or the personal-life domain in the case provenance;
+- it folds each owner's per-family solve rate p_i;
+- it bounds the panel verdicts over every possible coupling of case
+  difficulty across agents: trivial is at most `min p_i`, unsolved is at most
+  the U-capacity bound;
+- it runs those worst cases through familygate's own thresholds
+  (`familygate.Judge`), adding a five-owner, eight-case-per-owner panel floor.
+
+Evidence: 9 completed full-profile v14 canaries.
+- 5 are the gate 3 runs above. 4 more were chosen with `familypanel -plan` to
+  cover the rare role and temporal families.
+- 6 independently owned agents: the hybrid top five plus the rank-7 agent,
+  which joined as a fifth owner for identity-join and latest-event (one
+  top-five agent has no identity-join seed on any validator). Owners were
+  checked by payment coldkey; a same-owner agent was excluded.
+- Every dataset regenerated to its production digest, and every program case
+  was labelled and scored.
+- One more canary failed on the lease collision fixed in #3230. One was
+  cancelled unstarted.
+- Spend: $4.56 of locked-model inference for the gate 4 runs, $9.96 for all
+  v14 canaries.
+
+The baseline is the same tool run on the same six agents' accepted live v13
+scores (18 runs).
+
+| Family | Owners | Seeds | Cases | v14 solved | Trivial max | Unsolved max | Unsolved (indep.) | v14 verdict | Live v13, same agents |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| appointments-medication | 4 | 7 | 28 | 79% | 0.38 | 0.00 | 0.00 | hold-thin-panel | 98% (hold-trivial) |
+| client-vs-vendor | 2 | 2 | 8 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | 83% (hold-trivial) |
+| current-channel | 3 | 4 | 16 | 94% | 0.88 | 0.00 | 0.00 | hold-trivial | new in v14 |
+| family-milestones | 6 | 8 | 32 | 56% | 0.25 | 0.25 | 0.02 | hold-thin-panel | 81% (admit) |
+| hobbies-clubs | 6 | 8 | 32 | 81% | 0.25 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+| holder-vs-actor | 3 | 3 | 12 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | new in v14 |
+| household-chores | 5 | 7 | 28 | 29% | 0.00 | 0.75 | 0.45 | hold-unsolved | 98% (hold-trivial) |
+| identity-join | 4 | 4 | 16 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | new in v14 |
+| latest-event | 3 | 3 | 12 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | 100% (hold-trivial) |
+| next-action-responsible | 2 | 2 | 8 | 62% | 0.25 | 0.75 | 0.75 | hold-unsolved | new in v14 |
+| owner-after-correction | 6 | 9 | 36 | 81% | 0.50 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+| school-logistics | 6 | 9 | 36 | 100% | 1.00 | 0.00 | 0.00 | hold-trivial | 100% (hold-trivial) |
+| standing-status | 6 | 9 | 36 | 72% | 0.25 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+| subscriptions-renewals | 5 | 6 | 24 | 50% | 0.25 | 0.00 | 0.00 | hold-thin-panel | 71% (admit) |
+| travel-logistics | 6 | 9 | 36 | 56% | 0.12 | 0.00 | 0.00 | hold-thin-panel | 100% (hold-trivial) |
+
+Reading:
+
+- *Hold-trivial is no worse than live.* With the same tool, 8 of the 10
+  families comparable at v13 are hold-trivial at 98 to 100% on the live
+  benchmark today. v14 lowers the solve rate on 8 of the 10 shared families,
+  by 19 to 69 points. The two still trivial at v14 (school-logistics,
+  latest-event) were equally trivial at v13.
+  The new role and temporal families solve at 94 to 100%. Trivial cases are
+  uniform points for every agent and cannot reorder them.
+- *Identity-join (SN-359)* was solved on 16 of 16 cases by 4 independent
+  owners. It is neither broken nor misgraded: it holds only as too easy. The
+  concern that it is adjacent to the excluded owner-alias-email shape is not
+  borne out.
+- *Household-chores* is the one family with real unsolved mass: 29% solved,
+  5 owners, unsolved bound 0.75 (0.45 under independence). The cases are
+  well-posed revert chains. One example: the dog walk passes Lauren, then
+  Christopher, then Erica, and then a record says it "is back to what it was
+  before the most recent change", so the answer is Christopher.
+  - The inference traces of the champion's run show the agent answering
+    "Erica Abraham" on the base and its variants. Its own prompt heuristic
+    takes the latest record that announces itself as a change.
+  - Subscriptions-renewals fails the same way on a struck-entry chain: the
+    agent answers "switch it to annual billing" for an entry the notes say was
+    struck.
+  - The grader scored both correctly. This is the difficulty SN-353/354 were
+    added for, and every agent fails it alike. Weight: one 4-case group in
+    about 6 of 7 seeds, about 1.6% of memory cases, under 1% of the composite.
+- *Thin panels.* Next-action-responsible (2 owners, 62%) and the 3-owner
+  role and temporal families sit below the panel floor. Their measured rates
+  are admissible or trivial.
+
+Verdict by the letter of familygate: five families hold as trivial
+(school-logistics, identity-join, holder-vs-actor, latest-event,
+current-channel) and household-chores holds as unsolved. The orchestrator,
+under the operator's activation authority, closed H2 as MEDIUM with **no
+hold-out**:
+
+- hold-trivial is no worse than live v13 and cannot misrank;
+- identity-join is solved and correctly graded;
+- household-chores is well-posed, uniform difficulty under 1% of the composite.
+
+Holding families out would move the v14 vector and reopen gate 1, the GIH
+diagnostic and the canaries. Familygate tuning (a hold-trivial rule relative
+to the live baseline, panel depth for rare families) is recorded for v15 as
+an SN-351 follow-up.
+
+**Gate 5 (partial, no spend): the v14 composite rule on accepted v13 cases.**
+Platform keeps each accepted score's per-case rows (`details.per_case`: kind,
+category, score, correct, called and observed tools), but not the reply text.
+So the v14 *composite* rule (the declarative over-call change) can be replayed
+on the exact observed cases. The v14 *grading* changes (rendered-text reading,
+the claim-set correction, the #2734 matchers) and the new v14 cases cannot.
+Method: every accepted v13 score of every `scored` or `live` agent with at
+least 3 of them (684 scores, 228 agents), decoded into
+`[]protocol.CaseScore`, then `scorer.AggregateForVersion` at 13 and 14.
+`AggregateForVersion(…, 13)` reproduces all 684 stored composites exactly.
+
+- v14 minus v13 per score: mean -0.0100, range -0.208 to +0.086; 535 of 684
+  scores move.
+- Ranked by mean composite, the top six keep their places and places 7 and 8
+  swap. 188 of 228 agents move somewhere.
+- The current hybrid top five lose 0 to 0.0025 each.
+
+So the over-call rule moves top agents very little. It mainly hits agents
+that take unrelated actions on declarative cases, by up to 0.21. The 0.045
+to 0.111 canary losses above come almost entirely from the new v14 cases and
+the v14 grading, which only executed runs can measure. Gate 5 is still open:
+the replay of executed transcripts into separate v14 rows has not been run.
 
 ## Generator-competition changes (SN-361)
 
@@ -543,32 +749,62 @@ Open, and requiring an operator, release-owner or paid run:
    decisions, so no code is merged for them here. The latest offline public
    GIH diagnostic, at `7852c80c3` on the final vector, still inverts v14 at a
    quality of 0.9498. Comments on #1832 give the report SHA.
-2. **Release packet and a separate v14 cohort (#2508).** The capability is
-   live (gate 2 evidence above), but the packet is not recorded. It needs a
-   reviewed merge SHA and its release (v0.398.0 or later, so it includes
-   #3210; #3210 changes no scored bytes), its scorer image and descriptor
-   digests, and the archived v13 cohort packet. The four capable validators
-   also serve the pinned v13 cohort. Either stand up a separate v14 cohort, or
-   have the operator explicitly waive that requirement and hold automatic stack
-   updates on the v13 members.
-3. **Gate 3 controls.** The honest-agent canaries pass. Still missing:
-   known-benign and adversarial harness canaries, the persistence, no-call,
-   unrelated and mixed action and non-declarative write probes, and a LongMem
-   confirmation run at subject version 14.
-4. **Gate 4 family admission (SN-351).** There is no `familygate` table for
-   any of the 14 families in `universe.V14FamiliesAwaitingPanel`. Generator
-   rounds cannot supply one (bench 13 packs, no v14 family labels). The
-   operator must choose one of: a private operator column of v14 datagen cases
-   in at least 3 live rounds, a funded offline panel of at least 2
-   independently owned harnesses, or a recorded waiver for the structural
-   families. Identity-join should not ship on a waiver alone.
-5. **Shadow replay report (gates 4 and 5).** No measured v14 shadow results
-   exist yet: no consented-corpus replay into separate v14 rows, no rank-impact
+2. **Release packet and a separate v14 cohort (#2508).** Candidate packet,
+   observed on October 27 at 21:20 UTC. It is not reviewed or accepted:
+   - Merge source `8730e77d45e828c47c2a7f34969986a59453ed2a` (#3222).
+     Release v0.399.0, release commit
+     `e3f18675dd52ecdb43e3ded22bc50323abf9200f`, run 40577508333. It
+     contains #3204, #3210, #3211, #3212, #3213, #3219 and #3222. Only
+     #3212 and #3222 change v14 code, and neither moves the v14 vector or
+     v14 grading.
+   - Signed stack descriptor
+     `sha256:d9b58c6e80bc2641d9077499639ef881f13a7a62df1d87f42be048c0f5a40a6b`,
+     dittobench-api image
+     `sha256:e965c94cbc49b9ad94b15878812e07d7d416b24f3f78d48ec5825acb1d3ee1c2`.
+   - `v14_scored_runtime_env` sha256
+     `57ea6e21d68c678ab8ccb0dcb76f89d49cb3e809a454864a3d547a01b2e27c63` on the
+     three cohort members already on v0.399.0. The fourth member (`5CFtzzb4...`)
+     was still on v0.398.0 and must converge before the packet is recorded.
+   - Archived v13 cohort pin: rotation 12, packet source
+     `c2eeb1dd6bb7afe5a50c34b06065fa9dd88f0fa3`, scorer image
+     `sha256:60b03a024f86a67438e1b5b0d93cc975ac515d9f6029baa0fc5e32564092d745`,
+     descriptor
+     `sha256:16e3b8baabceb7cdc7746b015b727114f64f2c9fab24e784be06acf373a8926f`.
+     The live authority packet has already followed the fleet to newer
+     releases, so the v13 pin is not image-frozen.
+
+   The cohort validators also serve v13, and no separate v14 cohort exists.
+   Either stand up a separate v14 cohort, or have the operator explicitly
+   waive that requirement and hold automatic stack updates on the v13
+   members.
+3. **Gate 3 controls.** The honest-agent canaries pass on all five of the
+   current hybrid top five. Still missing: known-benign and adversarial
+   harness canaries (no control agent row exists to canary), and the
+   persistence, no-call, unrelated and mixed action and non-declarative write
+   probes as executed runs (unit-pinned only). LongMem confirmation at subject
+   version 14 cannot run before `start_benchmark_rollout` (see gate 3 above).
+   Accept it as a during-rollout shadow check or waive it.
+4. **Gate 4 family admission (SN-351): closed as MEDIUM, no hold-out.** See
+   *Gate 4 (family admission): measured from executed canaries* above. The
+   familygate tuning follow-up targets v15.
+5. **Fleet depth.** During October 27 one of the four v13 cohort members
+   (`5HEouuDa...`) dropped out of v14 capability for several hours with a live
+   v13 ticket, leaving three. That equals the three-validator quorum, so one
+   more outage would have stalled every v14 rollout member. It returned on
+   v0.399.0. At 21:20 UTC rollout control counts 5 v14-capable validators: the
+   4 cohort members and `5CqJAjSj...`, a paused source-mode validator with
+   `local_unverified` provenance. Before the start, confirm that at least 4
+   managed, signed-descriptor validators are capable. Do not rely on the
+   paused source-mode one.
+6. **Shadow replay report (gates 4 and 5).** The no-spend part is measured:
+   the v14 composite rule replayed on 684 accepted v13 per-case rows (see
+   *Gate 5 (partial)* above), and five same-seed top-five canaries. Still no
+   executed-transcript replay into separate v14 rows, no full rank-impact
    report, no operator review.
-6. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
+7. **Confirmation at v14.** Bundles stay `shadow` until qualified v14 shadow
    bundles exist. Enforce stays off at activation unless that evidence is
    recorded separately.
-7. **Generator-competition rounds follow activation (resolved in code).**
+8. **Generator-competition rounds follow activation (resolved in code).**
    Rounds freeze a bench version when they open and follow the active version
    where a round contract exists. The v14 pack contract adds v14 to the round
    contracts (`GENERATOR_ROUND_BENCH_VERSIONS = (13, 14)`).
@@ -591,7 +827,7 @@ Open, and requiring an operator, release-owner or paid run:
    - Rollback: deactivating v14 sends new rounds back to v13 at the next
      opening; a round already frozen at v14 finishes at v14.
 
-8. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
+9. **Miner rehearsal default (resolved for v13).** `local-rehearsal.py`
    now reads `active_version` from the public rollout endpoint, so the
    default follows activation without a code change. The activation PR still
    bumps the offline fallback `LIVE_SCORING_BENCH_VERSION` (now 13) and the

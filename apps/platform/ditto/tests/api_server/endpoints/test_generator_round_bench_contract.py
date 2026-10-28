@@ -13,7 +13,7 @@ packs, each column graded at the policy its pack declares.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -31,17 +31,23 @@ from ditto.api_models.generator_round_validator import (
 )
 from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.ticket_status import TicketPurpose
+from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import (
+    OPEN_DEFERRED_KEY,
+    ROUND_OPEN_CAPACITY_GRACE,
+    advance_rounds,
     choose_round_bench_version,
     get_round,
     round_bench_version,
     round_capable_validators,
     round_column_capacity,
     round_contract_for,
+    round_seed,
 )
-from ditto.db.models import GeneratorRound, ValidatorTicket
+from ditto.db.models import GeneratorRound, GeneratorSubmission, ValidatorTicket
 from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _ADMIN,
+    _BLOCK,
     _ROUNDS_URL,
     _SCORER,
     _VALIDATOR,
@@ -53,9 +59,11 @@ from ditto.tests.api_server.endpoints.test_generator_rounds import (
     _lease_job,
     _patch_lane,
     _patch_panel,
+    _position,
     _qualify_all,
     _register_default,
     _seed_agent,
+    _seed_generator,
     _signed_score,
 )
 from ditto.tests.db.queries.test_benchmark_rollout import _heartbeat
@@ -405,22 +413,232 @@ class TestRoundBenchContract:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
+        """Only once the capacity grace has run out: the round voids with an
+        infra reason and never reaches the scorer."""
         _install(app, session_maker)
         fleet = _Fleet(monkeypatch, active=13)
         fleet.capable = set()
-        await _open_round(client, session_maker, monkeypatch)
+        await _commit_round(client, session_maker, monkeypatch)
+        start = datetime.now(UTC)
+        await _tick(session_maker, 12, start)
+        await _tick(session_maker, 12, start + ROUND_OPEN_CAPACITY_GRACE)
         row = await _round(session_maker)
         assert row.status == "void" and row.bench_version is None
         assert row.void_reason is not None
         assert row.void_reason.startswith(
-            "no generator-round contract can run at active bench v13"
+            "infra: no generator-round contract can run at active bench v13"
         )
         assert "no validator can run a" in row.void_reason
+        assert "did not recover within 10 minutes" in row.void_reason
         # A void round never reaches the scorer.
         work = (
             await client.get("/api/v1/generator-scorer/round-work", headers=_SCORER)
         ).json()
         assert work.get("work") is None
+
+
+async def _commit_round(
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    **settings: Any,
+) -> list[UUID]:
+    """Commit round 3 (epochs 12..15) with a three-agent panel, unopened."""
+    await _apply_settings(client, validator_rounds_enabled=True, **settings)
+    agents = [await _seed_agent(maker, rank) for rank in range(3)]
+    _patch_panel(monkeypatch, agents)
+    await _register_default(client)
+    await _qualify_all(maker)
+    await _advance(maker, 9)
+    return agents
+
+
+async def _tick(
+    maker: async_sessionmaker[AsyncSession], epoch: int, now: datetime
+) -> list[str]:
+    async with maker() as session, session.begin():
+        resolved = await load_settings(session)
+        out = await advance_rounds(
+            session, resolved=resolved, position=_position(epoch), now=now
+        )
+    return out.actions
+
+
+class TestRoundOpenCapacityGrace:
+    """Round 25984 voided the instant it opened because, at that one tick, no
+    validator held a fresh heartbeat for the V13 cohort; the fleet was back
+    seconds later. Validator capacity alone now defers the opening."""
+
+    async def test_a_capacity_gap_defers_the_opening_and_a_later_tick_opens(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=13)
+        fleet.capable = set()
+        await _commit_round(client, session_maker, monkeypatch)
+        start = datetime.now(UTC)
+        actions = await _tick(session_maker, 12, start)
+        assert any("round 3: opening deferred (attempt 1" in a for a in actions)
+        row = await _round(session_maker)
+        # Left exactly as committed: no seed, no open block, no contract.
+        assert row.status == "committed" and row.void_reason is None
+        assert row.seed is None and row.opened_at is None
+        assert row.bench_version is None and row.columns is None
+        deferral = (row.generation or {})[OPEN_DEFERRED_KEY]
+        assert deferral["since"] == start.isoformat()
+        assert deferral["until"] == (start + ROUND_OPEN_CAPACITY_GRACE).isoformat()
+        assert deferral["attempts"] == 1
+        assert "no validator can run a" in deferral["reason"]
+
+        await _tick(session_maker, 12, start + timedelta(minutes=1))
+        row = await _round(session_maker)
+        assert row.status == "committed"
+        deferral = (row.generation or {})[OPEN_DEFERRED_KEY]
+        assert deferral["since"] == start.isoformat()
+        assert deferral["attempts"] == 2
+
+        # Heartbeats are back: the next tick opens on the seed the commitment
+        # promised (the opening epoch's boundary block), at the frozen contract.
+        fleet.capable = {13, 14}
+        opened_at = start + timedelta(minutes=2)
+        await _tick(session_maker, 12, opened_at)
+        row = await _round(session_maker)
+        assert row.status == "generating" and row.bench_version == 13
+        assert row.seed == round_seed(3, row.secret, _BLOCK)
+        assert row.open_epoch_index == 12 and row.opened_at == opened_at
+        assert (row.generation or {})[OPEN_DEFERRED_KEY]["attempts"] == 2
+
+    async def test_a_deferred_round_whose_epoch_ends_voids_as_infra(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The seed binds the opening epoch's boundary: a round still deferred
+        when the next epoch fires cannot open, and that is a fleet failure."""
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=13)
+        fleet.capable = set()
+        await _commit_round(client, session_maker, monkeypatch)
+        start = datetime.now(UTC)
+        await _tick(session_maker, 12, start)
+        fleet.capable = {13, 14}
+        await _tick(session_maker, 13, start + timedelta(minutes=1))
+        row = await _round(session_maker)
+        assert row.status == "void" and row.seed is None
+        assert (row.void_reason or "").startswith(
+            "infra: round opening epoch was missed while waiting for validator "
+            "capacity since " + start.isoformat()
+        )
+
+    async def test_a_scorer_that_grades_no_round_contract_still_voids_at_once(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Only validator capacity defers: a scorer refusal is not a fleet gap
+        that a later tick of this epoch can be expected to close."""
+        _install(app, session_maker)
+        _Fleet(monkeypatch, active=13, scorer_versions=())
+        await _commit_round(client, session_maker, monkeypatch)
+        await _tick(session_maker, 12, datetime.now(UTC))
+        row = await _round(session_maker)
+        assert row.status == "void"
+        assert OPEN_DEFERRED_KEY not in (row.generation or {})
+        assert (row.void_reason or "").startswith(
+            "no generator-round contract can run at active bench v13"
+        )
+
+    async def test_below_quorum_with_no_fallback_defers_too(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A quorum shortfall is validator capacity as well; the quorum itself
+        is unchanged, so the round opens only once enough validators can."""
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=14, validators=1)
+        fleet.capable = {14}
+        await _commit_round(client, session_maker, monkeypatch, min_round_validators=3)
+        start = datetime.now(UTC)
+        await _tick(session_maker, 12, start)
+        row = await _round(session_maker)
+        assert row.status == "committed"
+        assert (
+            "below min_round_validators 3"
+            in ((row.generation or {})[OPEN_DEFERRED_KEY]["reason"])
+        )
+        fleet.validators = 3
+        await _tick(session_maker, 12, start + timedelta(minutes=1))
+        row = await _round(session_maker)
+        assert row.status == "generating" and row.bench_version == 14
+
+    async def test_a_void_round_does_not_spend_the_challengers_turn(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """The challenger seat goes to qualified generators that have never
+        been scored. A void round scores nobody, so the challenger it held
+        keeps first claim on the next round's challenger column."""
+        _install(app, session_maker)
+        fleet = _Fleet(monkeypatch, active=13)
+        incumbent = await _seed_generator(
+            session_maker, hotkey="5GenIncumbent", owner="coldkey:inc", salt="inc"
+        )
+        challenger = await _seed_generator(
+            session_maker, hotkey="5GenChallenger", owner="coldkey:chl", salt="chl"
+        )
+        later = await _seed_generator(
+            session_maker, hotkey="5GenLater", owner="coldkey:late", salt="late"
+        )
+        async with session_maker() as session, session.begin():
+            row = await session.get(GeneratorSubmission, incumbent)
+            assert row is not None
+            row.round_score = 0.5
+            row.round_scored_index = 2
+            late = await session.get(GeneratorSubmission, later)
+            first = await session.get(GeneratorSubmission, challenger)
+            assert late is not None and first is not None and first.qualified_at
+            late.qualified_at = first.qualified_at + timedelta(minutes=5)
+        await _commit_round(
+            client,
+            session_maker,
+            monkeypatch,
+            counted_columns=1,
+            challenger_columns=1,
+        )
+
+        def _seats(row: GeneratorRound) -> list[tuple[str, bool]]:
+            return [(c["submission_id"], c["counted"]) for c in row.columns or ()]
+
+        fleet.capable = set()
+        start = datetime.now(UTC)
+        await _tick(session_maker, 12, start)
+        await _tick(session_maker, 12, start + ROUND_OPEN_CAPACITY_GRACE)
+        voided = await _round(session_maker)
+        assert voided.status == "void"
+        assert _seats(voided) == [(str(incumbent), True), (str(challenger), False)]
+
+        fleet.capable = {13, 14}
+        await _tick(session_maker, 16, start + timedelta(hours=1))
+        async with session_maker() as session:
+            nxt = await get_round(session, 4)
+            first = await session.get(GeneratorSubmission, challenger)
+        assert nxt is not None and nxt.status == "generating"
+        assert _seats(nxt) == [(str(incumbent), True), (str(challenger), False)]
+        assert first is not None and first.round_score is None
 
 
 class TestRoundPreviewBenchContract:

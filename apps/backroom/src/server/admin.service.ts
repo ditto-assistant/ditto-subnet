@@ -454,6 +454,7 @@ import {
   inferenceConcurrencySettingsControlSchema,
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
+  inferenceGrantCostsSchema,
   sourceReviewQueueSloSchema,
   athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
@@ -1935,6 +1936,14 @@ export async function fetchInferenceRuntimeMetrics() {
     timeoutMs: 30_000,
   })
   return inferenceRuntimeMetricsSchema.parse(payload)
+}
+
+export async function fetchInferenceGrantCosts(hours: number) {
+  const window = z.number().int().min(1).max(744).parse(hours)
+  return inferenceGrantCostsSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/inference-grant-costs?hours=${window}`,
+    { timeoutMs: 30_000 },
+  ))
 }
 
 const SOURCE_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/source-review-queue-slo'

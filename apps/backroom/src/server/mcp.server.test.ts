@@ -4678,6 +4678,38 @@ describe('Backroom MCP tools', () => {
       lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
       windows: [{ calls_per_second: 1.55, latency_p95_ms: 9995 }],
     })
+    // Ordinary runtime reads never acquire the additional ledger scan.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(readJsonResult(response)).not.toHaveProperty('grant_costs')
+    const costs = {
+      observed_at: '2026-10-27T20:00:00Z', window_start: '2026-10-26T20:00:00Z',
+      window_end: '2026-10-27T20:00:00Z', aggregation_basis: 'grant_created_at_full_lifetime',
+      provider_bill_reconciled: false, groups: [], total_cost_microusd: 0,
+      unclassified_cost_microusd: 0, grants: 0, unclassified_grants: 0,
+    }
+    fetchMock.mockResolvedValueOnce(Response.json(readJsonResult(response)))
+      .mockResolvedValueOnce(Response.json(costs))
+    const withCosts = await client.callTool({
+      name: 'get_inference_runtime_metrics', arguments: { costWindowHours: 24 },
+    })
+    expect(withCosts.isError).not.toBe(true)
+    expect(readJsonResult(withCosts)).toMatchObject({ grant_costs: costs })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/admin/inference-grant-costs?hours=24')
+
+    fetchMock.mockResolvedValueOnce(Response.json(readJsonResult(response)))
+      .mockResolvedValueOnce(new Response('Cost view unavailable', { status: 503 }))
+    const withoutCosts = await client.callTool({
+      name: 'get_inference_runtime_metrics', arguments: { costWindowHours: 24 },
+    })
+    expect(withoutCosts.isError).not.toBe(true)
+    expect(readJsonResult(withoutCosts)).toMatchObject({
+      settings_revision: 14,
+      lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
+      grant_costs: null,
+      grant_costs_error: 'Cost view unavailable',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
 
     await client.close()
     await server.close()

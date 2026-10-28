@@ -6905,14 +6905,32 @@ async def agent_artifact(
         agent = await get_agent_by_id(session, agent_id=agent_id)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
-        ticket = await session.scalar(
-            select(ValidatorTicket).where(
-                ValidatorTicket.agent_id == agent_id,
-                ValidatorTicket.validator_hotkey == x_validator_hotkey,
-                ValidatorTicket.status == TicketStatus.ISSUED,
-                ValidatorTicket.deadline > now,
+        live = (
+            await session.scalars(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.agent_id == agent_id,
+                    ValidatorTicket.validator_hotkey == x_validator_hotkey,
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                    ValidatorTicket.deadline > now,
+                )
+                .limit(2)
             )
-        )
+        ).all()
+        if len(live) > 1:
+            # Two live leases at different bench versions (identity is
+            # (agent, version, validator)): this request names only the agent,
+            # so either answer would mislabel the other run. Issuers refuse to
+            # create this state; refuse to guess if it exists anyway.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "validator holds more than one live lease on this agent "
+                    f"(bench versions {sorted(t.bench_version for t in live)}); "
+                    "refusing an ambiguous artifact"
+                ),
+            )
+        ticket = live[0] if live else None
         if ticket is None:
             raise HTTPException(
                 status_code=409,

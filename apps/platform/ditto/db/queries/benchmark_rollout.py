@@ -492,15 +492,24 @@ async def historical_rescore_cohort(
     )
     if not agents:
         return []
-    scores = list(
-        await session.scalars(
-            select(Score).where(
+    # Only the ranking columns: a full v13 score row carries hundreds of KB of
+    # per-case JSON, and loading every row for two eras exceeded the statement
+    # timeout on the first v14 start.
+    scores = (
+        await session.execute(
+            select(
+                Score.agent_id,
+                Score.bench_version,
+                Score.validator_hotkey,
+                Score.composite,
+                Score.n,
+            ).where(
                 Score.agent_id.in_([agent.agent_id for agent in agents]),
                 Score.bench_version.in_(versions),
             )
         )
-    )
-    by_version_agent: dict[int, dict[UUID, list[Score]]] = {}
+    ).all()
+    by_version_agent: dict[int, dict[UUID, list[Any]]] = {}
     for score in scores:
         by_version_agent.setdefault(score.bench_version, {}).setdefault(
             score.agent_id, []
@@ -1823,6 +1832,21 @@ async def issue_rollout_ticket(
         )
         .exists()
     )
+    # A live lease this validator holds on the member at another version (a
+    # source-version generator round or canary) would make the validator's
+    # artifact fetch ambiguous: identity is (agent, version, validator) and the
+    # fetch names only the agent. Serve another member instead.
+    live_at_other_version = (
+        select(ValidatorTicket.agent_id)
+        .where(
+            ValidatorTicket.agent_id == BenchmarkRolloutMember.agent_id,
+            ValidatorTicket.bench_version != rollout.desired_version,
+            ValidatorTicket.validator_hotkey == validator_hotkey,
+            ValidatorTicket.status == TicketStatus.ISSUED,
+            ValidatorTicket.deadline > now,
+        )
+        .exists()
+    )
     # This rollout's frozen gate width, so retuning the live policy never
     # changes which members an in-flight rollout prioritises.
     priority_target = rollout.priority_cohort_target
@@ -1841,6 +1865,7 @@ async def issue_rollout_ticket(
             complete_screened_image,
             ~already_scored,
             ~already_ticketed,
+            ~live_at_other_version,
             score_count + occupied_count < SCORING_QUORUM,
         )
     )
@@ -1886,6 +1911,27 @@ async def issue_rollout_ticket(
                 )
             )
     if member is None:
+        return None
+    # Re-check under the agent row lock every other issuer takes, so a
+    # generator round leased between the candidate read and here cannot end
+    # up live beside this lease.
+    await session.scalar(
+        select(Agent.agent_id)
+        .where(Agent.agent_id == member.agent_id)
+        .with_for_update()
+    )
+    from ditto.db.queries.tickets import live_ticket_for_agent_on_validator
+
+    if (
+        await live_ticket_for_agent_on_validator(
+            session,
+            agent_id=member.agent_id,
+            validator_hotkey=validator_hotkey,
+            now=now,
+            other_than_bench_version=rollout.desired_version,
+        )
+        is not None
+    ):
         return None
     # A rollout can open while this validator still owns an ordinary source-
     # version lease. Preserve genuinely running work, but an idle/polling

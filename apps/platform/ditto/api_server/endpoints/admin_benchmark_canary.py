@@ -58,6 +58,7 @@ from ditto.db.queries.benchmark_rollout import (
 )
 from ditto.db.queries.inference import ensure_inference_grant, revoke_ticket_inference
 from ditto.db.queries.provider_outages import lock_provider_work_gate, scoring_probe_key
+from ditto.db.queries.tickets import live_ticket_for_agent_on_validator
 from ditto.db.queries.validator_slot_occupancy import (
     live_ordinary_slot_ticket,
     live_v9_confirmation_slot_ticket,
@@ -354,6 +355,20 @@ async def issue_benchmark_canary(
                 409, "validator already has a canonical score for this target"
             )
         agent = await session.get(Agent, payload.agent_id, with_for_update=True)
+        if (
+            await live_ticket_for_agent_on_validator(
+                session,
+                agent_id=payload.agent_id,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+            )
+            is not None
+        ):
+            raise HTTPException(
+                409,
+                "validator already holds a live lease on this agent; "
+                "choose another validator or wait for it to finish",
+            )
         if (
             agent is None
             or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}

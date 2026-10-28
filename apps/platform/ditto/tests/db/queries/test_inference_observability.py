@@ -44,6 +44,7 @@ async def _grant(
     now: datetime,
     slot_id: str = "slot-0",
     status: str = "active",
+    bench_version: int = _BENCH_VERSION,
 ) -> InferenceGrant:
     agent = Agent(
         agent_id=uuid4(),
@@ -60,7 +61,7 @@ async def _grant(
         status=TicketStatus.ISSUED,
         issued_at=now - timedelta(hours=2),
         deadline=now + timedelta(minutes=20),
-        bench_version=_BENCH_VERSION,
+        bench_version=bench_version,
         attempt_count=1,
     )
     session.add_all([agent, ticket])
@@ -68,7 +69,7 @@ async def _grant(
     grant = InferenceGrant(
         grant_id=uuid4(),
         agent_id=agent.agent_id,
-        bench_version=_BENCH_VERSION,
+        bench_version=bench_version,
         validator_hotkey=validator_hotkey,
         slot_id=ticket.slot_id,
         ticket_deadline=ticket.deadline,
@@ -481,3 +482,168 @@ def _percentile(values: list[int], fraction: float) -> float:
     lower = int(position)
     upper = min(lower + 1, len(values) - 1)
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
+
+
+async def test_grant_costs_do_not_relabel_reused_tickets(session: AsyncSession) -> None:
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC)
+    async with session.begin():
+        exact = await _grant(session, validator_hotkey="current", now=now)
+        historical = await _grant(session, validator_hotkey="reused", now=now)
+        accepted = await _grant(session, validator_hotkey="accepted", now=now)
+        outside = await _grant(session, validator_hotkey="outside", now=now)
+        for grant in (exact, historical, accepted, outside):
+            grant.created_at = now - timedelta(minutes=10)
+            grant.cost_microusd = 1_000_000
+            grant.embedding_cost_microusd = 17
+            grant.request_count = 3
+        outside.created_at = now - timedelta(days=3)
+        # The present ticket must not lend its purpose to a different lease.
+        for grant in (historical, accepted):
+            await session.execute(
+                text(
+                    "UPDATE validator_tickets SET deadline=deadline+interval '1 hour', "
+                    "purpose='continual_retest' WHERE agent_id=:agent"
+                ),
+                {"agent": grant.agent_id},
+            )
+        session.add(
+            ScoreAuditEntry(
+                agent_id=accepted.agent_id,
+                validator_hotkey=accepted.validator_hotkey,
+                event="score",
+                payload={
+                    "bench_version": accepted.bench_version,
+                    "ticket_deadline": accepted.ticket_deadline.isoformat(
+                        timespec="microseconds"
+                    ),
+                },
+                prev_hash="0" * 64,
+                entry_hash="1" * 64,
+                recorded_at=now,
+            )
+        )
+        await session.flush()
+        rows = await load_inference_grant_costs(
+            session, window_start=now - timedelta(hours=24), window_end=now
+        )
+        groups = {row["classification_basis"]: row for row in rows}
+        assert set(groups) == {
+            "current_exact_lease",
+            "unknown",
+            "accepted_score_receipt",
+        }
+        assert groups["unknown"]["purpose"] == "historical_unclassified"
+        assert groups["accepted_score_receipt"]["purpose"] == "accepted_canonical_score"
+        assert sum(row["grants"] for row in rows) == 3
+        assert sum(row["chat_cost_microusd"] for row in rows) == 3_000_000
+        assert sum(row["embedding_cost_microusd"] for row in rows) == 51
+        assert sum(row["chat_calls"] for row in rows) == 9
+
+
+async def test_round_cost_classification_is_version_scoped(
+    session: AsyncSession,
+) -> None:
+    from ditto.db.models import GeneratorRound, GeneratorRoundAttempt
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC)
+    async with session.begin():
+        grant = await _grant(
+            session, validator_hotkey="version-scoped", now=now, bench_version=13
+        )
+        grant.created_at = now - timedelta(minutes=5)
+        round_row = GeneratorRound(
+            round_index=1,
+            status="void",
+            epochs_per_round=1,
+            secret=b"a" * 32,
+            commitment="a" * 64,
+            committed_at=now,
+            committed_epoch_index=1,
+            commitment_publication="disabled",
+            bench_version=14,
+            void_reason="test fixture",
+        )
+        session.add(round_row)
+        await session.flush()
+        session.add(
+            GeneratorRoundAttempt(
+                round_index=1,
+                agent_id=grant.agent_id,
+                validator_hotkey=grant.validator_hotkey,
+                ticket_deadline=grant.ticket_deadline,
+                slot_id=grant.slot_id,
+                status="completed",
+                issued_at=now,
+                finished_at=now,
+            )
+        )
+        await session.flush()
+
+        async def read():
+            return await load_inference_grant_costs(
+                session, window_start=now - timedelta(hours=1), window_end=now
+            )
+
+        rows = await read()
+        assert rows[0]["purpose"] == "canonical_quorum"
+        # The same immutable attempt is authoritative only in its round's version.
+        round_row.bench_version = 13
+        await session.flush()
+        rows = await read()
+        assert rows[0]["purpose"] == "generator_round"
+
+
+@pytest.mark.parametrize(
+    "grant_us,receipt_us,expected",
+    [
+        (0, 0, "accepted_score_receipt"),
+        (123456, 123456, "accepted_score_receipt"),
+        (123456, 0, "unknown"),
+        (0, 1, "unknown"),
+    ],
+)
+async def test_score_cost_receipts_preserve_fractional_identity(
+    session: AsyncSession,
+    grant_us: int,
+    receipt_us: int,
+    expected: str,
+) -> None:
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC).replace(microsecond=grant_us)
+    async with session.begin():
+        grant = await _grant(session, validator_hotkey="receipt-format", now=now)
+        grant.created_at = now - timedelta(minutes=5)
+        await session.execute(
+            text(
+                "UPDATE validator_tickets SET deadline=deadline+interval '1 hour' "
+                "WHERE agent_id=:agent"
+            ),
+            {"agent": grant.agent_id},
+        )
+        session.add(
+            ScoreAuditEntry(
+                agent_id=grant.agent_id,
+                validator_hotkey=grant.validator_hotkey,
+                event="score",
+                payload={
+                    "bench_version": grant.bench_version,
+                    "ticket_deadline": grant.ticket_deadline.replace(
+                        microsecond=receipt_us
+                    ).isoformat(),
+                },
+                prev_hash="0" * 64,
+                entry_hash="1" * 64,
+                recorded_at=now,
+            )
+        )
+        await session.flush()
+        rows = await load_inference_grant_costs(
+            session, window_start=now - timedelta(hours=1), window_end=now
+        )
+        assert rows[0]["classification_basis"] == expected

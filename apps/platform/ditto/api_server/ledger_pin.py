@@ -429,6 +429,71 @@ def pin_expected_treasury_vector(pin: Any, *, burn_hotkey: str) -> dict[str, flo
     )
 
 
+def treasury_vector_matches_pin(
+    weights: dict[str, int | float],
+    pin: Any,
+    *,
+    burn_hotkey: str,
+    generator_fraction: float = 0.0,
+    tolerance: float = PIN_SHARE_TOLERANCE,
+) -> bool:
+    """Whether a V2 (enforcing treasury) vector is the one the pin prescribes.
+
+    The memory-only service-first projection must match recipient by
+    recipient. With a served generator share (``generator_fraction``, see
+    :func:`pin_generator_fraction`) validators fold the generator ledger the
+    pin does not freeze, so the exact projection cannot name those
+    recipients. The vector then also matches when the collector holds exactly
+    the service share, the burn holds exactly the generator-paid residual, and
+    the miner part matches the pin's memory shares with the generator slice on
+    top, as :func:`classify_vector_against_pins` checks for legacy vectors.
+    """
+    total = sum(weights.values())
+    if total <= 0:
+        return False
+    normalized = {hotkey: value / total for hotkey, value in weights.items()}
+    prescribed = pin_expected_treasury_vector(pin, burn_hotkey=burn_hotkey)
+    if all(
+        abs(normalized.get(hotkey, 0) - prescribed.get(hotkey, 0)) <= tolerance
+        for hotkey in set(normalized) | set(prescribed)
+    ):
+        return True
+    if not 0.0 < generator_fraction < 1.0:
+        return False
+    projection = pin if isinstance(pin, LedgerPin) else LedgerPin.from_row(pin)
+    treasury = treasury_pin_from_context(projection)
+    if not isinstance(treasury, EnforcingTreasuryPin):
+        return False
+    collector = treasury.policy.collector_hotkey
+    shares = _pin_competitive_shares(pin)
+    # A treasury role holding a memory share has no generator-paid reading
+    # here; only the exact projection above may accept it.
+    if not shares or {collector, burn_hotkey} & set(shares):
+        return False
+    service = treasury.service_bps / 10_000
+    burn_share = projection.context["served"]["burn_share"]
+    paid = (1.0 - generator_fraction) * sum(shares.values()) + generator_fraction
+    miner = (1.0 - service) * (1.0 - burn_share) * paid
+    if abs(normalized.get(collector, 0) - service) > tolerance:
+        return False
+    if abs(normalized.get(burn_hotkey, 0) - (1.0 - service - miner)) > tolerance:
+        return False
+    miners = {
+        hotkey: value for hotkey, value in normalized.items() if hotkey != collector
+    }
+    return (
+        classify_vector_against_pins(
+            miners,
+            expected_current=shares,
+            expected_previous=None,
+            burn_hotkey=burn_hotkey,
+            tolerance=tolerance,
+            generator_current=generator_fraction,
+        )
+        == "current"
+    )
+
+
 def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     """The miner shares the pin's fold prescribes, keyed by hotkey.
 

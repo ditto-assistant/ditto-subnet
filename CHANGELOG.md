@@ -2,6 +2,148 @@
 
 <!-- version list -->
 
+## v0.401.0 (2026-10-28)
+
+### Features
+
+- Expose lease costs and gate OpenRouter cache affinity
+  ([#3224](https://github.com/ditto-assistant/ditto-subnet/pull/3224),
+  [`822f037`](https://github.com/ditto-assistant/ditto-subnet/commit/822f0379de92912ea6399d9838f6a33b1b22656b))
+
+### Performance Improvements
+
+- **backroom**: Defer MCP registry initialization until authorized
+  ([#3233](https://github.com/ditto-assistant/ditto-subnet/pull/3233),
+  [`3a3e5c2`](https://github.com/ditto-assistant/ditto-subnet/commit/3a3e5c212aa6e521407c9a288aa48580dcd607a8))
+
+- **backroom**: Read runtime metrics and grant costs concurrently
+  ([#3226](https://github.com/ditto-assistant/ditto-subnet/pull/3226),
+  [`9c7a248`](https://github.com/ditto-assistant/ditto-subnet/commit/9c7a248719ab69196d1ff1777a0e5355c1eda590))
+
+
+## v0.400.4 (2026-10-28)
+
+### Bug Fixes
+
+- **validator**: Submit v14 generator round datasets to the scorer
+  ([#3236](https://github.com/ditto-assistant/ditto-subnet/pull/3236),
+  [`8b7188e`](https://github.com/ditto-assistant/ditto-subnet/commit/8b7188e1d5466a5d771a0e85e50f532a3dfad14f))
+
+
+## v0.400.3 (2026-10-28)
+
+### Bug Fixes
+
+- **platform**: Accept the served generator split in V2 treasury payout backings
+  ([#3235](https://github.com/ditto-assistant/ditto-subnet/pull/3235),
+  [`49d1b7d`](https://github.com/ditto-assistant/ditto-subnet/commit/49d1b7ddd0953899119e33ab7e3020cbaf07ff30))
+
+
+## v0.400.2 (2026-10-28)
+
+### Bug Fixes
+
+- **platform**: Select only ranking columns when freezing the rollout cohort
+  ([#3232](https://github.com/ditto-assistant/ditto-subnet/pull/3232),
+  [`ec2d2c4`](https://github.com/ditto-assistant/ditto-subnet/commit/ec2d2c485aa4ba5919590da6473c1b8820008dd3))
+
+### Documentation
+
+- **benchmark**: Record the v14 gate 4 family panel and the no-hold-out decision
+  ([#3231](https://github.com/ditto-assistant/ditto-subnet/pull/3231),
+  [`0fbad51`](https://github.com/ditto-assistant/ditto-subnet/commit/0fbad5136f1c9141455dd3d635ddfeeabfaa4caf))
+
+
+## v0.400.1 (2026-10-27)
+
+### Bug Fixes
+
+- **platform**: Never lease an agent beside a live lease at another bench version
+  ([#3230](https://github.com/ditto-assistant/ditto-subnet/pull/3230),
+  [`d27b1da`](https://github.com/ditto-assistant/ditto-subnet/commit/d27b1dae2658cb44d1d4ca0730208584cd0f5dd1))
+
+
+## v0.400.0 (2026-10-27)
+
+### Features
+
+- **datagen**: Judge v14 candidate families from executed canary runs
+  ([#3228](https://github.com/ditto-assistant/ditto-subnet/pull/3228),
+  [`9e00695`](https://github.com/ditto-assistant/ditto-subnet/commit/9e006957da9c77f98d992447816b9de0501e247f))
+
+
+## v0.399.1 (2026-10-27)
+
+### Bug Fixes
+
+- **platform**: Defer generator round openings through validator capacity gaps
+  ([#3229](https://github.com/ditto-assistant/ditto-subnet/pull/3229),
+  [`7f7f49e`](https://github.com/ditto-assistant/ditto-subnet/commit/7f7f49e14b156384c720b2707e518182f54b3292))
+
+### Documentation
+
+- **benchmark**: Record v14 top-five canaries and gate 4 feasibility
+  ([#3220](https://github.com/ditto-assistant/ditto-subnet/pull/3220),
+  [`dd74180`](https://github.com/ditto-assistant/ditto-subnet/commit/dd741802745f01a83d11cf70673773fa5c004d0a))
+
+
+## v0.399.0 (2026-10-27)
+
+### Bug Fixes
+
+- **backroom**: Read generator-round capacity leases and no-rollout qualification
+  ([#3219](https://github.com/ditto-assistant/ditto-subnet/pull/3219),
+  [`bc404cc`](https://github.com/ditto-assistant/ditto-subnet/commit/bc404cc36aa5e443d71741bee914945b3d3782c8))
+
+- **datagen**: Pin the 40-minute datagen gate everywhere
+  ([#3217](https://github.com/ditto-assistant/ditto-subnet/pull/3217),
+  [`b9c934e`](https://github.com/ditto-assistant/ditto-subnet/commit/b9c934e4afa046aa2d6fa9206854b672d47ec234))
+
+### Continuous Integration
+
+- **datagen**: Bound the datagen suite at 15 minutes
+  ([#3223](https://github.com/ditto-assistant/ditto-subnet/pull/3223),
+  [`c492716`](https://github.com/ditto-assistant/ditto-subnet/commit/c492716000080e7ca02c097b85e1fbabf7473616))
+
+- **datagen**: Give the datagen package gate 40 minutes
+  ([#3216](https://github.com/ditto-assistant/ditto-subnet/pull/3216),
+  [`16a19e9`](https://github.com/ditto-assistant/ditto-subnet/commit/16a19e9ab9353b2eaa55f83b9c33dc89771d2c05))
+
+### Documentation
+
+- **benchmark**: Record October 27 v14 qualification evidence and blockers
+  ([#3211](https://github.com/ditto-assistant/ditto-subnet/pull/3211),
+  [`8f0bcad`](https://github.com/ditto-assistant/ditto-subnet/commit/8f0bcade7ee69a26f5a8c648721e713ef23e612f))
+
+- **datagen**: Tandem upgrades for agent bench and generator pack versions
+  ([#3213](https://github.com/ditto-assistant/ditto-subnet/pull/3213),
+  [`b8c2dba`](https://github.com/ditto-assistant/ditto-subnet/commit/b8c2dba1a8d1a77caaa76f5b4187f996657e9d38))
+
+- **skills**: Route bench activations through the tandem-upgrade runbook
+  ([#3218](https://github.com/ditto-assistant/ditto-subnet/pull/3218),
+  [`4a2f26c`](https://github.com/ditto-assistant/ditto-subnet/commit/4a2f26c6ff5606dde851dfb4d01c42ddc073d3e8))
+
+### Features
+
+- **datagen,platform,scorer,backroom,dashboard**: Enforce the tandem upgrade policy for generator
+  pack versions ([#3222](https://github.com/ditto-assistant/ditto-subnet/pull/3222),
+  [`8730e77`](https://github.com/ditto-assistant/ditto-subnet/commit/8730e77d45e828c47c2a7f34969986a59453ed2a))
+
+- **datagen,scorer,platform**: V14 generator pack contract for rounds
+  ([#3212](https://github.com/ditto-assistant/ditto-subnet/pull/3212),
+  [`f86333b`](https://github.com/ditto-assistant/ditto-subnet/commit/f86333b8ac752c9929d7b8ebd6215545e4385947))
+
+- **platform,scorer,backroom**: Gate generator work on the scorer's advertised case bounds
+  ([#3204](https://github.com/ditto-assistant/ditto-subnet/pull/3204),
+  [`aefb6d9`](https://github.com/ditto-assistant/ditto-subnet/commit/aefb6d98a1abbe31a62b74ed3e51b54bb491d161))
+
+### Testing
+
+- **datagen**: Share seed sweeps, prune redundant tests, run heavy tests in parallel
+  ([#3221](https://github.com/ditto-assistant/ditto-subnet/pull/3221),
+  [`86dbbe3`](https://github.com/ditto-assistant/ditto-subnet/commit/86dbbe3b6185c4f178442ba1329a5a71fb47c4fb))
+
+
 ## v0.398.0 (2026-10-27)
 
 ### Features

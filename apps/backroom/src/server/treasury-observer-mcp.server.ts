@@ -1,7 +1,7 @@
 import '@tanstack/react-start/server-only'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { McpGrantProps } from './mcp.server'
+import type { McpGrantProps } from './mcp-contract.server'
 import { fetchTreasuryObserverSettings, recordTreasuryReceipt } from './admin.service'
 import { treasuryReceiptInputSchema } from '../lib/treasury-receipts.schemas'
 import { observerGrant } from './treasury-observer-access.server'
