@@ -6564,15 +6564,19 @@ class TestJobHeartbeatFreshness:
     async def test_stale_heartbeat_is_refreshed_before_the_claim(self) -> None:
         platform = _platform_with_ledger(jobs=[], ledger=[])
         order: list[str] = []
-        platform.submit_heartbeat.side_effect = lambda _request: (
+
+        def heartbeat(_request: object) -> ValidatorHeartbeatResponse:
             order.append("heartbeat")
-            or ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
-        )
-        platform.request_job = AsyncMock(
-            side_effect=lambda **_: order.append("job") or None
-        )
+            return ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
+
+        def request_job(**_: object) -> None:
+            order.append("job")
+
+        platform.submit_heartbeat.side_effect = heartbeat
+        platform.request_job = AsyncMock(side_effect=request_job)
         worker = _heartbeat_worker(platform)
         clock = worker._heartbeat_clock
+        assert isinstance(clock, _ImmediateHeartbeatClock)
         assert await worker._report_heartbeat("polling")
         order.clear()
 
