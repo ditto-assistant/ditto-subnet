@@ -9,15 +9,18 @@ or set on the app directly.
 
 from __future__ import annotations
 
+import copy
 import os
 from collections.abc import AsyncIterator, Iterator
 from decimal import Decimal
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute, request_response
+from starlette.routing import BaseRoute
 
 from ditto.api_server import (
     ApiServerConfig,
@@ -35,6 +38,7 @@ from ditto.api_server.dependencies import (
     get_storage_client,
 )
 from ditto.api_server.embedding import EmbeddingConfig, NullEmbedder
+from ditto.api_server.factory import _process_role
 from ditto.api_server.pricing import PricingConfig
 from ditto.api_server.storage import ObjectMetadata, StorageConfig
 from ditto.chain import ChainConfig
@@ -111,6 +115,56 @@ def make_api_server_config(**overrides: Any) -> ApiServerConfig:
     return base
 
 
+# Route objects built by the first app in this worker, keyed by process role
+# (the only factory input that changes which routers are included).
+_INCLUDED_ROUTES: dict[str, list[BaseRoute]] = {}
+
+
+def _route_identity(route: BaseRoute) -> tuple[object, ...]:
+    return (
+        type(route),
+        getattr(route, "path", None),
+        frozenset(getattr(route, "methods", None) or ()),
+        getattr(route, "name", None),
+    )
+
+
+def _rebind(route: BaseRoute, app: FastAPI) -> BaseRoute:
+    """Copy an included route so dependency overrides resolve on ``app``."""
+    if not isinstance(route, APIRoute):
+        return route
+    clone = copy.copy(route)
+    clone.dependency_overrides_provider = app
+    clone.app = request_response(clone.get_route_handler())
+    return clone
+
+
+def _create_app_reusing_routes(config: ApiServerConfig) -> FastAPI:
+    """``create_api_server`` without rebuilding ~500 routes for every test.
+
+    Building the routes (FastAPI's ``get_dependant`` and model fields) was
+    about 0.3 s per test, roughly 40% of an endpoint test. The first app in a
+    worker builds them for real. Later apps run the same factory with
+    ``include_router`` skipped, so state, middleware, exception handlers and
+    directly registered routes are all fresh. Each included route is then
+    copied and rebound to the new app, so ``dependency_overrides`` still
+    resolve per test, and the template's route order is kept for matching.
+    """
+    role = _process_role()
+    template = _INCLUDED_ROUTES.get(role)
+    if template is None:
+        app = create_api_server(config)
+        _INCLUDED_ROUTES[role] = list(app.router.routes)
+        return app
+    with patch.object(FastAPI, "include_router", lambda *_args, **_kwargs: None):
+        app = create_api_server(config)
+    direct = {_route_identity(route): route for route in app.router.routes}
+    app.router.routes = [
+        direct.get(_route_identity(route)) or _rebind(route, app) for route in template
+    ]
+    return app
+
+
 @pytest.fixture
 def app(session_maker) -> Iterator[FastAPI]:
     """A fresh FastAPI app per test, with auto-cleared dependency overrides."""
@@ -118,7 +172,7 @@ def app(session_maker) -> Iterator[FastAPI]:
     # serve stale bodies across a test's mutate-then-refetch sequence. The
     # middleware has its own coverage in tests/api_server/middleware.
     os.environ["PUBLIC_CACHE_DISABLED"] = "1"
-    a = create_api_server(make_api_server_config())
+    a = _create_app_reusing_routes(make_api_server_config())
     # Lifespan does not run under ASGITransport, so set the bits the
     # health endpoint reads via app.state directly.
     a.state.admin_activity_session_maker = session_maker
