@@ -158,8 +158,8 @@ from ditto.api_server.endpoints.admin_validation_retry import (
 from ditto.api_server.endpoints.admin_validator_capacity import (
     router as admin_validator_capacity_router,
 )
-from ditto.api_server.endpoints.admin_validator_dispatch_outcomes import (
-    router as admin_validator_dispatch_outcomes_router,
+from ditto.api_server.endpoints.admin_validator_request_outcomes import (
+    router as admin_validator_request_outcomes_router,
 )
 from ditto.api_server.endpoints.admin_validator_slot_settings import (
     router as admin_validator_slot_settings_router,
@@ -261,7 +261,7 @@ __all__ = [
     "admin_submission_deposit_address_router",
     "admin_validation_retry_router",
     "admin_validator_capacity_router",
-    "admin_validator_dispatch_outcomes_router",
+    "admin_validator_request_outcomes_router",
     "admin_validator_slot_settings_router",
     "admin_v13_scorer_cohort_router",
     "metrics_router",

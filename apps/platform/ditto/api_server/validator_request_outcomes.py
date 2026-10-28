@@ -1,11 +1,13 @@
-"""Per-validator tally of how ``/validator/job`` polls end, for Backroom.
+"""Per-validator tally of how job polls and ledger reads end, for Backroom.
 
 ``ditto_validator_dispatch_declined_total`` deliberately carries no hotkey,
-so "why is *this* validator idle?" used to mean grepping the API log for
-``declined job reason=`` lines or reading the prod DB. This module keeps a
+so "why is *this* validator idle?" or "why did it skip setting weights?"
+used to mean grepping the API log or reading the prod DB. This module keeps a
 small in-process tally per (validator, lane, outcome) instead: totals since
 the process started, a rolling 15-minute count, the last time each outcome
-fired, and for 4xx/5xx the last error detail.
+fired, and for 4xx/5xx the last error detail. Lanes are the job poll, the
+top-5 confirmation poll, and the scoring ledger every weight fold reads
+(where a 428 means the validator could not set weights that epoch).
 
 It is observational only. Nothing here feeds dispatch, and a crash in it must
 never fail a poll, so every record path is wrapped. Platform API runs as one
@@ -32,7 +34,7 @@ from fastapi import HTTPException, Response
 
 logger = logging.getLogger(__name__)
 
-DispatchLane = Literal["job", "top5_confirmation"]
+RequestLane = Literal["job", "top5_confirmation", "scoring_ledger"]
 RECENT_WINDOW = timedelta(minutes=15)
 MAX_VALIDATORS = 256
 MAX_DETAIL_CHARS = 200
@@ -74,7 +76,7 @@ class OutcomeStats:
         return len(self.recent)
 
 
-class DispatchOutcomeTally:
+class RequestOutcomeTally:
     """Bounded per-(validator, lane, outcome) counters held in this process."""
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
@@ -144,7 +146,7 @@ class DispatchOutcomeTally:
         }
 
 
-DISPATCH_OUTCOMES = DispatchOutcomeTally()
+REQUEST_OUTCOMES = RequestOutcomeTally()
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -157,15 +159,32 @@ def _outcome_from_exception(exc: BaseException) -> tuple[str, str | None]:
     return f"error_{type(exc).__name__}", str(exc) or None
 
 
-def track_dispatch_outcomes(
-    lane: DispatchLane,
+def _dispatch_outcome(result: object) -> str:
+    status = result.status_code if isinstance(result, Response) else 200
+    if status == 204:
+        return _decline_reason.get() or "declined_unattributed"
+    if status < 300:
+        return "issued"
+    return f"http_{status}"
+
+
+def ledger_outcome(result: object) -> str:
+    """``served`` or ``served_stale`` for a scoring ledger response."""
+    return "served_stale" if getattr(result, "stale", False) else "served"
+
+
+def track_request_outcomes(
+    lane: RequestLane,
     *,
     unauthenticated: tuple[type[BaseException], ...] = (),
+    classify: Callable[[object], str] = _dispatch_outcome,
 ) -> Callable[[Callable[P, Awaitable[R]]], Callable[P, Awaitable[R]]]:
-    """Record how each poll of one dispatch endpoint ends.
+    """Record how each request to one validator endpoint ends.
 
     ``functools.wraps`` keeps the endpoint's signature visible to FastAPI.
-    The endpoint's ``payload`` keyword supplies the signed hotkey and slot.
+    The signed hotkey comes from the ``payload`` body or, for header-signed
+    reads, the ``x_validator_hotkey`` keyword. Exceptions in ``unauthenticated``
+    are raised before the signature verifies, so they never name a hotkey.
     """
 
     def decorate(endpoint: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -173,6 +192,7 @@ def track_dispatch_outcomes(
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
             token = _decline_reason.set(None)
             payload = kwargs.get("payload")
+            header_hotkey = kwargs.get("x_validator_hotkey")
             try:
                 result = await endpoint(*args, **kwargs)
             except unauthenticated as exc:
@@ -180,17 +200,11 @@ def track_dispatch_outcomes(
                 raise
             except BaseException as exc:
                 outcome, detail = _outcome_from_exception(exc)
-                _safely(_record, payload, lane, outcome, detail)
+                _safely(_record, payload, header_hotkey, lane, outcome, detail)
                 raise
             else:
-                status = result.status_code if isinstance(result, Response) else 200
-                if status == 204:
-                    outcome = _decline_reason.get() or "declined_unattributed"
-                elif status < 300:
-                    outcome = "issued"
-                else:
-                    outcome = f"http_{status}"
-                _safely(_record, payload, lane, outcome, None)
+                outcome = classify(result)
+                _safely(_record, payload, header_hotkey, lane, outcome, None)
                 return result
             finally:
                 _decline_reason.reset(token)
@@ -200,12 +214,14 @@ def track_dispatch_outcomes(
     return decorate
 
 
-def _record(payload: Any, lane: str, outcome: str, detail: str | None) -> None:
-    hotkey = getattr(payload, "validator_hotkey", None)
+def _record(
+    payload: Any, header_hotkey: Any, lane: str, outcome: str, detail: str | None
+) -> None:
+    hotkey = getattr(payload, "validator_hotkey", header_hotkey)
     if not isinstance(hotkey, str):
         return
     slot_id = getattr(payload, "slot_id", None)
-    DISPATCH_OUTCOMES.record(
+    REQUEST_OUTCOMES.record(
         hotkey,
         lane,
         outcome,
@@ -215,11 +231,11 @@ def _record(payload: Any, lane: str, outcome: str, detail: str | None) -> None:
 
 
 def _record_unauthenticated(lane: str, error: str) -> None:
-    DISPATCH_OUTCOMES.unauthenticated[f"{lane}:{error}"] += 1
+    REQUEST_OUTCOMES.unauthenticated[f"{lane}:{error}"] += 1
 
 
 def _safely(record: Callable[..., None], *args: Any) -> None:
     try:
         record(*args)
     except Exception:  # pragma: no cover - observability must not fail a poll
-        logger.exception("dispatch outcome tally failed")
+        logger.exception("validator request outcome tally failed")

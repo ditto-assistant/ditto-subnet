@@ -180,10 +180,6 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
-from ditto.api_server.dispatch_outcomes import (
-    note_decline_reason,
-    track_dispatch_outcomes,
-)
 from ditto.api_server.efficiency import (
     audited_v9_run_token_total,
     ensure_current_efficiency_state,
@@ -237,6 +233,10 @@ from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.v13_scorer_cohort import (
     pinned_validator_allowed,
     pinned_validator_may_submit,
+)
+from ditto.api_server.validator_request_outcomes import (
+    note_decline_reason,
+    track_request_outcomes,
 )
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS as SLOT_SETTINGS_DEFAULT,
@@ -3582,7 +3582,7 @@ async def _bind_unverified_v13_dataset(
         503: {"description": "Chain unavailable for the permit check."},
     },
 )
-@track_dispatch_outcomes("job", unauthenticated=(ValidatorAuthError,))
+@track_request_outcomes("job", unauthenticated=(ValidatorAuthError,))
 async def request_job(
     payload: JobRequest,
     request: Request,
@@ -5559,7 +5559,7 @@ async def _canonical_tail_is_draining(
         503: {"description": "Chain unavailable for the permit / tempo check."},
     },
 )
-@track_dispatch_outcomes("top5_confirmation", unauthenticated=(ValidatorAuthError,))
+@track_request_outcomes("top5_confirmation", unauthenticated=(ValidatorAuthError,))
 async def request_top5_confirmation_job(
     payload: Top5ConfirmationJobRequest,
     request: Request,

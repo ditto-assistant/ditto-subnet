@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from ditto.api_server import dispatch_outcomes
-from ditto.api_server.dispatch_outcomes import DispatchOutcomeTally
+from ditto.api_server import validator_request_outcomes
+from ditto.api_server.validator_request_outcomes import RequestOutcomeTally
 
 
 def test_tally_windows_recent_counts_and_evicts_the_quietest_validator(
     monkeypatch,
 ) -> None:
     now = [datetime(2026, 10, 28, tzinfo=UTC)]
-    tally = DispatchOutcomeTally(clock=lambda: now[0])
-    monkeypatch.setattr(dispatch_outcomes, "MAX_VALIDATORS", 2)
+    tally = RequestOutcomeTally(clock=lambda: now[0])
+    monkeypatch.setattr(validator_request_outcomes, "MAX_VALIDATORS", 2)
 
     tally.record("5Old", "job", "allocator_busy", slot_id="slot-0")
     now[0] += timedelta(minutes=10)
@@ -32,4 +32,7 @@ def test_tally_windows_recent_counts_and_evicts_the_quietest_validator(
         1,
     )
     assert old["allocator_busy"]["last_slot_id"] == "slot-1"
-    assert len(old["http_428"]["last_detail"]) == dispatch_outcomes.MAX_DETAIL_CHARS
+    assert (
+        len(old["http_428"]["last_detail"])
+        == validator_request_outcomes.MAX_DETAIL_CHARS
+    )

@@ -631,7 +631,7 @@ describe('Backroom MCP tools', () => {
         'get_scoring_lease_settings',
         'list_validator_assignments',
         'get_validator_capacity',
-        'get_validator_dispatch_outcomes',
+        'get_validator_request_outcomes',
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_track_share_settings',
@@ -4825,7 +4825,7 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('reads per-validator job-poll outcomes through the admin endpoint', async () => {
+  it('reads per-validator request outcomes through the admin endpoint', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
@@ -4858,13 +4858,13 @@ describe('Backroom MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
     const response = await client.callTool({
-      name: 'get_validator_dispatch_outcomes',
+      name: 'get_validator_request_outcomes',
       arguments: { validatorHotkey: '5Validator' },
     })
 
     expect(response.isError).not.toBe(true)
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
-      '/api/v1/admin/validator-dispatch-outcomes?validator_hotkey=5Validator',
+      '/api/v1/admin/validator-request-outcomes?validator_hotkey=5Validator',
     )
     expect(readJsonResult(response)).toMatchObject({
       validators: [{ last_outcome: 'http_428', outcomes: [{ recent_15m: 9 }] }],

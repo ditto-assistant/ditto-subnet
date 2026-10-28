@@ -85,7 +85,7 @@ from ditto.api_models.validator_weights_fold import (
     WeightsFold,
     weights_fold_signing_token,
 )
-from ditto.api_server import dispatch_outcomes
+from ditto.api_server import validator_request_outcomes
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -5787,8 +5787,8 @@ class TestRequestJob:
         session_maker: async_sessionmaker[AsyncSession],
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        tally = dispatch_outcomes.DispatchOutcomeTally()
-        monkeypatch.setattr(dispatch_outcomes, "DISPATCH_OUTCOMES", tally)
+        tally = validator_request_outcomes.RequestOutcomeTally()
+        monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
         await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         _install_db(app, session_maker)
         _install_chain(app)
@@ -5805,7 +5805,7 @@ class TestRequestJob:
             json=_job_payload(),
         )
         read = await client.get(
-            "/api/v1/admin/validator-dispatch-outcomes",
+            "/api/v1/admin/validator-request-outcomes",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
 

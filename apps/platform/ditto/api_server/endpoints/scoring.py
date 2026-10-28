@@ -94,6 +94,10 @@ from ditto.api_server.generator_competition import (
     load_settings as load_generator_settings,
 )
 from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
+from ditto.api_server.validator_request_outcomes import (
+    ledger_outcome,
+    track_request_outcomes,
+)
 from ditto.chain.errors import (
     ChainTreasuryActivationReadError,
 )
@@ -1444,6 +1448,9 @@ async def _require_statistical_cap_requester(
         401: {"description": "Missing/invalid validator auth."},
         503: {"description": "Chain unavailable, or no fresh/recent ledger to serve."},
     },
+)
+@track_request_outcomes(
+    "scoring_ledger", unauthenticated=(ValidatorAuthError,), classify=ledger_outcome
 )
 async def scores(
     request: Request,

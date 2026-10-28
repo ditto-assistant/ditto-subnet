@@ -1,7 +1,7 @@
-"""Operator model for per-validator ``/validator/job`` poll outcomes.
+"""Operator model for per-validator job-poll and scoring-ledger outcomes.
 
 Built from the Platform process's in-memory tally
-(:mod:`ditto.api_server.dispatch_outcomes`). It schedules nothing.
+(:mod:`ditto.api_server.validator_request_outcomes`). It schedules nothing.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class DispatchOutcomeCount(BaseModel):
+class RequestOutcomeCount(BaseModel):
     """How often one outcome ended this validator's polls on one lane."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -21,9 +21,11 @@ class DispatchOutcomeCount(BaseModel):
         str,
         Field(
             description=(
-                "issued; a 204 decline gate (allocator_busy, not_accepting, "
+                "issued; served or served_stale (scoring ledger); a 204 "
+                "decline gate (allocator_busy, not_accepting, "
                 "slot_not_healthy, no_candidate, ...); http_<status> for a "
-                "refused poll (http_428 stale heartbeat, http_426 upgrade, "
+                "refused request (http_428 stale heartbeat, or on the ledger "
+                "a validator that could not fold weights; http_426 upgrade; "
                 "http_409 replay or stale claim); or error_<Exception>."
             )
         ),
@@ -39,19 +41,19 @@ class DispatchOutcomeCount(BaseModel):
     last_slot_id: str | None
 
 
-class ValidatorDispatchOutcomes(BaseModel):
-    """Every outcome one validator saw on one dispatch lane, newest first."""
+class ValidatorRequestOutcomes(BaseModel):
+    """Every outcome one validator saw on one lane, newest first."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     validator_hotkey: str
-    lane: Literal["job", "top5_confirmation"]
+    lane: Literal["job", "top5_confirmation", "scoring_ledger"]
     last_poll_at: datetime | None
     last_outcome: str | None
-    outcomes: list[DispatchOutcomeCount]
+    outcomes: list[RequestOutcomeCount]
 
 
-class ValidatorDispatchOutcomeSummary(BaseModel):
+class ValidatorRequestOutcomeSummary(BaseModel):
     """Process-local poll outcome tally; resets when Platform API restarts."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -65,4 +67,4 @@ class ValidatorDispatchOutcomeSummary(BaseModel):
         dict[str, int],
         Field(description="Polls that failed authentication, by lane:error."),
     ]
-    validators: list[ValidatorDispatchOutcomes]
+    validators: list[ValidatorRequestOutcomes]

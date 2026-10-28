@@ -380,7 +380,7 @@ import {
   fetchValidatorSlotSettings,
   fetchValidatorFleetObservability,
   fetchValidatorCapacity,
-  fetchValidatorDispatchOutcomes,
+  fetchValidatorRequestOutcomes,
   fetchValidatorWeightDiagnostics,
   fetchLedgerEpochSnapshots,
   fetchValidatorAssignments,
@@ -871,8 +871,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Active validator leases.',
   get_validator_capacity:
     'Read serviceable/claimed/round-reserved slots, queue age, progress and relay load.',
-  get_validator_dispatch_outcomes:
-    'Read per-validator job-poll outcomes: issued, 204 gates, 428/426/409 with detail.',
+  get_validator_request_outcomes:
+    'Per-validator job-poll and weight-ledger outcomes: 204 gates, 428/426/409.',
   get_miner_owner_footprint:
     'Read payment links; common-control signal, not ownership. Verify chain.',
   get_inference_concurrency_settings:
@@ -3204,15 +3204,15 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
-    'get_validator_dispatch_outcomes',
+    'get_validator_request_outcomes',
     {
-      title: 'Get validator job-poll outcomes',
+      title: 'Get validator request outcomes',
       description:
-        'Read how each validator\'s POST /validator/job and /validator/top5-confirmation-job polls ended, from the Platform API process\'s in-memory tally (resets on deploy; see tracking_since). Per validator and lane: last_poll_at, last_outcome, and per outcome total, recent_15m, first_at, last_at, last_slot_id. Outcomes are issued; a 204 decline gate (allocator_busy, not_accepting, slot_not_healthy, slot_ceiling, disk_breaker, slot_cap, round_reservation, validator_paused, no_candidate, ...; declined_unattributed for a 204 with no named gate); http_<status> with last_detail for a refused poll (http_428 stale or missing heartbeat, http_426 software/protocol below minimum, http_409 replayed or stale claim, http_503 chain); or error_<Exception>. A validator whose last_poll_at is old has stopped polling; one that polls but only sees http_428 needs a fresh heartbeat. unauthenticated counts polls that failed signature checks, by lane, never per hotkey. Optional validatorHotkey filters to one validator. Requires backroom:read and changes nothing.',
+        'Read how each validator\'s signed requests ended, from the Platform API process\'s in-memory tally (resets on deploy; see tracking_since). Lanes: job (POST /validator/job), top5_confirmation (POST /validator/top5-confirmation-job) and scoring_ledger (GET /scoring/scores, the ledger every weight fold reads). Per validator and lane: last_poll_at, last_outcome, and per outcome total, recent_15m, first_at, last_at, last_slot_id. Outcomes: issued; served or served_stale on the ledger; a 204 decline gate (allocator_busy, not_accepting, slot_not_healthy, slot_ceiling, disk_breaker, slot_cap, round_reservation, validator_paused, no_candidate, ...; declined_unattributed for a 204 with no named gate); http_<status> with last_detail for a refused request (http_428 stale heartbeat on job, or on scoring_ledger a validator that could not fold weights, e.g. treasury fleet not ready or chain evidence invalid; http_426 software/protocol below minimum; http_409 replayed or stale claim; http_503 chain or ledger unavailable); or error_<Exception>. An old last_poll_at means the validator stopped polling. unauthenticated counts requests that failed signature checks, by lane, never per hotkey. Optional validatorHotkey filters to one validator. Requires backroom:read and changes nothing.',
       inputSchema: { validatorHotkey: z.string().min(1).max(64).optional() },
       annotations: toolAnnotations('read'),
     },
-    async ({ validatorHotkey }) => result(await fetchValidatorDispatchOutcomes(validatorHotkey)),
+    async ({ validatorHotkey }) => result(await fetchValidatorRequestOutcomes(validatorHotkey)),
   )
 
   registerTool(

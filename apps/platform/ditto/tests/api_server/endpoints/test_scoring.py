@@ -31,6 +31,7 @@ import ditto.api_server.endpoints.scoring as scoring_mod
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.validator import LedgerResponse
+from ditto.api_server import validator_request_outcomes
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
@@ -770,6 +771,8 @@ class TestScoringLedger:
             )
         )
         monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
+        tally = validator_request_outcomes.RequestOutcomeTally()
+        monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
         _install_db(app, session_maker)
         _install_chain(app)
 
@@ -780,6 +783,10 @@ class TestScoringLedger:
             "a fresh validator heartbeat is required before serving "
             "bounded efficiency factors"
         )
+        # Backroom sees why this validator could not fold weights.
+        [row] = tally.snapshot(_VALIDATOR_HOTKEY)["validators"]
+        assert (row["lane"], row["last_outcome"]) == ("scoring_ledger", "http_428")
+        assert "fresh validator heartbeat" in row["outcomes"][0]["last_detail"]
         assert resolver.await_args is not None
         assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
             _VALIDATOR_HOTKEY
