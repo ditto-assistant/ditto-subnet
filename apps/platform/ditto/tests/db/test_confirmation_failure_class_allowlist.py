@@ -23,6 +23,8 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
     CONFIRMATION_FAILURE_CLASS_VALUES,
     CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
@@ -87,12 +89,16 @@ async def test_the_scorer_classes_are_actually_present(engine: AsyncEngine) -> N
     # only restate the tuple and would have to be edited every time the scorer
     # gains a kind -- which is the edit most likely to be made without checking
     # the schema, i.e. exactly the drift this file exists to catch.
-    assert (
-        *CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
-        *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
-    ) == CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
-    assert CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES
-    assert CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES
+    families = (
+        CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
+        CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+        CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+        CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
+    )
+    assert tuple(value for family in families for value in family) == (
+        CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
+    )
+    assert all(families)
     missing = [
         value
         for value in CONFIRMATION_SCORER_FAILURE_CLASS_VALUES

@@ -355,6 +355,60 @@ func confirmationExecutionStage(err error) string {
 	return "execution"
 }
 
+// confirmationDimensionFailure names the step of the dimension coordinator
+// that failed. LongMemEval runs first and the two ablations second, inside the
+// single executor stage "dimension_execution", so without this a failure after
+// LongMemEval completes is indistinguishable from one inside it.
+type confirmationDimensionFailure struct {
+	step string
+	err  error
+}
+
+func (failure *confirmationDimensionFailure) Error() string { return failure.err.Error() }
+
+func (failure *confirmationDimensionFailure) Unwrap() error { return failure.err }
+
+func dimensionFailure(step string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &confirmationDimensionFailure{step: step, err: err}
+}
+
+// confirmationDimensionSteps is every step dimensionFailure is called with.
+// A source-parsing test holds this against the call sites.
+var confirmationDimensionSteps = []string{
+	"ablation_construct",
+	"ablation_coordinate",
+	"ablation_evaluate",
+	"ablation_marshal",
+	"ablation_responder",
+	"ablation_upstream",
+	"budget_unfundable",
+	"deadline_missing",
+	"longmem_digest",
+	"longmem_execute",
+	"longmem_marshal",
+	"longmem_validate",
+	"mode_inactive",
+	"wire_digest",
+}
+
+const confirmationDimensionClassPrefix = "longmem_dim_"
+
+func confirmationDimensionFailureClass(err error) (string, bool) {
+	var failure *confirmationDimensionFailure
+	if !errors.As(err, &failure) {
+		return "", false
+	}
+	for _, step := range confirmationDimensionSteps {
+		if step == failure.step {
+			return confirmationDimensionClassPrefix + step, true
+		}
+	}
+	return "", false
+}
+
 // confirmationExecutorStageClasses is the complete set of executor stages that
 // may be reported as a bounded failure class, mapping each to its wire slug.
 //
@@ -406,6 +460,18 @@ func confirmationExecutionDiagnostic(err error) (string, int) {
 	// harness case, so it must not become HarnessCaseFailure or unclassified.
 	if stage == "tool_endpoint" {
 		return "longmem_run_tool_endpoint", 0
+	}
+	// Below the harness boundary, prefer the most specific point that named
+	// itself: a failure inside LongMemEval's own executor, then the step of the
+	// dimension coordinator that contains it, then the executor stage. Each is
+	// strictly narrower than the next. Bundle 2ede5da4 is why this ordering
+	// exists: the stage alone said dimension_execution -- one call wrapping
+	// roughly sixty failure points, none of which logged its cause.
+	if class, ok := longmemeval.ExecutionFailureClass(err); ok {
+		return class, 0
+	}
+	if class, ok := confirmationDimensionFailureClass(err); ok {
+		return class, 0
 	}
 	// Anything the harness allowlist does not recognize broke in the executor's
 	// own scaffolding rather than at the harness boundary, and until now that
@@ -663,16 +729,16 @@ func executeTrustedConfirmationDimensions(
 ) (confirmationExecutionResult, error) {
 	mode, err := ablation.ParseMode(request.Mode)
 	if err != nil || mode == ablation.ModeOff {
-		return confirmationExecutionResult{}, errors.New("confirmation ablation mode is not active")
+		return confirmationExecutionResult{}, dimensionFailure("mode_inactive", errors.New("confirmation ablation mode is not active"))
 	}
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		return confirmationExecutionResult{}, errors.New("confirmation execution deadline is missing")
+		return confirmationExecutionResult{}, dimensionFailure("deadline_missing", errors.New("confirmation execution deadline is missing"))
 	}
 	coordinatorBudget := time.Duration(profile.AblationCoordinatorPolicy.TotalTimeoutMilliseconds) * time.Millisecond
 	longMemBudget := time.Until(deadline) - coordinatorBudget
 	if longMemBudget <= 0 {
-		return confirmationExecutionResult{}, errors.New("confirmation ticket cannot fund both frozen dimensions")
+		return confirmationExecutionResult{}, dimensionFailure("budget_unfundable", errors.New("confirmation ticket cannot fund both frozen dimensions"))
 	}
 	longMemProfile := profile.longMemProfile()
 	longMemResult, err := (longmemeval.Executor{
@@ -681,18 +747,18 @@ func executeTrustedConfirmationDimensions(
 		OnCase: onCase,
 	}).Execute(ctx, runtime.LongMemSource, longMemProfile, request.ArtifactSHA256, runtime.LongMemProjectionKey)
 	if err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("execute LongMemEval: %w", err)
+		return confirmationExecutionResult{}, dimensionFailure("longmem_execute", fmt.Errorf("execute LongMemEval: %w", err))
 	}
 	if err := longMemResult.Validate(longMemProfile); err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("validate LongMemEval evidence: %w", err)
+		return confirmationExecutionResult{}, dimensionFailure("longmem_validate", fmt.Errorf("validate LongMemEval evidence: %w", err))
 	}
 	longMemDigest, err := longMemResult.Digest(longMemProfile)
 	if err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("digest LongMemEval evidence: %w", err)
+		return confirmationExecutionResult{}, dimensionFailure("longmem_digest", fmt.Errorf("digest LongMemEval evidence: %w", err))
 	}
 	longMemRaw, err := marshalConfirmationDimension(longMemResult.Evidence, longMemDigest, longMemResult.Evidence.LatencyMS)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("longmem_marshal", err)
 	}
 
 	ablationProfile := profile.ablationProfile()
@@ -706,15 +772,15 @@ func executeTrustedConfirmationDimensions(
 		FrozenProfile: ablationProfile, ProfileSHA256: profile.AblationProfileChecksum,
 	})
 	if err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("construct ablation coordinator: %w", err)
+		return confirmationExecutionResult{}, dimensionFailure("ablation_construct", fmt.Errorf("construct ablation coordinator: %w", err))
 	}
 	inferenceResponder, err := ablation.NewResponder(ablation.InterventionInference, ablationProfile.InferenceBudget)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_responder", err)
 	}
 	embeddingResponder, err := ablation.NewResponder(ablation.InterventionEmbedding, ablationProfile.EmbeddingBudget)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_responder", err)
 	}
 	coordinatorStarted := time.Now()
 	report, err := coordinator.Coordinate(
@@ -722,30 +788,30 @@ func executeTrustedConfirmationDimensions(
 	)
 	coordinatorLatency := elapsedMilliseconds(coordinatorStarted, time.Now())
 	if err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("coordinate ablations: %w", err)
+		return confirmationExecutionResult{}, dimensionFailure("ablation_coordinate", fmt.Errorf("coordinate ablations: %w", err))
 	}
 	if err := requireZeroAblationUpstream(report); err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_upstream", err)
 	}
 	inference, err := evaluateConfirmationAblation(
 		request.ArtifactSHA256, mode, ablation.InterventionInference, profile, ablationProfile, report,
 	)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_evaluate", err)
 	}
 	embedding, err := evaluateConfirmationAblation(
 		request.ArtifactSHA256, mode, ablation.InterventionEmbedding, profile, ablationProfile, report,
 	)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_evaluate", err)
 	}
 	inferenceRaw, err := marshalConfirmationDimension(inference.Evidence, inference.SHA256, coordinatorLatency)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_marshal", err)
 	}
 	embeddingRaw, err := marshalConfirmationDimension(embedding.Evidence, embedding.SHA256, coordinatorLatency)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, dimensionFailure("ablation_marshal", err)
 	}
 	result := confirmationExecutionResult{
 		LongMemEval: longMemRaw, InferenceAblation: inferenceRaw, EmbeddingAblation: embeddingRaw,
@@ -753,9 +819,9 @@ func executeTrustedConfirmationDimensions(
 	}
 	wireDigest, err := confirmationWireSHA256(result)
 	if err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf(
+		return confirmationExecutionResult{}, dimensionFailure("wire_digest", fmt.Errorf(
 			"digest confirmation native wire: %w", err,
-		)
+		))
 	}
 	result.EvidenceSHA256 = wireDigest
 	if longMemResult.Diagnostics.ReceivedFailures > 0 {

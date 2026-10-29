@@ -74,6 +74,8 @@ from ditto_screening_protocol.bench_v9 import (
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
 )
 
@@ -171,6 +173,10 @@ _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
         # contract allows but this gate rejects is silently unreportable --
         # which is the exact blindness the executor classes exist to remove.
         *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+        # Coordinator steps and LongMemEval executor phases: likewise points in
+        # the scorer's own pipeline, never an HTTP exchange, so 0 only.
+        *CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+        *CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     }
 )
 _CONFIRMATION_HTTP_STATUS_FAILURES = frozenset(

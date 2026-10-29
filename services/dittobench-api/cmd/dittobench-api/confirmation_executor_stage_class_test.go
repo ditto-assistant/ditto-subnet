@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -199,4 +200,146 @@ func wrappedStagesInPackage(t *testing.T) []string {
 	}
 	sort.Strings(stages)
 	return stages
+}
+
+// TestDimensionStepsCoverEveryCallSite holds confirmationDimensionSteps against
+// every literal passed to dimensionFailure, in both directions.
+func TestDimensionStepsCoverEveryCallSite(t *testing.T) {
+	used := literalFirstArgsInPackage(t, "dimensionFailure")
+	if len(used) == 0 {
+		t.Fatal("found no dimensionFailure call sites; the parse is wrong, not the code")
+	}
+	declared := make(map[string]bool, len(confirmationDimensionSteps))
+	for _, step := range confirmationDimensionSteps {
+		declared[step] = true
+	}
+	usedSet := make(map[string]bool, len(used))
+	for _, step := range used {
+		usedSet[step] = true
+		if !declared[step] {
+			t.Errorf("dimensionFailure(%q) has no declared step", step)
+		}
+	}
+	for _, step := range confirmationDimensionSteps {
+		if !usedSet[step] {
+			t.Errorf("declared step %q is never used; drop it", step)
+		}
+	}
+	t.Logf("dimension steps inspected: %d", len(used))
+}
+
+// TestDiagnosticPrefersTheNarrowestNamedPoint pins the precedence chain:
+// LongMemEval executor reason > coordinator step > executor stage.
+func TestDiagnosticPrefersTheNarrowestNamedPoint(t *testing.T) {
+	inner := errors.New("trusted meter unavailable")
+	// Shape the real call path produces: stage wraps step wraps LongMem reason.
+	longMem := &longmemeval.ExecutionFailure{Phase: "accounting_run", Kind: "meter_unavailable"}
+	wrapped := wrapConfirmationExecutionFailure("dimension_execution", dimensionFailure("longmem_execute", longMem))
+	if class, _ := confirmationExecutionDiagnostic(wrapped); class != "longmem_eval_accounting_run_meter_unavailable" {
+		t.Errorf("full chain = %q, want the LongMemEval reason", class)
+	}
+
+	stepOnly := wrapConfirmationExecutionFailure("dimension_execution", dimensionFailure("ablation_upstream", inner))
+	if class, _ := confirmationExecutionDiagnostic(stepOnly); class != "longmem_dim_ablation_upstream" {
+		t.Errorf("step only = %q, want longmem_dim_ablation_upstream", class)
+	}
+
+	stageOnly := wrapConfirmationExecutionFailure("dimension_execution", inner)
+	if class, _ := confirmationExecutionDiagnostic(stageOnly); class != "longmem_exec_dimension_execution" {
+		t.Errorf("stage only = %q, want longmem_exec_dimension_execution", class)
+	}
+
+	// The harness boundary still outranks everything below it, status intact.
+	harness := wrapConfirmationExecutionFailure("dimension_execution", dimensionFailure("longmem_execute",
+		&longmemeval.HarnessCaseFailure{Kind: "http_status", StatusCode: 502}))
+	if class, status := confirmationExecutionDiagnostic(harness); class != "longmem_run_http_status" || status != 502 {
+		t.Errorf("harness = %q/%d, want longmem_run_http_status/502", class, status)
+	}
+}
+
+// TestScorerVocabularyMatchesTheSharedPythonAllowlist reads the shared Python
+// contract and requires its scorer-assigned families to equal what this binary
+// can emit. The Go map, the Python tuple, the Platform migration and the ORM
+// model are four hand-maintained copies; this is the only check that crosses
+// the language boundary, and drift between them is silent until a validator
+// tries to report a failure and Platform refuses it.
+func TestScorerVocabularyMatchesTheSharedPythonAllowlist(t *testing.T) {
+	const contract = "../../../../packages/ditto-screening-protocol/ditto_screening_protocol/confirmation_transport.py"
+	raw, err := os.ReadFile(contract)
+	if err != nil {
+		t.Fatalf("read shared contract %s: %v (the monorepo checkout is required)", contract, err)
+	}
+	pattern := regexp.MustCompile(`"(longmem_(?:exec|eval|dim)_[a-z_]+)"`)
+	python := map[string]bool{}
+	for _, match := range pattern.FindAllStringSubmatch(string(raw), -1) {
+		python[match[1]] = true
+	}
+	emitted := map[string]bool{}
+	for _, class := range confirmationExecutorStageClasses {
+		emitted[class] = true
+	}
+	for _, class := range longmemeval.ExecutionFailureClasses() {
+		emitted[class] = true
+	}
+	for _, step := range confirmationDimensionSteps {
+		emitted[confirmationDimensionClassPrefix+step] = true
+	}
+	var onlyGo, onlyPython []string
+	for class := range emitted {
+		if !python[class] {
+			onlyGo = append(onlyGo, class)
+		}
+	}
+	for class := range python {
+		if !emitted[class] {
+			onlyPython = append(onlyPython, class)
+		}
+	}
+	sort.Strings(onlyGo)
+	sort.Strings(onlyPython)
+	if len(onlyGo) != 0 || len(onlyPython) != 0 {
+		t.Fatalf("scorer vocabulary drift\n  emitted by Go, missing from Python (Platform would REJECT these): %v\n  in Python, never emitted by Go: %v",
+			onlyGo, onlyPython)
+	}
+	t.Logf("scorer classes compared: %d", len(emitted))
+}
+
+func literalFirstArgsInPackage(t *testing.T, function string) []string {
+	t.Helper()
+	unique := map[string]bool{}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok || len(call.Args) == 0 {
+				return true
+			}
+			if ident, ok := call.Fun.(*ast.Ident); !ok || ident.Name != function {
+				return true
+			}
+			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+				if value, err := strconv.Unquote(lit.Value); err == nil && value != "" {
+					unique[value] = true
+				}
+			}
+			return true
+		})
+	}
+	values := make([]string, 0, len(unique))
+	for value := range unique {
+		values = append(values, value)
+	}
+	sort.Strings(values)
+	return values
 }
