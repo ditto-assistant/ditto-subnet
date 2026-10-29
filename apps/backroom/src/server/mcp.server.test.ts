@@ -530,6 +530,34 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  // #2979: a settings revision stores the whole policy, so the catalog must
+  // not advertise any field of a whole-policy write as optional; an omitted
+  // field would be written as its read-compat default over the live value.
+  it('advertises every field of a whole-policy settings write as required', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.listTools()
+      for (const name of [
+        'set_continual_retest_settings',
+        'apply_screener_review_settings',
+        'set_screener_provider_settings',
+      ]) {
+        const tool = response.tools.find((each) => each.name === name)
+        const settings = (
+          tool?.inputSchema as {
+            properties?: Record<string, { properties?: Record<string, unknown>; required?: string[] }>
+          }
+        ).properties?.settings
+        const fields = Object.keys(settings?.properties ?? {}).sort()
+        expect(fields.length, name).toBeGreaterThan(4)
+        expect([...(settings?.required ?? [])].sort(), name).toEqual(fields)
+      }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('publishes every Backroom operation with MCP safety annotations', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.listTools()
@@ -931,7 +959,9 @@ describe('Backroom MCP tools', () => {
     // The screening review cost read (one bounded integer input, one-line
     // summary, detail in tool help) brings the measured catalog to 212,797
     // bytes; keep about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(213_300)
+    // Whole-policy settings writes list every field as required (#2979), which
+    // brings the measured catalog to 213,661 bytes; keep about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(214_150)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

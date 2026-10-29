@@ -10,6 +10,23 @@ type PlatformResponseShape<Response extends object> = {
   [Field in keyof Response]-?: z.ZodType<Response[Field]>
 }
 
+// A settings revision stores the whole policy and Platform appends it verbatim,
+// so an omitted field is not "leave it alone": it is a write of the read-compat
+// default over the live value. Reads keep their defaults so Backroom still
+// renders against an older Platform; whole-policy writes drop every one.
+type WithoutDefaults<Shape extends z.ZodRawShape> = {
+  [Field in keyof Shape]: Shape[Field] extends z.ZodDefault<infer Inner> ? Inner : Shape[Field]
+}
+
+function withoutDefaults<Shape extends z.ZodRawShape>(shape: Shape): WithoutDefaults<Shape> {
+  return Object.fromEntries(
+    Object.entries(shape).map(([field, schema]) => [
+      field,
+      schema instanceof z.ZodDefault ? schema.unwrap() : schema,
+    ]),
+  ) as WithoutDefaults<Shape>
+}
+
 type GeneratedScreeningReviewCost =
   PlatformComponents['schemas']['ScreeningReviewCostResponse']
 type GeneratedConfirmationBundleView =
@@ -293,94 +310,106 @@ export const fanoutShadowOutcomeSchema = z.enum([
   'skipped',
 ])
 export const policyManifestProfileSchema = z.enum(['core', 'l1', 'l1_l2'])
-export const screenerReviewSettingsSchema = z
-  .object({
-    mode: screenerReviewModeSchema,
-    l2_model: screenerReviewModelSchema,
-    l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
-    l3_enabled: z.boolean().default(true),
-    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
-    timeout_seconds: z.number().int().min(30).max(1_800),
-    max_steps: z.number().int().min(1).max(256),
-    source_review_max_steps: z.number().int().min(1).max(240).default(200),
-    source_review_max_read_bytes: z.number().int().min(32_000).max(16_000_000).default(8_000_000),
-    source_review_max_completion_tokens: z.number().int().min(2_000).max(32_000).default(8_000),
-    source_review_reasoning_effort: z.enum(['low', 'medium', 'high']).default('high'),
-    source_review_model: sourceReviewModelSchema.default('openai/gpt-5.6-luna'),
-    source_review_timeout_seconds: z.number().int().min(60).max(3_600).default(1_800),
-    concern_hold_count: z.number().int().min(1).max(16).default(3),
-    clear_min_notes: z.number().int().min(1).max(32).default(3),
-    adjudicator_mode: z.enum(['off', 'shadow', 'enforce']).default('off'),
-    adjudicator_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
-    adjudicator_max_steps: z.number().int().min(1).max(1024).default(128),
-    adjudicator_timeout_seconds: z.number().int().min(60).max(3_600).default(600),
-    adjudicator_max_completion_tokens: z.number().int().min(1_000).max(128_000).nullable().default(null),
-    fanout_shadow_mode: z.enum(['off', 'shadow']).default('off'),
-    fanout_shadow_image_source_sha: z.string().regex(/^[0-9a-f]{40}$/).default('0'.repeat(40)),
-    fanout_shadow_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
-    fanout_shadow_concurrency: z.number().int().min(1).max(4).default(2),
-    fanout_shadow_max_steps: z.number().int().min(1).max(8).default(4),
-    fanout_shadow_max_groups: z.number().int().min(1).max(8).default(4),
-    fanout_shadow_max_requests: z.number().int().min(1).max(64).default(40),
-    fanout_shadow_max_total_tokens: z.number().int().min(10_000).max(2_000_000).default(1_500_000),
-    fanout_shadow_timeout_seconds: z.number().int().min(60).max(1_800).default(900),
-    fanout_shadow_max_cost_usd: z.number().positive().max(10).default(3),
-    fanout_shadow_daily_cost_usd: z.number().positive().max(100).default(20),
-    fanout_shadow_global_concurrency: z.literal(1).default(1),
-    fanout_shadow_reserved_targon_slots: z.number().int().min(1).max(4).default(1),
-    probe_battery_mode: z.enum(['off', 'shadow']).default('off'),
-    probe_battery_timeout_seconds: z.number().int().min(30).max(600).default(120),
-    probe_review_mode: z.enum(['off', 'shadow']).default('off'),
-    probe_review_timeout_seconds: z.number().int().min(120).max(900).default(420),
-    probe_review_max_cost_usd: z.number().positive().max(5).default(1),
-    max_input_tokens: z.number().int().min(1).max(5_000_000),
-    max_output_tokens: z.number().int().min(1).max(1_000_000),
-    max_completion_tokens: z.number().int().min(1).max(128_000),
-    max_cost_usd: z.number().positive().max(25),
-    critic_reasoning_effort: z.enum(['low', 'medium', 'high']),
-    cache_ttl_seconds: z.number().int().min(60).max(2_592_000),
-    l2_always_escalate: z.boolean().default(false),
-    audit_retention_days: z.number().int().min(1).max(365),
-    policy_manifest_profile: policyManifestProfileSchema.default('l1'),
-    policy_manifest_rotation_id: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).default('v8-luna-source-review-behavioral-oracle'),
-  })
-  .superRefine((value, context) => {
-    const chain = [value.l2_model, ...value.l2_fallback_models]
-    if (new Set(chain).size !== chain.length) {
-      context.addIssue({ code: 'custom', message: 'Model chain cannot contain duplicates' })
-    }
-    if (value.max_completion_tokens > value.max_output_tokens) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Completion budget cannot exceed output budget',
-        path: ['max_completion_tokens'],
-      })
-    }
-    if (value.adjudicator_max_completion_tokens !== null && value.adjudicator_max_completion_tokens > value.max_output_tokens) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Adjudicator completion budget cannot exceed output budget',
-        path: ['adjudicator_max_completion_tokens'],
-      })
-    }
-    if (value.probe_review_mode === 'shadow' && value.probe_battery_mode !== 'shadow') {
-      context.addIssue({
-        code: 'custom',
-        message: 'The probe reviewer requires the probe battery',
-        path: ['probe_review_mode'],
-      })
-    }
-    if (
-      value.fanout_shadow_mode === 'shadow' &&
-      value.fanout_shadow_image_source_sha === '0'.repeat(40)
-    ) {
-      context.addIssue({
-        code: 'custom',
-        message: 'Shadow mode requires the exact trusted image source SHA',
-        path: ['fanout_shadow_image_source_sha'],
-      })
-    }
-  })
+const screenerReviewSettingsBaseSchema = z.object({
+  mode: screenerReviewModeSchema,
+  l2_model: screenerReviewModelSchema,
+  l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
+  l3_enabled: z.boolean().default(true),
+  l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
+  timeout_seconds: z.number().int().min(30).max(1_800),
+  max_steps: z.number().int().min(1).max(256),
+  source_review_max_steps: z.number().int().min(1).max(240).default(200),
+  source_review_max_read_bytes: z.number().int().min(32_000).max(16_000_000).default(8_000_000),
+  source_review_max_completion_tokens: z.number().int().min(2_000).max(32_000).default(8_000),
+  source_review_reasoning_effort: z.enum(['low', 'medium', 'high']).default('high'),
+  source_review_model: sourceReviewModelSchema.default('openai/gpt-5.6-luna'),
+  source_review_timeout_seconds: z.number().int().min(60).max(3_600).default(1_800),
+  concern_hold_count: z.number().int().min(1).max(16).default(3),
+  clear_min_notes: z.number().int().min(1).max(32).default(3),
+  adjudicator_mode: z.enum(['off', 'shadow', 'enforce']).default('off'),
+  adjudicator_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
+  adjudicator_max_steps: z.number().int().min(1).max(1024).default(128),
+  adjudicator_timeout_seconds: z.number().int().min(60).max(3_600).default(600),
+  adjudicator_max_completion_tokens: z.number().int().min(1_000).max(128_000).nullable().default(null),
+  fanout_shadow_mode: z.enum(['off', 'shadow']).default('off'),
+  fanout_shadow_image_source_sha: z.string().regex(/^[0-9a-f]{40}$/).default('0'.repeat(40)),
+  fanout_shadow_model: z.literal('z-ai/glm-5.3-flash').default('z-ai/glm-5.3-flash'),
+  fanout_shadow_concurrency: z.number().int().min(1).max(4).default(2),
+  fanout_shadow_max_steps: z.number().int().min(1).max(8).default(4),
+  fanout_shadow_max_groups: z.number().int().min(1).max(8).default(4),
+  fanout_shadow_max_requests: z.number().int().min(1).max(64).default(40),
+  fanout_shadow_max_total_tokens: z.number().int().min(10_000).max(2_000_000).default(1_500_000),
+  fanout_shadow_timeout_seconds: z.number().int().min(60).max(1_800).default(900),
+  fanout_shadow_max_cost_usd: z.number().positive().max(10).default(3),
+  fanout_shadow_daily_cost_usd: z.number().positive().max(100).default(20),
+  fanout_shadow_global_concurrency: z.literal(1).default(1),
+  fanout_shadow_reserved_targon_slots: z.number().int().min(1).max(4).default(1),
+  probe_battery_mode: z.enum(['off', 'shadow']).default('off'),
+  probe_battery_timeout_seconds: z.number().int().min(30).max(600).default(120),
+  probe_review_mode: z.enum(['off', 'shadow']).default('off'),
+  probe_review_timeout_seconds: z.number().int().min(120).max(900).default(420),
+  probe_review_max_cost_usd: z.number().positive().max(5).default(1),
+  max_input_tokens: z.number().int().min(1).max(5_000_000),
+  max_output_tokens: z.number().int().min(1).max(1_000_000),
+  max_completion_tokens: z.number().int().min(1).max(128_000),
+  max_cost_usd: z.number().positive().max(25),
+  critic_reasoning_effort: z.enum(['low', 'medium', 'high']),
+  cache_ttl_seconds: z.number().int().min(60).max(2_592_000),
+  l2_always_escalate: z.boolean().default(false),
+  audit_retention_days: z.number().int().min(1).max(365),
+  policy_manifest_profile: policyManifestProfileSchema.default('l1'),
+  policy_manifest_rotation_id: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).default('v8-luna-source-review-behavioral-oracle'),
+})
+
+const checkScreenerReviewSettings = (
+  value: z.output<typeof screenerReviewSettingsBaseSchema>,
+  context: z.RefinementCtx,
+) => {
+  const chain = [value.l2_model, ...value.l2_fallback_models]
+  if (new Set(chain).size !== chain.length) {
+    context.addIssue({ code: 'custom', message: 'Model chain cannot contain duplicates' })
+  }
+  if (value.max_completion_tokens > value.max_output_tokens) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Completion budget cannot exceed output budget',
+      path: ['max_completion_tokens'],
+    })
+  }
+  if (value.adjudicator_max_completion_tokens !== null && value.adjudicator_max_completion_tokens > value.max_output_tokens) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Adjudicator completion budget cannot exceed output budget',
+      path: ['adjudicator_max_completion_tokens'],
+    })
+  }
+  if (value.probe_review_mode === 'shadow' && value.probe_battery_mode !== 'shadow') {
+    context.addIssue({
+      code: 'custom',
+      message: 'The probe reviewer requires the probe battery',
+      path: ['probe_review_mode'],
+    })
+  }
+  if (
+    value.fanout_shadow_mode === 'shadow' &&
+    value.fanout_shadow_image_source_sha === '0'.repeat(40)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message: 'Shadow mode requires the exact trusted image source SHA',
+      path: ['fanout_shadow_image_source_sha'],
+    })
+  }
+}
+
+export const screenerReviewSettingsSchema = screenerReviewSettingsBaseSchema.superRefine(
+  checkScreenerReviewSettings,
+)
+
+// The write names every field; see withoutDefaults.
+export const screenerReviewSettingsWriteSchema = z
+  .object(withoutDefaults(screenerReviewSettingsBaseSchema.shape))
+  .superRefine(checkScreenerReviewSettings)
 
 export const screenerReviewRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
@@ -496,7 +525,7 @@ export const screenerReviewControlSchema = z.object({
 export const applyScreenerReviewSettingsInputSchema = z.object({
   scope: z.string().regex(/^(?:\*|[a-zA-Z0-9._-]{1,63})$/),
   expectedRevision: z.number().int().nonnegative(),
-  settings: screenerReviewSettingsSchema,
+  settings: screenerReviewSettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
@@ -760,6 +789,11 @@ export const screenerProviderSettingsSchema = z.object({
   gce_overflow_max_instances: z.number().int().min(0).max(32).default(6),
 })
 
+// The write names every field; see withoutDefaults.
+export const screenerProviderSettingsWriteSchema = z.object(
+  withoutDefaults(screenerProviderSettingsSchema.shape),
+)
+
 export const screenerProviderSettingsRevisionSchema = z.object({
   environment: z.string().min(1),
   revision: z.number().int().nonnegative(),
@@ -777,7 +811,7 @@ export const screenerProviderSettingsControlSchema = z.object({
 
 export const setScreenerProviderSettingsInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
-  settings: screenerProviderSettingsSchema,
+  settings: screenerProviderSettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
 })
@@ -2421,26 +2455,14 @@ export const continualRetestSettingsSchema =
 // alone" — it is a write of the default. Reading tolerates a missing field (an
 // older platform, an older revision); writing does not, or an MCP caller
 // flipping the idle switch would silently collapse a top-25 cohort back to the
-// emission set, return the fold to `strict`, and throw away a tie band.
+// emission set, return the fold to `strict`, throw away a tie band, or widen a
+// rollout stand-down back to capable validators. Every field is required, so
+// the next one added cannot be missed here.
 //
-// Refinement is applied after the extend rather than inherited: zod refuses to
-// overwrite keys on a schema that already carries refinements.
-export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSchema
-  .extend({
-    tie_weighting_mode: z.enum(['disabled', 'fleet_ready']),
-    statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
-    ledger_pin_mode: z.enum(['live', 'epoch']),
-    crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
-    wave_membership: z.enum(['strict', 'participants', 'per_agent']),
-    retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
-    retest_eligibility_mode: z.enum(['fixed', 'statistical']),
-    retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
-    retest_cohort_max_size: z
-      .number()
-      .int()
-      .min(EMISSION_SET_SIZE)
-      .max(MAX_RETEST_COHORT_SIZE),
-  })
+// Refinement is applied to the derived object rather than inherited: zod
+// refuses to overwrite keys on a schema that already carries refinements.
+export const continualRetestSettingsWriteSchema = z
+  .object(withoutDefaults(continualRetestSettingsBaseSchema.shape))
   .superRefine(checkCohortCeiling)
 
 export const continualRetestSettingsRevisionSchema = z.object({
