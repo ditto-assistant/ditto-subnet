@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -64,6 +66,7 @@ from ditto.validator.errors import (
     SandboxOomError,
     ValidatorInfrastructureError,
 )
+from ditto.validator.liveness import WATCHDOG_EXIT_CODE, LivenessWatchdog
 from ditto.validator.onchain_seed import derive_seed
 from ditto.validator.resource_gate import (
     DEFAULT_RESOURCE_CEILINGS,
@@ -2636,6 +2639,122 @@ class TestRunOnce:
         assert "drained" in states
         stop.set()
         await asyncio.wait_for(task, timeout=1)
+
+    async def test_drain_blocked_by_unresolved_handback_keeps_heartbeating(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression for the 2026-10-29 5HEouuDa outage.
+
+        A Platform 502 dropped one ticket hand-back, so the drain the updater
+        requested a few minutes later could not be acknowledged until that
+        ticket's deadline (three hours out). The quiescence wait sent no
+        heartbeat, Platform saw the managed treasury validator go stale after
+        15 minutes, and every validator's ledger read got a 428. The wait may
+        stay long; it must never go silent.
+        """
+        job = _job(
+            "5MinerA" + "x" * 41, deadline=datetime.now(UTC) + timedelta(hours=3)
+        )
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.report_ticket_failed = AsyncMock(
+            side_effect=PlatformError("job fail report rejected (502)")
+        )
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        config = _config()
+        config.sweep_seconds = 0.001
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        await worker._report_ticket_failed(
+            job, "scoring_error", "PlatformError: artifact rejected (502)"
+        )
+        assert worker._unresolved_live_tickets()
+        # ``raising=False`` keeps this a timeout, not an AttributeError, on a
+        # worker that predates the quiescence heartbeat.
+        monkeypatch.setattr(
+            worker_mod, "_DRAIN_QUIESCENCE_HEARTBEAT_SECONDS", 0.01, raising=False
+        )
+        states: list[str] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
+        sent_before = platform.submit_heartbeat.await_count
+
+        async def heartbeats_continue() -> None:
+            while platform.submit_heartbeat.await_count < sent_before + 3:
+                await asyncio.sleep(0.005)
+
+        try:
+            await asyncio.wait_for(heartbeats_continue(), timeout=2)
+        finally:
+            stop.set()
+            await asyncio.wait_for(task, timeout=2)
+        # Still undrained: the lease stays updater-visible until it resolves.
+        assert "drained" not in states
+        assert worker._unresolved_live_tickets()
+
+    async def test_heartbeat_that_never_returns_trips_the_liveness_watchdog(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A Platform heartbeat that never answers must end in a restart."""
+        never_answers = asyncio.Event()
+
+        async def hung_heartbeat(_request: object) -> ValidatorHeartbeatResponse:
+            await never_answers.wait()
+            return ValidatorHeartbeatResponse(accepted=True, seen_at=datetime.now(UTC))
+
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.submit_heartbeat = AsyncMock(side_effect=hung_heartbeat)
+        config = _config()
+        config.sweep_seconds = 0.001
+        chain = MagicMock()
+        chain.get_weights_rate_limit = AsyncMock(return_value=None)
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=chain,
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        exits: list[int] = []
+        watchdog = LivenessWatchdog(
+            loop=asyncio.get_running_loop(),
+            age_seconds=worker.heartbeat_attempt_age_seconds,
+            timeout_seconds=0.2,
+            check_seconds=0.01,
+            exit_process=exits.append,
+        )
+        caplog.set_level(logging.WARNING, logger="ditto.validator.liveness")
+        stop = asyncio.Event()
+        task = asyncio.create_task(worker.run_forever(stop))
+        watchdog.start()
+        try:
+            for _ in range(400):
+                if exits:
+                    break
+                await asyncio.sleep(0.005)
+        finally:
+            watchdog.stop()
+            stop.set()
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        assert exits == [WATCHDOG_EXIT_CODE]
+        platform.submit_heartbeat.assert_awaited()
+        # The dump names the exact await that never completes.
+        assert "hung_heartbeat" in caplog.text
+        assert "_send_heartbeat_unlocked" in caplog.text
 
     async def test_quiescent_bootstrap_authenticates_before_claiming_work(
         self, monkeypatch: pytest.MonkeyPatch

@@ -365,6 +365,17 @@ to be visible.
   after changing it.
 - **Updater reports a transaction:** keep the timer disabled, verify the
   validator and all sidecars, then use `recover`.
+- **The validator is running but its heartbeat is stale or logs stopped:**
+  capture a live dump before restarting anything:
+  `docker kill --signal=QUIT src-ditto-subnet-1`. It logs every asyncio task's
+  await chain and every thread's stack, and the worker keeps running. (`USR1`
+  and `USR2` are the updater's drain and resume signals, so do not use them
+  for this.) A worker that makes no heartbeat attempt for
+  `VALIDATOR_LIVENESS_WATCHDOG_SECONDS` (default 600, `0` disables) logs the
+  same dump and exits with code 70, and `restart: unless-stopped` brings it
+  back. While a drain waits for in-flight work, logs show `drain requested;
+  waiting for quiescence: ...` every five minutes and the heartbeat stays
+  fresh.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose
   and updater status. Do not add PM2 or another systemd service for the stack.
 - **Disk use grows:** inspect `sandbox-docker`. Its nested daemon prunes unused

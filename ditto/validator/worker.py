@@ -357,6 +357,12 @@ def _ledger_active_bench_version(ledger: LedgerResponse) -> int | None:
 
 
 _DRAIN_HEARTBEAT_SECONDS = 5.0
+# While a drain waits for in-flight work, keep this hotkey's Platform heartbeat
+# fresh. Active runs already heartbeat every _ACTIVE_HEARTBEAT_SECONDS; this
+# covers waits with nothing running, such as an unresolved ticket hand-back.
+_DRAIN_QUIESCENCE_HEARTBEAT_SECONDS = 30.0
+# How often the quiescence wait logs what still holds the drain open.
+_DRAIN_QUIESCENCE_REPORT_SECONDS = 300.0
 _BOOTSTRAP_SELF_RESUME_SECONDS = 30.0
 
 # A transient chain/Pylon failure setting weights is retried a few times within
@@ -921,6 +927,9 @@ class ValidatorWorker:
         # Platform stamped ``seen_at`` no earlier, so this bounds its age.
         self._last_accepted_heartbeat_sent_at: float | None = None
         self._job_heartbeat_lock = asyncio.Lock()
+        # Monotonic time of the newest finished heartbeat attempt. Seeded at
+        # construction so startup gets a full watchdog window.
+        self._last_heartbeat_attempt_monotonic = time.monotonic()
         self._heartbeat_clock = heartbeat_clock or _new_heartbeat_clock()
         self._pending_heartbeat_state: ValidatorRuntimeState | None = None
         self._pending_heartbeat_progress: dict[str, BenchmarkProgress] = {}
@@ -1814,6 +1823,15 @@ class ValidatorWorker:
         slot.last_progress_heartbeat_monotonic = time.monotonic()
         slot.last_progress_bucket = self._progress_bucket(progress)
 
+    def heartbeat_attempt_age_seconds(self) -> float:
+        """Seconds since this worker last finished a heartbeat attempt.
+
+        Counts every finished attempt, accepted or not: a Platform outage is not
+        a wedged worker. The liveness watchdog reads it from another thread; a
+        float read is atomic under the GIL.
+        """
+        return time.monotonic() - self._last_heartbeat_attempt_monotonic
+
     async def _report_heartbeat_unlocked(
         self,
         state: ValidatorRuntimeState,
@@ -1822,6 +1840,12 @@ class ValidatorWorker:
     ) -> bool:
         """Best-effort signed build + runtime report; never gate validator work."""
         del active_snapshot  # v10+ always signs one atomic all-slot snapshot.
+        try:
+            return await self._send_heartbeat_unlocked(state)
+        finally:
+            self._last_heartbeat_attempt_monotonic = time.monotonic()
+
+    async def _send_heartbeat_unlocked(self, state: ValidatorRuntimeState) -> bool:
         self._note_drain_requested()
         capacity = self._capacity_snapshot()
         primary = sorted(capacity.active, key=lambda slot: slot.slot_id)
@@ -5426,14 +5450,32 @@ class ValidatorWorker:
         bootstrap_resume: Callable[[], bool] | None = None,
         extra_busy: Callable[[], bool] | None = None,
     ) -> None:
-        """Publish drained only once scoring and weight work are quiescent."""
-        while (
-            self._scoring_active
-            or self._weights_active
-            or self._longmem_active
-            or self._unresolved_live_tickets()
-            or (extra_busy is not None and extra_busy())
-        ) and not stop.is_set():
+        """Publish drained only once scoring and weight work are quiescent.
+
+        The wait can legitimately last hours: a failed ticket hand-back keeps
+        its lease updater-visible until the ticket deadline. It must never go
+        silent while it waits. Platform reads a stale heartbeat as an offline
+        validator, and a stale managed treasury validator makes Platform refuse
+        every validator's ledger read (428). On 2026-10-29 one hand-back
+        dropped by a Platform 502 left 5HEouuDa waiting here, with no
+        heartbeat, until a manual restart 65 minutes later.
+        """
+        next_heartbeat = time.monotonic() + _DRAIN_QUIESCENCE_HEARTBEAT_SECONDS
+        next_report = time.monotonic()
+        while not stop.is_set():
+            blockers = self._drain_blockers(extra_busy)
+            if not blockers:
+                break
+            now = time.monotonic()
+            if now >= next_report:
+                logger.info(
+                    "drain requested; waiting for quiescence: %s",
+                    ", ".join(blockers),
+                )
+                next_report = now + _DRAIN_QUIESCENCE_REPORT_SECONDS
+            if now >= next_heartbeat:
+                await self._report_heartbeat("idle")
+                next_heartbeat = time.monotonic() + _DRAIN_QUIESCENCE_HEARTBEAT_SECONDS
             await self._sleep_or_stop(stop, 0.05)
         if stop.is_set():
             return
@@ -5456,6 +5498,26 @@ class ValidatorWorker:
                 platform_accepted=self._platform_accepted,
                 resume_ready=self._bootstrap_resume_ready,
             )
+
+    def _drain_blockers(self, extra_busy: Callable[[], bool] | None) -> list[str]:
+        """Name every unit of work that still holds a drain open."""
+        blockers = [
+            name
+            for name, busy in (
+                ("scoring sweep", self._scoring_active),
+                ("weight epoch", self._weights_active),
+                ("LongMem confirmation", self._longmem_active),
+                ("extra worker", extra_busy is not None and extra_busy()),
+            )
+            if busy
+        ]
+        if self._unresolved_live_tickets():
+            latest = max(deadline for _, deadline in self._unresolved_ticket_deadlines)
+            blockers.append(
+                f"{len(self._unresolved_ticket_deadlines)} unresolved ticket "
+                f"hand-back(s) until {latest.isoformat()}"
+            )
+        return blockers
 
     @staticmethod
     def _new_work_blocked(*events: asyncio.Event | None) -> bool:
