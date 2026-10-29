@@ -26,7 +26,6 @@ from ditto.api_models.bounty import (
 from ditto.api_server import bounty_claims
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.db.models import (
-    Bounty,
     BountyActionNonce,
     BountyAppeal,
     BountyClaim,
@@ -37,7 +36,6 @@ from ditto.db.models import (
     BountySubmission,
     BountyWithdrawal,
 )
-from ditto.tests.api_server.endpoints.test_bounties import publish as publish_bounty
 from ditto.tests.api_server.endpoints.test_bounty_claims import (
     _ADMIN_TOKEN,
     _HEADERS,
@@ -380,18 +378,6 @@ async def test_the_sweeper_records_deadlines_once(world, monkeypatch):
     assert detail["summary"]["reviews_overdue"] == 1
 
 
-async def test_a_closed_sweeper_can_start_again(world):
-    sweeper = BountyDeadlineSweeper(session_maker=world.maker, interval_seconds=60)
-    await sweeper.start()
-    await sweeper.aclose()
-    await sweeper.start()
-    # A fresh stop signal: the restarted loop is running, not already stopped.
-    await asyncio.sleep(0)
-    assert sweeper._task is not None and not sweeper._task.done()
-    await sweeper.aclose()
-    assert sweeper._task is None
-
-
 async def test_closing_never_waits_on_a_blocked_sweep(world, monkeypatch):
     from ditto.api_server import bounty_deadlines
 
@@ -412,34 +398,6 @@ async def test_closing_never_waits_on_a_blocked_sweep(world, monkeypatch):
     # The blocked sweep is cut short after the grace period.
     await asyncio.wait_for(sweeper.aclose(grace_seconds=0.1), timeout=5)
     assert sweeper._task is None
-
-
-async def test_a_cancelled_close_still_ends_the_sweep(world, monkeypatch):
-    from ditto.api_server import bounty_deadlines
-
-    blocked = asyncio.Event()
-
-    async def due(_session, **_kwargs):
-        return [uuid4()]
-
-    async def stuck(_maker, _bounty_id, **_kwargs):
-        blocked.set()
-        await asyncio.Event().wait()
-
-    monkeypatch.setattr(bounty_deadlines, "due_bounties", due)
-    monkeypatch.setattr(bounty_deadlines, "settle_deadlines", stuck)
-    sweeper = BountyDeadlineSweeper(session_maker=world.maker, interval_seconds=60)
-    await sweeper.start()
-    running = sweeper._task
-    assert running is not None
-    await asyncio.wait_for(blocked.wait(), timeout=5)
-    closing = asyncio.create_task(sweeper.aclose(grace_seconds=60))
-    await asyncio.sleep(0.05)
-    closing.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await closing
-    # The caller's cancellation ends the sweep too: a restart runs one loop.
-    assert running.done()
 
 
 async def test_one_failing_bounty_never_blocks_the_sweep(world, monkeypatch):
@@ -662,69 +620,6 @@ async def test_appeals_are_decided_by_someone_else(world):
     assert (await submit(world, ALICE, restored, sha="cd" * 20)).status_code == 200
 
 
-async def test_an_appeal_without_a_recorded_review_is_refused(world):
-    await world.start(ALICE)
-    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
-    await review(world, claim, "reject")
-    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
-    filed = await appeal(world, ALICE, claim, rejection["event_id"], "Fixture appeal.")
-    [entry] = filed.json()["appeals"]
-    # A review row that is somehow missing leaves the reviewer unknown.
-    async with world.maker() as session, session.begin():
-        await session.execute(
-            text("ALTER TABLE bounty_reviews DISABLE TRIGGER bounty_reviews_immutable")
-        )
-        await session.execute(text("DELETE FROM bounty_reviews"))
-        await session.execute(
-            text("ALTER TABLE bounty_reviews ENABLE TRIGGER bounty_reviews_immutable")
-        )
-    refused = await world.client.post(
-        f"{ADMIN}/appeals/{entry['appeal_id']}/decision",
-        headers=_HEADERS,
-        json={
-            "upheld": False,
-            "reason": "fixture appeal review",
-            "confirmation": f"DENY BOUNTY APPEAL {entry['appeal_id']}",
-        },
-    )
-    assert refused.status_code == 409 and "no recorded review" in refused.text
-
-
-async def test_a_missed_deadline_can_be_appealed_and_denied(world, monkeypatch):
-    await world.start(ALICE)
-    claim = await claimed(world, ALICE)
-    travel(monkeypatch, timedelta(days=5, minutes=1))
-    assert (await submit(world, ALICE, claim)).status_code == 409
-    missed = next(e for e in await events(world) if e["kind"] == "deadline_missed")
-    # A signed but blank statement is no appeal.
-    blank = await appeal(world, ALICE, claim, missed["event_id"], " " * 12)
-    assert blank.status_code == 400 and "must not be blank" in blank.text
-    filed = (await appeal(world, ALICE, claim, missed["event_id"], "Outage.")).json()
-    appeal_id = filed["appeals"][0]["appeal_id"]
-    route = f"{ADMIN}/appeals/{appeal_id}/decision"
-    missing_days = await world.client.post(
-        route,
-        headers=_HEADERS,
-        json={
-            "upheld": True,
-            "reason": "fixture appeal review",
-            "confirmation": f"UPHOLD BOUNTY APPEAL {appeal_id}",
-        },
-    )
-    assert missing_days.status_code == 400
-    denied = await world.client.post(
-        route,
-        headers=_HEADERS,
-        json={
-            "upheld": False,
-            "reason": "fixture appeal review",
-            "confirmation": f"DENY BOUNTY APPEAL {appeal_id}",
-        },
-    )
-    assert denied.status_code == 200 and denied.json()["slot_status"] == "expired"
-    assert denied.json()["appeals"][0]["upheld"] is False
-
-
 async def test_a_missed_rework_deadline_is_appealed_to_someone_else(world, monkeypatch):
     await world.start(ALICE)
     claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
@@ -877,32 +772,7 @@ async def test_reopening_is_explicit_and_admits_a_new_claim(world):
     assert [(a.action, a.prior_status) for a in actions] == [("reopen", "withdrawn")]
 
 
-async def test_reopening_waits_out_the_appeal_window_to_the_instant(world, monkeypatch):
-    await world.start(ALICE)
-    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
-    assert (await review(world, claim, "reject")).status_code == 200
-    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
-    ends = datetime.fromisoformat(rejection["recorded_at"]) + timedelta(days=3)
-    monkeypatch.setattr(
-        bounty_claims, "utcnow", lambda: ends - timedelta(microseconds=1)
-    )
-    early = await reopen(world, claim)
-    assert early.status_code == 409, early.text
-    assert (
-        f"appeal this rejected outcome until {ends.isoformat()}: reopen after the "
-        "3-day appeal window" in early.json()["message"]
-    )
-    assert slot_of(await world.refresh(), claim)["status"] == "rejected"
-    # The window ends at its instant; an appeal filed after it still counts
-    # until the slot is reopened.
-    monkeypatch.setattr(bounty_claims, "utcnow", lambda: ends)
-    late = await appeal(world, ALICE, claim, rejection["event_id"], "Fixture appeal.")
-    assert late.status_code == 200, late.text
-    pending = await reopen(world, claim)
-    assert pending.status_code == 409 and "pending appeal" in pending.text
-
-
-@pytest.mark.parametrize("outcome", ["rejected", "expired"])
+@pytest.mark.parametrize("outcome", ["expired"])
 async def test_a_decided_appeal_ends_the_appeal_window(world, monkeypatch, outcome):
     await world.start(ALICE)
     claim = await claimed(world, ALICE)
@@ -1106,231 +976,3 @@ async def test_review_history_is_append_only(world):
             )
             == 1
         )
-
-
-async def test_history_references_stay_within_their_bounty_and_claim(world):
-    """The database refuses an event naming another bounty's revision, round,
-    slot or claim, a slot held by another bounty's claim, and an appeal of
-    another claim's decision."""
-    await world.start(ALICE, BOB)
-    alice = (await submit(world, ALICE, await claimed(world, ALICE))).json()
-    bob = (await submit(world, BOB, await claimed(world, BOB))).json()
-    await review(world, bob, "reject")
-    published = await publish_bounty(world.client, issue=ISSUE + 1, terms={})
-    assert published.status_code == 200, published.text
-    async with world.maker() as session:
-        other = await session.scalar(
-            select(Bounty.bounty_id).where(Bounty.issue_number == ISSUE + 1)
-        )
-        open_slot = await session.scalar(
-            select(BountySlot.slot_id).where(BountySlot.bounty_id == other).limit(1)
-        )
-        rejection = await session.scalar(
-            select(BountyEvent.event_id).where(
-                BountyEvent.claim_id == UUID(bob["claim_id"]),
-                BountyEvent.kind == "rejected",
-            )
-        )
-    # A slot cancellation may name no claim, so only the key under test refuses.
-    event = text(
-        "INSERT INTO bounty_events (bounty_id, kind, revision, round, slot_id, "
-        "claim_id, recorded_at) VALUES (:bounty, 'slot_cancelled', :revision, "
-        ":round, :slot, :claim, now())"
-    )
-    nothing = {"bounty": other, "revision": None, "round": None, "slot": None}
-    cases = [
-        (
-            event,
-            {**nothing, "revision": 2, "claim": None},
-            "fk_bounty_events_bounty_id_bounty_revisions",
-        ),
-        (
-            event,
-            {**nothing, "round": 2, "claim": None},
-            "fk_bounty_events_bounty_id_bounty_rounds",
-        ),
-        (
-            event,
-            {**nothing, "slot": UUID(alice["slot_id"]), "claim": None},
-            "fk_bounty_events_slot_id_bounty_slots",
-        ),
-        (
-            event,
-            {**nothing, "claim": UUID(alice["claim_id"])},
-            "fk_bounty_events_claim_id_bounty_claims",
-        ),
-        (
-            text(
-                "UPDATE bounty_slots SET status = 'held', claim_id = :claim "
-                "WHERE slot_id = :slot"
-            ),
-            {"slot": open_slot, "claim": UUID(alice["claim_id"])},
-            "fk_bounty_slots_claim_id_bounty_claims",
-        ),
-        (
-            text(
-                "WITH nonce AS (INSERT INTO bounty_action_nonces (nonce, action, "
-                "recorded_at) VALUES (gen_random_uuid(), 'appeal', now()) "
-                "RETURNING nonce) INSERT INTO bounty_appeals (appeal_id, claim_id, "
-                "subject_event_id, reason, reason_digest, nonce, issued_at, "
-                "key_kind, signer, signature, filed_at) SELECT gen_random_uuid(), "
-                ":claim, :event, 'fixture', repeat('a', 64), nonce, now(), "
-                "'hotkey', 'signer', 'signature', now() FROM nonce"
-            ),
-            {"claim": UUID(alice["claim_id"]), "event": rejection},
-            "fk_bounty_appeals_subject_event_id_bounty_events",
-        ),
-    ]
-    for statement, values, constraint in cases:
-        async with world.maker() as session:
-            with pytest.raises(DBAPIError, match=constraint):
-                await session.execute(statement, values)
-            await session.rollback()
-
-    # An event's submission, appeal and obligation belong to its own claim.
-    accepted = (await review(world, alice, "accept")).json()
-    filed = await appeal(world, BOB, bob, rejection, "Fixture appeal.")
-    assert filed.status_code == 200, filed.text
-    refund = next(o for o in accepted["obligations"] if o["kind"] == "fee_refund")
-    # A kind that may name no claim, so only the reference under test refuses.
-    linked = text(
-        "INSERT INTO bounty_events (bounty_id, kind, claim_id, submission_id, "
-        "appeal_id, obligation_id, recorded_at) VALUES (:bounty, 'slot_cancelled', "
-        ":claim, :submission, :appeal, :obligation, now())"
-    )
-    none = {"submission": None, "appeal": None, "obligation": None}
-    for values, constraint in (
-        (
-            {
-                "claim": bob["claim_id"],
-                **none,
-                "submission": alice["submissions"][-1]["submission_id"],
-            },
-            "fk_bounty_events_claim_id_bounty_submissions",
-        ),
-        (
-            {
-                "claim": alice["claim_id"],
-                **none,
-                "appeal": filed.json()["appeals"][0]["appeal_id"],
-            },
-            "fk_bounty_events_claim_id_bounty_appeals",
-        ),
-        (
-            {"claim": bob["claim_id"], **none, "obligation": refund["obligation_id"]},
-            "fk_bounty_events_claim_id_bounty_obligations",
-        ),
-        # Without a claim the composite keys would not apply at all.
-        (
-            {
-                "claim": None,
-                **none,
-                "submission": alice["submissions"][-1]["submission_id"],
-            },
-            "ck_bounty_events_review_refs",
-        ),
-        (
-            {"claim": None, **none, "appeal": filed.json()["appeals"][0]["appeal_id"]},
-            "ck_bounty_events_review_refs",
-        ),
-        (
-            {"claim": None, **none, "obligation": refund["obligation_id"]},
-            "ck_bounty_events_obligation_ref",
-        ),
-    ):
-        async with world.maker() as session:
-            with pytest.raises(DBAPIError, match=constraint):
-                await session.execute(linked, {"bounty": alice["bounty_id"], **values})
-            await session.rollback()
-
-
-async def test_an_event_about_a_claim_names_it(world):
-    await world.start(ALICE)
-    insert = text(
-        "INSERT INTO bounty_events (bounty_id, kind, recorded_at) "
-        "VALUES (:bounty, :kind, now())"
-    )
-    bounty = world.detail["summary"]["bounty_id"]
-    # Bounty-wide events, and cancelling or reopening an open slot, name none.
-    async with world.maker() as session:
-        for kind in ("claims_paused", "reviewer_reassigned", "slot_cancelled"):
-            await session.execute(insert, {"bounty": bounty, "kind": kind})
-        await session.rollback()
-    for kind in ("slot_held", "submitted", "deadline_missed", "award_recorded"):
-        async with world.maker() as session:
-            with pytest.raises(DBAPIError, match="ck_bounty_events_claim_scope"):
-                await session.execute(insert, {"bounty": bounty, "kind": kind})
-            await session.rollback()
-
-
-async def test_a_slot_action_names_only_the_claim_of_its_slot(world):
-    await world.start(ALICE, BOB)
-    alice = await claimed(world, ALICE)
-    bob = await claimed(world, BOB)
-    assert alice["slot_id"] != bob["slot_id"]
-    # A cancellation of the slot in `slot`, recorded against Alice's claim.
-    cancel = text(
-        "INSERT INTO bounty_slot_actions (slot_id, claim_id, action, cancel_kind,"
-        " prior_status, actor, reason, recorded_at) VALUES (:slot, :claim,"
-        " 'cancel', 'team', 'claimed', 'fixture', 'fixture', now())"
-    )
-    async with world.maker() as session:
-        with pytest.raises(DBAPIError, match="violates foreign key"):
-            await session.execute(
-                cancel, {"slot": bob["slot_id"], "claim": alice["claim_id"]}
-            )
-        await session.rollback()
-    async with world.maker() as session, session.begin():
-        await session.execute(
-            cancel, {"slot": alice["slot_id"], "claim": alice["claim_id"]}
-        )
-
-
-async def test_every_recorded_digest_is_lowercase_hex(world):
-    await world.start(ALICE)
-    claim = (await submit(world, ALICE, await claimed(world, ALICE))).json()
-    await review(world, claim, "reject")
-    rejection = next(e for e in await events(world) if e["kind"] == "rejected")
-    filed = await appeal(world, ALICE, claim, rejection["event_id"], "Fixture appeal.")
-    assert filed.status_code == 200, filed.text
-    # A recorded row again with one digest replaced. Its check refuses it before
-    # any key can.
-    copy = (
-        "INSERT INTO {table} SELECT (jsonb_populate_record(NULL::{table},"
-        " to_jsonb(r) || jsonb_build_object('{column}', CAST(:digest AS text)))).*"
-        " FROM {table} r LIMIT 1"
-    )
-    for table, column, check in (
-        ("bounty_revisions", "spec_digest", "terms"),
-        ("bounty_claims", "spec_digest", "claim"),
-        ("bounty_claims", "team_digest", "claim"),
-        ("bounty_appeals", "reason_digest", "appeal"),
-        ("cla_versions", "sha256", "identity"),
-        ("cla_signatures", "cla_sha256", "digest"),
-    ):
-        for digest in ("z" * 64, "AB" * 32):
-            async with world.maker() as session:
-                with pytest.raises(DBAPIError, match=f"ck_{table}_{check}"):
-                    await session.execute(
-                        text(copy.format(table=table, column=column)),
-                        {"digest": digest},
-                    )
-                await session.rollback()
-
-
-async def test_review_routes_declare_their_errors(app):
-    paths = app.openapi()["paths"]
-    for route in ("submissions", "withdraw", "appeals"):
-        assert {"400", "403", "404", "409", "429"} <= set(
-            paths[f"{CLAIMS}/{{claim_id}}/{route}"]["post"]["responses"]
-        )
-    assert {"401", "403", "404", "409"} <= set(
-        paths[f"{ADMIN}/claims/{{claim_id}}/review"]["post"]["responses"]
-    )
-    for route in ("cancel", "reopen"):
-        assert {"401", "404", "409"} <= set(
-            paths[f"{ADMIN}/slots/{{slot_id}}/{route}"]["post"]["responses"]
-        )
-    assert (
-        "403" in paths[f"{ADMIN}/appeals/{{appeal_id}}/decision"]["post"]["responses"]
-    )

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from ditto.api_models.private_dataset import PrivateDatasetRequest
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.endpoints import validator as v
+from ditto.api_server.generator_rounds import round_bench_version
 from ditto.db.models import GeneratorRound, PrivateBenchmarkDataset, ValidatorTicket
 from ditto.db.queries.private_benchmark_datasets import (
     PrivateDatasetIdentity,
@@ -60,7 +61,6 @@ async def download_private_dataset(
             .where(
                 ValidatorTicket.agent_id == agent_id,
                 ValidatorTicket.validator_hotkey == payload.validator_hotkey,
-                ValidatorTicket.bench_version == 13,
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.deadline == payload.deadline,
                 ValidatorTicket.deadline > now,
@@ -79,7 +79,12 @@ async def download_private_dataset(
                     GeneratorRound.status == "running",
                 )
             )
-            if round_row is None or round_row.dataset_bytes is None:
+            if (
+                round_row is None
+                or round_row.dataset_bytes is None
+                # A round lease runs at its round's frozen bench version.
+                or ticket.bench_version != round_bench_version(round_row)
+            ):
                 raise HTTPException(409, "generator round dataset is unavailable")
             body = round_row.dataset_bytes
             return Response(
@@ -91,6 +96,9 @@ async def download_private_dataset(
                     "X-Dataset-SHA256": payload.dataset_sha256,
                 },
             )
+        if ticket.bench_version != 13:
+            # The private benchmark transport is V13-only.
+            raise HTTPException(409, "no matching live private dataset lease")
         row = await session.scalar(
             select(PrivateBenchmarkDataset)
             .where(

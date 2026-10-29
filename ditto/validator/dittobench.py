@@ -21,7 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -29,6 +29,12 @@ import httpx
 from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
+)
+from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_FEATURE_PREFIX,
+    GENERATOR_ROUND_BENCH_VERSIONS,
+    GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX,
+    MAX_ROUND_COLUMN_CASES,
 )
 from ditto.api_models.validator import (
     ArtifactResponse,
@@ -57,6 +63,7 @@ from ditto.validator.config import (
     run_budget_seconds,
 )
 from ditto.validator.errors import (
+    ConfirmationScorerError,
     DittobenchError,
     LeaseDeadlineError,
     SandboxOomError,
@@ -66,6 +73,9 @@ from ditto_screening_protocol.bench_v9 import (
     SUPPORTED_BENCH_VERSIONS as _SHARED_SUPPORTED_BENCH_VERSIONS,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
+from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+)
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -75,6 +85,65 @@ logger = logging.getLogger(__name__)
 # Dataset modes /v2/score accepts with private bytes: the Platform-private
 # benchmark artifact and a generator-competition round dataset.
 _PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
+
+_ROUND_MAX_CASES_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_max_cases(features: object) -> int | None:
+    """The round column size both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-max-cases-<n>`` (its pack
+    contract's ``challenge.MaxCases``); this validator's own job and result
+    models bound a column at ``MAX_ROUND_COLUMN_CASES``. ``None`` when the
+    scorer advertises no size, which Platform reads as the legacy column.
+    """
+    if not isinstance(features, list):
+        return None
+    sizes = [
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_MAX_CASES_FEATURE.fullmatch(feature))
+    ]
+    if not sizes:
+        return None
+    return min(max(sizes), MAX_ROUND_COLUMN_CASES)
+
+
+_ROUND_BENCH_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_BENCH_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_bench_versions(
+    features: object, observed_versions: tuple[int, ...]
+) -> tuple[int, ...] | None:
+    """The round bench versions both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-bench-<n>`` for each version its
+    ``generator-round-v1`` mode runs; this validator runs only its own round
+    contracts (``GENERATOR_ROUND_BENCH_VERSIONS``) that the scorer is also
+    verified for. ``None`` when the scorer advertises no version, which
+    Platform reads as the original v13-only round mode.
+    """
+    if not isinstance(features, list):
+        return None
+    advertised = {
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_BENCH_FEATURE.fullmatch(feature))
+    }
+    if not advertised:
+        return None
+    return tuple(
+        sorted(
+            advertised & set(GENERATOR_ROUND_BENCH_VERSIONS) & set(observed_versions)
+        )
+    )
+
 
 # Terminal job states reported by dittobench-api's store.
 _DONE = "done"
@@ -95,6 +164,13 @@ _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
         "longmem_run_response_too_large",
         "longmem_run_missing_final_text",
         "longmem_run_tool_endpoint",
+        # Executor-stage classes. These name a stage of the scorer's own
+        # pipeline rather than a harness boundary, so there is no HTTP exchange
+        # behind them and 0 is the only status they may carry. Imported rather
+        # than restated: this set is the admission gate, and a class the shared
+        # contract allows but this gate rejects is silently unreportable --
+        # which is the exact blindness the executor classes exist to remove.
+        *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
     }
 )
 _CONFIRMATION_HTTP_STATUS_FAILURES = frozenset(
@@ -132,28 +208,50 @@ _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
 }
 
 
-def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
+class ConfirmationFailureDiagnostic(NamedTuple):
+    """One accepted scorer class/status pair, ready for the signed hand-back."""
+
+    failure_class: str
+    failure_status: int
+
+    def suffix(self) -> str:
+        """The host-log form, kept so an operator on the box reads it unchanged."""
+        return (
+            f" [failure_class={self.failure_class} "
+            f"failure_status={self.failure_status}]"
+        )
+
+
+def _confirmation_failure_diagnostic(
+    response: httpx.Response,
+) -> ConfirmationFailureDiagnostic | None:
     """Return one bounded scorer diagnostic, or nothing for any drift.
 
     The confirmation response body deliberately remains stage-only. These
     purpose-specific headers cross only the protected local scorer boundary,
     and are accepted solely when their class/status pair matches a shape the
     Go scorer can emit from its reviewed allowlist.
+
+    Returned structurally rather than pre-formatted because the caller now owes
+    this pair to Platform as well as to the log line: formatting it into the
+    message first is what made the class unrecoverable from anywhere but the
+    host. The four shape checks below are the only admission gate, so whatever
+    survives them is exactly what may be signed.
     """
     failure_class = response.headers.get(_CONFIRMATION_FAILURE_CLASS_HEADER)
     raw_status = response.headers.get(_CONFIRMATION_FAILURE_STATUS_HEADER)
     if failure_class is None or raw_status is None:
-        return ""
+        return None
     if (
         not raw_status
         or len(raw_status) > 3
         or not raw_status.isascii()
         or not raw_status.isdecimal()
     ):
-        return ""
+        return None
     status = int(raw_status)
     if raw_status != str(status) or status > 599:
-        return ""
+        return None
     if failure_class in _CONFIRMATION_ZERO_STATUS_FAILURES:
         valid = status == 0
     elif failure_class in _CONFIRMATION_HTTP_STATUS_FAILURES:
@@ -165,8 +263,8 @@ def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
     else:
         valid = False
     if not valid:
-        return ""
-    return f" [failure_class={failure_class} failure_status={status}]"
+        return None
+    return ConfirmationFailureDiagnostic(failure_class, status)
 
 
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -752,9 +850,16 @@ class DittobenchClient:
                 await asyncio.wait({poll_task})
         if response.status_code != 200:
             diagnostic = _confirmation_failure_diagnostic(response)
-            raise DittobenchError(
+            message = (
                 "v9 confirmation execution rejected "
-                f"({response.status_code}): {response.text[:200]}{diagnostic}"
+                f"({response.status_code}): {response.text[:200]}"
+            )
+            if diagnostic is None:
+                raise DittobenchError(message)
+            raise ConfirmationScorerError(
+                f"{message}{diagnostic.suffix()}",
+                scorer_failure_class=diagnostic.failure_class,
+                scorer_failure_status=diagnostic.failure_status,
             )
         try:
             return V9ConfirmationScorerResult.model_validate(response.json())
@@ -1179,6 +1284,11 @@ class DittobenchClient:
             except ValueError:
                 pass
         try:
+            generator_rounds = (
+                13 in observed_versions
+                and isinstance(payload.get("features"), list)
+                and "generator-round-v1" in payload["features"]
+            )
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
                 deterministic_v13_datasets=(
@@ -1191,10 +1301,18 @@ class DittobenchClient:
                     and isinstance(payload.get("features"), list)
                     and "platform-private-v1" in payload["features"]
                 ),
-                generator_rounds=(
-                    13 in observed_versions
-                    and isinstance(payload.get("features"), list)
-                    and "generator-round-v1" in payload["features"]
+                generator_rounds=generator_rounds,
+                generator_round_max_cases=(
+                    scorer_generator_round_max_cases(payload.get("features"))
+                    if generator_rounds
+                    else None
+                ),
+                generator_round_bench_versions=(
+                    scorer_generator_round_bench_versions(
+                        payload.get("features"), observed_versions
+                    )
+                    if generator_rounds
+                    else None
                 ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
@@ -1406,10 +1524,12 @@ class DittobenchClient:
         inference_slot_id: str | None,
         inference_ticket_deadline: datetime | None,
         ticket_deadline: datetime,
+        bench_version: int = 13,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[str, list[dict[str, Any]]]:
-        """Run a generator-round dataset against one screened image.
+        """Run a generator-round dataset against one screened image at the
+        round's frozen ``bench_version`` (Platform's job carries it).
 
         Returns the scorer run id and the raw per-case results (case ids are
         ``column/case``; faults carry the ``generator_round_fault`` category).
@@ -1424,7 +1544,7 @@ class DittobenchClient:
             private_dataset_mode="generator-round-v1",
             private_dataset_bytes=dataset_bytes,
             run_size="full",
-            bench_version=13,
+            bench_version=bench_version,
             screened_image_url=screened_image_url,
             screened_image_sha256=screened_image_sha256,
             screened_image_size_bytes=screened_image_size_bytes,
@@ -1441,7 +1561,7 @@ class DittobenchClient:
         report = await self._poll_run(
             run_id,
             progress_callback=progress_callback,
-            expected_bench_version=13,
+            expected_bench_version=bench_version,
             ticket_deadline=ticket_deadline,
             raw=True,
         )
@@ -1574,9 +1694,16 @@ class DittobenchClient:
             )
         body["dataset_sha256"] = dataset_sha256
         if private_dataset_mode is not None or private_dataset_bytes is not None:
+            # The Platform-private artifact is a v13 contract; a generator round
+            # runs at any round contract (the pack grading policies) it froze.
+            allowed_versions = (
+                GENERATOR_ROUND_BENCH_VERSIONS
+                if private_dataset_mode == "generator-round-v1"
+                else (13,)
+            )
             if (
                 private_dataset_mode not in _PRIVATE_DATASET_MODES
-                or bench_version != 13
+                or bench_version not in allowed_versions
                 or not private_dataset_bytes
                 or len(private_dataset_bytes) > 32 << 20
             ):

@@ -58,11 +58,8 @@ ENDPOINT_MINER_ARTIFACT = "miner_me.my_artifact"
 ENDPOINT_MINER_MCP_ARTIFACT = "miner_mcp.get_my_submission_artifact"
 ENDPOINT_PUBLIC_ARTIFACT = "public.agent_artifact"
 ENDPOINT_VALIDATOR_ARTIFACT = "validator.agent_artifact"
-ENDPOINT_VALIDATOR_CODING_HARNESS = "validator.coding_harness_launch"
-ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS = (
-    "validator.coding_certification_harness_launch"
-)
 ENDPOINT_SCREENER_ARTIFACT = "screener.agent_artifact"
+ENDPOINT_SCREENER_REVIEW_LINEAGE = "screener.review_lineage"
 ENDPOINT_ADMIN_SCREENING_ARTIFACT = "admin.get_screening_artifact"
 ENDPOINT_ADMIN_SOURCE_FILES = "admin.list_screening_source_files"
 ENDPOINT_ADMIN_SOURCE_FILE = "admin.read_screening_source_file"
@@ -71,6 +68,7 @@ ENDPOINT_ADMIN_COPY_REVIEW_DIFF = "admin.get_copy_review_source_diff"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE = "admin.get_copy_review_source_diff_file"
 ENDPOINT_ADMIN_LINEAGE_DIFF = "admin.get_lineage_source_diff"
 ENDPOINT_ADMIN_LINEAGE_DIFF_FILE = "admin.get_lineage_source_diff_file"
+ENDPOINT_ADMIN_REVIEW_LINEAGE = "admin.get_screening_review_lineage"
 
 
 async def record_artifact_fetch(

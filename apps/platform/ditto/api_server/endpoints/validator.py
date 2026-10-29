@@ -187,6 +187,10 @@ from ditto.api_server.efficiency import (
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
 from ditto.api_server.fingerprint import reference_corpus_provenance
 from ditto.api_server.gate_evidence import build_gate_evidence, persisted_case_dump
+from ditto.api_server.generator_round_reservation import (
+    round_reservation_active,
+    validator_advertises_rounds,
+)
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
@@ -230,12 +234,17 @@ from ditto.api_server.v13_scorer_cohort import (
     pinned_validator_allowed,
     pinned_validator_may_submit,
 )
+from ditto.api_server.validator_request_outcomes import (
+    note_decline_reason,
+    track_request_outcomes,
+)
 from ditto.api_server.validator_slot_settings import (
     DEFAULT_SETTINGS as SLOT_SETTINGS_DEFAULT,
 )
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
+    reserved_round_slots,
     resolve_slot_settings,
     validator_issuance_paused,
 )
@@ -286,6 +295,7 @@ from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     heartbeat_supports_version,
     issue_rollout_ticket,
+    issue_rollout_topup_ticket,
     open_rollout,
     preserve_desired_authority,
     rollout_cohort_complete,
@@ -300,7 +310,6 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     fold_eligible_seeds_by_agent,
 )
-from ditto.db.queries.core_qualification import observe_core_qualification
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
 from ditto.db.queries.heartbeats import (
     HeartbeatProgressRegressionError,
@@ -487,13 +496,6 @@ TRANSFORM_AUDIT_ENFORCE = os.environ.get(
 # gate is a no-op until an operator sets ``DITTO_OUTLIER_ESCALATION_MODE`` to
 # ``observe`` (record would-be holds) or ``enforce`` (open them). The bench-
 # version floor keeps v8-v11 behaviour byte-identical.
-def _outlier_escalation_settings_from_env() -> OutlierEscalationSettings:
-    """Build the escalation policy from the environment, falling back to shipped
-    defaults for any variable that is unset or unparseable (fail-safe: a bad
-    value degrades to the conservative default rather than crashing scoring)."""
-    return load_outlier_escalation_settings(os.environ).settings
-
-
 # Loaded once per process at import, like the transform-audit toggle. The load
 # record keeps each field's source (env / default / default_invalid_env) so the
 # admin posture read can show a silently-rejected variable; scoring only ever
@@ -1394,6 +1396,64 @@ async def _held_lease_slots(
     )
 
 
+@dataclass(frozen=True)
+class _LiveSlotLeases:
+    """One validator's live leases, split by whether they are round work."""
+
+    slots: frozenset[str]
+    """Every slot holding a live lease, whatever its purpose."""
+
+    non_round_slots: frozenset[str]
+    """Slots holding a live lease that is not generator-round work: what the
+    round reservation charges against ``allowed - reserved``."""
+
+
+async def _live_slot_leases(
+    session: AsyncSession, *, validator_hotkey: str, now: datetime
+) -> _LiveSlotLeases:
+    """Live leases by slot and purpose, read like :func:`_held_lease_slots`."""
+    rows = (
+        await session.execute(
+            select(ValidatorTicket.slot_id, ValidatorTicket.purpose).where(
+                ValidatorTicket.validator_hotkey == validator_hotkey,
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+            )
+        )
+    ).all()
+    return _LiveSlotLeases(
+        slots=frozenset(slot for slot, _ in rows),
+        non_round_slots=frozenset(
+            slot for slot, purpose in rows if purpose != TicketPurpose.GENERATOR_ROUND
+        ),
+    )
+
+
+def _round_reservation_declines(
+    *,
+    slot_id: str,
+    slot_running_benchmark: bool,
+    allowed_slots: int,
+    reserved_slots: int,
+    non_round_slots: Collection[str],
+) -> bool:
+    """Whether a NEW non-round lease on ``slot_id`` would eat a round slot.
+
+    Non-round work (canonical, continual retest, canary) may hold at most
+    ``allowed - reserved`` leases at once; the remaining ``reserved`` slots are
+    kept for generator-round panel runs so continual retests and the canonical
+    queue can never starve a round. ``slot_id`` is excluded from the count and a
+    slot already running a benchmark is exempt, for the same resume reasons as
+    :func:`_slot_cap_declines`.
+    """
+    if slot_running_benchmark or reserved_slots <= 0:
+        return False
+    return (
+        len({held for held in non_round_slots if held != slot_id})
+        >= allowed_slots - reserved_slots
+    )
+
+
 def _inference_stage_slot_cap(config: InferenceProxyConfig) -> int:
     """Maximum concurrent post-v7 leases one validator may seed safely.
 
@@ -1491,6 +1551,7 @@ def _slot_cap_decline_reason(
     advertised_slots: int,
     sample: HostResourceSample | None = None,
     disk_percent: int | None = None,
+    validator_hotkey: str | None = None,
 ) -> DispatchDeclineReason:
     """Name the lever behind a :func:`_slot_cap_declines` refusal.
 
@@ -1518,12 +1579,14 @@ def _slot_cap_decline_reason(
         settings,
         advertised_slots=advertised_slots,
         sample=HostResourceSample(),
+        validator_hotkey=validator_hotkey,
     )
     if (
         allowed_slot_count(
             settings,
             advertised_slots=advertised_slots,
             sample=observed,
+            validator_hotkey=validator_hotkey,
         )
         < unrestricted
     ):
@@ -1546,6 +1609,7 @@ def _record_dispatch_decline(
     operator lands once the metric has told them *which* gate to go read about.
     """
     VALIDATOR_DISPATCH_DECLINED.labels(reason=reason).inc()
+    note_decline_reason(reason)
     logger.info(
         "declined job reason=%s validator=%s slot=%s",
         reason,
@@ -1561,6 +1625,8 @@ async def _idle_retest_slot(
     slot_settings: ValidatorSlotSettings,
     validator_hotkey: str,
     now: datetime,
+    lane: Literal["round", "non_round"],
+    round_reservation_active: bool,
     requested_slot_id: str | None = None,
 ) -> str | None:
     """Pick a slot a continual retest may occupy, or None when there is none.
@@ -1591,21 +1657,46 @@ async def _idle_retest_slot(
     Returns the lowest free healthy slot for determinism -- the caller's
     fairness ordering is over cohort members, not slots, so there is nothing to
     gain by spreading and a stable choice is easier to reason about.
+
+    ``lane`` decides how the generator-round reservation applies. A
+    ``non_round`` lease (continual retest, confirmation) is refused once this
+    validator's live non-round leases reach ``allowed - reserved``; a ``round``
+    lease may take any free slot below ``allowed``, the reserved ones included.
+    ``round_reservation_active`` is the competition gate: with rounds disabled
+    nothing is reserved. A paused validator receives no new lease on either
+    lane; callers resume an existing lease without coming through here.
     """
     if heartbeat is None:
+        return None
+    if validator_issuance_paused(slot_settings, validator_hotkey=validator_hotkey):
         return None
     try:
         capacity = BenchmarkCapacity.model_validate(heartbeat.benchmark_capacity)
     except ValidationError:
         capacity = None
-    held = await _held_lease_slots(session, validator_hotkey=validator_hotkey, now=now)
+    leases = await _live_slot_leases(
+        session, validator_hotkey=validator_hotkey, now=now
+    )
+    held = leases.slots
     allowed = allowed_slot_count(
         slot_settings,
         advertised_slots=(capacity.configured_slots if capacity is not None else 1),
         sample=_heartbeat_resource_sample(heartbeat),
+        validator_hotkey=validator_hotkey,
     )
     if len(held) >= allowed:
         return None
+    if lane == "non_round":
+        reserved = reserved_round_slots(
+            slot_settings,
+            validator_hotkey=validator_hotkey,
+            allowed_slots=allowed,
+            rounds_active=(
+                round_reservation_active and validator_advertises_rounds(heartbeat)
+            ),
+        )
+        if len(leases.non_round_slots) >= allowed - reserved:
+            return None
     offered = capacity.free_healthy_slots if capacity is not None else ("slot-0",)
     free = [slot for slot in offered if slot not in held]
     if not free:
@@ -1728,6 +1819,9 @@ async def _issue_source_backfill_ticket(
     # Defaults to the conservative policy so an omitted cap narrows the
     # backfill budget rather than widening it.
     slot_settings: ValidatorSlotSettings = SLOT_SETTINGS_DEFAULT,
+    # Whether each validator's generator-round slots are held back now. Those
+    # slots never take canonical work, so they are not desired-era capacity.
+    round_reservation_active: bool = False,
     carryover_settings: PrevGenCarryoverSettings = PREV_GEN_CARRYOVER_DEFAULTS,
     owner_concurrent_submission_limit: int = OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
     similarity_policy: SimilarityBudgetPolicy | None = None,
@@ -1892,14 +1986,23 @@ async def _issue_source_backfill_ticket(
             # can be raised without a release; counting that headroom here would
             # widen the source-backfill budget to capacity that never receives a
             # ticket, and drown the desired version this reservation protects.
-            slot_count = (
+            candidate_allowed = (
                 allowed_slot_count(
                     slot_settings,
                     advertised_slots=len(capacity.healthy_slots),
                     sample=_heartbeat_resource_sample(candidate),
+                    validator_hotkey=candidate.validator_hotkey,
                 )
                 if capacity.admission == "accepting"
                 else 0
+            )
+            slot_count = candidate_allowed - reserved_round_slots(
+                slot_settings,
+                validator_hotkey=candidate.validator_hotkey,
+                allowed_slots=candidate_allowed,
+                rounds_active=(
+                    round_reservation_active and validator_advertises_rounds(candidate)
+                ),
             )
         else:
             slot_count = 1
@@ -3473,6 +3576,7 @@ async def _bind_unverified_v13_dataset(
         503: {"description": "Chain unavailable for the permit check."},
     },
 )
+@track_request_outcomes("job", unauthenticated=(ValidatorAuthError,))
 async def request_job(
     payload: JobRequest,
     request: Request,
@@ -3669,6 +3773,9 @@ async def request_job(
             and heartbeat_supports_version(heartbeat, now=now, version=target_version)
         )
         slot_id = payload.slot_id or "slot-0"
+        # Cached for a short TTL on the resolver's own session; one indexed
+        # read on this session only in an app built without lifespan.
+        rounds_reserved_now = await round_reservation_active(request.app.state, session)
         issuance_paused = validator_issuance_paused(
             slot_settings, validator_hotkey=payload.validator_hotkey
         )
@@ -3742,16 +3849,18 @@ async def request_job(
                 slot_settings,
                 advertised_slots=capacity.configured_slots,
                 sample=resource_sample,
+                validator_hotkey=payload.validator_hotkey,
+            )
+            live_leases = await _live_slot_leases(
+                session,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
             )
             if _slot_cap_declines(
                 slot_id=slot_id,
                 slot_running_benchmark=slot_running_benchmark,
                 allowed_slots=allowed_slots,
-                held_slots=await _held_lease_slots(
-                    session,
-                    validator_hotkey=payload.validator_hotkey,
-                    now=now,
-                ),
+                held_slots=live_leases.slots,
             ):
                 # Same disk sample the decision used, so the label can never
                 # describe a different heartbeat than the refusal did.
@@ -3761,7 +3870,33 @@ async def request_job(
                         settings=slot_settings,
                         advertised_slots=capacity.configured_slots,
                         sample=resource_sample,
+                        validator_hotkey=payload.validator_hotkey,
                     ),
+                    validator_hotkey=payload.validator_hotkey,
+                    slot_id=slot_id,
+                )
+                return Response(status_code=204)
+            # Generator-round reservation: hold ``reserved`` of this
+            # validator's allowed slots for round panel runs, so canonical work
+            # and continual retests can never starve a round. Every lane below
+            # issues non-round work, so the gate sits here, once, ahead of all
+            # of them. Nothing is reserved while rounds are disabled.
+            if _round_reservation_declines(
+                slot_id=slot_id,
+                slot_running_benchmark=slot_running_benchmark,
+                allowed_slots=allowed_slots,
+                reserved_slots=reserved_round_slots(
+                    slot_settings,
+                    validator_hotkey=payload.validator_hotkey,
+                    allowed_slots=allowed_slots,
+                    rounds_active=(
+                        rounds_reserved_now and validator_advertises_rounds(heartbeat)
+                    ),
+                ),
+                non_round_slots=live_leases.non_round_slots,
+            ):
+                _record_dispatch_decline(
+                    "round_reservation",
                     validator_hotkey=payload.validator_hotkey,
                     slot_id=slot_id,
                 )
@@ -4084,6 +4219,7 @@ async def request_job(
                     slot_id=slot_id,
                     efficiency_config=efficiency_config,
                     slot_settings=slot_settings,
+                    round_reservation_active=rounds_reserved_now,
                     resume_only=True,
                     similarity_policy=policy_from_settings(
                         queue_policy.similarity_budget
@@ -4140,9 +4276,23 @@ async def request_job(
                         )
                     )
                 )
+                if not gated:
+                    # The activated era's frozen tail, if any member was left
+                    # below quorum when the rollout closed. Bounded to that
+                    # tail's missing quorum slots, and inert (no lock) once
+                    # every member has settled.
+                    ticket = await issue_rollout_topup_ticket(
+                        session,
+                        active_version=canonical_version,
+                        validator_hotkey=payload.validator_hotkey,
+                        now=now,
+                        ttl=ticket_ttl,
+                        validator_running_benchmark=slot_running_benchmark,
+                        slot_id=slot_id,
+                    )
                 ticket = (
-                    None
-                    if gated
+                    ticket
+                    if gated or ticket is not None
                     else await issue_ticket(
                         session,
                         validator_hotkey=payload.validator_hotkey,
@@ -4205,6 +4355,7 @@ async def request_job(
                     slot_id=slot_id,
                     efficiency_config=efficiency_config,
                     slot_settings=slot_settings,
+                    round_reservation_active=rounds_reserved_now,
                     carryover_settings=queue_policy.prev_gen_carryover,
                     owner_concurrent_submission_limit=(
                         queue_policy.owner_concurrent_submission_limit
@@ -5416,6 +5567,7 @@ async def _canonical_tail_is_draining(
         503: {"description": "Chain unavailable for the permit / tempo check."},
     },
 )
+@track_request_outcomes("top5_confirmation", unauthenticated=(ValidatorAuthError,))
 async def request_top5_confirmation_job(
     payload: Top5ConfirmationJobRequest,
     request: Request,
@@ -5450,6 +5602,7 @@ async def request_top5_confirmation_job(
     config = request.app.state.config
     if config.top5_backoff_base <= 0:
         if payload.slot_id is not None:
+            note_decline_reason("lane_disabled")
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
         raise HTTPException(
             status_code=409, detail="top-5 shared-seed rescore lane is disabled"
@@ -5561,6 +5714,7 @@ async def request_top5_confirmation_job(
                     payload.validator_hotkey,
                     payload.member_agent_id,
                 )
+                note_decline_reason("validator_paused")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             if not auto_routed:
                 # Legacy champion/member claims are not a slot poll. Returning
@@ -5620,6 +5774,7 @@ async def request_top5_confirmation_job(
                 continual_settings.rollout_standdown,
             )
             if auto_routed and live_retest is None:
+                note_decline_reason("rollout_standdown")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(status_code=409, detail=standdown)
         v7_calibration = None
@@ -5709,6 +5864,7 @@ async def request_top5_confirmation_job(
                         request_id=payload.nonce,
                         compensate=False,
                     )
+                note_decline_reason("member_left_cohort")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -5761,6 +5917,7 @@ async def request_top5_confirmation_job(
                     request_id=payload.nonce,
                     compensate=False,
                 )
+                note_decline_reason("member_left_cohort")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -5947,6 +6104,7 @@ async def request_top5_confirmation_job(
                     status_code=409,
                     detail=legacy_decline or "the requested retest is not claimable",
                 )
+            note_decline_reason("no_candidate")
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
         confirmation_datasets: list[ConfirmationDatasetPin] = []
@@ -6025,11 +6183,16 @@ async def request_top5_confirmation_job(
                 slot_settings=slot_settings,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
+                lane="non_round",
+                round_reservation_active=await round_reservation_active(
+                    request.app.state, session
+                ),
                 requested_slot_id=payload.slot_id,
             )
         )
         if retest_slot is None:
             if auto_routed:
+                note_decline_reason("slot_ceiling")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -6052,6 +6215,7 @@ async def request_top5_confirmation_job(
         )
         if ticket is None:
             if auto_routed:
+                note_decline_reason("no_ticket")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -6764,14 +6928,32 @@ async def agent_artifact(
         agent = await get_agent_by_id(session, agent_id=agent_id)
         if agent is None:
             raise AgentNotFoundError(f"no agent with id={agent_id}")
-        ticket = await session.scalar(
-            select(ValidatorTicket).where(
-                ValidatorTicket.agent_id == agent_id,
-                ValidatorTicket.validator_hotkey == x_validator_hotkey,
-                ValidatorTicket.status == TicketStatus.ISSUED,
-                ValidatorTicket.deadline > now,
+        live = (
+            await session.scalars(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.agent_id == agent_id,
+                    ValidatorTicket.validator_hotkey == x_validator_hotkey,
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                    ValidatorTicket.deadline > now,
+                )
+                .limit(2)
             )
-        )
+        ).all()
+        if len(live) > 1:
+            # Two live leases at different bench versions (identity is
+            # (agent, version, validator)): this request names only the agent,
+            # so either answer would mislabel the other run. Issuers refuse to
+            # create this state; refuse to guess if it exists anyway.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "validator holds more than one live lease on this agent "
+                    f"(bench versions {sorted(t.bench_version for t in live)}); "
+                    "refusing an ambiguous artifact"
+                ),
+            )
+        ticket = live[0] if live else None
         if ticket is None:
             raise HTTPException(
                 status_code=409,
@@ -7870,24 +8052,6 @@ async def submit_score(
         # normal issuance lock, and admin queue actions activate it directly, so
         # removing this eager handoff delays nothing and leaves one lock owner.
         result_status = agent.status
-
-    # Shadow core qualification is deliberately post-commit and fail-open.
-    # The ordinary score and consumed ticket above remain canonical even if the
-    # policy is absent, the observer schema is mid-rollout, or the diagnostic
-    # write fails. This ledger is not read by admission, rank, or weights.
-    try:
-        async with session.begin():
-            await observe_core_qualification(
-                session,
-                agent_id=agent_id,
-                bench_version=report_version,
-                now=audit_now,
-            )
-    except Exception:
-        logger.exception(
-            "shadow core qualification observation failed for agent %s",
-            agent_id,
-        )
 
     # LongMem's expensive dimensions live on a separate bounded ledger. Once the
     # canonical score transaction commits, persist its physical lower-median

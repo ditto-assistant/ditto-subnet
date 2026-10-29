@@ -224,6 +224,22 @@ class ScorerBenchmarkCapability(BaseModel):
     # The scorer accepts ``generator-round-v1`` round datasets. Absent unless
     # true, so validators without it sign exactly the bytes they always did.
     generator_rounds: bool = Field(default=False, exclude_if=lambda value: not value)
+    # The largest round column (cases per pack) the scorer runs, read from its
+    # ``generator-round-max-cases-<n>`` feature and capped at what this
+    # validator accepts. Absent unless advertised, so validators without it sign
+    # exactly the bytes they always did; Platform then assumes the legacy column
+    # size and leases them no larger round.
+    generator_round_max_cases: int | None = Field(
+        default=None, ge=1, le=1000, exclude_if=lambda value: value is None
+    )
+    # The bench versions the scorer runs a generator round at, read from its
+    # ``generator-round-bench-<n>`` features and capped at the versions this
+    # validator runs. Absent unless advertised, so validators without it sign
+    # exactly the bytes they always did; Platform then assumes the original
+    # v13-only round mode and leases them no round at another version.
+    generator_round_bench_versions: SupportedBenchVersions | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     # Additive and optional so a validator that predates heartbeat protocol v15
     # produces the exact same signing bytes it always did. Absent means "this
     # validator cannot report probe evidence", never "the probe succeeded".
@@ -232,6 +248,14 @@ class ScorerBenchmarkCapability(BaseModel):
     @model_validator(mode="after")
     def support_matches_verified_identity(self) -> ScorerBenchmarkCapability:
         versions = self.supported_bench_versions
+        if self.generator_round_bench_versions is not None and (
+            not self.generator_rounds
+            or not set(self.generator_round_bench_versions) <= set(versions)
+        ):
+            raise ValueError(
+                "generator round bench versions require the round mode and "
+                "verified support for each version"
+            )
         if self.scored_runtime_env is not None and (
             self.status != "fresh_verified"
             or 13 not in versions
@@ -319,6 +343,9 @@ class ValidatorCapabilities(BaseModel):
     sandbox_memory_limit: bool = Field(
         default=False, exclude_if=lambda value: not value
     )
+    # Publishes generator-round seed commitments Platform elects it for
+    # (``Commitments.set_commitment`` from its own Pylon identity).
+    round_commitments: bool = Field(default=False, exclude_if=lambda value: not value)
     executor_isolation: ExecutorIsolation
     scorer_benchmarks: ScorerBenchmarkCapability | None = Field(
         default=None, exclude_if=lambda value: value is None

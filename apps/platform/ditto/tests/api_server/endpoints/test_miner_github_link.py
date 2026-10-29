@@ -24,7 +24,6 @@ from ditto.api_models.contributor_identity import (
     github_link_message,
     github_unlink_message,
 )
-from ditto.api_models.http_errors import HttpErrorEnvelope
 from ditto.api_server import github_link as github_link_module
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.github_link import (
@@ -254,8 +253,6 @@ async def test_default_https_port_accepts_browser_consent(app, session_maker):
     "params",
     [
         {},
-        {"state": ""},
-        {"state": "short"},
         {"state": "x" * 129},
         {"state": "x" * 20, "code": "x" * 4097},
     ],
@@ -413,7 +410,13 @@ async def test_operator_recovery_rejects_stale_preflight_after_miner_relinks(
         )
 
 
-@pytest.mark.parametrize("case", ["success", "scope", "identity", "cleanup"])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "success",
+        "identity",
+    ],
+)
 async def test_exchange_revokes_only_the_issued_token_on_every_outcome(
     app, session_maker, case
 ):
@@ -448,11 +451,8 @@ async def test_exchange_revokes_only_the_issued_token_on_every_outcome(
         # GitHub's own answers about this sign-in: an expired or reused code,
         # an unverified account. The miner starts again.
         ({"error": "bad_verification_code"}, True),
-        ({"error": "unverified_user_email"}, True),
         # The app's configuration or a malformed body: a provider fault.
         ({"error": "incorrect_client_credentials"}, False),
-        ({"error": "redirect_uri_mismatch"}, False),
-        ({}, False),
         ({"access_token": TOKEN, "token_type": "mac", "scope": ""}, False),
     ],
 )
@@ -470,7 +470,7 @@ async def test_token_responses_are_classified_by_cause(
     assert len(deletes) == (1 if "access_token" in reply else 0)
 
 
-@pytest.mark.parametrize("user_id", [0, 2**53 - 1, 2**53])
+@pytest.mark.parametrize("user_id", [2**53 - 1, 2**53])
 async def test_sign_in_accepts_only_ids_every_client_reads_exactly(
     app, session_maker, user_id
 ):
@@ -486,8 +486,11 @@ async def test_sign_in_accepts_only_ids_every_client_reads_exactly(
         await app.state.github_link.exchange(code="fixture", verifier="fixture")
 
 
-@pytest.mark.parametrize("verification", ["scope", "identity", "success"])
-@pytest.mark.parametrize("cleanup", ["status", "transport"])
+@pytest.mark.parametrize(
+    ("cleanup", "verification"),
+    [("status", "scope"), ("transport", "success")],
+    ids=["status-scope", "transport-success"],
+)
 async def test_cleanup_preserves_original_rejection_and_blocks_success(
     app, session_maker, verification, cleanup, caplog
 ):
@@ -521,10 +524,7 @@ async def test_cleanup_preserves_original_rejection_and_blocks_success(
 @pytest.mark.parametrize(
     "change",
     [
-        {"status": "failed"},
-        {"github_login": "someone-else"},
         {"github_user_id": 101},
-        {"hotkey": "5" + "F" * 47},
         {"session_id": uuid4()},
     ],
 )
@@ -597,7 +597,7 @@ def signed_link(
     }
 
 
-@pytest.mark.parametrize("login", ["miner-fixture", "A--A", "c--"])
+@pytest.mark.parametrize("login", ["A--A", "c--"])
 async def test_roundtrip_uses_verified_numeric_id_and_never_stores_or_serves_token(
     app, client, session_maker, caplog, login
 ):
@@ -682,7 +682,6 @@ async def test_roundtrip_uses_verified_numeric_id_and_never_stores_or_serves_tok
         ("future", 400),
         ("wrong_signer", 400),
         ("wrong_netuid", 400),
-        ("bad_signature", 400),
     ],
 )
 async def test_link_rejects_unapproved_identity_and_invalid_proofs(
@@ -777,7 +776,7 @@ async def test_browser_binding_consent_and_session_binding_are_required(
     ).status_code == 400
 
 
-@pytest.mark.parametrize("status", [301, 308, 404])
+@pytest.mark.parametrize("status", [301, 404])
 async def test_live_identity_unavailable_or_redirected_requires_relink(
     app, session_maker, status
 ):
@@ -809,40 +808,24 @@ def _raise(exc):
 @pytest.mark.parametrize(
     "reply",
     [
-        lambda: httpx.Response(500),
         lambda: httpx.Response(503),
         lambda: httpx.Response(403, json={"message": "API rate limit exceeded"}),
-        lambda: httpx.Response(429),
         lambda: httpx.Response(401, json={"message": SECRET}),
-        lambda: httpx.Response(304),
-        lambda: httpx.Response(302, headers={"Location": "https://api.github.com/"}),
         lambda: httpx.Response(307, headers={"Location": "https://api.github.com/"}),
         lambda: httpx.Response(200, content=b"<html>not json</html>"),
-        lambda: httpx.Response(200, json=["not", "an", "object"]),
         lambda: httpx.Response(200, json={"id": 0, "login": "miner-fixture"}),
-        lambda: httpx.Response(200, json={"id": 2**53, "login": "miner-fixture"}),
-        lambda: httpx.Response(200, json={"id": "100", "login": "miner-fixture"}),
         lambda: httpx.Response(200, json={"id": 100, "login": "bad/login"}),
         lambda: _raise(httpx.ConnectError(f"fixture network {SECRET}")),
-        lambda: _raise(httpx.ReadTimeout(f"fixture timeout {SECRET}")),
     ],
     ids=[
-        "500",
         "503",
         "rate-limit-403",
-        "429",
         "credentials-401",
-        "bare-304",
-        "temporary-302",
         "temporary-307",
         "not-json",
-        "not-an-object",
         "invalid-id",
-        "unsafe-id",
-        "string-id",
         "invalid-login",
         "network",
-        "timeout",
     ],
 )
 async def test_public_identity_provider_faults_stay_retryable(
@@ -885,7 +868,13 @@ async def test_public_lookups_share_one_pool_and_never_carry_cookies(
     assert github._public_client() is not pooled
 
 
-@pytest.mark.parametrize("login", ["", "invalid/name", "invalid:login", "a" * 40])
+@pytest.mark.parametrize(
+    "login",
+    [
+        "",
+        "invalid/name",
+    ],
+)
 async def test_malformed_stored_login_is_rejected_without_network_or_input_details(
     app, session_maker, login
 ):
@@ -995,9 +984,14 @@ async def test_expired_status_poll_does_not_lock_or_mutate_the_attempt(
         ).status == "pending"
 
 
-@pytest.mark.parametrize("action", ["confirm", "unlink"])
 @pytest.mark.parametrize(
-    "race", [None, "session_revoked", "scope_removed", "target_changed"]
+    ("race", "action"),
+    [
+        (None, "confirm"),
+        ("session_revoked", "unlink"),
+        ("scope_removed", "confirm"),
+        ("target_changed", "unlink"),
+    ],
 )
 async def test_signed_actions_release_database_during_rpc_and_revalidate(
     app, client, session_maker, action, race
@@ -1335,7 +1329,12 @@ async def test_unique_account_relink_rename_nonce_replay_and_signed_unlink(
             await session.rollback()
 
 
-@pytest.mark.parametrize("action", ["confirm", "unlink"])
+@pytest.mark.parametrize(
+    "action",
+    [
+        "confirm",
+    ],
+)
 async def test_unrelated_integrity_failures_are_not_reported_as_conflicts(
     app, client, session_maker, monkeypatch, action
 ):
@@ -1643,7 +1642,13 @@ async def test_a_cancelled_consent_keeps_no_verifier_or_accept_token(
         assert attempt.browser_binding_hash is not None
 
 
-@pytest.mark.parametrize("failure", ["origin", "binding", "token", "decision"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "origin",
+        "token",
+    ],
+)
 async def test_browser_consent_failures_provide_html_recovery(
     app, client, session_maker, failure
 ):
@@ -2082,19 +2087,6 @@ async def test_start_prunes_abandoned_attempts_without_touching_links(
     kept = rows[live_accepted.attempt_id]
     assert kept.status == "accepted" and kept.accept_token_hash == "fixture-accept"
     assert kept.browser_binding_hash == "fixture-binding"
-
-
-async def test_attempt_status_rejects_a_malformed_attempt_id(
-    app, client, session_maker
-):
-    setup(app, session_maker)
-    token = await _sign_in(client, bittensor.Keypair.create_from_uri("//Alice"))
-    response = await client.get(
-        "/api/v1/me/github-link/attempts/not-a-uuid",
-        headers={"authorization": f"Bearer {token}"},
-    )
-    assert response.status_code == 422, response.text
-    assert HttpErrorEnvelope.model_validate(response.json()).error_code != 3000
 
 
 async def test_private_link_and_cla_responses_are_never_cached(

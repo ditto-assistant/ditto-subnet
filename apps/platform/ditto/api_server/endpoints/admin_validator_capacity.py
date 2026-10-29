@@ -104,6 +104,7 @@ def _entry(
             if validator.bench_serviceability == "serving"
             else 0
         ),
+        reserved_round_slots=validator.reserved_round_slots,
         claimed_slots=len(claimed),
         assignments=[
             _assignment(progress, seen_at=validator.seen_at, now=now)

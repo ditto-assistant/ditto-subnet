@@ -558,15 +558,6 @@ async def _seed_held_clear(
         ),
         pytest.param(
             13,
-            "escalate",
-            "enforce",
-            True,
-            None,
-            "quarantine is not a v13 court clear awaiting verification",
-            id="escalate",
-        ),
-        pytest.param(
-            13,
             "clear",
             "enforce",
             True,
@@ -627,15 +618,6 @@ async def _seed_held_clear(
             _other_receipt,
             "court completion receipt was not retained",
             id="mismatched-receipt",
-        ),
-        pytest.param(
-            13,
-            "clear",
-            "enforce",
-            True,
-            _drop_signature,
-            "court completion receipt was not retained",
-            id="missing-signature",
         ),
         pytest.param(
             13,

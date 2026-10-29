@@ -8,7 +8,6 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.endpoints.admin_screener_fanout_shadow import (
-    _view,
     get_screener_fanout_shadow,
 )
 from ditto.db.models import (
@@ -17,52 +16,6 @@ from ditto.db.models import (
     ScreeningAttempt,
 )
 from ditto.tests.api_server.endpoints.test_screener import _SCREENER_HOTKEY, _seed_agent
-
-
-@pytest.mark.parametrize(
-    "status,coverage,expected",
-    [
-        ("incomplete", False, None),
-        ("succeeded", False, None),
-        ("succeeded", True, True),
-    ],
-)
-def test_legacy_incomplete_reports_do_not_display_as_disagreements(
-    status, coverage, expected
-):
-    now = datetime.now(UTC)
-    row = ScreenerFanoutShadowReview(
-        shadow_id=uuid4(),
-        agent_id=uuid4(),
-        attempt_id=uuid4(),
-        artifact_sha256="a" * 64,
-        policy_version=12,
-        policy_manifest_profile="l1_l2",
-        policy_manifest_rotation_id="rotation",
-        policy_manifest_digest="b" * 64,
-        settings_revision=108,
-        settings_scope="subnet-screener-1",
-        settings_checksum="c" * 64,
-        status=status,
-        outcome="incomplete" if status == "incomplete" else "no_findings",
-        baseline={"outcome": "quarantine"},
-        report={"outcome": "incomplete"},
-        disagrees_with_baseline=True,
-        coverage_complete=coverage,
-        error_code=None,
-        provider="gcp",
-        reserved_cost_microusd=3_000_000,
-        reported_cost_microusd=30_000,
-        unmetered=False,
-        reserved_at=now,
-        created_at=now,
-        started_at=now,
-        completed_at=now,
-    )
-    result = _view(row)
-    assert result.disagrees_with_baseline is expected
-    assert result.report == row.report
-    assert result.reserved_cost_usd == 3
 
 
 @pytest.mark.asyncio

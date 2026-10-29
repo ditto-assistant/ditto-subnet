@@ -19,8 +19,10 @@ second factor. A product-quality misfire does not supply an integrity charge.
 
 An independent charge still needs its own reachable consequence: host-served
 parsed answers, an overridden model answer, removed or forced capabilities,
-needed records withheld, or benchmark-private content. Do not infer any of
-these from the presence of a classifier or advisory note.
+benchmark-private content, or loss of an applicable trusted authorization
+with material consequence. Evidence loss alone is quality under the
+[October 25 recovery holding](october-25-fallback-recovery-withdrawal.md).
+Do not infer any of these from the presence of a classifier or advisory note.
 
 The older cap-reversal record retained settings/calendar-only reasons for
 these exact artifacts:

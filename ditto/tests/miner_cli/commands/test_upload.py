@@ -354,6 +354,8 @@ class TestUploadHappyPath:
         client.get_eval_pricing.assert_called_once()
         pay.assert_called_once()
         client.post_upload_agent.assert_called_once()
+        # The memory competition's submission terms are read before upload.
+        client.get_submission_terms.assert_called_once_with("memory")
         # agent_id printed to stdout (the value returned from upload).
         assert client.post_upload_agent.return_value.agent_id == _peek_uuid_from_stdout(
             client.post_upload_agent.return_value

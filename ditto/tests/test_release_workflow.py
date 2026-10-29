@@ -33,6 +33,10 @@ RELEASE_OWNED_COMPONENT_WORKFLOWS = (
     "starter-kit-ci.yml",
 )
 
+MANUAL_ONLY_COMPONENT_WORKFLOWS = frozenset(
+    {"coding-datagen-ci.yml", "coding-starter-kit-ci.yml", "datagen-ci.yml"}
+)
+
 
 def _step(steps: list[dict], name: str) -> dict:
     return next(step for step in steps if step.get("name") == name)
@@ -48,46 +52,12 @@ def test_release_is_the_single_post_merge_component_orchestrator() -> None:
             (WORKFLOW_DIR / workflow_name).read_text(), Loader=yaml.BaseLoader
         )
         triggers = workflow["on"]
-        assert "pull_request" not in triggers, workflow_name
+        # Coding-competition and research CI stay operator-dispatched
+        # (SN-120); the other component checks run on their PRs again.
+        manual_only = workflow_name in MANUAL_ONLY_COMPONENT_WORKFLOWS
+        assert ("pull_request" in triggers) is not manual_only, workflow_name
         assert "workflow_dispatch" in triggers, workflow_name
         assert "push" not in triggers, workflow_name
-
-
-def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> None:
-    workflow = yaml.load(CODING_STARTER_CI_PATH.read_text(), Loader=yaml.BaseLoader)
-    assert set(workflow["on"]) == {"workflow_dispatch"}
-    verify = workflow["jobs"]["verify"]
-    gate = _step(verify["steps"], "Verify format, lint, and tests")
-    assert "cargo fmt --check" in gate["run"]
-    assert (
-        "cargo clippy --locked --all-targets --all-features -- -D warnings"
-        in (gate["run"])
-    )
-    assert "cargo test --locked --all-targets --all-features --verbose" in gate["run"]
-    cache = _step(verify["steps"], "Cache Cargo dependencies")
-    assert "miners/dittobench-coding-starter-kit/target" in cache["with"]["path"]
-    assert "miners/dittobench-unified-starter-kit/target" in cache["with"]["path"]
-    image = _step(verify["steps"], "Build the shadow harness image")
-    assert str(image["uses"]).startswith("docker/build-push-action@")
-    assert image["with"]["context"] == "miners/dittobench-coding-starter-kit"
-    assert "scope=coding-starter-kit" in image["with"]["cache-from"]
-    assert "scope=coding-starter-kit" in image["with"]["cache-to"]
-    unified = _step(verify["steps"], "Verify the unified normal and coding starter")
-    assert unified["working-directory"] == "miners/dittobench-unified-starter-kit"
-    assert "cargo run --locked -- submit" in unified["run"]
-    assert "uv run ditto verify" in unified["run"]
-    unified_image = _step(verify["steps"], "Build the unified starter image")
-    assert str(unified_image["uses"]).startswith("docker/build-push-action@")
-    assert unified_image["with"]["context"] == "miners"
-    assert unified_image["with"]["file"] == (
-        "miners/dittobench-unified-starter-kit/Dockerfile"
-    )
-    # The route probe below runs the tag from the local daemon.
-    assert unified_image["with"]["load"] == "true"
-    unified_probe = _step(verify["steps"], "Probe unified starter image routes")
-    assert "test-image-health.sh" in unified_probe["run"]
-    e2e = _step(verify["steps"], "Run the scripted Rust and Python practice E2E")
-    assert "scripts/test-coding-starter-practice-e2e.sh" in e2e["run"]
 
 
 def test_release_fanout_is_gated_by_the_component_plan() -> None:
@@ -259,7 +229,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         assert "needs.plan.outputs.validator_stack == 'true'" in job["if"]
 
     datagen = jobs["publish-datagen"]
-    assert datagen["needs"] == ["plan", "release"]
+    assert datagen["needs"] == ["plan", "release", "verify-dittobench-datagen"]
     assert "needs.plan.outputs.dittobench_datagen == 'true'" in datagen["if"]
     publish = _step(datagen["steps"], "Publish immutable component and source tags")
     assert "$DATAGEN_REPOSITORY:$COMPONENT_TAG" in publish["run"]
@@ -381,6 +351,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-model-relay-compat",
         "build-dittobench",
         "publish-datagen",
+        "publish-generator-scorer",
         "deploy-dittobench",
         "assemble-stack",
         "smoke-stack-runtime-amd64",
@@ -616,7 +587,8 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert jobs["verify-dittobench-datagen"]["defaults"]["run"][
         "working-directory"
     ] == ("research/dittobench-datagen")
-    assert datagen_verification["run"] == "go test -timeout 20m ./..."
+    assert "go test -timeout 15m ./..." in datagen_verification["run"]
+    assert "verified_sha=$(git rev-parse HEAD)" in datagen_verification["run"]
 
     component_gates = {
         "verify-backroom": (
@@ -774,31 +746,6 @@ def test_release_uses_the_hash_locked_host_semantic_release_cli() -> None:
         "GIT_COMMIT_AUTHOR": ("github-actions <actions@users.noreply.github.com>"),
         "PSR_DOCKER_GITHUB_ACTION": "true",
     }
-
-
-def test_release_uses_the_root_projects_minimum_python() -> None:
-    project = tomllib.loads(PYPROJECT_PATH.read_text())["project"]
-    assert project["requires-python"] == ">=3.12,<3.14"
-
-    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    verifier = yaml.safe_load(ROOT_VERIFY_PATH.read_text())
-    verify_setups = [
-        _step(verifier["jobs"][job_name]["steps"], "Set up Python 3.12")
-        for job_name in ("static", "tests", "contract")
-    ]
-    assemble_setup = _step(
-        workflow["jobs"]["assemble-stack"]["steps"], "Set up Python 3.12"
-    )
-    assert all(setup["run"] == "uv python install 3.12" for setup in verify_setups)
-    assert assemble_setup["run"] == "uv python install 3.12"
-
-    dockerfile = ROOT_DOCKERFILE_PATH.read_text().splitlines()
-    assert dockerfile[0].startswith("FROM python:3.12-slim@sha256:")
-    protocol_copy = dockerfile.index(
-        "COPY packages/ditto-screening-protocol ./packages/ditto-screening-protocol"
-    )
-    frozen_sync = dockerfile.index("RUN uv sync --frozen --no-dev --extra telemetry")
-    assert protocol_copy < frozen_sync
 
 
 def test_screener_release_build_registers_exact_digest_with_platform() -> None:
@@ -1393,133 +1340,6 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     assert "needs.deploy_platform.result == 'skipped'" in promotion_condition
 
 
-def test_dittobench_prepare_does_not_repeat_exact_source_tests() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    jobs = workflow["jobs"]
-    verify = jobs["verify-dittobench-api"]
-    prepare = jobs["prepare-dittobench"]
-
-    exact_source_gate = _step(
-        verify["steps"], "Gate DittoBench API release on exact merge source"
-    )
-    assert exact_source_gate["run"] == "go test ./..."
-    _step(prepare["steps"], "Bind DittoBench to the monorepo release")
-    materialize = _step(
-        prepare["steps"], "Materialize the retired relay compatibility source"
-    )
-    assert "sha256sum --check SHA256SUMS" in materialize["run"]
-    assert all(
-        "actions/setup-go@" not in step.get("uses", "") for step in prepare["steps"]
-    )
-    assert all("go test ./..." not in step.get("run", "") for step in prepare["steps"])
-
-
-def test_release_builds_dittobench_on_native_bounded_larger_runners() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    jobs = workflow["jobs"]
-    amd64_runner = {
-        "group": "release-larger-runners",
-        "labels": "ubuntu-24.04-release-8core",
-    }
-    arm64_runner = {
-        "group": "release-larger-runners",
-        "labels": "ubuntu-24.04-release-arm64-8core",
-    }
-
-    assert jobs["build-dittobench-amd64"]["runs-on"] == amd64_runner
-    assert jobs["build-dittobench-arm64"]["runs-on"] == arm64_runner
-    for job_name, job in jobs.items():
-        if job_name != "build-dittobench-amd64":
-            assert job.get("runs-on") != amd64_runner
-        if job_name != "build-dittobench-arm64":
-            assert job.get("runs-on") != arm64_runner
-
-    for architecture in ("amd64", "arm64"):
-        job = jobs[f"build-dittobench-{architecture}"]
-        build = _step(
-            job["steps"],
-            f"Build and publish the native {architecture} scorer manifest",
-        )
-        assert build["with"]["platforms"] == f"linux/{architecture}"
-        assert "push-by-digest=true" in build["with"]["outputs"]
-        assert all(
-            "setup-qemu-action@" not in (step.get("uses") or "")
-            for step in job["steps"]
-        )
-
-    merge = _step(
-        jobs["build-dittobench"]["steps"],
-        "Assemble the scorer multi-platform index",
-    )
-    assert (
-        merge["env"]["AMD64_DIGEST"]
-        == "${{ needs.build-dittobench-amd64.outputs.digest }}"
-    )
-    assert (
-        merge["env"]["ARM64_DIGEST"]
-        == "${{ needs.build-dittobench-arm64.outputs.digest }}"
-    )
-    assert "docker buildx imagetools create" in merge["run"]
-
-    compatibility = jobs["build-model-relay-compat"]
-    assert compatibility["needs"] == ["plan", "release", "prepare-dittobench"]
-    _step(
-        compatibility["steps"],
-        "Set up QEMU for the retired compatibility image",
-    )
-    fan_in_steps = jobs["build-dittobench"]["steps"]
-    assert all(
-        "setup-qemu-action@" not in (step.get("uses") or "") for step in fan_in_steps
-    )
-    assert all(
-        step.get("name") != "Build and publish the retired relay compatibility index"
-        for step in fan_in_steps
-    )
-    assert all(
-        step.get("name") != "Check out the exact release commit"
-        for step in fan_in_steps
-    )
-
-
-def test_release_builds_validator_on_native_standard_runners() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    jobs = workflow["jobs"]
-
-    assert jobs["build-validator-amd64"]["runs-on"] == "ubuntu-24.04"
-    assert jobs["build-validator-arm64"]["runs-on"] == "ubuntu-24.04-arm"
-
-    for architecture in ("amd64", "arm64"):
-        job = jobs[f"build-validator-{architecture}"]
-        build = _step(
-            job["steps"],
-            f"Build and publish the native {architecture} validator manifest",
-        )
-        assert build["with"]["platforms"] == f"linux/{architecture}"
-        assert "push-by-digest=true" in build["with"]["outputs"]
-        assert all(
-            "setup-qemu-action@" not in (step.get("uses") or "")
-            for step in job["steps"]
-        )
-
-    fan_in = jobs["build-validator"]
-    assert set(fan_in["needs"]) == {
-        "plan",
-        "release",
-        "build-validator-amd64",
-        "build-validator-arm64",
-    }
-    merge = _step(fan_in["steps"], "Assemble the validator multi-platform index")
-    assert (
-        merge["env"]["AMD64_DIGEST"]
-        == "${{ needs.build-validator-amd64.outputs.digest }}"
-    )
-    assert (
-        merge["env"]["ARM64_DIGEST"]
-        == "${{ needs.build-validator-arm64.outputs.digest }}"
-    )
-    assert "docker buildx imagetools create" in merge["run"]
-
-
 def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     assert workflow["env"]["PYLON_BASE_IMAGE"] == (
@@ -1563,20 +1383,6 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     )
     render = _step(assembly["steps"], "Render the architecture-bound stack bundles")
     assert "steps.compat-runtime.outputs.pylon_digest" in render["run"]
-
-
-def test_release_parallelizes_independent_artifact_authentication() -> None:
-    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    verify = _step(
-        workflow["jobs"]["assemble-stack"]["steps"],
-        "Verify every first-party multi-platform index",
-    )["run"]
-
-    assert "verify_artifact()" in verify
-    assert 'verify_artifact "$repository" &' in verify
-    assert 'pids+=("$!")' in verify
-    assert 'for pid in "${pids[@]}"' in verify
-    assert 'wait "$pid"' in verify
 
 
 def test_release_boots_exact_generated_runtime_dependencies_beside_publish() -> None:
@@ -1681,6 +1487,7 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
             writer_scopes.setdefault(job_name, []).append(writer)
 
     assert writer_scopes == {
+        "publish-generator-scorer": ["generator-scorer-release"],
         "verify-dittobench-coding-starter-kit": [
             "coding-starter-kit",
             "unified-starter-kit",
@@ -1706,5 +1513,5 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 12
+        == 13
     )

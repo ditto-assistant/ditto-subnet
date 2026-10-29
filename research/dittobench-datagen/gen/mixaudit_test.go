@@ -83,14 +83,14 @@ const (
 	v13InterimArithmeticShareMax = 0.45
 )
 
-// TestV13MixAuditStructuralAcrossFortySeeds asserts the bounds every v13 run
+// checkV13MixAuditStructural asserts the bounds every v13 run
 // must already satisfy while the interim slots and generators are in place:
 // the monetary project-outstanding oracle is capped inside the ordinary slot,
 // no gate can zero more than 40% of memory weight, no single honest error can
 // cascade into more than 4% of memory weight through a dependency cluster, and
 // the interim monetary exposure stays at or below its measured ceiling.
-func TestV13MixAuditStructuralAcrossFortySeeds(t *testing.T) {
-	for _, artifact := range v13FortySeeds(t) {
+func checkV13MixAuditStructural(t *testing.T, seeds []DatasetArtifact) {
+	for _, artifact := range seeds {
 		seed := artifact.Seed
 		audit, err := AuditMix(artifact)
 		if err != nil {
@@ -120,7 +120,7 @@ func TestV13MixAuditStructuralAcrossFortySeeds(t *testing.T) {
 	}
 }
 
-// TestV13MixAuditGateAcrossFortySeeds is the #1529 / #1848 gate: money <= 15%
+// checkV13MixAuditGate is the #1529 / #1848 gate: money <= 15%
 // of memory weight (12% target), <= 22 money-bearing cases, zero monetary open
 // programs, arithmetic <= 20%, money <= 25% of computed answers, personal >=
 // 30%, business >= 40%, no sub-domain > 20%, no answer-kind x operation > 15%,
@@ -135,11 +135,11 @@ func TestV13MixAuditStructuralAcrossFortySeeds(t *testing.T) {
 // failing seed and SKIPS. This PR therefore does not satisfy #1529; removing
 // the last entry from both interim lists turns every assertion on with no
 // further edit.
-func TestV13MixAuditGateAcrossFortySeeds(t *testing.T) {
+func checkV13MixAuditGate(t *testing.T, seeds []DatasetArtifact) {
 	var report []string
 	var firstFailing int64
 	failing := 0
-	for _, artifact := range v13FortySeeds(t) {
+	for _, artifact := range seeds {
 		seed := artifact.Seed
 		audit, err := AuditMix(artifact)
 		if err != nil {

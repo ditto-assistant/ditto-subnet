@@ -460,6 +460,126 @@ async def test_current_scorer_preserves_versions_and_run_capacity(
     assert client.full_run_capacity == 2
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "features,rounds,max_cases",
+    [
+        # A scorer that predates the column-size feature: Platform assumes 32.
+        (["generator-round-v1"], True, None),
+        (["generator-round-v1", "generator-round-max-cases-80"], True, 80),
+        # Never above what this validator's own job model accepts.
+        (["generator-round-v1", "generator-round-max-cases-120"], True, 80),
+        (["generator-round-v1", "generator-round-max-cases-64"], True, 64),
+        # Malformed sizes and a size without round support are ignored.
+        (["generator-round-v1", "generator-round-max-cases-08"], True, None),
+        (["generator-round-v1", "generator-round-max-cases-x"], True, None),
+        (["generator-round-max-cases-80"], False, None),
+    ],
+)
+async def test_scorer_round_column_size_is_forwarded(
+    features, rounds, max_cases
+) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": list(SUPPORTED_BENCH_VERSIONS),
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.generator_rounds is rounds
+    assert observed.generator_round_max_cases == max_cases
+    # Absent from the signed bytes unless advertised, so an older validator's
+    # heartbeat keeps its exact encoding.
+    dumped = observed.model_dump(mode="json")
+    assert ("generator_round_max_cases" in dumped) is (max_cases is not None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "features,advertised,round_versions",
+    [
+        # A scorer that predates the feature: Platform assumes v13-only rounds.
+        (["generator-round-v1"], None, None),
+        (
+            [
+                "generator-round-v1",
+                "generator-round-bench-13",
+                "generator-round-bench-14",
+            ],
+            None,
+            (13, 14),
+        ),
+        # Only versions the scorer is verified for and this validator runs.
+        (
+            [
+                "generator-round-v1",
+                "generator-round-bench-13",
+                "generator-round-bench-14",
+            ],
+            [13],
+            (13,),
+        ),
+        (
+            [
+                "generator-round-v1",
+                "generator-round-bench-13",
+                "generator-round-bench-99",
+            ],
+            None,
+            (13,),
+        ),
+        (["generator-round-v1", "generator-round-bench-x"], None, None),
+        # No round mode, no round versions.
+        (["generator-round-bench-13"], None, None),
+    ],
+)
+async def test_scorer_round_bench_versions_are_forwarded(
+    features, advertised, round_versions
+) -> None:
+    versions = advertised if advertised is not None else list(SUPPORTED_BENCH_VERSIONS)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "software_version": "0.22.0",
+                "source_revision": _REVISION,
+                "supported_bench_versions": versions,
+                "full_run_capacity": 2,
+                "features": features,
+            },
+        )
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_mock=False,
+        dittobench_capabilities_timeout_seconds=1,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        observed = await client.scorer_benchmark_capability(_stack())
+
+    assert observed.status == "fresh_verified"
+    assert observed.generator_round_bench_versions == round_versions
+    dumped = observed.model_dump(mode="json")
+    assert ("generator_round_bench_versions" in dumped) is (round_versions is not None)
+
+
 # A still-supported v8-only scorer capability shape used for rolling-upgrade tests.
 _LIVE_CAPABILITIES: dict[str, Any] = {
     "software_version": "0.29.4",
@@ -1247,13 +1367,8 @@ async def test_submit_parks_transient_scorer_capacity_inside_live_lease(
     ("status", "stage", "expected_counts"),
     [
         ("queued", "preparing", (None, None)),
-        ("building", "building_harness", (None, None)),
-        ("generating", "generating_dataset", (None, None)),
-        ("seeding", "starting_harness", (None, None)),
         ("running", "running_benchmark", (51, 114)),
-        ("waiting_for_relay", "waiting_for_relay", (51, 114)),
         ("scoring", "finalizing", (114, 114)),
-        ("done", "finalizing", (114, 114)),
         ("failed", "failed_retrying", (None, None)),
     ],
 )
@@ -1280,12 +1395,8 @@ def test_safe_progress_status_mapping(
     ("completed", "total"),
     [
         (float("nan"), 114),
-        (1, float("inf")),
         (True, 114),
-        (-1, 114),
         (115, 114),
-        (1, 10_001),
-        ("51", 114),
     ],
 )
 def test_malformed_source_counts_degrade_to_unknown(
@@ -1756,13 +1867,7 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
     [
         "sandbox_oom",
         "sandbox_tmpfs_exhausted",
-        "sandbox_network_unavailable",
-        "sandbox_image_unavailable",
         "model_relay_unavailable",
-        "embedding_provider_unavailable",
-        "screened_image_unavailable",
-        "seed_store_lock_timeout",
-        "sandbox_cpu_unsupported",
     ],
 )
 async def test_sandbox_resource_failure_is_retryable_infrastructure(

@@ -22,8 +22,8 @@
     {
       "lane": "judge",
       "provider": "openrouter",
-      "profile_revision": "longmemeval-official-gpt4o-azure-zdr-v2",
-      "model": "openai/gpt-4o-2024-08-06",
+      "profile_revision": "longmemeval-deepseek-v41-flash-together-v1",
+      "model": "deepseek/deepseek-v4.1-flash",
       "max_requests": 60,
       "max_prompt_tokens": 30000,
       "max_completion_tokens": 6000,

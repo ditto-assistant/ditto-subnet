@@ -1028,7 +1028,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const installationSHA = "62c5daa7326166ade81cea09eb4486bcb0e82f8e8552f2154a8219d16b1ae26c"
+	const installationSHA = "a030d095ba74543fd22e0ea905b787bdd857ea9ad2f077cb839d4196b8ad4436"
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
@@ -1044,14 +1044,14 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8" ||
+	if profile.Revision != "v9-confirmation-shadow-bounded-2026-10-25-deepseek-judge-v9" ||
 		profile.LongMemCasesPerCapability != 8 || profile.AblationCoordinatorPolicy.SampleSize != 4 ||
 		profile.Composite.BaseWeightBPS != 7000 || profile.Composite.LongMemWeightBPS != 3000 {
 		t.Fatalf("unexpected bounded profile: %+v", profile)
 	}
 	if len(profile.ProviderLanes) != 2 ||
-		profile.ProviderLanes[0].Model != "openai/gpt-4o-2024-08-06" ||
-		profile.ProviderLanes[0].RouteProvider != "azure" ||
+		profile.ProviderLanes[0].Model != "deepseek/deepseek-v4.1-flash" ||
+		profile.ProviderLanes[0].RouteProvider != "together" ||
 		profile.ProviderLanes[1].Model != "openai/gpt-oss-20b" ||
 		profile.ProviderLanes[1].RouteProvider != "throughput" {
 		t.Fatalf("unexpected provider lanes: %+v", profile.ProviderLanes)
@@ -1194,8 +1194,8 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	profile.LongMemProjectionKeySHA256 = digestBytes(longMemKey)
 	profile.ProviderLanes = []confirmationProviderLaneProfile{
 		{
-			Lane: longmemeval.JudgeLane, Provider: "openrouter", RouteProvider: "azure", ReceiptProvider: "Azure",
-			ProfileRevision: "longmemeval-official-gpt4o-azure-zdr-v2", Model: "openai/gpt-4o-2024-08-06",
+			Lane: longmemeval.JudgeLane, Provider: "openrouter", RouteProvider: "together", ReceiptProvider: "Together",
+			ProfileRevision: "longmemeval-deepseek-v41-flash-together-v1", Model: "deepseek/deepseek-v4.1-flash",
 			MaxRequests: 10, MaxPromptTokens: 100, MaxCompletionTokens: 100, MaxTotalTokens: 200, MaxCostUSDmicros: 10_000,
 		},
 		{
@@ -1255,8 +1255,8 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 				"fixture-reader-v1", llm.HarnessModelForVersion(9),
 			),
 			longmemeval.JudgeLane: grant(
-				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "azure", "Azure",
-				"longmemeval-official-gpt4o-azure-zdr-v2", "openai/gpt-4o-2024-08-06",
+				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "together", "Together",
+				"longmemeval-deepseek-v41-flash-together-v1", "deepseek/deepseek-v4.1-flash",
 			),
 			"embedding": grant(
 				"embedding", embedding.URL, profile.EmbeddingLane.Provider, profile.EmbeddingLane.Provider,

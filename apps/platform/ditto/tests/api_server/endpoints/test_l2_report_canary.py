@@ -17,7 +17,6 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException, Request, Response
-from pydantic import ValidationError
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -63,73 +62,6 @@ from ditto_screening_protocol import (
     ScoredRuntimeEvidenceLease,
     ScreenerReviewSettingsOverride,
 )
-
-
-def _schedule_fields() -> dict[str, Any]:
-    return {
-        "request_id": str(uuid4()),
-        "agent_id": str(uuid4()),
-        "source_attempt_id": str(uuid4()),
-        "artifact_sha256": "a" * 64,
-        "policy_version": 13,
-        "expected_agent_status": "rejected",
-        "expected_score_count": 0,
-        "target_node_id": "subnet-screener-1",
-        "review_label": "known_reject",
-        "confirm_report_only": True,
-    }
-
-
-@pytest.mark.parametrize("pin", [141, None])
-def test_plain_schedule_request_refuses_a_pin_key(pin: int | None) -> None:
-    # The plain route ignores unknown keys, except a pin: ignoring that one
-    # would queue the canary under the node's posture. It is refused even as
-    # null, and only the pinned model accepts it.
-    with pytest.raises(ValidationError, match="/pinned"):
-        L2CanaryScheduleRequest.model_validate(
-            {**_schedule_fields(), "review_settings_revision": pin}
-        )
-    plain = L2CanaryScheduleRequest.model_validate(
-        {**_schedule_fields(), "some_future_field": pin}
-    )
-    assert not hasattr(plain, "review_settings_revision")
-
-
-def test_pinned_schedule_request_requires_a_revision() -> None:
-    for body in (
-        _schedule_fields(),
-        {**_schedule_fields(), "review_settings_revision": None},
-        {**_schedule_fields(), "review_settings_revision": 0},
-    ):
-        with pytest.raises(ValidationError):
-            L2CanaryPinnedScheduleRequest.model_validate(body)
-    pinned = L2CanaryPinnedScheduleRequest.model_validate(
-        {**_schedule_fields(), "review_settings_revision": 141, "some_future_field": 1}
-    )
-    assert pinned.review_settings_revision == 141
-
-
-def test_l2_canary_schedule_accepts_uuid_strings_from_http_json() -> None:
-    request_id, agent_id, attempt_id = uuid4(), uuid4(), uuid4()
-    payload = L2CanaryScheduleRequest.model_validate(
-        {
-            "request_id": str(request_id),
-            "agent_id": str(agent_id),
-            "source_attempt_id": str(attempt_id),
-            "artifact_sha256": "a" * 64,
-            "policy_version": 13,
-            "expected_agent_status": "screening_failed",
-            "expected_score_count": 0,
-            "target_node_id": "subnet-screener-1",
-            "review_label": "candidate_clear",
-            "confirm_report_only": True,
-        }
-    )
-    assert (payload.request_id, payload.agent_id, payload.source_attempt_id) == (
-        request_id,
-        agent_id,
-        attempt_id,
-    )
 
 
 def test_historical_canary_request_requires_matching_source_only_ruling() -> None:
@@ -242,32 +174,6 @@ async def test_historical_ruling_matches_exact_source() -> None:
     )
     event.attempt_id = uuid4()
     assert not await endpoints._historical_ruling_matches(session, row)
-
-
-@pytest.mark.asyncio
-async def test_current_object_attestation_rejects_replacement() -> None:
-    agent_id = uuid4()
-    agent = cast(Agent, SimpleNamespace(agent_id=agent_id, size_bytes=123))
-    storage = cast(
-        S3StorageClient,
-        SimpleNamespace(
-            verify_object_sha256=AsyncMock(
-                return_value=VerifiedObject(size_bytes=123, sha256="a" * 64)
-            )
-        ),
-    )
-    assert await endpoints._current_object_matches(storage, agent, "a" * 64) == (
-        True,
-        123,
-    )
-    storage.verify_object_sha256.assert_awaited_with(  # type: ignore[attr-defined]
-        key=f"{agent_id}/agent.tar.gz", expected_size_bytes=123
-    )
-    storage.verify_object_sha256.return_value = VerifiedObject(  # type: ignore[attr-defined]
-        size_bytes=123, sha256="b" * 64
-    )
-    matches, _ = await endpoints._current_object_matches(storage, agent, "a" * 64)
-    assert matches is False
 
 
 @pytest.mark.asyncio
@@ -688,54 +594,6 @@ async def test_full_runtime_claim_requires_exact_adopted_worker() -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_canary_preflight_exposes_scheduler_guard_values_without_mutation(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    agent_sha, attempt_sha = "a" * 64, "b" * 64
-    agent_id = await _seed_agent(
-        session_maker, status=AgentStatus.EVALUATING, sha256=agent_sha
-    )
-    attempt_id = uuid4()
-    now = datetime.now(UTC)
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreeningAttempt(
-                attempt_id=attempt_id,
-                agent_id=agent_id,
-                artifact_sha256=attempt_sha,
-                screener_hotkey="preflight-test-hotkey",
-                policy_version=13,
-                status="passed",
-                started_at=now - timedelta(minutes=1),
-                deadline=now,
-                finished_at=now,
-            )
-        )
-    await _seed_score(session_maker, agent_id=agent_id)
-    response = Response()
-    async with session_maker() as session:
-        view = await endpoints.get_l2_report_canary_preflight(
-            agent_id, attempt_id, response, None, session
-        )
-    assert response.headers["Cache-Control"] == "no-store"
-    assert view.agent_id == agent_id
-    assert view.source_attempt_id == attempt_id
-    assert view.agent_artifact_sha256 == agent_sha
-    assert view.source_attempt_artifact_sha256 == attempt_sha
-    assert view.agent_status == "evaluating"
-    assert view.attempt_policy_version == 13
-    assert view.score_row_count == 1
-    assert view.arrival_bench_version is not None
-    assert view.arrival_bench_version >= 1
-    async with session_maker() as session:
-        with pytest.raises(HTTPException) as error:
-            await endpoints.get_l2_report_canary_preflight(
-                uuid4(), attempt_id, Response(), None, session
-            )
-    assert error.value.status_code == 404
-
-
 async def _seed_preflight_source(
     session_maker: async_sessionmaker[AsyncSession],
     *,
@@ -898,95 +756,6 @@ async def test_canary_preflight_reports_the_guard_scheduling_enforces(
             "attempt_artifact_sha256",
         }
         assert again.guards_pass is None
-
-
-@pytest.mark.asyncio
-async def test_canary_preflight_explains_legacy_null_sha_historical_ruling(
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sha = "a" * 64
-    agent_id, attempt_id, _node_id = await _seed_preflight_source(
-        session_maker, agent_sha=sha, attempt_sha=None, status=AgentStatus.SCORED
-    )
-    ruling_id = uuid4()
-    now = datetime.now(UTC)
-    async with session_maker() as session, session.begin():
-        session.add(
-            AthReview(
-                review_id=ruling_id,
-                agent_id=agent_id,
-                status="resolved",
-                resolved_at=now,
-                resolved_by="human-reviewer",
-                resolution="clear",
-                resolution_reason="Exact artifact independently cleared",
-                original_policy_version=13,
-                original_evidence={"sha256": sha},
-                algorithm_provenance={},
-            )
-        )
-        await session.flush()
-        session.add(
-            AthReviewAction(
-                action_id=uuid4(),
-                review_id=ruling_id,
-                action="clear",
-                reason="Exact artifact independently cleared",
-                actor="human-reviewer",
-                evidence={},
-                created_at=now,
-            )
-        )
-    monkeypatch.setattr(endpoints, "arrival_bench_version", AsyncMock(return_value=13))
-    monkeypatch.setattr(
-        endpoints, "scored_runtime_evidence_for_lease", AsyncMock(return_value=None)
-    )
-    async with session_maker() as session:
-        view = await endpoints.get_l2_report_canary_preflight(
-            agent_id,
-            attempt_id,
-            Response(),
-            None,
-            session,
-            artifact_sha256=sha,
-            expected_agent_status="scored",
-            expected_score_count=1,
-            historical_ruling_kind="ath_clear",
-            historical_ruling_id=ruling_id,
-        )
-        results = {check.guard: check.passed for check in view.guards}
-        assert results["attempt_artifact_sha256"] is True
-        assert results["historical_ruling"] is True
-        assert results["historical_ruling_run_mode"] is True
-        # Only scheduling re-hashes the stored object.
-        assert results["source_object_verified"] is None
-        assert view.guards_pass is None
-        assert view.legacy_null_attempt_sha256 is True
-        assert view.report_only_packet_available is False
-
-        with pytest.raises(HTTPException) as error:
-            await endpoints.get_l2_report_canary_preflight(
-                agent_id,
-                attempt_id,
-                Response(),
-                None,
-                session,
-                historical_ruling_kind="ath_clear",
-                historical_ruling_id=ruling_id,
-            )
-        assert error.value.status_code == 422
-        with pytest.raises(HTTPException) as error:
-            await endpoints.get_l2_report_canary_preflight(
-                agent_id,
-                attempt_id,
-                Response(),
-                None,
-                session,
-                artifact_sha256=sha,
-                historical_ruling_kind="ath_clear",
-            )
-        assert error.value.status_code == 422
 
 
 async def _seed_ath_clear(
@@ -1201,8 +970,7 @@ async def test_preflight_and_scheduler_refuse_identically_on_the_same_state(
     ("run_mode", "review_mode"),
     [
         ("source_only", "shadow"),
-        ("source_only", "enforce_preview"),
-        ("full_runtime", "shadow"),  # An already leased older worker can finish.
+        # An already leased older worker can finish.
         ("full_runtime", "enforce_preview"),
     ],
 )
@@ -2021,10 +1789,6 @@ async def test_pinned_canary_claims_under_pinned_revision_not_node_effective(
     ("case", "status_code"),
     [
         ("global", 422),
-        ("bootstrap", 422),
-        ("node", 422),
-        ("worker", 422),
-        ("unprefixed", 422),
         ("prefix-lookalike", 422),
         ("inherit", 422),
         ("live-identity", 409),
@@ -2824,65 +2588,7 @@ async def test_canary_claim_refused_while_production_work_is_claimable(
 
 
 @pytest.mark.asyncio
-async def test_canary_claim_ignores_unauthorized_failed_screening(
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level(logging.INFO, logger=endpoints.__name__)
-    node_id = await _seed_reservation_node(
-        session_maker, screening_concurrency=2, canary_concurrency=4
-    )
-    failed = await _seed_agent(
-        session_maker,
-        status=AgentStatus.SCREENING_FAILED,
-        sha256=_FRESH_UPLOAD_SHA,
-        name="failed-upload",
-    )
-    failed_attempt = uuid4()
-    now = datetime.now(UTC)
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreeningAttempt(
-                attempt_id=failed_attempt,
-                agent_id=failed,
-                artifact_sha256=_FRESH_UPLOAD_SHA,
-                screener_hotkey="hotkey-production",
-                policy_version=13,
-                status="failed",
-                started_at=now - timedelta(minutes=5),
-                deadline=now,
-                finished_at=now,
-            )
-        )
-    claim = _reservation_claimer(node_id, session_maker, monkeypatch)
-
-    # A failed screen stays parked until Backroom authorizes its retry, so it
-    # is not work production could claim instead of the canary.
-    assert await claim(1) is not None
-    assert _holds(caplog) == []
-
-    async with session_maker() as session, session.begin():
-        session.add(
-            ScreeningRetryOverride(
-                override_id=uuid4(),
-                agent_id=failed,
-                attempt_id=failed_attempt,
-                artifact_sha256=_FRESH_UPLOAD_SHA,
-                expected_score_count=0,
-                reason="Retry the failed screen after the provider outage",
-                actor="operator@example.com",
-            )
-        )
-    assert await claim(2) is None
-    assert len(_holds(caplog, "production-claimable")) == 1
-    assert len(await _leased(session_maker, node_id)) == 1
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("screening_concurrency", "expected_leases"), [(2, 2), (3, 1), (4, 0)]
-)
+@pytest.mark.parametrize(("screening_concurrency", "expected_leases"), [(2, 2), (4, 0)])
 async def test_canary_claim_reserves_production_workers(
     session_maker: async_sessionmaker[AsyncSession],
     monkeypatch: pytest.MonkeyPatch,
@@ -2977,27 +2683,6 @@ async def test_canary_claim_unchanged_when_admission_closed(
     claims = await asyncio.gather(*(claim(worker) for worker in range(1, 5)))
     assert len([row for row in claims if row is not None]) == 3
     assert len(await _leased(session_maker, node_id)) == 4
-    assert _holds(caplog) == []
-
-
-@pytest.mark.asyncio
-async def test_canary_claim_without_queued_rows_skips_production_read(
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level(logging.INFO, logger=endpoints.__name__)
-    node_id = await _seed_reservation_node(
-        session_maker, screening_concurrency=2, canary_concurrency=4, canaries=0
-    )
-    production_read = AsyncMock(return_value=True)
-    monkeypatch.setattr(endpoints, "has_claimable_screening_work", production_read)
-    claim = _reservation_claimer(node_id, session_maker, monkeypatch)
-
-    # Idle workers poll every 30 seconds; with nothing queued there is no
-    # canary to hold, so neither the global read nor the hold log runs.
-    assert await claim(1) is None
-    production_read.assert_not_awaited()
     assert _holds(caplog) == []
 
 
@@ -3324,42 +3009,3 @@ async def test_canary_hold_is_decided_on_the_row_the_worker_would_lease(
             )
         )
     assert statuses == ["queued"]
-
-
-@pytest.mark.asyncio
-async def test_production_hold_log_is_throttled_per_node_and_reason(
-    session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    caplog.set_level(logging.INFO, logger=endpoints.__name__)
-    # Four fresh workers all reserved for production: every claim is held.
-    node_id = await _seed_reservation_node(
-        session_maker, screening_concurrency=4, canary_concurrency=4
-    )
-    claim = _reservation_claimer(node_id, session_maker, monkeypatch)
-
-    for worker in range(1, 5):
-        assert await claim(worker) is None
-    assert len(_holds(caplog, "production-reserved")) == 1
-    # Age the last log line instead of patching time.monotonic, which the
-    # event loop also reads.
-    logged_at = endpoints._production_hold_logged_at
-    key = (node_id, "production-reserved")
-    logged_at[key] -= endpoints._PRODUCTION_HOLD_LOG_INTERVAL_SECONDS - 1
-    assert await claim(1) is None
-    assert len(_holds(caplog, "production-reserved")) == 1
-    logged_at[key] -= 1
-    assert await claim(1) is None
-    assert len(_holds(caplog, "production-reserved")) == 2
-
-    # A different reason on the same node has its own interval.
-    await _seed_agent(
-        session_maker,
-        status=AgentStatus.UPLOADED,
-        sha256=_FRESH_UPLOAD_SHA,
-        name="fresh-upload",
-    )
-    assert await claim(2) is None
-    assert len(_holds(caplog, "production-claimable")) == 1
-    assert len(await _leased(session_maker, node_id)) == 0

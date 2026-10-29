@@ -980,7 +980,7 @@ export function ScreenerReviewControlPanel({
                   <td className="px-3 py-3 text-[var(--muted-strong)]">{item.leads.map((lead) => `${lead.invariant} ${lead.item_id}`).join(', ') || 'None'}</td>
                   <td className="px-3 py-3 text-[var(--muted-strong)]">
                     {item.review
-                      ? `${item.review.verified ? `verified ${item.review.invariants.join('/')}` : item.review.status.replace('_', ' ')} · $${item.review.cost_usd.toFixed(2)}`
+                      ? `${item.review.verified ? `verified ${item.review.invariants.join('/')}` : item.review.status.replace('_', ' ')}${item.review.error ? ` (${item.review.error})` : ''} · $${item.review.cost_usd.toFixed(2)}`
                       : 'Off'}
                   </td>
                   <td className="px-5 py-3 text-[var(--muted)]">{item.probe_count} · {(item.battery_ms / 1000).toFixed(0)}s</td>

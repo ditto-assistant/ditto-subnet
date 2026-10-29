@@ -44,6 +44,10 @@ from ditto.api_server.ath_review_state import (
 )
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.review_lineage import (
+    ReviewLineageUnavailableError,
+    build_review_lineage_packet,
+)
 from ditto.api_server.source_diff import (
     build_source_diff_manifest,
     unified_diff_for_file,
@@ -64,6 +68,7 @@ from ditto.db.models import (
     AthReview,
     AthReviewAction,
     Score,
+    ScreeningAttempt,
     ValidatorTicket,
 )
 from ditto.db.queries.artifact_fetch_audit import (
@@ -71,6 +76,7 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
     ENDPOINT_ADMIN_LINEAGE_DIFF,
     ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
+    ENDPOINT_ADMIN_REVIEW_LINEAGE,
     ENDPOINT_PUBLIC_ARTIFACT,
     record_artifact_fetch,
 )
@@ -101,6 +107,7 @@ from ditto.db.queries.terminal_quarantine_reconciliation import (
     close_quarantines_for_terminal_ruling,
     lock_active_quarantines,
 )
+from ditto_screening_protocol import ReviewLineagePacket
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -1833,3 +1840,72 @@ async def get_lineage_source_diff_file(
         path=normalized,
     )
     return response
+
+
+@router.get(
+    "/screening-attempts/{attempt_id}/review-lineage",
+    response_model=ReviewLineagePacket,
+    responses={
+        404: {"description": "No attempt with this id."},
+        409: {
+            "description": (
+                "The attempt has no lineage parent or bound packet, or the "
+                "packet can no longer be rebuilt identically."
+            )
+        },
+    },
+)
+async def get_screening_review_lineage(
+    attempt_id: UUID,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    storage: StorageDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> ReviewLineagePacket:
+    """Rebuild the lineage packet one screening attempt was reviewed with.
+
+    Returns the same packet the worker fetched: parent, history, rulings,
+    prior findings and the bounded source diff. When the attempt bound a
+    digest and the rebuilt packet differs (a ruling landed since), the route
+    answers 409 rather than show a packet the reviewer never saw.
+    """
+    actor = _require_actor(x_admin_actor)
+    attempt = await session.get(ScreeningAttempt, attempt_id)
+    if attempt is None:
+        raise HTTPException(status_code=404, detail="screening attempt not found")
+    if attempt.lineage_parent_agent_id is None:
+        raise HTTPException(status_code=409, detail="attempt has no lineage parent")
+    agent = await session.get(Agent, attempt.agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    try:
+        packet = await build_review_lineage_packet(
+            session, storage, agent=agent, attempt=attempt
+        )
+    except ReviewLineageUnavailableError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    if attempt.lineage_packet_sha256 is None:
+        # The worker binds the digest only once it holds a packet; without one
+        # the reviewer saw no lineage context, so a rebuilt packet is not what
+        # was reviewed.
+        raise HTTPException(
+            status_code=409, detail="the attempt never bound a lineage packet"
+        )
+    if attempt.lineage_packet_sha256 != packet.packet_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail="the bound packet changed after review; history has moved",
+        )
+    parent = await session.get(Agent, attempt.lineage_parent_agent_id)
+    logger.info("admin_actor=%s viewed review lineage attempt_id=%s", actor, attempt_id)
+    if parent is not None:
+        await _audit_diff_pair(
+            session,
+            request=request,
+            actor=actor,
+            endpoint=ENDPOINT_ADMIN_REVIEW_LINEAGE,
+            candidate=agent,
+            reference=parent,
+        )
+    return packet

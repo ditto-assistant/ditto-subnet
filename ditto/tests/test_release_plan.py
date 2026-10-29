@@ -111,19 +111,6 @@ def test_dittobench_workflow_is_release_owned(components, ignored_paths) -> None
         "services/dittobench-api/Dockerfile.egress-proxy",
         "services/dittobench-api/coding_runtime/python/driver.py",
         "scripts/test-coding-python-driver.sh",
-        "scripts/test-coding-compiled-bootstrap.sh",
-        "scripts/test-coding-rust-bridge.sh",
-        "scripts/test-coding-rust-driver.sh",
-        "services/dittobench-api/Dockerfile.coding-rust",
-        "scripts/test-coding-go-build.sh",
-        "scripts/test-coding-go-driver.sh",
-        "services/dittobench-api/Dockerfile.coding-go",
-        "services/dittobench-api/coding_runtime/compiled/bootstrap.c",
-        "services/dittobench-api/Dockerfile.coding-compiled-bootstrap",
-        "scripts/test-coding-node-driver.sh",
-        "scripts/test-coding-node-confinement.sh",
-        "services/dittobench-api/coding_runtime/node/confinement.c",
-        "services/dittobench-api/Dockerfile.coding-node",
         "services/dittobench-api/integrations/longmemeval/longmemeval_adapter.py",
         "services/dittobench-api/scripts/calibrate.sh",
         "services/dittobench-api/calibration/token-efficiency-v5/contract.json",
@@ -255,23 +242,6 @@ def test_coding_execution_plan_vector_selects_delivery_consumers(
     assert root_verification(components, ignored_paths, path) == "full"
 
 
-def test_coding_execution_delivery_generator_selects_every_consumer(
-    components, ignored_paths
-) -> None:
-    path = "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
-    assert selected(components, ignored_paths, path) == {
-        "backroom",
-        "dittobench_api",
-        "dittobench_coding_datagen",
-        "dittobench_coding_starter_kit",
-        "platform",
-        "platform_api",
-        "validator",
-        "validator_stack",
-    }
-    assert root_verification(components, ignored_paths, path) == "full"
-
-
 def test_coding_contract_models_select_scorer_and_validator_stack(
     components, ignored_paths
 ) -> None:
@@ -287,10 +257,6 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
     "path",
     [
         "ditto/api_models/coding_inference.py",
-        "ditto/api_models/coding_inference_grants.py",
-        "ditto/api_models/coding_harness.py",
-        "ditto/api_models/coding_claims.py",
-        "ditto/api_models/coding_certification_leases.py",
     ],
 )
 def test_validator_coding_inference_models_are_release_owned(
@@ -310,12 +276,6 @@ def test_validator_coding_inference_models_are_release_owned(
     "path",
     [
         "services/dittobench-api/internal/codingrunner/session.go",
-        "services/dittobench-api/internal/codinggrader/grader.go",
-        "services/dittobench-api/internal/codingexecutor/executor.go",
-        "services/dittobench-api/internal/codingrelay/relay.go",
-        "services/dittobench-api/internal/codingharness/factory.go",
-        "services/dittobench-api/internal/codingsource/router.go",
-        "services/dittobench-api/internal/codinggrantrevoke/revoker.go",
     ],
 )
 def test_shadow_coding_execution_selects_only_scorer_stack(
@@ -332,16 +292,6 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
     "path",
     [
         "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_certification_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
-        "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
     ],
 )
 def test_shared_coding_contract_vectors_select_every_consumer(

@@ -226,6 +226,7 @@ func TestStratifiedBalance(t *testing.T) {
 // serves — otherwise the honest inspect-the-options path cannot solve the case.
 // The case keeps the v8 capability-resolution shape.
 func TestV13AppearanceIntentsAreServedByTheInventory(t *testing.T) {
+	t.Parallel()
 	const n = 100 // the full-profile tool count
 	checked := map[string]int{}
 	for seed := int64(1); seed <= 40; seed++ {

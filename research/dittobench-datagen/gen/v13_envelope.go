@@ -23,7 +23,7 @@ import (
 // change that moves a count is a new contract, not a drift.
 //
 // All dedicated v13 generators are integrated. The interim registries are
-// empty, so TestV13MixAuditGateAcrossFortySeeds enforces the complete gate.
+// empty, so TestV13QualificationSeeds/MixAuditGate enforces the complete gate.
 
 // V13MemoryEnvelope is the memory-case slot table for one v13 run size.
 type V13MemoryEnvelope struct {
@@ -119,7 +119,7 @@ var V13SlotOrder = []string{
 // v13InterimSlots are the slots whose dedicated generator has not landed. Remove
 // a slot from this list in the same change that wires its generator into
 // generateV13WorldMemorySuite; TestV13InterimSlotsArePinned keeps the list
-// honest and TestV13MixAuditGateAcrossFortySeeds arms the full #1529 gate once
+// honest and TestV13QualificationSeeds/MixAuditGate arms the full #1529 gate once
 // it is empty.
 var v13InterimSlots = []string{}
 
@@ -262,7 +262,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	enterpriseCount := min(12, envelope.BusinessPrograms)
 	legacyCount := envelope.BusinessPrograms - enterpriseCount
 	if legacyCount > 0 {
-		business, err = universe.GenerateV13Programs(seed, legacyCount)
+		business, err = universe.GenerateV13ProgramsForVersion(seed, legacyCount, benchVersion)
 	}
 	if err == nil {
 		var enterprise []universe.V10GeneratedCase
@@ -274,7 +274,7 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 	}
 	var personal []universe.V10GeneratedCase
 	if envelope.PersonalPrograms > 0 {
-		personal, err = universe.GenerateV13PersonalPrograms(seed, envelope.PersonalPrograms)
+		personal, err = universe.GenerateV13PersonalProgramsForVersion(seed, envelope.PersonalPrograms, benchVersion)
 		if err != nil {
 			return MemorySuite{}, err
 		}
@@ -348,6 +348,16 @@ func generateV13WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memor
 		}
 	}
 	suite.WorldCases = len(suite.Cases) - suite.ConversationalCases
+	if benchVersion >= protocol.BenchVersionV14 {
+		// The program, enterprise, record-quantity and injection builders stamp
+		// the version that introduced them (13). The grader dispatches its policy
+		// on MemoryCase.BenchVersion, so without this a v14 run graded those
+		// cases under the v13 policy and no v14 grading correction reached them.
+		// v13 keeps the builders' stamps byte for byte.
+		for i := range suite.Cases {
+			suite.Cases[i].Case.BenchVersion = benchVersion
+		}
+	}
 	if len(suite.Cases)+envelope.Isolation != envelope.Total() {
 		return MemorySuite{}, fmt.Errorf("v13 memory budget: %d plus %d isolation, want %d", len(suite.Cases), envelope.Isolation, envelope.Total())
 	}

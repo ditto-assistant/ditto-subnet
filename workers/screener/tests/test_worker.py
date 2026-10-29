@@ -210,6 +210,13 @@ class _FakePlatform:
         self.review_settings_revisions: dict[int, Any] = {}
         self.shadow_reviews: list[dict[str, Any]] = []
 
+    async def get_review_lineage(
+        self, agent_id: UUID, *, attempt_id: UUID, artifact_sha256: str
+    ) -> Any:
+        """No lineage reference: Platform's 409, so an ordinary full review."""
+        del agent_id, attempt_id, artifact_sha256
+        raise PlatformError("lineage packet rejected (409): no lineage parent")
+
     async def upload_screened_image(self, agent_id: UUID, **metadata: Any) -> UUID:
         self.image_uploads.append({"agent_id": agent_id, **metadata})
         return UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")

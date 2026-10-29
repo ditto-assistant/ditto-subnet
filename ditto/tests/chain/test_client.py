@@ -620,3 +620,51 @@ class TestSubnetHyperparams:
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainConnectionError):
                 await client.get_weights_rate_limit(118)
+
+
+class TestLiveSubstrateTransport:
+    """A configured provider is tried before the 429-prone public entrypoint."""
+
+    async def test_configured_provider_is_used_first(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.return_value = 1_700_000_000_000
+        config = make_chain_config(subtensor_rpc_url="wss://paid.example/rpc/k")
+        async with ChainClient(config) as client:
+            await client.get_block_timestamp("0xblock")
+        factory = sys.modules["async_substrate_interface"].AsyncSubstrateInterface
+        factory.assert_called_once_with(url="wss://paid.example/rpc/k")
+
+    async def test_refused_handshake_falls_through_to_the_entrypoint(
+        self, monkeypatch: pytest.MonkeyPatch, mock_substrate: AsyncMock
+    ):
+        refused = MagicMock()
+        refused.__aenter__ = AsyncMock(side_effect=RuntimeError("HTTP 429"))
+        refused.__aexit__ = AsyncMock(return_value=False)
+        module = MagicMock()
+        module.AsyncSubstrateInterface = MagicMock(
+            side_effect=[refused, mock_substrate]
+        )
+        monkeypatch.setitem(sys.modules, "async_substrate_interface", module)
+        mock_substrate.query.return_value = 1_700_000_000_000
+
+        config = make_chain_config(subtensor_rpc_url="wss://paid.example/rpc")
+        async with ChainClient(config) as client:
+            assert await client.get_block_timestamp("0xblock") == 1_700_000_000
+
+        urls = [c.kwargs["url"] for c in module.AsyncSubstrateInterface.call_args_list]
+        assert urls == [
+            "wss://paid.example/rpc",
+            "wss://entrypoint-finney.opentensor.ai:443",
+        ]
+
+    async def test_query_failure_after_connect_is_not_retried(
+        self, install_substrate_module: AsyncMock
+    ):
+        install_substrate_module.query.side_effect = RuntimeError("bad storage key")
+        config = make_chain_config(subtensor_rpc_url="wss://paid.example/rpc")
+        async with ChainClient(config) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.get_block_timestamp("0xblock")
+        factory = sys.modules["async_substrate_interface"].AsyncSubstrateInterface
+        assert factory.call_count == 1

@@ -63,6 +63,7 @@ from ditto.db.models import (
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
     benchmark_admission_predicate,
+    first_queued_in_era_predicate,
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.scores import SCORING_QUORUM
@@ -135,6 +136,9 @@ async def prev_generation_agent_ids(
             select(Agent.agent_id).where(
                 Agent.agent_id.in_(requested - cohort),
                 Agent.created_at < resolved_rollout.created_at,
+                # Uploaded earlier but first queued in this era: ordinary
+                # desired-era work, not a previous-generation lane.
+                ~first_queued_in_era_predicate(rollout=resolved_rollout),
             )
         )
     )

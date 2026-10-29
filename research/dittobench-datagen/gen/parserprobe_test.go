@@ -87,6 +87,7 @@ func TestParserprobeBaselineOnPublicSeed(t *testing.T) {
 // frame banks: across several seeds every emitted memory question family is
 // recognised at a rate that only a generator template change can move.
 func TestParserprobeFramesCoverEveryV12Family(t *testing.T) {
+	t.Parallel()
 	report, err := parserprobe.Run(parserprobe.Options{BenchVersion: protocol.BenchVersionV12, RunSize: "full", FirstSeed: 1, Seeds: 4})
 	if err != nil {
 		t.Fatal(err)
@@ -121,13 +122,16 @@ func TestParserprobeFramesCoverEveryV12Family(t *testing.T) {
 
 // TestParserprobeProgramGrammarCoversEveryContract is the forward guard for
 // the one family whose name carries the contract version. For every supported
-// bench version from v10 up (a floor, so a new contract joins the loop the
-// moment protocol supports it) the parser must know every emitted family and
+// bench version from v13 up (a floor, so a new contract joins the loop the
+// moment protocol supports it; v10-v12 are frozen, their bytes pinned by the
+// known vectors and v12's frames by TestParserprobeFramesCoverEveryV12Family)
+// the parser must know every emitted family and
 // invert the program family near-perfectly; a re-rendered program surface
 // without a registered grammar fails here instead of scoring a silent zero
 // that would read as hardening.
 func TestParserprobeProgramGrammarCoversEveryContract(t *testing.T) {
-	for version := protocol.BenchVersionV10; protocol.SupportedBenchVersion(version); version++ {
+	t.Parallel()
+	for version := protocol.BenchVersionV13; protocol.SupportedBenchVersion(version); version++ {
 		report, err := parserprobe.Run(parserprobe.Options{BenchVersion: version, RunSize: "full", FirstSeed: 11, Seeds: 1})
 		if err != nil {
 			t.Fatalf("v%d: %v", version, err)
@@ -151,6 +155,7 @@ func TestParserprobeProgramGrammarCoversEveryContract(t *testing.T) {
 // trained on a small disjoint seed range it recovers most families and feeds
 // the same slot extractors and launder step as the GIH.
 func TestParserprobeRouterVariantRuns(t *testing.T) {
+	t.Parallel()
 	report, err := parserprobe.Run(parserprobe.Options{BenchVersion: protocol.BenchVersionV12, RunSize: "full", FirstSeed: 5, Seeds: 1, RouterSeeds: parserprobeCIRouterSeeds, RouterFirstSeed: parserprobeCIRouterFirstSeed})
 	if err != nil {
 		t.Fatal(err)

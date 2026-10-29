@@ -11,8 +11,10 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/store"
+	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
 
 // generatorRoundMode runs a generator-competition round dataset against one
@@ -21,8 +23,42 @@ import (
 // endpoint; the report never enters the agent score ledger.
 const generatorRoundMode = "generator-round-v1"
 
+// generatorRoundMaxCasesFeature advertises the largest round column (cases
+// per pack) this scorer runs: the pack contract's challenge.MaxCases. The
+// validator forwards it to Platform as generator_round_max_cases, and Platform
+// leases a round only to validators whose scorer can run its column size. A
+// scorer without the feature is assumed to run the legacy 32-case column.
+func generatorRoundMaxCasesFeature() string {
+	return fmt.Sprintf("generator-round-max-cases-%d", challenge.MaxCases)
+}
+
+// generatorRoundBenchFeaturePrefix names one bench version this scorer runs a
+// round at: generator-round-bench-<n> for every
+// challenge.SupportedGradingBenchVersions entry. The validator forwards the set
+// to Platform as generator_round_bench_versions, and Platform leases a round
+// frozen at version n only to a validator whose scorer advertises n. A scorer
+// without any of these features runs only v13 rounds (the original mode).
+const generatorRoundBenchFeaturePrefix = "generator-round-bench-"
+
+// generatorRoundBenchFeatures advertises every round bench version.
+func generatorRoundBenchFeatures() []string {
+	versions := challenge.SupportedGradingBenchVersions()
+	out := make([]string, 0, len(versions))
+	for _, v := range versions {
+		out = append(out, fmt.Sprintf("%s%d", generatorRoundBenchFeaturePrefix, v))
+	}
+	return out
+}
+
+// runsGeneratorRoundAt reports whether this scorer runs a round frozen at v: a
+// round at v runs packs graded at any supported policy through v, and v itself
+// must be a supported policy so the round's newest columns can use it.
+func runsGeneratorRoundAt(v int) bool {
+	return challenge.SupportsGradingBenchVersion(v)
+}
+
 func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
-	if !enabled || req.BenchVersion != protocol.BenchVersionV13 {
+	if !enabled || !runsGeneratorRoundAt(req.BenchVersion) {
 		return errors.New("generator round mode unavailable")
 	}
 	if len(req.PrivateDatasetBytes) == 0 || len(req.PrivateDatasetBytes) > challenge.MaxRoundDatasetBytes || !canonicalSHA256(req.ExpectedDatasetSHA256) {
@@ -37,7 +73,7 @@ func validateGeneratorRoundRequest(req submitRequest, enabled bool) error {
 // It reuses the scored path's primitives end to end: the same screened-image
 // build and sandbox, the same ticket inference capability and embedding phase,
 // the same relay accounting, and challengerun (which seeds and grades exactly
-// like a benchmark memory case at the round's grading version). It skips what
+// like a benchmark memory case at each pack's declared grading policy). It skips what
 // only the canonical benchmark needs: dataset regeneration, tool cases, the
 // harness projection, and v9 base evidence. Case IDs in the report are
 // challenge.RoundCaseID values; a case the harness never answered is reported
@@ -58,6 +94,12 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 	_, columns, err := challenge.DecodeRoundDataset(req.PrivateDatasetBytes, req.ExpectedDatasetSHA256)
 	if err != nil {
 		s.store.Fail(runID, "generator round dataset integrity verification failed")
+		return
+	}
+	// Each column is graded at the policy its pack declares; a round frozen at
+	// v accepts only policies through v.
+	if err := challenge.CheckRoundGradingVersions(columns, req.BenchVersion); err != nil {
+		s.store.Fail(runID, err.Error())
 		return
 	}
 	total := 0
@@ -153,6 +195,30 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 		return
 	}
 
+	// A pack case is a memory question, but it reaches the harness exactly as
+	// a scored memory case does: with the run's seeded tool catalog and an
+	// observed tool_endpoint. A harness built for the scored path rejects a
+	// /run without them. Each case's fixture is registered just before its
+	// /run, under the opaque ID the harness sees.
+	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	toolSrv := toolexec.NewServer()
+	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
+		toolSrv, handle.SourceIP, req.BenchVersion, sessionID, concurrency,
+	)
+	if err != nil {
+		s.store.FailWith(runID, "tool endpoint start failed: "+err.Error(), toolEndpointInfrastructureFailure())
+		return
+	}
+	defer stopToolSrv()
+	if !toolEndpoint.available() {
+		s.store.FailWith(runID, "generator round cannot observe tool execution: tool_endpoint unreachable from the harness", toolEndpointInfrastructureFailure())
+		return
+	}
+	prepareCase := func(packCaseID, opaqueCaseID, opaqueUserID string) string {
+		toolSrv.Register(opaqueCaseID, toolexec.BuildFixtureForVersion(seed, protocol.ToolCase{ID: packCaseID}, req.BenchVersion))
+		return toolEndpoint.forCase(opaqueCaseID, opaqueUserID)
+	}
+
 	s.store.SetStage(runID, store.StatusRunning, 0, total)
 	started := time.Now()
 	perCase := make([]protocol.CaseScore, 0, total)
@@ -162,6 +228,12 @@ func (s *server) runGeneratorRoundJob(ctx context.Context, runID string, req sub
 			InferenceBaseURL: func(opaqueCaseID string) string {
 				return v13CaseInferenceBaseURL(req.BenchVersion, gateway, opaqueCaseID)
 			},
+			// The agent runs at the round's bench version; each case is
+			// graded at its pack's declared policy.
+			BenchVersion:  req.BenchVersion,
+			Tools:         tools,
+			ToolEndpoint:  prepareCase,
+			ObservedCalls: toolSrv.Observed,
 		})
 		if execErr != nil {
 			if errors.Is(execErr, challengerun.ErrHarnessUnavailable) {

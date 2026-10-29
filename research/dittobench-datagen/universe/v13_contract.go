@@ -449,29 +449,41 @@ type v13Group struct {
 	Orgs [4]string
 	// Neutral milestone date planted in the third state record.
 	Milestone v13Date
+	// V14 only: the fourth chain value (SN-353) a counterfactual may move
+	// to. ExtraPerson serves person families, ExtraClass term families.
+	ExtraPerson string
+	ExtraClass  int
+	// T14 holds the draws of the v14 temporal families
+	// (v14_temporal_families.go). v13 groups leave it nil.
+	T14 *v14TemporalDraw
+	// V14 holds the draws of the v14 role families (v14_role_families.go).
+	V14 *v14GroupExtra
 }
 
 // v13Draws holds the per-seed draw state shared across groups.
 type v13Draws struct {
-	seed      int64
-	names     *rand.Rand
-	nameOrd   int
-	usedNames map[string]bool
-	usedOrgs  map[string]bool
-	usedPurp  map[string]bool
-	statusMap []int // class index -> alias term index
+	seed         int64
+	benchVersion int
+	names        *rand.Rand
+	nameOrd      int
+	usedNames    map[string]bool
+	usedOrgs     map[string]bool
+	usedPurp     map[string]bool
+	statusMap    []int // class index -> alias term index
+	v14          *v14DrawState
 }
 
 // newV13Draws opens the per-seed draw state. stream separates the name RNG of
 // independent generators (business vs personal) so neither perturbs the other.
-func newV13Draws(seed int64, stream string) *v13Draws {
+func newV13Draws(seed int64, stream string, benchVersion int) *v13Draws {
 	return &v13Draws{
-		seed:      seed,
-		names:     rand.New(rand.NewSource(v10Seed(seed, "v13:people:"+stream))),
-		usedNames: map[string]bool{},
-		usedOrgs:  map[string]bool{},
-		usedPurp:  map[string]bool{},
-		statusMap: v13Perm(seed, "status-alias", len(v13StatusAliasTerms))[:len(V13StatusClasses)],
+		seed:         seed,
+		benchVersion: benchVersion,
+		names:        rand.New(rand.NewSource(v10Seed(seed, "v13:people:"+stream))),
+		usedNames:    map[string]bool{},
+		usedOrgs:     map[string]bool{},
+		usedPurp:     map[string]bool{},
+		statusMap:    v13Perm(seed, "status-alias", len(v13StatusAliasTerms))[:len(V13StatusClasses)],
 	}
 }
 
@@ -509,7 +521,7 @@ func (d *v13Draws) distinctClasses(salt string, size, n int) [4]int {
 }
 
 func (d *v13Draws) drawGroup(group int) v13Group {
-	g := v13Group{Family: V13Families[group%len(V13Families)]}
+	g := v13Group{Family: d.family(group)}
 	g.Alias = v12Label(d.seed, fmt.Sprintf("v13-scenario-%d", group))
 	g.DecoyAlias = v12Label(d.seed, fmt.Sprintf("v13-decoy-%d", group))
 	g.Purpose = v13Purpose(d.seed, fmt.Sprintf("remit-%d", group), d.usedPurp)
@@ -550,6 +562,14 @@ func (d *v13Draws) drawGroup(group int) v13Group {
 		g.Orgs[1] = v13Org(d.seed, fmt.Sprintf("vendor-%d", group), d.usedOrgs)
 		g.Orgs[2] = v13Org(d.seed, fmt.Sprintf("counter-client-%d", group), d.usedOrgs)
 		g.Orgs[3] = v13Org(d.seed, fmt.Sprintf("decoy-client-%d", group), d.usedOrgs)
+	case V14FamilyHolderVsActor, V14FamilyIdentityJoin:
+		d.drawV14Group(&g, group)
+	}
+	if v14ChainUsesChains(d.benchVersion) {
+		d.drawV14BusinessChainValues(group, &g)
+	}
+	if d.benchVersion >= protocol.BenchVersionV14 {
+		d.drawV14Temporal(&g, group)
 	}
 	return g
 }
@@ -600,7 +620,10 @@ func v13GroupTimestamp(seed int64, salt string, i int, g v13Group) string {
 // MemoryCase: the three state records, the decoy clause, the question, and
 // the typed answer specification.
 type v13Member struct {
-	Records     [3]string
+	Records [3]string
+	// Extra holds further state records after Records, in story order. Only
+	// the v14 temporal families fill it; v13 members render exactly three.
+	Extra       []string
 	DecoyClause string
 	Question    string
 	Kind        string
@@ -616,6 +639,14 @@ type v13Member struct {
 	Constraints []string
 	Operations  []string
 	Protected   []string
+	// ChainExtra holds v14 supersession-chain records after Records[1]
+	// (SN-353); always empty below v14.
+	ChainExtra []string
+	// chain is the rendered v14 chain with the value each row mentions.
+	chain []v14ChainRow
+	// custody is the holder-vs-actor oracle input: one handover per record
+	// (v14_role_families.go). Never rendered.
+	custody []v14Handover
 }
 
 func v13Subject(seed int64, group int, purpose string) string {
@@ -726,6 +757,10 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Operations = []string{"induce schema", "resolve subject by remit", "select latest status", "map alias term to plain status", "return the status"}
 
 	case V13FamilyLatestEvent:
+		if g.T14 != nil {
+			renderV14EventSequence(d, schema, group, variant, g, counter, subject, &m)
+			break
+		}
 		events := g.Events
 		if counter {
 			events[g.CounterEvent].Date = g.CounterDate
@@ -799,6 +834,10 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Operations = []string{"induce schema", "resolve subject by remit", "map role labels to commissioning vs supplier", "return the client organisation"}
 
 	case V13FamilyNextActionResponsible:
+		if g.T14 != nil {
+			renderV14Process(d, schema, group, variant, g, counter, subject, &m)
+			break
+		}
 		action := V13ActionClasses[g.Classes[0]]
 		first, current := g.People[0], g.People[1]
 		if counter {
@@ -838,6 +877,10 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Operations = []string{"induce schema", "resolve subject by remit", "read the standing action", "select latest responsible party", "return both"}
 
 	case V13FamilyCurrentChannel:
+		if g.T14 != nil {
+			renderV14ChannelAsOf(d, schema, group, variant, g, counter, subject, &m)
+			break
+		}
 		first, current, decoy := g.Classes[0], g.Classes[1], g.Classes[3]
 		if counter {
 			current = g.Classes[2]
@@ -908,8 +951,17 @@ func renderV13Member(d *v13Draws, schema v13Schema, group, variant int, g v13Gro
 		m.Facts = []string{"per-run schema glossary", "entity alias", "first sign-off record", "independent second sign-off record"}
 		m.Constraints = []string{g.Alias, g.Purpose}
 		m.Operations = []string{"induce schema", "resolve subject by remit", "collect every sign-off record", "detect disagreement", "return both values and the conflict"}
+
+	case V14FamilyHolderVsActor:
+		renderV14HolderVsActor(d, schema, group, variant, g, counter, subject, &m)
+
+	case V14FamilyIdentityJoin:
+		renderV14IdentityJoin(d, schema, group, variant, g, counter, subject, &m)
 	default:
 		panic("unhandled v13 family")
+	}
+	if v14ChainUsesChains(d.benchVersion) {
+		applyV14BusinessChain(d, &m, schema, group, g, counter)
 	}
 	return m
 }
@@ -941,8 +993,13 @@ func v13Glossary(d *v13Draws, group int, schema v13Schema, g v13Group) []string 
 	if g.Family == V13FamilyStandingStatus {
 		// The status legend binds every alias term this group uses to its
 		// plain-English class, so an honest reader can answer either way.
-		legend := make([]string, 0, 4)
-		for _, class := range g.Classes {
+		legend := make([]string, 0, 5)
+		classes := g.Classes[:]
+		if v14ChainUsesChains(d.benchVersion) {
+			// The v14 chain can move the counterfactual to a fifth class.
+			classes = append(append([]int(nil), classes...), g.ExtraClass)
+		}
+		for _, class := range classes {
 			legend = append(legend, fmt.Sprintf("%s means %s", d.statusAlias(class), V13StatusClasses[class].Canonical))
 		}
 		perm := v13Perm(seed, fmt.Sprintf("legend-%d", group), len(legend))
@@ -984,6 +1041,14 @@ func renderV13Record(seed int64, group int, renderer V10Renderer, index int, row
 // invariant, causal counterfactual). Count must be a positive multiple of
 // four; 28 covers every family once.
 func GenerateV13Programs(seed int64, count int) ([]V10GeneratedCase, error) {
+	return GenerateV13ProgramsForVersion(seed, count, protocol.BenchVersionV13)
+}
+
+// GenerateV13ProgramsForVersion is GenerateV13Programs under an explicit
+// benchmark contract. v13 renders exactly as before; bench_version >= 14 files
+// the shuffled case-file rows in story order (ditto-subnet#3088) and rotates
+// the v14 role families through the role slot (V14FamilyFor).
+func GenerateV13ProgramsForVersion(seed int64, count, benchVersion int) ([]V10GeneratedCase, error) {
 	if count <= 0 || count%4 != 0 {
 		return nil, fmt.Errorf("v13 program count must be a positive multiple of four, got %d", count)
 	}
@@ -993,7 +1058,7 @@ func GenerateV13Programs(seed int64, count int) ([]V10GeneratedCase, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := newV13Draws(seed, "business")
+	d := newV13Draws(seed, "business", benchVersion)
 	out := make([]V10GeneratedCase, 0, count)
 	for group := 0; group < count/4; group++ {
 		g := d.drawGroup(group)
@@ -1048,14 +1113,23 @@ func materializeV13Case(
 		protocol.OpaqueCaseID(seed, prefix+"-state-b", 0),
 		protocol.OpaqueCaseID(seed, prefix+"-state-c", 0),
 	}
+	for k := range m.ChainExtra {
+		pairIDs = append(pairIDs, protocol.OpaqueCaseID(seed, prefix+"-state-chain", k))
+	}
 	glossary := v13Glossary(d, group, schema, g)
 	binding := fmt.Sprintf("%s=%s; %s=%s. Its remit is %s.", schema.Entity, g.Alias, schema.Alias, g.Alias, g.Purpose)
 	if includeDistractor {
 		binding += fmt.Sprintf(" Separately, an unrelated workstream %s=%s handles %s.%s", schema.Entity, g.DecoyAlias, g.DecoyPurpose, m.DecoyClause)
 	}
-	movable := []string{binding, m.Records[0], m.Records[1], m.Records[2]}
+	// A member carries either supersession-chain rows (ChainExtra, before
+	// the neutral record) or temporal-family rows (Extra, after it).
+	movable := append(append(append([]string{binding, m.Records[0], m.Records[1]}, m.ChainExtra...), m.Records[2]), m.Extra...)
+	for k := range m.Extra {
+		pairIDs = append(pairIDs, protocol.OpaqueCaseID(seed, prefix+"-state-extra", k))
+	}
 	perm := v13Perm(seed, fmt.Sprintf("rows-%d", group), len(movable))
 	rows := []string{glossary[0], glossary[1]}
+	fixedRows := len(rows)
 	for _, p := range perm {
 		rows = append(rows, movable[p])
 	}
@@ -1066,7 +1140,7 @@ func materializeV13Case(
 		pairs = append(pairs, protocol.MemoryPair{
 			PairID:    pairIDs[i],
 			SessionID: protocol.OpaqueCaseID(seed, fmt.Sprintf("v13-session-%d", group), i),
-			Timestamp: v13CalendarTimestamp(seed, "business", group, i),
+			Timestamp: v13CalendarTimestamp(seed, "business", group, v13CaseFileSlot(d.benchVersion, perm, i, fixedRows)),
 			Prompt:    prompt, Response: response,
 		})
 	}

@@ -348,6 +348,24 @@ async def record_treasury_settings(
     if payload.expected_revision != current:
         raise HTTPException(status_code=409, detail="treasury policy changed; refresh")
     if runtime is not None and runtime.settings.mode == "enforce":
+        from ditto.db.queries.emission_allocation import (
+            latest_emission_allocation_number,
+        )
+
+        owner = await latest_emission_allocation_number(session)
+        previous = TreasurySettings.model_validate(latest.settings) if latest else None
+        if owner and (
+            previous is None
+            or {b.bucket_id: b.allocation_bps for b in previous.service_buckets}
+            != {b.bucket_id: b.allocation_bps for b in payload.settings.service_buckets}
+        ):
+            # Gamma folds before the burn share, so moving it here would move
+            # every other share; the allocation derives both atomically.
+            raise HTTPException(
+                409,
+                f"emission allocation revision {owner} owns the enforcing Gamma "
+                "allocation; change it with set_emission_allocation",
+            )
         # Enforcing epochs fold this allocation, like burn: only the Gamma %
         # may move, and only inside the range the collector coldkey signed.
         policy = runtime.settings.approval.policy

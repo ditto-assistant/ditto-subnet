@@ -35,6 +35,10 @@ _A = "5AAAaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _B = "5BBBeW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _C = "5CCCvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _VALIDATOR = "5CiPPseXPECbkjWCa6MnjNokrgYjMqmKndv2rSnekmSK2DjL"
+# SS58-shaped witnesses that sort below and above every fixture hotkey, so the
+# fixture validator stays the lower-median row of a full quorum.
+_QUORUM_WITNESSES = ("5" + "1" * 47, "5" + "z" * 47)
+
 _ISSUED = datetime(2026, 7, 26, 12, 0, 0, tzinfo=UTC)
 
 
@@ -279,20 +283,22 @@ async def _seed_scored_agent(
                 timestamp=created_at,
             )
         )
-        await upsert_score(
-            session,
-            agent_id=agent.agent_id,
-            validator_hotkey=_VALIDATOR,
-            run_id="run_1",
-            seed=42,
-            composite=composite,
-            tool_mean=composite,
-            memory_mean=composite,
-            median_ms=500,
-            n=MIN_ELIGIBLE_CASES,
-            generated_at=created_at,
-            bench_version=MIN_SCOREABLE_BENCH_VERSION,
-        )
+        # A full quorum: authority ledger reads omit sub-quorum rows.
+        for quorum_hotkey in (_VALIDATOR, *_QUORUM_WITNESSES):
+            await upsert_score(
+                session,
+                agent_id=agent.agent_id,
+                validator_hotkey=quorum_hotkey,
+                run_id="run_1",
+                seed=42,
+                composite=composite,
+                tool_mean=composite,
+                memory_mean=composite,
+                median_ms=500,
+                n=MIN_ELIGIBLE_CASES,
+                generated_at=created_at,
+                bench_version=MIN_SCOREABLE_BENCH_VERSION,
+            )
     return agent
 
 

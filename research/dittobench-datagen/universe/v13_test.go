@@ -13,6 +13,7 @@ import (
 // v13 world contract: below v13 the versioned constructor is exactly Generate,
 // and at v13 probes are appended after the versioned story/surface world.
 func TestGenerateForVersionKeepsFrozenWorldsByteIdentical(t *testing.T) {
+	t.Parallel()
 	for _, scale := range []int{1, 2, 3} {
 		for seed := int64(1); seed <= 10; seed++ {
 			base := Generate(seed, scale)
@@ -42,6 +43,7 @@ func TestGenerateForVersionKeepsFrozenWorldsByteIdentical(t *testing.T) {
 // plan proof on both halves, the before-half answer is the superseded value,
 // and the anchors render as dates the harness can compare against timestamps.
 func TestV13AsOfPairsValidateAcrossSeeds(t *testing.T) {
+	t.Parallel()
 	for _, scale := range []int{2, 3} {
 		wantPeople, wantProjects, wantTrips := V13AsOfPairCounts(scale)
 		for seed := int64(1); seed <= 40; seed++ {
@@ -82,6 +84,7 @@ func TestV13AsOfPairsValidateAcrossSeeds(t *testing.T) {
 // every family on every seed: the oracle resolves to nothing, the tempting
 // value is planted, the grounding is citable, and the twin is answerable.
 func TestV13DecisionPairsValidateAcrossSeeds(t *testing.T) {
+	t.Parallel()
 	for _, scale := range []int{2, 3} {
 		counts := V13AbsenceFamilyCounts(scale)
 		for seed := int64(1); seed <= 40; seed++ {

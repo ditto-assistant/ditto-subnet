@@ -81,8 +81,12 @@ func Validate(p Pack) Report {
 	if p.Contract != ContractV1 {
 		v.add("", "contract", "contract must be %q, got %q", ContractV1, p.Contract)
 	}
-	if p.GradingBenchVersion != GradingBenchVersion {
-		v.add("", "grading_bench_version", "grading_bench_version must be %d, got %d", GradingBenchVersion, p.GradingBenchVersion)
+	gradingVersion := p.GradingBenchVersion
+	if !SupportsGradingBenchVersion(gradingVersion) {
+		v.add("", "grading_bench_version", "grading_bench_version must be one of %v, got %d", supportedGradingBenchVersions, gradingVersion)
+		// Grade the cases under the baseline so the remaining checks still
+		// report; the pack is already invalid.
+		gradingVersion = GradingBenchVersion
 	}
 	if !hotkeyPattern.MatchString(p.MinerHotkey) {
 		v.add("", "miner_hotkey", "miner_hotkey must be an SS58 hotkey")
@@ -123,7 +127,7 @@ func Validate(p Pack) Report {
 			seenQuestion[qKey] = id
 		}
 		r.Cases = append(r.Cases, CaseRef{CaseID: id, Fingerprint: fp})
-		validateCase(v, c, len(p.MemoryWaves), pairs, users)
+		validateCase(v, c, gradingVersion, len(p.MemoryWaves), pairs, users)
 	}
 
 	r.Issues = v.issues
@@ -219,12 +223,12 @@ func validateWaves(v *validator, waves []protocol.SeedRequest) (map[string]seede
 	return pairs, users
 }
 
-func validateCase(v *validator, c Case, nWaves int, pairs map[string]seededPair, users map[string]bool) {
+func validateCase(v *validator, c Case, gradingVersion, nWaves int, pairs map[string]seededPair, users map[string]bool) {
 	id := c.ID
-	mc := c.GradingCase()
+	mc := c.GradingCaseAt(gradingVersion)
 
-	if c.BenchVersion != 0 && c.BenchVersion != GradingBenchVersion {
-		v.add(id, "bench_version", "case bench_version must be omitted or %d", GradingBenchVersion)
+	if c.BenchVersion != 0 && c.BenchVersion != gradingVersion {
+		v.add(id, "bench_version", "case bench_version must be omitted or %d (the pack's grading_bench_version)", gradingVersion)
 	}
 	if strings.TrimSpace(c.Question) == "" || utf8.RuneCountInString(c.Question) > MaxQuestionRunes {
 		v.add(id, "question", "question must be 1..%d characters", MaxQuestionRunes)
@@ -322,6 +326,9 @@ func validateCase(v *validator, c Case, nWaves int, pairs map[string]seededPair,
 			return
 		}
 	}
+	if gradingVersion >= GradingBenchVersionV14 {
+		checkRenderedAnswerText(v, c, groups)
+	}
 	evidenceText := evidence.String()
 	for gi, forms := range groups {
 		if kind == protocol.AnswerMoney {
@@ -336,6 +343,36 @@ func validateCase(v *validator, c Case, nWaves int, pairs map[string]seededPair,
 	}
 
 	checkGraderConsistency(v, c, mc, kind, pairs)
+}
+
+// checkRenderedAnswerText is the v14 answer-text rule. The v14 grader reads a
+// reply as rendered text (grade.PlainReplyTextV14): markdown emphasis, code,
+// links, headings, bullets, and table pipes are removed before matching. A
+// graded form that rendering would change can never be matched by a reply
+// that quotes it, and a distractor or dump-guard entry that rendering would
+// change can never be caught, so a v14 pack must state them as plain text.
+func checkRenderedAnswerText(v *validator, c Case, groups [][]string) {
+	unstable := func(s string) bool {
+		return strings.TrimSpace(s) != "" && grade.Normalize(grade.PlainReplyTextV14(s)) != grade.Normalize(s)
+	}
+	for gi, forms := range groups {
+		for _, f := range forms {
+			if unstable(f) {
+				v.add(c.ID, "v14_rendered_text", "answer item %d form %q changes when read as rendered text; v14 packs state answers as plain text", gi, f)
+				break
+			}
+		}
+	}
+	for _, d := range c.DistractorAnswers {
+		if unstable(d) {
+			v.add(c.ID, "v14_rendered_text", "distractor %q changes when read as rendered text; v14 packs state distractors as plain text", d)
+		}
+	}
+	for _, d := range c.DumpGuard {
+		if unstable(d) {
+			v.add(c.ID, "v14_rendered_text", "dump_guard entry %q changes when read as rendered text; v14 packs state it as plain text", d)
+		}
+	}
 }
 
 // checkGraderConsistency probes the production grader with canned responses.

@@ -26,6 +26,7 @@ import binascii
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -39,6 +40,7 @@ from ditto.api_models.generator import (
     GeneratorCompetitionSettings,
     GeneratorResultRequest,
     GeneratorRunSummary,
+    GeneratorScorerFault,
     GeneratorSeedOutput,
     GeneratorSubmissionSummary,
 )
@@ -64,6 +66,7 @@ from ditto.score_order import rank_submissions
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from ditto.api_server.generator_identity import GeneratorIdentity
     from ditto.db.models import GeneratorRun, GeneratorSubmission
 
 logger = logging.getLogger(__name__)
@@ -154,6 +157,11 @@ def inspect_upload(*, source_base64: str, source_sha256: str) -> InspectedUpload
         raw = base64.b64decode(source_base64, validate=True)
     except (binascii.Error, ValueError) as exc:
         raise UploadRejected("source_base64 is not valid base64") from exc
+    return inspect_source(raw, source_sha256=source_sha256)
+
+
+def inspect_source(raw: bytes, *, source_sha256: str) -> InspectedUpload:
+    """Check raw archive bytes. Raises :class:`UploadRejected`."""
     if not raw or len(raw) > MAX_SOURCE_ARCHIVE_BYTES:
         raise UploadRejected(
             f"source archive must be 1..{MAX_SOURCE_ARCHIVE_BYTES} bytes"
@@ -167,8 +175,11 @@ def inspect_upload(*, source_base64: str, source_sha256: str) -> InspectedUpload
     return InspectedUpload(raw=raw, info=info)
 
 
-async def select_panel(session: AsyncSession, *, size: int) -> list[dict[str, Any]]:
-    """The top ``size`` owners on the authoritative ledger, best first.
+async def select_panel(
+    session: AsyncSession, *, size: int | None
+) -> list[dict[str, Any]]:
+    """The top ``size`` owners on the authoritative ledger, best first
+    (``None``: every ranked owner).
 
     One agent per owner (the ledger already dedupes owners); the first is the
     champion. Owner keys use the emission owner space, matching packs'
@@ -295,6 +306,32 @@ def _generator_failure(payload: GeneratorResultRequest) -> tuple[str, str] | Non
     return None
 
 
+# The messages challenge.GenerateRequest.Validate returns. A scorer before
+# genrun.ErrInvalidRequest wrote them into a seed's error as if the generator
+# had failed; they are the scorer refusing the request it was leased, never
+# the generator's output (generator failures are prefixed "generator ").
+_SCORER_REQUEST_ERROR = re.compile(
+    r"^request (?:(?:contract|seed|miner_hotkey|cases|grading_bench_version) must "
+    r"|accepts grading policies )"
+)
+
+
+def scorer_request_error(error: str | None) -> bool:
+    """Whether a reported generation error is the scorer refusing its request."""
+    return bool(error) and _SCORER_REQUEST_ERROR.match(error or "") is not None
+
+
+def _scorer_request_failure(payload: GeneratorResultRequest) -> str | None:
+    """A legacy scorer's request refusal reported as a seed error, if any."""
+    outputs = list(payload.seeds or ())
+    if payload.probe is not None:
+        outputs.append(payload.probe)
+    for output in outputs:
+        if scorer_request_error(output.error):
+            return output.error
+    return None
+
+
 def _reject(row: GeneratorSubmission, reason: str, *, now: datetime) -> None:
     row.status = "rejected"
     row.status_reason = reason[:1000]
@@ -350,6 +387,20 @@ async def record_result(
             else None
         ),
     }
+
+    refused = _scorer_request_failure(payload) if payload.build.ok else None
+    if refused is not None:
+        _back_off_for_scorer_fault(
+            row,
+            run,
+            settings=settings,
+            kind="unsupported_request",
+            detail=refused,
+            now=now,
+        )
+        return RecordedResult(
+            "abandoned", "scorer_unsupported_request", None, row.status
+        )
 
     failure = _generator_failure(payload)
     if failure is not None:
@@ -437,6 +488,66 @@ async def record_result(
     return RecordedResult("qualified", "qualified", None, row.status)
 
 
+def _back_off_for_scorer_fault(
+    row: GeneratorSubmission,
+    run: GeneratorRun,
+    *,
+    settings: GeneratorCompetitionSettings,
+    kind: str,
+    detail: str,
+    now: datetime,
+) -> None:
+    """Retire a run the scorer could not do, without blaming the generator.
+
+    The run's seeds were exposed, so it is abandoned, and the submission
+    stays active and backs off for ``retry_backoff_seconds`` (a stale scorer
+    would otherwise fail every lease in a tight loop).
+    """
+    finish_run(run, status="abandoned", outcome=f"scorer_{kind}", now=now)
+    clear_lease(row, now=now)
+    row.next_run_at = now + timedelta(seconds=settings.retry_backoff_seconds)
+    if row.status == "active":
+        row.status_reason = f"scorer fault ({kind}); retrying: {detail}"[:1000]
+    row.updated_at = now
+
+
+async def record_scorer_fault(
+    session: AsyncSession,
+    row: GeneratorSubmission,
+    run: GeneratorRun,
+    payload: GeneratorScorerFault,
+    *,
+    now: datetime,
+) -> RecordedResult:
+    """Apply a scorer-reported fault to a row-locked, leased run (caller commits)."""
+    if (
+        run.status != "leased"
+        or row.lease_id != payload.lease_id
+        or row.lease_run_id != run.run_id
+    ):
+        raise ResultRejected("lease is not current for this run")
+    expires = row.lease_expires_at
+    if expires is not None and expires.replace(tzinfo=expires.tzinfo or UTC) <= now:
+        raise ResultRejected("lease expired before the fault arrived")
+    settings = await settings_at(session, run.settings_revision)
+    run.scorer_version = payload.scorer_version
+    run.evaluation = {
+        "scorer_fault": {
+            "error_kind": payload.error_kind,
+            "detail": payload.detail[:2000],
+        }
+    }
+    _back_off_for_scorer_fault(
+        row,
+        run,
+        settings=settings,
+        kind=payload.error_kind,
+        detail=payload.detail,
+        now=now,
+    )
+    return RecordedResult("abandoned", f"scorer_{payload.error_kind}", None, row.status)
+
+
 def run_summary(
     run: GeneratorRun | None, counts: dict[str, int] | None
 ) -> GeneratorRunSummary | None:
@@ -458,7 +569,10 @@ def submission_summary(
     row: GeneratorSubmission,
     latest: GeneratorRun | None,
     counts: dict[str, int] | None,
+    identity: GeneratorIdentity | None = None,
 ) -> GeneratorSubmissionSummary:
+    """A submission's public summary; ``identity`` adds its public name,
+    avatar and version (operator views may omit it)."""
     return GeneratorSubmissionSummary(
         submission_id=row.submission_id,
         miner_hotkey=row.miner_hotkey,
@@ -481,6 +595,10 @@ def submission_summary(
         public_default=row.public_default,
         round_score=row.round_score,
         round_scored_index=row.round_scored_index,
+        name=identity.name if identity is not None else row.name,
+        name_handle=identity.name_handle if identity is not None else None,
+        avatar_url=identity.avatar_url if identity is not None else None,
+        version=identity.version if identity is not None else None,
     )
 
 

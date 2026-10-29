@@ -22,6 +22,8 @@
 @import "./pages/activity.css";
 @import "./pages/gamma.css";
 @import "./pages/bounties.css";
+@import "./pages/generators.css";
+@import "./pages/pipeline-theater.css";
 
 /* the calm layer sits last so it wins every tie */
 @import "./calm.css";

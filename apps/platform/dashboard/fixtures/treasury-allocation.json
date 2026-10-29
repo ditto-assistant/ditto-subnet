@@ -1,0 +1,52 @@
+{
+  "policy_revision": 5,
+  "allocation_version": 2,
+  "mode": "enforce",
+  "routing_status": "active",
+  "routing_epoch": 25963,
+  "denominator": "miner_emission",
+  "service_bps": 0,
+  "forecast_service_share": 0.0,
+  "forecast_burn_share": 0.5,
+  "forecast_miner_share": 0.5,
+  "effective_service_share": 0.0,
+  "burn_revision": 18,
+  "burn_of_miner_remainder": 0.5,
+  "collector_hotkey": "5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e",
+  "collector_coldkey": "5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t",
+  "sweep_interval_hours": 1,
+  "sweep_status": "not_activated",
+  "payment_observer_status": "not_activated",
+  "buckets": [
+    {
+      "bucket_id": "gm",
+      "purpose": "GM inference credits funding from the Gamma service pool",
+      "allocation_bps": 0,
+      "holding_coldkey": "5Cm6Vok2sWkQ33w97AVEsb9U2EyE96Y1utfSLW5vR4viiLKD",
+      "publish_payments": true,
+      "payee_rules": []
+    },
+    {
+      "bucket_id": "bitsec",
+      "purpose": "Bitsec service funding; initial allocation is zero",
+      "allocation_bps": 0,
+      "holding_coldkey": "5CD8TZWNSNtARxmB5VQF9qTNfCVjhdMdjmwBrniqU3E71ohQ",
+      "publish_payments": true,
+      "payee_rules": []
+    },
+    {
+      "bucket_id": "bitcast",
+      "purpose": "Bitcast service funding; initial allocation is zero",
+      "allocation_bps": 0,
+      "holding_coldkey": "5F2821EzMcBC2b8hWmrMWiNRcx6DgdaTQQiqmPkbAk7a6yn9",
+      "publish_payments": true,
+      "payee_rules": []
+    }
+  ],
+  "runtime": {
+    "revision": 20,
+    "mode": "enforce",
+    "activation_epoch": 25901,
+    "allocation_matches": true
+  }
+}

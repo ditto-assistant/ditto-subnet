@@ -32,8 +32,8 @@ locals {
   # larger class: upload fingerprinting is GIL-bound in-process CPU and the
   # shared-core e2-medium saturated under the 2026-07-16 miner upload storm.
   app_envs = {
-    dev  = { hostname = "ditto-platform-dev", domain = var.api_domain_dev, size = "app-small" }
-    prod = { hostname = "ditto-platform-prod", domain = var.api_domain_prod, size = "app-standard" }
+    dev  = { hostname = "ditto-platform-dev", domain = var.api_domain_dev, size = "app-small", running = var.dev_environment_running }
+    prod = { hostname = "ditto-platform-prod", domain = var.api_domain_prod, size = "app-standard", running = true }
   }
 
   # Secrets the platform runtime SA reads at converge/deploy time (see the
@@ -157,6 +157,7 @@ module "app" {
   boot_disk_gb          = var.app_boot_disk_gb
   service_account_email = var.platform_dedicated_identity_attached ? local.platform_api_sa_email : local.run_sa_email
   labels                = { env = each.key, role = "platform-app", managed = "terraform" }
+  desired_status        = each.value.running ? "RUNNING" : "TERMINATED"
 }
 
 # --- Agent-tarball object storage: one GCS bucket per env (S3 interop). ---
@@ -612,8 +613,9 @@ resource "google_secret_manager_secret_iam_member" "platform_api_access" {
 # freshly-created VM attribute. Here for_each keys off var.manage_dns (a known
 # bool), so the record SET is known at plan and only the `content` (the IP) is
 # deferred to apply.
+# A stopped VM releases its ephemeral IP, so a stopped env has no record.
 resource "cloudflare_record" "api" {
-  for_each = var.manage_dns ? local.app_envs : {}
+  for_each = var.manage_dns ? { for env, app in local.app_envs : env => app if app.running } : {}
 
   zone_id = var.cloudflare_zone_id
   name    = each.value.domain

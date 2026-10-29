@@ -6,6 +6,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import judge_evaluator
 from longmemeval_adapter import (
     NATIVE_MEMORY_TOOLS,
     AdapterError,
@@ -19,7 +20,11 @@ from longmemeval_adapter import (
     sha256_file,
     stable_id,
 )
-from openrouter_judge_proxy import OFFICIAL_MODEL, OPENROUTER_MODEL, rewrite_request
+from openrouter_judge_proxy import (
+    JUDGE_MAX_COMPLETION_TOKENS,
+    JUDGE_MODEL,
+    rewrite_request,
+)
 from openrouter_reader_proxy import (
     PROFILE_REVISION as READER_PROFILE_REVISION,
 )
@@ -29,7 +34,11 @@ from openrouter_reader_proxy import (
 from openrouter_reader_proxy import (
     rewrite_request as rewrite_reader_request,
 )
-from summarize_results import summarize_agent
+from summarize_results import (
+    is_official_protocol,
+    resolve_judge,
+    summarize_agent,
+)
 
 
 def fixture_entry():
@@ -176,16 +185,70 @@ class RetrievalConditionTests(unittest.TestCase):
 
 
 class JudgeProxyTests(unittest.TestCase):
-    def test_only_official_model_is_rewritten(self):
-        value = rewrite_request(
-            {"model": OFFICIAL_MODEL, "messages": [], "temperature": 0}
-        )
-        self.assertEqual(value["model"], OPENROUTER_MODEL)
+    def judge_request(self, **overrides):
+        request = {
+            "model": JUDGE_MODEL,
+            "messages": [],
+            "temperature": 0,
+            "max_tokens": JUDGE_MAX_COMPLETION_TOKENS,
+        }
+        request.update(overrides)
+        return request
+
+    def test_the_production_judge_is_accepted_and_the_provider_pinned(self):
+        value = rewrite_request(self.judge_request())
+        self.assertEqual(value["model"], JUDGE_MODEL)
         self.assertFalse(value["stream"])
+        # The provider block is the frozen contract as a unit, not just the
+        # pin: agreement with the incumbent ranged 95.3%-100% across the 23
+        # providers OpenRouter served this model from, and the relay rejects a
+        # block that is a subset of production's rather than widening it.
+        # ProductionParityTests checks that helper against the Go runtime.
+        self.assertEqual(
+            value["provider"], judge_evaluator.judge_provider_routing()
+        )
+        self.assertEqual(
+            value["provider"]["only"], [judge_evaluator.JUDGE_ROUTE_PROVIDER]
+        )
+        self.assertFalse(value["provider"]["allow_fallbacks"])
+        self.assertTrue(value["provider"]["require_parameters"])
+        self.assertEqual(value["provider"]["data_collection"], "deny")
+        self.assertTrue(value["provider"]["zdr"])
 
     def test_other_models_are_rejected(self):
         with self.assertRaises(ValueError):
-            rewrite_request({"model": "gpt-4o-mini", "messages": []})
+            rewrite_request(self.judge_request(model="gpt-4o-mini"))
+
+    def test_the_retired_official_judge_is_rejected(self):
+        with self.assertRaises(ValueError):
+            rewrite_request(
+                self.judge_request(model=judge_evaluator.OFFICIAL_JUDGE_MODEL)
+            )
+
+    def test_the_upstream_completion_bound_is_rejected(self):
+        """An unmodified upstream evaluator sends max_tokens=10.
+
+        A reasoning judge spends that entirely on reasoning tokens and returns
+        content="", which an evaluator labelling by `'yes' in response` scores
+        "no" on every question -- a complete run reporting total failure with
+        no error anywhere. Refuse it at the boundary.
+        """
+        with self.assertRaisesRegex(ValueError, "max_tokens"):
+            rewrite_request(
+                self.judge_request(
+                    max_tokens=judge_evaluator.OFFICIAL_JUDGE_MAX_COMPLETION_TOKENS
+                )
+            )
+
+    def test_a_missing_completion_bound_is_rejected(self):
+        request = self.judge_request()
+        del request["max_tokens"]
+        with self.assertRaisesRegex(ValueError, "max_tokens"):
+            rewrite_request(request)
+
+    def test_streaming_is_rejected(self):
+        with self.assertRaises(ValueError):
+            rewrite_request(self.judge_request(stream=True))
 
 
 class ReaderProxyTests(unittest.TestCase):
@@ -218,14 +281,18 @@ class SummaryTests(unittest.TestCase):
             {"question_id": "q1", "hypothesis": "yes"},
             {"question_id": "q2_abs", "hypothesis": ""},
         ]
+        # The frozen 2026-07-23 result files were produced by the official
+        # gpt-4o judge and keep validating as its rows; summarize_results reads
+        # recorded artifacts and never re-judges anything.
+        official = judge_evaluator.OFFICIAL_JUDGE_MODEL
         evaluations = [
             {
                 "question_id": "q1",
-                "autoeval_label": {"model": OFFICIAL_MODEL, "label": True},
+                "autoeval_label": {"model": official, "label": True},
             },
             {
                 "question_id": "q2_abs",
-                "autoeval_label": {"model": OFFICIAL_MODEL, "label": False},
+                "autoeval_label": {"model": official, "label": False},
             },
         ]
         result = summarize_agent(hypotheses, evaluations, references)
@@ -235,6 +302,109 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result["empty_answers_judged_correct"], 0)
         self.assertEqual(result["abstention"], {"n": 1, "accuracy": 0.0})
 
+    def test_a_row_judged_by_another_model_is_rejected(self):
+        """Provenance is validated per row against the declared judge.
+
+        Repointing a module constant at a different judge would make this
+        script reject its own recorded inputs and stamp the output with a judge
+        that never ran, so the expected judge is an argument and every row is
+        checked against it.
+        """
+        references = {"q1": {"question_type": "single-session-user"}}
+        hypotheses = [{"question_id": "q1", "hypothesis": "Lisbon"}]
+        evaluations = [
+            {
+                "question_id": "q1",
+                "autoeval_label": {"model": judge_evaluator.JUDGE_MODEL, "label": True},
+            }
+        ]
+        with self.assertRaisesRegex(ValueError, "not the declared judge"):
+            summarize_agent(
+                hypotheses,
+                evaluations,
+                references,
+                judge_model=judge_evaluator.OFFICIAL_JUDGE_MODEL,
+            )
+
+
+class JudgeMetadataTests(unittest.TestCase):
+    """Naming one judge field must not leave the rest describing another judge."""
+
+    def test_the_official_judge_resolves_to_its_own_identity(self):
+        self.assertEqual(
+            resolve_judge(judge_evaluator.OFFICIAL_JUDGE_MODEL),
+            {
+                "model": judge_evaluator.OFFICIAL_JUDGE_MODEL,
+                "short_name": judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME,
+                "openrouter_model": "openai/gpt-4o-2024-08-06",
+                "profile_revision": judge_evaluator.OFFICIAL_JUDGE_PROFILE_REVISION,
+            },
+        )
+
+    def test_the_production_judge_resolves_without_repeating_its_identity(self):
+        resolved = resolve_judge(judge_evaluator.JUDGE_MODEL)
+        self.assertEqual(resolved["short_name"], judge_evaluator.JUDGE_SHORT_NAME)
+        self.assertEqual(
+            resolved["profile_revision"], judge_evaluator.JUDGE_PROFILE_REVISION
+        )
+        # The failure this guards: resolving to gpt-4o's short name would read
+        # `.eval-results-gpt-4o` for a DeepSeek-judged run.
+        self.assertNotEqual(
+            resolved["short_name"], judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME
+        )
+
+    def test_an_unknown_judge_must_supply_its_whole_identity(self):
+        with self.assertRaisesRegex(ValueError, "not a known judge"):
+            resolve_judge("some/unreviewed-judge")
+
+    def test_an_unknown_judge_is_accepted_once_fully_described(self):
+        self.assertEqual(
+            resolve_judge(
+                "some/unreviewed-judge",
+                "unreviewed",
+                "some/unreviewed-judge",
+                "unreviewed-v1",
+            )["profile_revision"],
+            "unreviewed-v1",
+        )
+
+    def test_a_partially_described_unknown_judge_names_what_is_missing(self):
+        with self.assertRaisesRegex(ValueError, "--judge-profile-revision"):
+            resolve_judge(
+                "some/unreviewed-judge",
+                "unreviewed",
+                "some/unreviewed-judge",
+            )
+
+
+    def test_an_explicitly_empty_override_does_not_borrow_a_known_identity(self):
+        """`--judge-short-name ''` means "I have no value", not "use theirs".
+
+        Falling back would publish a known judge's short name, and that name
+        selects the .eval-results-* artifact the numbers are read from.
+        """
+        with self.assertRaises(ValueError) as caught:
+            resolve_judge(
+                judge_evaluator.OFFICIAL_JUDGE_MODEL, short_name=""
+            )
+        self.assertIn("--judge-short-name", str(caught.exception))
+
+    def test_official_protocol_requires_the_official_short_name(self):
+        """The short name is part of the identity, and picks the artifact."""
+        judge = resolve_judge(
+            judge_evaluator.OFFICIAL_JUDGE_MODEL, short_name="substituted"
+        )
+        self.assertFalse(
+            is_official_protocol(judge),
+            "a run reading .eval-results-substituted must not be stamped "
+            "official_protocol",
+        )
+        self.assertTrue(
+            is_official_protocol(
+                resolve_judge(judge_evaluator.OFFICIAL_JUDGE_MODEL)
+            ),
+            "the unmodified official identity must still mark official_protocol",
+        )
 
 class RecordingHandler(BaseHTTPRequestHandler):
     requests = []

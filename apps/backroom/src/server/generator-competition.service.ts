@@ -8,8 +8,10 @@ import {
   generatorRoundLoopSchema,
   generatorRoundPreviewSchema,
   generatorRoundTickSchema,
+  generatorScorerStatusSchema,
   listGeneratorRoundsInputSchema,
   registerDefaultGeneratorInputSchema,
+  defaultGeneratorUploadResponseSchema,
   tickGeneratorRoundsInputSchema,
   releaseRoundLeaseInputSchema,
   republishRoundCommitmentInputSchema,
@@ -27,6 +29,7 @@ import {
   generatorPromotionInputSchema,
   listGeneratorSubmissionsInputSchema,
   rejectGeneratorInputSchema,
+  reinstateGeneratorInputSchema,
   rescoreGeneratorInputSchema,
   rotateGeneratorProbeInputSchema,
   setGeneratorSettingsInputSchema,
@@ -53,18 +56,37 @@ function settingsRefusal(cause: unknown) {
   if (cause.status !== 409 && cause.status !== 422) return null
   const recovery = /confirmation/i.test(cause.message)
     ? 'Nothing was applied: the confirmation must be "APPLY GENERATOR COMPETITION <MODE>" naming the mode this revision applies.'
-    : cause.status === 422
+    : /generator scorer/i.test(cause.message)
+      ? 'Nothing was applied: the live generator scorer (get_generator_scorer) refuses that cases_per_seed. Redeploy the scorer first, or resubmit with overrideScorerCapability=true to apply it anyway (rounds void with an infra reason and qualifications wait until a capable scorer polls).'
+      : cause.status === 422
       ? 'Nothing was applied: correct the refused settings (min_solver_owners <= min_panel <= panel_size, every field inside its bound) and resubmit with the same expectedRevision.'
       : 'Nothing was applied: re-read get_generator_competition_settings and resubmit with the revision it reports.'
   return new Error(`${cause.message}. ${recovery}`)
 }
 
+// Reads default a field an older Platform omits. A write must not use that
+// default to report a setting Platform silently dropped: an older Platform
+// ignores unknown fields and stores the revision without them. A dropped field
+// whose requested value equals that default changed nothing and is fine.
+function droppedSettings(
+  raw: unknown,
+  requested: Record<string, unknown>,
+  stored: Record<string, unknown>,
+) {
+  const returned = (raw as { settings?: unknown } | null)?.settings
+  const returnedFields = returned !== null && typeof returned === 'object' ? returned : {}
+  return Object.keys(requested).filter(
+    (field) => !(field in returnedFields) && requested[field] !== stored[field],
+  )
+}
+
 export async function setGeneratorSettings(rawInput: unknown, actor: string) {
   const input = setGeneratorSettingsInputSchema.parse(rawInput)
+  let raw: unknown
   try {
     // The POST's own response is the revision this write created; a re-read
     // could report a concurrent write as if it were this one.
-    return generatorSettingsRevisionSchema.parse(await platformAdminRequest(`${BASE}/settings`, {
+    raw = await platformAdminRequest(`${BASE}/settings`, {
       method: 'POST',
       actor,
       body: {
@@ -74,11 +96,23 @@ export async function setGeneratorSettings(rawInput: unknown, actor: string) {
         reason: input.reason,
         actor,
         confirmation: input.confirmation,
+        ...(input.overrideScorerCapability ? { override_scorer_capability: true } : {}),
       },
-    }))
+    })
   } catch (cause) {
     throw settingsRefusal(cause) ?? cause
   }
+  const created = generatorSettingsRevisionSchema.parse(raw)
+  const dropped = droppedSettings(raw, input.settings, created.settings)
+  if (dropped.length > 0) {
+    throw new Error(
+      `Platform stored revision ${created.revision} without ${dropped.join(', ')}: it predates `
+      + 'that setting, so the stored revision uses the default rather than the value you sent '
+      + '(for upload_fee_required, generator uploads stay free). Deploy the Platform release '
+      + 'that supports it, then re-read get_generator_competition_settings and write again.',
+    )
+  }
+  return created
 }
 
 export async function listGeneratorSubmissions(rawInput: unknown) {
@@ -167,6 +201,27 @@ export async function rejectGenerator(rawInput: unknown, actor: string) {
   )
 }
 
+export async function reinstateGenerator(rawInput: unknown, actor: string) {
+  const input = reinstateGeneratorInputSchema.parse(rawInput)
+  return generatorSubmissionDetailSchema.parse(
+    await platformAdminRequest(
+      `${BASE}/submissions/${encodeURIComponent(input.submissionId)}/reinstate`,
+      {
+        method: 'POST',
+        actor,
+        body: {
+          expected_status: input.expectedStatus,
+          expected_status_reason: input.expectedStatusReason,
+          reason: input.reason,
+          actor,
+          confirmation: input.confirmation,
+          override_operator_ruling: input.overrideOperatorRuling,
+        },
+      },
+    ),
+  )
+}
+
 // --- rounds ----------------------------------------------------------------
 
 function roundRefusal(cause: unknown) {
@@ -193,7 +248,7 @@ async function defaultGeneratorWrite<T>(operation: () => Promise<T>): Promise<T>
   } catch (cause) {
     if (cause instanceof PlatformAdminError && (cause.status === 409 || cause.status === 422)) {
       throw new Error(
-        `${cause.message}. Nothing was registered: send the confirmation "REGISTER DEFAULT GENERATOR" with a source archive whose SHA-256 matches sourceSha256 and that no earlier upload already holds.`,
+        `${cause.message}. Nothing was registered: send the confirmation "REGISTER DEFAULT GENERATOR" with a source archive (an uploadKey from this operator's create_default_generator_upload, or sourceBase64) whose SHA-256 matches sourceSha256 and that no earlier upload already holds.`,
       )
     }
     throw cause
@@ -214,6 +269,10 @@ export async function fetchGeneratorRound(rawInput: unknown) {
 
 export async function fetchGeneratorRoundPreview() {
   return generatorRoundPreviewSchema.parse(await platformAdminRequest(`${BASE}/rounds/preview`))
+}
+
+export async function fetchGeneratorScorer() {
+  return generatorScorerStatusSchema.parse(await platformAdminRequest(`${BASE}/scorer`))
 }
 
 export async function fetchGeneratorRoundLoop() {
@@ -307,8 +366,23 @@ export async function releaseGeneratorRoundLease(rawInput: unknown, actor: strin
   )
 }
 
+export async function createDefaultGeneratorUpload(actor: string) {
+  return defaultGeneratorUploadResponseSchema.parse(
+    await platformAdminRequest(`${BASE}/default-generator/upload-url`, {
+      method: 'POST',
+      actor,
+      body: {},
+    }),
+  )
+}
+
 export async function registerDefaultGenerator(rawInput: unknown, actor: string) {
   const input = registerDefaultGeneratorInputSchema.parse(rawInput)
+  if ((input.sourceBase64 === undefined) === (input.uploadKey === undefined)) {
+    throw new Error(
+      'Provide exactly one of uploadKey (from create_default_generator_upload) or sourceBase64. Nothing was registered.',
+    )
+  }
   return defaultGeneratorWrite(async () =>
     defaultGeneratorResponseSchema.parse(
       await platformAdminRequest(`${BASE}/default-generator`, {
@@ -317,7 +391,8 @@ export async function registerDefaultGenerator(rawInput: unknown, actor: string)
         body: {
           miner_hotkey: input.minerHotkey,
           source_sha256: input.sourceSha256,
-          source_base64: input.sourceBase64,
+          source_base64: input.sourceBase64 ?? null,
+          upload_key: input.uploadKey ?? null,
           reason: input.reason,
           actor,
           confirmation: input.confirmation,

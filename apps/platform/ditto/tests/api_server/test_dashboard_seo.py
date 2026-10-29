@@ -97,6 +97,7 @@ class TestRobotsAndLlms:
         assert "sample ranks" not in body.lower()
         assert f"- Gamma service treasury: {_ORIGIN}/gamma" in body
         assert f"- Build bounties: {_ORIGIN}/bounties" in body
+        assert f"- Generator competition: {_ORIGIN}/generators" in body
 
 
 class TestSitemap:
@@ -106,6 +107,7 @@ class TestSitemap:
         assert "<loc>https://platform-api.heyditto.ai/leaderboard</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/gamma</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/bounties</loc>" in xml
+        assert "<loc>https://platform-api.heyditto.ai/generators</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/operations/screeners</loc>" in xml
         assert (
             "<loc>https://platform-api.heyditto.ai/operations/validators</loc>" in xml
@@ -227,6 +229,17 @@ class TestInjectLiveSeo:
         assert "signed terms, open slots" in html
         assert (
             'property="og:url" content="https://platform-api.heyditto.ai/bounties"'
+            in html
+        )
+
+    def test_generators_route_has_its_own_metadata(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML, origin=_ORIGIN, path="/generators", snapshot=_snapshot()
+        )
+        assert "<title>Generator competition · Ditto SN118</title>" in html
+        assert "per-generator case outcomes" in html
+        assert (
+            'property="og:url" content="https://platform-api.heyditto.ai/generators"'
             in html
         )
 

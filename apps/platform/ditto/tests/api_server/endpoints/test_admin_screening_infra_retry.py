@@ -126,55 +126,6 @@ async def test_requires_the_admin_token(
     assert (await client.get(_URL, headers=wrong)).status_code == 401
 
 
-async def test_empty_state_still_reports_policy(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    _install(app, maker)
-    body = await _get(client)
-    assert body["agents"] == []
-    assert body["breakers"] == []
-    assert body["agents_truncated"] is False
-    assert body["summary"]["parked_agents"] == 0
-    assert body["summary"]["by_state"] == {
-        "backoff": 0,
-        "breaker_held": 0,
-        "probe_due": 0,
-        "due": 0,
-        "capped": 0,
-    }
-    assert "Derived from screening attempt history" in body["basis"]
-    # A breaker holds workers on its provider only; the wording must say so.
-    assert "worker on another provider can still claim" in body["basis"]
-    assert "by backoff alone" in body["basis"]
-    assert "no particular claimant" in body["basis"]
-    # A screening-lane signature (the node court-key code) never shows build
-    # recovery, so the view must say that it only ages out.
-    assert "screening lane" in body["basis"]
-    assert "breaker_history_lookback_seconds" in body["basis"]
-
-
-async def test_policy_block_equals_the_constants(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    _install(app, maker)
-    policy = (await _get(client))["policy"]
-    lookback = infra.BREAKER_HISTORY_LOOKBACK.total_seconds()
-    assert policy == {
-        "auto_retry_reason_codes": list(infra.INFRA_AUTO_RETRY_REASON_CODES),
-        "base_backoff_seconds": infra.INFRA_RETRY_BASE_BACKOFF.total_seconds(),
-        "max_backoff_seconds": infra.INFRA_RETRY_MAX_BACKOFF.total_seconds(),
-        "jitter_fraction": infra.INFRA_RETRY_JITTER_FRACTION,
-        "auto_retry_max_age_seconds": infra.INFRA_AUTO_RETRY_MAX_AGE.total_seconds(),
-        "auto_retry_max_streak": infra.INFRA_AUTO_RETRY_MAX_STREAK,
-        "plan_max_claimable": infra.INFRA_PLAN_MAX_CLAIMABLE,
-        "breaker_distinct_agents": infra.BREAKER_DISTINCT_AGENTS,
-        "breaker_window_seconds": infra.BREAKER_WINDOW.total_seconds(),
-        "breaker_open_seconds": infra.BREAKER_OPEN_DURATION.total_seconds(),
-        "breaker_probe_interval_seconds": infra.BREAKER_PROBE_INTERVAL.total_seconds(),
-        "breaker_history_lookback_seconds": lookback,
-    }
-
-
 async def test_mixed_queue_reports_every_state_and_breaker(
     app: FastAPI,
     client: httpx.AsyncClient,

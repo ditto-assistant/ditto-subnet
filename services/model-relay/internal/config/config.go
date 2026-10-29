@@ -248,6 +248,8 @@ type InferenceProxyConfig struct {
 	AllowedModels []string // DITTO_INFERENCE_ALLOWED_MODELS csv, 1..4 entries
 	Provider      string   // DITTO_INFERENCE_PROVIDER, default nebius
 	RoutingMode   string   // DITTO_INFERENCE_ROUTING_MODE
+	// Optional provider cache affinity; independent generations remain separate.
+	OpenRouterSessionAffinity bool // DITTO_INFERENCE_OPENROUTER_SESSION_AFFINITY, default false
 
 	RequestBudget int   // DB-policy fallback default 16384, max 32768
 	TokenBudget   int64 // DB-policy fallback default 25_000_000, max 200_000_000
@@ -555,8 +557,9 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		EmbeddingUpstreamURL: r.str("DITTO_EMBEDDING_UPSTREAM_URL", "https://openrouter.ai/api/v1/embeddings"),
 		EmbeddingFallbackURL: r.str("DITTO_EMBEDDING_FALLBACK_URL", "https://api.perplexity.ai/v1/embeddings"),
 
-		Provider:    r.str("DITTO_INFERENCE_PROVIDER", "nebius"),
-		RoutingMode: r.str("DITTO_INFERENCE_ROUTING_MODE", RoutingModeAggregateThroughput),
+		Provider:                  r.str("DITTO_INFERENCE_PROVIDER", "nebius"),
+		RoutingMode:               r.str("DITTO_INFERENCE_ROUTING_MODE", RoutingModeAggregateThroughput),
+		OpenRouterSessionAffinity: r.boolval("DITTO_INFERENCE_OPENROUTER_SESSION_AFFINITY", false),
 
 		RequestBudget: 16384,
 		TokenBudget:   25_000_000,

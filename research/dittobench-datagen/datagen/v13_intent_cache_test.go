@@ -8,9 +8,12 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
+// Every set_effort prompt must map to its graded value; 30 seeds cover each
+// public intent phrase many times over (originally 100).
 func TestV13EffortIntentMatchesGradedValueAcrossOneRun(t *testing.T) {
+	t.Parallel()
 	seen := map[string]int{}
-	for seed := int64(1); seed <= 100; seed++ {
+	for seed := int64(1); seed <= 30; seed++ {
 		cases, _ := GenerateCasesWithFillersForVersion(rand.New(rand.NewSource(seed)), seed, 100, protocol.BenchVersionV13)
 		for _, c := range cases {
 			if c.Category != "set_effort" {

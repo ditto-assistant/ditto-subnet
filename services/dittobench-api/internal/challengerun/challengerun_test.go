@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
+	"github.com/ditto-assistant/dittobench-api/internal/scorer"
 	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -213,5 +214,128 @@ func TestExecuteRejectsInvalidPack(t *testing.T) {
 	p.Contract = "nope"
 	if _, err := Execute(context.Background(), "http://127.0.0.1:1", p, Options{}); err == nil {
 		t.Fatal("invalid pack executed")
+	}
+}
+
+// Round cases reach the harness with the same /run surface as a scored memory
+// case: the advertised tool catalog and a per-case tool_endpoint. A harness
+// built for the scored path rejects a request missing them, which faulted
+// every case of every panel run.
+func TestExecuteAdvertisesToolsAndPerCaseToolEndpoint(t *testing.T) {
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	tools := []protocol.ToolDefinition{{Name: "send_email"}, {Name: "memory_search"}}
+	var mu sync.Mutex
+	prepared := map[string]string{} // opaque case ID -> pack case ID
+	out, err := Execute(context.Background(), srv.URL, p, Options{
+		Tools: tools,
+		ToolEndpoint: func(packCaseID, opaqueCaseID, opaqueUserID string) string {
+			mu.Lock()
+			defer mu.Unlock()
+			prepared[opaqueCaseID] = packCaseID
+			return "http://tools.invalid/" + opaqueCaseID + "/" + opaqueUserID
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range out {
+		if o.Fault {
+			t.Fatalf("case %s faulted", o.CaseID)
+		}
+	}
+	if len(h.runs) != len(p.Cases) || len(prepared) != len(p.Cases) {
+		t.Fatalf("runs=%d prepared=%d cases=%d", len(h.runs), len(prepared), len(p.Cases))
+	}
+	packIDs := map[string]bool{}
+	for _, c := range p.Cases {
+		packIDs[c.ID] = true
+	}
+	for _, r := range h.runs {
+		if len(r.Tools) != len(tools) {
+			t.Fatalf("case %s advertised %d tools, want %d", r.CaseID, len(r.Tools), len(tools))
+		}
+		want := "http://tools.invalid/" + r.CaseID + "/" + r.UserID
+		if r.ToolEndpoint != want {
+			t.Fatalf("case %s tool_endpoint %q, want %q", r.CaseID, r.ToolEndpoint, want)
+		}
+		if !packIDs[prepared[r.CaseID]] {
+			t.Fatalf("opaque case %s was not prepared with its pack case ID", r.CaseID)
+		}
+	}
+}
+
+// A harness that executes a tool through the endpoint but omits it from its
+// response is graded on what the validator observed.
+func TestGradingUsesObservedCalls(t *testing.T) {
+	bait := []protocol.ObservedToolCall{{Name: "send_email"}}
+	hidden := withObservedCalls(protocol.RunResponse{Answer: "x"}, bait)
+	if len(hidden.ToolCalls) != 1 || hidden.ToolCalls[0].Name != "send_email" {
+		t.Fatalf("observed call not restored: %+v", hidden.ToolCalls)
+	}
+	claimed := protocol.RunResponse{ToolCalls: []protocol.ObservedToolCall{{Name: "search_web"}}}
+	if got := withObservedCalls(claimed, nil); len(got.ToolCalls) != 1 || got.ToolCalls[0].Name != "search_web" {
+		t.Fatalf("self-reported call dropped with nothing observed: %+v", got.ToolCalls)
+	}
+
+	p := challenge.ReferencePack(4, testHotkey)
+	h := &fakeHarness{answer: answersByQuestion(p, gold)}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	var mu sync.Mutex
+	asked := map[string]int{}
+	if _, err := Execute(context.Background(), srv.URL, p, Options{
+		ObservedCalls: func(opaqueCaseID string) []protocol.ObservedToolCall {
+			mu.Lock()
+			defer mu.Unlock()
+			asked[opaqueCaseID]++
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(asked) != len(p.Cases) {
+		t.Fatalf("observed calls read for %d cases, want %d", len(asked), len(p.Cases))
+	}
+	for _, r := range h.runs {
+		if asked[r.CaseID] != 1 {
+			t.Fatalf("case %s observed %d times; must be read once under its wire ID", r.CaseID, asked[r.CaseID])
+		}
+	}
+}
+
+// A pack is graded at the policy it declares, and the harness runs at the
+// round's bench version. The reply below ends in a non-breaking hyphen, which
+// the v14 typographic fold reads differently from v13, so the two policies
+// disagree on it.
+func TestExecuteGradesAtThePackPolicy(t *testing.T) {
+	reply := func(c challenge.Case) string { return gold(c) + "‑" }
+	differs := false
+	for _, version := range []int{13, 14} {
+		p := challenge.ReferencePack(4, testHotkey)
+		p.GradingBenchVersion = version
+		h := &fakeHarness{answer: answersByQuestion(p, reply)}
+		srv := httptest.NewServer(h)
+		out, err := Execute(context.Background(), srv.URL, p, Options{Nonce: []byte("pinned"), BenchVersion: 14})
+		srv.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, o := range out {
+			resp := protocol.RunResponse{Answer: reply(p.Cases[i]), FinalText: reply(p.Cases[i])}
+			want := scorer.GradeMemory(p.Cases[i].GradingCaseAt(version), resp).Score
+			if o.Score != want {
+				t.Fatalf("v%d case %s: score %v, want the v%d grade %v", version, o.CaseID, o.Score, version, want)
+			}
+			other := 27 - version
+			if scorer.GradeMemory(p.Cases[i].GradingCaseAt(other), resp).Score != want {
+				differs = true
+			}
+		}
+	}
+	if !differs {
+		t.Fatal("the probe reply no longer separates the v13 and v14 policies; pick another")
 	}
 }

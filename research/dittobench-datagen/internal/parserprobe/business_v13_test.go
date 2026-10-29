@@ -10,14 +10,10 @@ import (
 )
 
 func TestBusinessV13WireParser(t *testing.T) {
-	prof, _ := gen.ProfileForVersion("full", protocol.BenchVersionV13)
+	t.Parallel()
 	total, solved := 0, 0
 	counts, successes := map[string]int{}, map[string]int{}
-	for seed := int64(1); seed <= 10; seed++ {
-		a, err := gen.GenerateDataset(seed, prof, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, a := range probeArtifacts(t, protocol.BenchVersionV13, seedRange(1, 3)...) {
 		stores := buildStores(a)
 		for _, c := range a.MemoryCases {
 			if c.QuestionType != "v13-open-program" && c.QuestionType != "v13-personal-program" && !strings.HasPrefix(c.QuestionType, "record-quantity-") && !strings.HasPrefix(c.QuestionType, "point-in-time-") {

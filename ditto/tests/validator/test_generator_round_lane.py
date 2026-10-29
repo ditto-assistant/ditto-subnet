@@ -56,7 +56,8 @@ def _artifact(job: GeneratorRoundJobResponse) -> ArtifactResponse:
         sha256=job.sha256,
         download_url="https://signed.example/x.tar.gz",
         expires_at=datetime.now(UTC),
-        bench_version=13,
+        # The artifact route answers with the lease's own bench version.
+        bench_version=job.bench_version,
         screening_policy_version=9,
         screened_image_url="https://signed.example/image.tar",
         screened_image_sha256="12" * 32,
@@ -196,6 +197,76 @@ async def test_artifact_identity_mismatch_is_refused() -> None:
     )
 
 
+async def test_a_round_runs_at_the_bench_version_platform_froze(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The job carries the round's frozen contract; the worker runs at it
+    instead of a hard-wired v13, once its scorer's round mode runs v14."""
+    import ditto.validator.worker as worker_mod
+
+    monkeypatch.setattr(worker_mod, "SUPPORTED_BENCH_VERSIONS", frozenset({13, 14}))
+    job = _job(bench_version=14)
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock(return_value=("run-1", []))
+    worker, platform = _worker(job, dittobench)
+    worker._scorer_round_bench_versions = (13, 14)
+
+    assert await worker._run_generator_round_lane() is True
+
+    assert dittobench.run_generator_round.await_args.kwargs["bench_version"] == 14
+    platform.fail_generator_round_job.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("bench_version", "scorer_round_versions"),
+    [
+        (12, (13, 14)),  # older than every round contract
+        (15, (13, 14)),  # no pack grading policy at v15
+        # A scorer whose round mode advertises no versions runs only v13.
+        (14, (13,)),
+    ],
+)
+async def test_a_round_job_outside_the_round_contracts_is_refused(
+    bench_version: int,
+    scorer_round_versions: tuple[int, ...],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import ditto.validator.worker as worker_mod
+
+    monkeypatch.setattr(
+        worker_mod, "SUPPORTED_BENCH_VERSIONS", frozenset({12, 13, 14, 15})
+    )
+    job = _job(bench_version=bench_version)
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock()
+    worker, platform = _worker(job, dittobench)
+    worker._scorer_round_bench_versions = scorer_round_versions
+
+    assert await worker._run_generator_round_lane() is True
+
+    dittobench.run_generator_round.assert_not_awaited()
+    assert platform.fail_generator_round_job.await_args.kwargs["detail"] == (
+        "round_job_not_executable"
+    )
+
+
+async def test_an_artifact_at_another_bench_version_is_refused() -> None:
+    job = _job()
+    dittobench = MagicMock()
+    dittobench.run_generator_round = AsyncMock()
+    worker, platform = _worker(job, dittobench)
+    platform.get_artifact = AsyncMock(
+        return_value=_artifact(job).model_copy(update={"bench_version": 12})
+    )
+
+    await worker._run_generator_round_lane()
+
+    dittobench.run_generator_round.assert_not_awaited()
+    assert (
+        platform.fail_generator_round_job.await_args.kwargs["reason"] == "scoring_error"
+    )
+
+
 def test_signing_messages_bind_every_field() -> None:
     agent = uuid4()
     request = GeneratorRoundJobRequest(
@@ -264,3 +335,41 @@ async def test_dittobench_round_submission_uses_the_round_mode(
     assert (run_id, per_case) == ("run-9", [{"case_id": "c0/a", "score": 1.0}])
     assert submitted["private_dataset_mode"] == "generator-round-v1"
     assert submitted["bench_version"] == 13
+
+
+async def test_round_run_keeps_the_validator_heartbeat_fresh(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A panel run must refresh ``running_benchmark`` while it holds the slot.
+
+    It used to heartbeat only after the run ended. A run that held the slot for
+    most of an epoch let the managed weight setter's heartbeat go stale, and
+    Platform's treasury fleet gate then refused every validator's ledger read.
+    """
+    import asyncio
+
+    import ditto.validator.worker as worker_module
+
+    monkeypatch.setattr(worker_module, "_ACTIVE_HEARTBEAT_SECONDS", 0.01)
+    job = _job()
+    dittobench = MagicMock()
+
+    async def slow_round(*_args: object, **_kwargs: object):
+        await asyncio.sleep(0.1)
+        return ("run-1", [{"case_id": "c0/a", "score": 1.0}])
+
+    dittobench.run_generator_round = AsyncMock(side_effect=slow_round)
+    worker, _platform = _worker(job, dittobench)
+    states: list[str] = []
+
+    async def record(state: str, **_kwargs: object) -> bool:
+        states.append(state)
+        return True
+
+    monkeypatch.setattr(worker, "_report_heartbeat", record)
+
+    assert await worker._run_generator_round_lane() is True
+
+    assert states.count("running_benchmark") >= 2
+    assert states[-1] == "polling"
+    assert worker._active_agent_id is None

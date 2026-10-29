@@ -200,16 +200,16 @@ Violations (first seed):
   arcs keep six oracles (one pure-money oracle dropped per arc), the ordinary
   slot caps `project-outstanding` at 4, and the interim fill is non-monetary.
 - The structural bounds already hold on every seed: `project-outstanding` ≤ 4,
-  gate-exposed 12.8%, largest cascade 1.2% (`TestV13MixAuditStructuralAcrossFortySeeds`).
+  gate-exposed 12.8%, largest cascade 1.2% (`TestV13QualificationSeeds/MixAuditStructural`).
 - The remaining violations are exactly the pending generators: 28 monetary
   open programs (#1520), 16 monetary record-balance cases (#1837), two
   pure-money story oracles per arc (#1841), zero abstention (#1530), no
   point-in-time twins (#1844), personal programs (#1838). The
   `value/current-channel` answer-kind × operation share (~21%) is the interim
   contact fill and disappears with those slots.
-- `TestV13MixAuditGateAcrossFortySeeds` reports these violations (first failing
+- `TestV13QualificationSeeds/MixAuditGate` reports these violations (first failing
   seed) and skips while `gen.V13InterimSlots` or `gen.V13InterimGenerators` is
   non-empty; it enforces the full gate the moment both lists are empty. Until
-  then `TestV13MixAuditStructuralAcrossFortySeeds` pins the interim ceilings
+  then `TestV13QualificationSeeds/MixAuditStructural` pins the interim ceilings
   (money ≤ 37%, ≤ 110 money-bearing cases, arithmetic ≤ 45%) so the interim
   exposure cannot widen unnoticed.

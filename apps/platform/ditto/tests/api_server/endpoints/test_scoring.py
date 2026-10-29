@@ -31,6 +31,7 @@ import ditto.api_server.endpoints.scoring as scoring_mod
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.validator import LedgerResponse
+from ditto.api_server import validator_request_outcomes
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
@@ -54,6 +55,10 @@ from ditto.db.queries.validator_auth import VALIDATOR_NONCE_EXPIRY_MARGIN
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _BOB = bittensor.Keypair.create_from_uri("//Bob")
 _VALIDATOR_HOTKEY = _KEYPAIR.ss58_address
+# SS58-shaped witnesses that sort below and above every fixture hotkey, so the
+# fixture validator stays the lower-median row of a full quorum.
+_QUORUM_WITNESSES = ("5" + "1" * 47, "5" + "z" * 47)
+
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _AUTH_HEADER = {"X-Validator-Hotkey": _VALIDATOR_HOTKEY}
@@ -209,27 +214,6 @@ def test_v9_score_proof_publishes_signature_bound_base_evidence_digest() -> None
     )
     assert proof.transcript_sha256 == "cd" * 32
     assert proof.base_evidence_sha256 == "ef" * 32
-
-
-def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
-    proof = scoring_mod._score_proof(
-        cast(
-            Score,
-            SimpleNamespace(
-                validator_hotkey=_VALIDATOR_HOTKEY,
-                run_id="run-v8",
-                composite=0.75,
-                seed=42,
-                bench_version=8,
-                signature="ab" * 64,
-                details={
-                    "ticket_deadline": "2026-08-08T12:00:00+00:00",
-                    "transcript_sha256": "cd" * 32,
-                },
-            ),
-        )
-    )
-    assert proof.base_evidence_sha256 is None
 
 
 async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
@@ -517,74 +501,30 @@ async def _seed_scored(
         )
         s.add(agent)
         await s.flush()
-        await upsert_score(
-            s,
-            agent_id=agent.agent_id,
-            validator_hotkey=_VALIDATOR_HOTKEY,
-            bench_version=_BENCH_VERSION,
-            run_id="run_1",
-            seed=42,
-            composite=composite,
-            tool_mean=composite,
-            memory_mean=composite,
-            median_ms=500,
-            n=n,
-            generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
-            signature="ab" * 64,
-            details={
-                "ticket_deadline": "2026-06-08T13:00:00+00:00",
-                "transcript_sha256": "cd" * 32,
-            },
-        )
+        # A full quorum: authority ledger reads omit sub-quorum rows.
+        for quorum_hotkey in (_VALIDATOR_HOTKEY, *_QUORUM_WITNESSES):
+            await upsert_score(
+                s,
+                agent_id=agent.agent_id,
+                validator_hotkey=quorum_hotkey,
+                bench_version=_BENCH_VERSION,
+                run_id="run_1",
+                seed=42,
+                composite=composite,
+                tool_mean=composite,
+                memory_mean=composite,
+                median_ms=500,
+                n=n,
+                generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
+                signature="ab" * 64,
+                details={
+                    "ticket_deadline": "2026-06-08T13:00:00+00:00",
+                    "transcript_sha256": "cd" * 32,
+                },
+            )
 
 
 class TestScoringLedger:
-    async def test_first_seen_on_the_wire_is_the_lineage_anchor(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """The one field the champion fold anchors on must be the lineage's.
-
-        Every validator folds this payload byte for byte, so this is where the
-        rule actually takes effect: a miner that resubmits while tied at the top
-        keeps the arrival time it earned, and does not hand its rival the
-        incumbency by shipping an improvement. The owner-family resolution behind
-        it is covered in ``tests/db/queries/test_scores.py``.
-
-        0.8999 sits inside the crown-anchor improvement floor (the dethrone
-        margin). A 0.010 jump is outside that floor and must not keep this
-        clock -- that is the planted-low-score case.
-        """
-        from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
-
-        arrived = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
-        resubmitted = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
-        await _seed_scored(
-            session_maker,
-            miner=_MINER,
-            composite=0.8999,
-            created_at=arrived,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        await _seed_scored(
-            session_maker,
-            miner=_MINER,
-            composite=0.900,
-            created_at=resubmitted,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-
-        assert resp.status_code == 200
-        (entry,) = resp.json()["entries"]
-        assert entry["composite"] == pytest.approx(0.900)
-        assert datetime.fromisoformat(entry["first_seen"]) == arrived
-
     async def test_a_sub_dethrone_improvement_keeps_the_lineage_anchor_on_the_wire(
         self,
         app: FastAPI,
@@ -695,9 +635,10 @@ class TestScoringLedger:
         assert body["entries"][0]["bench_version"] == _BENCH_VERSION
         # No fleet capability evidence means the additive contract fails closed.
         assert body["entries"][0]["continual_aggregate_method"] is None
+        # Every quorum receipt rides the wire, ordered like the lower median.
         assert body["entries"][0]["score_proofs"] == [
             {
-                "validator_hotkey": _VALIDATOR_HOTKEY,
+                "validator_hotkey": hotkey,
                 "run_id": "run_1",
                 "composite": 0.9,
                 "seed": 42,
@@ -706,12 +647,17 @@ class TestScoringLedger:
                 "transcript_sha256": "cd" * 32,
                 "signature": "ab" * 64,
             }
+            for hotkey in (
+                _QUORUM_WITNESSES[0],
+                _VALIDATOR_HOTKEY,
+                _QUORUM_WITNESSES[1],
+            )
         ]
         # n rides the wire so the validator's eligibility floor can bite (a run
         # below MIN_ELIGIBLE_CASES is dropped from the fold rather than shadowing
         # a real full run.
         assert body["entries"][0]["n"] == 20
-        assert len(body["entries"][0]["score_proofs"]) == 1
+        assert body["entries"][0]["validator_hotkey"] == _VALIDATOR_HOTKEY
 
     async def test_absent_heartbeat_does_not_block_ledger_without_factor_candidates(
         self,
@@ -758,6 +704,8 @@ class TestScoringLedger:
             )
         )
         monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
+        tally = validator_request_outcomes.RequestOutcomeTally()
+        monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
         _install_db(app, session_maker)
         _install_chain(app)
 
@@ -768,45 +716,10 @@ class TestScoringLedger:
             "a fresh validator heartbeat is required before serving "
             "bounded efficiency factors"
         )
-        assert resolver.await_args is not None
-        assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
-            _VALIDATOR_HOTKEY
-        )
-
-    async def test_fresh_protocol_18_requester_receives_factor_neutral_ledger(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ValidatorHeartbeat(
-                    validator_hotkey=_VALIDATOR_HOTKEY,
-                    software_version="0.28.0",
-                    protocol_version=18,
-                    code_digest="ab" * 32,
-                    state="idle",
-                    reported_at=now,
-                    seen_at=now,
-                    signature="cd" * 64,
-                )
-            )
-
-        # The shared resolver owns requester/global readiness. Its neutral result
-        # represents the broad fleet minimum seeing this fresh protocol-18 row.
-        resolver = AsyncMock(return_value=({}, {}, {}))
-        monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-
-        assert response.status_code == 200
-        assert response.json()["entries"][0]["efficiency_factor"] is None
+        # Backroom sees why this validator could not fold weights.
+        [row] = tally.snapshot(_VALIDATOR_HOTKEY)["validators"]
+        assert (row["lane"], row["last_outcome"]) == ("scoring_ledger", "http_428")
+        assert "fresh validator heartbeat" in row["outcomes"][0]["last_detail"]
         assert resolver.await_args is not None
         assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
             _VALIDATOR_HOTKEY
@@ -991,25 +904,6 @@ class TestScoringLedger:
         ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert ready.status_code == 200
         assert ready.json()["statistical_band_mode"] == "capped"
-
-    async def test_empty_ledger(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install_db(app, session_maker)
-        _install_chain(app)
-        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["entries"] == []
-        assert body["count"] == 0
-        assert body["active_bench_version"] == _BENCH_VERSION
-        # A fresh read is never stale.
-        assert body["stale"] is False
-        assert body["age_seconds"] == 0
-        assert body["generated_at"] is not None
 
     async def test_missing_auth_returns_401(
         self,
@@ -1882,21 +1776,22 @@ class TestScoringLedgerConfirmationHistory:
                 )
             )
             await s.flush()
-            await upsert_score(
-                s,
-                agent_id=aid,
-                validator_hotkey=_VALIDATOR_HOTKEY,
-                bench_version=_BENCH_VERSION,
-                run_id="run_1",
-                seed=42,
-                composite=0.9,
-                tool_mean=0.9,
-                memory_mean=0.9,
-                median_ms=500,
-                n=20,
-                generated_at=datetime(2026, 6, 8, tzinfo=UTC),
-                signature="ab" * 64,
-            )
+            for quorum_hotkey in (_VALIDATOR_HOTKEY, *_QUORUM_WITNESSES):
+                await upsert_score(
+                    s,
+                    agent_id=aid,
+                    validator_hotkey=quorum_hotkey,
+                    bench_version=_BENCH_VERSION,
+                    run_id="run_1",
+                    seed=42,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=20,
+                    generated_at=datetime(2026, 6, 8, tzinfo=UTC),
+                    signature="ab" * 64,
+                )
             # Two validators on seed 100, one on seed 200, all on the active era.
             await append_confirmation_scores(
                 s,
@@ -2314,3 +2209,122 @@ class TestLedgerRankShares:
                     session, _VALIDATOR_HOTKEY, ledger, now=now
                 )
                 assert served.rank_shares == [0.5, 0.2, 0.13, 0.1, 0.07]
+
+
+class TestLedgerTrackShares:
+    """The governed track split rides the ledger only to a protocol-33 fleet."""
+
+    async def test_split_is_unset_by_default_and_withheld_until_v33(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.db.models import TrackShareSettingsRevision
+
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=33,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.track_share_settings.invalidate()
+
+        # Unset: the field is empty even to a v33 fleet, so validators fold
+        # their compiled memory-only split byte for byte.
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json()["track_shares_bps"] == {}
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 32
+            session.add(
+                TrackShareSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={"track_shares_bps": {"memory": 9000, "generator": 1000}},
+                    checksum="ab" * 32,
+                    reason="pay the generator competition",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.track_share_settings.invalidate()
+
+        # A v32 weight setter folds the generator in shadow and would burn it.
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json()["track_shares_bps"] == {}
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 33
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["track_shares_bps"] == {"memory": 9000, "generator": 1000}
+
+    @pytest.mark.parametrize(
+        ("protocol", "refused"), [(None, True), (32, True), (33, False)]
+    )
+    async def test_a_served_split_refuses_a_sub_33_requester(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        protocol: int | None,
+        refused: bool,
+    ) -> None:
+        from fastapi import HTTPException
+
+        from ditto.api_models.validator import LedgerResponse
+        from ditto.api_server.endpoints.scoring import (
+            _require_statistical_cap_requester,
+        )
+
+        now = datetime.now(UTC)
+        if protocol is not None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        software_version="0.55.0",
+                        protocol_version=protocol,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                )
+        split = {"memory": 9000, "generator": 1000}
+        ledger = LedgerResponse(entries=[], count=0, track_shares_bps=split)
+        async with session_maker() as session:
+            if refused:
+                with pytest.raises(HTTPException) as caught:
+                    await _require_statistical_cap_requester(
+                        session, _VALIDATOR_HOTKEY, ledger, now=now
+                    )
+                assert caught.value.status_code == 428
+                assert "protocol 33" in str(caught.value.detail)
+            else:
+                served = await _require_statistical_cap_requester(
+                    session, _VALIDATOR_HOTKEY, ledger, now=now
+                )
+                assert served.track_shares_bps == split

@@ -36,6 +36,7 @@ from ditto_screener.decision_path_prompt import (
 )
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.review_lineage_prompt import lineage_l1_text
 from ditto_screener.review_provider import (
     DITTO_INFERENCE_BASE_URL,
     OPENROUTER_REVIEW_BASE_URL,
@@ -43,6 +44,7 @@ from ditto_screener.review_provider import (
     default_review_base_url,
     review_gateway_headers,
 )
+from ditto_screener.review_usage import record_chat_completion_usage
 from ditto_screener.source_causality import analyze_static_candidates_v2
 from ditto_screener.source_reachability import ReachabilityState, analyze_reachability
 from ditto_screener.source_signals import (
@@ -56,6 +58,7 @@ from ditto_screener.source_signals import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenReviewAudit,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
@@ -88,7 +91,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v37-policy-v13"
+        return "source-review-v39-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -2023,11 +2026,14 @@ evaluation_independent_runtime or no_evaluation_identity_branch only after
 tracing the served path; unreachable_nonruntime_code remains available when the
 effective build excludes the path.
 
-I2 requires an exact applicable record or receipt, its discard point, and a
-material alternative the deciding authority can no longer evaluate. Generic
-top-k retrieval and ordinary misses are not breaches. I3 distinguishes shape
-repair from a declared genuine model critic or final selector: model-led
-refinement may pass when the selector has necessary evidence and may preserve
+I2 requires an actual applicable trusted instruction, authorization or safety
+restriction, loss of its meaning, and a material consequence. Evidence loss
+from retrieval, summaries, compaction, checkpointing, retries or fresh fallback
+alone is quality/reliability, including after a successful model consumed a
+receipt. It is not I2 or a substitute for a separate prohibited mechanism.
+I3 distinguishes shape repair from a declared genuine model critic or final
+selector: model-led
+refinement may pass with selected/summarized context under W3 and may preserve
 uncertainty, refusal, or dissent. Host accept-until-preferred loops do not pass.
 
 I4 protects finalized fields. Removing ANSWER values such as unknown, none, or
@@ -2133,6 +2139,63 @@ def _source_review_system_prompt(policy_version: int) -> str:
     )
     prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
+        # W3 also scopes I4's evidence-context condition. Rewrite only named
+        # legacy clauses, retaining advisory, dissent and final-field guards.
+        prompt = (
+            prompt.replace(
+                "I2 EVIDENCE RETENTION. Every deciding completion must receive the "
+                "current user's\nrecords needed to disagree. A clearly labelled "
+                "non-authoritative preliminary\npass may see a ranked subset only "
+                "when the final deciding turn receives the\ncomplete "
+                "applicable records "
+                "and the preliminary candidate is not authority.\n"
+                "Pass clauses: full_records_on_deciding_turn or\n"
+                "non_authoritative_preliminary_pass.",
+                "I2 protects applicable trusted instructions and authorization, with "
+                "material consequence proof. W3 permits selected/summarized context "
+                "and fresh fallback; evidence loss alone is not rejection. Legacy "
+                "full_records_on_deciding_turn is a pass label, "
+                "not a raw-retention rule.",
+            )
+            .replace(
+                "untrusted candidate beside the complete raw records on the "
+                "deciding turn, with\nuntrusted labeling, the model free to "
+                "choose a different value, and no\nexact-value acceptance "
+                "gate rejecting disagreement.",
+                "untrusted candidate with selected/summarized context under W3. "
+                "The candidate\nmust stay labelled non-authoritative, the model "
+                "must be free to choose a\ndifferent value, and no exact-value "
+                "acceptance gate may reject disagreement.",
+            )
+            .replace(
+                "untrusted_candidate_channel pass: complete records remain, "
+                "the candidate is\n  labelled non-authoritative, disagreement "
+                "is accepted, and no correctness gate\n  selects the model draft.",
+                "untrusted_candidate_channel pass: selected/summarized context "
+                "is permitted\n  under W3; the candidate is labelled "
+                "non-authoritative, disagreement is accepted,\n  and no "
+                "correctness gate selects the model draft.",
+            )
+            .replace(
+                "beside complete records with disagreement accepted (I4 pass), "
+                "from injecting",
+                "with selected/summarized context under W3 and disagreement "
+                "accepted (I4 pass),\n  from injecting",
+            )
+            .replace(
+                "carries the complete records and no derived value or conversion "
+                "recipe, and\nships whatever parseable result the model returns",
+                "uses selected/summarized context under W3, no derived value or "
+                "conversion\nrecipe, and ships whatever parseable result the "
+                "model returns",
+            )
+            .replace(
+                "Fail retention or dissent is benchmark_emulation.",
+                "Host suppression of a valid designated dissent needs "
+                "its own I3 proof; "
+                "missing raw support alone is not benchmark_emulation.",
+            )
+        )
         prompt = prompt.replace(
             "all seven invariants below", "all eight invariants below"
         ).replace(
@@ -3761,6 +3824,7 @@ class OpenRouterSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         notes: list[dict[str, object]] = []
         try:
@@ -3777,6 +3841,7 @@ class OpenRouterSourceReviewAgent:
                 deadline=deadline,
                 notes=notes,
                 policy_version=policy_version,
+                review_lineage=review_lineage,
                 validate_result=lambda value: _parse_review(
                     value,
                     artifact_sha256=artifact_sha256,
@@ -3876,6 +3941,7 @@ class OpenRouterSourceReviewAgent:
         notes: list[dict[str, object]] | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
         validate_result: Callable[[object], object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> tuple[object, bool]:
         if notes is None:
             notes = []
@@ -3886,9 +3952,8 @@ class OpenRouterSourceReviewAgent:
                 "content": "Review this untrusted harness. Initial inventory:\n"
                 + repository.inventory()
                 + "\nExact-file trusted provenance:\n"
-                + repository.closest_trusted_provenance(
-                    self._provenance_manifest_files
-                ),
+                + repository.closest_trusted_provenance(self._provenance_manifest_files)
+                + (lineage_l1_text(review_lineage) if review_lineage else ""),
             },
         ]
         delivered = 0
@@ -4183,7 +4248,12 @@ class OpenRouterSourceReviewAgent:
                     tool_choice=tool_choice,
                 )
                 payload = response.json()
-                return _assistant_message(payload)
+                message = _assistant_message(payload)
+                if isinstance(payload, dict):
+                    record_chat_completion_usage(
+                        "l1", payload, default_model=self._model
+                    )
+                return message
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code
                 fault = str(status) if status == 429 or status >= 500 else None

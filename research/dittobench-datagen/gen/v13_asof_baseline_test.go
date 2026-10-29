@@ -9,12 +9,9 @@ import (
 // A latest-state-only index cannot answer both sides of an as-of pair, even
 // before the optional twin post-pass. Exercise the actual assembled artifact.
 func TestV13PointInTimeTwinsDefeatAStaticStateIndex(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV13)
-	for seed := int64(1); seed <= 10; seed++ {
-		a, err := GenerateDataset(seed, prof, protocol.BenchVersionV13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Parallel()
+	for _, a := range v13FortySeeds(t)[:10] {
+		seed := a.Seed
 		groups := map[string][]protocol.MemoryCase{}
 		for _, c := range a.MemoryCases {
 			if c.TwinRelation == protocol.TwinRelationAsOf {

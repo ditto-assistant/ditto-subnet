@@ -446,22 +446,6 @@ tr:hover .copy,
 .bar.router {
   background: var(--router);
 }
-.bar.coding {
-  background: var(--coding);
-}
-.metric .barwrap.coding-measured-zero::after {
-  content: "";
-  position: absolute;
-  z-index: 2;
-  top: 50%;
-  left: 0;
-  width: 5px;
-  height: 5px;
-  border: 1px solid var(--bg-elev);
-  border-radius: 50%;
-  background: var(--coding);
-  transform: translateY(-50%);
-}
 .muted {
   color: var(--text-dim);
 }

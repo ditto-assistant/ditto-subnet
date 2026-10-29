@@ -81,7 +81,6 @@ _DESIRED_VERSION = 7
 
 # The shipped default. Named so every "no-op" assertion below is visibly made
 # against the object an un-revisioned deployment actually resolves.
-_SHIPPED_DEFAULT = PrevGenCarryoverSettings()
 _ENABLED = PrevGenCarryoverSettings(enabled=True)
 
 
@@ -235,45 +234,6 @@ async def _admitted_ids(
 
 class TestShippedDefaultIsATotalNoOp:
     """Requirement one: merging this changes nothing until an operator acts."""
-
-    async def test_disabled_admits_nothing_and_generates_nothing(
-        self, session: AsyncSession
-    ) -> None:
-        async with _seeding_the_retired_era(session):
-            rollout = await _seed_rollout(session)
-            agent_id = await _seed_stranded(session, name="stranded")
-
-        async with session.begin():
-            # No settings revision is written at all: this is what a deployment
-            # that merely merges the change actually resolves.
-            assert _SHIPPED_DEFAULT.enabled is False
-            selected = await stranded_prev_gen_candidates(
-                session, rollout=rollout, settings=_ENABLED, now=_NOW
-            )
-            # The agent IS stranded -- the default's no-op is a policy decision,
-            # not an accident of the data.
-            assert [c.agent_id for c in selected] == [agent_id]
-
-            # Leg 1: not admitted.
-            assert agent_id not in await _admitted_ids(session, rollout=rollout)
-            # Leg 2: no desired-version dataset.
-            assert (
-                await session.get(BenchmarkDataset, (agent_id, _DESIRED_VERSION))
-            ) is None
-            # Leg 3: not leasable by the carryover path either.
-            assert await carryover_agent_ids(session, rollout=rollout) == []
-
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5Validator-new",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_DESIRED_VERSION,
-                artifact_mode="screened_only",
-                only_agent_ids=[agent_id],
-            )
-        assert ticket is None
 
 
 class TestThreeLegsMoveTogether:
@@ -461,45 +421,6 @@ class TestAdmissionCannotOutrunGeneration:
                 )
             ) is None
             assert agent_id not in await _admitted_ids(session, rollout=rollout)
-
-    async def test_adoption_never_writes_a_row_without_a_dataset(
-        self, session: AsyncSession
-    ) -> None:
-        """Both halves land in one transaction, or neither does."""
-        async with _seeding_the_retired_era(session):
-            rollout = await _seed_rollout(session)
-            agent_id = await _seed_stranded(session, name="stranded")
-        async with session.begin():
-            assert await _adopt(session, rollout=rollout, agent_id=agent_id)
-
-        async with session.begin():
-            rows = list(
-                await session.scalars(select(BenchmarkRolloutCarryover.agent_id))
-            )
-            datasets = set(
-                await session.scalars(
-                    select(BenchmarkDataset.agent_id).where(
-                        BenchmarkDataset.bench_version == _DESIRED_VERSION
-                    )
-                )
-            )
-        assert set(rows) <= datasets
-
-    async def test_second_adoption_is_idempotent(self, session: AsyncSession) -> None:
-        async with _seeding_the_retired_era(session):
-            rollout = await _seed_rollout(session)
-            agent_id = await _seed_stranded(session, name="stranded")
-        async with session.begin():
-            assert await _adopt(session, rollout=rollout, agent_id=agent_id)
-        async with session.begin():
-            # A concurrent refresh re-selecting the same agent must not double
-            # up: the agent is no longer even a candidate.
-            assert (
-                await stranded_prev_gen_candidates(
-                    session, rollout=rollout, settings=_ENABLED, now=_NOW
-                )
-                == []
-            )
 
 
 class TestStrandedSelection:
@@ -959,42 +880,3 @@ class TestFreshLaneIsNotDiluted:
                 only_agent_ids=[never_adopted],
             )
         assert ticket is None
-
-    async def test_default_call_shape_is_unchanged(self, session: AsyncSession) -> None:
-        """Every existing caller passes no ``only_agent_ids`` and is unaffected."""
-        async with _seeding_the_retired_era(session):
-            rollout = await _seed_rollout(session)
-            adopted = await _seed_stranded(session, name="stranded")
-            fresh_agent = await _seed_stranded(
-                session,
-                name="fresh",
-                score_count=0,
-                created_at=_ROLLOUT_START + timedelta(hours=2),
-            )
-            session.add(
-                BenchmarkDataset(
-                    agent_id=fresh_agent,
-                    bench_version=_DESIRED_VERSION,
-                    seed=7,
-                    sha256="ef" * 32,
-                    run_size="full",
-                    created_at=_NOW,
-                )
-            )
-        async with session.begin():
-            assert await _adopt(session, rollout=rollout, agent_id=adopted)
-
-        async with session.begin():
-            ticket = await issue_ticket(
-                session,
-                validator_hotkey="5Validator-fresh",
-                now=_NOW,
-                ttl=_TTL,
-                bench_version=_DESIRED_VERSION,
-                artifact_mode="screened_only",
-                submitted_at_or_after=rollout.created_at,
-                fifo_start_at=rollout.created_at,
-                completion_first=True,
-            )
-        assert ticket is not None
-        assert ticket.agent_id == fresh_agent

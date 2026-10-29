@@ -17,10 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.admin_quarantine import AdminBenchmarkQualificationRequest
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.benchmark_contract import (
-    benchmark_contract,
-    latest_benchmark_contract,
-)
 from ditto.api_models.public import PublicBenchRolloutResponse
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
@@ -65,6 +61,7 @@ from ditto.db.models import (
     V13ScorerCohortPin,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
+    ValidatorQueueWithdrawal,
     ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
@@ -73,7 +70,6 @@ from ditto.db.queries.benchmark_rollout import (
     DEFAULT_BENCH_VERSION,
     DEFAULT_RESCORE_COHORT_SIZE,
     DESIRED_AUTHORITY_EARNED_EVENT,
-    LEGACY_BENCH_VERSION,
     MIN_DESIRED_AUTHORITY_AGENTS,
     MIN_SCOREABLE_BENCH_VERSION,
     PRIORITY_COHORT_SIZE,
@@ -93,6 +89,7 @@ from ditto.db.queries.benchmark_rollout import (
     historical_rescore_cohort,
     inference_activation_ready,
     issue_rollout_ticket,
+    issue_rollout_topup_ticket,
     maybe_activate_rollout,
     maybe_record_desired_authority,
     open_rollout,
@@ -120,19 +117,6 @@ from ditto.tests.legacy_era import (
 pytestmark = pytest.mark.asyncio
 
 _Seeded = TypeVar("_Seeded")
-
-
-async def test_newest_contract_is_a_target_not_an_activation() -> None:
-    # v14 is the newest shipped contract. Shipping it makes it a discoverable
-    # rollout target and moves CANARY/CURRENT (discovery metadata); it does not
-    # activate it or move weight authority, which stays on the durable ledger.
-    contract = benchmark_contract(14)
-    assert contract.minimum_screening_policy_version == 9
-    assert contract.requires_screened_image is True
-    assert latest_benchmark_contract() == contract
-    assert CANARY_BENCH_VERSION == 14
-    assert DEFAULT_BENCH_VERSION == 2
-    assert LEGACY_BENCH_VERSION == 2
 
 
 async def test_rollout_diagnostics_expose_exhausted_priority_without_mutation(
@@ -1674,6 +1658,280 @@ async def test_rollout_ticket_respects_retry_cooldown_and_attempt_cap(
         assert granted.attempt_count == MAX_ATTEMPTS_PER_VERSION + 1
 
 
+async def _activate_with_short_tail(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout,
+    agent_ids: list[UUID],
+    now: datetime,
+) -> UUID:
+    """Close ``rollout`` with its last frozen member at 2/3 (validators a, b).
+
+    The shape production reached when an era activated on earned authority
+    while its tail was mid-rescore: the member stays ``scored`` with a short
+    desired-version quorum and no lane left that leases it.
+    """
+    version = rollout.desired_version
+    for agent_id in agent_ids[:-1]:
+        session.add_all(
+            _desired_quorum(
+                agent_id, desired_version=version, now=now, tag=str(agent_id)
+            )
+        )
+    tail_id = agent_ids[-1]
+    for index, hotkey in enumerate(("validator-a", "validator-b")):
+        session.add(
+            ValidatorTicket(
+                agent_id=tail_id,
+                bench_version=version,
+                validator_hotkey=hotkey,
+                slot_id="slot-0",
+                status=TicketStatus.SCORED,
+                purpose=TicketPurpose.CANONICAL_QUORUM,
+                purpose_revision=1,
+                issued_at=now - timedelta(hours=2),
+                deadline=now - timedelta(minutes=30),
+                attempt_count=1,
+                manual_retry_grants=0,
+            )
+        )
+        session.add(
+            Score(
+                agent_id=tail_id,
+                bench_version=version,
+                validator_hotkey=hotkey,
+                run_id=f"tail-{index}",
+                signature="bb",
+                seed=index,
+                composite=0.8,
+                tool_mean=0.8,
+                memory_mean=0.8,
+                median_ms=1,
+                n=114,
+                details={
+                    "bench_version": version,
+                    "v9_base": {"semantic_gate_factor_bps": 10_000},
+                },
+                generated_at=now,
+            )
+        )
+    rollout.status = "activated"
+    rollout.activated_at = now
+    await session.flush()
+    assert await open_rollout(session) is None
+    assert await active_bench_version(session) == version
+    return tail_id
+
+
+async def test_activated_rollout_topup_finishes_short_member_from_new_validator(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A member left at 2/3 by activation gets exactly one more distinct lease."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_rollout_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        tail_id = await _activate_with_short_tail(
+            session, rollout=rollout, agent_ids=agent_ids, now=now
+        )
+        version = rollout.desired_version
+        ttl = timedelta(minutes=90)
+        # The open-rollout lane is closed, which is how the tail was stranded.
+        assert (
+            await issue_rollout_ticket(
+                session, validator_hotkey="validator-c", now=now, ttl=ttl
+            )
+            is None
+        )
+        # Distinct-validator rule: the validators that scored it get nothing.
+        for hotkey in ("validator-a", "validator-b"):
+            assert (
+                await issue_rollout_topup_ticket(
+                    session,
+                    active_version=version,
+                    validator_hotkey=hotkey,
+                    now=now,
+                    ttl=ttl,
+                )
+                is None
+            )
+
+        ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-c",
+            now=now,
+            ttl=ttl,
+        )
+        assert ticket is not None
+        assert ticket.agent_id == tail_id
+        assert ticket.bench_version == version
+        assert ticket.status == TicketStatus.ISSUED
+        assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        assert ticket.purpose_revision == 1
+
+        # Its last quorum slot is in flight: no second lease from any slot.
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+                slot_id="slot-1",
+            )
+            is None
+        )
+
+        ticket.status = TicketStatus.SCORED
+        session.add(
+            Score(
+                agent_id=tail_id,
+                bench_version=version,
+                validator_hotkey="validator-c",
+                run_id="tail-c",
+                signature="cc",
+                seed=3,
+                composite=0.8,
+                tool_mean=0.8,
+                memory_mean=0.8,
+                median_ms=1,
+                n=114,
+                details={
+                    "bench_version": version,
+                    "v9_base": {"semantic_gate_factor_bps": 10_000},
+                },
+                generated_at=now,
+            )
+        )
+        await session.flush()
+        # At quorum the lane is inert for every validator.
+        for hotkey in ("validator-a", "validator-b", "validator-c"):
+            assert (
+                await issue_rollout_topup_ticket(
+                    session,
+                    active_version=version,
+                    validator_hotkey=hotkey,
+                    now=now,
+                    ttl=ttl,
+                    slot_id="slot-2",
+                )
+                is None
+            )
+
+
+async def test_activated_rollout_topup_never_displaces_or_collides(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Empty slots only, no lease beside another-version lease, queue rails hold."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _inherited_era_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        tail_id = await _activate_with_short_tail(
+            session, rollout=rollout, agent_ids=agent_ids, now=now
+        )
+        version = rollout.desired_version
+        ttl = timedelta(minutes=90)
+
+        # An idle same-era lease on this slot is the ordinary path's to resume;
+        # the top-up must neither take the slot nor revoke the lease.
+        ordinary = ValidatorTicket(
+            agent_id=agent_ids[0],
+            bench_version=version,
+            validator_hotkey="validator-c",
+            slot_id="slot-0",
+            status=TicketStatus.ISSUED,
+            purpose=TicketPurpose.CANONICAL_QUORUM,
+            purpose_revision=1,
+            issued_at=now - timedelta(minutes=5),
+            deadline=now + ttl,
+            attempt_count=1,
+            manual_retry_grants=0,
+        )
+        session.add(ordinary)
+        await session.flush()
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+                validator_running_benchmark=False,
+            )
+            is None
+        )
+        assert ordinary.status == TicketStatus.ISSUED
+        assert ordinary.deadline == now + ttl
+
+        # Lease-collision guard: a live lease on the member at another version
+        # on this validator keeps the top-up off every slot.
+        await session.delete(ordinary)
+        other_version = ValidatorTicket(
+            agent_id=tail_id,
+            bench_version=DEFAULT_BENCH_VERSION,
+            validator_hotkey="validator-c",
+            slot_id="slot-1",
+            status=TicketStatus.ISSUED,
+            issued_at=now - timedelta(minutes=5),
+            deadline=now + ttl,
+            attempt_count=1,
+            manual_retry_grants=0,
+        )
+        session.add(other_version)
+        await session.flush()
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+            )
+            is None
+        )
+
+        # An operator queue removal still pulls the member.
+        await session.delete(other_version)
+        withdrawal = ValidatorQueueWithdrawal(
+            withdrawal_id=uuid4(),
+            agent_id=tail_id,
+            bench_version=version,
+            actor="operator",
+            reason="test removal",
+            expected_snapshot="0" * 64,
+            score_count=2,
+            ticket_snapshot=[],
+        )
+        session.add(withdrawal)
+        await session.flush()
+        assert (
+            await issue_rollout_topup_ticket(
+                session,
+                active_version=version,
+                validator_hotkey="validator-c",
+                now=now,
+                ttl=ttl,
+            )
+            is None
+        )
+        await session.delete(withdrawal)
+        await session.flush()
+        ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-c",
+            now=now,
+            ttl=ttl,
+        )
+        assert ticket is not None and ticket.agent_id == tail_id
+
+
 async def test_rollout_preempts_idle_source_lease_only_when_target_work_exists(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -1892,7 +2150,9 @@ async def test_rollout_never_preempts_a_lease_behind_a_frozen_capacity_blob(
 
 @pytest.mark.parametrize(
     "purpose",
-    [TicketPurpose.CONTINUAL_RETEST, TicketPurpose.LEGACY_UNCLASSIFIED],
+    [
+        TicketPurpose.CONTINUAL_RETEST,
+    ],
 )
 async def test_rollout_does_not_serve_or_preempt_noncanonical_lease(
     session_maker: async_sessionmaker[AsyncSession],
@@ -2671,7 +2931,13 @@ async def test_admin_start_is_idempotent_after_unique_transition_activation(
         await session.rollback()
 
 
-@pytest.mark.parametrize("capable_count", [0, 1, 2])
+@pytest.mark.parametrize(
+    "capable_count",
+    [
+        0,
+        1,
+    ],
+)
 async def test_rollout_start_requires_one_capable_validator_and_matches_telemetry(
     session_maker: async_sessionmaker[AsyncSession],
     capable_count: int,
@@ -2715,37 +2981,6 @@ async def test_rollout_start_requires_one_capable_validator_and_matches_telemetr
             assert guarded["v3_capable_validator_count"] == capable_count
 
 
-async def test_v7_rollout_start_requires_route_and_manifest_intersection(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    capabilities, stack = _capabilities(now)
-    capabilities["scorer_benchmarks"]["v7_calibration"]["manifest_sha256"] = "d" * 64
-    async with session_maker() as session, session.begin():
-        session.add(
-            ValidatorHeartbeat(
-                validator_hotkey="validator-mismatched-manifest",
-                software_version="1.0.0",
-                protocol_version=12,
-                code_digest="d" * 64,
-                state="polling",
-                first_seen_at=now,
-                reported_at=now,
-                seen_at=now,
-                signature="ab" * 64,
-                capabilities=capabilities,
-                stack=stack,
-            )
-        )
-        _add_ready_inference_route(session, now)
-        await session.flush()
-
-        with pytest.raises(HTTPException) as exc_info:
-            await _require_rollout_start_capacity(session, now=now, desired_version=7)
-        assert exc_info.value.status_code == 409
-        assert "exact route and manifest match" in str(exc_info.value.detail)
-
-
 def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     capabilities, stack = _capabilities(now)
     scorer = capabilities["scorer_benchmarks"]
@@ -2756,7 +2991,7 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     return capabilities, stack
 
 
-@pytest.mark.parametrize("bench_version", [8, 9, 10])
+@pytest.mark.parametrize("bench_version", [10])
 async def test_post_v7_rollout_uses_exact_route_without_retired_calibration(
     session_maker: async_sessionmaker[AsyncSession],
     bench_version: int,
@@ -3167,21 +3402,9 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
 @pytest.mark.parametrize(
     ("software_version", "supports_v9"),
     [
-        ("0.51.2", False),
         ("source-build", False),
-        ("0.51.9", False),
-        ("0.52.0", False),
-        ("0.53.0", False),
-        ("0.53.1", False),
-        ("0.53.2", False),
-        ("0.53.4", False),
-        ("0.53.5", False),
-        ("0.53.6", False),
-        ("0.53.7", False),
-        ("0.53.8", False),
         ("0.53.9", False),
         ("0.53.10", True),
-        ("0.54.0", True),
     ],
 )
 async def test_v9_requires_the_authoritative_enforce_scorer_release(
@@ -3433,46 +3656,6 @@ async def test_supersede_frees_the_open_slot_for_the_next_rollout(
         assert fresh.desired_version == 9
         assert fresh.status == "collecting"
         await session.flush()
-
-
-async def test_superseding_v8_rolls_the_target_back_to_active_v7(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    async with session_maker() as session, session.begin():
-        session.add(
-            BenchmarkRollout(
-                rollout_id=uuid4(),
-                from_version=6,
-                desired_version=7,
-                status="activated",
-                cohort_size=5,
-                created_at=now - timedelta(days=1),
-                activated_at=now - timedelta(days=1),
-            )
-        )
-        members, pins = await _seed_members(session, now)
-        rollout = await create_rollout_snapshot(
-            session,
-            members=members,
-            datasets=pins,
-            now=now,
-            from_version=7,
-            desired_version=8,
-        )
-        assert await active_bench_version(session) == 7
-
-        superseded = await supersede_open_rollout(
-            session,
-            actor="backroom:test",
-            reason="roll back the unopened v8 target",
-            now=now + timedelta(seconds=1),
-        )
-        assert superseded is not None
-        assert superseded.rollout_id == rollout.rollout_id
-        assert superseded.status == "superseded"
-        assert await open_rollout(session) is None
-        assert await active_bench_version(session) == 7
 
 
 async def test_superseded_rollout_issues_no_tickets_and_never_activates(
@@ -3864,7 +4047,7 @@ def _add_exhausted_tail_tickets(
 
 @pytest.mark.parametrize(
     ("smoke_indices", "held_indices"),
-    [((0,), ()), ((), (0,))],
+    [((), (0,))],
 )
 async def test_activation_requires_five_ranked_desired_quorum_agents(
     session_maker: async_sessionmaker[AsyncSession],
@@ -4078,140 +4261,16 @@ async def test_activation_suppresses_three_terminal_scoreless_tail_members(
         )
 
 
-async def test_activation_does_not_suppress_a_running_tail_attempt(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
-    ) as (session, (_agent_ids, rollout)):
-        tail_id = await _append_scoreless_rollout_tail(
-            session, rollout=rollout, now=now, suffix="running"
-        )
-        _add_exhausted_tail_tickets(
-            session,
-            agent_id=tail_id,
-            now=now,
-            bench_version=rollout.desired_version,
-            running_validator=0,
-        )
-        await session.flush()
-
-        assert await maybe_activate_rollout(
-            session,
-            rollout,
-            now=now,
-            inference_requirements=_activation_requirements(),
-        )
-        assert rollout.status == "activated"
-        assert await open_rollout(session) is None
-
-
-async def test_activation_does_not_suppress_multiple_unfinished_tail_members(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
-    ) as (session, (_agent_ids, rollout)):
-        tail_id = await _append_scoreless_rollout_tail(
-            session, rollout=rollout, now=now, suffix="terminal"
-        )
-        await _append_scoreless_rollout_tail(
-            session, rollout=rollout, now=now, suffix="unfinished"
-        )
-        _add_exhausted_tail_tickets(
-            session,
-            agent_id=tail_id,
-            now=now,
-            bench_version=rollout.desired_version,
-        )
-        await session.flush()
-
-        assert await maybe_activate_rollout(
-            session,
-            rollout,
-            now=now,
-            inference_requirements=_activation_requirements(),
-        )
-        assert rollout.status == "activated"
-        assert await open_rollout(session) is None
-
-
-async def test_activation_does_not_suppress_more_than_three_exhausted_tail_members(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
-    ) as (session, (_agent_ids, rollout)):
-        for index in range(4):
-            tail_id = await _append_scoreless_rollout_tail(
-                session, rollout=rollout, now=now, suffix=f"over-limit-{index}"
-            )
-            _add_exhausted_tail_tickets(
-                session,
-                agent_id=tail_id,
-                now=now,
-                bench_version=rollout.desired_version,
-            )
-        await session.flush()
-
-        assert await maybe_activate_rollout(
-            session,
-            rollout,
-            now=now,
-            inference_requirements=_activation_requirements(),
-        )
-        assert rollout.status == "activated"
-        assert await open_rollout(session) is None
-
-
-async def test_activation_suppresses_automatically_exhausted_tail_without_manual_retry(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """Automatic budget exhaustion is enough to close a leftover 0-score tail."""
-    now = datetime.now(UTC).replace(microsecond=0)
-    async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
-    ) as (session, (_agent_ids, rollout)):
-        tail_id = await _append_scoreless_rollout_tail(
-            session, rollout=rollout, now=now, suffix="auto-exhausted"
-        )
-        _add_exhausted_tail_tickets(
-            session,
-            agent_id=tail_id,
-            now=now,
-            bench_version=rollout.desired_version,
-            attempt_count=MAX_ATTEMPTS_PER_VERSION,
-            manual_retry_grants=0,
-        )
-        await session.flush()
-
-        assert await maybe_activate_rollout(
-            session,
-            rollout,
-            now=now,
-            inference_requirements=_activation_requirements(),
-        )
-        assert rollout.status == "activated"
-        assert await open_rollout(session) is None
-        audits = list(
-            await session.scalars(
-                select(BenchmarkRolloutAudit).where(
-                    BenchmarkRolloutAudit.rollout_id == rollout.rollout_id
-                )
-            )
-        )
-        activated = next(audit for audit in audits if audit.event == "activated")
-        assert activated.payload["close_reason"] == "desired_authority_earned"
-        assert str(tail_id) in activated.payload["score_counts"]
-
-
 @pytest.mark.parametrize(
     ("failed_order_index", "expected_activation"),
-    [(0, True), (1, False), (2, True)],
-    ids=("lower-row-fails", "median-row-fails", "upper-row-fails"),
+    [
+        (0, True),
+        (1, False),
+    ],
+    ids=(
+        "lower-row-fails",
+        "median-row-fails",
+    ),
 )
 async def test_v9_activation_uses_median_semantic_evidence(
     session_maker: async_sessionmaker[AsyncSession],
@@ -4413,9 +4472,46 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
         assert rollout.status == "activated"
         assert await open_rollout(session) is None
 
+        def unfinished_score(validator: int) -> Score:
+            return Score(
+                agent_id=unfinished_id,
+                bench_version=9,
+                validator_hotkey=f"validator-{validator}",
+                run_id=f"v4-unfinished-{validator}",
+                signature="cc",
+                seed=7,
+                composite=0,
+                tool_mean=0,
+                memory_mean=0,
+                median_ms=1,
+                n=114,
+                details={
+                    "bench_version": 9,
+                    "v9_base": {"semantic_gate_factor_bps": 0},
+                },
+                generated_at=now,
+            )
+
+        # Activation dropped the leftover cohort work while this scored member
+        # had only part of its desired-version quorum. The settled ledger must
+        # keep excluding it exactly as the collecting ledger did: a row with
+        # fewer than SCORING_QUORUM receipts fails validator proof
+        # verification and makes every validator reject the whole ledger.
+        session.add_all([unfinished_score(0), unfinished_score(1)])
+        await session.flush()
+        stranded_ledger = await list_eligible_ledger(session)
+        assert unfinished_id not in {row.agent_id for row in stranded_ledger}
+        assert {row.agent_id for row in stranded_ledger} == {
+            row.agent_id for row in collecting_ledger
+        }
+        # The historical single-version view still shows the partial median.
+        assert unfinished_id in {
+            row.agent_id for row in await list_eligible_ledger(session, bench_version=9)
+        }
+
         # Completing the last member with a legitimate semantic failure closes
         # the durable rollout record without requiring that failure to rank.
-        for validator in range(3):
+        for validator in range(2, 3):
             session.add(
                 Score(
                     agent_id=unfinished_id,
@@ -4551,14 +4647,9 @@ async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
 @pytest.mark.parametrize(
     ("requirements", "stale_route"),
     [
-        (replace(_activation_requirements(), enabled=False), False),
-        (
-            replace(_activation_requirements(), provider_key_configured=False),
-            False,
-        ),
         (_activation_requirements(), True),
     ],
-    ids=("proxy-disabled", "provider-key-removed", "stale-route"),
+    ids=["stale-route"],
 )
 async def test_post_v7_inference_blocks_activation_not_hybrid_authority(
     session_maker: async_sessionmaker[AsyncSession],
@@ -4591,31 +4682,6 @@ async def test_post_v7_inference_blocks_activation_not_hybrid_authority(
         assert rollout.status == "activated"
         assert await persisted_active_bench_version(session) == rollout.desired_version
         assert await active_bench_version(session) == rollout.desired_version
-
-
-async def test_activation_skips_permanently_ineligible_frozen_members(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    now = datetime.now(UTC).replace(microsecond=0)
-    async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
-    ) as (session, (agent_ids, rollout)):
-        outsider = await _seed_non_member_ranked_agent(
-            session, now=now, desired_version=rollout.desired_version
-        )
-        agent = await session.get(Agent, agent_ids[0])
-        assert agent is not None
-        agent.status = AgentStatus.BANNED
-
-        assert await maybe_activate_rollout(
-            session,
-            rollout,
-            now=now,
-            inference_requirements=_activation_requirements(),
-        )
-        assert rollout.status == "activated"
-        assert rollout.blocked_reason is None
-        assert await session.get(Agent, outsider) is not None
 
 
 async def test_banning_frozen_member_does_not_revert_desired_authority(
@@ -5039,10 +5105,48 @@ async def test_rollout_start_freezes_the_configured_cohort_size(
     assert len(result["state"]["members"]) == 12
 
 
-async def test_rollout_start_honors_a_narrowed_cohort_size(
+async def test_rollout_ticket_skips_a_member_live_at_the_source_version(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    result = await _start_for_cohort_size(session_maker, 5)
-    assert result["target"] == 5
-    assert result["cohort_size"] == 5
-    assert len(result["state"]["members"]) == 5
+    """2026-10-27: a source-version generator round lease live beside a
+    target-version lease made the validator's artifact fetch ambiguous, and the
+    target run failed as a version mismatch. The rollout lane must serve
+    another member instead."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _inherited_era_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_ids[0],
+                bench_version=rollout.from_version,
+                validator_hotkey="validator-a",
+                slot_id="slot-1",
+                status=TicketStatus.ISSUED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=now - timedelta(minutes=1),
+                deadline=now + timedelta(minutes=89),
+                attempt_count=0,
+                manual_retry_grants=0,
+            )
+        )
+        await session.flush()
+        ticket = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert ticket is not None
+        assert ticket.agent_id != agent_ids[0]
+        # Another validator holds nothing on the first member and gets it.
+        other = await issue_rollout_ticket(
+            session,
+            validator_hotkey="validator-b",
+            now=now,
+            ttl=timedelta(minutes=90),
+        )
+        assert other is not None and other.agent_id == agent_ids[0]

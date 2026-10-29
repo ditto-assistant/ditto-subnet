@@ -642,7 +642,7 @@ honest error never costs more than ~4% of memory weight). The classifier is
 pinned to the v12 diagnosis (`TestMixAuditReproducesV12MoneyExposure` (#1830):
 117 direct money cases / 143 money-bearing / 50.9% of weight on seed
 `123456789`); the gate over the pinned 40 seeds is
-`TestV13MixAuditGateAcrossFortySeeds` (#1848). All dedicated slot generators
+`TestV13QualificationSeeds/MixAuditGate` (#1848). All dedicated slot generators
 are integrated: `gen.V13InterimSlots` and `gen.V13InterimGenerators` are empty,
 so the complete mix gate is asserted. Medium is 95 memory
 cases (36 · 12 · 4 · 4 · 8 · 4 · 4 · 4 · 14 · 5) and small 27 (6 · 4 · 4 · 13);
@@ -696,7 +696,7 @@ technically ready.
   beat a shuffled null on v13 (`TestV13SeedWireCarriesNoFamilyArcOrSlotLabel`
   (#1827), `TestLeakProbeDetectsTheFrozenV12Labels` (#1827)); `/seed` subject
   links do not enumerate the story join
-  (`TestV13SeedSubjectLinksDoNotEnumerateTheStoryJoin` (#1827)).
+  (`TestV13QualificationSeeds/SeedSubjectLinksDoNotEnumerateTheStoryJoin` (#1827)).
 - *Grammars for every surface and typo v2.* Every tool category, world tool
   prompt, settings intent, chitchat/declarative bank and question frame
   renders from a `persona.Grammar` with a per-(seed, surface) two-thirds bank
@@ -920,7 +920,7 @@ not secret defences; an adversary can read every one.
 | Memory exposure audit | `go run ./cmd/memoryprobe -bench-version 13 -seed 41 -run-size full` | ≥ half of evidence-bound answers computed; correction/join families count as computed from v13 | `TestMemoryExposureAuditIsVersionExplicit` (#1824) |
 | Generator-inverse harness (GIH, N13) and 10k-seed router (N14) | `go run ./cmd/parserprobe -bench-version 13 -seeds 40 -run-size full -json` | pass-off (salt 0) baseline ≈ oracle (v12: 0.992 composite over seeds 1–40) — **the published baseline, not a failure**; ceiling on a surface-passed artifact: GIH and router composite ≤ starter-kit − 0.05 overall and on every slice (story, programs, personal, quantity, tool prompts) | `TestParserprobeBaselineOnPublicSeed` (#1829); `TestParserprobeCeilingOnSurfacePassedArtifacts` (#1829), armed by `DITTOBENCH_SURFACE_PASSED_ARTIFACTS`, report-only until the #1832 owner decision |
 | Grader robustness audit | `go run ./cmd/graderaudit -bench-version 13 -seeds 40 -run-size full`, `-release-gate` | no hard negative passes, no reviewed positive fails, public-question-only passable share < 5% per claim kind | `TestSyntheticRobustnessV13BankIsCleanAndCoversEveryKind` (#1522), `TestCannedAuditV13RegradesTheNewestGeneratableCorpus` (#1522) |
-| Mix audit | `go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate` | the `MixGateV13` caps and floors above | `TestV13MixAuditGateAcrossFortySeeds` (#1848) |
+| Mix audit | `go run ./cmd/mixaudit -bench-version 13 -seeds 40 -gate` | the `MixGateV13` caps and floors above | `TestV13QualificationSeeds/MixAuditGate` (#1848) |
 | `/seed` label-leak probe | `go test ./gen -run LabelLeak` | family / arc / slot at chance on 10 held-out seeds (v12: 94% from the session prefix) | `TestV13SeedWireCarriesNoFamilyArcOrSlotLabel` (#1827) |
 | Story arc recovery | `go test ./universe -run StoryV2ArcRecovery` | raw pre-pass ceiling reported per seed; the enforced ceiling is parserprobe's after the surface pass | `TestStoryV2ArcRecoveryCeilingIsReportedAndDeterministic` (#1839) |
 
@@ -1104,15 +1104,213 @@ V14 counts those cases in the memory over-call denominator and exempts only
 reads and no-call baselines remain unpenalized. Unrelated and mixed actions
 count once per case. Legacy lifecycle-write cases stay excluded at all versions.
 
-The generated surface, question-family identifiers, envelope, grader policy,
-v13 gate postures, LongMem instrument, and public harness wire version (9) carry
-forward. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
+V14 also owns grading policy floor 14 with one claim-set correction. A sentence
+that is wholly one of the case's own claim values no longer retracts the
+sentence before it when that value is also a correction cue: the published
+`world-story-lesson-claims` answer `safe; sorry` scores 0.5 at v13 and 1 at v14.
+A cue sentence carrying anything beyond the value is still a correction.
+
+V14 also folds the typographic hyphens U+2010 and U+2011 in the reply text
+(answer slot and `final_text`) to the ASCII hyphen before grading, on the
+memory axis and on the text-graded tool cases (restraint, effect reads)
+(#2734). The pinned model writes U+2011 inside most identifiers and compounds
+it copies from an ASCII record, so V13 misses `VK‑48HJXP6A63` for
+`VK-48HJXP6A63`. The fold also catches a forbidden or distractor value
+written with those hyphens. V13 keeps the unfolded match. The v14 audit bank
+(`v14-1`) extends `v13-1` with positives and negatives for both changes.
+
+The rest of the v14 scorer reads the reply the same way. The claim-span
+provenance gate keeps the published `NormalizeSpan` unchanged; that normaliser
+keeps the ASCII `-` (so `VK-48HJXP6A63` tokenizes with a signed `-48`) while
+NFKC turns a completion's U+2011 into U+2010, a separator. So from v14
+`ClaimAlternatives` adds the U+2010 variants of every hyphenated claim form
+(every ASCII/U+2010 mix up to four hyphens), and an honest completion that
+wrote U+2011 is not flagged `served_text_not_model_emitted`. The twin
+post-pass compares asserted answers and the result-usage check reads the reply
+after the same fold (memory twins also after the hyphen-joined-value rewrite
+below), so a hyphen variant cannot make two credited answers compare unequal.
+
+The same v14 floor adds three memory-axis matcher changes from #2734; v13 and
+older grade byte-identically:
+
+- **Hyphen-joined multi-word values.** A hyphen (after the fold) that joins
+  two letter-ended words of a known multi-word value reads as the space it
+  replaces, so `blue‑purple` grades as `blue purple` and `true‑blue accent`
+  as `true blue accent` on every rule, including the
+  `conversational-declarative` acknowledgement. Known values are every hidden
+  value (expected, accepted, list items, claim values, distractors, forbidden,
+  dump guard), so a joined distractor or forbidden value is still caught. The
+  words must match (`blue‑green` stays a miss for `bluey green`), values
+  without a space are unaffected, and a join is not undone where it would
+  break a known value that itself contains a hyphen.
+- **Set removal with a place phrase.** A set-membership clause ending in
+  ` has been removed` / ` was removed` / ` is removed` followed only by a
+  preposition (`from`, `in`, `off`) and at most three plain words
+  (`from the list`, `from it`, `from your packing list`) reads as removal, as
+  does the bare form with trailing punctuation. A phrase that names a case
+  value, names a time (`is removed on Friday`, `in two weeks`; `on` is not a
+  place preposition at all), runs longer, or sits in a hedged clause does not:
+  a scheduled removal is a plan. An item asserted in another clause is still
+  asserted.
+- **Progressive action claims.** An `action` claim also accepts the -ing form
+  of the first word of each accepted form (`pausing` for `pause`,
+  `upgrading`, `stopping`, `canceling`/`cancelling`; a multisyllabic verb
+  doubles its final consonant only as a listed exception such as `admitting`
+  or `cancelling`, so `open` gives `opening`), and the case's
+  distractors get the same forms so a progressive distractor is caught. Past
+  -ed forms stay misses. Because the -ing form makes gerund negation
+  natural, an action claim also reads a gerund-taking negator (`avoid`,
+  `against`, `stop`, `quit` and their inflections) immediately before a
+  reviewed action value, and a post-posed predicate (`isn't possible`,
+  `is not an option`, `isn't allowed`) right after one, as rejecting that
+  value: `I'd avoid pausing it`, `we decided against pausing it`,
+  `we stopped pausing it` and `pausing isn't possible` are misses. The
+  negator must govern the value directly (`to stop the charges, we are
+  pausing it` still states the action), and the post-posed predicate rejects
+  only the value before it, not the rest of its clause.
+
+Audit bank `v14-1` carries reviewed positives and negatives for each.
+
+The same floor reads every graded reply as rendered text (SN-342). Top v13
+agents strip paired `**` in their final writer so a bolded date or a value
+split by emphasis grades; operators accepted that as W8 typography. From v14
+the grader does it instead, in the memory grader and in every scorer path that
+reads reply text (`grade.ReplyAsRead`), and v13 and older grade
+byte-identically:
+
+- **Rendered markdown** (`PlainReplyTextV14`): word-bounded paired emphasis,
+  inline code and fence lines, ATX headings, blockquote markers, bullets and
+  task boxes, table outer pipes and delimiter rows, thematic breaks, and link
+  or image syntax are removed, keeping the text they mark up. Ordinals are
+  removed only from a real numbered list (two or more items numbered 1, 2,
+  ...). Strikethrough is kept, so a struck distractor is still named.
+  Non-ASCII spaces read as a space, zero-width characters are dropped, and
+  U+2212 reads as `-`.
+- **Sentence punctuation ends a number**: a `.` or `,` that no digit follows
+  ends a number token (`Your PIN is 4471, as saved` names `4471`), on every
+  rule, so a forbidden, dump-guard or result-usage decoy number followed by
+  punctuation is caught too. Decimal and grouping separators still attach.
+- **Percent claims**: a `percent` / `percentage points` quantity claim reads
+  `15%` as `15 percent`; a count still ignores percentages.
+
+Audit bank `v14-2` extends `v14-1` with reviewed positives for these rules and
+negatives for a bolded distractor, a markdown hedge, strikethrough, a decimal
+tail, a comma hedge, a punctuated forbidden value, and a percent distractor.
+
+V14 also files case-file records in story order (#3088). V13 stamped each
+case-file row from where it landed after the presentation shuffle, so a plain
+statement could be dated after the change that replaced it while the oracle
+still graded the change as current. A memory agent that trusted the latest
+filing date was marked wrong on those groups, and the only recovery was a
+benchmark-specific currency rule that the screener then read as
+benchmark-shaped. V14 stamps each row from its story position and shuffles only
+the document order, so the dates agree with the narrative the oracle grades and
+a reader still has to sort the file. Personal and business case files both
+change. The enterprise case files already instruct the model to apply events by
+`effective_step` rather than document order and are unchanged. Every v13 seed is
+untouched.
+
+V14 replaces the single announced correction with a short supersession chain
+(SN-353, SN-354) in the owner and standing-status business families (a
+current-channel group renders as channel-as-of, below) and in the household, appointment, milestone, subscription, travel
+and hobby personal domains. After the initial record come two or three more
+state records. Every chain has a revert, a proposed change that was turned
+down, or an entry logged in error, and the counterfactual twin flips one link
+of the same chain. A seeded quarter of groups state every change plainly, so
+precedence comes only from story-order filing. Another quarter put the change
+vocabulary on records that do not govern. Half of the reverts say "back to the
+original" or "back to the previous entry" without restating the value, an idea
+ported from a generator-competition miner (generator D in
+[v14-generator-credits.md](v14-generator-credits.md)). Over 120 seeds, no
+model-free shortcut (last cued record, the second record, or the latest
+record naming a value) solves both readings of more than 16% of chained
+groups. On v13 the second-record shortcut is exact.
+
+V14 also replaces two business families with temporal shapes that the
+generator competition measured as discriminating (SN-355, SN-358; credits in
+[v14-generator-credits.md](v14-generator-credits.md)). Every v13 family asks
+for the state in force now over a fixed three-record history, so reading the
+latest record answers it. `universe/v14_temporal_families.go` adds:
+
+- **Channel as of a date** (SN-355, in place of current-channel): four dated
+  channel changes and a question date strictly inside an interval that is
+  neither the first nor the last, never on a change date. The latest and the
+  first value are both wrong and both distractors. Program `as_of`.
+- **Relative event sequence** (SN-358, in place of latest-event): five to
+  eight dated events from the 24-class `V14SequenceEventClasses` bank, one or
+  two dated only as "N days after/before" an absolutely dated event within
+  four weeks. The question asks for the nth event in date order or the event
+  immediately before or after a named one (programs `nth_by_date`,
+  `before_by_date`, `after_by_date`). The answer is never the first or last
+  event by date nor the first or last record filed, and the pair count varies
+  with the event count.
+
+Two state-fold families follow the same evidence (SN-356, SN-357;
+`universe/v14_process_family.go`, `universe/v14_membership_family.go`):
+
+- **Multi-step process** (SN-356, in place of next-action-responsible): a
+  plan of three to five ordered steps with owners from the 24-class
+  `V14ProcessStepClasses` bank; later records close steps (done or dropped),
+  finish a later step early, reopen a closed step and reassign one owner.
+  The question asks for the first open step and its current owner (program
+  `first_open_step`). The plan's first step is never the answer, so the v13
+  half credit for copying record 0's action is gone.
+- **Membership fold** (SN-357, the school list): a removal and re-add, a
+  replacement, an optional addition and an optional no-op removal of an item
+  never listed (program `set_fold`). One set-member claim per item at 1/n
+  keeps per-member partial credit; the replaced, no-op and decoy items are
+  distractors.
+
+The full profile scores four business groups, so v13's families 4-6 never
+reached a scored run. From v14 each seed draws which of latest-event,
+next-action-responsible and current-channel fills cycle position 2; the other
+two take positions 4 and 5. A v14 run also stamps every memory case with its
+own contract: the v13 slot table left business, personal, enterprise,
+record-quantity and injection cases at 13, so the grader read them under the
+v13 policy.
+
+V14 also adds two business-program families from generator-competition
+evidence (SN-359, SN-360) and rotates them through the role slot of the
+business cycle. Both come directly from the generator competition
+(`docs/v14-generator-credits.md`). The v13 cycle is unchanged; from v14
+positions 3, 7 and 8 take a per-seed permutation of client-vs-vendor,
+holder-vs-actor and identity-join, so the full profile's fourth business group
+is one of the three and a 36-case request covers all nine families
+(`universe/v14_role_families.go`).
+
+- **holder-vs-actor.** Client-vs-vendor labels every role ("X's client is Y"),
+  so picking the label solves it, and the owner families never separate the
+  person who did a step from the person who holds the item. Custody records now
+  name the step's doer and the resulting holder in one sentence with no role
+  label, over a one- or two-hop chain in which each hop names its giver, so the
+  chain links in any filing order. The second hop names the item only by its
+  bare noun. Questions ask who holds the item now (a holder fold with exactly
+  one end) or who performed a named step. Actors, or the recipients for step
+  questions, are distractors. Names only; no pronoun crosses a handoff.
+- **identity-join.** A directory record binds each person in the case to one
+  synthetic handle (`example.invalid` address or chat handle) exactly once. The
+  owner records use one side of the binding only: handles when the name is
+  asked, names or initial and surname when the contact is asked, so the answer
+  never appears in the governing record. Distractors are the previous owner
+  and a near-miss handle owned by another person (same stem, both digits
+  different). Handles and surnames are unique per seed. The counterfactual
+  rebinds one directory entry.
+
+The v14 family draws finalise the FNV draw hash with splitmix64, because
+FNV-1a's low bit is the parity of its input bytes and would tie every binary
+draw of a group together. Both families grade with existing person and value
+claims; the grader policy does not change.
+
+Question-family identifiers, the envelope, the rest of the grader policy, v13
+gate postures, the LongMem instrument, and public harness wire version (9)
+carry forward. The generated surface carries forward apart from the case-file
+filing dates, the supersession chains and the temporal, state-fold and role families above. V14 has its own seed rotation, epoch `2027-06-01T00:00:00Z`, and artifact
 version. It introduces no deferred private surface research or screening-policy
 activation. `CurrentBenchVersion` stays at its existing value (8).
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV14KnownVector` pins:
-`8a08dfe713fd6df2d67ece92148118a3fbd64b5d0f6a90f78dccb9853e329d50`.
+`760d155a9f192b635d3f5a19ef58ebba211576dd9ae2bccf5ae89135ff8492d9`.
 Every v2–v13 generation and grading vector remains unchanged. The scorer also
 pins 1,536 historical composite replay vectors against source
 `861814b58a38c0582e9fc73848566d1b6fe8c325`.

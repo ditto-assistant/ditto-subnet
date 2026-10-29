@@ -7,7 +7,7 @@ import json
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 CourtMode = Literal["off", "shadow", "enforce"]
 
@@ -24,6 +24,15 @@ class CopyCourtSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
+    # Recording: whenever ``mode`` is not ``off`` every pending copy hold gets
+    # a recommendation (per settings revision and triage revision); a class
+    # mode gates only what the court may *apply*. ``near_duplicate_mode:
+    # enforce`` is the auto-apply switch for the narrow deterministic family
+    # CLEAR (overlap fully explained by a proven-public base, none of the
+    # unreleased matched agent's distinctive lines present, held artifact
+    # screened under its current policy, no crown change). The court never
+    # applies a reject or an escalation, and enforce is refused for every
+    # other class.
     mode: CourtMode = "off"
     byte_identical_resubmission_mode: CourtMode = "off"
     repack_resubmission_mode: CourtMode = "off"
@@ -36,6 +45,20 @@ class CopyCourtSettings(BaseModel):
     # settings shape stable when a model court is added.
     model: str | None = None
     prompt_revision: str | None = None
+
+    @model_validator(mode="after")
+    def _enforce_only_near_duplicate(self) -> CopyCourtSettings:
+        for name in (
+            "byte_identical_resubmission_mode",
+            "repack_resubmission_mode",
+            "cross_miner_resubmission_mode",
+        ):
+            if getattr(self, name) == "enforce":
+                raise ValueError(
+                    f"{name}=enforce is not supported: the court applies only the "
+                    "deterministic near-duplicate family CLEAR"
+                )
+        return self
 
     def effective_mode(self, hold_class: str) -> CourtMode:
         """Master-capped posture for one hold class."""
@@ -74,17 +97,56 @@ class CopyCourtSettingsRevision(BaseModel):
     checksum: str
 
 
+class AdminCopyCourtRuntime(BaseModel):
+    """The in-process court loop's last tick, as this Platform process saw it."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    running: bool
+    interval_seconds: float
+    last_tick_started_at: datetime | None = None
+    last_tick_finished_at: datetime | None = None
+    last_tick_counters: dict[str, int] = Field(default_factory=dict)
+    last_tick_error: str | None = None
+    last_hold_errors: list[dict[str, str]] = Field(default_factory=list)
+
+
 class AdminCopyCourtSettingsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: CopyCourtSettingsRevision | None
     history: list[CopyCourtSettingsRevision]
+    runtime: AdminCopyCourtRuntime | None = None
+
+
+class AdminCopyCourtTriagePreview(BaseModel):
+    """A dry-run family triage for one copy-kind ATH review. Records nothing."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: str
+    review_id: str
+    review_status: str
+    hold_class: str
+    triage_revision: str
+    verdict: str
+    reason: str
+    citations: list
+    evidence: dict
+    auto_clear_eligible: bool
 
 
 class AdminCopyCourtRecommendation(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     recommendation_id: str
+    # Which engine produced the verdict: ``rules-v1`` for the resubmission
+    # classes, ``family-diff-v2`` for the near-duplicate attribution triage.
+    triage_revision: str = "rules-v1"
+    # Set when the court acted on (or declined to act on) the recommendation
+    # in enforce mode: ``{"status": "applied"|"skipped", "detail", ...}``.
+    application: dict | None = None
+    applied_at: datetime | None = None
     review_id: str
     agent_id: str
     verdict: str

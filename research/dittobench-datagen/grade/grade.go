@@ -131,10 +131,67 @@ type gradingPolicy struct {
 	// v13 claim-span provenance gate can check it. It changes no score: v13
 	// grades byte-identically to v12 and only reports which span won.
 	claimProvenance bool
+	// claimValuesAreNotCorrections (v14) keeps a sentence that is exactly a
+	// reviewed claim value ("Safe. Sorry.") from reading as a correction cue
+	// that retracts the sentence before it (#2769).
+	claimValuesAreNotCorrections bool
+	// foldTypographicHyphens (v14) folds U+2010 HYPHEN and U+2011 NON-BREAKING
+	// HYPHEN in the reply text to the ASCII hyphen before grading (#2734). The
+	// pinned model writes U+2011 inside most identifiers and compounds it
+	// copies from an ASCII record, so "VK‑48HJXP6A63" missed "VK-48HJXP6A63".
+	// V13 is a frozen scored contract and keeps the unfolded match.
+	foldTypographicHyphens bool
+	// hyphenJoinedValues (v14) reads a hyphen that joins the words of a known
+	// multi-word value as the space it replaces, so "blue-purple" grades as
+	// "blue purple" (#2734). It applies to every hidden value alike (expected,
+	// accepted, distractor, forbidden), so a hyphen-joined distractor is still
+	// caught. A changed word ("blue-green" for "bluey green") stays a miss.
+	hyphenJoinedValues bool
+	// setRemovalPlace (v14) lets a set-membership clause that ends in completed
+	// passive removal carry a short trailing place phrase ("PE kit has been
+	// removed from the list") and still read as removal (#2734).
+	setRemovalPlace bool
+	// progressiveActions (v14) accepts the progressive -ing form of an action
+	// claim's verb ("pausing" for "pause"), for accepted and distractor forms
+	// alike (#2734). Past -ed forms describe an earlier action and stay misses.
+	progressiveActions bool
+	// plainReplyText (v14) reads the reply as rendered text before grading:
+	// markdown emphasis, inline code, links, headings, blockquotes, bullets,
+	// numbered-list ordinals and table pipes are removed and the characters
+	// they mark up are kept; non-ASCII spaces read as a space
+	// (PlainReplyTextV14). Top agents stripped `**` in their final writer so a
+	// bolded date or a value split by emphasis would grade (SN-342).
+	plainReplyText bool
+	// numberPunctuationBounds (v14) lets a "." or "," that is not followed by
+	// a digit end a number token in the reply: "Your PIN is 4471, as saved"
+	// names 4471, and a forbidden or dump-guard number followed by sentence
+	// punctuation is caught. A decimal or grouping separator still attaches.
+	numberPunctuationBounds bool
+	// percentClaims (v14) lets a quantity claim whose unit is a percentage
+	// read "15%" as "15 percent". Counts keep ignoring percentages.
+	percentClaims bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
+	case benchVersion >= protocol.BenchVersionV14:
+		return gradingPolicy{
+			strictGenericKinds:           true,
+			authoritativeAnswerSlot:      true,
+			rejectQuestionEcho:           true,
+			chitchatCredit:               0.5,
+			distractorScanSlotOnly:       true,
+			typedClaims:                  true,
+			claimProvenance:              true,
+			claimValuesAreNotCorrections: true,
+			foldTypographicHyphens:       true,
+			hyphenJoinedValues:           true,
+			setRemovalPlace:              true,
+			progressiveActions:           true,
+			plainReplyText:               true,
+			numberPunctuationBounds:      true,
+			percentClaims:                true,
+		}
 	case benchVersion >= protocol.BenchVersionV13:
 		return gradingPolicy{
 			strictGenericKinds:      true,
@@ -492,7 +549,68 @@ func ClaimAlternatives(mc protocol.MemoryCase) [][]string {
 			group(forms...)
 		}
 	}
+	if gradingPolicyForVersion(mc.BenchVersion).foldTypographicHyphens {
+		out = withTypographicHyphenForms(out)
+	}
 	return out
+}
+
+// withTypographicHyphenForms adds, to each claim group, the U+2010 HYPHEN
+// variant of every form carrying an ASCII hyphen (v14, foldTypographicHyphens).
+// The grader folds a reply's U+2010/U+2011 to ASCII before matching, but the
+// relay tokenizes the model's raw completion: NFKC maps U+2011 to U+2010, which
+// the published claim-span normaliser reads as a separator, while it keeps the
+// ASCII '-' and so reads "VK-48HJXP6A63" as carrying a signed "-48". Without
+// this variant the gate would flag an honest model that wrote U+2011 as
+// served_text_not_model_emitted. The variant differs from its form only in the
+// hyphen, so it accepts no value the grader does not.
+//
+// A completion can mix the two spellings ("AB\u201112-CD"), and the fold credits it,
+// so every ASCII/U+2010 combination is added for a form with at most
+// maxMixedHyphenForms hyphens. Longer forms get the all-U+2010 spelling only,
+// which keeps the group bounded.
+func withTypographicHyphenForms(groups [][]string) [][]string {
+	out := make([][]string, len(groups))
+	for i, group := range groups {
+		forms := append([]string(nil), group...)
+		for _, form := range group {
+			forms = append(forms, typographicHyphenVariants(form)...)
+		}
+		out[i] = forms
+	}
+	return out
+}
+
+// maxMixedHyphenForms bounds the hyphens for which every ASCII/U+2010
+// combination is generated (2^4 - 1 = 15 variants per form).
+const maxMixedHyphenForms = 4
+
+// typographicHyphenVariants returns the spellings of form with one or more of
+// its ASCII hyphens written as U+2010, excluding form itself.
+func typographicHyphenVariants(form string) []string {
+	parts := strings.Split(form, "-")
+	hyphens := len(parts) - 1
+	if hyphens == 0 {
+		return nil
+	}
+	if hyphens > maxMixedHyphenForms {
+		return []string{strings.ReplaceAll(form, "-", "\u2010")}
+	}
+	variants := make([]string, 0, 1<<hyphens-1)
+	for mask := 1; mask < 1<<hyphens; mask++ {
+		var b strings.Builder
+		b.WriteString(parts[0])
+		for j, part := range parts[1:] {
+			if mask&(1<<j) != 0 {
+				b.WriteString("\u2010")
+			} else {
+				b.WriteByte('-')
+			}
+			b.WriteString(part)
+		}
+		variants = append(variants, b.String())
+	}
+	return variants
 }
 
 // MoneyMajorForm renders an AnswerMoney expected value (integer minor units,

@@ -85,6 +85,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     AvatarRejectedError,
+    GeneratorPaymentRejectedError,
     HotkeyAgentNotFoundError,
     LoginRejectedError,
     LoginRequiredError,
@@ -117,6 +118,11 @@ _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
 _ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 _ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
 _ERROR_CODE_PAYMENT_RECOVERY_EXPIRED = 3208
+# Generator fee refusals the same proof can never overcome. 3201 (extrinsic not
+# found) is left out: an archive node that has not caught up yet reports it.
+_DEFINITIVE_GENERATOR_PAYMENT_CODES = frozenset(
+    {3202, 3203, 3204, 3205, 3206, 3207, 3208}
+)
 
 # Safe post-payment retry set. These statuses conventionally represent a
 # transient request, capacity, gateway, or service failure. Other 4xx responses
@@ -243,6 +249,21 @@ class ApiClient:
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="eval-pricing"))
         return EvalPricingResponse.model_validate(response.json())
+
+    # ---- /public/submission-terms ----------------------------------------
+
+    def get_submission_terms(self, competition: str) -> dict[str, Any] | None:
+        """One competition's deliverable, cooldown and fee, or ``None`` on a
+        Platform that predates per-competition submission terms."""
+        response = self._request(
+            "GET", f"/api/v1/public/submission-terms/{competition}"
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="submission terms"))
+        result: dict[str, Any] = response.json()
+        return result
 
     # ---- /upload/check --------------------------------------------------
 
@@ -394,7 +415,37 @@ class ApiClient:
     def post_generator_submission(self, body: dict[str, Any]) -> dict[str, Any]:
         response = self._request("POST", "/api/v1/generator/submissions", json=body)
         if response.status_code != 200:
-            raise ApiResponseError(_format_error(response, prefix="generator upload"))
+            message = _format_error(response, prefix="generator upload")
+            if (
+                response.status_code == 402
+                and _safe_envelope(response).get("error_code")
+                in _DEFINITIVE_GENERATOR_PAYMENT_CODES
+            ):
+                raise GeneratorPaymentRejectedError(message)
+            raise ApiResponseError(message)
+        result: dict[str, Any] = response.json()
+        return result
+
+    def get_generator_upload_terms(
+        self, *, hotkey: str, source_sha256: str, name: str | None = None
+    ) -> dict[str, Any] | None:
+        """What a generator upload needs now, or ``None`` on an older Platform.
+
+        A Platform without the endpoint predates generator upload fees, so it
+        never requires one. ``name`` asks Platform whether that display name
+        would be refused (a handle reserved to another miner family) before
+        anything is paid.
+        """
+        params = {"hotkey": hotkey, "source_sha256": source_sha256}
+        if name is not None:
+            params["name"] = name
+        response = self._request("GET", "/api/v1/generator/upload-terms", params=params)
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise ApiResponseError(
+                _format_error(response, prefix="generator upload terms")
+            )
         result: dict[str, Any] = response.json()
         return result
 

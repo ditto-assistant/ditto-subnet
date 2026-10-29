@@ -139,6 +139,7 @@ const queueSettings = {
     require_cohort_complete: true,
     require_desired_era_drained: true,
   },
+  lineage_reference_mode: 'same_owner_version' as const,
 }
 
 const queuePolicy: QueuePolicySettingsControl = {

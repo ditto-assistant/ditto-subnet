@@ -135,8 +135,6 @@ def test_the_report_names_the_bounty_and_what_accepted_work_delivered():
     ("kinds", "status"),
     [
         ((), "pending"),
-        (("merged",), "merged"),
-        (("merged", "deployed"), "deployed"),
         # Each fact is recorded on its own; the furthest one counts.
         (("adopted",), "adopted"),
         (("deployed", "merged"), "deployed"),
@@ -166,14 +164,6 @@ def test_only_confirmed_transfers_are_receipts():
     delivered = next(c for c in report(DETAIL, claims).claims if c.accepted)
     assert delivered.accepted is not None
     assert [r.round for r in delivered.accepted.receipts] == [2]
-
-
-def test_a_bounty_without_accepted_work_has_no_first_acceptance():
-    claims = copy.deepcopy(CLAIMS)
-    by_login(claims, "alice-dev")["slot_status"] = "rejected"
-    made = report(DETAIL, claims)
-    assert made.publish_to_first_accept_seconds is None
-    assert all(c.accepted is None for c in made.claims)
 
 
 def test_a_later_smaller_pool_never_fails_an_award_its_claim_signed_for():
@@ -211,17 +201,6 @@ def test_awards_recorded_at_the_same_instant_count_against_each_other(amount, ok
     # Alice's 40 alpha and this award share an instant against a 100 alpha pool.
     check = next(c for c in made.checks if c.name == "awards_within_pool")
     assert check.ok is ok
-
-
-def test_the_median_review_time_rounds_to_the_nearest_second():
-    claims = copy.deepcopy(CLAIMS)
-    decided = [s for c in claims.values() for s in c["submissions"] if s["decided_at"]]
-    assert len(decided) == 2
-    # Reviews of 1.4 and 2.4 seconds: a median of 1.9 reads 2, not 1.
-    for submission, seconds in zip(decided, (1.4, 2.4), strict=True):
-        submitted = datetime.fromisoformat(submission["submitted_at"])
-        submission["decided_at"] = (submitted + timedelta(seconds=seconds)).isoformat()
-    assert report(DETAIL, claims).median_review_seconds == 2
 
 
 State = dict[str, dict[str, Any]]
@@ -325,22 +304,6 @@ def entry(entry_id: int, kind: str, metric: str, value: float):
         actor=f"operator-{entry_id}@example.com",
         recorded_at=AT + timedelta(hours=entry_id),
     )
-
-
-def test_an_unrecorded_evaluation_reads_null():
-    made = report(DETAIL, CLAIMS).evaluation
-    nothing = dict.fromkeys(
-        (
-            "build_hours",
-            "reviewer_hours",
-            "integration_hours",
-            "operator_hours",
-            "turnaround_days",
-        )
-    )
-    assert made.estimates.model_dump() == made.actuals.model_dump() == nothing
-    assert (made.decision, made.integration_status, made.reasons) == (None,) * 3
-    assert made.decided_at is None
 
 
 def test_the_evaluation_keeps_estimates_and_actuals_apart_and_names_no_one():

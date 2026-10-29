@@ -41,6 +41,8 @@ from ditto.api_models.confirmation_progress import (
 )
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_VERSIONS,
+    LEGACY_SCORER_ROUND_BENCH_VERSIONS,
     GeneratorRoundCaseResult,
     GeneratorRoundJobResponse,
 )
@@ -87,6 +89,7 @@ from ditto.validator.errors import (
     LeaseDeadlineError,
     LeaseRevokedError,
     PlatformError,
+    PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
     SandboxOomError,
     ValidatorInfrastructureError,
@@ -105,6 +108,7 @@ from ditto.validator.resource_gate import (
     ConstrainedResource,
     ResourceCeilings,
 )
+from ditto.validator.round_commitments import RoundCommitmentPublisher
 from ditto.validator.signing import (
     rebuild_v9_confirmation_evidence_root,
     sign_heartbeat,
@@ -126,6 +130,7 @@ from ditto.validator.telemetry import (
     scored_agent_stat,
 )
 from ditto.validator.tracks import (
+    TRACK_GENERATOR,
     TRACK_MEMORY,
     MemoryFoldParams,
     TrackFoldInputs,
@@ -167,6 +172,7 @@ from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
 from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
@@ -213,6 +219,22 @@ def _supports_bench_version(bench_version: int | None) -> bool:
     """Return whether this validator can execute a platform-issued contract."""
 
     return bench_version in SUPPORTED_BENCH_VERSIONS
+
+
+def _runs_generator_round_version(
+    bench_version: int | None,
+    scorer_round_versions: tuple[int, ...] = LEGACY_SCORER_ROUND_BENCH_VERSIONS,
+) -> bool:
+    """Whether a round job at ``bench_version`` is executable here: a round
+    contract (the pack grading policies) this validator supports and its
+    scorer's round mode runs (``generator-round-bench-<n>``; a scorer that
+    advertises none runs only v13 rounds)."""
+
+    return (
+        bench_version in GENERATOR_ROUND_BENCH_VERSIONS
+        and bench_version in scorer_round_versions
+        and _supports_bench_version(bench_version)
+    )
 
 
 def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
@@ -431,6 +453,7 @@ CONFIRMATION_FAILURE_CLASSES: dict[str, str] = {
     "ServerTimeoutError": "timeout",
 }
 _UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
+_DITTOBENCH_CONFIRMATION_FAILURE = CONFIRMATION_FAILURE_CLASSES["DittobenchError"]
 
 # These slugs are now persisted by Platform and shown to operators, so they are
 # a wire contract, not local telemetry. Fail at import if this map ever emits a
@@ -440,6 +463,19 @@ _UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
 assert set(CONFIRMATION_FAILURE_CLASSES.values()) | {
     _UNCLASSIFIED_CONFIRMATION_FAILURE
 } <= set(CONFIRMATION_FAILURE_CLASS_VALUES)
+
+# The map above classifies an exception TYPE, which is the right instrument for
+# a failure raised in this process and the wrong one for a failure raised in the
+# scorer: the whole scorer arrives as ``DittobenchError``, so every distinct
+# break it reports -- seeding, the harness run, provider accounting -- collapses
+# into one slug. The scorer already classifies itself, and
+# ``ConfirmationScorerError`` carries that class up from the response headers;
+# this set is what the reporter will forward unchanged. Anything outside it
+# falls back to the type-derived class rather than widening the wire contract
+# from the far side of an HTTP boundary.
+_SCORER_CONFIRMATION_FAILURE_CLASSES = frozenset(
+    CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
+)
 
 
 def _ledger_seed_anchors(ledger: LedgerResponse) -> list[object]:
@@ -503,14 +539,44 @@ def _confirmation_pin_binding_mismatch(
 def confirmation_failure_class(error: BaseException) -> str:
     """Map an exception to an allowlisted, low-cardinality failure slug.
 
-    Walks the MRO so a subclass of a known error still classifies, and falls
-    back to ``unclassified`` rather than leaking an arbitrary type name.
+    Prefers a class the trusted scorer assigned itself, because the alternative
+    for those is ``dittobench`` -- true, and true of every scorer failure there
+    has ever been, which is why a repeatable lane break stayed invisible outside
+    one host's logs. Otherwise walks the MRO so a subclass of a known error
+    still classifies, and falls back to ``unclassified`` rather than leaking an
+    arbitrary type name.
+
+    The forwarded value is re-checked against the shared allowlist here rather
+    than trusted from the header: the admission gate and the thing that gets
+    signed must be the same decision, and an unrecognized slug has to degrade to
+    the type-derived class instead of failing the hand-back it is attached to.
     """
+    scorer_class = getattr(error, "scorer_failure_class", None)
+    if (
+        isinstance(scorer_class, str)
+        and scorer_class in _SCORER_CONFIRMATION_FAILURE_CLASSES
+    ):
+        return scorer_class
     for klass in type(error).__mro__:
         slug = CONFIRMATION_FAILURE_CLASSES.get(klass.__name__)
         if slug is not None:
             return slug
     return _UNCLASSIFIED_CONFIRMATION_FAILURE
+
+
+def confirmation_failure_status(error: BaseException) -> int | None:
+    """The scorer's bounded status, or ``None`` when it assigned no class.
+
+    Returns ``None`` -- never ``0`` -- for anything the scorer did not classify.
+    ``0`` is the scorer's own value for "the boundary broke before a status
+    existed", so substituting it for absence would invent a measurement.
+    """
+    if confirmation_failure_class(error) not in _SCORER_CONFIRMATION_FAILURE_CLASSES:
+        return None
+    status = getattr(error, "scorer_failure_status", None)
+    if isinstance(status, int) and not isinstance(status, bool) and 0 <= status <= 599:
+        return status
+    return None
 
 
 _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
@@ -520,6 +586,17 @@ _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
 # how many slots actually receive tickets. Short enough that a quorum opening is
 # picked up promptly, long enough that seven idle slots are not a poll storm.
 _IDLE_SLOT_REPOLL_SECONDS = 15.0
+# Platform refuses ``/validator/job`` once the last accepted heartbeat is older
+# than its compatibility window (300s by default). Idle slots re-poll inside one
+# sweep without heartbeating, so refresh before a claim once the last accepted
+# heartbeat is this old: under half the window, leaving room for a slow request.
+_JOB_HEARTBEAT_REFRESH_SECONDS = 120.0
+# An idle sweep ends once no lease has run for this long. Idle slots re-poll
+# while sibling claims are in flight, and with eight slots and slow polls some
+# claim almost always is, so without this bound an idle sweep never ends and
+# never re-dispatches its once-per-sweep retest lane. Until the heartbeat refresh
+# above, the stale-heartbeat 428 ended these sweeps at about this age.
+_IDLE_SWEEP_MAX_SECONDS = 300.0
 
 # Must stay exhaustive over ``BenchmarkProgressStage``: a missing stage raises
 # KeyError in ``_publish_benchmark_progress``, which the fail-open telemetry
@@ -826,6 +903,12 @@ class ValidatorWorker:
         self._weight_receipt_relay = WeightReceiptRelay(
             self._weight_setter, self._platform, config.validator_hotkey, config.netuid
         )
+        # Generator-round seed commitments this validator is elected to publish
+        # on chain. An independent best-effort lane: it shares no flag or lock
+        # with the weight loop and never delays it.
+        self._round_commitments = RoundCommitmentPublisher(
+            platform, chain, config.validator_hotkey
+        )
         # Public telemetry sink. A disabled instance is a cheap no-op, so the
         # sweep can call it unconditionally.
         self._telemetry: ValidatorTelemetry = telemetry or ValidatorTelemetry(
@@ -834,6 +917,10 @@ class ValidatorWorker:
             netuid=config.netuid,
         )
         self._last_heartbeat_timestamp = 0
+        # Heartbeat-clock time at which the newest accepted heartbeat was sent.
+        # Platform stamped ``seen_at`` no earlier, so this bounds its age.
+        self._last_accepted_heartbeat_sent_at: float | None = None
+        self._job_heartbeat_lock = asyncio.Lock()
         self._heartbeat_clock = heartbeat_clock or _new_heartbeat_clock()
         self._pending_heartbeat_state: ValidatorRuntimeState | None = None
         self._pending_heartbeat_progress: dict[str, BenchmarkProgress] = {}
@@ -880,6 +967,7 @@ class ValidatorWorker:
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
         self._scorer_runs_generator_rounds = False
+        self._scorer_round_bench_versions = LEGACY_SCORER_ROUND_BENCH_VERSIONS
         # Re-zeroed at the top of every sweep; seeded here so a hand-back from
         # outside a sweep (a drain, or a test driving the method directly)
         # cannot raise AttributeError on a pure telemetry counter.
@@ -1154,17 +1242,27 @@ class ValidatorWorker:
             retest_dispatching = False
             retest_work_claimed = False
             retests_dispatched = False
+            # Generator rounds have their own dispatcher, independent of the
+            # retest lane: a stream of continual retests must not keep an idle
+            # slot from ever asking for round work. At most one round dispatch
+            # is in flight per host; Platform decides whether a slot may take
+            # it (it reserves round capacity per validator).
+            round_dispatching = False
             # Set whenever a claim resolves or a slot finishes a lease, so a
             # waiting slot re-polls the instant the pool changes instead of
             # sitting out the interval. Cleared and read under ``budget_lock``
             # together with ``running``, ``pending_claims``, and the retest
             # dispatch state, which makes the wakeup impossible to miss.
             lease_state_changed = asyncio.Event()
+            # When this sweep last finished leased work (or started). Bounds
+            # how long idle slots keep re-polling one another; see
+            # ``_IDLE_SWEEP_MAX_SECONDS``.
+            idle_since = started
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
                 nonlocal claimed, pending_claims, retest_dispatching
-                nonlocal retest_work_claimed
-                nonlocal retests_dispatched, running
+                nonlocal retest_work_claimed, round_dispatching
+                nonlocal retests_dispatched, running, idle_since
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
@@ -1177,7 +1275,7 @@ class ValidatorWorker:
                             claimed += 1
                             pending_claims += 1
                         try:
-                            job = await self._platform.request_job(slot_id=slot_id)
+                            job = await self._request_job_with_fresh_heartbeat(slot_id)
                         except PlatformError as error:
                             async with budget_lock:
                                 claimed -= 1
@@ -1209,10 +1307,20 @@ class ValidatorWorker:
                                     # before the retest claim resolves.
                                     retest_dispatching = True
                                     retests_dispatched = True
+                                # Any other idle slot may dispatch round work
+                                # while the retest lane is busy elsewhere.
+                                dispatch_round = bool(
+                                    not dispatch_retests
+                                    and not round_dispatching
+                                    and self._scorer_runs_generator_rounds
+                                )
+                                if dispatch_round:
+                                    round_dispatching = True
                                 sibling_work_possible = bool(
                                     siblings_running
                                     or pending_claims
                                     or retest_dispatching
+                                    or round_dispatching
                                 )
                                 if sibling_work_possible:
                                     lease_state_changed.clear()
@@ -1240,17 +1348,29 @@ class ValidatorWorker:
                                     async with budget_lock:
                                         retest_work_claimed = retest_claimed
                                         retest_dispatching = False
+                                        if retest_claimed:
+                                            idle_since = time.monotonic()
                                         lease_state_changed.set()
                                 if not retest_claimed:
-                                    # Generator rounds are the lowest-priority
-                                    # lane: only idle capacity left after both
-                                    # canonical work and continual retests.
-                                    retest_claimed = (
-                                        await self._run_generator_round_lane(
-                                            stop_requested=stop_requested,
-                                            drain_requested=drain_requested,
-                                        )
-                                    )
+                                    # No retest: this slot may still ask for
+                                    # round work, so a single-slot host is not
+                                    # left without a round dispatcher.
+                                    async with budget_lock:
+                                        take_round = not round_dispatching
+                                        if take_round:
+                                            round_dispatching = True
+                                    if take_round:
+                                        try:
+                                            retest_claimed = (
+                                                await self._run_generator_round_lane(
+                                                    stop_requested=stop_requested,
+                                                    drain_requested=drain_requested,
+                                                )
+                                            )
+                                        finally:
+                                            async with budget_lock:
+                                                round_dispatching = False
+                                                lease_state_changed.set()
                                 if retest_claimed:
                                     # The dispatcher itself becomes free only
                                     # after its retest work settles. Ask for
@@ -1259,7 +1379,35 @@ class ValidatorWorker:
                                     continue
                                 async with budget_lock:
                                     sibling_work_possible = bool(
-                                        running or pending_claims
+                                        running or pending_claims or round_dispatching
+                                    )
+                            elif dispatch_round:
+                                round_claimed = False
+                                try:
+                                    round_claimed = (
+                                        await self._run_generator_round_lane(
+                                            stop_requested=stop_requested,
+                                            drain_requested=drain_requested,
+                                        )
+                                    )
+                                finally:
+                                    async with budget_lock:
+                                        round_dispatching = False
+                                        if round_claimed:
+                                            idle_since = time.monotonic()
+                                        lease_state_changed.set()
+                                if round_claimed:
+                                    # The round run has settled; ask for
+                                    # ordinary work before anything else.
+                                    continue
+                                async with budget_lock:
+                                    # A sibling may have started the next round
+                                    # dispatch since this one finished.
+                                    sibling_work_possible = bool(
+                                        running
+                                        or pending_claims
+                                        or retest_dispatching
+                                        or round_dispatching
                                     )
                             if not sibling_work_possible:
                                 # Nothing of this worker's is in flight and the
@@ -1288,10 +1436,21 @@ class ValidatorWorker:
                                     retests_dispatched
                                     and not retest_dispatching
                                     and not retest_work_claimed
+                                    and not round_dispatching
                                     and not running
                                     and not pending_claims
                                 )
-                            if no_retest_work:
+                                # Idle siblings' own claims are always in flight
+                                # on a slow Platform, so they alone must not keep
+                                # an idle sweep alive forever.
+                                idle_sweep_expired = bool(
+                                    not running
+                                    and not retest_dispatching
+                                    and not round_dispatching
+                                    and time.monotonic() - idle_since
+                                    >= _IDLE_SWEEP_MAX_SECONDS
+                                )
+                            if no_retest_work or idle_sweep_expired:
                                 break
                             continue
                         async with budget_lock:
@@ -1433,6 +1592,7 @@ class ValidatorWorker:
                         finally:
                             async with budget_lock:
                                 running -= 1
+                                idle_since = time.monotonic()
                                 lease_state_changed.set()
                     return slot_scored, slot_failed, slot_claimed
                 finally:
@@ -1538,6 +1698,50 @@ class ValidatorWorker:
             )
             return False
 
+    async def _refresh_heartbeat_for_job(
+        self, *, sent_after: float | None = None
+    ) -> None:
+        """Send a heartbeat unless Platform already has a fresh enough one.
+
+        Without ``sent_after`` the bar is :data:`_JOB_HEARTBEAT_REFRESH_SECONDS`.
+        With it, only a heartbeat accepted after that instant counts, so every
+        slot rejected by the same stale gate shares one refresh.
+        """
+        async with self._job_heartbeat_lock:
+            last = self._last_accepted_heartbeat_sent_at
+            if last is not None and (
+                last > sent_after
+                if sent_after is not None
+                else self._heartbeat_clock.time() - last
+                < _JOB_HEARTBEAT_REFRESH_SECONDS
+            ):
+                return
+            await self._report_heartbeat("polling")
+
+    async def _request_job_with_fresh_heartbeat(
+        self, slot_id: str
+    ) -> JobResponse | None:
+        """Claim canonical work, refreshing a stale heartbeat at most once.
+
+        Platform's compatibility gate refuses a claim (428) when this hotkey's
+        last heartbeat is older than its window. An idle sweep can outlive that
+        window, so refresh first; if Platform still answers 428, refresh once
+        more and retry once. A second refusal propagates and isolates the slot.
+        """
+        await self._refresh_heartbeat_for_job()
+        requested_at = self._heartbeat_clock.time()
+        try:
+            return await self._platform.request_job(slot_id=slot_id)
+        except PlatformHeartbeatRequiredError as error:
+            logger.info(
+                "job request for %s needs a fresh heartbeat; refreshing and "
+                "retrying once: %s",
+                slot_id,
+                error,
+            )
+        await self._refresh_heartbeat_for_job(sent_after=requested_at)
+        return await self._platform.request_job(slot_id=slot_id)
+
     async def _report_heartbeat(
         self,
         state: ValidatorRuntimeState,
@@ -1636,7 +1840,8 @@ class ValidatorWorker:
             return True
         try:
             build = validator_build_info()
-            timestamp = int(self._heartbeat_clock.time())
+            sent_at = self._heartbeat_clock.time()
+            timestamp = int(sent_at)
             if timestamp <= self._last_heartbeat_timestamp:
                 raise RuntimeError("heartbeat wall-clock rate limit was bypassed")
             self._last_heartbeat_timestamp = timestamp
@@ -1685,10 +1890,16 @@ class ValidatorWorker:
                 scorer_benchmarks.status == "fresh_verified"
                 and scorer_benchmarks.generator_rounds
             )
+            self._scorer_round_bench_versions = (
+                scorer_benchmarks.generator_round_bench_versions
+                if scorer_benchmarks.generator_round_bench_versions is not None
+                else LEGACY_SCORER_ROUND_BENCH_VERSIONS
+            )
             capabilities = capabilities.model_copy(
                 update={
                     "scorer_benchmarks": scorer_benchmarks,
                     "treasury_weights": await self._treasury_weight_capability(),
+                    "round_commitments": self._round_commitments.supported(),
                 }
             )
             # v9: per-component runtime health. A collector failure (or no
@@ -1751,6 +1962,8 @@ class ValidatorWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
+            if response.accepted:
+                self._last_accepted_heartbeat_sent_at = sent_at
             # Update safety requires fresh platform acceptance. A later
             # rejection must revoke an earlier success instead of leaving the
             # updater-visible state permanently sticky.
@@ -2381,13 +2594,17 @@ class ValidatorWorker:
             else GeneratorLedgerResponse(count=0)
         )
         if generator_ledger is None:
-            if self._config.generator_weight_eligible:
+            if registry.shares_bps().get(TRACK_GENERATOR, 0) > 0:
+                # A governed generator share is in force: folding an empty
+                # ledger would hand it to memory while validators that read
+                # the ledger pay generators. Keep the last accepted vector.
                 logger.warning(
-                    "generator ledger unavailable while generator weights are "
-                    "eligible; weights unchanged this epoch"
+                    "generator ledger unavailable while the generator track "
+                    "holds a governed share; weights unchanged this epoch"
                 )
                 return _WeightOutcome(leaderboard=leaderboard)
-            # Shadow: the track pays nothing, so an empty ledger changes no weight.
+            # No generator share (shadow, or the compiled 0 bps default): the
+            # track pays nothing, so an empty ledger changes no weight.
             generator_ledger = GeneratorLedgerResponse(count=0)
         fold_inputs = TrackFoldInputs(
             memory_entries=registered_entries,
@@ -2428,7 +2645,11 @@ class ValidatorWorker:
         track_vectors = {
             track.track_id: track.fold(fold_inputs) for track in registry.tracks
         }
-        paying_shares_bps = registry.shares_bps()
+        # An empty generator vector hands its governed share to memory rather
+        # than burning it (``Track.unclaimed_share_to``), so a served
+        # ``{memory: 9000, generator: 1000}`` with no weight-eligible generator
+        # folds memory at the full pool: byte-identical to the memory-only fold.
+        paying_shares_bps = registry.claimed_shares_bps(track_vectors)
         eligible_vectors = {
             track_id: vector
             for track_id, vector in track_vectors.items()
@@ -2804,27 +3025,73 @@ class ValidatorWorker:
                 failure_stage = (
                     self._confirmation_stage(slot_id) if error is not None else None
                 )
+                failure_status = (
+                    confirmation_failure_status(error) if error is not None else None
+                )
                 await self._publish_confirmation_progress(job, "failed_retrying")
-                try:
+
+                async def report(
+                    reported_class: str | None, reported_status: int | None
+                ) -> None:
                     await asyncio.wait_for(
                         asyncio.shield(
                             self._platform.fail_v9_confirmation_job(
                                 job,
                                 reason=reason,
-                                failure_class=failure_class,
+                                failure_class=reported_class,
                                 failure_stage=failure_stage,
+                                failure_status=reported_status,
                             )
                         ),
                         timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
                     )
+
+                try:
+                    await report(failure_class, failure_status)
                 except Exception as hand_back_error:  # noqa: BLE001
+                    # A forwarded scorer class is the one part of this report a
+                    # Platform predating the widened allowlist will refuse, and
+                    # refusing it costs far more than the diagnostic is worth:
+                    # the ticket is not handed back at all, so it holds its slot
+                    # and its reservation until the deadline hours later. Retry
+                    # once with the class that Platform has always accepted. The
+                    # ordering is deliberate -- ask for the better diagnostic
+                    # first, keep the hand-back either way -- and it also covers
+                    # any future allowlist drift, not just this rollout.
+                    coarse_class = (
+                        _DITTOBENCH_CONFIRMATION_FAILURE
+                        if failure_class in _SCORER_CONFIRMATION_FAILURE_CLASSES
+                        else None
+                    )
+                    if coarse_class is None:
+                        logger.warning(
+                            "v9 confirmation failure hand-back did not land "
+                            "bundle=%s ticket=%s: %s",
+                            job.bundle_id,
+                            job.ticket_id,
+                            hand_back_error,
+                        )
+                        return
                     logger.warning(
-                        "v9 confirmation failure hand-back did not land "
-                        "bundle=%s ticket=%s: %s",
+                        "v9 confirmation failure hand-back with scorer class %s "
+                        "was refused for bundle=%s ticket=%s (%s); retrying as "
+                        "%s so the ticket is still handed back",
+                        failure_class,
                         job.bundle_id,
                         job.ticket_id,
                         hand_back_error,
+                        coarse_class,
                     )
+                    try:
+                        await report(coarse_class, None)
+                    except Exception as retry_error:  # noqa: BLE001
+                        logger.warning(
+                            "v9 confirmation failure hand-back did not land "
+                            "bundle=%s ticket=%s: %s",
+                            job.bundle_id,
+                            job.ticket_id,
+                            retry_error,
+                        )
 
             try:
                 # Prepare the trusted broker key before asking Platform for
@@ -3324,7 +3591,10 @@ class ValidatorWorker:
             job.slot_id != requested
             or job.slot_id not in self._healthy_slots
             or self._slots[job.slot_id].active_agent_id
-            or job.bench_version != 13
+            # The round's frozen contract, issued by Platform per round.
+            or not _runs_generator_round_version(
+                job.bench_version, self._scorer_round_bench_versions
+            )
         ):
             await self._platform.fail_generator_round_job(
                 job, reason="infrastructure", detail="round_job_not_executable"
@@ -3339,7 +3609,7 @@ class ValidatorWorker:
             seed=job.seed,
             dataset_sha256=job.dataset_sha256,
             run_size=job.run_size,
-            bench_version=13,
+            bench_version=job.bench_version,
             minimum_screening_policy_version=job.minimum_screening_policy_version,
             requires_screened_image=job.requires_screened_image,
             inference=job.inference,
@@ -3352,8 +3622,19 @@ class ValidatorWorker:
         slot_token = _CURRENT_SLOT.set(job.slot_id)
         slot = self._slot_state()
         slot.revoked.clear()
+        # A panel run can hold the slot for most of an epoch. Without this
+        # refresh the validator heartbeat goes stale mid-run, and Platform's
+        # treasury fleet gate then refuses every validator's ledger read (428)
+        # while this managed weight setter looks offline.
+        heartbeat_stop = asyncio.Event()
+        heartbeat_task: asyncio.Task[None] | None = None
         try:
-            await self._begin_active_ticket(job.agent_id, job.deadline, 13)
+            await self._begin_active_ticket(
+                job.agent_id, job.deadline, job.bench_version
+            )
+            heartbeat_task = asyncio.create_task(
+                self._heartbeat_while_active(heartbeat_stop)
+            )
             run_id, per_case = await self._run_within_lease(
                 lambda: self._execute_generator_round(job, lease),
                 job=lease,
@@ -3401,6 +3682,9 @@ class ValidatorWorker:
                 job, reason="scoring_error", detail=failure_detail(exc)
             )
         finally:
+            heartbeat_stop.set()
+            if heartbeat_task is not None:
+                await heartbeat_task
             self._clear_active_ticket()
             await self._report_heartbeat("polling")
             _CURRENT_SLOT.reset(slot_token)
@@ -3413,7 +3697,7 @@ class ValidatorWorker:
         artifact = await self._platform.get_artifact(job.agent_id)
         if (
             artifact.sha256.lower() != job.sha256.lower()
-            or artifact.bench_version != 13
+            or artifact.bench_version != job.bench_version
         ):
             raise PlatformError(
                 f"generator round artifact identity mismatch for agent {job.agent_id}"
@@ -3433,6 +3717,7 @@ class ValidatorWorker:
                 dataset_bytes=dataset,
                 dataset_sha256=job.dataset_sha256,
                 seed=job.seed,
+                bench_version=job.bench_version,
                 screened_image_url=artifact.screened_image_url,
                 screened_image_sha256=artifact.screened_image_sha256,
                 screened_image_size_bytes=artifact.screened_image_size_bytes,
@@ -4858,6 +5143,10 @@ class ValidatorWorker:
             self._run_longmem_forever(stop, drain_requested=drain_requested),
             name="validator-longmem",
         )
+        commitment_task = asyncio.create_task(
+            self._round_commitments.run_forever(stop, drain_requested=drain_requested),
+            name="validator-round-commitments",
+        )
         bootstrap_resume_pending = bootstrap_resume
         try:
             while not stop.is_set():
@@ -4909,10 +5198,13 @@ class ValidatorWorker:
         finally:
             weight_task.cancel()
             longmem_task.cancel()
+            commitment_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await weight_task
             with contextlib.suppress(asyncio.CancelledError):
                 await longmem_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await commitment_task
             # The remembered event belongs to this run's lifetime; a later
             # standalone ``run_once`` must not inherit a drain that ended here.
             if self._drain_requested is drain_requested:
@@ -5043,9 +5335,13 @@ class ValidatorWorker:
                 self._weights_active = True
                 # Do not overwrite an active benchmark heartbeat with the
                 # short weight state; benchmark progress remains the useful
-                # public current-work signal.
+                # public current-work signal. Still refresh it: the treasury
+                # ledger read requires a fresh managed-validator heartbeat, and
+                # a lane that stopped heartbeating must not freeze weights.
                 if self._active_agent_id is None:
                     await self._report_heartbeat("updating_weights")
+                else:
+                    await self._emit_active_heartbeat()
                 outcome = await self._update_weights()
                 logger.info(
                     "weight request accepted by Pylon: accepted=%s miner(s)=%d; "

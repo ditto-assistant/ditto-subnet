@@ -33,6 +33,8 @@ from ditto_screener.causal_evidence import (
 )
 from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.review_lineage_prompt import lineage_dossier
+from ditto_screener.review_usage import l2_stage_for_role, record_usage
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
@@ -54,6 +56,7 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
     ScreenReviewAudit,
     SourceReviewAuthorityTransition,
@@ -140,35 +143,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v59-policy-v13"
+        return "l2-terra-source-review-v61-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v31-policy-v13"
+        return "l3-sol-adversarial-critic-v33-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v36-policy-v13"
+        return "l3-sol-violation-cause-v38-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v16-policy-v13"
+        return "l3-sol-cause-disagreement-v18-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v34-policy-v13"
+        return "l3-sol-safety-adjudicator-v36-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1272,10 +1275,12 @@ Behavioral degradation alone is a lead, never an I8 breach. Screening runs no
 separate behavioral test that could attribute it later, so decide I8 from the
 traced served path.
 
-For I2, identify the exact applicable evidence and its discard point; generic
-top-k selection or an ordinary retrieval miss is insufficient. For I3, separate
-shape repair from a genuine model critic/final selector that has necessary
-evidence and may preserve dissent. For I4, conditional deletion of unknown,
+For I2, identify the actual applicable trusted instruction/authorization,
+loss of its meaning and material consequence. Evidence loss from retrieval,
+summaries, compaction, checkpointing, retries or fresh fallback alone is not
+rejection, including after a successful model consumed a receipt. For I3, separate
+shape repair from a genuine model critic/final selector with selected/summarized
+context under W3 and real dissent. For I4, conditional deletion of unknown,
 none, n/a, or an overlength answer; prose-derived abstention; currency rescale;
 added equivalents; and grader-vocabulary mapping are scorer-field rewrites.
 For I5, conditionality is neither necessary nor sufficient: an always-on
@@ -1372,8 +1377,8 @@ configuration, candidate boundary, input, output, or downstream authority.
 A genuine authoritative model planner may author a pinned plan; an advisory
 planner must remain rejectable. A user/model-authored program may directly
 return its result only when the delegation fixed inputs, operation, scope,
-units, and representation before execution. Neither permission cures evidence
-loss, host final-field rewriting, hidden expected trajectories, or missing
+units, and representation before execution. Neither permission cures host
+final-field rewriting, hidden expected trajectories, or missing
 authorization. Opaque-file presence, dead code, lineage, and labels are leads.
 On a scored v13 `/run`, the validator mints `inference_base_url` for that
 case. A harness may build a per-request model client from this field and
@@ -1404,6 +1409,26 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
+        # Change the legacy I2/I4 context clauses, never arbitrary occurrences
+        # elsewhere in the assembled prompt or their authority safeguards.
+        prompt = prompt.replace(
+            "I2 requires complete applicable current-user records on the deciding\n"
+            "turn, while allowing a clearly non-authoritative "
+            "focused preliminary pass.",
+            "I2 protects applicable trusted instructions and authorization, with "
+            "material consequence proof; W3 permits selected/summarized context "
+            "and fresh fallback without mandatory raw receipt/history retention.",
+        ).replace(
+            "I4 is stricter than the legacy derive-as-prompt allowance. "
+            "A local value passes\nonly as an explicitly untrusted candidate "
+            "beside complete records, with records\npreferred on disagreement "
+            "and no accept gate.",
+            "I4 is stricter than the legacy derive-as-prompt allowance. "
+            "It protects model authority over a local candidate: it must stay "
+            "explicitly\nuntrusted/advisory, with no correctness gate and "
+            "freedom to disagree. Selected\nor summarized evidence/context "
+            "is permitted under W3; missing raw support alone is not I4.",
+        )
         prompt = (
             prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
             .replace("replaces I1-I7.", "replaces I1-I8.")
@@ -3030,6 +3055,7 @@ class TerraSolSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         bench_version: int | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
         local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
@@ -3151,17 +3177,20 @@ class TerraSolSourceReviewAgent:
             if runtime_evidence
             else "absent"
         )
+        lineage_digest = review_lineage.packet_sha256 if review_lineage else None
         cache_key = self._cache_key(
             artifact_sha256,
             l1_observation,
             policy_version,
             runtime_evidence_digest=evidence_digest,
+            lineage_digest=lineage_digest,
         )
         analyst_cache_key = self._analyst_cache_key(
             artifact_sha256,
             l1_observation,
             policy_version,
             runtime_evidence_digest=evidence_digest,
+            lineage_digest=lineage_digest,
         )
         self._cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self._cache_dir, 0o700)
@@ -3204,6 +3233,7 @@ class TerraSolSourceReviewAgent:
                     policy_version=policy_version,
                     on_l3_start=on_l3_start,
                     runtime_evidence=runtime_evidence,
+                    review_lineage=review_lineage,
                 )
             if asyncio.get_running_loop().time() >= effective_deadline:
                 result = L2RunResult(
@@ -3377,6 +3407,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
         runtime_evidence: Mapping[str, object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         if self._workspace_root is not None:
             # A rootless analyzer daemon lives outside the worker service's
@@ -3404,6 +3435,7 @@ class TerraSolSourceReviewAgent:
                 policy_version=policy_version,
                 on_l3_start=on_l3_start,
                 runtime_evidence=runtime_evidence,
+                review_lineage=review_lineage,
             )
         except L2TrajectoryError as error:
             logger.warning("L2 model trajectory failed safely: %s", error.code)
@@ -3509,6 +3541,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
         runtime_evidence: Mapping[str, object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         api_key = _read_key(self._api_key_file)
         (
@@ -3525,6 +3558,7 @@ class TerraSolSourceReviewAgent:
             policy_version=policy_version,
             deadline=deadline,
             runtime_evidence=runtime_evidence,
+            review_lineage=review_lineage,
         )
         analyst_cache_hit = False
         analyst = self._load_cache(f"{analyst_cache_key}.analyst")
@@ -4462,6 +4496,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int,
         deadline: float | None,
         runtime_evidence: Mapping[str, object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> tuple[dict[str, object], tuple[str, ...], bool, bool, tuple[str, ...]]:
         deterministic: dict[str, object] = {}
         tools: list[str] = []
@@ -4504,25 +4539,28 @@ class TerraSolSourceReviewAgent:
             if isinstance(starter_diff, Mapping)
             else self._starter_revision
         )
-        return (
-            {
-                "dossier_revision": L2_DOSSIER_REVISION,
-                "artifact_sha256": artifact_sha256,
-                "benchmark_contract": _benchmark_contract_capsule(policy_version),
-                "trusted_scored_runtime_env": runtime_evidence,
-                "starter_revision": selected_starter_revision,
-                "supported_starter_revisions": list(self._starter_revisions),
-                "l1": {
-                    "finding_digest": l1_observation.finding_digest,
-                    "risk": l1_observation.risk_level,
-                    "categories": list(l1_observation.categories),
-                    "evidence": _l1_evidence(l1_observation),
-                    "finding": _compressed_l1_finding(l1_observation),
-                    "leads": list(_l1_lead_packet(l1_observation)),
-                },
-                "deterministic": deterministic,
-                "bounded_source_inventory": inventory,
+        dossier: dict[str, object] = {
+            "dossier_revision": L2_DOSSIER_REVISION,
+            "artifact_sha256": artifact_sha256,
+            "benchmark_contract": _benchmark_contract_capsule(policy_version),
+            "trusted_scored_runtime_env": runtime_evidence,
+            "starter_revision": selected_starter_revision,
+            "supported_starter_revisions": list(self._starter_revisions),
+            "l1": {
+                "finding_digest": l1_observation.finding_digest,
+                "risk": l1_observation.risk_level,
+                "categories": list(l1_observation.categories),
+                "evidence": _l1_evidence(l1_observation),
+                "finding": _compressed_l1_finding(l1_observation),
+                "leads": list(_l1_lead_packet(l1_observation)),
             },
+            "deterministic": deterministic,
+            "bounded_source_inventory": inventory,
+        }
+        if review_lineage is not None:
+            dossier["review_lineage"] = lineage_dossier(review_lineage)
+        return (
+            dossier,
             tuple(tools),
             not incomplete_components,
             False,  # legacy report field; no language-specific graph is required
@@ -4923,6 +4961,16 @@ class TerraSolSourceReviewAgent:
                     _response_fault_subcode(payload),
                 ) from error
             usage = _add_usage(usage, turn_usage)
+            record_usage(
+                l2_stage_for_role(role),
+                model=response_model or model,
+                input_tokens=turn_usage.input_tokens,
+                output_tokens=turn_usage.output_tokens,
+                cached_input_tokens=turn_usage.cached_input_tokens,
+                reasoning_tokens=turn_usage.reasoning_tokens,
+                estimated_cost_usd=turn_usage.estimated_cost_usd,
+                reported_cost_usd=turn_usage.reported_cost_usd,
+            )
             if self._terminal_verdict_required:
                 self._audit.record(
                     {
@@ -5616,12 +5664,14 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         *,
         runtime_evidence_digest: str = "absent",
+        lineage_digest: str | None = None,
     ) -> str:
         value = self._cache_key_value(
             artifact_sha256,
             l1_observation,
             policy_version,
             runtime_evidence_digest=runtime_evidence_digest,
+            lineage_digest=lineage_digest,
         )
         value["cause_prompt_revision"] = l2_cause_prompt_revision(policy_version)
         # Final results from an older L3-off posture must never bypass the
@@ -5642,6 +5692,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         *,
         runtime_evidence_digest: str = "absent",
+        lineage_digest: str | None = None,
     ) -> str:
         """Keep cause-only retries from rerunning Terra or the critic."""
         value = self._cache_key_value(
@@ -5649,6 +5700,7 @@ class TerraSolSourceReviewAgent:
             l1_observation,
             policy_version,
             runtime_evidence_digest=runtime_evidence_digest,
+            lineage_digest=lineage_digest,
         )
         # Preserve the pre-split stage key so already verified Terra/critic
         # trajectories remain reusable when only adjudication changes.
@@ -5678,6 +5730,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         *,
         runtime_evidence_digest: str = "absent",
+        lineage_digest: str | None = None,
     ) -> dict[str, object]:
         value: dict[str, object] = {
             "artifact_sha256": artifact_sha256,
@@ -5728,6 +5781,10 @@ class TerraSolSourceReviewAgent:
                 "cost": self._max_cost_usd,
             },
         }
+        if lineage_digest is not None:
+            # Present only for a lineage-scoped review, so every ordinary
+            # review keeps its existing cache entries.
+            value["lineage_packet_sha256"] = lineage_digest
         return value
 
     def _try_lock_cache(self, key: str) -> int | None:
@@ -6223,6 +6280,7 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         bench_version: int | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         hold = self._runtime_evidence_hold(
             scored_runtime_evidence,
@@ -6265,6 +6323,7 @@ class LayeredSourceReviewAgent:
             progress=report_l1 if progress is not None else None,
             deadline=l1_deadline,
             policy_version=policy_version,
+            review_lineage=review_lineage,
         )
         return await self.resolve_lead(
             archive_path,
@@ -6279,6 +6338,7 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
             scored_runtime_evidence_received_at=scored_runtime_evidence_received_at,
             bench_version=bench_version,
+            review_lineage=review_lineage,
         )
 
     async def resolve_lead(
@@ -6296,6 +6356,7 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         bench_version: int | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
         requires_lease = self._requires_signed_runtime_lease(policy_version)
@@ -6380,6 +6441,7 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
             scored_runtime_evidence_received_at=scored_runtime_evidence_received_at,
             bench_version=bench_version,
+            review_lineage=review_lineage,
         )
         report(9)
         if self._capture_enforce_result:

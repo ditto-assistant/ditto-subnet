@@ -13,15 +13,11 @@ import (
 )
 
 func TestV8ToolMixVariesAndCoversEveryFamily(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV8)
+	t.Parallel()
 	var first map[string]int
 	seen := map[string]bool{}
 	varied := false
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range cachedDatasets(t, 1, 40, "full", protocol.BenchVersionV8, 0) {
 		hist := map[string]int{}
 		for _, tc := range artifact.ToolCases {
 			hist[tc.Category]++
@@ -255,13 +251,9 @@ func TestV8WorldToolCasesAreFuzzyComposedAndStateBound(t *testing.T) {
 }
 
 func TestV8AgentJobsStopAtApprovalBoundary(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV8)
+	t.Parallel()
 	seen := 0
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range cachedDatasets(t, 1, 40, "full", protocol.BenchVersionV8, 0) {
 		for _, tc := range artifact.ToolCases {
 			for _, spec := range tc.ExpectedTools {
 				if spec.Name == "get_agent_job_status" {
@@ -286,7 +278,7 @@ func TestV8AgentJobsStopAtApprovalBoundary(t *testing.T) {
 }
 
 func TestV8FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV8)
+	t.Parallel()
 	freeForm := map[string]bool{
 		"agent_job": true, "workflow_not_job": true, "agent_workflow": true,
 		"feedback": true, "set_tool_prefs": true, "automation_not_job": true,
@@ -294,11 +286,7 @@ func TestV8FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
 		"calendar_search": true,
 	}
 	seen := map[string]bool{}
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range cachedDatasets(t, 1, 40, "full", protocol.BenchVersionV8, 0) {
 		for _, tc := range artifact.ToolCases {
 			if !freeForm[tc.Category] {
 				continue
@@ -317,7 +305,7 @@ func TestV8FreeFormArgumentsDoNotRequireMagicStrings(t *testing.T) {
 }
 
 func TestV8ReviewScenariosUseNaturalResolutionInsteadOfWireIdentifiers(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV8)
+	t.Parallel()
 	wantCategories := map[string]bool{
 		"world_contact_research_email_result_usage": false,
 		"world_memory_delete":                       false,
@@ -326,11 +314,7 @@ func TestV8ReviewScenariosUseNaturalResolutionInsteadOfWireIdentifiers(t *testin
 		"world_theme_discover_set":                  false,
 		"set_model":                                 false,
 	}
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range cachedDatasets(t, 1, 40, "full", protocol.BenchVersionV8, 0) {
 		for _, tc := range artifact.ToolCases {
 			if _, tracked := wantCategories[tc.Category]; !tracked {
 				continue
@@ -358,12 +342,7 @@ func TestV8ReviewScenariosUseNaturalResolutionInsteadOfWireIdentifiers(t *testin
 }
 
 func TestV8MemoryFetchUsesNaturalSearchThenFetch(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV8)
-	for seed := int64(1); seed <= 80; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, artifact := range cachedDatasets(t, 1, 80, "full", protocol.BenchVersionV8, 0) {
 		for _, tc := range artifact.ToolCases {
 			if tc.Category != "memory_fetch" {
 				continue
@@ -381,12 +360,9 @@ func TestV8MemoryFetchUsesNaturalSearchThenFetch(t *testing.T) {
 }
 
 func TestV8ComposedMemoryFloor(t *testing.T) {
-	prof, _ := ProfileForVersion("full", protocol.BenchVersionV8)
-	for seed := int64(1); seed <= 40; seed++ {
-		artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV8)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Parallel()
+	for _, artifact := range cachedDatasets(t, 1, 40, "full", protocol.BenchVersionV8, 0) {
+		seed := artifact.Seed
 		composed := 0
 		hist := map[string]int{}
 		for _, mc := range artifact.MemoryCases {
@@ -405,6 +381,7 @@ func TestV8ComposedMemoryFloor(t *testing.T) {
 }
 
 func TestV8HasNoLegacySessionQuestionsOrTranscripts(t *testing.T) {
+	t.Parallel()
 	legacy := map[string]bool{
 		QTLifecycleWrite: true, QTLifecycleRead: true,
 		QTDeclarativeWrite: true, QTDeclarativeRead: true,
@@ -521,6 +498,7 @@ func v8ComposedMemoryType(questionType string) bool {
 }
 
 func TestV8ReferenceRunHasFixedCaseAndBoundedIngestionEnvelope(t *testing.T) {
+	t.Parallel()
 	seeds := []int64{1, 2, 3, 7, 11, 42, 123456789, 3058240546919425205}
 	for _, seed := range seeds {
 		for _, runSize := range []string{"small", "medium", "full"} {

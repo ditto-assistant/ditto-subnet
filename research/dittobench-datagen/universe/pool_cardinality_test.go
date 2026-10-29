@@ -89,6 +89,15 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			{Name: "enterpriseReferenceFields", Size: len(enterpriseReferenceFields), Role: "question cue (enterprise join field)"},
 			{Name: "enterpriseSetFields", Size: len(enterpriseSetFields), Role: "question cue (enterprise set field)"},
 
+			// v14 temporal business families (v14_temporal_families.go).
+			{Name: "V14SequenceEventClasses", Size: len(V14SequenceEventClasses), Role: "answer (event class)"},
+			{Name: "V14ProcessStepClasses", Size: len(V14ProcessStepClasses), Role: "answer (process step class)"},
+			// v14 role families (v14_role_families.go). The custody item and step
+			// banks are question cues; handle stems and domains compose answers.
+			{Name: "v14CustodySteps", Size: len(v14CustodySteps), Role: "question cue (custody step)"},
+			{Name: "v14HandleWords", Size: len(v14HandleWords), Role: "answer part (contact handle stem)"},
+			{Name: "v14HandleDomains", Size: len(v14HandleDomains), Role: "answer part (contact handle domain)"},
+
 			// Story arcs (story_events.go, story_v2.go, story.go).
 			{Name: "storyStatusVocabulary", Size: len(storyStatusVocabulary), Role: "answer (story status)"},
 			{Name: "storyChannels", Size: len(storyChannels), Role: "answer (contact channel)"},
@@ -99,6 +108,20 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			{Name: "personalDomains", Size: len(personalDomains), Role: "record surface (story domain)"},
 			{Name: "businessDomains", Size: len(businessDomains), Role: "record surface (story domain)"},
 			{Name: "storyLessons", Size: len(storyLessons), Role: "answer (story lesson)", Grown: true}, // merged with the CC0 lesson corpus at init
+
+			// V14 supersession chains (v14_supersession.go, SN-353 / SN-354).
+			{Name: "v14PlainForms", Size: len(v14PlainForms), Role: "record surface (chain step)"},
+			{Name: "v14AnnouncedForms", Size: len(v14AnnouncedForms), Role: "record surface (chain step)"},
+			{Name: "v14ProposeForms", Size: len(v14ProposeForms), Role: "record surface (chain step)"},
+			{Name: "v14ProposeCuedForms", Size: len(v14ProposeCuedForms), Role: "record surface (chain step)"},
+			{Name: "v14WithdrawForms", Size: len(v14WithdrawForms), Role: "record surface (chain step)"},
+			{Name: "v14AdoptForms", Size: len(v14AdoptForms), Role: "record surface (chain step)"},
+			{Name: "v14ErrorForms", Size: len(v14ErrorForms), Role: "record surface (chain step)"},
+			{Name: "v14ConfirmForms", Size: len(v14ConfirmForms), Role: "record surface (chain step)"},
+			{Name: "v14RevertOriginalForms", Size: len(v14RevertOriginalForms), Role: "record surface (chain step)"},
+			{Name: "v14RevertOriginalCuedForms", Size: len(v14RevertOriginalCuedForms), Role: "record surface (chain step)"},
+			{Name: "v14RevertPreviousForms", Size: len(v14RevertPreviousForms), Role: "record surface (chain step)"},
+			{Name: "v14RevertPreviousCuedForms", Size: len(v14RevertPreviousCuedForms), Role: "record surface (chain step)"},
 
 			// Absence false premises (v13_absence.go).
 			{Name: "countryPool", Size: len(countryPool), Role: "question cue (false-premise country)"},
@@ -164,6 +187,21 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"storyV2Titles":              6,
 			"personalDomains":            8,
 			"businessDomains":            8,
+			// V14 supersession-chain frames (SN-353 / SN-354). The value and
+			// subject are slots; the frame's position relative to the answer
+			// is seeded per group, so the wording is not the answer cue.
+			"v14PlainForms":              3,
+			"v14AnnouncedForms":          3,
+			"v14ProposeForms":            3,
+			"v14ProposeCuedForms":        3,
+			"v14WithdrawForms":           3,
+			"v14AdoptForms":              3,
+			"v14ErrorForms":              3,
+			"v14ConfirmForms":            3,
+			"v14RevertOriginalForms":     3,
+			"v14RevertOriginalCuedForms": 3,
+			"v14RevertPreviousForms":     3,
+			"v14RevertPreviousCuedForms": 3,
 		},
 
 		Exempt: map[string]string{
@@ -173,10 +211,15 @@ func TestPoolCardinalityCanary(t *testing.T) {
 
 			// Published case-structure enums.
 			"V13Families":          poolcanary.Schema,
+			"V14Families":          poolcanary.Schema,
+			"v14RoleFamilies":      poolcanary.Schema,
+			"v14RoleSlots":         poolcanary.Internal,
 			"V13PersonalDomains":   poolcanary.Schema,
 			"V13AbsenceFamilies":   poolcanary.Schema,
 			"v13PersonalRenderers": poolcanary.Schema,
 			"v10Renderers":         poolcanary.Schema,
+			"v14TemporalFamilies":  poolcanary.Schema,
+			"v14Ordinals":          "ordinal words for sequence positions 1-8: the closed number set an event-sequence question counts in, not a vocabulary a table could key on",
 			"storyEventCatalog":    poolcanary.Schema,
 			"personalThemes":       poolcanary.Schema,
 
@@ -189,9 +232,14 @@ func TestPoolCardinalityCanary(t *testing.T) {
 			"v13StoryTaskGrammars": poolcanary.Keyed,
 
 			// Configuration and filters.
-			"monetaryOracles":    poolcanary.Internal,
-			"storyDropRotation":  poolcanary.Internal,
-			"tripAliasForbidden": poolcanary.Internal, // words a trip alias must avoid
+			"monetaryOracles":          poolcanary.Internal,
+			"V14ExcludedShapes":        poolcanary.Internal, // SN-351 admission ledger; never rendered
+			"v14ChainTemplates":        poolcanary.Schema,   // SN-353 chain shapes; published in docs
+			"v14ChainBusinessFamilies": poolcanary.Internal,
+			"v14ChainPersonalDomains":  poolcanary.Internal,
+			"V14FamilyMix":             poolcanary.Internal, // SN-351 admission ledger; never rendered
+			"storyDropRotation":        poolcanary.Internal,
+			"tripAliasForbidden":       poolcanary.Internal, // words a trip alias must avoid
 
 			// v8..v12 world lists that v13 draws only to hold the rng phase
 			// (world.go's v13 branch replaces the value from publicdata).

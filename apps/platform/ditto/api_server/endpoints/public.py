@@ -88,7 +88,6 @@ from ditto.api_models import (
     PublicChainWeight,
     PublicChainWeightsResponse,
     PublicClaimedSlot,
-    PublicCodingShadowScore,
     PublicCompositeBreakdown,
     PublicConfirmationProgress,
     PublicConfirmationScore,
@@ -270,6 +269,10 @@ from ditto.api_server.gate_evidence import (
     gate_note_ids_for,
     public_gate_evidence,
 )
+from ditto.api_server.generator_round_reservation import (
+    round_reservation_active,
+    validator_advertises_rounds,
+)
 from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
@@ -289,6 +292,7 @@ from ditto.api_server.koth import (
 from ditto.api_server.ledger_pin import (
     classify_vector_against_pins,
     pin_expected_shares,
+    pin_generator_fraction,
     pin_provisional_incumbent,
     served_rank_shares,
 )
@@ -298,6 +302,7 @@ from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundEr
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
+    reserved_round_slots,
     resolve_slot_settings,
     validator_issuance_paused,
 )
@@ -360,10 +365,6 @@ from ditto.db.queries.benchmark_rollout import (
     protocol_serves_version,
     rollout_state,
     verified_scorer_for_version,
-)
-from ditto.db.queries.coding_evaluations import (
-    CodingShadowRunBundle,
-    latest_coding_shadow_runs,
 )
 from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
@@ -462,6 +463,7 @@ from ditto.db.queries.source_review_queue_slo import (
     load_source_review_queue_slo_snapshot,
 )
 from ditto.db.queries.tickets import (
+    generator_round_free_ticket,
     get_score_continuation_floor,
     get_score_continuation_floor_row,
     get_score_priority_floors,
@@ -846,6 +848,11 @@ def _decorate_vectors_with_pins(
             )
             return None, True
 
+    def generator_fraction(pin: LedgerEpochSnapshot | None) -> float:
+        context = getattr(pin, "context", None) if pin is not None else None
+        served = context.get("served") if isinstance(context, dict) else None
+        return pin_generator_fraction(served) if isinstance(served, dict) else 0.0
+
     expected_current, invalid_current = expected(current)
     expected_previous, invalid_previous = expected(previous)
     decorated: list[PublicValidatorWeightVector] = []
@@ -856,6 +863,8 @@ def _decorate_vectors_with_pins(
             expected_current=expected_current,
             expected_previous=expected_previous,
             burn_hotkey=burn_hotkey,
+            generator_current=generator_fraction(current),
+            generator_previous=generator_fraction(previous),
         )
         if invalid_current or invalid_previous and verdict != "current":
             # A valid current match is independently meaningful. A failed
@@ -2385,64 +2394,6 @@ async def _attested_owner_roots_for_agents(
     }
 
 
-def _public_coding_shadow(
-    bundle: CodingShadowRunBundle | None,
-    *,
-    artifact_sha256: str,
-    screened_image_sha256: str | None,
-    bench_version: int,
-) -> PublicCodingShadowScore | None:
-    if bundle is None:
-        return None
-    run = bundle.run
-    results = tuple(bundle.results.values())
-    if len(results) > SCORING_QUORUM:
-        return None
-    current = (
-        screened_image_sha256 is not None
-        and run.artifact_sha256 == artifact_sha256
-        and run.screened_image_sha256 == screened_image_sha256
-        and run.bench_version == bench_version
-    )
-    if not current:
-        return PublicCodingShadowScore(
-            status="stale",
-            score=None,
-            result_count=min(len(results), SCORING_QUORUM),
-            bench_version=run.bench_version,
-            coding_contract_version=1,
-            completed_at=None,
-            shadow_only=True,
-            weight_eligible=False,
-        )
-    if len(results) >= SCORING_QUORUM:
-        return PublicCodingShadowScore(
-            status="complete",
-            score=(
-                statistics.median_low(
-                    sorted(result.repair_mean_micros for result in results)
-                )
-                / 1_000_000
-            ),
-            result_count=SCORING_QUORUM,
-            bench_version=run.bench_version,
-            coding_contract_version=1,
-            completed_at=max(result.created_at for result in results),
-            shadow_only=True,
-            weight_eligible=False,
-        )
-    return PublicCodingShadowScore(
-        status="collecting" if bundle.tickets else "scheduled",
-        score=None,
-        result_count=len(results),
-        bench_version=run.bench_version,
-        coding_contract_version=1,
-        completed_at=None,
-        shadow_only=True,
-        weight_eligible=False,
-    )
-
-
 def _public_reward_eligibility(
     record: Any | None,
 ) -> PublicRewardEligibility | None:
@@ -2610,7 +2561,6 @@ def _public_entry(
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
     name_handle: PublicNameHandle | None = None,
     avatar_url: str | None = None,
-    coding_shadow: PublicCodingShadowScore | None = None,
     router_shadow_by_hotkey: Mapping[str, float] | None = None,
     router_shadow_queued: bool = False,
     reward_eligibility: Any | None = None,
@@ -2705,7 +2655,6 @@ def _public_entry(
         agent_version=agent_version,
         artifact_release=artifact_release,
         submission_family=submission_family,
-        coding_shadow=coding_shadow,
         miner_hotkey=r.miner_hotkey,
         miner_uid=miner_uid,
         registered=registered,
@@ -4084,7 +4033,6 @@ async def build_public_leaderboard(
                     Agent.agent_id,
                     Agent.name,
                     Agent.version,
-                    Agent.screened_image_sha256,
                 ).where(Agent.agent_id.in_([row.agent_id for row in rows]))
             )
         )
@@ -4092,14 +4040,8 @@ async def build_public_leaderboard(
         .all()
     )
     agent_metadata = {
-        agent_id: (name, version, screened_image_sha256)
-        for agent_id, name, version, screened_image_sha256 in agent_rows
+        agent_id: (name, version) for agent_id, name, version in agent_rows
     }
-    coding_runs = await latest_coding_shadow_runs(
-        session,
-        agent_ids=[row.agent_id for row in rows],
-        bench_version=display_version,
-    )
     from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
     from ditto.db.queries.name_claims import active_handle_claims
 
@@ -4243,9 +4185,7 @@ async def build_public_leaderboard(
             else None
         )
         adjustment_present = bounded_factor is not None or legacy_bonus is not None
-        stored_name, stored_version, screened_image_sha256 = agent_metadata[
-            row.agent_id
-        ]
+        stored_name, stored_version = agent_metadata[row.agent_id]
         display_name, name_handle = _public_named(
             stored_name,
             row.emission_owner_root,
@@ -4260,12 +4200,6 @@ async def build_public_leaderboard(
                 stored_version,
                 name_handle=name_handle,
                 avatar_url=avatar_urls.get(row.miner_hotkey),
-                coding_shadow=_public_coding_shadow(
-                    coding_runs.get(row.agent_id),
-                    artifact_sha256=row.sha256,
-                    screened_image_sha256=screened_image_sha256,
-                    bench_version=row.bench_version,
-                ),
                 finalized=True,
                 score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
                 settled_composite=settled,
@@ -4364,9 +4298,7 @@ async def build_public_leaderboard(
         settled, rolling, rolling_count = rollout_states.get(
             row.agent_id, (None, None, None)
         )
-        stored_name, stored_version, screened_image_sha256 = agent_metadata[
-            row.agent_id
-        ]
+        stored_name, stored_version = agent_metadata[row.agent_id]
         display_name, name_handle = _public_named(
             stored_name,
             row.emission_owner_root,
@@ -4381,12 +4313,6 @@ async def build_public_leaderboard(
                 stored_version,
                 name_handle=name_handle,
                 avatar_url=avatar_urls.get(row.miner_hotkey),
-                coding_shadow=_public_coding_shadow(
-                    coding_runs.get(row.agent_id),
-                    artifact_sha256=row.sha256,
-                    screened_image_sha256=screened_image_sha256,
-                    bench_version=row.bench_version,
-                ),
                 finalized=False,
                 score_count=count,
                 settled_composite=settled,
@@ -5055,6 +4981,7 @@ def _validator_heartbeats_response(
     now: datetime,
     active_bench_version: int,
     slot_settings: ValidatorSlotSettings,
+    round_reservation_active: bool = False,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5240,6 +5167,24 @@ def _validator_heartbeats_response(
         bench_serviceability = _bench_serviceability(
             row, active_bench_version=active_bench_version
         )
+        allowed_slots = (
+            0
+            if issuance_paused
+            else allowed_slot_count(
+                slot_settings,
+                advertised_slots=(capacity.configured_slots if capacity else 1),
+                sample=HostResourceSample(
+                    cpu_percent=(metrics.cpu_percent if metrics is not None else None),
+                    memory_percent=(
+                        metrics.memory_percent if metrics is not None else None
+                    ),
+                    disk_percent=(
+                        metrics.disk_percent if metrics is not None else None
+                    ),
+                ),
+                validator_hotkey=row.validator_hotkey,
+            )
+        )
         entries.append(
             PublicValidatorHeartbeat(
                 validator_hotkey=row.validator_hotkey,
@@ -5268,24 +5213,14 @@ def _validator_heartbeats_response(
                 issuance_paused=issuance_paused,
                 # Resolved with the very function ticket issue calls, so the
                 # fleet view cannot drift from dispatch as the policy changes.
-                allowed_slots=(
-                    0
-                    if issuance_paused
-                    else allowed_slot_count(
-                        slot_settings,
-                        advertised_slots=(capacity.configured_slots if capacity else 1),
-                        sample=HostResourceSample(
-                            cpu_percent=(
-                                metrics.cpu_percent if metrics is not None else None
-                            ),
-                            memory_percent=(
-                                metrics.memory_percent if metrics is not None else None
-                            ),
-                            disk_percent=(
-                                metrics.disk_percent if metrics is not None else None
-                            ),
-                        ),
-                    )
+                allowed_slots=allowed_slots,
+                reserved_round_slots=reserved_round_slots(
+                    slot_settings,
+                    validator_hotkey=row.validator_hotkey,
+                    allowed_slots=allowed_slots,
+                    rounds_active=(
+                        round_reservation_active and validator_advertises_rounds(row)
+                    ),
                 ),
                 healthy_slots=(capacity.healthy_slots if capacity else ["slot-0"]),
                 admission=(capacity.admission if capacity else "accepting"),
@@ -5393,6 +5328,7 @@ async def load_validator_fleet(
         now=now,
         active_bench_version=await active_bench_version(session),
         slot_settings=await resolve_slot_settings(app_state),
+        round_reservation_active=await round_reservation_active(app_state, session),
     )
 
 
@@ -5774,11 +5710,56 @@ async def screeners(
     )
 
 
-def _median_composite(row: SubmissionRow) -> float | None:
-    """Median of the reported composites: the canonical score, or None if unscored."""
-    if not row.scores:
-        return None
-    return statistics.median(s.composite for s in row.scores)
+@dataclass(frozen=True)
+class _SubmissionEra:
+    """The one benchmark version a public score aggregate is reported against."""
+
+    bench_version: int | None
+    scores: list[Score]
+    median_composite: float | None
+
+
+def _submission_era(row: SubmissionRow, *, active_version: int) -> _SubmissionEra:
+    """Pick the benchmark version whose rows the public aggregate summarizes.
+
+    A re-scored agent carries rows from more than one benchmark version, and
+    composites from different versions measure different benchmarks. Pooling
+    them published a median that matched neither: an agent finalized at v12
+    around 0.79 and re-scored at v13 around 0.13 read as 0.54 with "6 scores".
+
+    So the aggregate names exactly one version, chosen the way a reader means
+    "this agent's score": the active version once it holds a quorum there, else
+    the newest version it was finalized in, else the newest version it has any
+    accepted row in (median null, no quorum to finalize on). The version is the
+    first-class ``bench_version`` column the ticket and signature are bound to,
+    not the advisory JSON detail. Every row stays published in ``scores``.
+    """
+    by_version: dict[int, list[Score]] = {}
+    for score in row.scores:
+        by_version.setdefault(score.bench_version, []).append(score)
+    if not by_version:
+        return _SubmissionEra(bench_version=None, scores=[], median_composite=None)
+    settled = sorted(
+        version
+        for version, scores in by_version.items()
+        if len(scores) >= SCORING_QUORUM
+    )
+    if active_version in settled:
+        version = active_version
+    elif settled:
+        version = settled[-1]
+    else:
+        version = max(by_version)
+    scores = by_version[version]
+    return _SubmissionEra(
+        bench_version=version,
+        scores=scores,
+        median_composite=(
+            float(statistics.median(s.composite for s in scores))
+            if len(scores) >= SCORING_QUORUM
+            else None
+        ),
+    )
 
 
 def _ticket_deadline(score: Score) -> datetime | None:
@@ -5857,18 +5838,22 @@ def _dataset_command(
 def _submission_scores(
     row: SubmissionRow,
     *,
+    active_version: int,
     artifact_release: PublicArtifactRelease,
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
 ) -> PublicSubmissionScores:
     """Map a submission row to the full public k=3 record."""
+    era = _submission_era(row, active_version=active_version)
     return PublicSubmissionScores(
         agent_id=row.agent_id,
         miner_hotkey=row.miner_hotkey,
         status=row.status.value,
         artifact_release=artifact_release,
         quorum=SCORING_QUORUM,
-        score_count=len(row.scores),
-        median_composite=_median_composite(row),
+        bench_version=era.bench_version,
+        score_count=len(era.scores),
+        total_score_count=len(row.scores),
+        median_composite=era.median_composite,
         v9_confirmation_status=(
             v9_confirmation.result_status
             if v9_confirmation is not None
@@ -5952,16 +5937,22 @@ def _public_validator_score(s) -> PublicValidatorScore:
 
 
 def _submission_summary(
-    row: SubmissionRow, *, artifact_release: PublicArtifactRelease
+    row: SubmissionRow,
+    *,
+    active_version: int,
+    artifact_release: PublicArtifactRelease,
 ) -> PublicSubmissionSummary:
     """Map a submission row to the compact index entry."""
+    era = _submission_era(row, active_version=active_version)
     return PublicSubmissionSummary(
         agent_id=row.agent_id,
         miner_hotkey=row.miner_hotkey,
         status=row.status.value,
         artifact_release=artifact_release,
-        score_count=len(row.scores),
-        median_composite=_median_composite(row),
+        bench_version=era.bench_version,
+        score_count=len(era.scores),
+        total_score_count=len(row.scores),
+        median_composite=era.median_composite,
         dataset_seed=row.dataset_seed,
         dataset_sha256=row.dataset_sha256,
         last_scored_at=row.last_scored_at,
@@ -6220,7 +6211,6 @@ def _public_activity_response(
     owner_roots: dict[UUID, str] | None = None,
     strike_colliding_names: bool = True,
     avatar_urls: dict[str, str] | None = None,
-    coding_runs: dict[UUID, CodingShadowRunBundle] | None = None,
     miner_uids: dict[str, int] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
@@ -6463,16 +6453,6 @@ def _public_activity_response(
                     row.agent.agent_id
                 ),
                 score_count=row.score_count,
-                coding_shadow=(
-                    _public_coding_shadow(
-                        (coding_runs or {}).get(row.agent.agent_id),
-                        artifact_sha256=row.agent.sha256,
-                        screened_image_sha256=row.agent.screened_image_sha256,
-                        bench_version=active_bench_version,
-                    )
-                    if active_bench_version is not None
-                    else None
-                ),
                 provisional_composite=row.provisional_composite,
                 validator_queue_rank=_queue_rank(queue_preview, row.agent.agent_id),
                 validator_queue_gate=_queue_gate(queue_preview, row.agent.agent_id),
@@ -7136,11 +7116,6 @@ async def activity(
         owner_roots=await _attested_owner_roots_for_rows(session, rows),
         strike_colliding_names=True,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
-        coding_runs=await latest_coding_shadow_runs(
-            session,
-            agent_ids=[row.agent.agent_id for row in rows],
-            bench_version=active_version,
-        ),
         miner_uids=registered_uids,
     )
 
@@ -7402,11 +7377,6 @@ async def operations(
         owner_roots=owner_roots,
         strike_colliding_names=False,
         avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
-        coding_runs=await latest_coding_shadow_runs(
-            session,
-            agent_ids=[row.agent.agent_id for row in activity_rows],
-            bench_version=active_version,
-        ),
         miner_uids=registered_uids,
     )
     validator_snapshot = _validator_heartbeats_response(
@@ -7420,6 +7390,9 @@ async def operations(
         now=now,
         active_bench_version=active_version,
         slot_settings=await resolve_slot_settings(request.app.state),
+        round_reservation_active=await round_reservation_active(
+            request.app.state, session
+        ),
     )
     rows_by_agent = {row.agent.agent_id: row for row in activity_rows}
     desired_version = cast(int, benchmark_rollout["desired_version"])
@@ -8061,7 +8034,12 @@ async def agent_pipeline(
     tickets = list(
         await session.scalars(
             select(ValidatorTicket)
-            .where(ValidatorTicket.agent_id == agent_id)
+            .where(
+                ValidatorTicket.agent_id == agent_id,
+                # A generator-round lease is not a validation attempt, and a
+                # round-only row has none to report.
+                generator_round_free_ticket(),
+            )
             .order_by(
                 ValidatorTicket.issued_at.desc(),
                 ValidatorTicket.validator_hotkey,
@@ -8584,6 +8562,7 @@ async def submissions(
     """
     response.headers["Cache-Control"] = _CACHE_CONTROL
     rows = await list_public_submissions(session, limit=limit)
+    canonical_version = await active_bench_version(session)
     now = datetime.now(UTC)
     artifact_releases = await _artifact_release_snapshot(
         session,
@@ -8595,7 +8574,11 @@ async def submissions(
         count=len(rows),
         quorum=SCORING_QUORUM,
         submissions=[
-            _submission_summary(row, artifact_release=artifact_releases[row.agent_id])
+            _submission_summary(
+                row,
+                active_version=canonical_version,
+                artifact_release=artifact_releases[row.agent_id],
+            )
             for row in rows
         ],
     )
@@ -8630,6 +8613,7 @@ async def agent_scores(
     ).get(agent_id)
     return _submission_scores(
         row,
+        active_version=await active_bench_version(session),
         artifact_release=artifact_release,
         v9_confirmation=v9_confirmation,
     )

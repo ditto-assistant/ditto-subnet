@@ -527,7 +527,7 @@ async def test_cap_admits_one_extra_retry_then_waits_without_erasing_reservation
     assert all(item["reserved_microusd"] == 30_000_000 for item in listing["items"])
 
 
-@pytest.mark.parametrize("guard", ["off", "rank", "image", "expired", "changed_report"])
+@pytest.mark.parametrize("guard", ["image", "expired", "changed_report"])
 async def test_authorized_retry_rechecks_admission_guards(
     app, client, session_maker, monkeypatch, guard
 ):

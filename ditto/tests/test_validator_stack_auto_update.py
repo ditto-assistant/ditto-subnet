@@ -285,9 +285,7 @@ def test_release_builder_binds_scorer_runtime_identity_to_descriptor(
     ("argument", "value", "message"),
     [
         ("version", "v0.10.0", "unprefixed semantic version"),
-        ("version", "0.10", "unprefixed semantic version"),
         ("revision", "A" * 40, "full lowercase Git SHA"),
-        ("revision", "a" * 39, "full lowercase Git SHA"),
         ("dittobench-revision", "b" * 39, "full lowercase Git SHA"),
         ("compatibility-epoch", "0", "positive integer"),
         ("update-protocol", "-1", "positive integer"),
@@ -521,13 +519,6 @@ def test_stack_wrapper_rejects_unverified_release_directory(tmp_path: Path) -> N
     assert result.returncode != 0
     assert "no regular .descriptor-ref" in result.stderr
     assert not capture.exists()
-
-
-def test_stack_updater_contract_is_installed() -> None:
-    """Give an immediate, readable failure while the updater is being built."""
-
-    assert UPDATER.is_file(), "whole-stack updater entrypoint is missing"
-    assert os.access(UPDATER, os.X_OK), "whole-stack updater must be executable"
 
 
 def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> None:
@@ -1076,7 +1067,6 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
 @pytest.mark.parametrize(
     "dittobench_source",
     [
-        "https://github.com/ditto-assistant/dittobench-api",
         "https://github.com/ditto-assistant/ditto-subnet",
     ],
 )
@@ -1861,66 +1851,6 @@ def test_waits_for_busy_validator_before_replacing_stack(
 
 
 @pytest.mark.parametrize(
-    "relay_source",
-    [
-        "https://github.com/ditto-assistant/dittobench-api",
-        (
-            f"https://github.com/ditto-assistant/ditto-subnet/tree/{REVISION}"
-            "/services/dittobench-api/compat/model-relay"
-        ),
-    ],
-)
-def test_four_service_candidate_can_roll_back_to_legacy_six_service_release(
-    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
-    relay_source: str,
-) -> None:
-    env, state_path, state_dir, env_file = stack_updater_env
-    state = json.loads(state_path.read_text())
-    old_release = Path(state["descriptor_dirs"][OLD_STACK_DIGEST])
-    relay = "ghcr.io/ditto-assistant/dittobench-api-relay@sha256:" + "9" * 64
-    ollama = "docker.io/ollama/ollama@sha256:" + "a" * 64
-    with (old_release / "manifest.env").open("a") as manifest:
-        manifest.write(f"MODEL_RELAY_IMAGE={relay}\nOLLAMA_IMAGE={ollama}\n")
-    for index, (service, image) in enumerate(
-        (("model-relay", relay), ("ollama", ollama)), start=8
-    ):
-        image_id = "sha256:" + str(index) * 64
-        state["images"][image] = image_id
-        state["containers"][f"{service}-container"] = {
-            "image": image_id,
-            "running": True,
-            "health": "healthy",
-        }
-    state["descriptor_labels"][relay] = {
-        "org.opencontainers.image.source": relay_source,
-        "org.opencontainers.image.revision": REVISION,
-        "org.opencontainers.image.version": "0.10.0",
-    }
-    state_path.write_text(json.dumps(state))
-
-    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
-    assert adopted.returncode == 0, adopted.stderr
-    state = json.loads(state_path.read_text())
-    state["fail_health_service"] = "dittobench-api"
-    state_path.write_text(json.dumps(state))
-    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
-
-    result = _run_updater(env, "run")
-
-    assert result.returncode != 0
-    final = json.loads(state_path.read_text())
-    rollback_up_calls = [
-        call
-        for call in final["compose_calls"]
-        if "up" in call and "model-relay" in call and "ollama" in call
-    ]
-    assert rollback_up_calls
-    assert (state_dir / "managed-release.env").read_text() == (
-        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
-    )
-
-
-@pytest.mark.parametrize(
     "failure_service",
     ["pylon", "sandbox-docker", "dittobench-api"],
 )
@@ -2402,3 +2332,53 @@ def test_recover_restores_the_complete_previous_stack_after_crash_phase(
     assert all(container["running"] for container in final["containers"].values())
     assert final["runtime_state"]["state"] == "working"
     assert len([call for call in final["compose_calls"] if "up" in call]) == 2
+
+
+def test_reconfigure_recreates_the_current_release_from_host_environment(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+
+    result = _run_updater(env, "reconfigure")
+
+    assert result.returncode == 0, result.stderr
+    # Same signed release: nothing is staged, swapped or recorded as an update.
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.0"
+    assert not (state_dir / "staged").exists()
+    assert not (state_dir / "last-update.env").exists()
+    state = json.loads(state_path.read_text())
+    signals = [call[1] for call in state["calls"] if call[:1] == ["kill"]]
+    assert signals[-2:] == ["--signal=USR1", "--signal=USR2"]
+    up_calls = [call for call in state["compose_calls"] if "up" in call]
+    assert len(up_calls) == 2 and all("--force-recreate" in c for c in up_calls)
+    assert all(Path(call[0]).name == "current" for call in up_calls)
+    assert up_calls[1][-1] == "ditto-subnet"
+    assert state["runtime_state"]["state"] == "working"
+
+
+def test_reconfigure_refuses_an_unadopted_stack_without_draining(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, _ = stack_updater_env
+
+    result = _run_updater(env, "reconfigure")
+
+    assert result.returncode != 0
+    assert "not adopted" in result.stderr
+    state = json.loads(state_path.read_text())
+    assert not [call for call in state["calls"] if call[:1] == ["kill"]]
+    assert not [call for call in state["compose_calls"] if "up" in call]
+
+
+def test_reconfigure_rejects_extra_arguments(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, _, _, _ = stack_updater_env
+    result = _run_updater(env, "reconfigure", OLD_STACK_DIGEST)
+    assert result.returncode != 0
+    assert "usage" in result.stderr

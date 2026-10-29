@@ -313,6 +313,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	admissionOpen = false
 
 	reservedGrant := result.grant
+	ctx = withOpenRouterSession(ctx, cfg.OpenRouterSessionAffinity, headers.grant.String(), headers.generation, model)
 	upstreamPayload, herr := lockedUpstreamPayload(payload, model, maxTokens, reservedGrant.BenchVersion)
 	if herr != nil {
 		// Unreachable (reasoning already validated), kept for parity with

@@ -12,16 +12,14 @@ import (
 // Inspect the whole graph the scorer seeds, not the hidden prerequisite list
 // of one case in isolation. Both public and noisy private-base surfaces must
 // leave exactly one retrievable record for each scoped request.
-func TestV13RestraintContextsSurviveSharedGraphAndRandomization(t *testing.T) {
-	profile, _ := ProfileForVersion("full", 13)
+// Public seeds run over all 40 qualification seeds; the salted private-base
+// surface over v13SaltedSeeds.
+func checkV13RestraintContextsSurviveSharedGraphAndRandomization(t *testing.T, public []DatasetArtifact) {
 	refPattern := regexp.MustCompile(`\bc[0-9a-f]{16}\b`)
 	asks, acts := 0, 0
-	for seed := int64(1); seed <= 40; seed++ {
-		for _, salt := range []uint64{0, 91} {
-			a, err := GenerateDatasetWithSurface(seed, profile, 13, SurfaceOptions{Salt: salt})
-			if err != nil {
-				t.Fatal(err)
-			}
+	for _, artifacts := range [][]DatasetArtifact{public, v13SaltedSeeds(t)} {
+		for _, a := range artifacts {
+			seed, salt := a.Seed, a.SurfaceSalt
 			graph := map[string]protocol.MemoryPair{}
 			for _, wave := range a.MemoryWaves {
 				if wave.UserID == "" || wave.UserID == PrimaryUser {

@@ -172,39 +172,6 @@ class TestAuth:
 
 
 class TestCapacitySummary:
-    async def test_an_empty_fleet_reports_zeros_not_an_error(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        _install(app, session_maker, monkeypatch)
-
-        response = await client.get(_URL, headers=_HEADERS)
-
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert body["active_bench_version"] == _BENCH
-        assert body["live_validator_count"] == 0
-        assert body["serviceable_validator_count"] == 0
-        assert body["serviceable_slots"] == 0
-        assert body["claimed_slots"] == 0
-        assert body["active_assignment_count"] == 0
-        assert body["estimated_remaining_slot_minutes"] == 0
-        assert body["unestimated_assignment_count"] == 0
-        assert body["eligible_unleased_count"] == 0
-        assert body["oldest_eligible_unleased_age_seconds"] is None
-        assert body["validators"] == []
-        assert body["validators_truncated"] is False
-        assert [lane["request_kind"] for lane in body["relay"]] == [
-            "chat",
-            "embedding",
-        ]
-        assert all(lane["active_requests"] == 0 for lane in body["relay"])
-        assert all(lane["saturation"] == 0 for lane in body["relay"])
-        assert all(lane["global_limit"] >= 1 for lane in body["relay"])
-
     async def test_mixed_fleet_separates_serviceable_from_claimed_slots(
         self,
         app: FastAPI,

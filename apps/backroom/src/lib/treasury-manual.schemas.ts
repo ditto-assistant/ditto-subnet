@@ -51,12 +51,22 @@ export const manualTransferSchema = z.object({
   status: z.enum(['queued', 'dispatched', 'pending', 'audit_pending', 'published', 'failed', 'refused']),
   actor: z.string(), created_at: z.string(), updated_at: z.string(),
   last_error: z.string().nullable(),
+  custody_result: z.object({
+    status: z.enum(['readiness', 'blocked', 'pending', 'finalized', 'failed', 'refused']),
+    observed_at: integer,
+    failure_code: z.enum(['signing_window_elapsed', 'expired_unsigned']).nullable(),
+    settlement: z.object({ block: integer, block_hash: z.string(), extrinsic_index: z.number().int().nonnegative(), extrinsic_hash: z.string() }).nullable(),
+  }).nullish(),
   receipt: z.object({ receipt_id: digest, extrinsic_hash: z.string(), published: z.boolean(), source_attribution: z.literal("incomplete").optional() }).nullable(),
 })
 export const manualControlSchema = z.object({
   enabled: z.boolean(), blocked_reason: z.string().nullable(), bridge_error: z.string().nullable(),
   recurring_enabled: z.literal(false),
   readiness: z.object({
+    transfer_delegate: address.nullish(),
+    delegate_free_rao: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+    required_delegate_free_rao: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullish(),
+    unsigned_intent: z.object({ request_id: z.string().uuid(), after_operation: integer, expires_block: integer }).nullish(),
     policy: digest, after_operation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), previous_state: z.string().nullable(),
     bounded_claim_available: z.boolean(), finalized_block: integer,
     available_alpha_rao: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),

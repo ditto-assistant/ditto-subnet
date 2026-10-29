@@ -401,6 +401,52 @@ def track_allocated_share(
     return allocated / BASIS_POINT_SCALE
 
 
+def reassign_unclaimed_shares(
+    shares_bps: Mapping[str, int],
+    vectors: Mapping[str, Mapping[str, float]],
+    *,
+    fallbacks: Mapping[str, str],
+) -> dict[str, int]:
+    """Move an empty track's bps to its declared fallback track.
+
+    By default an eligible track that folds no payable miner leaves its share
+    unclaimed and :func:`track_allocated_share` burns it. A track may instead
+    name a fallback (``fallbacks[track_id]``, e.g. ``generator -> memory``):
+    when the track produced no positive weight and the fallback is itself a
+    paying track with a positive share, the track's bps are added to the
+    fallback's and the track drops out of the map. The generator track
+    declares memory so a governed generator share with no weight-eligible
+    generator (Platform still in shadow, an empty round window) pays agent
+    miners rather than burning, which also keeps that state byte-identical
+    to the memory-only fold: with
+    ``{memory: 9000, generator: 1000}`` and no eligible generator, memory
+    folds at the full ``BASIS_POINT_SCALE`` and passes through unchanged.
+
+    One hop only, in a deterministic order, so the result never depends on
+    dict iteration: a fallback that is itself empty keeps the moved bps
+    unclaimed, and they burn exactly as its own would. Integer bps in, integer
+    bps out, so every validator folds the same split.
+    """
+    original = {track_id: bps for track_id, bps in shares_bps.items() if bps > 0}
+    resolved = dict(original)
+    for track_id in sorted(original):
+        target = fallbacks.get(track_id)
+        if (
+            target is None
+            or target == track_id
+            # A fallback governance holds at 0 bps is not paying: the share
+            # stays unclaimed and burns rather than funding a zeroed track.
+            or target not in original
+            or _has_positive_weight(vectors.get(track_id, {}))
+        ):
+            continue
+        # Move only the track's own configured bps (never bps it received),
+        # so a chain of fallbacks is still a single hop.
+        resolved[track_id] -= original[track_id]
+        resolved[target] = resolved.get(target, 0) + original[track_id]
+    return {track_id: bps for track_id, bps in resolved.items() if bps > 0}
+
+
 def split_unpaid_share(weights: Mapping[str, float]) -> tuple[dict[str, float], float]:
     """Separate a provisional incumbent's unpaid share from a blended vector.
 
@@ -981,6 +1027,15 @@ def _bounded_efficiency_factor(entry: LedgerEntry) -> float | None:
         return None
     if _entry_version(entry) < 9:
         return 1.0
+    # Deliberately v9-only, unlike the receipt reads in ``_quality_composite``
+    # and ``_entry_seed_composites``. Bench v9 tied its bounded factor to the
+    # receipt from #675 on. Bench v10+ never did: Platform's KOTH projection
+    # (``koth._bounded_efficiency_factor``) honours the factor whether or not a
+    # receipt is served. Widening this would neutralize every live v10+ factor
+    # while confirmation is off or shadowing (no receipts are served then) and
+    # split the validator from the Platform pin on efficiency tie-breaks. Under
+    # enforce, every served confirmation-capable row carries a receipt, so the
+    # branch could not fire for v10+ anyway (#2989).
     if _entry_version(entry) == 9 and getattr(entry, "v9_confirmation", None) is None:
         return 1.0
     if (
@@ -1120,9 +1175,20 @@ def _effective_composite(entry: LedgerEntry) -> float:
 
 
 def _quality_composite(entry: LedgerEntry) -> float:
-    """Return authoritative quality before relative efficiency is applied."""
+    """Return authoritative quality before relative efficiency is applied.
+
+    A verified full-confirmation receipt is the quality authority for every
+    version with a receipt contract (:data:`RECEIPT_CONTRACT_VERSIONS`), not
+    only Bench v9. Platform crowns on ``full_effective_micros`` for each
+    confirmation-capable version (``koth_entries_from_ledger``); reading the
+    raw quorum composite here for v10+ crowned a different champion under
+    enforce and every weight receipt then failed ``ledger_pin_mismatch``
+    (#2989). Platform serves receipts only alongside an explicit enforce
+    marker, so a ledger served while confirmation is off or shadowing has no
+    receipt and still pays its continual aggregate, unchanged.
+    """
     receipt = getattr(entry, "v9_confirmation", None)
-    if _entry_version(entry) == 9 and receipt is not None:
+    if _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS and receipt is not None:
         value = getattr(receipt, "full_effective_micros", None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value / 1_000_000
@@ -1214,12 +1280,14 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     non-negative int seeds with no duplicate; anything else is treated as absent
     (a consensus-safe guard so two validators never pair off a differently-parsed
     map)."""
-    # A v9 full-confirmation receipt is a separate signed score authority. Its
-    # KOTH comparison must use that verified receipt, never legacy continual
-    # histories that the receipt does not bind and an untrusted Platform could
-    # otherwise attach to recreate the pre-v9 paired-dethrone path.
+    # A full-confirmation receipt is a separate signed score authority for
+    # every version with a receipt contract. Its KOTH comparison must use that
+    # verified receipt, never legacy continual histories that the receipt does
+    # not bind and an untrusted Platform could otherwise attach to recreate the
+    # pre-v9 paired-dethrone path. Platform already omits those histories from
+    # any row it serves with a receipt (#2989).
     if (
-        _entry_version(entry) == 9
+        _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS
         and getattr(entry, "v9_confirmation", None) is not None
     ):
         return None

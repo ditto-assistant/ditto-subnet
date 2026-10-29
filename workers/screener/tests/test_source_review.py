@@ -4037,7 +4037,8 @@ def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> 
     assert all(fragment in prompt for fragment in required)
 
 
-def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
+@pytest.mark.parametrize("policy_version", (10, 11, 12, 13))
+def test_prompt_teaches_independent_versioned_invariants(policy_version) -> None:
     from ditto_screener.source_review import (
         _prompt_revision,
     )
@@ -4045,10 +4046,9 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v37-policy-v13"
+    assert _prompt_revision(13) == "source-review-v39-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
-        "I2 EVIDENCE RETENTION",
         "I3 MODEL DISSENT",
         "I4 DERIVED-VALUE AUTHORITY",
         "I5 PRODUCTION ENGINE",
@@ -4069,7 +4069,12 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
         "exact-deck planners",
     }
 
-    prompt = _prompt(SCREENING_POLICY_VERSION)
+    required.add(
+        "I2 protects applicable trusted instructions and authorization"
+        if policy_version == 13
+        else "I2 EVIDENCE RETENTION"
+    )
+    prompt = _prompt(policy_version)
     assert all(fragment in prompt for fragment in required)
 
 
@@ -4098,12 +4103,12 @@ def test_policy_v13_provider_lead_uses_scored_runtime_selector() -> None:
     assert "do not infer the scored environment from Dockerfile ENV" not in _prompt(12)
 
 
-def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
+@pytest.mark.parametrize("policy_version", (10, 11, 12, 13))
+def test_prompt_keeps_versioned_false_positive_valves(policy_version) -> None:
     from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     required = {
         "untrusted_candidate_channel pass",
-        "complete records remain",
         "disagreement is accepted",
         "no correctness gate",
         "policy-forbidden capabilities",
@@ -4123,7 +4128,12 @@ def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
         "Practice stubs, local launchers",
     }
 
-    prompt = _prompt(SCREENING_POLICY_VERSION)
+    required.add(
+        "selected/summarized context is permitted"
+        if policy_version == 13
+        else "complete records remain"
+    )
+    prompt = _prompt(policy_version)
     assert all(fragment in prompt for fragment in required)
 
 

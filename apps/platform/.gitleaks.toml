@@ -79,6 +79,37 @@ regexes = [
 ]
 paths = ['''^dashboard/fixtures/bounty-(board|detail|claims)\.json$''']
 
+# Public SS58 addresses in the recorded treasury allocation fixture: the Gamma
+# collector hotkey and coldkey and the three service-bucket holding coldkeys. The fixture is a
+# verbatim recording of the public /treasury/allocation response, and addresses
+# are not credentials.
+[[allowlists]]
+description = "Public treasury coldkey addresses in the recorded allocation fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = [
+  '''^5CD8TZWNSNtARxmB5VQF9qTNfCVjhdMdjmwBrniqU3E71ohQ$''',
+  '''^5Cm6Vok2sWkQ33w97AVEsb9U2EyE96Y1utfSLW5vR4viiLKD$''',
+  '''^5F2821EzMcBC2b8hWmrMWiNRcx6DgdaTQQiqmPkbAk7a6yn9$''',
+  '''^5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t$''',
+  '''^5H93a8uVJC6ve2bNVZu9jAGEuBHDFspct3UbHRYGsxUNpA1e$''',
+]
+paths = ['''^dashboard/fixtures/treasury-allocation\.json$''']
+
+# Revealed generator round secrets in the recorded public round list. Platform
+# publishes `secret_hex` only after a round's privacy window, so anyone can
+# check RoundCommitment(round, secret) against the on-chain commitment; a
+# revealed secret is verification data, not a credential. Constrain to the
+# rule, the fixture and the 64-hex shape, since recordings are refreshed.
+[[allowlists]]
+description = "Revealed generator round secrets in the recorded round list fixture"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[0-9a-f]{64}$''']
+paths = ['''^dashboard/fixtures/generator-rounds\.json$''']
+
 # Generated metadata digests (scripts/pin_runtime_interfaces.py). A Substrate
 # call name containing "key" (e.g. sudo_set_min_childkey_take_per_subnet) makes
 # its public 16- or 64-hex digest look like a credential. The digests change

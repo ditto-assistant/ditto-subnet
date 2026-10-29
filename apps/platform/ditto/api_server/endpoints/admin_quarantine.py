@@ -1985,6 +1985,11 @@ async def _build_quarantine_context(
                 reason=attempt.public_reason,
                 reason_code=attempt.reason_code,
                 duplicate_of=attempt.duplicate_of,
+                lineage_parent_agent_id=attempt.lineage_parent_agent_id,
+                lineage_scope=attempt.lineage_scope,  # type: ignore[arg-type]
+                lineage_packet_sha256=attempt.lineage_packet_sha256,
+                lineage_full_review_reasons=attempt.lineage_full_review_reasons,
+                lineage_reference_kind=attempt.lineage_reference_kind,  # type: ignore[arg-type]
             )
             for attempt in attempts
         ],
@@ -2720,6 +2725,11 @@ async def _screening_attempts_by_agent(
                 reason=attempt.public_reason,
                 reason_code=attempt.reason_code,
                 duplicate_of=attempt.duplicate_of,
+                lineage_parent_agent_id=attempt.lineage_parent_agent_id,
+                lineage_scope=attempt.lineage_scope,  # type: ignore[arg-type]
+                lineage_packet_sha256=attempt.lineage_packet_sha256,
+                lineage_full_review_reasons=attempt.lineage_full_review_reasons,
+                lineage_reference_kind=attempt.lineage_reference_kind,  # type: ignore[arg-type]
                 duplicate_name=duplicate.name if duplicate is not None else None,
                 duplicate_version=duplicate.version if duplicate is not None else None,
             )

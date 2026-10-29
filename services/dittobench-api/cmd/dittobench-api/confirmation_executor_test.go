@@ -449,13 +449,42 @@ func TestConfirmationExecutionFailurePreservesFirstReviewedStageAndCause(t *test
 }
 
 func TestConfirmationExecutionDiagnosticDoesNotDeriveFromPrivateErrorText(t *testing.T) {
+	// The property under test is that the diagnostic comes from the reviewed
+	// stage vocabulary and NEVER from the wrapped error's text. The class is now
+	// the stage rather than "unclassified" -- the stage is a literal this binary
+	// declares at its own failure points, not anything the error carries -- so
+	// assert that the private words cannot appear anywhere in the diagnostic
+	// while the stage itself still does.
 	err := wrapConfirmationExecutionFailure(
 		"dimension_execution",
 		errors.New("private submitted response credential-material"),
 	)
 	class, status := confirmationExecutionDiagnostic(err)
+	if class != "longmem_exec_dimension_execution" {
+		t.Fatalf("diagnostic class = %q, want longmem_exec_dimension_execution", class)
+	}
+	if status != 0 {
+		t.Fatalf("diagnostic status = %d, want 0", status)
+	}
+	for _, forbidden := range []string{"private", "submitted", "credential-material"} {
+		if strings.Contains(class, forbidden) {
+			t.Fatalf("diagnostic class %q derived from private error text %q", class, forbidden)
+		}
+	}
+}
+
+func TestConfirmationExecutionDiagnosticIsUnclassifiedForAnUndeclaredStage(t *testing.T) {
+	// The fail-closed half of the same rule: a stage outside the reviewed map
+	// must not reach the wire, because Platform and the validator share a signed
+	// allowlist and would reject an unknown slug at exactly the moment a failure
+	// is being reported.
+	err := wrapConfirmationExecutionFailure(
+		"a_stage_nobody_declared",
+		errors.New("private submitted response credential-material"),
+	)
+	class, status := confirmationExecutionDiagnostic(err)
 	if class != "unclassified" || status != 0 {
-		t.Fatalf("diagnostic = %q, %d", class, status)
+		t.Fatalf("diagnostic = %q, %d; want unclassified, 0", class, status)
 	}
 }
 

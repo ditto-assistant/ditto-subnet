@@ -291,6 +291,7 @@ func oracleResponse(mc protocol.MemoryCase) protocol.RunResponse {
 // Complements TestCanonicalAnswersSelfGrade (which pins the same invariant for
 // the frozen v2 contract).
 func TestV7OracleSolvable(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV7)
 	for seed := int64(1); seed <= 30; seed++ {
 		a, err := GenerateDataset(seed, prof, protocol.BenchVersionV7)
@@ -621,6 +622,7 @@ func naiveToolScore(t *testing.T, seeds []int64, benchVersion int) float64 {
 // on the reasoning subset the benchmark exists to grade — not asserted over
 // cases no benchmark could make retrieval fail.
 func TestV7NaiveStrategiesCollapse(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("difficulty sweep is a multi-dataset generation pass")
 	}

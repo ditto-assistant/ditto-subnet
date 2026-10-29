@@ -7,8 +7,12 @@ import argparse
 import collections
 import hashlib
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import judge_evaluator  # noqa: E402  (sibling module: the frozen judge identity)
 
 
 AGENTS = [
@@ -53,7 +57,99 @@ AGENTS = [
         "image_id": "sha256:ac4e0eb2f4bf83165d64a83a4774dd93febd9ed8f14fc4f3b95dc8dc8178b31b",
     },
 ]
-JUDGE_MODEL = "gpt-4o-2024-08-06"
+# The judge is an explicit, validated input rather than a module constant.
+#
+# These files were produced by the official gpt-4o judge, and the rows carry
+# that provenance in `autoeval_label.model`. Repointing a constant here at a
+# different judge would make this script reject its own inputs AND stamp the
+# output metadata with a judge that never ran -- falsified provenance, which is
+# worse than a crash. So the expected judge is passed in and checked against
+# what the rows actually say, and the result file is named after it the same
+# way the evaluator names it.
+OFFICIAL_JUDGE_MODEL = judge_evaluator.OFFICIAL_JUDGE_MODEL
+OFFICIAL_JUDGE_SHORT_NAME = judge_evaluator.OFFICIAL_JUDGE_SHORT_NAME
+OFFICIAL_JUDGE_OPENROUTER_MODEL = "openai/gpt-4o-2024-08-06"
+OFFICIAL_JUDGE_PROFILE_REVISION = judge_evaluator.OFFICIAL_JUDGE_PROFILE_REVISION
+
+# Judges whose full identity this script already knows. Naming only
+# --judge-model would otherwise leave the short name, the OpenRouter id and the
+# profile revision on their official defaults, so a substituted run would read
+# its artifacts from the wrong filename and publish metadata describing a judge
+# that never ran. For a judge that is not in this table, every field has to be
+# supplied; see resolve_judge.
+KNOWN_JUDGES = {
+    OFFICIAL_JUDGE_MODEL: {
+        "short_name": OFFICIAL_JUDGE_SHORT_NAME,
+        "openrouter_model": OFFICIAL_JUDGE_OPENROUTER_MODEL,
+        "profile_revision": OFFICIAL_JUDGE_PROFILE_REVISION,
+    },
+    judge_evaluator.JUDGE_MODEL: {
+        "short_name": judge_evaluator.JUDGE_SHORT_NAME,
+        "openrouter_model": judge_evaluator.JUDGE_MODEL,
+        "profile_revision": judge_evaluator.JUDGE_PROFILE_REVISION,
+    },
+}
+
+
+def resolve_judge(
+    judge_model: str,
+    short_name: str | None = None,
+    openrouter_model: str | None = None,
+    profile_revision: str | None = None,
+) -> dict[str, str]:
+    """Complete one judge identity, or say exactly what is missing.
+
+    Every field is either given explicitly or filled from a judge this script
+    knows. An unknown judge with anything omitted is an error rather than a
+    report carrying someone else's provenance.
+    """
+    known = KNOWN_JUDGES.get(judge_model, {})
+    # `is None` rather than `or`: an explicitly empty --judge-short-name is a
+    # caller saying "I have no value for this", and silently substituting the
+    # known judge's would publish an identity nobody asked for. Only an omitted
+    # field defaults; an empty one falls through to the missing-field error.
+    resolved = {
+        "model": judge_model,
+        "short_name": (
+            known.get("short_name") if short_name is None else short_name
+        ),
+        "openrouter_model": (
+            known.get("openrouter_model")
+            if openrouter_model is None
+            else openrouter_model
+        ),
+        "profile_revision": (
+            known.get("profile_revision")
+            if profile_revision is None
+            else profile_revision
+        ),
+    }
+    missing = sorted(key for key, value in resolved.items() if not value)
+    if missing:
+        raise ValueError(
+            f"judge {judge_model!r} is not a known judge, so "
+            + ", ".join(f"--judge-{key.replace('_', '-')}" for key in missing)
+            + " must be given explicitly rather than defaulting to another "
+            "judge's identity"
+        )
+    return resolved
+
+
+def is_official_protocol(judge: dict[str, str]) -> bool:
+    """True only when every field of the identity is the official judge's.
+
+    Not the model alone: the official model served through another OpenRouter
+    route or profile revision is not the official protocol either, and the
+    short name selects which .eval-results-* artifact the numbers were read
+    from -- a report stamped from `.eval-results-substituted` would be claiming
+    provenance it does not have.
+    """
+    return (
+        judge["model"] == OFFICIAL_JUDGE_MODEL
+        and judge["short_name"] == OFFICIAL_JUDGE_SHORT_NAME
+        and judge["openrouter_model"] == OFFICIAL_JUDGE_OPENROUTER_MODEL
+        and judge["profile_revision"] == OFFICIAL_JUDGE_PROFILE_REVISION
+    )
 
 
 def sha256(path: Path) -> str:
@@ -68,6 +164,7 @@ def summarize_agent(
     hypotheses: list[dict[str, Any]],
     evaluations: list[dict[str, Any]],
     references: dict[str, dict[str, Any]],
+    judge_model: str = OFFICIAL_JUDGE_MODEL,
 ) -> dict[str, Any]:
     expected = set(references)
     hypothesis_ids = [row["question_id"] for row in hypotheses]
@@ -84,8 +181,12 @@ def summarize_agent(
     empty_answers_judged_correct = 0
     for row in evaluations:
         autoeval = row.get("autoeval_label") or {}
-        if autoeval.get("model") != JUDGE_MODEL or not isinstance(autoeval.get("label"), bool):
-            raise ValueError("evaluation is not from the frozen official judge")
+        recorded = autoeval.get("model")
+        if recorded != judge_model or not isinstance(autoeval.get("label"), bool):
+            raise ValueError(
+                f"evaluation for {row.get('question_id')!r} was judged by "
+                f"{recorded!r}, not the declared judge {judge_model!r}"
+            )
         question_id = row["question_id"]
         label = autoeval["label"]
         if question_id in empty_answer_ids and label:
@@ -121,6 +222,20 @@ def main() -> None:
         "--condition",
         default="longmemeval-s-cleaned-native-dittobench-memory-v1",
     )
+    parser.add_argument(
+        "--judge-model",
+        default=OFFICIAL_JUDGE_MODEL,
+        help="judge that produced the evaluations; every row must match it",
+    )
+    parser.add_argument(
+        "--judge-short-name",
+        help=(
+            "evaluator short name, which names the .eval-results-* artifacts; "
+            "defaults to the known identity for --judge-model"
+        ),
+    )
+    parser.add_argument("--judge-openrouter-model")
+    parser.add_argument("--judge-profile-revision")
     parser.add_argument("--answer-model-id", default="qwen/qwen3-32b")
     parser.add_argument("--answer-model-provider", default="openrouter")
     parser.add_argument(
@@ -136,6 +251,15 @@ def main() -> None:
         help="optional aggregate-only JSON captured from the trusted proxies",
     )
     args = parser.parse_args()
+    try:
+        judge = resolve_judge(
+            args.judge_model,
+            args.judge_short_name,
+            args.judge_openrouter_model,
+            args.judge_profile_revision,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
 
     dataset_path = Path(args.dataset)
     references_list = json.loads(dataset_path.read_text())
@@ -145,8 +269,16 @@ def main() -> None:
     for agent in AGENTS:
         rank = agent["rank"]
         hypothesis_path = results_dir / f"agent-{rank}.jsonl"
-        evaluation_path = results_dir / f"agent-{rank}.jsonl.eval-results-gpt-4o"
-        aggregate = summarize_agent(read_jsonl(hypothesis_path), read_jsonl(evaluation_path), references)
+        evaluation_path = results_dir / (
+            f"agent-{rank}.jsonl"
+            + judge_evaluator.evaluation_suffix(judge["short_name"])
+        )
+        aggregate = summarize_agent(
+            read_jsonl(hypothesis_path),
+            read_jsonl(evaluation_path),
+            references,
+            judge_model=judge["model"],
+        )
         agents.append(
             {
                 **agent,
@@ -181,9 +313,16 @@ def main() -> None:
         },
         "public_harness_revision": "c3caa8e2c19f8a41a0610b9f7db774f97643dd9c",
         "judge": {
-            "official_model": JUDGE_MODEL,
-            "openrouter_model": "openai/gpt-4o-2024-08-06",
-            "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+            # `official_model` is the historical key name and now carries
+            # whichever judge ran, so a consumer reading it as proof of the
+            # official protocol would misclassify a substituted run. The
+            # marker is computed from the WHOLE identity, not the model alone:
+            # the official model served through another route or profile is
+            # not the official protocol either.
+            "official_model": judge["model"],
+            "openrouter_model": judge["openrouter_model"],
+            "profile_revision": judge["profile_revision"],
+            "official_protocol": is_official_protocol(judge),
         },
         "agents": agents,
     }

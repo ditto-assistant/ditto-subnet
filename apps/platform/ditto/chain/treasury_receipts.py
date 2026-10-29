@@ -53,8 +53,8 @@ async def _admit_receipt_runtime(
     Exact audited collector artifacts are admitted as before. Any other runtime
     is admitted for *reading* when the storage, events and calls this reader
     decodes are unchanged from an audited runtime (TREASURY_RECEIPT_SURFACE).
-    This never authorizes signing: the validator collector still requires the
-    runtime its cold-signed policy names.
+    This never authorizes signing: custody independently compares its own
+    signer surface with the runtime its cold-signed policy names.
     """
     if not isinstance(code, str) or not code.startswith("0x"):
         raise ValueError("receipt runtime is not audited")

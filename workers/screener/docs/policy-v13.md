@@ -126,7 +126,8 @@ does not clear the artifact.
 - Normal substantive answers originate from genuine model inference, or from a
   permitted W5/W6 delegation.
 - Refusal, uncertainty, and substantive abstention remain model decisions.
-- The model receives the request and evidence needed to decide.
+- The model receives the request and its selected evidence/context under W3;
+  completeness of raw evidence is not itself a model-authority requirement.
 - A model call is not ornamental. An ornamental call does not establish
   authority over a separately generated answer.
 - The final deciding result remains authoritative through serialization.
@@ -150,8 +151,10 @@ Every deciding answer-producing call receives:
 Prompt projection is allowed only when it preserves all applicable meaning and
 restrictions.
 
-A summary or digest is not sufficient when the deciding model needs the
-original instruction.
+A summary, digest or checkpoint may carry an instruction when it preserves
+its applicable meaning, scope and restrictions. Omitting raw instruction bytes
+alone is not a violation; removing an applicable trusted restriction with a
+material consequence remains prohibited under I2.
 
 ### W3: retrieval and final evidence
 
@@ -163,40 +166,54 @@ multistage candidate selection before substantive reasoning.
 Policy v13 does not require perfect recall. Retrieval uses the authenticated
 principal's authorized data.
 
-An intermediate retrieval candidate is not protected evidence merely because
-one stage scored it. Protection begins when the pipeline:
+Records, tool arguments, receipts and history may be selected, excerpted,
+summarized, compacted, checkpointed or omitted. The same permission applies
+before and after a deciding or critic model has received or used them, and to
+retries, recovery and fresh fallback transcripts. There is no requirement to
+retain every raw record, receipt or prior turn at every later stage.
 
-- designates the record as part of the final evidence set;
-- attaches it to a deciding transcript;
-- relies on it for substantive reasoning;
-- uses it to create an advisory value; or
-- uses it to select a tool argument.
+Keeping corrections, qualifications, contradictions, chronology and execution
+state is useful engineering. Losing them can reduce answer quality or cause a
+reliability failure. Evidence loss alone is a benchmark-quality issue, not an
+integrity or certification rejection ground. Neither a pointer to unavailable
+evidence, an incomplete summary nor a fresh fallback is sufficient proof of a
+violation. Context limits prove neither compliance nor a violation.
 
-Once protected:
+Applicable trusted instructions, authorization and safety constraints remain
+protected under W2/I2. Independently prohibited mechanisms remain enforceable,
+including host semantic suppression of a valid designated answer (I3), host
+answer rewriting (I4), a proven benchmark-specific recipe (I5), execution
+misrepresentation (I6), or unauthorized capability changes (I7). Each needs
+its own complete proof and material consequence; loss of evidence is not that
+independent ground.
 
-- corrections remain available;
-- qualifications remain available;
-- contradictory evidence remains available;
-- assistant-side evidence remains available when applicable;
-- completed tool arguments and receipts remain available;
-- applicable chronology and relationships reach the deciding authority;
-- retries preserve it;
-- critique preserves it;
-- compaction preserves it; and
-- fallback preserves it.
+#### Clarification: summaries, compaction and recovery (2026-10-25)
 
-Additional retention rules:
+Evidence loss from retrieval, summaries, compaction, checkpointing, retries or
+recovery alone is benchmark quality or reliability, not rejection. This
+includes losing a receipt after a successful deciding call consumed it,
+switching to a fresh model-authored fallback, and a possible different answer
+because the later model has less context. A hypothetical sequence showing
+that loss, or even an observed wrong answer from it, does not establish an
+independent prohibited mechanism.
 
-- Preliminary summaries remain advisory and do not replace necessary
-  originals.
-- Reordering and genuine deduplication preserve distinct material facts and
-  events. Record selection alone is retrieval quality, not a rejection ground
-  (see the 2026-10-23 clarification below).
-- A pointer to unavailable evidence is not a substitute for supplying it.
-- Context limits alone prove neither compliance nor a violation.
+A rejection must identify that separate mechanism under its published rule
+and prove its material response, execution or security consequence. Do not
+rename incidental evidence loss as I2, I3, I5, I6, Q1 or another condition.
+This does not permit ignoring applicable trusted instructions/authorization,
+overriding a valid designated model answer to obtain a preferred value,
+fabricating execution, or a separately proven security breach.
 
-An ordinary retrieval miss is a score-quality issue and is not automatically
-an integrity violation.
+The 51 fallback-only rulings identified in the dated operator withdrawal
+record are withdrawn as precedent. Their exact UUID/SHA scope is recorded in
+the Backroom review precedent store. Restoration is an audited court action
+with fresh guards and readback; this document neither applies it nor erases
+the historical rejects. A different, independently supported ground remains
+subject to its own exact-artifact review.
+
+The operator's separately recorded historical loss-only withdrawals apply this
+current reconsideration standard without rewriting earlier policy text or
+claiming a screening requeue is an ATH clear.
 
 #### Clarification: over-budget retrieval and record selection (2026-10-23)
 
@@ -210,18 +227,13 @@ records, event projections or summaries in place of records, field
 projections that strip a field such as the saved timestamp from every record,
 and top-k selection. These are design choices, often poor ones. Making them costly is
 the benchmark's job (bench v14 will reward keeping such records), not the
-screener's. This holds when:
-
-- the rule is applied the same way whatever the record says: it does not
-  single out corrections, qualifications or later records because they
-  correct, qualify or update; and
-- the model, not the host, still authors the graded value or tool call.
+screener's. The model, not the host, still authors the graded value or tool
+call. A content-dependent selector is not automatically a breach either;
+prove an independent prohibited mechanism and material consequence under the
+October 25 clarification rather than inferring them from an omitted record.
 
 Independent grounds that still reject:
 
-- evidence a deciding or critic model already received is stripped by a later
-  retry, critique, compaction or fallback stage whose output ships (W3,
-  "Once protected");
 - the host writes, rewrites or overrides the graded value or a dissenting model
   answer, or presents host-derived state as authoritative (I3, I4);
 - execution is fabricated or misreported (I6);
@@ -274,7 +286,8 @@ allowed when:
 - the host does not extract authoritative operands from narrative text;
 - the calculator performs only the advertised arithmetic;
 - the result is labelled as a receipt for supplied inputs;
-- complete applicable evidence remains available;
+- the model may inspect the selected evidence/context under W3; no mandatory
+  raw-record retention is inferred from this calculator safe harbor;
 - the final model may reject, revise, or recompute the result;
 - no expected-value gate prefers agreement and no hidden expected-answer
   comparison selects the final answer; and
@@ -323,7 +336,8 @@ benchmark-specific operands.
   are not shape failures, and recovery does not classify them as syntax.
 - A declared genuine critic may produce the final answer.
 - The critic receives the original request, applicable evidence, and relevant
-  drafts.
+  drafts, which may be summarized or checkpointed under W3. Losing a raw
+  receipt or draft alone does not turn a declared critic into a violation.
 - The critic may retain refusal or uncertainty, and may reject any suggested
   correction.
 - The first valid designated final result ships without host semantic
@@ -358,8 +372,8 @@ counting unit, the measurement point, the affected field, and the overflow
 behavior. Raw UTF-8 bytes are the preferred counting unit.
 
 Overflow neither infers abstention nor selects a likely-scoring substring. A
-permitted length-only model reserialization receives complete evidence and no
-expected semantic answer; its first compliant result ships.
+permitted length-only model reserialization uses selected/summarized context
+under W3 and no expected semantic answer; its first compliant result ships.
 
 A miner-defined threshold cannot delete or move a scorer-visible field, or
 change the precedence of one.
@@ -558,32 +572,33 @@ genuine deciding authority.
 - Provider failure activates a deterministic scored-answer fallback.
 - A benchmark answer lookup is represented as genuine model output.
 
-### I2: instruction or evidence loss
+### I2: applicable trusted instruction or authorization loss
 
-Reject when applicable trusted instructions or protected final evidence are
-removed before a deciding, retry, critic, or fallback model.
+Reject when a deciding, retry, critic or fallback stage loses the applicable
+meaning of a trusted instruction, authorization boundary or safety constraint,
+and that loss has a proven material consequence. Meaning-preserving summaries,
+projection and checkpoints are allowed. Raw evidence/history loss alone is
+not I2, including after a model has successfully consumed a receipt (W3).
 
-- Protected applicable evidence or an applicable trusted instruction is
-  removed or altered before decision.
-- A derived interpretation remains while necessary support or contradiction is
-  removed.
-- Recovery or finalization loses a material correction, qualification, record,
-  or receipt.
-- Expected-answer agreement or a preferred conclusion controls retention.
+A rule that suppresses a valid designated model result because it disagrees
+with an expected answer must independently satisfy I3. A rule that forges or
+misreports execution must independently satisfy I6. Neither may be inferred
+from a less complete fallback transcript alone.
 
 Required proof:
 
 1. exact UUID and SHA;
-2. exact instruction, record, argument, or receipt;
-3. why it is applicable;
-4. where it entered the final evidence set;
-5. where it was removed;
-6. the deciding input lacking it; and
-7. the material alternative that can no longer be evaluated.
+2. exact trusted instruction, authorization or safety constraint;
+3. why it applies to the actual served stage;
+4. where its meaning entered the request;
+5. where that meaning or restriction was removed or changed;
+6. the actual deciding input and effective execution guard lacking it; and
+7. the resulting material response, execution or security consequence.
 
 The proof also names the reachable path. Ordinary relevance ranking, an
-isolated miss, or a hypothetical retrieval miss is insufficient. A controlled
-exact-artifact reproduction is sufficient.
+isolated miss, receipt omission or a hypothetical retrieval/recovery miss is
+insufficient. Controlled exact-artifact reproduction may prove a reachable
+mechanism and consequence; it does not turn evidence loss alone into I2.
 
 #### Clarification: which instructions I2 protects (2026-10-19)
 
@@ -613,9 +628,9 @@ not a requirement that every model call repeat the system prompt.
 - **`/seed` is out of scope for this clause.** The seed request carries no
   system prompt, so seed-time processing cannot lose a trusted instruction.
   Model-written notes, extraction, indexing and summaries built during
-  `/seed` are permitted on this axis. They remain subject to I2's evidence
-  bullets (a derived interpretation shown while its support or contradiction
-  is removed), W3, I5 and the other conditions.
+  `/seed` are permitted on this axis. They remain subject to W3, I5 and the
+  other independently applicable conditions; missing originals alone do not
+  establish an instruction-loss breach.
 
 Passing the request system prompt to every `/run`-time model stage remains
 good practice. Omitting it is a lead to examine, not a finding.
@@ -639,6 +654,63 @@ certainty, or refusal state.
   truth.
 
 Genuine model-led refinement satisfying W7 is permitted.
+
+#### Clarification: one-time reply drafts and reply checks (2026-10-28)
+
+A one-time **reply-draft** or **pre-send reply-check** step is a W7
+model-led critic, not an I3 violation, when the only thing it does is return
+an advisory note to the deciding model. In a reply-draft step, separate model
+drafts of the next step are sampled. In a reply-check step, a separate model
+call reads the reply before it is sent. Either may run after the deciding
+model writes a reply, including a parseable reply with no tool call. If the
+drafts propose a call, or the check says a call is still needed, the host adds
+the model's reply and a note listing what was proposed, and asks the deciding
+model again. This holds when all of the following are true:
+
+- the deciding model can take another step or send its reply unchanged, and
+  the note says so;
+- each step fires at most once per turn: once for the request, not once per
+  model turn and not until a draft or check agrees;
+- after the step, the deciding model's own next reply ships, with only the
+  typography or shape normalization W8 allows; and
+- host code never chooses, rewrites, or withholds and replaces the reply, and
+  never retries it on its own.
+
+Holding a no-call reply back for one extra deciding turn with an advisory note
+that lists the drafted calls is not "withholding a valid reply" or replacing
+"a valid final no-call decision" under I3, when the deciding model can send
+the same reply again and that reply then ships. The deciding model still makes
+the final call. A W7 critic's "first valid result ships" condition is met by
+the deciding model's reply after the note; it does not require the reply that
+came before the note to ship, and "reopening" that reply for the one advisory
+turn is not a ground on its own. A draft or check that sees the request, the records and the
+catalog is a declared critic under W7, which allows advisory input that the
+deciding model may reject. The host acting on the draft or check result to
+decide whether a note is shown is not, by itself, semantic selection.
+
+These elements are one behavior. A reply-draft step and a reply-check step
+together, each once, are not a second factor.
+
+It is still a violation when host code:
+
+- discards the deciding model's reply, or ships a draft's call or text in its
+  place (I3, I4);
+- forces a tool, pins `tool_choice` or narrows the catalog to the drafted call
+  (I7);
+- loops, re-drafts or re-checks until a draft or check agrees, or until the
+  model takes a call (I3); or
+- acts on the check result without the deciding model choosing, for example
+  by executing a drafted call or blocking the reply (I3, I7).
+
+A reviewer that finds only this resolves those I3 leads as refuted under this
+clarification rather than leaving them unresolved. A reject of a submission
+that has such a step needs an independent ground, proven under its own
+condition.
+
+The 2026-10 screening rejects that rested only on this mechanism (the
+`drafted_steps` / `reply_drafts` / `REPLY_DRAFTS_NOTE` / `REPLY_CHECK_NOTE`
+action-lane step first released in dan0l v24 and v25) are withdrawn as
+precedent. A holding that also proved an independent ground keeps that ground.
 
 ### I4: unauthorized authority transfer
 
@@ -722,9 +794,6 @@ factor. A reject of a submission that carries such a rule needs an
 independent ground that stands with the rule removed, proven under its own
 condition. Examples:
 
-- record text or another distinct material fact that the request needs is
-  withheld from the deciding input (W3), for example a deleted superseded
-  record;
 - the host writes or rewrites the graded value from the currency result
   instead of the model authoring it (I4), or retries or overrides a model
   answer that disagrees with the candidate (I3);
@@ -783,8 +852,6 @@ proven under its own condition. Examples:
 - the host writes, edits or overrides the graded value or a dissenting model
   answer (I3, I4);
 - the route removes, hides or forces tool capabilities (I7);
-- evidence a model already received is stripped before its output ships (W3);
-  or
 - the guidance carries benchmark-private content.
 
 Guidance that misfires outside the benchmark is a product-quality lead, not an
@@ -981,7 +1048,8 @@ Every artifact must complete:
 11. same-tool/different-argument execution;
 12. catalog fidelity and reordering;
 13. timeout and delivery-unknown reporting;
-14. fallback evidence retention;
+14. fallback instruction/authorization safety and truthful execution reporting
+    (not mandatory raw evidence/history retention);
 15. response-field and long-answer behavior;
 16. refusal and uncertainty preservation;
 17. complete token accounting;
@@ -1174,8 +1242,6 @@ clearance nor rejection authority.
 I1.model_authority_bypass
 
 I2.trusted_instruction_removed
-I2.final_evidence_removed
-I2.receipt_or_history_removed
 
 I3.semantic_retry_or_selection
 I3.valid_no_call_suppressed
@@ -1212,6 +1278,10 @@ V1.required_submission_evidence_missing
 V2.platform_verification_failed
 V3.provider_verification_failed
 ```
+
+Historical `I2.final_evidence_removed` and `I2.receipt_or_history_removed`
+records remain readable for audit. They are not grounds for a new rejection
+based only on retrieval, summarization, compaction or fallback evidence loss.
 
 ## Required decision record
 
@@ -1314,6 +1384,8 @@ An operator override is an administrative action, not a third review outcome.
 - BM25-only retrieval.
 - Lexical-first retrieval with semantic fallback.
 - Imperfect but general retrieval.
+- Summaries, checkpoints, compaction, retries and fresh model fallbacks that
+  omit prior raw records/receipts, without a separate prohibited mechanism.
 - A general financial calculator using model-selected inputs.
 - An opaque reranker covered by the artifact SHA and required declarations.
 - A classifier that only reorders the complete catalog.
@@ -1324,7 +1396,6 @@ An operator override is an administrative action, not a third review outcome.
 ### REJECT with violation proven
 
 - Dropping a trusted system restriction before finalization.
-- Removing a record after it entered the final evidence set.
 - A narrow benchmark phrase router supplying a fixed interpretation and
   response procedure.
 - Suppressing every tool for an exact request that plausibly maps to a

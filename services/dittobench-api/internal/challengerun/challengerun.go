@@ -39,12 +39,31 @@ const DefaultConcurrency = 4
 type Options struct {
 	// Concurrency bounds in-flight cases per wave (default DefaultConcurrency).
 	Concurrency int
+	// BenchVersion is the runtime contract the harness is seeded and run
+	// under: a round's frozen bench version. Zero uses the pack's declared
+	// grading policy. Grading always uses the pack's declared policy.
+	BenchVersion int
 	// Nonce keys the opaque ID projection. A fresh random nonce is used when
 	// empty; tests pin it for stable wire IDs.
 	Nonce []byte
 	// InferenceBaseURL, when set, returns the case-scoped inference URL the
 	// harness should use for one opaque case ID.
 	InferenceBaseURL func(opaqueCaseID string) string
+	// Tools is the tool catalog advertised on every /run, exactly as a scored
+	// memory case advertises the run's catalog. A pack case is a memory
+	// question, but a harness built for the scored path expects the catalog.
+	Tools []protocol.ToolDefinition
+	// ToolEndpoint, when set, returns the observed tool-execution URL for one
+	// case. It is called once per case, before its /run, with the pack case ID
+	// and the opaque case and user IDs the harness will see, so the caller can
+	// register that case's fixture first. An empty result omits tool_endpoint.
+	ToolEndpoint func(packCaseID, opaqueCaseID, opaqueUserID string) string
+	// ObservedCalls, when set, returns the tool calls the validator watched
+	// one case execute through its tool_endpoint. Grading uses them in place
+	// of the harness's self-reported trajectory whenever any were observed,
+	// exactly as the scored path does, so a harness cannot execute a tool and
+	// omit it from its response.
+	ObservedCalls func(opaqueCaseID string) []protocol.ObservedToolCall
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -80,6 +99,9 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	if concurrency <= 0 {
 		concurrency = DefaultConcurrency
 	}
+	if opts.BenchVersion == 0 {
+		opts.BenchVersion = p.GradingBenchVersion
+	}
 	proj := newProjection(nonce)
 	waves := proj.waves(p.MemoryWaves)
 	buckets := runner.StageCasesByWave(len(waves), len(p.Cases), func(i int) int { return p.Cases[i].RunAfterWave })
@@ -87,13 +109,13 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	outcomes := make([]CaseOutcome, len(p.Cases))
 	err := runner.RunStagedWaves(ctx, waves, buckets,
 		func(ctx context.Context, _ int, wave protocol.SeedRequest) error {
-			_, err := runner.SeedForVersion(ctx, harnessURL, wave, challenge.GradingBenchVersion)
+			_, err := runner.SeedForVersion(ctx, harnessURL, wave, opts.BenchVersion)
 			return err
 		},
 		func(ctx context.Context, _ int, bucket []int) error {
 			runBounded(len(bucket), concurrency, func(j int) {
 				i := bucket[j]
-				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], proj, opts)
+				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], p.GradingCase(i), proj, opts)
 			})
 			return ctx.Err()
 		},
@@ -108,23 +130,41 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	return outcomes, nil
 }
 
-func runCase(ctx context.Context, harnessURL string, c challenge.Case, proj *projection, opts Options) CaseOutcome {
+func runCase(ctx context.Context, harnessURL string, c challenge.Case, graded protocol.MemoryCase, proj *projection, opts Options) CaseOutcome {
 	opaqueID := proj.id("case", c.ID)
-	caseOpts := runner.CaseOptions{UserID: proj.id("user", c.UserID), BenchVersion: challenge.GradingBenchVersion}
+	opaqueUser := proj.id("user", c.UserID)
+	caseOpts := runner.CaseOptions{UserID: opaqueUser, BenchVersion: opts.BenchVersion}
 	if opts.InferenceBaseURL != nil {
 		caseOpts.InferenceBaseURL = opts.InferenceBaseURL(opaqueID)
 	}
+	if opts.ToolEndpoint != nil {
+		caseOpts.ToolEndpoint = opts.ToolEndpoint(c.ID, opaqueID, opaqueUser)
+	}
 	out := CaseOutcome{PanelCaseResult: challenge.PanelCaseResult{CaseID: c.ID}}
-	resp, _, err := runner.RunCaseWithTelemetry(ctx, harnessURL, opaqueID, c.Question, nil, caseOpts)
+	resp, _, err := runner.RunCaseWithTelemetry(ctx, harnessURL, opaqueID, c.Question, opts.Tools, caseOpts)
 	if err != nil {
 		out.Fault = true
 		out.Notes = []string{"no response from harness (error or timeout); excluded as a fault"}
 		return out
 	}
-	cs := scorer.GradeMemory(c.GradingCase(), resp)
+	if opts.ObservedCalls != nil {
+		resp = withObservedCalls(resp, opts.ObservedCalls(opaqueID))
+	}
+	cs := scorer.GradeMemory(graded, resp)
 	out.Score = cs.Score
 	out.Notes = cs.Notes
 	return out
+}
+
+// withObservedCalls grades on the validator-observed trajectory whenever any
+// call was observed, the scored path's withObservedTrajectory contract. A
+// self-reported call that never reached the endpoint still stands against the
+// harness; an executed call the harness omitted is restored.
+func withObservedCalls(resp protocol.RunResponse, observed []protocol.ObservedToolCall) protocol.RunResponse {
+	if len(observed) > 0 {
+		resp.ToolCalls = observed
+	}
+	return resp
 }
 
 // projection maps pack identities to per-run opaque identities.

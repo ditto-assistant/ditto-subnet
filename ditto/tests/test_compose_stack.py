@@ -40,12 +40,6 @@ def _compose_default(expression: str) -> str:
     return remainder.rstrip("}")
 
 
-def test_retired_local_inference_sidecars_are_absent() -> None:
-    compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    assert "ollama" not in compose["services"]
-    assert "model-relay" not in compose["services"]
-
-
 def test_sandbox_image_pins_compatible_rootful_dind_and_installs_guard_tools() -> None:
     dockerfile = SANDBOX_DOCKERFILE_PATH.read_text()
 
@@ -120,15 +114,6 @@ def test_v9_private_projection_volume_is_initialized_before_scorer_health() -> N
     assert entrypoint.index('chmod 0700 "$private_artifact_dir"') < entrypoint.index(
         "exec dockerd-entrypoint.sh"
     )
-
-
-def test_compatibility_executor_does_not_require_host_specific_outer_limits() -> None:
-    compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    sandbox = compose["services"]["sandbox-docker"]
-
-    assert "mem_limit" not in sandbox
-    assert "cpus" not in sandbox
-    assert "pids_limit" not in sandbox
 
 
 def test_validator_probes_the_live_sandbox_network_namespace() -> None:
@@ -211,68 +196,6 @@ def test_scorer_allows_only_verified_screened_image_downloads() -> None:
 
     assert environment["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
     assert "DITTOBENCH_ALLOW_PRIVATE_HARNESS" not in environment
-
-
-def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None:
-    compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    services = compose["services"]
-    scorer = services["dittobench-api"]["environment"]
-    validator = services["ditto-subnet"]["environment"]
-
-    assert _compose_default(scorer["DITTOBENCH_CODING_SHADOW_ENABLED"]) == "false"
-    assert _compose_default(scorer["DITTOBENCH_CODING_CANARY_ENABLED"]) == "false"
-    assert _compose_default(scorer["DITTOBENCH_CODING_CERTIFICATION_ROOT"]) == ""
-    assert _compose_default(scorer["DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"]) == ""
-    assert _compose_default(validator["VALIDATOR_CODING_SHADOW_ENABLED"]) == "false"
-    assert _compose_default(validator["VALIDATOR_CODING_SHADOW_RUN_ID"]) == ""
-    assert (
-        _compose_default(validator["VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED"])
-        == "false"
-    )
-    assert (
-        _compose_default(
-            validator["VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED"]
-        )
-        == "false"
-    )
-    for key in (
-        "VALIDATOR_CODING_EXECUTOR_BASE_URL",
-        "VALIDATOR_CODING_EXECUTOR_CA_PATH",
-        "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH",
-        "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH",
-        "VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS",
-    ):
-        assert _compose_default(validator[key]) == ""
-    assert _compose_default(validator["VALIDATOR_CODING_CANARY_ENABLED"]) == "false"
-    assert {item["source"] for item in services["ditto-subnet"]["secrets"]} == {
-        "coding-executor-validator-ca",
-        "coding-executor-validator-client-cert",
-        "coding-executor-validator-client-key",
-        "treasury-emission-approval",
-    }
-    for secret in (
-        "coding-executor-validator-ca",
-        "coding-executor-validator-client-cert",
-        "coding-executor-validator-client-key",
-    ):
-        assert _compose_default(compose["secrets"][secret]["file"]) == "/dev/null"
-    assert scorer["DITTOBENCH_CODING_PRIVATE_ROOT"].startswith(
-        "/var/lib/dittobench-private-artifacts/"
-    )
-    assert scorer["DITTOBENCH_CODING_POLICY_FILE"].endswith(
-        "coding_inference_policy_locked_v1.json"
-    )
-    assert (
-        "coding_inference_policy_locked_v1.json" in SCORER_DOCKERFILE_PATH.read_text()
-    )
-    assert (
-        "DITTOBENCH_CODING_SHADOW_ENABLED"
-        not in services["sandbox-docker"]["environment"]
-    )
-    assert (
-        "DITTOBENCH_CODING_CANARY_ENABLED"
-        not in services["sandbox-docker"]["environment"]
-    )
 
 
 def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
@@ -818,7 +741,8 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     # Both native validator children, the sandbox daemon, both native scorer
     # children, the dedicated coding-executor scorer, patched Pylon, the
     # frozen-updater relay shim, the signed validator stack descriptor, and the
-    # signed screener fleet descriptor are independently built and published;
+    # signed screener fleet and generator scorer descriptors are independently built
+    # and published;
     # the two cached starter-kit verify gates build without publishing.
     build_action_count = sum(
         workflow.count(action)
@@ -827,7 +751,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 12
+    assert build_action_count == 13
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",

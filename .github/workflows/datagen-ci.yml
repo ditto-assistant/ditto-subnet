@@ -35,10 +35,11 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        # The full v13 seed sweeps exceed Go's default per-package 10m on
-        # hosted runners. Preserve every seed and assertion with a bounded
-        # timeout rather than reducing the immutable-contract coverage.
-        run: go test -timeout 20m ./...
+        # Shared seed sweeps generate each artifact once per test binary and
+        # the heavy tests run in parallel, so the suite fits well inside this
+        # bound on a 4-vCPU runner. A timeout here means a regression in test
+        # cost, not a reason to raise the bound.
+        run: go test -timeout 15m ./...
       - name: Grader audit release gate
         run: go run ./cmd/graderaudit -release-gate
       - name: Determinism

@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from ditto.api_models.generator import GeneratorCompetitionSettings
-from ditto.api_server import generator_competition
+from ditto.api_server import generator_competition, generator_rounds
 from ditto.api_server.generator_rounds import select_round_panel
 
 
@@ -25,7 +25,11 @@ async def test_a_ranked_reference_frees_its_ranked_seat(
             for i, agent_id in enumerate(ranked_ids[:size])
         ]
 
+    async def _eligible(_session: Any, _agent_ids: list[str]) -> dict[str, str]:
+        return {}
+
     monkeypatch.setattr(generator_competition, "select_panel", _select_panel)
+    monkeypatch.setattr(generator_rounds, "panel_ineligibility", _eligible)
     session = SimpleNamespace(
         get=AsyncMock(
             return_value=SimpleNamespace(
@@ -41,9 +45,10 @@ async def test_a_ranked_reference_frees_its_ranked_seat(
         reference_agent_ids=[UUID(ranked_ids[0])],
     )
 
-    panel, skipped = await select_round_panel(session, settings)  # type: ignore[arg-type]
+    frozen = await select_round_panel(session, settings)  # type: ignore[arg-type]
+    panel = frozen.panel
 
-    assert skipped == []
+    assert frozen.skipped_references == [] and frozen.skipped_agents == []
     assert [slot["agent_id"] for slot in panel] == [*ranked_ids[1:4], ranked_ids[0]]
     assert len(panel) == settings.panel_size + 1 >= settings.min_panel
     reference = panel[-1]

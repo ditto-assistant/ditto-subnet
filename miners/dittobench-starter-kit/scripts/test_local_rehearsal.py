@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -36,7 +38,7 @@ class LocalRehearsalTest(unittest.TestCase):
                 "run_size": "small",
             },
         )
-        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 12)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 14)
 
     def test_submit_body_can_pin_an_older_contract(self) -> None:
         body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)
@@ -99,9 +101,8 @@ class LocalRehearsalTest(unittest.TestCase):
             LOCAL.parse_args(["--timeout", "0"])
 
     def test_default_and_rejected_bench_versions(self) -> None:
-        self.assertEqual(
-            LOCAL.parse_args([]).bench_version, LOCAL.LIVE_SCORING_BENCH_VERSION
-        )
+        # No explicit version: resolved at run time from the live rollout.
+        self.assertIsNone(LOCAL.parse_args([]).bench_version)
         self.assertEqual(
             LOCAL.parse_args(["--bench-version", str(LOCAL.MAX_BENCH_VERSION)]).bench_version,
             LOCAL.MAX_BENCH_VERSION,
@@ -110,6 +111,85 @@ class LocalRehearsalTest(unittest.TestCase):
             LOCAL.parse_args(["--bench-version", str(LOCAL.MIN_BENCH_VERSION - 1)])
         with self.assertRaises(SystemExit):
             LOCAL.parse_args(["--bench-version", str(LOCAL.MAX_BENCH_VERSION + 1)])
+
+    def test_explicit_bench_version_skips_the_live_lookup(self) -> None:
+        with patch.object(LOCAL, "fetch_live_bench_version") as fetch:
+            self.assertEqual(LOCAL.resolve_bench_version(9), 9)
+        fetch.assert_not_called()
+
+    def test_default_bench_version_follows_the_live_rollout(self) -> None:
+        live = LOCAL.MAX_BENCH_VERSION
+        with patch.dict(os.environ, {LOCAL.PUBLIC_ROLLOUT_URL_ENV: "http://x/r"}):
+            with patch.object(
+                LOCAL, "fetch_live_bench_version", return_value=live
+            ) as fetch:
+                self.assertEqual(LOCAL.resolve_bench_version(None), live)
+        fetch.assert_called_once_with("http://x/r")
+
+    def test_default_bench_version_falls_back_offline(self) -> None:
+        with patch.object(LOCAL, "fetch_live_bench_version", return_value=None):
+            self.assertEqual(
+                LOCAL.resolve_bench_version(None), LOCAL.LIVE_SCORING_BENCH_VERSION
+            )
+        with patch.dict(os.environ, {LOCAL.PUBLIC_ROLLOUT_URL_ENV: "off"}):
+            with patch.object(LOCAL, "fetch_live_bench_version") as fetch:
+                self.assertEqual(
+                    LOCAL.resolve_bench_version(None),
+                    LOCAL.LIVE_SCORING_BENCH_VERSION,
+                )
+            fetch.assert_not_called()
+
+    def test_live_bench_newer_than_checkout_fails_loudly(self) -> None:
+        with patch.object(
+            LOCAL,
+            "fetch_live_bench_version",
+            return_value=LOCAL.MAX_BENCH_VERSION + 1,
+        ):
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "update ditto-subnet"):
+                LOCAL.resolve_bench_version(None)
+
+    def test_fetch_live_bench_version_reads_active_version_only(self) -> None:
+        class Response:
+            def __init__(self, body: bytes) -> None:
+                self.body = body
+
+            def __enter__(self):  # noqa: ANN204
+                import io
+
+                return io.BytesIO(self.body)
+
+            def __exit__(self, *exc: object) -> None:
+                return None
+
+        cases = {
+            b'{"active_version": 13, "desired_version": 14}': 13,
+            b'{"active_version": true}': None,
+            b'{"desired_version": 14}': None,
+            b"[13]": None,
+            b"not json": None,
+        }
+        for body, expected in cases.items():
+            with self.subTest(body=body), patch.object(
+                LOCAL.urllib.request, "urlopen", return_value=Response(body)
+            ):
+                self.assertEqual(
+                    LOCAL.fetch_live_bench_version("http://x/r"), expected
+                )
+        with patch.object(
+            LOCAL.urllib.request,
+            "urlopen",
+            side_effect=LOCAL.urllib.error.URLError("offline"),
+        ):
+            self.assertIsNone(LOCAL.fetch_live_bench_version("http://x/r"))
+
+    @unittest.skipUnless(
+        os.environ.get("DITTO_LIVE_CHECKS") == "1",
+        "set DITTO_LIVE_CHECKS=1 to compare the fallback with live Platform",
+    )
+    def test_offline_fallback_matches_live_scoring(self) -> None:
+        live = LOCAL.fetch_live_bench_version(LOCAL.PUBLIC_ROLLOUT_URL)
+        self.assertIsNotNone(live)
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, live)
 
     def test_gates_flag_and_keep_artifacts_dependency(self) -> None:
         self.assertFalse(LOCAL.parse_args([]).gates)
@@ -210,8 +290,10 @@ class LocalRehearsalTest(unittest.TestCase):
     def test_longmem_full_and_partial_labels_are_distinct(self) -> None:
         full = LOCAL.format_longmem_summary(
             {
-                "official_full_condition": True,
+                "full_condition": True,
                 "condition": LOCAL.LONGMEM_CONDITION,
+                "judge_model": LOCAL.judge_evaluator().JUDGE_MODEL,
+                "judge_route_provider": LOCAL.judge_evaluator().JUDGE_ROUTE_PROVIDER,
                 "correct": 277,
                 "n": 500,
                 "accuracy": 0.554,
@@ -219,13 +301,41 @@ class LocalRehearsalTest(unittest.TestCase):
                 "abstention_n": 30,
             }
         )
-        partial = full.replace("official full condition", "partial practice")
-        self.assertIn("official full condition", full)
+        partial = full.replace("full condition", "partial practice")
+        self.assertIn("full condition", full)
         self.assertIn("separate offline adapter score", full)
         self.assertNotEqual(full, partial)
 
+    def test_longmem_summary_names_the_judge_and_disclaims_the_protocol(self) -> None:
+        """A reported number must say what judged it.
+
+        The rehearsal judge matches production, which is the point, but it is
+        not LongMemEval's official judge -- so the summary may not read as an
+        official-protocol score.
+        """
+        summary = LOCAL.format_longmem_summary(
+            {
+                "full_condition": True,
+                "condition": LOCAL.LONGMEM_CONDITION,
+                "judge_model": LOCAL.judge_evaluator().JUDGE_MODEL,
+                "judge_route_provider": LOCAL.judge_evaluator().JUDGE_ROUTE_PROVIDER,
+                "correct": 277,
+                "n": 500,
+                "accuracy": 0.554,
+                "abstention_correct": 26,
+                "abstention_n": 30,
+            }
+        )
+        self.assertIn(LOCAL.judge_evaluator().JUDGE_MODEL, summary)
+        self.assertIn(LOCAL.judge_evaluator().JUDGE_ROUTE_PROVIDER, summary)
+        self.assertIn("not an", summary)
+        self.assertIn("official-protocol LongMemEval score", summary)
+
     def test_fresh_longmem_command_does_not_request_resume_rebalancing(self) -> None:
         args = LOCAL.parse_args(["--longmem-eval", "--longmem-limit", "1"])
+        args.bench_version = LOCAL.resolve_bench_version(
+            LOCAL.LIVE_SCORING_BENCH_VERSION
+        )
         command = LOCAL.longmem_adapter_command(
             args=args,
             kit_dir=Path("/tmp/starter"),
@@ -249,7 +359,7 @@ class LocalRehearsalTest(unittest.TestCase):
             row = {
                 "question_id": "q-1",
                 "autoeval_label": {
-                    "model": "gpt-4o-2024-08-06",
+                    "model": LOCAL.judge_evaluator().JUDGE_MODEL,
                     "label": True,
                 },
             }
@@ -264,14 +374,14 @@ class LocalRehearsalTest(unittest.TestCase):
                 {
                     "question_id": "q-1",
                     "autoeval_label": {
-                        "model": "gpt-4o-2024-08-06",
+                        "model": LOCAL.judge_evaluator().JUDGE_MODEL,
                         "label": True,
                     },
                 },
                 {
                     "question_id": "q-2_abs",
                     "autoeval_label": {
-                        "model": "gpt-4o-2024-08-06",
+                        "model": LOCAL.judge_evaluator().JUDGE_MODEL,
                         "label": False,
                     },
                 },
@@ -282,9 +392,26 @@ class LocalRehearsalTest(unittest.TestCase):
             self.assertEqual(result["accuracy"], 0.5)
             self.assertEqual(result["abstention_n"], 1)
             self.assertEqual(result["abstention_correct"], 0)
-            self.assertFalse(result["official_full_condition"])
+            self.assertFalse(result["full_condition"])
             self.assertEqual(result["dataset_sha256"], LOCAL.LONGMEM_DATASET_SHA256)
             self.assertEqual(result["condition"], LOCAL.LONGMEM_CONDITION)
+            self.assertEqual(
+                result["judge_model"], LOCAL.judge_evaluator().JUDGE_MODEL
+            )
+            self.assertEqual(
+                result["judge_profile"], LOCAL.judge_evaluator().JUDGE_PROFILE_REVISION
+            )
+            self.assertEqual(
+                result["judge_max_completion_tokens"],
+                LOCAL.judge_evaluator().JUDGE_MAX_COMPLETION_TOKENS,
+            )
+            self.assertFalse(result["official_protocol"])
+            self.assertEqual(
+                result["source_revision"], LOCAL.judge_evaluator().FORK_REVISION
+            )
+            self.assertEqual(
+                result["upstream_revision"], LOCAL.judge_evaluator().UPSTREAM_REVISION
+            )
 
     def test_summarize_longmem_rejects_wrong_judge_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -298,7 +425,30 @@ class LocalRehearsalTest(unittest.TestCase):
                 )
                 + "\n"
             )
-            with self.assertRaisesRegex(LOCAL.RehearsalError, "pinned official judge"):
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "not the pinned judge"):
+                LOCAL.summarize_longmem(path, limit=1, bench_version=11)
+
+    def test_summarize_longmem_rejects_the_retired_official_judge(self) -> None:
+        """A gpt-4o-judged artifact is not a rehearsal of the production lane.
+
+        This is the divergence the fork closes: before it, the rehearsal judged
+        with gpt-4o while production judged with deepseek, and nothing said so.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "eval.jsonl"
+            path.write_text(
+                json.dumps(
+                    {
+                        "question_id": "q-1",
+                        "autoeval_label": {
+                            "model": LOCAL.judge_evaluator().OFFICIAL_JUDGE_MODEL,
+                            "label": True,
+                        },
+                    }
+                )
+                + "\n"
+            )
+            with self.assertRaisesRegex(LOCAL.RehearsalError, "not the pinned judge"):
                 LOCAL.summarize_longmem(path, limit=1, bench_version=11)
 
     def test_build_environment_drops_provider_credentials(self) -> None:
@@ -311,10 +461,93 @@ class LocalRehearsalTest(unittest.TestCase):
         self.assertNotIn("CHUTES_API_KEY", environment)
 
     def test_judge_git_context_has_advertised_ref_and_full_checksum(self) -> None:
+        judge = LOCAL.judge_evaluator()
         context = LOCAL.longmem_judge_context()
-        self.assertIn("ref=refs/heads/main", context)
-        self.assertIn(f"checksum={LOCAL.LONGMEM_SOURCE_REVISION}", context)
-        self.assertEqual(len(LOCAL.LONGMEM_SOURCE_REVISION), 40)
+        self.assertIn(f"ref={judge.FORK_REF}", context)
+        self.assertIn(f"checksum={judge.FORK_REVISION}", context)
+        self.assertEqual(len(judge.FORK_REVISION), 40)
+        self.assertEqual(len(judge.UPSTREAM_REVISION), 40)
+
+    def test_judge_context_is_the_fork_not_upstream(self) -> None:
+        """The judge image must come from the fork, whose evaluator supports a
+        reasoning judge. Built from upstream it would send max_tokens=10 and
+        silently score every question "no"."""
+        context = LOCAL.longmem_judge_context()
+        self.assertIn("ditto-assistant/LongMemEval", context)
+        self.assertNotIn("xiaowu0162/LongMemEval", context)
+        judge = LOCAL.judge_evaluator()
+        self.assertNotEqual(judge.FORK_REVISION, judge.UPSTREAM_REVISION)
+
+    @staticmethod
+    def _standalone_kit(root: Path) -> Path:
+        """Materialise a starter-kit checkout with no services/ tree."""
+        scripts = root / "miners" / "dittobench-starter-kit" / "scripts"
+        scripts.mkdir(parents=True)
+        for name in ("local-rehearsal.py", "rehearsal_gates.py"):
+            shutil.copy(SCRIPT_PATH.with_name(name), scripts / name)
+        assert not (root / "services").exists()
+        return scripts / "local-rehearsal.py"
+
+    def test_help_works_without_the_monorepo_api_tree(self) -> None:
+        """A miner's standalone kit has no services/dittobench-api. Loading the
+        shared judge identity at import time made even --help a traceback."""
+        with tempfile.TemporaryDirectory() as directory:
+            script = self._standalone_kit(Path(directory))
+            completed = subprocess.run(
+                [sys.executable, str(script), "--help"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("usage:", completed.stdout)
+
+    def test_missing_judge_identity_is_an_actionable_rehearsal_error(self) -> None:
+        """When the judge identity really is needed and really is absent, say
+        which file is missing instead of raising a bare ImportError."""
+        probe = (
+            "import importlib.util, sys;"
+            "spec = importlib.util.spec_from_file_location('lr', sys.argv[1]);"
+            "m = importlib.util.module_from_spec(spec);"
+            "sys.modules['lr'] = m;"
+            "spec.loader.exec_module(m);"
+            "\ntry:\n m.judge_evaluator()\n"
+            "except m.RehearsalError as exc:\n print('RehearsalError:', exc)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            script = self._standalone_kit(Path(directory))
+            completed = subprocess.run(
+                [sys.executable, "-c", probe, str(script)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("RehearsalError:", completed.stdout)
+        self.assertIn("judge_evaluator.py", completed.stdout)
+
+    def test_judge_image_evaluator_digest_is_verified(self) -> None:
+        """A judge image whose evaluator is not the recorded fork file must
+        stop the rehearsal rather than score 500 questions with it."""
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="deadbeef  src/evaluation/evaluate_qa.py\n"
+        )
+        with (
+            patch.object(LOCAL.subprocess, "run", return_value=completed),
+            self.assertRaisesRegex(LOCAL.RehearsalError, "evaluator sha256"),
+        ):
+            LOCAL.verify_longmem_judge_evaluator()
+
+        good = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=(
+                f"{LOCAL.judge_evaluator().FORK_EVALUATOR_SHA256}  "
+                "src/evaluation/evaluate_qa.py\n"
+            ),
+        )
+        with patch.object(LOCAL.subprocess, "run", return_value=good):
+            LOCAL.verify_longmem_judge_evaluator()
 
     def test_scorer_environment_uses_private_local_evidence_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -893,11 +1126,100 @@ class ProvenanceNormaliserTest(unittest.TestCase):
             exempt |= GATES.value_tokens(case["question"])
             served = response.get("answer") or response["final_text"]
             verdict = GATES.evaluate_claim(
-                served, GATES.claim_alternatives(case), ledger, exempt
+                served, GATES.claim_groups(case), ledger, exempt
             )
             self.assertTrue(verdict["applicable"], name)
             self.assertEqual(verdict["model_emitted"], want_emitted, name)
             self.assertEqual(verdict["answer_in_prompt"], want_in_prompt, name)
+
+    def test_any_accepted_form_of_a_claim_unit_counts_as_emitted(self) -> None:
+        """``claimGroupsEmitted``: the model may write a different accepted
+        form of the served unit than the harness served."""
+        cases = [
+            # served "3", the model wrote "three"
+            ({"answer_kind": "number", "expected_answer": "3"}, "3", "I count three."),
+            # served one accept_any form, the model wrote another
+            (
+                {"answer_kind": "value", "expected_answer": "Tokyo", "accept_any": ["Osaka"]},
+                "Tokyo",
+                "It moved to Osaka.",
+            ),
+            # served one accepted direction phrase, the model wrote another
+            (
+                {"bench_version": 13, "answer_kind": "direction", "expected_answer": "increase"},
+                "went up",
+                "It increased.",
+            ),
+        ]
+        for case, served, completion in cases:
+            ledger = GATES.ClaimSpanLedger()
+            ledger.record_call([], [completion])
+            verdict = GATES.evaluate_claim(served, GATES.claim_groups(case), ledger)
+            self.assertTrue(verdict["applicable"], case)
+            self.assertTrue(verdict["model_emitted"], case)
+
+    def test_each_list_item_needs_its_own_emitted_form(self) -> None:
+        case = {
+            "answer_kind": "list",
+            "answer_items": ["Rome", "Paris"],
+            "answer_item_accept_any": [["Roma"], []],
+        }
+        groups = GATES.claim_groups(case)
+        self.assertEqual(groups, [["Rome", "Roma"], ["Paris"]])
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([], ["Roma and Paris."])
+        self.assertTrue(GATES.evaluate_claim("Rome, Paris", groups, ledger)["model_emitted"])
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([], ["Roma, and somewhere else."])
+        self.assertFalse(GATES.evaluate_claim("Rome, Paris", groups, ledger)["model_emitted"])
+        with self.assertRaises(TypeError):
+            GATES.claim_groups_emitted("Rome", ["Rome"], set())
+
+    def test_v14_replay_accepts_a_typographic_hyphen_identifier(self) -> None:
+        """#2734: the v14 grader folds the model's U+2011 before crediting
+        VK-48HJXP6A63, so the replay accepts the claim the same way the
+        scorer's v14 claim vocabulary does. V13 keeps its finding."""
+        question = "What Signal handle do I have for Melanie?"
+        for served in ("VK-48HJXP6A63", "VK\u201148HJXP6A63"):
+            for version, want_emitted in ((13, False), (14, True)):
+                case = {
+                    "bench_version": version,
+                    "answer_kind": "value",
+                    "expected_answer": "VK-48HJXP6A63",
+                    "question": question,
+                }
+                ledger = GATES.ClaimSpanLedger()
+                ledger.record_call([question], ["Your handle is VK\u201148HJXP6A63."])
+                verdict = GATES.evaluate_claim(
+                    served, GATES.claim_groups(case), ledger, GATES.value_tokens(question)
+                )
+                if version == 13 and served != "VK-48HJXP6A63":
+                    # V13 does not fold, so the U+2011 slot is no claim span.
+                    self.assertFalse(verdict["applicable"], served)
+                    continue
+                self.assertTrue(verdict["applicable"], (served, version))
+                self.assertEqual(verdict["model_emitted"], want_emitted, (served, version))
+        # A value the model never wrote is still not model-emitted at v14.
+        ledger = GATES.ClaimSpanLedger()
+        ledger.record_call([question], ["I could not find that handle."])
+        case = {"bench_version": 14, "answer_kind": "value", "expected_answer": "VK-48HJXP6A63"}
+        verdict = GATES.evaluate_claim("VK-48HJXP6A63", GATES.claim_groups(case), ledger)
+        self.assertFalse(verdict["model_emitted"])
+        self.assertEqual(
+            GATES.claim_alternatives({"bench_version": 13, "expected_answer": "VK-48HJXP6A63"}),
+            ["VK-48HJXP6A63"],
+        )
+
+    def test_v14_replay_carries_mixed_hyphen_forms(self) -> None:
+        """Mirrors ``TestV14ClaimAlternativesCarryMixedHyphenForms``."""
+        self.assertEqual(
+            GATES.claim_alternatives({"bench_version": 14, "expected_answer": "AB-12-CD"}),
+            ["AB-12-CD", "AB‐12-CD", "AB-12‐CD", "AB‐12‐CD"],
+        )
+        self.assertEqual(
+            GATES.claim_alternatives({"bench_version": 14, "expected_answer": "a-b-c-d-e-f"}),
+            ["a-b-c-d-e-f", "a‐b‐c‐d‐e‐f"],
+        )
 
     def test_slot_not_in_prose_accepts_unit_alternatives_and_rejects_substitution(
         self,

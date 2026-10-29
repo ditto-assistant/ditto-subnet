@@ -1095,7 +1095,7 @@ refresh_updater_checkout() {
 }
 
 mode="${1:-run}"
-case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; prepare|bootstrap) [ "$#" -eq 2 ] || die "usage: $0 $mode <descriptor-digest>";; run|prefetch|refresh|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|refresh|status|recover|prepare <descriptor-digest>|bootstrap <descriptor-digest>|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
+case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; prepare|bootstrap) [ "$#" -eq 2 ] || die "usage: $0 $mode <descriptor-digest>";; run|prefetch|refresh|recover|status|budget|reconfigure) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|refresh|status|recover|prepare <descriptor-digest>|bootstrap <descriptor-digest>|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback|reconfigure]";; esac
 # The run service must also cover startup recovery before a fresh full drain:
 # committed recovery can wait once then fully roll back (five ready windows).
 # Add stop, candidate deploy/health and another rollback (seven windows), or systemd
@@ -1203,6 +1203,29 @@ if [ "$mode" = migrate ]; then
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "migrated validator may be working; verify it before recovery"
   record_managed "$2"; rm -f "$TRANSACTION_FILE"
   log "completed supervised first migration to $2"
+  exit 0
+fi
+if [ "$mode" = reconfigure ]; then
+  # A changed host .env (for example a restored Gamma guard) does not reach
+  # running containers, and run is a no-op on the current descriptor. Drain and
+  # recreate every service from the installed signed release instead.
+  stack_update_timers_enabled && die "disable the stack timer before supervised reconfiguration"
+  [ "$#" -eq 1 ] || die "usage: $0 reconfigure"
+  current_ref="$(managed_release)"
+  verify_descriptor_signature "$current_ref" || die "managed current descriptor publisher identity is invalid"
+  docker_pull "$current_ref" >/dev/null || die "managed current descriptor is unavailable"
+  [ -d "$CURRENT_DIR" ] && validate_descriptor "$current_ref" "$CURRENT_DIR" || die "managed current descriptor is missing or invalid"
+  assert_stack_matches "$CURRENT_DIR" || die "running stack has drifted from its managed release"
+  old_container="$(service_container "$CURRENT_DIR" ditto-subnet)"
+  state_ready "$(runtime_state "$old_container")" "$old_container" || die "validator is not operational and freshly platform-accepted"
+  request_drain "$CURRENT_DIR" "$drain_timeout" "$check_seconds" || die "validator did not drain; nothing was recreated"
+  bounded "$((command_timeout + STOP_GRACE_SECONDS))" docker stop --time "$STOP_GRACE_SECONDS" "$old_container" >/dev/null || die "could not stop the drained validator"
+  DRAINED_CONTAINER=''; DRAINED_RELEASE_DIR=''
+  if ! deploy_release "$CURRENT_DIR" || ! wait_stack_quiescent "$CURRENT_DIR" "$ready_timeout" "$check_seconds"; then
+    die "reconfigured stack failed readiness; validator remains quiescent for supervised repair"
+  fi
+  resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "reconfigured validator may be working; verify it before recovery"
+  log "reconfigured current stack release $current_ref from the host environment"
   exit 0
 fi
 if [ "$mode" = rollback ]; then

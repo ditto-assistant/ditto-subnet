@@ -386,3 +386,17 @@ Rollout:
    `probe_battery_mode: shadow` and `probe_review_mode: shadow`.
 4. Compare `probe_battery_observations[].review` against L1/L2/L3 outcomes for
    the next 50 v13 attempts before widening.
+
+Capability-only converge (no vault needed) for an already-converged primary that
+has the conversation key, mirroring `conversation-shadow.yml`:
+
+```bash
+ansible-playbook -i infra/ansible/inventory/screener-ci-partition.yml \
+  infra/ansible/playbooks/probe-review-shadow.yml --check --diff \
+  -e ansible_ssh_private_key_file=$HOME/.ssh/id_ed25519
+```
+
+Drop `--check --diff` to apply. It re-renders the materializer with the
+reviewer key added, restarts the materializer, asserts the key is non-empty,
+0400 and worker-owned, and installs the `probe-review.conf` worker drop-in.
+Workers pick it up on their next release restart.

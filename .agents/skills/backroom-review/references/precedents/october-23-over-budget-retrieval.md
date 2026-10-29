@@ -37,15 +37,18 @@ this ruling cited:
 - lucas_v30 v1 `e086d1d1-aeba-4643-a310-bcf711c91539`: an event projection
   replaces complete records (internal/agent/engine.go:149).
 
-Kept, because each has an independent ground:
+October 23 disposition history (not a new confirmation of any ground):
 
 - Pentagon1028 v1: I7, finalization removes every tool (src/agent.py:673).
 - blink-python v1: I3, a parseable abstention triggers an overwriting
   completion (ditto_harness/agent/engine.py:212).
 - doctor submission v9.3 v1 and apollo-s22 v1: I4.
-- dittoreader v12-v15: a critic rebuilds its conversation without the fetch
-  receipts the model already received and its reply ships (W3 "Once
-  protected"), plus I7.
+- dittoreader v12-v15: the earlier rationale included a critic rebuilding its
+  conversation without fetch receipts and a separately alleged I7. The
+  [October 25 recovery holding](october-25-fallback-recovery-withdrawal.md)
+  withdraws receipt-loss-only reasoning, including already-received receipts.
+  Any I7 must independently establish its applicable capability, authority,
+  blocked alternative and material consequence; it is not supplied by loss.
 - T v9 and King v7: trusted system instructions are dropped from the deciding
   turn (instruction loss, not record selection).
 
@@ -57,8 +60,16 @@ stripping is bench quality too … I don't think that is cheating"):
 - ember v4 `c1fd2e4c-cb1a-4062-915c-fa673ff7a283`: the grouped deciding
   packet omits each record's saved timestamp.
 
-A field projection still rejects when paired with a host recency or
-precedence rule that decides currency (cointaker v9, Hades v8; SN-215 / I4).
+A field projection plus ordinary case-file currency handling is also permitted
+alone under the later [currency clarification](october-23-case-file-currency.md).
+The earlier cointaker/Hades chronology rationale does not supply an independent
+I4 ground without actual host writing or rewriting of a finalized graded value.
+
+The October 25 holding extends the quality/reliability rule to later
+summaries, compaction, checkpoints, retries and fresh fallback, even after a
+successful deciding model consumed a receipt. The earlier W3 "Once protected"
+exception is withdrawn. Preserve the historical reasons; do not cite them as
+current authority for loss alone.
 
 Apply this per exact UUID. A later artifact with the same selection rule still
 needs its own full review for independent grounds.

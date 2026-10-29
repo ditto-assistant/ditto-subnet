@@ -195,6 +195,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_github_deploy_key }} --project={{ gcp_project }}"
   register: platform_deploy_key
   changed_when: false
+  check_mode: false
   no_log: true
 
 - name: Write GitHub deploy key
@@ -237,10 +238,15 @@
     GIT_SSH_COMMAND: "ssh -i /home/{{ platform_owner }}/.ssh/id_ed25519 -o IdentitiesOnly=yes"
 
 # --- Render apps/platform/.env from Secret Manager + host/group vars ---
+# check_mode: false because this is a pure read (`changed_when: false` already
+# says so) and skipping it in check mode makes --check unusable: every secret
+# comes back empty, so the .env diff is wrong and the assertions below fire on
+# values that were never fetched. github-link-config.yml already does this.
 - name: Read app secrets from Secret Manager
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ item.secret }} --project={{ gcp_project }}"
   register: platform_secret_reads
   changed_when: false
+  check_mode: false
   no_log: true
   loop:
     - { key: db_password, secret: "{{ secret_db_password }}" }
@@ -259,6 +265,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backroom_platform_operator_proof }} --project={{ gcp_project }}"
   register: platform_backroom_operator_proof_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: secret_backroom_platform_operator_proof | length > 0
 
@@ -283,6 +290,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_ditto_link_client_secret }} --project={{ gcp_project }}"
   register: platform_ditto_link_secret_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: secret_ditto_link_client_secret | length > 0
 
@@ -296,6 +304,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_ditto_router_api_key }} --project={{ gcp_project }}"
   register: platform_ditto_router_key_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: secret_ditto_router_api_key | length > 0
 
@@ -309,23 +318,21 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_openrouter_key }} --project={{ gcp_project }}"
   register: platform_openrouter_read
   changed_when: false
+  check_mode: false
   no_log: true
-  when: >-
-    platform_inference_proxy_enabled | bool or
-    platform_coding_shadow_enabled | bool
+  when: platform_inference_proxy_enabled | bool
 
 - name: Fold the platform OpenRouter key into the secrets map
   ansible.builtin.set_fact:
     platform_secrets: "{{ platform_secrets | combine({'openrouter_api_key': platform_openrouter_read.stdout}) }}"
   no_log: true
-  when: >-
-    platform_inference_proxy_enabled | bool or
-    platform_coding_shadow_enabled | bool
+  when: platform_inference_proxy_enabled | bool
 
 - name: Read platform Perplexity key when ticket inference is enabled
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_platform_perplexity_key }} --project={{ gcp_project }}"
   register: platform_perplexity_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_inference_proxy_enabled | bool
 
@@ -341,6 +348,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_screener_api_token }} --project={{ gcp_project }}"
   register: platform_screener_token_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_screener_hotkey | length > 0
 
@@ -356,6 +364,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_moderation_audit_signing_key }} --project={{ gcp_project }}"
   register: platform_moderation_audit_signing_key_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_moderation_audit_enabled | bool
 
@@ -376,6 +385,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_screener_controller_api_token }} --project={{ gcp_project }}"
   register: platform_screener_controller_token_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: secret_screener_controller_api_token | length > 0
 
@@ -384,6 +394,19 @@
     platform_secrets: "{{ platform_secrets | combine({'screener_controller_api_token': platform_screener_controller_token_read.stdout}) }}"
   no_log: true
   when: secret_screener_controller_api_token | length > 0
+
+- name: Read the generator-scorer bearer from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_generator_scorer_token }} --project={{ gcp_project }}"
+  register: platform_generator_scorer_token_read
+  changed_when: false
+  no_log: true
+  when: secret_generator_scorer_token | length > 0
+
+- name: Fold the generator-scorer bearer into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'generator_scorer_token': platform_generator_scorer_token_read.stdout | trim}) }}"
+  no_log: true
+  when: secret_generator_scorer_token | length > 0
 
 - name: Validate backup reader secret references before fetching
   ansible.builtin.assert:
@@ -399,6 +422,7 @@
     argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_access_key_id }}", "--project={{ platform_database_backup_secret_project }}"]
   register: platform_backup_reader_access
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_database_backup_reader_enabled | bool
 
@@ -407,6 +431,7 @@
     argv: [gcloud, secrets, versions, access, latest, "--secret={{ secret_database_backup_reader_secret_access_key }}", "--project={{ platform_database_backup_secret_project }}"]
   register: platform_backup_reader_secret
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_database_backup_reader_enabled | bool
 
@@ -414,6 +439,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_access_key_id }} --project={{ gcp_project }}"
   register: platform_hippius_access_key_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_hippius_bucket | default('') | length > 0
 
@@ -421,6 +447,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_secret_access_key }} --project={{ gcp_project }}"
   register: platform_hippius_secret_key_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_hippius_bucket | default('') | length > 0
 
@@ -453,6 +480,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backblaze_key_id }} --project={{ gcp_project }}"
   register: platform_backblaze_key_id_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_trace_enabled | bool and platform_trace_backblaze_bucket | default('') | length > 0
 
@@ -460,6 +488,7 @@
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backblaze_application_key }} --project={{ gcp_project }}"
   register: platform_backblaze_application_key_read
   changed_when: false
+  check_mode: false
   no_log: true
   when: platform_trace_enabled | bool and platform_trace_backblaze_bucket | default('') | length > 0
 
@@ -478,222 +507,13 @@
     mode: "0750"
   when: platform_trace_enabled | bool
 
-- name: Validate private coding catalog activation
-  ansible.builtin.assert:
-    that:
-      - platform_coding_catalog_bucket | default('') | length > 0
-      - platform_coding_catalog_endpoint | default('') | length > 0
-      - platform_coding_catalog_region | default('') | length > 0
-      - platform_coding_catalog_bucket != platform_bucket
-      - platform_coding_catalog_bucket != (platform_hippius_bucket | default(''))
-      - secret_coding_catalog_access_key != secret_hmac_secret
-      - secret_coding_catalog_secret_key != secret_hmac_secret
-      - secret_coding_catalog_access_key != secret_hippius_access_key_id
-      - secret_coding_catalog_access_key != secret_hippius_secret_access_key
-      - secret_coding_catalog_secret_key != secret_hippius_access_key_id
-      - secret_coding_catalog_secret_key != secret_hippius_secret_access_key
-      - secret_coding_catalog_access_key != secret_coding_catalog_secret_key
-      - platform_coding_catalog_max_record_bytes | int >= 4096
-      - platform_coding_catalog_max_record_bytes | int <= 2097152
-      - platform_coding_catalog_timeout_seconds | float >= 0.1
-      - platform_coding_catalog_timeout_seconds | float <= 60
-    fail_msg: >-
-      Private coding catalog activation requires a dedicated bucket, endpoint,
-      region, distinct Secret Manager identities, and bounded record/timeout
-      limits. Do not reuse upload or avatar storage credentials.
-  when: platform_coding_catalog_enabled | bool
-
-- name: Read private coding catalog access key from Secret Manager
-  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_catalog_access_key }} --project={{ gcp_project }}"
-  register: platform_coding_catalog_access_key_read
-  changed_when: false
-  no_log: true
-  when: platform_coding_catalog_enabled | bool
-
-- name: Read private coding catalog secret key from Secret Manager
-  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_catalog_secret_key }} --project={{ gcp_project }}"
-  register: platform_coding_catalog_secret_key_read
-  changed_when: false
-  no_log: true
-  when: platform_coding_catalog_enabled | bool
-
-- name: Validate private coding catalog credentials
-  ansible.builtin.assert:
-    that:
-      - platform_coding_catalog_access_key_read.stdout | default('') | length > 0
-      - platform_coding_catalog_secret_key_read.stdout | default('') | length > 0
-      - platform_coding_catalog_access_key_read.stdout != platform_coding_catalog_secret_key_read.stdout
-      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hmac_secret | default(''))
-      - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hmac_secret | default(''))
-      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
-      - platform_coding_catalog_access_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
-      - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
-      - platform_coding_catalog_secret_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
-    fail_msg: >-
-      Private coding catalog credentials must be nonempty and distinct from
-      upload HMAC and avatar Hippius credentials.
-  when: platform_coding_catalog_enabled | bool
-  no_log: true
-
-- name: Fold private coding catalog credentials into the secrets map
-  ansible.builtin.set_fact:
-    platform_secrets: "{{ platform_secrets | combine({'coding_catalog_access_key': platform_coding_catalog_access_key_read.stdout, 'coding_catalog_secret_key': platform_coding_catalog_secret_key_read.stdout}) }}"
-  no_log: true
-  when: platform_coding_catalog_enabled | bool
-
-- name: Inspect the locked shadow coding inference policy
-  ansible.builtin.stat:
-    path: "{{ platform_coding_shadow_inference_policy_file }}"
-    checksum_algorithm: sha256
-  register: platform_coding_shadow_policy
-  changed_when: false
-  when: platform_coding_shadow_enabled | bool
-
-- name: Validate shadow coding transport activation
-  ansible.builtin.assert:
-    that:
-      - platform_inference_relay_ports | sort == [8010, 8011]
-      - platform_coding_shadow_policy.stat.exists
-      - not platform_coding_shadow_policy.stat.isdir
-      - >-
-        platform_coding_shadow_policy.stat.checksum ==
-        platform_coding_shadow_inference_policy_sha256
-      - >-
-        platform_coding_shadow_inference_exchange_url is match(
-        '^https://[^/@?#:]+(?::443)?/api/v1/validator/coding-shadow/inference-exchange$')
-      - >-
-        platform_coding_shadow_inference_proxy_url is match(
-        '^https://[^/@?#:]+(?::443)?/api/v1/inference/coding/chat/completions$')
-      - >-
-        platform_coding_shadow_inference_revoke_url is match(
-        '^https://[^/@?#:]+(?::443)?/api/v1/validator/coding-shadow/inference-revoke-capability$')
-      - platform_secrets.openrouter_api_key | default('') | length >= 32
-    fail_msg: >-
-      Shadow coding transport requires a deployed relay pool, the exact locked
-      policy bytes from this checkout, the three reviewed HTTPS URLs, and the
-      server-only OpenRouter credential. Leave platform_coding_shadow_enabled
-      false until the whole profile has been reviewed.
-  when: platform_coding_shadow_enabled | bool
-  no_log: true
-
-- name: Validate shadow coding admin controls
-  ansible.builtin.assert:
-    that:
-      - >-
-        platform_coding_shadow_selection_delay_blocks | int >= 1 and
-        platform_coding_shadow_selection_delay_blocks | int <= 10000
-      - >-
-        platform_coding_shadow_ticket_lease_seconds | int >= 60 and
-        platform_coding_shadow_ticket_lease_seconds | int <= 7200
-      - >-
-        not (platform_coding_shadow_reconciliation_enabled | bool) or
-        (platform_coding_catalog_enabled | bool)
-      - >-
-        not (
-          platform_coding_shadow_reconciliation_enabled | bool or
-          platform_coding_shadow_ticket_set_enabled | bool
-        ) or platform_secrets.admin_api_token | default('') | length >= 32
-    fail_msg: >-
-      Shadow coding reconciliation requires the separate private catalog; both
-      reconciliation and ticket-set issuance require a valid admin token. Keep
-      their switches false until one named shadow run is approved.
-  no_log: true
-- name: Validate Hippius Coding evidence custody activation
-  ansible.builtin.assert:
-    that:
-      - platform_coding_hippius_evidence_bucket | default('') | length > 0
-      - platform_coding_hippius_endpoint == 'https://s3.hippius.com'
-      - platform_coding_hippius_region == 'decentralized'
-      - platform_coding_hippius_evidence_bucket != platform_bucket
-      - platform_coding_hippius_evidence_bucket != (platform_hippius_bucket | default(''))
-      - platform_coding_hippius_evidence_bucket != (platform_coding_catalog_bucket | default(''))
-      - platform_coding_hippius_evidence_timeout_seconds | float >= 1
-      - platform_coding_hippius_evidence_timeout_seconds | float <= 60
-      - secret_coding_hippius_evidence_access_key != secret_hmac_secret
-      - secret_coding_hippius_evidence_secret_key != secret_hmac_secret
-      - secret_coding_hippius_evidence_access_key != secret_hippius_access_key_id
-      - secret_coding_hippius_evidence_secret_key != secret_hippius_secret_access_key
-      - secret_coding_hippius_evidence_access_key != secret_coding_catalog_access_key
-      - secret_coding_hippius_evidence_secret_key != secret_coding_catalog_secret_key
-      - secret_coding_hippius_evidence_access_key != secret_coding_hippius_evidence_secret_key
-    fail_msg: >-
-      Hippius Coding evidence custody requires its dedicated private bucket,
-      exact provider origin/region, bounded timeout, and distinct Secret Manager
-      identities. It may not reuse upload, avatar, trace, or catalog authority.
-  when: platform_coding_hippius_evidence_enabled | bool
-
-- name: Read Hippius Coding evidence access key from Secret Manager
-  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_hippius_evidence_access_key }} --project={{ gcp_project }}"
-  register: platform_coding_hippius_evidence_access_key_read
-  changed_when: false
-  no_log: true
-  when: platform_coding_hippius_evidence_enabled | bool
-
-- name: Read Hippius Coding evidence secret key from Secret Manager
-  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_coding_hippius_evidence_secret_key }} --project={{ gcp_project }}"
-  register: platform_coding_hippius_evidence_secret_key_read
-  changed_when: false
-  no_log: true
-  when: platform_coding_hippius_evidence_enabled | bool
-
-- name: Validate Hippius Coding evidence credentials
-  ansible.builtin.assert:
-    that:
-      - platform_coding_hippius_evidence_access_key_read.stdout | default('') is match('^hip_')
-      - platform_coding_hippius_evidence_secret_key_read.stdout | default('') | length > 0
-      - platform_coding_hippius_evidence_access_key_read.stdout != platform_coding_hippius_evidence_secret_key_read.stdout
-      - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.hmac_secret | default(''))
-      - platform_coding_hippius_evidence_secret_key_read.stdout != (platform_secrets.hmac_secret | default(''))
-      - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.hippius_access_key_id | default(''))
-      - platform_coding_hippius_evidence_secret_key_read.stdout != (platform_secrets.hippius_secret_access_key | default(''))
-      - platform_coding_hippius_evidence_access_key_read.stdout != (platform_secrets.coding_catalog_access_key | default(''))
-      - platform_coding_hippius_evidence_secret_key_read.stdout != (platform_secrets.coding_catalog_secret_key | default(''))
-    fail_msg: >-
-      Hippius Coding evidence credentials must be nonempty, provider-shaped,
-      and distinct from upload, avatar, trace, and private-catalog credentials.
-  when: platform_coding_hippius_evidence_enabled | bool
-  no_log: true
-
-- name: Verify protected Hippius Coding evidence authority files
-  ansible.builtin.stat:
-    path: "{{ item }}"
-  loop:
-    - "{{ platform_coding_hippius_probe_receipt_path }}"
-    - "{{ platform_coding_hippius_evidence_wrapping_public_key_path }}"
-  register: platform_coding_hippius_authority_files
-  when: platform_coding_hippius_evidence_enabled | bool
-
-- name: Validate protected Hippius Coding evidence authority files
-  ansible.builtin.assert:
-    that:
-      - item.stat.exists
-      - item.stat.isreg
-      - item.stat.pw_name == platform_owner
-      - item.stat.mode in ['0400', '0600']
-    fail_msg: >-
-      Hippius probe receipt and evidence wrapping public key must be existing
-      regular files owned by the Platform user with mode 0400 or 0600.
-  loop: "{{ platform_coding_hippius_authority_files.results }}"
-  when: platform_coding_hippius_evidence_enabled | bool
-
-- name: Ensure protected Hippius Coding evidence spool
-  ansible.builtin.file:
-    path: "{{ platform_coding_hippius_evidence_spool_root }}"
-    state: directory
-    owner: "{{ platform_owner }}"
-    group: "{{ platform_group }}"
-    mode: "0700"
-  when: platform_coding_hippius_evidence_enabled | bool
-
-- name: Fold Hippius Coding evidence credentials into the secrets map
-  ansible.builtin.set_fact:
-    platform_secrets: "{{ platform_secrets | combine({'coding_hippius_evidence_access_key': platform_coding_hippius_evidence_access_key_read.stdout, 'coding_hippius_evidence_secret_key': platform_coding_hippius_evidence_secret_key_read.stdout}) }}"
-  no_log: true
-  when: platform_coding_hippius_evidence_enabled | bool
-
 - name: Load and validate GitHub linking configuration
   ansible.builtin.import_tasks: github-link-config.yml
 
+# `validate` renders to a temp file and installs it ONLY on exit 0, so a
+# placeholder never replaces the live .env. The postflight guard below still
+# runs: this prevents, that verifies. `backup` keeps a timestamped copy on the
+# host so a bad-but-valid render is still recoverable without a re-converge.
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2
@@ -701,6 +521,8 @@
     owner: "{{ platform_owner }}"
     group: "{{ platform_group }}"
     mode: "0640"
+    backup: true
+    validate: "{{ env_render_validate_placeholders }}"
   no_log: true
 
 # Postflight backstop for the whole placeholder class, including variables

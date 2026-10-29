@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/ditto-assistant/dittobench-datagen/challenge"
 	"reflect"
 	"strings"
 	"testing"
@@ -14,10 +15,10 @@ import (
 
 func TestPrivateDatasetAdmission(t *testing.T) {
 	valid := submitRequest{BenchVersion: 13, PrivateDatasetMode: privateDatasetMode, PrivateDatasetBytes: []byte("{}"), ExpectedDatasetSHA256: strings.Repeat("a", 64)}
-	if err := validatePrivateDatasetRequest(valid, true); err != nil {
+	if err := validatePrivateDatasetRequest(valid, true, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := validatePrivateDatasetRequest(submitRequest{BenchVersion: 12}, false); err != nil {
+	if err := validatePrivateDatasetRequest(submitRequest{BenchVersion: 12}, false, false); err != nil {
 		t.Fatal("public compatibility changed")
 	}
 	for _, edit := range []func(*submitRequest){
@@ -29,19 +30,28 @@ func TestPrivateDatasetAdmission(t *testing.T) {
 	} {
 		r := valid
 		edit(&r)
-		if validatePrivateDatasetRequest(r, true) == nil {
+		if validatePrivateDatasetRequest(r, true, true) == nil {
 			t.Fatal("invalid private contract admitted")
 		}
 	}
-	if validatePrivateDatasetRequest(valid, false) == nil {
+	if validatePrivateDatasetRequest(valid, false, true) == nil {
 		t.Fatal("disabled private path admitted")
 	}
 	s := &server{}
 	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1"}) {
 		t.Fatal("disabled capability advertised")
 	}
+	// Every validator stack runs in screened-image mode, so it serves rounds
+	// without opening the private V13 transport.
+	s.allowGeneratorRounds = true
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", generatorRoundMode, generatorRoundMaxCasesFeature(), "generator-round-bench-13", "generator-round-bench-14"}) {
+		t.Fatal("round capability not independent of private datasets")
+	}
+	if s.privateBodyBytes() != challenge.MaxRoundDatasetBytes {
+		t.Fatal("round-only scorer must admit a full round dataset body")
+	}
 	s.allowPrivateDatasets = true
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode, generatorRoundMode}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode, generatorRoundMode, generatorRoundMaxCasesFeature(), "generator-round-bench-13", "generator-round-bench-14"}) {
 		t.Fatal("enabled capability missing")
 	}
 }

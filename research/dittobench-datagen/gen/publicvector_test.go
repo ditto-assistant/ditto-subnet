@@ -447,6 +447,7 @@ func TestV12KnownVector(t *testing.T) {
 const v13KnownVectorWant = "59bd8592ff8b820b2e0bb49ceb992940c9a45a2935a47ba8062b80707f85766a"
 
 func TestV13KnownVector(t *testing.T) {
+	t.Parallel()
 	const (
 		seed = int64(123456789)
 		want = v13KnownVectorWant
@@ -488,6 +489,7 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 // only for its own public run sizes (a foreign size fails closed), so it is
 // checked under its canonical ProfileForVersion profile in a second loop.
 func TestSameSeedSameBytes(t *testing.T) {
+	t.Parallel()
 	assertSameBytes := func(version int, prof Profile) {
 		artifactA, err := GenerateDataset(42, prof, version)
 		if err != nil {

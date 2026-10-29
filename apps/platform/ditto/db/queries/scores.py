@@ -1815,8 +1815,10 @@ async def list_eligible_ledger(
        move it. It keeps the whole **row** (not a per-column ``MEDIAN``), so
        ``composite`` / ``seed`` / ``run_id`` / ``validator_hotkey`` /
        ``signature`` all come from the same physical row and the exposed
-       signature still verifies against the exposed composite. An agent with a
-       single score is its own median, so pre-quorum agents degrade cleanly.
+       signature still verifies against the exposed composite. Authority
+       reads serve only rows backed by a full :data:`SCORING_QUORUM`, because
+       the validator rejects the whole ledger when any row lacks one; an
+       explicit ``bench_version`` view still returns a pre-quorum median.
     2. join to ``agents`` filtered to ``scored``.
     3. after the canonical rows are materialized, rank them by the requested
        owner score and keep each attested payment owner root's first agent.
@@ -2018,8 +2020,21 @@ async def list_eligible_ledger(
     # and an explicit ``bench_version`` request stays a historical single-version
     # view (``desired_version`` is None for those, so this whole block is skipped).
     authority_filter: ColumnElement[bool] | None = None
+    # Every authority row must carry a full quorum of signed receipts at the
+    # version it is served on. The validator verifies each served row
+    # (``ditto.validator.signing.verify_ledger_entry`` needs SCORING_QUORUM
+    # distinct proofs) and rejects the WHOLE ledger on one failure, so a single
+    # sub-quorum row freezes every validator's weights. An activation closes
+    # the rollout and drops leftover cohort rescoring, which can strand a
+    # ``scored`` agent with fewer than SCORING_QUORUM desired-version scores;
+    # the collecting ledger already excluded it (``desired_at_quorum``) and the
+    # settled ledger must keep doing so. An explicit ``bench_version`` request
+    # stays a historical view and is not filtered.
+    authority_quorum = per_agent.c.cnt >= SCORING_QUORUM
     if desired_version is None:
         version_priority: ColumnElement[Any] = per_agent.c.bench_version
+        if bench_version is None:
+            authority_filter = authority_quorum
     else:
         assert rollout is not None
         # Quorum SIZE only. Never add an eligibility or ``composite > 0`` term
@@ -2050,7 +2065,7 @@ async def list_eligible_ledger(
             # rollout progress, not leaderboard authority. Excluding them
             # prevents a mixed v8/v9 ledger while the public rollout still
             # says v8 is active.
-            authority_filter = on_canonical
+            authority_filter = and_(on_canonical, authority_quorum)
             version_priority = per_agent.c.bench_version
     selected_version_stmt = select(
         per_agent,

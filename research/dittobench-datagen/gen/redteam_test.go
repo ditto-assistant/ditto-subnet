@@ -45,6 +45,7 @@ func dumperResponse(hay string) protocol.RunResponse {
 // SELECTION (routing to the asked fact, declining when absent, computing counts)
 // rather than verbatim possession — the property the string-table exploit broke.
 func TestRedTeamOmniscientDumperScoresNearZero(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileFor("full")
 	var total float64
 	var n int

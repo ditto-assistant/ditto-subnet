@@ -1,3 +1,5 @@
+import { TreasuryFundingHistory } from '../../components/TreasuryFundingHistory'
+import { getTreasuryFundingHistory } from '../../server/treasury-funding.functions'
 import { createFileRoute } from '@tanstack/react-router'
 import { AlertTriangle } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
@@ -9,7 +11,7 @@ import { getManualTransfers } from '../../server/treasury-manual.functions'
 
 export const Route = createFileRoute('/_authenticated/gamma')({
   loader: async () => {
-    const [treasury, manual, runtime] = await Promise.all([
+    const [treasury, manual, runtime, funding] = await Promise.all([
       getTreasurySettings().then(
         (state) => ({ state, error: null }),
         () => ({ state: null, error: 'Treasury policy is unavailable. Refresh to try again.' }),
@@ -22,8 +24,12 @@ export const Route = createFileRoute('/_authenticated/gamma')({
         (state) => ({ state, error: null }),
         () => ({ state: null, error: 'Signed emission policy is unavailable. Refresh to try again.' }),
       ),
+      getTreasuryFundingHistory().then(
+        (state) => ({ state, error: null }),
+        () => ({ state: null, error: 'GM funding history is unavailable. Refresh to try again.' }),
+      ),
     ])
-    return { treasury, manual, runtime }
+    return { treasury, manual, runtime, funding }
   },
   pendingComponent: Pending,
   errorComponent: ErrorState,
@@ -31,7 +37,7 @@ export const Route = createFileRoute('/_authenticated/gamma')({
 })
 
 function GammaPage() {
-  const { treasury, manual, runtime } = Route.useLoaderData()
+  const { treasury, manual, runtime, funding } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
   const readOnly = user.accessLevel === 'read'
   const signed = runtime.state?.latest?.settings
@@ -81,6 +87,7 @@ function GammaPage() {
         ) : (
           <p className="text-sm text-[var(--red)]" role="alert">{manual.error}</p>
         )}
+        {funding.state ? <TreasuryFundingHistory initialState={funding.state} /> : <p role='alert' className='text-sm text-[var(--red)]'>{funding.error}</p>}
       </div>
     </div>
   )

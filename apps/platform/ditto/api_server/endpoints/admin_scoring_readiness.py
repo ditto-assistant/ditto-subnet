@@ -30,7 +30,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import exists, select
+from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.admin_scoring_readiness import (
@@ -41,14 +41,18 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent, BenchmarkDataset
-from ditto.db.queries.benchmark_admission import agent_is_admitted
+from ditto.db.models import Agent, BenchmarkDataset, Score
+from ditto.db.queries.benchmark_admission import (
+    activated_rollout_for_version,
+    agent_is_admitted,
+)
 from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     agent_is_rollout_member,
     arrival_bench_version,
     open_rollout,
 )
+from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.screener_policy_state import effective_screening_policy_version
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -88,6 +92,29 @@ async def scoring_readiness(
     cohort_member = rollout is not None and await agent_is_rollout_member(
         session, rollout=rollout, agent_id=agent_id
     )
+    if rollout is None:
+        # After activation the same lane keeps finishing the activated era's
+        # frozen tail (``issue_rollout_topup_ticket``): a member left below
+        # quorum when the rollout closed is still served out of ``scored``.
+        activated = await activated_rollout_for_version(
+            session, bench_version=active_version
+        )
+        cohort_member = (
+            activated is not None
+            and await agent_is_rollout_member(
+                session, rollout=activated, agent_id=agent_id
+            )
+            and int(
+                await session.scalar(
+                    select(func.count(Score.validator_hotkey)).where(
+                        Score.agent_id == agent_id,
+                        Score.bench_version == active_version,
+                    )
+                )
+                or 0
+            )
+            < SCORING_QUORUM
+        )
     scoring_version = await arrival_bench_version(session, agent=agent)
     if rollout is not None and cohort_member:
         scoring_version = rollout.desired_version
@@ -121,7 +148,8 @@ async def scoring_readiness(
 
     blocking: list[str] = []
     # The cohort lane rescores frozen members straight out of ``scored``/``live``
-    # (see ``issue_rollout_ticket``); only the ordinary and fresh-submission
+    # (see ``issue_rollout_ticket`` and, after activation,
+    # ``issue_rollout_topup_ticket``); only the ordinary and fresh-submission
     # lanes require ``evaluating``.
     leaseable_statuses = (
         (AgentStatus.SCORED, AgentStatus.LIVE)

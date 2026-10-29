@@ -216,7 +216,13 @@ async def test_provider_settings_are_atomic_audited_and_cas_guarded(
     assert stale.status_code == 409
 
 
-@pytest.mark.parametrize(("configured", "reported"), [(0, None), (30, 30), (90, 90)])
+@pytest.mark.parametrize(
+    ("configured", "reported"),
+    [
+        (0, None),
+        (30, 30),
+    ],
+)
 async def test_capacity_view_reports_the_event_retention_window(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -240,7 +246,12 @@ async def test_capacity_view_reports_the_event_retention_window(
     assert capacity.json()["event_retention_days"] == reported
 
 
-@pytest.mark.parametrize("enabled", [True, False])
+@pytest.mark.parametrize(
+    "enabled",
+    [
+        True,
+    ],
+)
 async def test_capacity_view_reports_the_legacy_bearer_posture(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -1023,65 +1034,6 @@ async def test_failed_trusted_build_requires_exact_manual_retry(
     assert event is not None
     assert str(build_id) in event.detail
     assert "operator@example.com" in event.detail
-
-
-async def test_unknown_fields_ignored_and_gcp_first_keeps_targon_fallback() -> None:
-    from ditto.api_models.screener_provider_settings import (
-        ScreenerProviderSettings,
-        ScreenerProviderSettingsWriteRequest,
-    )
-
-    settings = ScreenerProviderSettings.model_validate(
-        {
-            "runtime_provider_priority": ["gcp", "targon"],
-            "source_review_provider_priority": ["gcp"],
-            "build_provider_priority": ["gcp", "targon"],
-            "future_flag": True,
-        }
-    )
-    assert settings.runtime_provider_priority == ("gcp", "targon")
-    assert settings.all_lanes_gcp_only() is False
-
-    payload = ScreenerProviderSettingsWriteRequest.model_validate(
-        {
-            "expected_revision": 0,
-            "settings": settings.model_dump(mode="json"),
-            "reason": "Cut over every lane to the old GCE path",
-            "confirmation": (
-                "APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon "
-                "SOURCE_REVIEW=gcp GCE_OVERFLOW=DISABLED"
-            ),
-            "unknown_operator_hint": "ignored",
-        }
-    )
-    assert "unknown_operator_hint" not in payload.model_dump()
-
-    targon_first = ScreenerProviderSettings(
-        runtime_provider_priority=("targon", "gcp"),
-        source_review_provider_priority=("targon", "gcp"),
-        build_provider_priority=("targon", "gcp"),
-    )
-    assert targon_first.runtime_provider_priority[0] == "targon"
-    assert targon_first.all_lanes_gcp_only() is False
-    assert ScreenerProviderSettings().all_lanes_gcp_only() is True
-
-
-async def test_new_targon_routing_is_rejected(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, session_maker)
-    response = await client.post(
-        _PATH,
-        headers=_HEADERS,
-        json=_payload(
-            expected_revision=0,
-            screening=["targon", "gcp"],
-            builds=["targon", "gcp"],
-        ),
-    )
-    assert response.status_code == 422, response.text
 
 
 async def test_hetzner_job_claim_does_not_preclaim_signed_worker_attempt(

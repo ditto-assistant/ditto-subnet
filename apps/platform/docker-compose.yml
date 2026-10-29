@@ -39,8 +39,10 @@ services:
       # Ditto is SN118 consensus infrastructure; this is not operator-tunable.
       PYLON_RECENT_OBJECTS_NETUIDS: "[118]"
       # Pylon's neuron cache must read the same chain the API authorizes against.
-      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:?set SUBTENSOR_NETWORK in .env}
-      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_NETWORK:?set SUBTENSOR_NETWORK in .env}
+      # PYLON_SUBTENSOR_URL (scripts/chain-transport.sh) is the paid provider for
+      # that chain; the public entrypoint 429s under load.
+      PYLON_BITTENSOR_NETWORK: ${PYLON_SUBTENSOR_URL:-${SUBTENSOR_NETWORK:?set SUBTENSOR_NETWORK in .env}}
+      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${PYLON_SUBTENSOR_URL:-${SUBTENSOR_NETWORK:?set SUBTENSOR_NETWORK in .env}}
       # --- Write identity (put_weights) ---
       # Open-access (above) stays for reads; identities add the write path.
       # Pylon loads the hotkey from the mounted wallet and signs set_weights

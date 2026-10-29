@@ -91,6 +91,7 @@ from ditto.db.queries.payments import (
     consume_evaluation_credit,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
+    get_generator_payment_for_proof,
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
@@ -402,6 +403,14 @@ async def check(
                 _ensure_payment_recovery_fresh(payment_record.timestamp)
                 recovery_payment_verified = True
         else:
+            if await get_generator_payment_for_proof(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            ):
+                raise PaymentReplayedError(
+                    "payment proof already funded a generator upload"
+                )
             # The replay lookup autobegins a read transaction. Do not hold a
             # pooled connection across the recovery proof's chain reads.
             if session.in_transaction():
@@ -667,6 +676,12 @@ async def upload_agent(
             PaymentReplayedError("payment proof already used by a different upload"),
             retry_identity,
         )
+    if payment_record is None and await get_generator_payment_for_proof(
+        session,
+        block_hash=payment_block_hash,
+        extrinsic_index=payment_extrinsic_index,
+    ):
+        raise PaymentReplayedError("payment proof already funded a generator upload")
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
     if payment_record:

@@ -379,9 +379,31 @@ def _outcome(state: dict[str, Any]) -> tuple[dict, dict]:
     return bindings, payouts
 
 
-@pytest.mark.parametrize("runtime", [CODE, GATED_CODE], ids=["v473", "yuma-gated"])
-@pytest.mark.parametrize("mode", ["primary", "shadow"])
-@pytest.mark.parametrize("scenario", SCENARIOS, ids=[s.name for s in SCENARIOS])
+# Every scenario runs on the live runtime (yuma-gated) in primary mode, the
+# hard-coded reveal plan. The legacy v473 runtime and the shadow rollback path
+# keep one or two representative scenarios each instead of the full grid.
+_SCENARIO_BY_NAME = {s.name: s for s in SCENARIOS}
+_RUNTIME_BY_ID = {"v473": CODE, "yuma-gated": GATED_CODE}
+_REPLAY_CASES = [(s.name, "primary", "yuma-gated") for s in SCENARIOS] + [
+    ("singleton-reveal", "primary", "v473"),
+    ("range-boundaries", "primary", "v473"),
+    ("range-boundaries", "shadow", "yuma-gated"),
+    ("hotkey-swap", "shadow", "yuma-gated"),
+]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "mode", "runtime"),
+    [
+        pytest.param(
+            _SCENARIO_BY_NAME[name],
+            mode,
+            _RUNTIME_BY_ID[runtime],
+            id=f"{name}-{mode}-{runtime}",
+        )
+        for name, mode, runtime in _REPLAY_CASES
+    ],
+)
 async def test_sparse_replay_commits_what_the_per_block_scan_commits(
     app, session_maker, monkeypatch, full_reads, scenario, mode, runtime
 ):

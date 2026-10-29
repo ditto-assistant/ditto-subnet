@@ -1,13 +1,14 @@
 """Audited operator control and inspection for generator-competition rounds.
 
 Every round fact an operator needs to run or debug the matrix is readable
-here: the chain schedule, each round's commitment and its on-chain
-publication, frozen columns and panel, generation per column, every validator
-lease and result, the agents still pending, the scored matrix, and the round
-driver's last tick. Writes are confirmation-gated and guarded by the round's
-current status. The round secret is never served before the reveal; the seed
-and dataset are served to operators only once the round closed (or, for the
-dataset, through the artifact-scoped download used to reproduce a round).
+here: the chain schedule, each round's commitment and which elected
+validators published it on-chain, frozen columns and panel, generation per
+column, every validator lease and result, the agents still pending, the
+scored matrix, and the round driver's last tick. Writes are
+confirmation-gated and guarded by the round's current status. The round
+secret is never served before the reveal; the seed and dataset are served to
+operators only once the round closed (or, for the dataset, through the
+artifact-scoped download used to reproduce a round).
 """
 
 from __future__ import annotations
@@ -20,54 +21,77 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.generator import MAX_SOURCE_ARCHIVE_BYTES
+from ditto.api_models.generator_round_validator import GENERATOR_ROUND_BENCH_VERSIONS
 from ditto.api_models.generator_rounds import (
+    DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
+    DEFAULT_GENERATOR_UPLOAD_PREFIX,
+    DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS,
     REGISTER_DEFAULT_GENERATOR_CONFIRMATION,
     RELEASE_ROUND_LEASE_CONFIRMATION,
     REPUBLISH_COMMITMENT_CONFIRMATION,
     AdminDefaultGeneratorRequest,
     AdminDefaultGeneratorResponse,
+    AdminDefaultGeneratorUploadResponse,
     AdminGeneratorRoundActionRequest,
     AdminGeneratorRoundDetail,
     AdminGeneratorRoundLeaseReleaseRequest,
     AdminGeneratorRoundListResponse,
     AdminGeneratorRoundPreview,
+    GeneratorRoundBenchContractPreview,
     GeneratorRoundColumnSlot,
     GeneratorRoundLoopStatus,
     GeneratorRoundPanelSlot,
     GeneratorRoundSchedule,
+    GeneratorRoundSkippedAgent,
     void_round_confirmation,
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.endpoints.admin_ath_rulings import ActorDep, actor_slug
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import (
+    InspectedUpload,
     UploadRejected,
+    inspect_source,
     inspect_upload,
     load_settings,
 )
 from ditto.api_server.generator_rounds import (
+    ROUND_COMMITMENT_PUBLISHERS,
+    ROUND_OPEN_CAPACITY_GRACE,
     GeneratorRoundLoop,
     attempt_views,
+    choose_round_bench_version,
     close_round,
     column_views,
+    commitment_publication_views,
     expire_round_tickets,
     get_round,
     list_rounds,
     pending_panel_agents,
     public_default_generator,
     result_views,
+    round_contract_capacity,
     round_counts_by_status,
+    round_summaries,
     round_summary,
     select_columns,
     select_round_panel,
     standing_views,
     void_round,
 )
+from ditto.api_server.hippius import HippiusClient, normalize_object_key
+from ditto.api_server.storage.errors import (
+    ObjectDownloadFailedError,
+    ObjectNotFoundError,
+)
 from ditto.db.models import (
     GeneratorRoundAttempt,
+    GeneratorRoundCommitmentPublication,
     GeneratorSubmission,
     ValidatorTicket,
 )
@@ -79,6 +103,7 @@ from ditto.db.queries.generator import (
     record_operator_action,
 )
 from ditto.db.queries.inference import revoke_ticket_inference
+from ditto.db.queries.tickets import finish_generator_round_ticket
 
 router = APIRouter(prefix="/admin/generator-competition", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -146,7 +171,7 @@ async def admin_list_rounds(
         schedule=_schedule(
             request, resolved.settings.mode, resolved.settings.epochs_per_round
         ),
-        rounds=[await round_summary(session, row, operator=True) for row in rows],
+        rounds=await round_summaries(session, rows, operator=True),
         counts_by_status=await round_counts_by_status(session),
     )
 
@@ -197,7 +222,8 @@ async def admin_round_preview(
     resolved = await load_settings(session)
     settings = resolved.settings
     columns = await select_columns(session, settings)
-    panel, skipped = await select_round_panel(session, settings)
+    frozen = await select_round_panel(session, settings)
+    panel, skipped = frozen.panel, frozen.skipped_references
     qualified = int(
         await session.scalar(
             select(func.count()).where(
@@ -241,6 +267,28 @@ async def admin_round_preview(
             "validator_rounds_enabled is false: rounds generate but no validator "
             "runs the panel"
         )
+    now = datetime.now(UTC)
+    contract = await choose_round_bench_version(
+        session,
+        cases_per_column=settings.cases_per_seed,
+        now=now,
+        min_round_validators=settings.min_round_validators,
+    )
+    if contract.bench_version is None:
+        blockers.append(
+            f"no generator-round contract can run: {contract.reason}"
+            + (
+                "; validator capacity is the only blocker, so a round opening "
+                "now would stay committed and retry for "
+                f"{int(ROUND_OPEN_CAPACITY_GRACE.total_seconds() // 60)} minutes "
+                "before voiding"
+                if contract.capacity_blocked
+                else ""
+            )
+        )
+    capable = await round_contract_capacity(
+        session, cases_per_column=settings.cases_per_seed, now=now
+    )
     return AdminGeneratorRoundPreview(
         schedule=_schedule(request, settings.mode, settings.epochs_per_round),
         columns=[GeneratorRoundColumnSlot(**c) for c in columns],
@@ -248,6 +296,19 @@ async def admin_round_preview(
         qualified_generators=qualified,
         awaiting_qualification=awaiting,
         blockers=blockers,
+        skipped_panel_agents=[
+            GeneratorRoundSkippedAgent(**slot) for slot in frozen.skipped_agents
+        ],
+        bench_contract=GeneratorRoundBenchContractPreview(
+            active_version=contract.active_version,
+            bench_version=contract.bench_version,
+            reason=contract.reason,
+            round_contracts=list(GENERATOR_ROUND_BENCH_VERSIONS),
+            capable_validators=capable,
+            previous_version=contract.previous_version,
+            min_round_validators=contract.min_round_validators,
+            scorer_grading_versions=list(contract.scorer_grading_versions),
+        ),
     )
 
 
@@ -259,10 +320,13 @@ async def admin_round_detail(
     if row is None:
         raise HTTPException(status_code=404, detail="unknown round")
     closed = row.status in {"scoring", "scored", "void"}
+    now = datetime.now(UTC)
+    publications, elected = await commitment_publication_views(session, row, now=now)
     return AdminGeneratorRoundDetail(
         summary=await round_summary(session, row, operator=True),
         settings_revision=row.settings_revision,
         cases_per_column=row.cases_per_column,
+        bench_version=row.bench_version,
         seed=row.seed if closed else None,
         columns=[GeneratorRoundColumnSlot(**c) for c in row.columns or ()],
         panel=[GeneratorRoundPanelSlot(**p) for p in row.panel or ()],
@@ -274,13 +338,20 @@ async def admin_round_detail(
         lease_attempts=row.lease_attempts,
         commitment_published_at=row.commitment_published_at,
         commitment_error=row.commitment_error,
+        commitment_publishers_target=ROUND_COMMITMENT_PUBLISHERS,
+        commitment_publications=publications,
+        commitment_elected=elected,
         attempts=await attempt_views(session, round_index),
-        results=await result_views(session, round_index),
+        results=await result_views(session, row),
         pending_agents=(
-            await pending_panel_agents(session, row, now=datetime.now(UTC))
+            await pending_panel_agents(session, row, now=now)
             if row.status == "running"
             else []
         ),
+        skipped_panel_agents=[
+            GeneratorRoundSkippedAgent(**slot)
+            for slot in (row.generation or {}).get("skipped_panel_agents", ())
+        ],
         score=row.score,
         scorer_version=row.scorer_version,
         standings=standing_views(row),
@@ -406,42 +477,52 @@ async def admin_close_round(
 async def admin_republish_commitment(
     round_index: int,
     payload: AdminGeneratorRoundActionRequest,
-    request: Request,
     _admin: AdminDep,
     session: SessionDep,
 ) -> AdminGeneratorRoundDetail:
-    """Retry a failed on-chain commitment publication for a committed round."""
+    """Ask elected validators to publish a committed round's commitment again.
+
+    Platform never publishes a commitment itself. This reopens publication
+    (``pending``) and forgets every failed or unconfirmed validator claim, so
+    the round's publisher order elects again from the validators fresh now.
+    Confirmed publications are kept and still count toward the target.
+    """
     if payload.confirmation != REPUBLISH_COMMITMENT_CONFIRMATION:
         raise HTTPException(
             status_code=409,
             detail=f"confirmation must be exactly {REPUBLISH_COMMITMENT_CONFIRMATION}",
         )
     row, reason, actor = await _locked_round(session, round_index, payload)
-    if row.commitment_publication not in {"failed", "disabled"}:
-        raise HTTPException(
-            status_code=409,
-            detail=f"commitment publication is {row.commitment_publication}",
-        )
     if row.status != "committed":
         raise HTTPException(
             status_code=409,
             detail="a commitment published after the round opened proves nothing",
         )
+    if row.commitment_publication == "published":
+        raise HTTPException(
+            status_code=409,
+            detail="commitment publication already reached its validator target",
+        )
+    cleared = await session.execute(
+        delete(GeneratorRoundCommitmentPublication).where(
+            GeneratorRoundCommitmentPublication.round_index == round_index,
+            GeneratorRoundCommitmentPublication.status != "confirmed",
+        )
+    )
     record_operator_action(
         session,
         action="republish_commitment",
         subject=f"round:{round_index}",
         actor=actor,
         reason=reason,
-        detail={"previous": row.commitment_publication},
+        detail={
+            "previous": row.commitment_publication,
+            "cleared_claims": int(cleared.rowcount or 0),  # type: ignore[attr-defined]
+        },
     )
     row.commitment_publication = "pending"
     row.commitment_error = None
     await session.commit()
-    loop = _loop(request) or GeneratorRoundLoop(
-        app_state=request.app.state, session_maker=request.app.state.session_maker
-    )
-    await loop.publish_commitments(now=datetime.now(UTC))
     session.expire_all()
     return await admin_round_detail(round_index, _admin, session)
 
@@ -501,7 +582,7 @@ async def admin_release_round_lease(
     if attempt is None or ticket is None:
         raise HTTPException(status_code=409, detail="no live round lease to release")
     await revoke_ticket_inference(session, ticket=ticket, now=now)
-    ticket.status = TicketStatus.SCORED
+    finish_generator_round_ticket(ticket)
     attempt.status = "failed"
     attempt.detail = f"operator ({actor}): {reason}"
     attempt.finished_at = now
@@ -528,9 +609,110 @@ async def admin_release_round_lease(
     return await admin_round_detail(round_index, _admin, session)
 
 
+def _default_generator_store(request: Request) -> HippiusClient:
+    # The private inference-trace bucket, as ATH rulings uploads use; never a
+    # bucket that may serve a public prefix.
+    client = getattr(request.app.state, "traces_hippius", None)
+    if client is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "default generator upload storage is not configured; send source_base64"
+            ),
+        )
+    return client
+
+
+def _default_generator_prefix(actor: str) -> str:
+    # The slug is readable but lossy (case and punctuation fold), so a digest
+    # of the exact actor keeps two operators with one slug in distinct scopes.
+    digest = hashlib.sha256(actor.encode()).hexdigest()[:16]
+    return f"{DEFAULT_GENERATOR_UPLOAD_PREFIX}{actor_slug(actor)}-{digest}/"
+
+
+def _header_actor(x_admin_actor: str | None) -> str:
+    actor = (x_admin_actor or "").strip()
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    return actor
+
+
+@router.post(
+    "/default-generator/upload-url",
+    response_model=AdminDefaultGeneratorUploadResponse,
+)
+async def admin_create_default_generator_upload(
+    request: Request, _admin: AdminDep, x_admin_actor: ActorDep = None
+) -> AdminDefaultGeneratorUploadResponse:
+    """Issue a five-minute presigned PUT for one default-generator archive.
+
+    Register it with ``POST /default-generator`` and ``upload_key``; the key is
+    scoped to the issuing operator.
+    """
+    actor = _header_actor(x_admin_actor)
+    client = _default_generator_store(request)
+    now = datetime.now(UTC)
+    key = f"{_default_generator_prefix(actor)}{now:%Y-%m-%d}/{uuid4()}.tar.gz"
+    url = await client.presigned_put_url(
+        key=key,
+        content_type=DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
+        expires_in=DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS,
+    )
+    return AdminDefaultGeneratorUploadResponse(
+        bucket=client.bucket,
+        key=key,
+        url=url,
+        content_type=DEFAULT_GENERATOR_UPLOAD_CONTENT_TYPE,
+        expires_in=DEFAULT_GENERATOR_UPLOAD_TTL_SECONDS,
+        max_bytes=MAX_SOURCE_ARCHIVE_BYTES,
+    )
+
+
+async def _inspect_default_source(
+    request: Request,
+    payload: AdminDefaultGeneratorRequest,
+    x_admin_actor: str | None,
+) -> InspectedUpload:
+    if payload.upload_key is None:
+        assert payload.source_base64 is not None
+        return inspect_upload(
+            source_base64=payload.source_base64, source_sha256=payload.source_sha256
+        )
+    key = normalize_object_key(payload.upload_key)
+    # Scope by the authenticated actor header, as the issuing route does, never
+    # by the free-form body actor.
+    scope = _default_generator_prefix(_header_actor(x_admin_actor))
+    if not key.startswith(scope):
+        raise HTTPException(
+            status_code=403,
+            detail=f"upload_key must be under this operator's prefix {scope}",
+        )
+    client = _default_generator_store(request)
+    try:
+        raw = await client.get_object(key=key, max_bytes=MAX_SOURCE_ARCHIVE_BYTES)
+    except ObjectNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="default generator upload not found; upload it first",
+        ) from None
+    except ObjectDownloadFailedError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "default generator upload could not be read within "
+                f"{MAX_SOURCE_ARCHIVE_BYTES} bytes: {exc}"
+            ),
+        ) from None
+    return inspect_source(raw, source_sha256=payload.source_sha256)
+
+
 @router.post("/default-generator", response_model=AdminDefaultGeneratorResponse)
 async def admin_register_default_generator(
-    payload: AdminDefaultGeneratorRequest, _admin: AdminDep, session: SessionDep
+    payload: AdminDefaultGeneratorRequest,
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: ActorDep = None,
 ) -> AdminDefaultGeneratorResponse:
     """Register the public default generator that fills empty counted columns.
 
@@ -548,9 +730,7 @@ async def admin_register_default_generator(
         )
     reason, actor = _check_reason(payload.reason, payload.actor)
     try:
-        inspected = inspect_upload(
-            source_base64=payload.source_base64, source_sha256=payload.source_sha256
-        )
+        inspected = await _inspect_default_source(request, payload, x_admin_actor)
     except UploadRejected as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     info = inspected.info
@@ -616,6 +796,7 @@ async def admin_register_default_generator(
         reason=reason,
         detail={
             "source_sha256": payload.source_sha256,
+            "upload_key": payload.upload_key,
             "superseded": [str(sid) for sid in superseded],
         },
     )

@@ -72,6 +72,11 @@ from ditto.api_models.coding_inference_grants import (
 from ditto.api_models.generator_ledger import GeneratorLedgerResponse
 from ditto.api_models.generator_round_validator import (
     GeneratorRoundCaseResult,
+    GeneratorRoundCommitmentJobRequest,
+    GeneratorRoundCommitmentJobResponse,
+    GeneratorRoundCommitmentOutcome,
+    GeneratorRoundCommitmentReportRequest,
+    GeneratorRoundCommitmentReportResponse,
     GeneratorRoundFailReason,
     GeneratorRoundFailRequest,
     GeneratorRoundFailResponse,
@@ -132,6 +137,7 @@ from ditto.validator.coding_publication import (
 )
 from ditto.validator.errors import (
     PlatformError,
+    PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
     WeightReceiptConflictError,
 )
@@ -448,6 +454,12 @@ class PlatformClient:
             raise PlatformError(f"job request failed: {e}") from e
         if resp.status_code == 204:
             return None
+        if resp.status_code == 428:
+            # The compatibility gate wants a fresh signed heartbeat. Typed so the
+            # worker can refresh once and retry instead of isolating the slot.
+            raise PlatformHeartbeatRequiredError(
+                f"job request rejected (428): {resp.text[:200]}"
+            )
         if resp.status_code != 200:
             raise PlatformError(
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
@@ -1752,6 +1764,7 @@ class PlatformClient:
         reason: Literal["execution_failed", "deadline", "cancelled", "infrastructure"],
         failure_class: str | None = None,
         failure_stage: str | None = None,
+        failure_status: int | None = None,
     ) -> V9ConfirmationFailResponse:
         """Close one private v9 lease without touching canonical fail routes."""
         url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/fail"
@@ -1763,6 +1776,7 @@ class PlatformClient:
             reason=reason,
             failure_class=failure_class,
             failure_stage=failure_stage,
+            failure_status=failure_status,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_v9_confirmation_fail(
@@ -1773,6 +1787,7 @@ class PlatformClient:
                 reason=reason,
                 failure_class=failure_class,
                 failure_stage=failure_stage,
+                failure_status=failure_status,
                 nonce=nonce,
                 requested_at=requested_at,
             ),
@@ -2093,6 +2108,72 @@ class PlatformClient:
             return None
         return GeneratorRoundFailResponse.model_validate(resp.json())
 
+    async def request_generator_round_commitment_job(
+        self,
+    ) -> GeneratorRoundCommitmentJobResponse | None:
+        """Ask Platform whether this validator should publish a round commitment.
+
+        ``None`` (HTTP 204) means nothing needs this validator: no round is
+        waiting for publication, or another validator is elected for it.
+        """
+        payload = GeneratorRoundCommitmentJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-commitment-job"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"commitment job request failed: {exc}") from exc
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"commitment job rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundCommitmentJobResponse.model_validate(resp.json())
+
+    async def report_generator_round_commitment(
+        self,
+        job: GeneratorRoundCommitmentJobResponse,
+        *,
+        outcome: GeneratorRoundCommitmentOutcome,
+        block_number: int | None = None,
+        extrinsic_hash: str | None = None,
+        detail: str | None = None,
+    ) -> GeneratorRoundCommitmentReportResponse:
+        """Post the signed outcome of one elected commitment publication."""
+        payload = GeneratorRoundCommitmentReportRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            round_index=job.round_index,
+            commitment=job.commitment,
+            outcome=outcome,
+            block_number=block_number,
+            extrinsic_hash=extrinsic_hash,
+            detail=(detail or None) and detail[:500],
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-commitment-report"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"commitment report failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"commitment report rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundCommitmentReportResponse.model_validate(resp.json())
+
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-payment-coldkey ledger folded into weights.
 
@@ -2139,12 +2220,17 @@ class PlatformClient:
             if ledger.provisional_incumbent is not None
             else ledger.entries
         )
+        # Enforce is fail-closed for every confirmation-capable version, the
+        # same population Platform's ranked predicate gates on, not only v9
+        # (#2989). A v13 row served under enforce without a receipt would
+        # otherwise be withheld silently by ``filter_weight_confirmed`` instead
+        # of rejecting a ledger that cannot match the Platform pin.
         if ledger.v9_confirmation_mode == "enforce" and any(
-            entry.bench_version == 9 and entry.v9_confirmation is None
+            supports_confirmation(entry.bench_version) and entry.v9_confirmation is None
             for entry in served
         ):
             raise PlatformError(
-                "v9 enforce ledger contained a row without full confirmation"
+                "confirmation enforce ledger contained a row without full confirmation"
             )
         if ledger.v9_confirmation_mode is None and any(
             entry.v9_confirmation is not None for entry in served

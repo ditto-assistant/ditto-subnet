@@ -356,6 +356,7 @@ async def _bundle_view(
                 failure_reason=row.failure_reason,
                 failure_class=row.failure_class,
                 failure_stage=row.failure_stage,
+                failure_status=row.failure_status,
                 failed_at=row.failed_at,
                 prepare_rejection=cast(
                     PrepareRejectionCode | None, row.prepare_rejection

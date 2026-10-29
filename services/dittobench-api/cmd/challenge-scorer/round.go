@@ -39,6 +39,11 @@ type roundWork struct {
 	Seed           string           `json:"seed,omitempty"`
 	CasesPerColumn int              `json:"cases_per_column,omitempty"`
 	Columns        []roundSourceCol `json:"columns,omitempty"`
+	// BenchVersion is the round's frozen bench contract: each column's
+	// request accepts every pack grading policy through it, and the encoded
+	// dataset is checked against it. Absent (a Platform that predates it) is
+	// the original v13 round.
+	BenchVersion int `json:"bench_version,omitempty"`
 
 	// score
 	Params *challenge.ScoreParams `json:"params,omitempty"`
@@ -80,12 +85,13 @@ type roundScoreResult struct {
 }
 
 // processRound leases and completes one round work item. It reports whether
-// work was leased. A sandbox failure is returned without posting, so the
-// lease expires and the round is re-leased; a column's own failure (build,
-// crash, invalid pack) is posted as that column's result.
+// work was leased. A request this scorer cannot serve or a sandbox failure is
+// reported as a fault (Platform voids the round or re-leases it) and never as
+// a column result; a column's own failure (build, crash, invalid pack) is
+// posted as that column's result.
 func processRound(ctx context.Context, client *platformClient, sb genrun.Sandbox) (bool, error) {
 	var resp roundWorkResponse
-	if err := client.do(ctx, http.MethodGet, "/api/v1/generator-scorer/round-work", nil, &resp); err != nil {
+	if err := client.do(ctx, http.MethodGet, client.pollPath("/api/v1/generator-scorer/round-work"), nil, &resp); err != nil {
 		return false, err
 	}
 	w := resp.Work
@@ -96,7 +102,10 @@ func processRound(ctx context.Context, client *platformClient, sb genrun.Sandbox
 	case "generate":
 		result, err := generateRound(ctx, sb, w)
 		if err != nil {
-			return true, fmt.Errorf("round %d: %w", w.RoundIndex, err)
+			idx := w.RoundIndex
+			return true, reportFault(ctx, client, faultReport{
+				Work: "round", LeaseID: w.LeaseID, RoundIndex: &idx,
+			}, fmt.Errorf("round %d: %w", w.RoundIndex, err))
 		}
 		return true, client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/round-results", result, nil)
 	case "score":
@@ -131,9 +140,10 @@ func generateRound(ctx context.Context, sb genrun.Sandbox, w *roundWork) (roundG
 		}
 		seed := challenge.RoundColumnSeed(w.Seed, col.ColumnID)
 		ev, err := evaluateArchive(ctx, sb, raw, genrun.Plan{
-			MinerHotkey: col.MinerHotkey,
-			Seeds:       []string{seed},
-			Cases:       w.CasesPerColumn,
+			MinerHotkey:       col.MinerHotkey,
+			Seeds:             []string{seed},
+			Cases:             w.CasesPerColumn,
+			RoundBenchVersion: w.BenchVersion,
 		})
 		if err != nil {
 			return out, fmt.Errorf("column %s: %w", col.ColumnID, err)
@@ -156,6 +166,9 @@ func generateRound(ctx context.Context, sb genrun.Sandbox, w *roundWork) (roundG
 				res.OK = true
 				packs[col.ColumnID] = s.Pack
 			}
+		}
+		if res.Seed != nil && res.Seed.GradingBenchVersion != 0 {
+			log.Printf("round %d column %s: grading v%d %s", w.RoundIndex, col.ColumnID, res.Seed.GradingBenchVersion, res.Seed.LegacyRetry)
 		}
 		log.Printf("round %d column %s: ok=%t %s", w.RoundIndex, col.ColumnID, res.OK, res.Error)
 		out.Columns = append(out.Columns, res)

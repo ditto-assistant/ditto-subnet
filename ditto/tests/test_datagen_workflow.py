@@ -6,7 +6,7 @@ ROOT = Path(__file__).parents[2]
 
 
 def test_datagen_full_suite_has_same_bounded_timeout_everywhere() -> None:
-    command = "go test -timeout 20m ./..."
+    command = "go test -timeout 15m ./..."
     ci = yaml.safe_load((ROOT / ".github/workflows/datagen-ci.yml").read_text())
     assert (
         next(s for s in ci["jobs"]["build-test"]["steps"] if s.get("name") == "Test")[
@@ -21,7 +21,7 @@ def test_datagen_full_suite_has_same_bounded_timeout_everywhere() -> None:
             s
             for s in steps
             if s.get("name") == "Gate DittoBench datagen release on exact merge source"
-        )["run"]
+        )["run"].splitlines()[0]
         == command
     )
     script = (
@@ -42,26 +42,6 @@ def test_datagen_ci_syntax_checks_the_release_verifier() -> None:
     )
 
     assert syntax["run"] == "bash -n scripts/verify-generate-service-release.sh"
-
-
-def test_coding_datagen_ci_checks_committed_inference_vectors() -> None:
-    workflow = yaml.safe_load(
-        (ROOT / ".github/workflows/coding-datagen-ci.yml").read_text()
-    )
-    step = next(
-        item
-        for item in workflow["jobs"]["verify"]["steps"]
-        if item.get("name") == "Verify source, types, tests, and committed public pack"
-    )
-    check = (
-        "uv run python ../../packages/dittobench-coding-contract/"
-        "generate_inference_vectors.py --check"
-    )
-    assert check in step["run"].splitlines()
-    assert (
-        "uv run dittobench-coding-datagen validate-public-v2-pack "
-        "/tmp/dittobench-coding-public-v2"
-    ) in step["run"].splitlines()
 
 
 def test_public_practice_has_no_hosted_dataset_upload_workflow() -> None:

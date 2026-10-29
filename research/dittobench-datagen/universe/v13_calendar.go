@@ -23,6 +23,20 @@ func v13CalendarDate(seed int64, domain string, group int, date v13Date, past bo
 	return at.AddDate(0, 0, days).Truncate(24 * time.Hour)
 }
 
+// Case-file rows are shuffled for presentation. v13 stamped each row from its
+// shuffled position, so a plain statement could be filed after the change that
+// replaced it while the oracle still graded the change as current
+// (ditto-subnet#3088). A memory agent that trusts the latest filing date was
+// marked wrong for it. From v14 the stamp follows the row's story position, so
+// the dates agree with the narrative the oracle grades and a reader still has
+// to sort the document. offset counts leading rows that are never shuffled.
+func v13CaseFileSlot(benchVersion int, perm []int, presented, offset int) int {
+	if benchVersion < protocol.BenchVersionV14 || presented < offset {
+		return presented
+	}
+	return offset + perm[presented-offset]
+}
+
 func v13CalendarTimestamp(seed int64, domain string, group, slot int) string {
 	timeline := protocol.NewOpaqueTimeline(seed, v13CalendarKey(domain, group))
 	var stamp string

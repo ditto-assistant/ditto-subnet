@@ -569,6 +569,21 @@ class ScreeningAttempt(Base):
     review_settings_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_settings_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_settings_checksum: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lineage-scoped review: the same-owner prior version whose diff and
+    # review history scope this attempt's model review (chosen at claim), and
+    # the scope/digest of the exact packet the worker fetched. NULL scope and
+    # digest mean the packet was never fetched; a NULL parent is a full review.
+    lineage_parent_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lineage_packet_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why a bound packet went full (reason strings; empty for diff) and which
+    # kind of reference it was diffed against. NULL before this was recorded.
+    lineage_full_review_reasons: Mapped[list | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    lineage_reference_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     """This attempt only rebuilds an already-adjudicated submission's missing
     prerequisites (screened image / dataset); the screener must NOT re-run the
     anti-cheat source review and cannot quarantine. Set when an EVALUATING agent
@@ -591,6 +606,33 @@ class ScreeningAttempt(Base):
             ["agents.agent_id"],
             ondelete="SET NULL",
             name="screening_attempts_duplicate_of_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["lineage_parent_agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="screening_attempts_lineage_parent_fkey",
+        ),
+        # The claim names the parent before any packet exists; scope and
+        # digest bind together on the first packet fetch. A parent with no
+        # scope or digest is therefore a claimed attempt whose packet was
+        # never fetched (an ordinary full review), not a partial binding.
+        CheckConstraint(
+            "(lineage_scope IS NULL AND lineage_packet_sha256 IS NULL) OR "
+            "(lineage_parent_agent_id IS NOT NULL "
+            "AND lineage_scope IN ('diff', 'full') "
+            "AND length(lineage_packet_sha256) = 64)",
+            name="screening_attempts_lineage_binding_check",
+        ),
+        CheckConstraint(
+            "lineage_scope IS NOT NULL OR (lineage_full_review_reasons IS NULL "
+            "AND lineage_reference_kind IS NULL)",
+            name="screening_attempts_lineage_record_check",
+        ),
+        CheckConstraint(
+            "lineage_reference_kind IS NULL OR lineage_reference_kind IN "
+            "('same_owner_version', 'same_owner', 'released_base')",
+            name="screening_attempts_lineage_reference_kind_check",
         ),
         CheckConstraint(
             "policy_version > 0",
@@ -1481,6 +1523,17 @@ class AthCopyCourtRecommendation(Base):
     settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Engine that produced the verdict (``rules-v1`` resubmission rules,
+    # ``family-diff-v2`` near-duplicate attribution). Part of the unique key,
+    # so an improved engine re-triages a hold under the same settings.
+    triage_revision: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'rules-v1'")
+    )
+    # Enforce-mode outcome: ``{"status": "applied"|"skipped", "detail", ...}``.
+    application: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1522,7 +1575,12 @@ class AthCopyCourtRecommendation(Base):
         UniqueConstraint(
             "review_id",
             "settings_revision",
-            name="ath_copy_court_recommendations_review_revision_key",
+            "triage_revision",
+            name="ath_copy_court_recommendations_review_triage_key",
+        ),
+        CheckConstraint(
+            "length(trim(triage_revision)) BETWEEN 1 AND 64",
+            name="ath_copy_court_recommendations_triage_revision_check",
         ),
         Index(
             "ath_copy_court_recommendations_agent_idx",
@@ -6667,6 +6725,15 @@ class SubmissionSettingsRevision(Base):
     parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """The default submission fee: what the memory (agent) lane charges and
+    what every other competition inherits unless ``competition_fees``
+    overrides it."""
+    competition_fees: Mapped[dict] = mapped_column(
+        _JSON_VARIANT, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    """Per-competition overrides, ``{competition: {"fee_amount_rao": int |
+    null, "fee_required": bool | null}}``; ``null`` (or a missing entry)
+    inherits. See :mod:`ditto.db.queries.submission_settings`."""
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6677,6 +6744,10 @@ class SubmissionSettingsRevision(Base):
         CheckConstraint(
             "cooldown_seconds BETWEEN 60 AND 86400",
             name="submission_settings_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(competition_fees) = 'object'",
+            name="submission_settings_competition_fees_check",
         ),
         CheckConstraint(
             "fee_amount_rao BETWEEN 1 AND 1000000000000",
@@ -6953,6 +7024,60 @@ class SourceEmissionPayoutResolution(Base):
     proof: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class ScreeningReviewUsage(Base):
+    """Per-attempt model usage of the source review stages (telemetry only).
+
+    Posted by the screener holding the attempt before its verdict. It never
+    participates in the signed decision or any queue transition; it exists so
+    review cost can be compared across lineage scopes and reviewer postures.
+    """
+
+    __tablename__ = "screening_review_usage"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    stages: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    total_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    elapsed_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screening_review_usage_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screening_review_usage_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screening_review_usage_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "total_input_tokens >= 0 AND total_output_tokens >= 0 "
+            "AND total_cost_usd >= 0 AND (elapsed_ms IS NULL OR elapsed_ms >= 0)",
+            name="screening_review_usage_totals_check",
+        ),
+        CheckConstraint(
+            "lineage_scope IS NULL OR lineage_scope IN ('diff', 'full')",
+            name="screening_review_usage_lineage_scope_check",
+        ),
+        Index("screening_review_usage_recorded_idx", "recorded_at"),
     )
 
 
@@ -7510,7 +7635,11 @@ class ValidatorTicket(Base):
     """Hash used to independently re-derive the validator-specific seed."""
 
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    """Number of leases issued to this validator for this agent/version."""
+    """Number of scoring leases issued to this validator for this agent/version.
+
+    Generator-round leases never count. A row a round lease created starts at
+    zero, which is how every retry and quorum surface tells it apart from a row
+    with scoring history (SN-334)."""
 
     manual_retry_grants: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -7688,8 +7817,8 @@ class ValidatorTicket(Base):
             name="validator_tickets_purpose_revision_nonnegative",
         ),
         CheckConstraint(
-            "attempt_count > 0",
-            name="validator_tickets_attempt_count_positive",
+            "attempt_count >= 0",
+            name="validator_tickets_attempt_count_nonnegative",
         ),
         CheckConstraint(
             "manual_retry_grants >= 0",
@@ -8978,6 +9107,21 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class TreasuryFundingReconciliation(Base):
+    """Private immutable operator observations, never spend/public-proof authority."""
+
+    __tablename__ = "treasury_funding_reconciliations"
+    purchase_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    payment_reference: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+
+
 class TreasuryManualBridgeState(Base):
     __tablename__ = "treasury_manual_bridge_state"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -9125,6 +9269,116 @@ class BurnSettingsRevision(Base):
             "scope",
             "parent_revision",
             name="burn_settings_scope_parent_key",
+        ),
+    )
+
+
+class TrackShareSettingsRevision(Base):
+    """Append-only operator split of emission across competition tracks.
+
+    Shaped exactly like :class:`BurnSettingsRevision`: one policy object the
+    scoring ledger serves to every validator as ``track_shares_bps``. Unset
+    (no row, or a row whose map is null) leaves validators on their compiled
+    memory-only split. See :mod:`ditto.api_models.track_share_settings`.
+    """
+
+    __tablename__ = "track_share_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="track_share_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="track_share_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="track_share_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="track_share_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="track_share_settings_actor_check",
+        ),
+        Index(
+            "track_share_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="track_share_settings_scope_parent_key",
+        ),
+    )
+
+
+class EmissionAllocationRevision(Base):
+    """Append-only typed-weights split of total miner emission (SN-350).
+
+    One revision names burn, every paid track and every Gamma bucket as integer
+    basis points summing to 10000. Platform derives the burn share, track map
+    and Gamma bucket allocation validators fold and writes any that changed as
+    revisions of their own settings in the same transaction; the three
+    ``*_settings_revision`` columns record which of those revisions were in
+    force after the write. See :mod:`ditto.api_models.emission_allocation`.
+    """
+
+    __tablename__ = "emission_allocation_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    served: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    burn_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    track_share_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    treasury_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="emission_allocation_parent_revision_check",
+        ),
+        CheckConstraint(
+            "burn_settings_revision >= 0 AND track_share_settings_revision >= 0 "
+            "AND treasury_settings_revision >= 0",
+            name="emission_allocation_settings_revision_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="emission_allocation_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="emission_allocation_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="emission_allocation_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="emission_allocation_parent_key",
         ),
     )
 
@@ -11070,6 +11324,16 @@ class ConfirmationBundleTicket(Base):
     failure_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Last progress stage the slot published before it broke, or ``unknown``."""
 
+    failure_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Bounded HTTP status behind a scorer-forwarded :attr:`failure_class`.
+
+    Only the scorer's own ``longmem_*`` classes have one, and only some of
+    those: ``0`` means the boundary broke before a status existed. Null means
+    the reporter sent no status at all -- an older reporter, or a class derived
+    from the reporter's exception type, which has no status behind it. The two
+    are deliberately distinguishable: ``0`` is a measurement, null is silence.
+    """
+
     failed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -11123,8 +11387,30 @@ class ConfirmationBundleTicket(Base):
             "failure_class IS NULL OR failure_class IN ("
             "'sandbox_oom', 'lease_revoked', 'validator_infrastructure', "
             "'platform_infrastructure', 'dittobench', 'platform', 'validator', "
-            "'evidence_schema', 'timeout', 'transport', 'unclassified')",
+            "'evidence_schema', 'timeout', 'transport', 'unclassified', "
+            "'longmem_run_http_status', 'longmem_run_malformed_json', "
+            "'longmem_run_missing_final_text', 'longmem_run_request', "
+            "'longmem_run_response_read', 'longmem_run_response_too_large', "
+            "'longmem_run_tool_endpoint', 'longmem_seed_http_status', "
+            "'longmem_seed_incomplete_ack', 'longmem_seed_malformed_json', "
+            "'longmem_seed_request', 'longmem_seed_response_read', "
+            "'longmem_seed_response_too_large', "
+            "'longmem_exec_ablation_dataset', 'longmem_exec_broker_session', "
+            "'longmem_exec_dimension_execution', 'longmem_exec_embedding_phase', "
+            "'longmem_exec_execution', 'longmem_exec_harness_health', "
+            "'longmem_exec_installation_validation', 'longmem_exec_longmem_dataset', "
+            "'longmem_exec_provider_capabilities', 'longmem_exec_provider_session', "
+            "'longmem_exec_runtime_acquire', 'longmem_exec_runtime_close', "
+            "'longmem_exec_runtime_material', 'longmem_exec_runtime_validation', "
+            "'longmem_exec_sandbox_availability', 'longmem_exec_sandbox_start', "
+            "'longmem_exec_sandbox_stop', 'longmem_exec_screened_image', "
+            "'longmem_exec_source_validation')",
             name="confirmation_tickets_failure_class_check",
+        ),
+        CheckConstraint(
+            "failure_status IS NULL OR "
+            "(failure_class IS NOT NULL AND failure_status BETWEEN 0 AND 599)",
+            name="confirmation_tickets_failure_status_check",
         ),
         CheckConstraint(
             "failure_stage IS NULL OR failure_stage IN ("
@@ -13229,9 +13515,17 @@ class GeneratorSubmission(Base):
     round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
     """The latest scored round this generator had a column in, and its column
     score there; columns are filled best-first from these."""
+    name: Mapped[str | None] = mapped_column(Text)
+    """Optional miner-chosen display name (1-64 characters), shown with the
+    miner's profile on the public generator pages. ``None`` renders a short
+    submission id."""
 
     __table_args__ = (
         UniqueConstraint("source_sha256", name="generator_submissions_sha256_key"),
+        CheckConstraint(
+            "name IS NULL OR char_length(name) BETWEEN 1 AND 64",
+            name="generator_submissions_name_check",
+        ),
         CheckConstraint(
             "source_sha256 ~ '^[0-9a-f]{64}$' AND tree_sha256 ~ '^[0-9a-f]{64}$'",
             name="generator_submissions_digest_check",
@@ -13271,6 +13565,70 @@ class GeneratorSubmission(Base):
     )
 
 
+class GeneratorSubmissionPayment(Base):
+    """The finalized TAO transfer that funded one generator upload.
+
+    Written only while the generator setting ``upload_fee_required`` is on.
+    The primary key ``(block_hash, extrinsic_index)`` stops one proof funding
+    two generator uploads; the upload paths refuse a proof already recorded in
+    :class:`EvaluationPayment` (and agent uploads one recorded here) under a
+    shared per-proof advisory lock, so a transfer funds exactly one upload
+    across both lanes. Columns mirror :class:`EvaluationPayment`.
+    """
+
+    __tablename__ = "generator_submission_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the transfer at payment time."""
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash",
+            "extrinsic_index",
+            name="generator_submission_payments_pkey",
+        ),
+        UniqueConstraint(
+            "submission_id", name="generator_submission_payments_submission_key"
+        ),
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="RESTRICT",
+            name="generator_submission_payments_submission_fkey",
+        ),
+        CheckConstraint(
+            "block_hash = lower(block_hash)",
+            name="generator_submission_payments_block_hash_check",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="generator_submission_payments_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "amount_rao > 0", name="generator_submission_payments_amount_rao_check"
+        ),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="generator_submission_payments_tao_usd_rate_check",
+        ),
+        Index("generator_submission_payments_miner_coldkey_idx", "miner_coldkey"),
+    )
+
+
 class GeneratorProbeEpoch(Base):
     """A secret seed every generator run also generates (never panel-run).
 
@@ -13301,6 +13659,59 @@ class GeneratorProbeEpoch(Base):
             text("(retired_at IS NULL)"),
             unique=True,
             postgresql_where=text("retired_at IS NULL"),
+        ),
+    )
+
+
+class GeneratorScorerHeartbeat(Base):
+    """The latest capability one generator scorer advertised on a work poll.
+
+    ``min_cases``/``max_cases`` are the case bounds the scorer build's pack
+    contract accepts (``challenge.MinCases``/``MaxCases``); both are NULL for a
+    scorer that predates advertising. Platform refuses qualification and round
+    work, and settings writes, outside the live scorer's bounds.
+
+    ``grading_bench_versions`` is the ascending list of pack grading policies
+    the build advertises (``challenge.SupportedGradingBenchVersions``); NULL for
+    a scorer that predates the list, which Platform treats as v13-only. A round
+    opens and leases at version N, and a qualification requests N, only for a
+    scorer listing N.
+    """
+
+    __tablename__ = "generator_scorer_heartbeats"
+
+    scorer_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    scorer_version: Mapped[str] = mapped_column(Text, nullable=False)
+    min_cases: Mapped[int | None] = mapped_column(Integer)
+    max_cases: Mapped[int | None] = mapped_column(Integer)
+    sandbox: Mapped[str | None] = mapped_column(Text)
+    build_revision: Mapped[str | None] = mapped_column(Text)
+    grading_bench_versions: Mapped[list[int] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    last_poll: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "grading_bench_versions IS NULL "
+            "OR (jsonb_typeof(grading_bench_versions) = 'array' "
+            "AND jsonb_array_length(grading_bench_versions) BETWEEN 1 AND 16)",
+            name="generator_scorer_heartbeats_grading_versions_check",
+        ),
+        CheckConstraint(
+            "(min_cases IS NULL) = (max_cases IS NULL) "
+            "AND (min_cases IS NULL OR (min_cases >= 1 AND max_cases >= min_cases))",
+            name="generator_scorer_heartbeats_cases_check",
+        ),
+        CheckConstraint(
+            "last_poll IN ('qualification', 'round')",
+            name="generator_scorer_heartbeats_poll_check",
         ),
     )
 
@@ -13388,7 +13799,7 @@ class GeneratorRun(Base):
             name="generator_runs_score_check",
         ),
         CheckConstraint(
-            "cases_per_seed BETWEEN 8 AND 64", name="generator_runs_cases_check"
+            "cases_per_seed BETWEEN 8 AND 80", name="generator_runs_cases_check"
         ),
         Index("generator_runs_submission_idx", "submission_id", text("leased_at DESC")),
         Index(
@@ -13506,6 +13917,9 @@ class GeneratorRound(Base):
     seed: Mapped[str | None] = mapped_column(Text)
     settings_revision: Mapped[int | None] = mapped_column(Integer)
     cases_per_column: Mapped[int | None] = mapped_column(Integer)
+    # The bench contract the round runs at, frozen when it opens (NULL before,
+    # or for a round voided at opening). See generator_rounds.round_bench_version.
+    bench_version: Mapped[int | None] = mapped_column(Integer)
     columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
     panel: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
     lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
@@ -13556,6 +13970,10 @@ class GeneratorRound(Base):
         CheckConstraint(
             "(status = 'void') = (void_reason IS NOT NULL)",
             name="generator_rounds_void_check",
+        ),
+        CheckConstraint(
+            "bench_version IS NULL OR bench_version >= 13",
+            name="generator_rounds_bench_version_check",
         ),
         Index(
             "generator_rounds_dataset_idx",
@@ -13629,6 +14047,50 @@ class GeneratorRoundAttempt(Base):
             name="generator_round_attempts_status_check",
         ),
         Index("generator_round_attempts_round_idx", "round_index", "agent_id"),
+    )
+
+
+class GeneratorRoundCommitmentPublication(Base):
+    """One validator's publication of a committed round's seed commitment.
+
+    Platform elects a few validators per committed round (see
+    ``generator_rounds.elect_commitment_publishers``) to publish
+    ``dgr1:{round}:{commitment}`` with ``Commitments.set_commitment`` from
+    their own Pylon identity. A row is ``claimed`` when Platform hands the
+    job out, then ``confirmed`` (the validator read the value back on chain at
+    ``block_number``) or ``failed``. A claim with no report after
+    ``claim_expires_at`` no longer holds an election slot.
+    """
+
+    __tablename__ = "generator_round_commitment_publications"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    reported_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    block_number: Mapped[int | None] = mapped_column(BigInteger)
+    extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('claimed', 'confirmed', 'failed')",
+            name="publication_status_check",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR block_number IS NOT NULL",
+            name="publication_block_check",
+        ),
     )
 
 

@@ -5,6 +5,8 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  competitionFeesInputSchema,
+  submissionSettingsRevisionSchema,
   retryValidationInputSchema,
   reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
@@ -80,6 +82,8 @@ import {
   setQueuePolicySettingsInputSchema,
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
+  validatorCapacityEntrySchema,
+  benchmarkRolloutQualificationDetailSchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
   setValidatorIssuancePauseInputSchema,
@@ -125,6 +129,10 @@ import {
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
   validatorFleetObservabilityMemberSchema,
+  setTrackShareSettingsInputSchema,
+  emissionAllocationConfirmation,
+  setEmissionAllocationInputSchema,
+  trackSharesConfirmation,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -988,6 +996,33 @@ describe('admin API schemas', () => {
         }),
       ).toThrow()
     }
+  })
+
+  it('parses a live generator-round lease on a row with no scoring attempt yet', () => {
+    // SN-334: a round lease is not a scoring attempt, so the row it created
+    // reports zero, and the panel must not drop the whole list over it.
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'memory-agent',
+          miner_hotkey: '5Miner',
+          validator_hotkey: '5Validator',
+          issued_at: '2026-10-24T07:00:00Z',
+          deadline: '2026-10-24T08:30:00Z',
+          bench_version: 13,
+          attempt_count: 0,
+          score_count: 3,
+          provisional_composite: 0.9,
+          purpose: 'generator_round',
+        },
+      ],
+    })
+    expect(parsed.items[0].purpose).toBe('generator_round')
+    expect(parsed.items[0].attempt_count).toBe(0)
   })
 })
 
@@ -3007,6 +3042,7 @@ describe('queue policy settings schemas', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    lineage_reference_mode: 'same_owner_version',
   }
 
   function input(overrides: Record<string, unknown> = {}) {
@@ -3124,6 +3160,7 @@ describe('queue policy settings schemas', () => {
       'deferred_source_review',
       'fresh_submission_slots',
       'lane_cycle_size',
+      'lineage_reference_mode',
       'owner_concurrent_submission_limit',
       'prev_gen_carryover',
       'priority_cohort_size',
@@ -3135,6 +3172,14 @@ describe('queue policy settings schemas', () => {
   it('requires every policy field on write, because a revision stores the whole object', () => {
     const { owner_concurrent_submission_limit: _limit, ...missingLimit } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingLimit)).toThrow()
+    const { lineage_reference_mode: _mode, ...missingMode } = settings
+    expect(() => queuePolicySettingsWriteSchema.parse(missingMode)).toThrow()
+    expect(queuePolicySettingsSchema.parse(missingMode).lineage_reference_mode).toBe(
+      'same_owner_version',
+    )
+    expect(() =>
+      queuePolicySettingsWriteSchema.parse({ ...settings, lineage_reference_mode: 'anyone' }),
+    ).toThrow()
 
     const { prev_gen_carryover: _carryover, ...missingCarryover } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingCarryover)).toThrow()
@@ -3488,6 +3533,168 @@ describe('validator slot settings schemas', () => {
     })
     expect(parsed.effective.source).toBe('revision')
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
+  })
+
+  it('reads capacity from a platform that predates reserved round slots as zero', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-25T00:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 4,
+      serviceable_slots: 4,
+      claimed_slots: 1,
+      assignments: [],
+    })
+    expect(parsed.reserved_round_slots).toBe(0)
+  })
+
+  it('reads a validator running a generator-round panel lease', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-27T19:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 8,
+      serviceable_slots: 8,
+      reserved_round_slots: 1,
+      claimed_slots: 1,
+      assignments: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'panel-agent',
+          slot_id: 'slot-0',
+          bench_version: 13,
+          purpose: 'generator_round',
+          stage: 'running_benchmark',
+          started_at: '2026-10-27T18:55:00Z',
+          age_seconds: 300,
+          completed_checks: null,
+          total_checks: null,
+          stalled: false,
+          checks_per_minute: null,
+          estimated_remaining_slot_minutes: null,
+        },
+      ],
+    })
+    expect(parsed.assignments[0].purpose).toBe('generator_round')
+  })
+
+  describe('per-validator overrides and the round reservation', () => {
+    const bigHost = '5' + 'B'.repeat(47)
+    const smallHost = '5' + 'C'.repeat(47)
+    const withOverrides = {
+      ...settings,
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+        [smallHost]: { max_concurrent_slots: 1, generator_round_reserved_slots: null },
+      },
+    }
+
+    it('accepts and round-trips overrides through the write schema', () => {
+      const parsed = setValidatorSlotSettingsInputSchema.parse(
+        input({ settings: withOverrides, confirmation: validatorSlotConfirmation(2) }),
+      )
+      expect(parsed.settings).toEqual(withOverrides)
+      // The body Backroom forwards is exactly what it parsed: nothing stripped.
+      expect(JSON.parse(JSON.stringify(parsed.settings))).toEqual(withOverrides)
+    })
+
+    it('still parses a policy from a platform that predates the new fields', () => {
+      expect(validatorSlotSettingsSchema.parse(settings)).toEqual(settings)
+    })
+
+    it('rejects out-of-range, empty and mis-keyed overrides', () => {
+      const bad = (perValidator: unknown, reserved: unknown = 1) =>
+        validatorSlotSettingsSchema.safeParse({
+          ...settings,
+          generator_round_reserved_slots: reserved,
+          per_validator: perValidator,
+        }).success
+      expect(bad({}, 9)).toBe(false)
+      expect(bad({}, -1)).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 0 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: { generator_round_reserved_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: {} })).toBe(false)
+      expect(bad({ 'not-a-hotkey': { max_concurrent_slots: 2 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 4 } })).toBe(true)
+    })
+
+    it('caps the override map at 256 validators', () => {
+      const overrides = (count: number) =>
+        Object.fromEntries(
+          Array.from({ length: count }, (_, index) => [
+            '5' + index.toString().padStart(47, 'A').replace(/0/g, 'z'),
+            { max_concurrent_slots: 2 },
+          ]),
+        )
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(256) })
+          .success,
+      ).toBe(true)
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(257) })
+          .success,
+      ).toBe(false)
+    })
+
+    it('reads the per-validator fleet sizing view', () => {
+      const parsed = validatorSlotSettingsControlSchema.parse({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: withOverrides,
+          checksum: '',
+          source: 'default',
+          hard_slot_ceiling: 8,
+          disk_restricted_slots: 1,
+          max_age_seconds: 5.0,
+        },
+        generator_round_reservation_active: true,
+        fleet: [
+          {
+            validator_hotkey: bigHost,
+            seen_at: '2026-10-25T00:00:00Z',
+            online: true,
+            issuance_paused: false,
+            round_capable: true,
+            override: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+            advertised_slots: 8,
+            healthy_slots: 8,
+            max_concurrent_slots: 6,
+            allowed_slots: 6,
+            configured_reserved_round_slots: 2,
+            reserved_round_slots: 2,
+            non_round_slot_budget: 4,
+            live_leases_by_purpose: { canonical_quorum: 3, generator_round: 1 },
+            host_specs: {
+              cpu_count: 32,
+              cpu_physical_cores: 16,
+              memory_total_mib: 131072,
+              disk_total_gib: 2000,
+              architecture: 'x86_64',
+            },
+            cpu_percent: 60,
+            memory_percent: 20,
+            disk_percent: 40,
+          },
+        ],
+      })
+      expect(parsed.generator_round_reservation_active).toBe(true)
+      expect(parsed.fleet?.[0]).toMatchObject({
+        allowed_slots: 6,
+        reserved_round_slots: 2,
+        non_round_slot_budget: 4,
+      })
+      expect(parsed.effective.settings.per_validator).toEqual(withOverrides.per_validator)
+    })
   })
 
   // The empty-default failure class: the platform 422s a partial body, but a
@@ -5347,5 +5554,144 @@ describe('targeted validator retry input', () => {
     expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
     expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
     expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
+  })
+})
+
+describe('track share settings', () => {
+  it('spells out the split, with no trailing space and a clear phrase for null', () => {
+    expect(trackSharesConfirmation({ generator: 1000, memory: 9000 })).toBe(
+      'APPLY TRACK SHARES memory=9000 generator=1000',
+    )
+    expect(trackSharesConfirmation({ memory: 0 })).toBe('APPLY TRACK SHARES')
+    expect(trackSharesConfirmation(null)).toBe('CLEAR TRACK SHARES')
+  })
+
+  it('mirrors the Platform refusals', () => {
+    const base = { expectedRevision: 0, reason: 'activate generator emissions' }
+    const parse = (shares: Record<string, number> | null) =>
+      setTrackShareSettingsInputSchema.safeParse({
+        ...base,
+        settings: { track_shares_bps: shares },
+        confirmation: trackSharesConfirmation(shares),
+      }).success
+    expect(parse({ memory: 9000, generator: 1000 })).toBe(true)
+    expect(parse(null)).toBe(true)
+    expect(parse({ generator: 1000 })).toBe(false)
+    expect(parse({ memory: 9000, router: 1000 })).toBe(false)
+    expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
+    expect(parse({ memory: 0 })).toBe(false)
+    expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
+  })
+})
+
+describe('emission allocation', () => {
+  const live = [
+    { kind: 'burn' as const, bps: 5000 },
+    { kind: 'track' as const, id: 'memory', bps: 3500 },
+    { kind: 'track' as const, id: 'generator', bps: 1500 },
+  ]
+
+  it('spells every nonzero entry in canonical order', () => {
+    expect(emissionAllocationConfirmation([live[2], { kind: 'gamma', bucket: 'gm', bps: 0 }, live[0], live[1]])).toBe(
+      'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+    )
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'gamma', bucket: 'gm', bps: 500 },
+        { kind: 'burn', bps: 4500 },
+        live[1],
+        live[2],
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500')
+  })
+
+  it('orders Gamma buckets by codepoint like Platform', () => {
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'burn', bps: 4000 },
+        live[1],
+        live[2],
+        { kind: 'gamma', bucket: 'gm2', bps: 600 },
+        { kind: 'gamma', bucket: 'gm_2', bps: 400 },
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4000 memory=3500 generator=1500 gamma:gm2=600 gamma:gm_2=400')
+  })
+
+  it.each([
+    ['sum short of 10000', [live[0], live[1], { kind: 'track', id: 'generator', bps: 1400 }]],
+    ['duplicate', [...live, { kind: 'track', id: 'memory', bps: 0 }]],
+    ['unpaid coding', [{ kind: 'burn', bps: 4000 }, live[1], live[2], { kind: 'track', id: 'coding', bps: 1000 }]],
+    ['missing generator', [{ kind: 'burn', bps: 6500 }, live[1], { kind: 'track', id: 'router', bps: 0 }]],
+    ['burn with an id', [{ kind: 'burn', id: 'memory', bps: 5000 }, live[1], live[2]]],
+  ])('refuses %s', (_label, entries) => {
+    const parsed = setEmissionAllocationInputSchema.safeParse({
+      expectedRevision: 0,
+      entries,
+      reason: 'operator split change',
+      confirmation: emissionAllocationConfirmation(entries as typeof live),
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('accepts the live split with its phrase', () => {
+    expect(
+      setEmissionAllocationInputSchema.safeParse({
+        expectedRevision: 0,
+        entries: live,
+        reason: 'operator split change',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      }).success,
+    ).toBe(true)
+  })
+})
+
+describe('competition fee policy schemas', () => {
+  it('rejects unknown fields in operator input but tolerates them on read', () => {
+    expect(
+      competitionFeesInputSchema.safeParse({
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, extra: 1 },
+      }).success,
+    ).toBe(false)
+    const revision = submissionSettingsRevisionSchema.parse({
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 1_000_000,
+      competition_fees: {
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, added_later: 'x' },
+      },
+      reason: 'price generator uploads',
+      actor: 'operator',
+      created_at: null,
+    })
+    expect(revision.competition_fees.generator).toMatchObject({
+      fee_amount_rao: 2_000_000,
+      fee_required: true,
+    })
+  })
+})
+
+describe('benchmark rollout qualification detail', () => {
+  it('reads an agent while no rollout is open', () => {
+    const parsed = benchmarkRolloutQualificationDetailSchema.parse({
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'top-five-agent',
+      agent_status: 'scored',
+      artifact_sha256: 'ab'.repeat(32),
+      rollout_id: null,
+      source_bench_version: null,
+      target_bench_version: null,
+      currently_top_five: true,
+      rollout_member: false,
+      target_dataset_sha256: null,
+      total_score_count: 3,
+      source_score_count: 0,
+      target_score_count: 0,
+      screening_attempt_active: false,
+      validator_run_active: false,
+      qualification_allowed: false,
+      blocking_reason: 'no benchmark rollout is open',
+    })
+    expect(parsed.source_bench_version).toBeNull()
   })
 })

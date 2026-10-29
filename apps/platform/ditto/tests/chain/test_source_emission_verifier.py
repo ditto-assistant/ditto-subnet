@@ -134,14 +134,23 @@ def event(
     }
 
 
-@pytest.fixture(params=[list, tuple], ids=["json-list", "scale-tuple"])
+# Substrate event attributes arrive as a SCALE tuple; JSON transports deliver
+# a list. Only the tests of attribute parsing itself sweep both containers
+# (BOTH_CONTAINERS); every other test reads the production tuple shape.
+BOTH_CONTAINERS = pytest.mark.parametrize(
+    "chain", [list, tuple], ids=["json-list", "scale-tuple"], indirect=True
+)
+
+
+@pytest.fixture
 def chain(request: pytest.FixtureRequest) -> tuple[AsyncMock, dict]:
+    container = getattr(request, "param", tuple)
     substrate = AsyncMock()
     state: dict[str, Any] = {
         "runtime": sorted(AUDITED_RUNTIME_CODE_HASHES)[0],
         "events": [
-            event("WeightsSet", request.param([118, 0])),
-            event("TimelockedWeightsRevealed", request.param([118, "v1"])),
+            event("WeightsSet", container([118, 0])),
+            event("TimelockedWeightsRevealed", container([118, "v1"])),
         ],
         "pending": [(9, [("v1", 80, "0x010203", 100)])],
         "keys": [(0, "v1"), (1, "miner"), (2, "tail")],
@@ -261,6 +270,7 @@ async def test_finalized_block_from_the_scanner_still_bounds_the_read(
     substrate.get_chain_finalised_head.assert_not_called()
 
 
+@BOTH_CONTAINERS
 async def test_successful_singleton_reveal_binds_exact_ciphertext(chain: tuple) -> None:
     substrate, _ = chain
     block = await read_source_emission_block(substrate, netuid=118, block=100)
@@ -330,52 +340,11 @@ async def test_unknown_runtime_cannot_be_configured_around(chain: tuple) -> None
         )
 
 
-@pytest.mark.parametrize("upgrade", [False, True])
-async def test_v466_artifact_preserves_reveal_and_resets_upgrade_boundary(
-    chain: tuple, upgrade: bool
-) -> None:
-    substrate, state = chain
-    runtime = "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e"
-    state["runtime"] = (
-        "0x637844a3ad94d3bdbea45664b67bbfa07a31f21c087834a56a772ba27f612b9f"
-        if upgrade
-        else runtime
-    )
-    state["post_runtime"] = runtime
-    block = await read_source_emission_block(substrate, netuid=118, block=100)
-    assert block.runtime_code_hash == runtime
-    if upgrade:
-        assert block.reset_reason == "runtime_changed"
-        assert not block.updates and not block.is_payout
-    else:
-        assert block.reset_reason is None
-        assert block.updates[0].commit_ciphertext_hash is not None
-
-
 async def test_known_runtime_transition_resets_provenance(chain: tuple) -> None:
     substrate, state = chain
     state["post_runtime"] = sorted(AUDITED_RUNTIME_CODE_HASHES)[1]
     block = await read_source_emission_block(substrate, netuid=118, block=100)
     assert block.reset_reason == "runtime_changed"
-
-
-@pytest.mark.parametrize("upgrade", [False, True])
-async def test_v467_artifact_preserves_reveal_and_resets_upgrade_boundary(
-    chain: tuple, upgrade: bool
-) -> None:
-    substrate, state = chain
-    v466 = "0xff4ba0da10fb8ac26fab3e446f23413ef7f91de4a604802097ece0b928d53a8e"
-    v467 = "0x2f175dcc64196ec8a6b9235f8d7cfd84efef6c68bb925c4455949591cef9f6d2"
-    state["runtime"] = v466 if upgrade else v467
-    state["post_runtime"] = v467
-    block = await read_source_emission_block(substrate, netuid=118, block=100)
-    assert block.runtime_code_hash == v467
-    if upgrade:
-        assert block.reset_reason == "runtime_changed"
-        assert not block.updates and not block.is_payout
-    else:
-        assert block.reset_reason is None
-        assert block.updates[0].commit_ciphertext_hash is not None
 
 
 @pytest.mark.parametrize("upgrade", [False, True])
@@ -479,6 +448,7 @@ def commit_chain(chain: tuple) -> tuple:
     return substrate, state, claim
 
 
+@BOTH_CONTAINERS
 async def test_exact_finalized_commit_inclusion(commit_chain: tuple) -> None:
     from ditto.chain.source_emission_verifier import verify_finalized_weight_commit
 
@@ -487,6 +457,7 @@ async def test_exact_finalized_commit_inclusion(commit_chain: tuple) -> None:
 
 
 @pytest.mark.parametrize("values", [(118,), (118, 0, 1), {"netuid": 118}, "118,0"])
+@BOTH_CONTAINERS
 async def test_malformed_event_attributes_still_fail_closed(
     chain: tuple, values: Any
 ) -> None:

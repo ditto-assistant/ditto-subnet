@@ -123,6 +123,11 @@ const quarantineContext: ScreeningQuarantineContext = {
       duplicate_of: null,
       duplicate_name: null,
       duplicate_version: null,
+      lineage_parent_agent_id: null,
+      lineage_scope: null,
+      lineage_packet_sha256: null,
+      lineage_full_review_reasons: null,
+      lineage_reference_kind: null,
     },
   ],
   miner: {
@@ -260,6 +265,11 @@ const submission: ScreeningSubmission = {
       duplicate_of: '77777777-7777-4777-8777-777777777777',
       duplicate_name: 'Jackie',
       duplicate_version: 2,
+      lineage_parent_agent_id: null,
+      lineage_scope: null,
+      lineage_packet_sha256: null,
+      lineage_full_review_reasons: null,
+      lineage_reference_kind: null,
     },
   ],
 }

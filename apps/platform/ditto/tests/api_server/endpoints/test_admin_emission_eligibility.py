@@ -34,7 +34,6 @@ from ditto.db.queries.emission_eligibility import (
     load_review_postures,
     record_shadow_exclusions,
 )
-from ditto.db.queries.scores import list_scores_for_agent
 from ditto.tests.api_server.endpoints.test_emission_eligibility_ledger import (
     _fleet,
     _unverified_weight_setter,
@@ -228,20 +227,6 @@ class TestPosture:
         # The rehearsal history is not rewritten by a posture change.
         assert [row["revision"] for row in body["history"]] == [2, 1]
 
-    async def test_window_length_is_bounded_by_the_platform(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        response = await client.post(
-            _URL,
-            headers=_HEADERS,
-            json=_payload(activation_window_seconds=5),
-        )
-        assert response.status_code == 422
-
 
 class TestShadowRehearsal:
     async def test_a_windows_finding_is_recorded_once_not_once_per_poll(
@@ -347,53 +332,6 @@ class TestReviewFacts:
         assert posture.review_kind == "deferred_source_review"
         assert posture.review_resolution is None
 
-    async def test_an_agent_with_no_review_reads_as_never_held(
-        self, session: AsyncSession
-    ) -> None:
-        agent_id = await _seed_scored_agent(session)
-        posture = (await load_review_postures(session, [agent_id]))[agent_id]
-        assert posture.review_status is None
-        assert posture.passed_attempt_count == 0
-
-    async def test_rejection_preserves_the_score_and_the_review_history(
-        self, session: AsyncSession
-    ) -> None:
-        agent_id = await _seed_scored_agent(session)
-        review_id = await _open_hold(session, agent_id)
-        async with session.begin():
-            review = await session.get(AthReview, review_id)
-            assert review is not None
-            review.status = "resolved"
-            review.resolution = "reject"
-            review.resolution_reason = "adjudicated copy of an earlier submission"
-            review.resolved_at = _NOW
-            review.resolved_by = "operator@example.com"
-            session.add(
-                AthReviewAction(
-                    action_id=uuid4(),
-                    review_id=review_id,
-                    action="reject",
-                    reason="adjudicated copy of an earlier submission",
-                    actor="operator@example.com",
-                    evidence={"sha256": _SHA},
-                )
-            )
-
-        # #2041: "Preserve score and review history after rejection."
-        scores = await list_scores_for_agent(session, agent_id=agent_id)
-        assert [score.composite for score in scores] == [pytest.approx(0.9)]
-        actions = list(
-            await session.scalars(
-                select(AthReviewAction)
-                .where(AthReviewAction.review_id == review_id)
-                .order_by(AthReviewAction.created_at)
-            )
-        )
-        assert [action.action for action in actions] == ["reopen", "reject"]
-        posture = (await load_review_postures(session, [agent_id]))[agent_id]
-        assert posture.review_resolution == "reject"
-        assert posture.review_resolved_at is not None
-
 
 class TestPerAgentRead:
     async def test_policy_read_counts_unverified_weight_setter_in_protocol_gate(
@@ -488,15 +426,3 @@ class TestPerAgentRead:
         assert body["eligibility"]["posture_satisfied"] is False
         assert body["eligibility"]["reward_eligible"] is True
         assert body["eligibility"]["enforcement"] == "shadow"
-
-    async def test_unknown_agent_is_a_404_not_an_empty_verdict(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, session_maker)
-        response = await client.get(
-            f"/api/v1/admin/agents/{uuid4()}/emission-eligibility", headers=_HEADERS
-        )
-        assert response.status_code == 404

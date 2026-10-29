@@ -45,10 +45,10 @@ func newBrokerTestReaderSession(t *testing.T, upstreamStatus int) (*longmemeval.
 			profile.ProviderLanes[index].ProfileRevision = "fixture-reader-v1"
 			profile.ProviderLanes[index].Model = "openai/gpt-oss-20b"
 		} else {
-			profile.ProviderLanes[index].RouteProvider = "azure"
-			profile.ProviderLanes[index].ReceiptProvider = "Azure"
-			profile.ProviderLanes[index].ProfileRevision = "longmemeval-official-gpt4o-azure-zdr-v2"
-			profile.ProviderLanes[index].Model = "openai/gpt-4o-2024-08-06"
+			profile.ProviderLanes[index].RouteProvider = "together"
+			profile.ProviderLanes[index].ReceiptProvider = "Together"
+			profile.ProviderLanes[index].ProfileRevision = "longmemeval-deepseek-v41-flash-together-v1"
+			profile.ProviderLanes[index].Model = "deepseek/deepseek-v4.1-flash"
 		}
 	}
 	readerModel := ""

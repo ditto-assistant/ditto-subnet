@@ -5,10 +5,56 @@ import {
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema, githubRevocationControlSchema,
 } from '../lib/contributor.schemas'
 import '@tanstack/react-start/server-only'
-import { manualControlSchema } from '../lib/treasury-manual.schemas'
+import {
+  alphaRao, manualControlSchema, manualPreviewInputSchema, manualPreviewSchema, manualRequestId,
+  manualSubmitSchema, manualTransferConfirmation, manualTransferSchema,
+} from '../lib/treasury-manual.schemas'
 
 export async function fetchTreasuryManualTransfers() {
   return manualControlSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual'))
+}
+
+/**
+ * MCP twin of previewManualTransfer: same Platform body and actor. Accepts
+ * exactly one of integer `amount_rao` or decimal `amount_alpha`, and returns
+ * the exact confirmation phrase the Transfer once button asks the operator
+ * to type. Preview grants no spending authority (`not_queued`).
+ */
+export async function previewTreasuryManualTransfer(rawInput: {
+  bucket_id: string
+  amount_rao?: number
+  amount_alpha?: string
+  retained_alpha_rao: number
+  reason: string
+  request_id?: string
+}, actor: string) {
+  const { amount_rao: amountRao, amount_alpha: amountAlpha, request_id: requestId, ...rest } = rawInput
+  if ((amountRao === undefined) === (amountAlpha === undefined)) {
+    throw new Error('Provide exactly one of amount_rao or amount_alpha')
+  }
+  const amount = amountRao ?? alphaRao(amountAlpha!.trim())
+  if (amount === null) {
+    throw new Error('amount_alpha must be a positive decimal alpha amount with at most 9 fractional digits')
+  }
+  const body = manualPreviewInputSchema.parse({
+    ...rest, amount_rao: amount, request_id: requestId ?? manualRequestId(),
+  })
+  const preview = manualPreviewSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual/preview', {
+    method: 'POST', body, actor,
+  }))
+  return { ...preview, confirmation: manualTransferConfirmation(preview.envelope) }
+}
+
+/**
+ * MCP twin of queueManualTransfer. manualSubmitSchema refuses any
+ * confirmation other than the exact amount-and-destination phrase before a
+ * Platform request; the Platform wire literal is then supplied server-side.
+ */
+export async function queueTreasuryManualTransfer(rawInput: unknown, actor: string) {
+  const data = manualSubmitSchema.parse(rawInput)
+  return manualTransferSchema.parse(await platformAdminRequest('/api/v1/admin/treasury-manual', {
+    method: 'POST', body: { ...data, confirmation: 'TRANSFER SN118 ALPHA ONCE' }, actor,
+  }))
 }
 import { z } from 'zod'
 import { treasuryReceiptInputSchema, treasuryReceiptSchema, treasuryReceiptPageSchema, treasuryReceiptPreflightInputSchema, treasuryReceiptPreflightSchema } from '../lib/treasury-receipts.schemas'
@@ -307,6 +353,8 @@ import {
   screeningFailureDiagnosticSchema,
   adjudicationAttemptsInputSchema,
   adjudicationAttemptsSchema,
+  screeningReviewCostInputSchema,
+  screeningReviewCostSchema,
   screeningVerificationReadinessSchema,
   screeningReviewDeadlineDiagnosticSchema,
   screeningSubmissionLookupInputSchema,
@@ -319,6 +367,8 @@ import {
   sourceDiffInputSchema,
   sourceDiffManifestSchema,
   lineageSourceDiffInputSchema,
+  screeningReviewLineageInputSchema,
+  screeningReviewLineageSchema,
   lineageSourceDiffFileInputSchema,
   sourceExcerptInputSchema,
   sourceExcerptSchema,
@@ -361,12 +411,6 @@ import {
   batchRetryValidationResponseSchema,
   agentScoringReadinessInputSchema,
   agentScoringReadinessSchema,
-  agentCoreQualificationInputSchema,
-  agentCoreQualificationStatusSchema,
-  coreQualificationPolicyControlSchema,
-  getCoreQualificationPolicyInputSchema,
-  refreshAgentCoreQualificationInputSchema,
-  setCoreQualificationPolicyInputSchema,
   benchmarkContractRefreshLookupInputSchema,
   benchmarkContractRefreshDetailSchema,
   refreshBenchmarkContractInputSchema,
@@ -396,6 +440,12 @@ import {
   agentEmissionEligibilityInputSchema,
   agentEmissionEligibilitySchema,
   burnSettingsControlSchema,
+  trackShareSettingsControlSchema,
+  trackShareSettingsRevisionSchema,
+  setTrackShareSettingsInputSchema,
+  emissionAllocationControlSchema,
+  emissionAllocationRevisionSchema,
+  setEmissionAllocationInputSchema,
   emissionEligibilityControlSchema,
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
@@ -406,9 +456,11 @@ import {
   inferenceConcurrencySettingsControlSchema,
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
+  inferenceGrantCostsSchema,
   sourceReviewQueueSloSchema,
   athReviewQueueSloSchema,
   validatorCapacitySummarySchema,
+  validatorRequestOutcomeSummarySchema,
   outlierEscalationDryRunInputSchema,
   outlierEscalationDryRunSchema,
   outlierEscalationInputSchema,
@@ -439,6 +491,7 @@ import {
   validatorFleetObservabilitySchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
+  canonicalCompetitionFees,
   hotkeyBanControlSchema,
   hotkeyBanListSchema,
   hotkeyBanLookupInputSchema,
@@ -463,6 +516,8 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  copyCourtTriagePreviewInputSchema,
+  copyCourtTriagePreviewSchema,
   confirmationSeedAnchorListSchema,
   confirmationSeedAnchorsInputSchema,
   screenerCapacityViewSchema,
@@ -485,6 +540,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
+  agentScoresInputSchema,
   agentScoresLookupInputSchema,
   agentScoresDetailSchema,
   continualRetestDiagnosticInputSchema,
@@ -530,6 +586,10 @@ import {
   platformPublicRequest,
 } from './ditto.server'
 import { NothingAppliedError, platformAdminWrite } from './platform-write'
+import {
+  submissionTermsReadSchema,
+  submissionTermsSchema,
+} from '../lib/submission-terms.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -941,12 +1001,22 @@ export async function fetchCopyCourtRecommendations(rawInput: unknown) {
   const input = copyCourtRecommendationsInputSchema.parse(rawInput)
   const params = new URLSearchParams()
   params.set('pending_only', String(input.pendingOnly))
+  if (input.agentId !== undefined) params.set('agent_id', input.agentId)
   params.set('limit', String(input.limit))
   params.set('offset', String(input.offset))
   const payload = await platformAdminRequest(
     `/api/v1/admin/copy-court/recommendations?${params.toString()}`,
   )
   return copyCourtRecommendationListSchema.parse(payload)
+}
+
+export async function fetchCopyCourtTriagePreview(rawInput: unknown, actor: string) {
+  const input = copyCourtTriagePreviewInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-court/triage/${encodeURIComponent(input.agentId)}/preview`,
+    { actor },
+  )
+  return copyCourtTriagePreviewSchema.parse(payload)
 }
 
 export async function applyCopyCourtSettings(actor: string, rawInput: unknown) {
@@ -1191,6 +1261,32 @@ export async function updateArtifactReleaseSettings(actor: string, rawInput: unk
   return fetchArtifactReleaseControl()
 }
 
+const SUBMISSION_TERMS_PATH = '/api/v1/public/submission-terms'
+
+/**
+ * Every competition's submission terms: deliverable, cooldown and own fee.
+ * A Platform that predates the endpoint answers 404; report that plainly
+ * (with where the same facts live there) instead of failing the read.
+ */
+export async function fetchCompetitionSubmissionTerms() {
+  try {
+    const payload = await platformPublicRequest(SUBMISSION_TERMS_PATH)
+    return submissionTermsReadSchema.parse({
+      competitions: submissionTermsSchema.parse(payload).competitions,
+      note: null,
+    })
+  } catch (error) {
+    if (!isPlatformPublicNotFound(error)) throw error
+    return submissionTermsReadSchema.parse({
+      competitions: null,
+      note:
+        'This Platform predates per-competition submission terms: every upload lane '
+        + 'charges get_submission_cooldown fee_amount_rao, generator uploads only while '
+        + 'get_generator_competition_settings upload_fee_required is true.',
+    })
+  }
+}
+
 const SUBMISSION_SETTINGS_PATH = '/api/v1/admin/submission-settings'
 
 export async function fetchSubmissionSettingsControl() {
@@ -1200,6 +1296,8 @@ export async function fetchSubmissionSettingsControl() {
 
 export async function updateSubmissionSettings(actor: string, rawInput: unknown) {
   const input = updateSubmissionSettingsInputSchema.parse(rawInput)
+  const competitionFees =
+    input.competitionFees === undefined ? undefined : canonicalCompetitionFees(input.competitionFees)
   await platformAdminRequest(SUBMISSION_SETTINGS_PATH, {
     method: 'POST',
     actor,
@@ -1207,12 +1305,29 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
       expected_revision: input.expectedRevision,
       cooldown_seconds: input.cooldownSeconds,
       fee_amount_rao: input.feeAmountRao,
+      // Omitted (not null) when unset, so an older Platform sees exactly the
+      // body it always did and the current overrides carry forward.
+      ...(competitionFees === undefined ? {} : { competition_fees: competitionFees }),
       reason: input.reason,
       actor,
       confirmation: input.confirmation,
     },
   })
-  return fetchSubmissionSettingsControl()
+  const control = await fetchSubmissionSettingsControl()
+  if (competitionFees !== undefined) {
+    // A Platform that predates per-competition fees refuses the extended
+    // confirmation phrase, but never report a price as set unless the stored
+    // revision carries it.
+    const stored = JSON.stringify(canonicalCompetitionFees(control.current.competition_fees))
+    if (stored !== JSON.stringify(competitionFees)) {
+      throw new Error(
+        `Platform stored revision ${control.current.revision} with competition_fees ${stored}, `
+        + `not ${JSON.stringify(competitionFees)}: it predates per-competition fees or the `
+        + 'settings moved. Re-read get_submission_cooldown before writing again.',
+      )
+    }
+  }
+  return control
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'
@@ -1397,6 +1512,90 @@ export async function setBurnSettings(rawInput: unknown, actor: string) {
     throw burnSettingsConflict(cause) ?? cause
   }
   return fetchBurnSettings()
+}
+
+const TRACK_SHARE_SETTINGS_PATH = '/api/v1/admin/track-share-settings'
+
+export async function fetchTrackShareSettings() {
+  const payload = await platformAdminRequest(TRACK_SHARE_SETTINGS_PATH)
+  return trackShareSettingsControlSchema.parse(payload)
+}
+
+function trackShareSettingsConflict(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  if (/track share settings changed/i.test(message)) {
+    return new Error(
+      `${message}. Nothing was applied: re-read get_track_share_settings and resubmit with the revision it reports.`,
+    )
+  }
+  if (/confirmation must be exactly/i.test(message)) {
+    return new Error(
+      `${message}. Nothing was applied: the confirmation spells out every nonzero share in track order, e.g. "APPLY TRACK SHARES memory=9000 generator=1000", or "CLEAR TRACK SHARES" to unset.`,
+    )
+  }
+  return null
+}
+
+export async function setTrackShareSettings(rawInput: unknown, actor: string) {
+  const input = setTrackShareSettingsInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(TRACK_SHARE_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: input.scope,
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    trackShareSettingsRevisionSchema.parse(payload)
+  } catch (cause) {
+    throw trackShareSettingsConflict(cause) ?? cause
+  }
+  return fetchTrackShareSettings()
+}
+
+const EMISSION_ALLOCATION_PATH = '/api/v1/admin/emission-allocation'
+
+export async function fetchEmissionAllocation() {
+  const payload = await platformAdminRequest(EMISSION_ALLOCATION_PATH)
+  return emissionAllocationControlSchema.parse(payload)
+}
+
+// Platform names the revision now current on a stale write; keep its message
+// verbatim and only append the recovery.
+function emissionAllocationConflict(cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause)
+  if (/emission allocation changed/i.test(message)) {
+    return new Error(
+      `${message}. Nothing was applied: re-read get_emission_allocation and resubmit with the revision it reports.`,
+    )
+  }
+  return null
+}
+
+export async function setEmissionAllocation(rawInput: unknown, actor: string) {
+  const input = setEmissionAllocationInputSchema.parse(rawInput)
+  try {
+    const payload = await platformAdminRequest(EMISSION_ALLOCATION_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        expected_revision: input.expectedRevision,
+        settings: { entries: input.entries },
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+    emissionAllocationRevisionSchema.parse(payload)
+  } catch (cause) {
+    throw emissionAllocationConflict(cause) ?? cause
+  }
+  return fetchEmissionAllocation()
 }
 
 const CONFIRMATION_BUNDLE_SETTINGS_PATH = '/api/v1/admin/confirmation-bundle-settings'
@@ -1752,6 +1951,14 @@ export async function fetchInferenceRuntimeMetrics() {
     timeoutMs: 30_000,
   })
   return inferenceRuntimeMetricsSchema.parse(payload)
+}
+
+export async function fetchInferenceGrantCosts(hours: number) {
+  const window = z.number().int().min(1).max(744).parse(hours)
+  return inferenceGrantCostsSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/inference-grant-costs?hours=${window}`,
+    { timeoutMs: 30_000 },
+  ))
 }
 
 const SOURCE_REVIEW_QUEUE_SLO_PATH = '/api/v1/admin/source-review-queue-slo'
@@ -2250,6 +2457,19 @@ export async function fetchValidatorCapacity() {
   return validatorCapacitySummarySchema.parse(payload)
 }
 
+const VALIDATOR_REQUEST_OUTCOMES_PATH = '/api/v1/admin/validator-request-outcomes'
+
+export async function fetchValidatorRequestOutcomes(validatorHotkey?: string) {
+  const query = validatorHotkey
+    ? `?validator_hotkey=${encodeURIComponent(validatorHotkey)}`
+    : ''
+  const payload = await platformAdminRequest(`${VALIDATOR_REQUEST_OUTCOMES_PATH}${query}`, {
+    timeoutMs: 8_000,
+    retries: 1,
+  })
+  return validatorRequestOutcomeSummarySchema.parse(payload)
+}
+
 export async function fetchLedgerEpochSnapshots(limit = 24) {
   const bounded = Math.min(100, Math.max(1, Math.trunc(limit)))
   const payload = await platformAdminRequest(`/api/v1/public/ledger-epochs?limit=${bounded}`, {
@@ -2707,6 +2927,15 @@ export async function fetchAdjudicationAttempts(rawInput: unknown) {
   return adjudicationAttemptsSchema.parse(payload)
 }
 
+export async function fetchScreeningReviewCost(rawInput: unknown) {
+  const input = screeningReviewCostInputSchema.parse(rawInput)
+  const query = new URLSearchParams({ lookback_days: String(input.lookbackDays) })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-review-cost?${query.toString()}`,
+  )
+  return screeningReviewCostSchema.parse(payload)
+}
+
 export async function fetchScreeningVerificationReadiness(rawInput: unknown, actor: string) {
   const input = screeningFailureDiagnosticInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -3126,56 +3355,6 @@ export async function fetchAgentScoringReadiness(rawInput: unknown) {
   return agentScoringReadinessSchema.parse(payload)
 }
 
-export async function fetchCoreQualificationPolicy(rawInput: unknown) {
-  const input = getCoreQualificationPolicyInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/core-qualification/policy?bench_version=${input.benchVersion}&history_limit=${input.historyLimit}`,
-  )
-  return coreQualificationPolicyControlSchema.parse(payload)
-}
-
-export async function setCoreQualificationPolicy(rawInput: unknown, actor: string) {
-  const input = setCoreQualificationPolicyInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest('/api/v1/admin/core-qualification/policy', {
-    method: 'POST',
-    actor,
-    body: {
-      expected_revision: input.expectedRevision,
-      policy: input.policy,
-      reason: input.reason,
-      actor,
-      confirmation: input.confirmation,
-    },
-  })
-  return coreQualificationPolicyControlSchema.parse(payload)
-}
-
-export async function fetchAgentCoreQualification(rawInput: unknown) {
-  const input = agentCoreQualificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/core-qualification?bench_version=${input.benchVersion}&limit=${input.limit}`,
-  )
-  return agentCoreQualificationStatusSchema.parse(payload)
-}
-
-export async function refreshAgentCoreQualification(rawInput: unknown, actor: string) {
-  const input = refreshAgentCoreQualificationInputSchema.parse(rawInput)
-  const payload = await platformAdminRequest(
-    `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/core-qualification/refresh`,
-    {
-      method: 'POST',
-      actor,
-      body: {
-        bench_version: input.benchVersion,
-        reason: input.reason,
-        actor,
-        confirmation: input.confirmation,
-      },
-    },
-  )
-  return agentCoreQualificationStatusSchema.parse(payload)
-}
-
 export async function fetchValidatorScoreReplacement(rawInput: unknown) {
   const input = validatorScoreReplacementLookupInputSchema.parse(rawInput)
   const payload = await platformAdminRequest(
@@ -3485,6 +3664,15 @@ export async function fetchCopyReviewSourceDiffFile(rawInput: unknown, actor: st
   return sourceDiffFileDetailSchema.parse(payload)
 }
 
+export async function fetchScreeningReviewLineage(rawInput: unknown, actor: string) {
+  const input = screeningReviewLineageInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-attempts/${encodeURIComponent(input.attemptId)}/review-lineage`,
+    { actor },
+  )
+  return screeningReviewLineageSchema.parse(payload)
+}
+
 export async function fetchLineageSourceDiff(rawInput: unknown, actor: string) {
   const input = lineageSourceDiffInputSchema.parse(rawInput)
   const query = new URLSearchParams({ reference_agent_id: input.referenceAgentId })
@@ -3663,41 +3851,54 @@ function provisionalAgentScores({
   pipeline,
   board,
   entry,
+  selection,
 }: {
   pipeline: PublicSubmissionPipeline
   board: PublicLeaderboard
   entry: PublicLeaderboardEntry | null
+  selection: BenchVersionSelection
 }) {
+  const rows = pipeline.provisional_scores.map((score) => ({
+    // Withheld before quorum by the platform, not missing here. See
+    // agentScoreRowSchema.
+    validator_hotkey: null,
+    run_id: null,
+    tool_mean: null,
+    memory_mean: null,
+    median_ms: null,
+    n: null,
+    composite: score.composite,
+    raw_composite: score.raw_composite ?? null,
+    composite_breakdown: score.composite_breakdown ?? null,
+    seed: score.seed,
+    bench_version: score.bench_version ?? null,
+    generated_at: score.accepted_at,
+    transcript_sha256: score.transcript_sha256 ?? null,
+  }))
   return agentScoresDetailSchema.parse({
     agent_id: pipeline.agent_id,
     miner_hotkey: entry?.miner_hotkey ?? null,
     status: pipeline.status,
     finalized: false,
     quorum: pipeline.quorum,
-    score_count: pipeline.score_count,
-    median_composite: pipeline.final_composite ?? null,
     dataset_seed: null,
     dataset_sha256: null,
     dataset_run_size: null,
     dataset_seed_block: null,
     dataset_seed_block_hash: null,
-    scores: pipeline.provisional_scores.map((score) => ({
-      // Withheld before quorum by the platform, not missing here. See
-      // agentScoreRowSchema.
-      validator_hotkey: null,
-      run_id: null,
-      tool_mean: null,
-      memory_mean: null,
-      median_ms: null,
-      n: null,
-      composite: score.composite,
-      raw_composite: score.raw_composite ?? null,
-      composite_breakdown: score.composite_breakdown ?? null,
-      seed: score.seed,
-      bench_version: score.bench_version ?? null,
-      generated_at: score.accepted_at,
-      transcript_sha256: score.transcript_sha256 ?? null,
-    })),
+    ...selection,
+    // The pipeline's own aggregate names its era (`score_bench_version`) and
+    // stays null until that era settles, so it is the ledger value for that
+    // one version and nothing else.
+    ...splitScoresByBenchVersion({
+      rows,
+      selected: selection.selected_bench_version,
+      quorum: pipeline.quorum,
+      ledger: {
+        bench_version: pipeline.score_bench_version,
+        median_composite: pipeline.final_composite ?? null,
+      },
+    }),
     generated_at: pipeline.generated_at,
     active_bench_version: board.active_bench_version,
     desired_bench_version: board.desired_bench_version,
@@ -3705,23 +3906,166 @@ function provisionalAgentScores({
   })
 }
 
+type BenchVersionSelection = {
+  selected_bench_version: number
+  selected_bench_version_source: 'requested' | 'active'
+}
+
+/** Accepted score rows that share one bench version, in ledger order. */
+type BenchVersionGroup<Row> = { benchVersion: number | null; rows: Array<Row> }
+
+/**
+ * Split accepted score rows by the bench version each was graded under.
+ *
+ * Legacy (null-version) rows first, then ascending versions, so a reader sees
+ * version-over-version movement. Every row lands in exactly one group, in the
+ * order the ledger published it: nothing is dropped or merged.
+ */
+function groupScoresByBenchVersion<Row extends { bench_version: number | null }>(
+  rows: ReadonlyArray<Row>,
+): Array<BenchVersionGroup<Row>> {
+  const groups = new Map<number | null, Array<Row>>()
+  for (const row of rows) {
+    const group = groups.get(row.bench_version) ?? []
+    group.push(row)
+    groups.set(row.bench_version, group)
+  }
+  return [...groups.keys()]
+    .sort((left, right) => {
+      if (left === null) return -1
+      if (right === null) return 1
+      return left - right
+    })
+    .map((benchVersion) => ({ benchVersion, rows: groups.get(benchVersion)! }))
+}
+
+/** The one per-version aggregate the ledger itself published, if any. */
+type LedgerVersionAggregate = {
+  bench_version: number | null
+  median_composite: number | null
+}
+
+/**
+ * The median of one bench version's accepted rows, and where it came from.
+ *
+ * Platform's own number is used only when Platform scoped it to exactly this
+ * version. Otherwise the median is computed here over this version's rows and
+ * labeled a statistic, and below quorum there is no aggregate at all: a median
+ * of one or two scores is not what any version finalizes on.
+ */
+function benchVersionMedian(
+  rows: ReadonlyArray<{ composite: number }>,
+  benchVersion: number | null,
+  quorum: number,
+  ledger: LedgerVersionAggregate | null,
+) {
+  if (
+    ledger !== null &&
+    ledger.bench_version !== null &&
+    ledger.bench_version === benchVersion &&
+    ledger.median_composite !== null
+  ) {
+    return {
+      median_composite: ledger.median_composite,
+      median_composite_authority: 'platform_ledger' as const,
+    }
+  }
+  if (rows.length < quorum) {
+    return { median_composite: null, median_composite_authority: null }
+  }
+  return {
+    median_composite: median(rows.map((row) => row.composite)),
+    median_composite_authority: 'per_benchmark_statistic' as const,
+  }
+}
+
+/**
+ * Report one selected bench version and keep every other version apart.
+ *
+ * Composites from different bench versions measure different benchmarks, so
+ * the selected version's count and median come from its rows alone and every
+ * other version's rows stay whole in their own group (SN-348: a v12-finalized
+ * agent re-scored at v13 used to read as one pooled six-score median).
+ */
+function splitScoresByBenchVersion<
+  Row extends { bench_version: number | null; composite: number },
+>({
+  rows,
+  selected,
+  quorum,
+  ledger,
+}: {
+  rows: ReadonlyArray<Row>
+  selected: number
+  quorum: number
+  ledger: LedgerVersionAggregate | null
+}) {
+  const groups = groupScoresByBenchVersion(rows)
+  const selectedRows = groups.find((group) => group.benchVersion === selected)?.rows ?? []
+  return {
+    score_count: selectedRows.length,
+    total_score_count: rows.length,
+    selected_quorum_reached: selectedRows.length >= quorum,
+    ...benchVersionMedian(selectedRows, selected, quorum, ledger),
+    scores: selectedRows,
+    other_bench_versions: groups
+      .filter((group) => group.benchVersion !== selected)
+      .map((group) => ({
+        bench_version: group.benchVersion,
+        score_count: group.rows.length,
+        quorum_reached: group.rows.length >= quorum,
+        ...benchVersionMedian(group.rows, group.benchVersion, quorum, ledger),
+        scores: group.rows,
+      })),
+  }
+}
+
 export async function fetchAgentScores(rawInput: unknown) {
-  const input = agentScoresLookupInputSchema.parse(rawInput)
+  const input = agentScoresInputSchema.parse(rawInput)
   // The authoritative board also resolves hotkeys and carries the agent's
   // current rank/eligibility context, so one snapshot serves both purposes.
   const board = await fetchLeaderboardSnapshot()
   const { agentId, entry } = resolveBoardAgent(board, input)
+  const selection: BenchVersionSelection =
+    input.benchVersion === undefined
+      ? {
+          selected_bench_version: board.active_bench_version,
+          selected_bench_version_source: 'active',
+        }
+      : {
+          selected_bench_version: input.benchVersion,
+          selected_bench_version_source: 'requested',
+        }
   const scores = await fetchSettledAgentScores(agentId)
   if (scores === null) {
     return provisionalAgentScores({
       pipeline: await fetchPublicSubmissionPipeline(agentId),
       board,
       entry,
+      selection,
     })
   }
+  const {
+    bench_version: ledgerBenchVersion,
+    median_composite: ledgerMedian,
+    scores: rows,
+    ...record
+  } = scores
   return agentScoresDetailSchema.parse({
-    ...scores,
+    ...record,
     finalized: true,
+    ...selection,
+    ...splitScoresByBenchVersion({
+      rows,
+      selected: selection.selected_bench_version,
+      quorum: record.quorum,
+      // A Platform that predates SN-348 names no version for its aggregate
+      // because it pooled them all; that number is never reused.
+      ledger:
+        ledgerBenchVersion === undefined
+          ? null
+          : { bench_version: ledgerBenchVersion, median_composite: ledgerMedian },
+    }),
     active_bench_version: board.active_bench_version,
     desired_bench_version: board.desired_bench_version,
     leaderboard: entry,
@@ -3812,24 +4156,10 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
   }
   const record = settled
 
-  type ScoreRow = (typeof record.scores)[number]
-  const groups = new Map<number | null, Array<ScoreRow>>()
-  for (const score of record.scores) {
-    const rows = groups.get(score.bench_version) ?? []
-    rows.push(score)
-    groups.set(score.bench_version, rows)
-  }
   // Legacy (null-version) scores first, then ascending bench versions, so
   // composite_delta_vs_previous reads as version-over-version movement.
-  const orderedVersions = [...groups.keys()].sort((left, right) => {
-    if (left === null) return -1
-    if (right === null) return 1
-    return left - right
-  })
-
   let previousMedian: number | null = null
-  const versions = orderedVersions.map((benchVersion) => {
-    const rows = groups.get(benchVersion)!
+  const versions = groupScoresByBenchVersion(record.scores).map(({ benchVersion, rows }) => {
     const composites = rows.map((row) => row.composite)
     const medianComposite = median(composites)
     const generatedAt = rows.map((row) => row.generated_at).sort()
@@ -3866,7 +4196,9 @@ export async function fetchAgentScoreHistory(rawInput: unknown) {
     miner_hotkey: record.miner_hotkey,
     status: record.status,
     quorum: record.quorum,
-    total_score_count: record.score_count,
+    // Every version's rows. An SN-348 Platform scopes its own score_count to
+    // one bench version, so the total is counted from the rows themselves.
+    total_score_count: record.scores.length,
     versions,
     generated_at: record.generated_at,
   })

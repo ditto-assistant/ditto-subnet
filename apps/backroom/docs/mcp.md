@@ -158,16 +158,30 @@ Each round's secret is revealed after `privacy_window_rounds`.
 - **Reads (`backroom:read`):**
   - `get_generator_competition_settings` returns the policy, including the
     round knobs (`epochs_per_round`, columns, reference agents, privacy
-    window, on-chain commitment and `validator_rounds_enabled`).
+    window, on-chain commitment and `validator_rounds_enabled`) and
+    `upload_fee_required`. A Platform that predates the fee field reads as
+    `false`.
   - `list_generator_submissions` and `get_generator_submission` return
     identity, status, qualification and latest round score, never source.
   - `get_generator_run` returns a qualification run's evaluation. Seeds appear
     only after the run finished, so an operator can regenerate its packs.
   - `get_generator_probe` returns probe epochs. The probe seed is never served.
+  - `get_generator_scorer` returns what each generator scorer advertised on
+    its last work poll (version, min/max cases, grading versions, build
+    revision, last seen) and whether the live one accepts the governing
+    `cases_per_seed` and grades the active round contract
+    (`supports_round_contract`). A scorer that advertises no grading versions
+    is matched as v13-only. Platform refuses a settings write outside the case
+    bounds unless `overrideScorerCapability` is set.
+  - `preview_generator_round` `bench_contract` also reports `previous_version`,
+    `min_round_validators` (the switch quorum, default 3) and the live
+    scorer's `scorer_grading_versions`; `reason` names a quorum or scorer
+    shortfall that keeps rounds on the previous version.
   - `list_generator_rounds`, `get_generator_round`, `preview_generator_round`
     and `get_generator_round_loop` expose the following:
     - the schedule;
-    - each round's commitment and its publication;
+    - each round's commitment and which elected validators published it
+      on chain (claim, status, block);
     - columns, panel and per-column generation;
     - every validator lease and result;
     - pending agents;
@@ -181,6 +195,11 @@ Each round's secret is revealed after `privacy_window_rounds`.
 - **Writes (`backroom:write`, actor recorded):**
   - `set_generator_competition_settings` stores a whole-object revision with
     `expectedRevision` and the confirmation `APPLY GENERATOR COMPETITION {MODE}`.
+    `upload_fee_required=true` charges every generator upload the generator
+    competition's fee (`get_submission_cooldown`
+    `effective_competition_fees`), which inherits the default `feeAmountRao`
+    until `set_submission_cooldown` `competitionFees` gives generator its own
+    price; one payment funds one upload across both lanes. It ships `false`.
   - `register_default_generator` (`REGISTER DEFAULT GENERATOR`) registers the
     public generator that fills empty counted columns.
   - `tick_generator_rounds` runs one idempotent round-driver tick now.
@@ -188,8 +207,8 @@ Each round's secret is revealed after `privacy_window_rounds`.
     `close_generator_round` (`CLOSE GENERATOR ROUND {n}`) scores a running
     round with the results it already has.
   - `republish_generator_round_commitment`
-    (`REPUBLISH GENERATOR ROUND COMMITMENT`) retries a failed on-chain
-    commitment for a round that has not opened.
+    (`REPUBLISH GENERATOR ROUND COMMITMENT`) re-elects validators to
+    publish the on-chain commitment of a round that has not opened.
   - `release_generator_round_lease` (`RELEASE GENERATOR ROUND LEASE`) frees a
     quiet validator's round lease.
   - `rotate_generator_probe_seed` needs the confirmation
@@ -199,6 +218,14 @@ Each round's secret is revealed after `privacy_window_rounds`.
     `REJECT GENERATOR SUBMISSION` and `expectedStatus`. It abandons an
     in-flight qualification run and drops the generator from the ledger at
     once.
+  - `reinstate_generator_submission` needs the confirmation
+    `REINSTATE GENERATOR SUBMISSION`, `expectedStatus: rejected`, and the
+    exact `expectedStatusReason` from `get_generator_submission`. It returns
+    a rejection that was not the generator's fault (for example a stale
+    scorer) to `active` for a fresh qualification run. It refuses while the
+    hotkey has another active or a newer submission, and it refuses an
+    operator ruling unless `overrideOperatorRuling` is true.
+    `get_generator_submission` lists the same guards as `reinstate_blockers`.
 
 Activating the lane in shadow takes four steps:
 
@@ -259,7 +286,7 @@ Three scopes, in ascending sensitivity:
 |---|---|
 | `backroom:read` | Every read. Required for any connection. |
 | `backroom:artifact:read` | Miner-submitted source and sensitive diagnostics: tarball URLs, file listings, source search, copy/lineage/baseline diffs, and sanitized private screening failure details. |
-| `backroom:write` | Mutations, including `set_burn_settings`, which moves TAO. |
+| `backroom:write` | Mutations, including `set_emission_allocation` and `set_burn_settings`, which move TAO, and `queue_treasury_manual_transfer`, which moves SN118 alpha. |
 
 Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through
@@ -335,6 +362,29 @@ separately approve and obtain the dedicated grant through ordinary browser
 consent. No desktop credential copying, mint/refresh helper, secret provisioning
 or observer activation is included.
 
+### Manual Gamma collector transfers
+
+`preview_treasury_manual_transfer` and `queue_treasury_manual_transfer` are the
+MCP form of the **Transfer once** panel under Emissions & treasury and call the
+same Platform routes with the signed-in operator as the audit actor. Both need
+`backroom:write`, because the panel's server functions need a write-level
+session.
+
+Preview takes `bucket_id`, exactly one of integer `amount_rao` or decimal
+`amount_alpha`, `retained_alpha_rao`, an 8-240 character `reason` and an
+optional `request_id` (generated when omitted). It returns Platform's envelope,
+`confirmation_digest`, `spending_authority: "not_queued"` and `confirmation`,
+the exact `TRANSFER <amount> ALPHA TO <BUCKET> <destination>` phrase the panel
+asks the operator to type. Nothing is queued, signed or moved.
+
+Queue is destructive: it queues a real on-chain transfer of SN118 alpha from the
+Gamma collector to that bucket's holding coldkey. Pass the preview's envelope
+and digest unchanged with that exact `confirmation`; any other text is refused
+before Platform is called, and Backroom supplies Platform's own wire
+confirmation. Custody re-verifies balances, reserve, destination and the
+previous claim before signing. One unresolved claim blocks another, and an
+unresolved request is never resent automatically.
+
 ## Bindings
 
 Beyond the console's own secrets (`docs/oauth.md`), the MCP needs:
@@ -361,7 +411,9 @@ call, so a new capability is one `registerTool` entry:
    pass `props.session.email` so the platform records the real operator as the
    audit actor; artifact reads go through `artifact(() => …)`.
 3. Add the name to `WRITE_TOOL_NAMES` (or `TOOL_SCOPE_REQUIREMENTS` for artifact
-   scope) so the pre-flight scope challenge covers it.
+   scope) in `mcp-contract.server.ts` so the pre-flight scope challenge covers it.
+   This lightweight contract keeps OAuth and rejected requests independent of
+   the SDK and registry; authorized MCP calls load those modules on demand.
 4. Add it to the expected catalog list in `mcp.server.test.ts`. That list is
    exhaustive on purpose: a tool that is not named there fails the suite.
 
@@ -532,6 +584,42 @@ the signed-in operator identity plus the previous ban evidence to
 returns the post-write state so a successful call proves `banned=false` and
 surfaces the new audit entry.
 
+## Submission terms and per-competition fees
+
+`get_competition_submission_terms` reads `GET /api/v1/public/submission-terms`:
+for every competition with an upload lane (memory agent uploads, generator
+uploads) it returns the deliverable (artifact kind, format, contract version,
+required files, each upload-time limit with its source), the cooldown and its
+scope, and the competition's own fee. `competitions=null` means the Platform
+predates the endpoint. The miner CLI prints the same terms before upload.
+This is the miner submission contract only; build bounties are separate.
+
+Fees live in the submission settings. `get_submission_cooldown` returns the
+default fee (`fee_amount_rao`, what agent uploads pay and what every other
+competition inherits), the overrides as written (`competition_fees`), and
+every lane's resolved fee (`effective_competition_fees`). To give the
+generator competition its own price, read `get_submission_cooldown` and call
+`set_submission_cooldown` with the current cooldown and default fee plus the
+whole override map:
+
+```json
+{
+  "expectedRevision": 7,
+  "cooldownSeconds": 3600,
+  "feeAmountRao": 200000000,
+  "competitionFees": { "generator": { "fee_amount_rao": 500000000, "fee_required": null } },
+  "reason": "price generator uploads separately from agent uploads",
+  "confirmation": "SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT"
+}
+```
+
+A null `fee_amount_rao` inherits `feeAmountRao`; `fee_required` true charges,
+false makes uploads free, null leaves it to the generator
+`upload_fee_required` switch. `{}` clears every override, and omitting
+`competitionFees` carries the current map forward with the original phrase
+(the Backroom panel does this). An upload must pay its competition's fee
+exactly, and one transfer funds one upload across both lanes.
+
 ## Reading miner source
 
 Three tools, used in this order. Skipping the middle one is the expensive
@@ -573,6 +661,31 @@ One tool covers both modes to keep the catalog inside its byte budget. It needs
 artifact-fetch audit row per agent read (`admin.get_lineage_source_diff` or
 `admin.get_lineage_source_diff_file`, each tagged candidate or reference), so
 "who read this source" answers for the ancestor too.
+
+## Lineage-scoped review packets
+
+A same-hotkey resubmission (same agent name, a higher version) is screened
+against its prior version. At claim Platform names that prior version as the
+attempt's lineage parent; the worker then fetches one bound packet carrying the
+parent and earlier versions, every operator ruling on them, the parent's
+automated findings, and the bounded source diff from the parent. The model
+review always runs: `scope: diff` focuses it on the changed files and the open
+leads in the history, and `scope: full` names why the prior review could not
+carry (`build-surface-changed`, `diff-too-large`, `too-many-files-changed`,
+`opaque-file-changed`, `source-not-compared`, `parent-policy-differs`,
+`no-review-history`). History is context, never a verdict.
+
+`get_screening_submission` attempts carry `lineage_parent_agent_id`,
+`lineage_scope`, `lineage_packet_sha256`, `lineage_reference_kind`
+(`same_owner_version`, `same_owner` or `released_base`) and
+`lineage_full_review_reasons` (why a bound packet went full; empty for diff).
+A parent with a null scope means the worker never fetched the packet and
+reviewed in full. The queue policy's `lineage_reference_mode` decides whether
+same-coldkey uploads and declared released bases may be references
+(`set_queue_policy_settings` help has the rules; default off).
+`get_screening_review_lineage(attemptId)` rebuilds the exact packet (artifact
+scope, audited as `admin.get_screening_review_lineage` for both agents) and
+answers 409 when the history has moved since the packet was bound.
 
 The source readers publish their agent ids as plain `format: uuid` rather than
 zod's long uuid regex, also for the byte budget. Each service function still
@@ -726,3 +839,31 @@ validation gates without rerunning deep source review or granting a paid retry.
 The review console exposes this release action on the resolved quarantine when its
 submission is still `screening_failed`; older Platform contexts without score
 counts fail closed. Inconclusive reviews alone do not establish a policy violation.
+
+## Inference cost attribution
+
+`get_inference_runtime_metrics` accepts optional `costWindowHours` (1–744).
+Ordinary calls retain their existing response and do not scan the cost ledger.
+An explicit window adds `grant_costs`, backed by the admin-only
+`GET /api/v1/admin/inference-grant-costs?hours=24` endpoint.
+
+This groups **full recorded lifetime counters of grants created in the window**.
+It is not request-time spend, settled provider billing, account-wide usage or a
+complete screening/review cost report. Active grants continue accumulating cost.
+`aggregation_basis` and `provider_bill_reconciled=false` make that distinction
+machine-readable. Costs are integer micro-USD; chat and embeddings are separate.
+
+Historical ticket rows are reused. A current ticket purpose is admissible only
+for the exact agent/version/validator/deadline and a purpose-aware revision.
+Immutable round attempts, canary leases and accepted score receipts can also
+identify their exact leases. Everything else remains `historical_unclassified`;
+the result includes unknown grants and dollars explicitly. Accepted score
+receipts do not distinguish initial quorum from every repair/rollout path.
+Historical timestamp encodings not matching the canonical signed representation
+remain unknown. No prompt, answer, API key or actor credential is returned.
+
+Reconcile this operational view to provider key/model exports with matching
+service periods before claiming realized savings. Do not reduce seeds, panel
+coverage or independent executions solely because a grant's purpose is unknown.
+Immutable purpose capture at issuance is still needed for complete future
+attribution after ticket reuse; this read does not reconstruct missing history.

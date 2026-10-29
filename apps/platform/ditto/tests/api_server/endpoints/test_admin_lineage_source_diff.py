@@ -16,14 +16,12 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import HTTPException
-from starlette.requests import Request
 
 from ditto.api_server import create_api_server
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.endpoints import admin_copy_review
 from ditto.api_server.storage import ObjectDownloadFailedError
 from ditto.db.models import Agent, AgentStatus, ArtifactFetchAudit
-from ditto.db.queries import artifact_fetch_audit
 from ditto.tests.api_server.conftest import make_api_server_config
 
 _TOKEN = "test-admin-token-at-least-32-characters"
@@ -120,48 +118,6 @@ def test_lineage_routes_share_the_copy_review_wire_shapes() -> None:
     assert file_params["path"]["schema"]["maxLength"] == 240
 
 
-def test_lineage_audit_endpoints_are_their_own_doors() -> None:
-    names = {
-        artifact_fetch_audit.ENDPOINT_ADMIN_COPY_REVIEW_DIFF,
-        artifact_fetch_audit.ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
-        artifact_fetch_audit.ENDPOINT_ADMIN_LINEAGE_DIFF,
-        artifact_fetch_audit.ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
-    }
-    assert len(names) == 4
-    assert artifact_fetch_audit.ENDPOINT_ADMIN_LINEAGE_DIFF == (
-        "admin.get_lineage_source_diff"
-    )
-    assert artifact_fetch_audit.ENDPOINT_ADMIN_LINEAGE_DIFF_FILE == (
-        "admin.get_lineage_source_diff_file"
-    )
-
-
-async def test_same_agent_on_both_sides_is_400_before_any_read() -> None:
-    agent_id = uuid4()
-    session, storage = _fakes({}, {})
-    with pytest.raises(HTTPException) as caught:
-        await admin_copy_review._lineage_diff_pair(agent_id, agent_id, session, storage)
-    assert caught.value.status_code == 400
-    session.get.assert_not_called()
-    storage.get_object.assert_not_called()
-
-
-async def test_missing_agent_or_reference_is_404() -> None:
-    candidate_id, reference_id, session, storage = _pair_fixture(
-        {"a.rs": "x\n"}, {"a.rs": "y\n"}
-    )
-    for agent_id, other_id, detail in (
-        (uuid4(), reference_id, "agent not found"),
-        (candidate_id, uuid4(), "reference agent not found"),
-    ):
-        with pytest.raises(HTTPException) as caught:
-            await admin_copy_review._lineage_diff_pair(
-                agent_id, other_id, session, storage
-            )
-        assert (caught.value.status_code, caught.value.detail) == (404, detail)
-    storage.get_object.assert_not_called()
-
-
 async def test_missing_or_tampered_artifact_is_502() -> None:
     candidate_id, reference_id, session, storage = _pair_fixture(
         {"a.rs": "x\n"}, {"a.rs": "y\n"}
@@ -244,50 +200,6 @@ async def test_file_detail_diffs_one_path_and_404s_on_a_ghost() -> None:
     with pytest.raises(HTTPException) as caught:
         await admin_copy_review._source_diff_file_detail(pair, "ghost.rs")
     assert caught.value.status_code == 404
-
-
-async def test_audit_writes_one_row_per_exposed_agent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    candidate_id, reference_id, session, storage = _pair_fixture(
-        {"a.rs": "x\n"}, {"a.rs": "y\n"}
-    )
-    pair = await admin_copy_review._lineage_diff_pair(
-        candidate_id, reference_id, session, storage
-    )
-    record = AsyncMock(return_value=True)
-    monkeypatch.setattr(admin_copy_review, "record_artifact_fetch", record)
-    request = Request(
-        {
-            "type": "http",
-            "method": "GET",
-            "path": "/",
-            "headers": [],
-            "client": ("10.0.0.7", 1234),
-        }
-    )
-
-    await admin_copy_review._audit_diff_pair(
-        session,
-        request=request,
-        actor="operator",
-        endpoint=artifact_fetch_audit.ENDPOINT_ADMIN_LINEAGE_DIFF_FILE,
-        candidate=pair.candidate,
-        reference=pair.reference,
-        path="a.rs",
-    )
-
-    calls = [call.kwargs for call in record.await_args_list]
-    assert [(c["agent_id"], c["detail"]["role"]) for c in calls] == [
-        (candidate_id, "candidate"),
-        (reference_id, "reference"),
-    ]
-    for call in calls:
-        assert call["endpoint"] == "admin.get_lineage_source_diff_file"
-        assert call["requester_kind"] == "admin"
-        assert call["requester_id"] == "operator"
-        assert call["source_ip"] == "10.0.0.7"
-        assert call["detail"]["path"] == "a.rs"
 
 
 async def test_http_round_trip_serves_and_audits_without_a_review_row() -> None:

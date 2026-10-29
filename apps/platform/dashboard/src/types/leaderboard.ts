@@ -265,6 +265,7 @@ export interface NameHandle {
   claim_id: string;
 }
 
+/** @deprecated The Coding competition is retired; Platform never sends this. */
 export interface CodingShadowScore {
   status: "scheduled" | "collecting" | "complete" | "stale";
   score?: number | null;
@@ -286,7 +287,7 @@ export interface LeaderboardEntry {
   agent_version?: number | null;
   /** Minimal children for the expandable owner-family grouping. */
   submission_family?: LeaderboardFamily | null;
-  /** Exact-artifact aggregate only; never changes rank, composite, or emissions. */
+  /** @deprecated Coding is retired: always absent. Tolerated until the field is removed. */
   coding_shadow?: CodingShadowScore | null;
   /** Mean settled platform-metered validator lease cost on this score's bench version. */
   average_run_cost_microusd?: number | null;

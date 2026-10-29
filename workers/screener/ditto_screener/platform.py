@@ -51,6 +51,7 @@ from ditto_screener.review_settings import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ArtifactResponse,
+    ReviewLineagePacket,
     ScreenedImageCompletedPart,
     ScreenedImagePartUploadRequest,
     ScreenedImagePartUploadResponse,
@@ -63,6 +64,8 @@ from ditto_screening_protocol import (
     ScreenerQueueResponse,
     ScreenerReviewSettingsOverride,
     ScreenEvidenceItem,
+    ScreeningReviewUsageRequest,
+    ScreeningReviewUsageResponse,
     ScreenResultOutcome,
     ScreenResultRequest,
     ScreenResultResponse,
@@ -437,6 +440,25 @@ class PlatformClient:
             )
         return ShadowReviewObservationResponse.model_validate(resp.json())
 
+    async def submit_review_usage(
+        self, agent_id: UUID, request: ScreeningReviewUsageRequest
+    ) -> ScreeningReviewUsageResponse:
+        """Persist the attempt's model usage telemetry; never changes outcome."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-usage"
+        try:
+            resp = await self._client.post(
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"review usage submission failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"review usage rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ScreeningReviewUsageResponse.model_validate(resp.json())
+
     async def submit_probe_battery(
         self, agent_id: UUID, request: ProbeBatteryObservationRequest
     ) -> ShadowReviewObservationResponse:
@@ -532,6 +554,41 @@ class PlatformClient:
                 )
                 raise ClaimResponseInvalid(message, ()) from error
             raise ClaimResponseInvalid(message, tuple(refs)) from error
+
+    async def get_review_lineage(
+        self, agent_id: UUID, *, attempt_id: UUID, artifact_sha256: str
+    ) -> ReviewLineagePacket:
+        """Fetch and bind the lineage-scoped review packet for one leased attempt.
+
+        The packet must name exactly this agent, attempt and artifact; anything
+        else is refused so a stale or crossed packet can never scope a review.
+        """
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-lineage"
+        try:
+            resp = await self._client.post(
+                url,
+                headers=await self._auth_headers(),
+                params={"attempt_id": str(attempt_id)},
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"lineage packet fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"lineage packet rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            packet = ReviewLineagePacket.model_validate(resp.json())
+        except (ValueError, ValidationError) as error:
+            # json.JSONDecodeError is a ValueError; the worker's lineage
+            # fallback keys on PlatformError.
+            raise PlatformError("lineage packet response is invalid") from error
+        if (
+            packet.agent_id != agent_id
+            or packet.attempt_id != attempt_id
+            or packet.artifact_sha256 != artifact_sha256.lower()
+        ):
+            raise PlatformError("lineage packet does not match the claimed attempt")
+        return packet
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None

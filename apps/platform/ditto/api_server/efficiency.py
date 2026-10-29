@@ -792,18 +792,6 @@ def bonus_for_submission(
     )
 
 
-def effective_composite(composite: float, bonus: float) -> float:
-    """The legacy v1/v2 ranking score: ``composite * (1 + bonus)``.
-
-    Multiplicative, matching the spec's ``bonus_multiplier`` form: the fold
-    compares composites, so a scale factor preserves ordering semantics and a
-    zero composite can never buy weight from cheapness alone. Bounded by
-    ``1 + cap`` (<= 1.10). Curve v3 does not use this helper: it multiplies
-    downside and applies upside only to remaining quality headroom. The
-    validator's composite is never modified."""
-    return composite * (1.0 + bonus)
-
-
 def epoch_index_for(now: datetime, epoch_hours: int) -> int:
     """The platform efficiency epoch a wall-clock instant falls in.
 

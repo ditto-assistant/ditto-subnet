@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,7 +25,7 @@ func TestGenerateRequestValidate(t *testing.T) {
 		t.Error("seed fold should be non-trivial")
 	}
 	var round GenerateRequest
-	if err := json.Unmarshal(ok.Bytes(), &round); err != nil || round != ok {
+	if err := json.Unmarshal(ok.Bytes(), &round); err != nil || !reflect.DeepEqual(round, ok) {
 		t.Fatalf("request round trip: %v %+v", err, round)
 	}
 	for name, mut := range map[string]func(*GenerateRequest){

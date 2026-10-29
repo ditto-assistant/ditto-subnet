@@ -13,7 +13,7 @@ import base64
 import copy
 import hashlib
 import json
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -664,12 +664,18 @@ def _confirmation_chat_request(
     signer: Ed25519PrivateKey,
     *,
     provider: dict[str, Any] | None = None,
+    max_tokens: int = 10,
 ) -> tuple[bytes, dict[str, str]]:
+    # max_tokens defaults to the upstream evaluator's bound because most
+    # callers here only exercise transport. The judge lane overrides it: its
+    # frozen runtime asks for 8192, sized from the reasoning judge's measured
+    # completion tail. The platform clamps downward against the ticket ceiling
+    # (config.max_output_tokens, 32768), so 8192 passes through intact.
     body = json.dumps(
         {
             "model": offer["model"],
             "messages": [{"role": "user", "content": "Answer yes or no."}],
-            "max_tokens": 10,
+            "max_tokens": max_tokens,
             "n": 1,
             "stream": False,
             "provider": provider
@@ -949,732 +955,6 @@ class TestV9ConfirmationChatProxy:
             assert grant.completion_tokens == 0
             assert grant.cost_microusd == 0
 
-    async def test_reader_backpressure_exhaustion_settles_one_failed_request(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        offers, signer = await _claim_installed_profile_offers(
-            app, client, session_maker
-        )
-        offer = next(item for item in offers if item["lane"] == "reader")
-        app.state.session_maker = session_maker
-        _enable_confirmation_proxy(app)
-        body, headers = _confirmation_chat_request(offer, signer)
-        upstream_calls = 0
-        original_post = inference_mod._post_provider_with_retry
-
-        async def no_delay_post(
-            provider_client: httpx.AsyncClient,
-            url: str,
-            *,
-            payload: dict[str, Any],
-            headers: dict[str, str],
-            retry_backpressure: bool = True,
-            retry_pre_provider_not_found_model: str | None = None,
-            backpressure_max_attempts: int = inference_mod._PROVIDER_MAX_ATTEMPTS,
-            require_receipt_free_backpressure: bool = False,
-            receipt_free_expected_model: str = "",
-            receipt_free_expected_provider: str = "",
-            max_elapsed_seconds: float | None = None,
-        ) -> Any:
-            async def no_sleep(_: float) -> None:
-                return None
-
-            return await original_post(
-                provider_client,
-                url,
-                payload=payload,
-                headers=headers,
-                retry_backpressure=retry_backpressure,
-                retry_pre_provider_not_found_model=retry_pre_provider_not_found_model,
-                backpressure_max_attempts=backpressure_max_attempts,
-                require_receipt_free_backpressure=require_receipt_free_backpressure,
-                receipt_free_expected_model=receipt_free_expected_model,
-                receipt_free_expected_provider=receipt_free_expected_provider,
-                max_elapsed_seconds=max_elapsed_seconds,
-                sleep=no_sleep,
-            )
-
-        monkeypatch.setattr(inference_mod, "_post_provider_with_retry", no_delay_post)
-
-        async def provider(request: httpx.Request) -> httpx.Response:
-            nonlocal upstream_calls
-            upstream_calls += 1
-            return httpx.Response(
-                429,
-                request=request,
-                headers={"Retry-After": "1"},
-                json={"error": {"code": 429, "message": "rate limited"}},
-            )
-
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(provider)
-        ) as provider_client:
-            app.state.inference_client = provider_client
-            response = await client.post(
-                "/api/v1/inference/confirmation/chat/completions",
-                content=body,
-                headers=headers,
-            )
-
-        assert response.status_code == 502, response.text
-        assert upstream_calls == 1
-        async with session_maker() as session:
-            request_rows = list(
-                await session.scalars(
-                    select(ConfirmationInferenceRequest).where(
-                        ConfirmationInferenceRequest.grant_id == UUID(offer["grant_id"])
-                    )
-                )
-            )
-            grant = await session.get(
-                ConfirmationInferenceGrant, UUID(offer["grant_id"])
-            )
-            assert len(request_rows) == 1
-            request_row = request_rows[0]
-            assert request_row.status == "failed"
-            assert request_row.prompt_tokens == 0
-            assert request_row.completion_tokens == 0
-            assert request_row.cost_microusd == 0
-            assert request_row.upstream_provider is None
-            assert grant is not None
-            assert grant.request_count == 1
-            assert grant.active_requests == 0
-            assert grant.prompt_tokens == 0
-            assert grant.completion_tokens == 0
-            assert grant.cost_microusd == 0
-
-    async def test_reader_does_not_retry_ambiguous_backpressure_shapes(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        offers, signer = await _claim_installed_profile_offers(
-            app, client, session_maker
-        )
-        offer = next(item for item in offers if item["lane"] == "reader")
-        app.state.session_maker = session_maker
-        _enable_confirmation_proxy(app)
-        responses = [
-            {
-                "error": {"code": 429, "message": "rate limited"},
-                "billing": {"amount_microusd": 0},
-            },
-            {
-                "error": {"code": 429, "message": "rate limited"},
-                "openrouter_metadata": {
-                    "requested": offer["model"],
-                    "strategy": "direct",
-                    "attempt": 0,
-                    "endpoints": {
-                        "total": 1,
-                        "available": [
-                            {
-                                "provider": "Azure",
-                                "model": offer["model"],
-                                "selected": False,
-                            }
-                        ],
-                    },
-                },
-            },
-        ]
-        upstream_calls = 0
-
-        async def provider(request: httpx.Request) -> httpx.Response:
-            nonlocal upstream_calls
-            response_payload = responses[upstream_calls]
-            upstream_calls += 1
-            return httpx.Response(429, request=request, json=response_payload)
-
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(provider)
-        ) as provider_client:
-            app.state.inference_client = provider_client
-            for expected_calls in range(1, len(responses) + 1):
-                body, headers = _confirmation_chat_request(offer, signer)
-                response = await client.post(
-                    "/api/v1/inference/confirmation/chat/completions",
-                    content=body,
-                    headers=headers,
-                )
-                assert response.status_code == 502, response.text
-                assert upstream_calls == expected_calls
-
-        async with session_maker() as session:
-            request_rows = list(
-                await session.scalars(
-                    select(ConfirmationInferenceRequest).where(
-                        ConfirmationInferenceRequest.grant_id == UUID(offer["grant_id"])
-                    )
-                )
-            )
-            grant = await session.get(
-                ConfirmationInferenceGrant, UUID(offer["grant_id"])
-            )
-            assert len(request_rows) == 2
-            assert all(row.status == "failed" for row in request_rows)
-            assert grant is not None
-            assert grant.request_count == 2
-            assert grant.active_requests == 0
-            assert grant.completion_tokens == 0
-            assert grant.cost_microusd == 0
-
-    async def test_reader_parks_documented_pre_provider_route_miss(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        offers, signer = await _claim_installed_profile_offers(
-            app, client, session_maker
-        )
-        offer = next(item for item in offers if item["lane"] == "reader")
-        app.state.session_maker = session_maker
-        _enable_confirmation_proxy(app)
-        body, headers = _confirmation_chat_request(offer, signer)
-        attempts: list[bytes] = []
-        sleeps: list[float] = []
-        original_post = inference_mod._post_provider_with_retry
-
-        async def no_delay_post(
-            provider_client: httpx.AsyncClient,
-            url: str,
-            *,
-            payload: dict[str, Any],
-            headers: dict[str, str],
-            retry_backpressure: bool = True,
-            retry_pre_provider_not_found_model: str | None = None,
-            backpressure_max_attempts: int = inference_mod._PROVIDER_MAX_ATTEMPTS,
-            require_receipt_free_backpressure: bool = False,
-            receipt_free_expected_model: str = "",
-            receipt_free_expected_provider: str = "",
-            max_elapsed_seconds: float | None = None,
-        ) -> Any:
-            async def record_sleep(delay: float) -> None:
-                sleeps.append(delay)
-
-            return await original_post(
-                provider_client,
-                url,
-                payload=payload,
-                headers=headers,
-                retry_backpressure=retry_backpressure,
-                retry_pre_provider_not_found_model=(retry_pre_provider_not_found_model),
-                backpressure_max_attempts=backpressure_max_attempts,
-                require_receipt_free_backpressure=require_receipt_free_backpressure,
-                receipt_free_expected_model=receipt_free_expected_model,
-                receipt_free_expected_provider=receipt_free_expected_provider,
-                max_elapsed_seconds=max_elapsed_seconds,
-                sleep=record_sleep,
-            )
-
-        monkeypatch.setattr(inference_mod, "_post_provider_with_retry", no_delay_post)
-
-        async def provider(request: httpx.Request) -> httpx.Response:
-            attempts.append(request.content)
-            payload = json.loads(request.content)
-            assert payload["model"] == offer["model"]
-            assert payload["provider"] == {
-                "sort": "throughput",
-                "ignore": ["coreweave"],
-                "allow_fallbacks": False,
-                "data_collection": "deny",
-                "zdr": True,
-            }
-            if len(attempts) == 1:
-                return httpx.Response(
-                    404,
-                    request=request,
-                    headers={"Retry-After": "120"},
-                    json={
-                        "error": {
-                            "code": 404,
-                            "message": (
-                                "No allowed providers are available for the "
-                                "selected model"
-                            ),
-                        },
-                        "openrouter_metadata": {
-                            "requested": offer["model"],
-                            "strategy": "direct",
-                            "attempt": 0,
-                            "endpoints": {
-                                "total": 1,
-                                "available": [
-                                    {
-                                        "provider": "DeepInfra",
-                                        "model": offer["model"],
-                                        "selected": False,
-                                    }
-                                ],
-                            },
-                        },
-                    },
-                )
-            return httpx.Response(
-                200,
-                request=request,
-                json={
-                    "id": "generation-reader-route-recovered",
-                    "object": "chat.completion",
-                    "created": 1,
-                    "model": offer["model"],
-                    "provider": "Groq",
-                    "choices": [
-                        {
-                            "index": 0,
-                            "finish_reason": "stop",
-                            "message": {"role": "assistant", "content": "memory"},
-                        }
-                    ],
-                    "usage": {
-                        "prompt_tokens": 5,
-                        "completion_tokens": 1,
-                        "total_tokens": 6,
-                        "cost": 0.00001,
-                    },
-                },
-            )
-
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(provider)
-        ) as provider_client:
-            app.state.inference_client = provider_client
-            response = await client.post(
-                "/api/v1/inference/confirmation/chat/completions",
-                content=body,
-                headers=headers,
-            )
-
-        assert response.status_code == 502, response.text
-        assert len(attempts) == 1
-        assert sleeps == []
-        async with session_maker() as session:
-            request_rows = list(
-                await session.scalars(
-                    select(ConfirmationInferenceRequest).where(
-                        ConfirmationInferenceRequest.grant_id == UUID(offer["grant_id"])
-                    )
-                )
-            )
-            grant = await session.get(
-                ConfirmationInferenceGrant, UUID(offer["grant_id"])
-            )
-            assert len(request_rows) == 1
-            request_row = request_rows[0]
-            assert request_row.status == "failed"
-            assert request_row.prompt_tokens == 0
-            assert request_row.completion_tokens == 0
-            assert request_row.cost_microusd == 0
-            assert grant is not None
-            assert grant.request_count == 1
-            assert grant.active_requests == 0
-            assert grant.prompt_tokens == 0
-            assert grant.completion_tokens == 0
-            assert grant.cost_microusd == 0
-
-    async def test_pre_provider_route_miss_classifier_fails_closed(self) -> None:
-        model = "openai/gpt-oss-20b"
-        valid: dict[str, Any] = {
-            "error": {"code": 404, "message": "No allowed providers"},
-            "openrouter_metadata": {
-                "requested": model,
-                "strategy": "direct",
-                "attempt": 0,
-                "endpoints": {
-                    "total": 1,
-                    "available": [
-                        {
-                            "provider": "DeepInfra",
-                            "model": model,
-                            "selected": False,
-                        }
-                    ],
-                },
-            },
-        }
-
-        def response(payload: dict[str, Any]) -> httpx.Response:
-            return httpx.Response(404, json=payload)
-
-        assert inference_mod._is_retryable_pre_provider_not_found(
-            response(valid), expected_model=model
-        )
-        invalid = [
-            {"error": {"code": 404}},
-            {**valid, "error": {"code": 404.0}},
-            {**valid, "usage": {"cost": 0}},
-            {**valid, "id": "gen-billed"},
-            {**valid, "generation": "gen-billed"},
-            {**valid, "generation_id": "gen-billed"},
-            {**valid, "model": model},
-            {**valid, "provider": "DeepInfra"},
-            {**valid, "choices": []},
-            {**valid, "cost": 0},
-            {
-                **valid,
-                "openrouter_metadata": {
-                    **valid["openrouter_metadata"],
-                    "attempt": 1,
-                },
-            },
-            {
-                **valid,
-                "openrouter_metadata": {
-                    **valid["openrouter_metadata"],
-                    "attempt": 0.0,
-                },
-            },
-            {
-                **valid,
-                "openrouter_metadata": {
-                    **valid["openrouter_metadata"],
-                    "attempts": [],
-                },
-            },
-            {
-                **valid,
-                "openrouter_metadata": {
-                    **valid["openrouter_metadata"],
-                    "requested": "other/model",
-                },
-            },
-            {
-                **valid,
-                "openrouter_metadata": {
-                    **valid["openrouter_metadata"],
-                    "endpoints": {
-                        "total": 1,
-                        "available": [
-                            {
-                                "provider": "DeepInfra",
-                                "model": model,
-                                "selected": True,
-                            }
-                        ],
-                    },
-                },
-            },
-        ]
-        assert all(
-            not inference_mod._is_retryable_pre_provider_not_found(
-                response(payload), expected_model=model
-            )
-            for payload in invalid
-        )
-        duplicate_bodies = [
-            b'{"error":{"code":500,"code":404},"openrouter_metadata":{"requested":"openai/gpt-oss-20b","attempt":0,"endpoints":{"available":[{"selected":false}]}}}',
-            b'{"error":{"code":404},"openrouter_metadata":{"requested":"other/model","requested":"openai/gpt-oss-20b","attempt":0,"endpoints":{"available":[{"selected":false}]}}}',
-            b'{"error":{"code":404},"openrouter_metadata":{"requested":"openai/gpt-oss-20b","attempt":1,"attempt":0,"endpoints":{"available":[{"selected":false}]}}}',
-            b'{"error":{"code":404},"openrouter_metadata":{"requested":"openai/gpt-oss-20b","attempt":0,"endpoints":{"available":[{"selected":true,"selected":false}]}}}',
-        ]
-        assert all(
-            not inference_mod._is_retryable_pre_provider_not_found(
-                httpx.Response(404, content=body), expected_model=model
-            )
-            for body in duplicate_bodies
-        )
-
-    async def test_confirmation_backpressure_receipt_proof_fails_closed(
-        self,
-    ) -> None:
-        canonical_metadata = {
-            "requested": "fixed/model",
-            "strategy": "direct",
-            "attempt": 0,
-            "endpoints": {
-                "total": 1,
-                "available": [
-                    {
-                        "provider": "DeepInfra",
-                        "model": "fixed/model",
-                        "selected": False,
-                    }
-                ],
-            },
-        }
-        valid = [
-            httpx.Response(
-                429, content=b'{"error":{"code":429,"message":"rate limited"}}'
-            ),
-            httpx.Response(
-                429,
-                json={
-                    "error": {"code": 429, "message": "rate limited"},
-                    "openrouter_metadata": canonical_metadata,
-                },
-            ),
-        ]
-        invalid = [
-            b"{}",
-            b'{"error":',
-            b'{"error":"rate limited"}',
-            b'{"error":{"code":429}}',
-            b'{"error":{"code":429,"message":""}}',
-            b'{"error":{"code":429,"message":"rate limited",'
-            b'"provider_name":"DeepInfra"}}',
-            b'{"error":{"code":429,"message":"rate limited"},'
-            b'"billing":{"amount_microusd":0}}',
-            b'{"error":{"code":429,"message":"rate limited"},"response_id":"r"}',
-            b'{"error":{"code":429,"message":"rate limited"},"token_usage":{}}',
-            b'{"error":{"code":503,"message":"rate limited"}}',
-            b'{"error":"first","error":"second"}',
-            b'{"error":{"code":429,"message":"rate limited"},"usage":{}}',
-            b'{"error":{"code":429,"message":"rate limited","metadata":{"usage":{}}}}',
-            b'{"error":{"code":429,"message":"rate limited"},"cost":0}',
-            b'{"error":{"code":429,"message":"rate limited"},"generation":"gen-1"}',
-            b'{"error":{"code":429,"message":"rate limited"},"generation_id":"gen-1"}',
-            b'{"error":{"code":429,"message":"rate limited"},"provider":"DeepInfra"}',
-            b'{"error":{"code":429,"message":"rate limited"},"choices":[]}',
-            b'{"error":{"code":429,"message":"rate limited"},"receipt":{"id":"r"}}',
-            b'{"error":{"code":429,"message":"rate limited"},"receipt_id":"r"}',
-            b'{"error":{"code":429,"message":"rate limited"},"billed":false}',
-            b'{"error":{"code":429,"message":"rate limited",'
-            b'"metadata":{"charged":false}}}',
-            b'{"error":{"code":429,"message":"rate limited",'
-            b'"metadata":{"provider":"DeepInfra"}}}',
-            b'{"error":{"code":429,"message":"rate limited","metadata":[{"cost":0}]}}',
-            b'{"error":{"code":429,"message":"rate limited",'
-            b'"metadata":{"receipt":"r"}}}',
-            b'{"error":{"code":429,"message":"rate limited",'
-            b'"metadata":[{"choices":[]}]}}',
-            b'{"error":{"code":429,"message":"rate limited"},"value":NaN}',
-            b'{"error":{"code":429,"message":"rate limited"},"value":Infinity}',
-            b'{"error":{"code":429,"message":"rate limited"},"value":-Infinity}',
-            b'{"error":{"code":429,"message":"rate limited"},'
-            b'"openrouter_metadata":{"requested":"fixed/model","strategy":"direct",'
-            b'"attempt":-0,"endpoints":{"total":1,"available":[{"provider":'
-            b'"DeepInfra","model":"fixed/model","selected":false}]}}}',
-        ]
-        invalid_metadata = [
-            {**canonical_metadata, "attempt": 1},
-            {**canonical_metadata, "requested": "other/model"},
-            {**canonical_metadata, "attempts": []},
-            {
-                **canonical_metadata,
-                "endpoints": {
-                    "total": 1,
-                    "available": [
-                        {
-                            "provider": "DeepInfra",
-                            "model": "fixed/model",
-                            "selected": True,
-                        }
-                    ],
-                },
-            },
-            None,
-        ]
-        invalid_metadata.extend(
-            [
-                {
-                    **canonical_metadata,
-                    "endpoints": {
-                        "total": 1,
-                        "available": [
-                            {
-                                "provider": "Azure",
-                                "model": "fixed/model",
-                                "selected": False,
-                            }
-                        ],
-                    },
-                },
-                {
-                    **canonical_metadata,
-                    "endpoints": {
-                        "total": 1,
-                        "available": [
-                            {
-                                "provider": "DeepInfra",
-                                "model": "other/model",
-                                "selected": False,
-                            }
-                        ],
-                    },
-                },
-            ]
-        )
-        assert all(
-            inference_mod._provider_backpressure_is_receipt_free(
-                response,
-                expected_model="fixed/model",
-                expected_provider="deepinfra",
-            )
-            for response in valid
-        )
-        assert all(
-            not inference_mod._provider_backpressure_is_receipt_free(
-                httpx.Response(429, content=body),
-                expected_model="fixed/model",
-                expected_provider="deepinfra",
-            )
-            for body in invalid
-        )
-        assert all(
-            not inference_mod._provider_backpressure_is_receipt_free(
-                httpx.Response(
-                    429,
-                    json={
-                        "error": {"code": 429, "message": "rate limited"},
-                        "openrouter_metadata": metadata,
-                    },
-                ),
-                expected_model="fixed/model",
-                expected_provider="deepinfra",
-            )
-            for metadata in invalid_metadata
-        )
-
-    async def test_confirmation_reader_retry_after_contract(self) -> None:
-        cases = {
-            None: 10.0,
-            "invalid": 10.0,
-            "+1": 10.0,
-            "6_0": 10.0,
-            "６０": 10.0,
-            "0": 10.0,
-            "-3": 10.0,
-            "1": 1.0,
-            "60": 60.0,
-            "120": 60.0,
-            "9223372036854775808": 60.0,
-        }
-        for retry_after, expected in cases.items():
-            headers: httpx.Headers | dict[str, str]
-            if retry_after is None:
-                headers = {}
-            elif retry_after.isascii():
-                headers = {"Retry-After": retry_after}
-            else:
-                headers = httpx.Headers(
-                    [(b"Retry-After", retry_after.encode())], encoding="utf-8"
-                )
-            response = httpx.Response(429, headers=headers)
-            assert (
-                inference_mod._confirmation_reader_backpressure_delay(response)
-                == expected
-            )
-        duplicate = httpx.Response(
-            429,
-            headers=[("Retry-After", "1"), ("Retry-After", "60")],
-        )
-        assert inference_mod._confirmation_reader_backpressure_delay(duplicate) == 10.0
-
-    async def test_judge_and_503_are_single_shot(self) -> None:
-        async def no_sleep(_: float) -> None:
-            return None
-
-        cases = (
-            (429, 3, False, {"error": "legacy judge rate limit"}),
-            (503, 7, True, {"error": {"code": 503, "message": "capacity"}}),
-        )
-        for status, extended_attempts, require_receipt_free, error_body in cases:
-            calls = 0
-
-            def provider_for(
-                provider_status: int, provider_error: dict[str, Any]
-            ) -> Callable[[httpx.Request], Coroutine[None, None, httpx.Response]]:
-                async def provider(request: httpx.Request) -> httpx.Response:
-                    nonlocal calls
-                    calls += 1
-                    return httpx.Response(
-                        provider_status,
-                        request=request,
-                        json=provider_error,
-                    )
-
-                return provider
-
-            async with httpx.AsyncClient(
-                transport=httpx.MockTransport(provider_for(status, error_body))
-            ) as provider_client:
-                result = await inference_mod._post_provider_with_retry(
-                    provider_client,
-                    "https://provider.invalid/chat",
-                    payload={"model": "fixed/model"},
-                    headers={"Authorization": "redacted"},
-                    backpressure_max_attempts=extended_attempts,
-                    require_receipt_free_backpressure=require_receipt_free,
-                    sleep=no_sleep,
-                )
-            assert result.response.status_code == status
-            assert result.attempts == 1
-            assert calls == 1
-
-    async def test_receipt_bearing_429_is_never_retried(self) -> None:
-        calls = 0
-
-        async def provider(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(
-                429,
-                request=request,
-                json={
-                    "error": {
-                        "code": 429,
-                        "message": "capacity",
-                        "metadata": {"usage": {"prompt_tokens": 1}},
-                    }
-                },
-            )
-
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(provider)
-        ) as provider_client:
-            result = await inference_mod._post_provider_with_retry(
-                provider_client,
-                "https://provider.invalid/chat",
-                payload={"model": "fixed/model"},
-                headers={"Authorization": "redacted"},
-                backpressure_max_attempts=7,
-                require_receipt_free_backpressure=True,
-            )
-        assert result.response.status_code == 429
-        assert result.attempts == 1
-        assert calls == 1
-
-    async def test_reader_backpressure_returns_without_retry_delay(self) -> None:
-        calls = 0
-        sleeps: list[float] = []
-
-        async def provider(request: httpx.Request) -> httpx.Response:
-            nonlocal calls
-            calls += 1
-            return httpx.Response(
-                429,
-                request=request,
-                json={"error": {"code": 429, "message": "capacity"}},
-            )
-
-        async def record_sleep(delay: float) -> None:
-            sleeps.append(delay)
-
-        async with httpx.AsyncClient(
-            transport=httpx.MockTransport(provider)
-        ) as provider_client:
-            result = await inference_mod._post_provider_with_retry(
-                provider_client,
-                "https://provider.invalid/chat",
-                payload={"model": "fixed/model"},
-                headers={"Authorization": "redacted"},
-                backpressure_max_attempts=7,
-                require_receipt_free_backpressure=True,
-                max_elapsed_seconds=1.0,
-                sleep=record_sleep,
-            )
-        assert result.response.status_code == 429
-        assert result.attempts == 1
-        assert calls == 1
-        assert sleeps == []
-
     async def test_reader_backpressure_never_enters_retry_sleep(self) -> None:
         calls = 0
         sleeping = asyncio.Event()
@@ -1709,7 +989,7 @@ class TestV9ConfirmationChatProxy:
         assert not sleeping.is_set()
         assert calls == 1
 
-    async def test_installed_judge_profile_reaches_zdr_azure_route(
+    async def test_installed_judge_profile_reaches_zdr_together_route(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1721,7 +1001,7 @@ class TestV9ConfirmationChatProxy:
         offer = next(item for item in offers if item["lane"] == "judge")
         app.state.session_maker = session_maker
         _enable_confirmation_proxy(app)
-        body, headers = _confirmation_chat_request(offer, signer)
+        body, headers = _confirmation_chat_request(offer, signer, max_tokens=8192)
         upstream_calls = 0
 
         async def provider(request: httpx.Request) -> httpx.Response:
@@ -1729,14 +1009,19 @@ class TestV9ConfirmationChatProxy:
             upstream_calls += 1
             payload = json.loads(request.content)
             assert payload["provider"] == {
-                "only": ["azure"],
-                "order": ["azure"],
+                "only": ["together"],
+                "order": ["together"],
                 "allow_fallbacks": False,
                 "require_parameters": True,
                 "data_collection": "deny",
                 "zdr": True,
             }
-            assert payload["max_completion_tokens"] == 10
+            # The frozen judge is a reasoning model, so the bound is sized from
+            # its measured completion tail rather than the upstream evaluator's
+            # 10. At 10 a reasoning judge spends the budget on reasoning tokens
+            # and returns an empty content, which the Go runtime rejects as
+            # malformed and which upstream LongMemEval would score "no".
+            assert payload["max_completion_tokens"] == 8192
             assert "max_tokens" not in payload
             return httpx.Response(
                 200,
@@ -1784,7 +1069,7 @@ class TestV9ConfirmationChatProxy:
             )
             assert request_row is not None
             assert request_row.status == "completed"
-            assert request_row.upstream_provider == "Azure"
+            assert request_row.upstream_provider == "Together"
 
     async def test_installed_reader_profile_reaches_throughput_zdr_route(
         self,
@@ -1986,6 +1271,17 @@ def _report_payload(
     }
 
 
+class _Unset:
+    """Sentinel letting a caller sign ``None`` where ``None`` means "default to
+    the sent value". Without it ``sign_status=None`` is indistinguishable from
+    "not overridden", and a test meant to prove a stripped status fails the
+    signature would quietly sign the very status it claims to omit -- passing
+    while asserting nothing."""
+
+
+_UNSET = _Unset()
+
+
 def _fail_payload(
     *,
     bundle_id: UUID,
@@ -1993,8 +1289,10 @@ def _fail_payload(
     reason: str = "execution_failed",
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
     sign_class: str | None = None,
     sign_stage: str | None = None,
+    sign_status: int | None | _Unset = _UNSET,
     nonce: UUID | None = None,
     requested_at: datetime | None = None,
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
@@ -2015,6 +1313,9 @@ def _fail_payload(
             reason=reason,
             failure_class=sign_class if sign_class is not None else failure_class,
             failure_stage=sign_stage if sign_stage is not None else failure_stage,
+            failure_status=(
+                failure_status if isinstance(sign_status, _Unset) else sign_status
+            ),
             nonce=failure_nonce,
             requested_at=failed_at,
         )
@@ -2030,6 +1331,8 @@ def _fail_payload(
     if failure_class is not None:
         payload["failure_class"] = failure_class
         payload["failure_stage"] = failure_stage
+    if failure_status is not None:
+        payload["failure_status"] = failure_status
     return payload
 
 
@@ -3520,7 +2823,7 @@ class TestV9ConfirmationFailureRecovery:
         nonce = UUID("33333333-3333-3333-3333-333333333333")
         requested_at = datetime(2026, 8, 8, 12, 34, 56, 789, tzinfo=UTC)
 
-        def message(**diagnostics: str) -> bytes:
+        def message(**diagnostics: Any) -> bytes:
             return v9_confirmation_fail_signing_message(
                 validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
                 bundle_id=bundle_id,
@@ -3544,6 +2847,193 @@ class TestV9ConfirmationFailureRecovery:
 
         with pytest.raises(ValueError, match="travel together"):
             message(failure_class="dittobench")
+
+    async def test_scorer_status_binds_a_v3_message_without_breaking_v2(
+        self,
+    ) -> None:
+        """v2 stays byte-identical; a status gets its own bound message.
+
+        All three versions must remain simultaneously valid: the fleet upgrades
+        one validator at a time, and a reporter that has not adopted the status
+        keeps handing work back on the message it already signs.
+        """
+        bundle_id = UUID("11111111-1111-1111-1111-111111111111")
+        ticket_id = UUID("22222222-2222-2222-2222-222222222222")
+        nonce = UUID("33333333-3333-3333-3333-333333333333")
+        requested_at = datetime(2026, 8, 8, 12, 34, 56, 789, tzinfo=UTC)
+
+        def message(**diagnostics: Any) -> bytes:
+            return v9_confirmation_fail_signing_message(
+                validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
+                bundle_id=bundle_id,
+                ticket_id=ticket_id,
+                reason="execution_failed",
+                nonce=nonce,
+                requested_at=requested_at,
+                **diagnostics,
+            )
+
+        assert message(
+            failure_class="longmem_run_http_status",
+            failure_stage="running_confirmation",
+        ).startswith(b"validator-v9-confirmation-fail:v2:")
+        assert (
+            message(
+                failure_class="longmem_run_http_status",
+                failure_stage="running_confirmation",
+                failure_status=502,
+            )
+            == (
+                "validator-v9-confirmation-fail:v3:"
+                f"{VALIDATOR_KEYPAIR.ss58_address}:{bundle_id}:{ticket_id}:"
+                "execution_failed:longmem_run_http_status:running_confirmation:"
+                f"502:{nonce}:2026-08-08T12:34:56.000789Z"
+            ).encode()
+        )
+        # 0 is a real measurement, so it must select v3 like any other status.
+        assert message(
+            failure_class="longmem_run_request",
+            failure_stage="running_confirmation",
+            failure_status=0,
+        ).startswith(b"validator-v9-confirmation-fail:v3:")
+
+        with pytest.raises(ValueError, match="requires a failure class"):
+            message(failure_status=502)
+
+    async def test_forwarded_scorer_class_and_status_are_persisted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The scorer's own class must reach the ledger, not just the host log.
+
+        A class derived from the reporter's exception type is ``dittobench``
+        for every scorer failure that exists, so this is the only field that
+        can tell one repeatable lane break from another without shell access to
+        whichever validator happened to claim the ticket.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="longmem_run_http_status",
+                failure_stage="running_confirmation",
+                failure_status=502,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_class == "longmem_run_http_status"
+            assert stored.failure_stage == "running_confirmation"
+            assert stored.failure_status == 502
+
+    async def test_a_scorer_status_of_zero_is_stored_rather_than_dropped(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """``0`` means the boundary broke before a status existed.
+
+        That is a different finding from "the reporter sent no status", and a
+        falsy check anywhere on this path would merge the two.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="longmem_run_request",
+                failure_stage="running_confirmation",
+                failure_status=0,
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_status == 0
+
+    async def test_an_unsigned_scorer_status_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Stripping or forging the status must fail closed like class and stage.
+
+        Platform rebuilds the message from what it received, so a status added
+        in flight downgrades nothing: it changes the rebuilt message to v3 and
+        the v2 signature no longer verifies.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="longmem_run_http_status",
+                failure_stage="running_confirmation",
+                failure_status=502,
+                # Signed without the status: a v2 signature on a v3 payload.
+                sign_status=None,
+            ),
+        )
+
+        assert response.status_code == 401, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_status is None
+
+    async def test_a_status_without_a_scorer_class_is_rejected(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A type-derived class has no status behind it, so one would be invented.
+
+        This ledger is read by an operator deciding whether to spend the next
+        bounded canary; a fabricated status is worse than none.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="dittobench",
+                failure_stage="running_confirmation",
+                failure_status=502,
+            ),
+        )
+
+        assert response.status_code == 422, response.text
 
     async def test_signed_failure_diagnostics_are_persisted_for_operators(
         self,

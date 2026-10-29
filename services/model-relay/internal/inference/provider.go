@@ -1205,6 +1205,7 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	primary["provider"] = preferences
 	phases := []phaseSpec{{phase: 0, payload: primary}}
 	headers := openrouterHeaders(cfg.OpenRouterAPIKey, true)
+	attachOpenRouterSessionHeader(ctx, headers)
 
 	totalAttempts := 0
 	routerAttempts := 0

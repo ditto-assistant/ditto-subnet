@@ -134,75 +134,20 @@ jobs:
           uv run python ../../scripts/generate_confirmation_installation.py
           --check
 
-      - name: Coding execution delivery vectors match their generator
-        run: |
-          uv run ruff format --check ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
-          uv run ruff check ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
-          uv run python ../../packages/dittobench-coding-contract/generate_execution_delivery_vectors.py --check
-
   test:
     needs: validate
     if: inputs.backend
-    name: pytest (${{ matrix.suite }})
+    name: pytest (shard ${{ matrix.shard }})
     runs-on: depot-ubuntu-24.04-4
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - suite: public-validator-endpoints
-            pytest_args: >-
-              ditto/tests/api_server/endpoints/test_public.py
-              ditto/tests/api_server/endpoints/test_validator.py
-            object_storage: false
-          # test_screener.py and test_inference.py are the two largest files
-          # after the public/validator pair; their own shard keeps the four
-          # endpoint-heavy lanes near-equal instead of one ~5-minute long pole.
-          - suite: screener-inference-endpoints
-            pytest_args: >-
-              ditto/tests/api_server/endpoints/test_screener.py
-              ditto/tests/api_server/endpoints/test_inference.py
-            object_storage: false
-          # The former catch-all endpoint shard took nearly eight minutes in
-          # release verification. Keep every file covered while running the
-          # ten largest files alongside the remaining endpoint tests.
-          - suite: other-endpoints-large
-            pytest_args: >-
-              ditto/tests/api_server/endpoints/test_validator_v9_confirmation_transport.py
-              ditto/tests/api_server/endpoints/test_upload.py
-              ditto/tests/api_server/endpoints/test_admin_validation_retry.py
-              ditto/tests/api_server/endpoints/test_scoring.py
-              ditto/tests/api_server/endpoints/test_admin_copy_review.py
-              ditto/tests/api_server/endpoints/test_validator_slot_cap.py
-              ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py
-              ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py
-              ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py
-              ditto/tests/api_server/endpoints/test_gate_notes.py
-            object_storage: false
-          - suite: other-endpoints-remaining
-            pytest_args: >-
-              ditto/tests/api_server/endpoints
-              --ignore=ditto/tests/api_server/endpoints/test_public.py
-              --ignore=ditto/tests/api_server/endpoints/test_validator.py
-              --ignore=ditto/tests/api_server/endpoints/test_screener.py
-              --ignore=ditto/tests/api_server/endpoints/test_inference.py
-              --ignore=ditto/tests/api_server/endpoints/test_validator_v9_confirmation_transport.py
-              --ignore=ditto/tests/api_server/endpoints/test_upload.py
-              --ignore=ditto/tests/api_server/endpoints/test_admin_validation_retry.py
-              --ignore=ditto/tests/api_server/endpoints/test_scoring.py
-              --ignore=ditto/tests/api_server/endpoints/test_admin_copy_review.py
-              --ignore=ditto/tests/api_server/endpoints/test_validator_slot_cap.py
-              --ignore=ditto/tests/api_server/endpoints/test_admin_queue_policy_settings.py
-              --ignore=ditto/tests/api_server/endpoints/test_admin_validator_slot_settings.py
-              --ignore=ditto/tests/api_server/endpoints/test_admin_confirmation_bundles.py
-              --ignore=ditto/tests/api_server/endpoints/test_gate_notes.py
-            # Official-control uploads hash and seal real S3 objects.
-            object_storage: true
-          - suite: api-server
-            pytest_args: ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints
-            object_storage: false
-          - suite: data-contract-integration
-            pytest_args: --ignore=ditto/tests/api_server
-            object_storage: true
+        # The conftest deals the sorted node IDs round-robin across
+        # DITTO_TEST_SHARD=<shard>/8, so every shard carries an equal slice
+        # of every slow file and the union is the complete suite exactly
+        # once. Hand-kept file lists left one shard at 20 minutes while the
+        # others finished in five. Keep the count in step with the env below.
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     services:
       # Every shard gets its own real Postgres. SQLite emitted no FOR UPDATE,
       # had no pg_advisory_xact_lock, and had no concurrent writers, so it
@@ -217,7 +162,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U ditto_test"
+          --health-cmd "pg_isready -U ditto_test -d postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -239,16 +184,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked --group dev --group browser --python 3.12
 
-      - name: Set up Go for hosted start integration
-        if: matrix.suite == 'api-server'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.27.3"
-          cache: true
-          cache-dependency-path: services/dittobench-api/go.sum
-
       - name: Install Chromium for the GitHub OAuth browser regression
-        if: matrix.suite == 'other-endpoints-remaining'
+        # The conftest pins the browser regression to shard 0.
+        if: matrix.shard == 0
         run: uv run --group browser playwright install --with-deps chromium
 
       - name: Tune disposable Postgres
@@ -297,11 +235,9 @@ jobs:
           asyncio.run(main())
           PY
 
-      # Integration and official-control endpoint tests request object_storage.
-      # Keeping MinIO out of other shards avoids image pulls and startup loops
-      # without weakening the hard requirement in the shard that uses it.
+      # Integration and official-control endpoint tests request object_storage,
+      # and the round-robin split can place them on any shard.
       - name: Start MinIO
-        if: matrix.object_storage
         run: |
           # The archived official Docker Hub and Quay images now reject pulls.
           # This pinned community image builds the tagged MinIO source; it is
@@ -325,11 +261,11 @@ jobs:
           # xdist worker, so this role must be able to CREATE DATABASE.
           DITTO_TEST_POSTGRES_URI: postgres://ditto_test:ditto_test@localhost:5432/postgres
           DITTO_REQUIRE_POSTGRES: "1"
-          # The integration shard must fail rather than skip if MinIO is down.
-          # The other shards never request the fixture, so this remains inert.
+          DITTO_TEST_SHARD: ${{ matrix.shard }}/8
+          # Object-storage tests must fail rather than skip if MinIO is down.
           DITTO_REQUIRE_OBJECT_STORAGE: "1"
-          # The browser shard installs Chromium above; a missing browser must
-          # fail the OAuth regression rather than skip it.
+          # Shard 0 installs Chromium above; a missing browser must fail the
+          # OAuth regression rather than skip it.
           DITTO_REQUIRE_BROWSER: "1"
           DITTO_UPLOAD_PAYMENT_ADDRESS: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
           PYLON_URL: http://127.0.0.1:1
@@ -340,7 +276,8 @@ jobs:
           STORAGE_BUCKET: ditto-agents
           STORAGE_REGION: us-east-1
           STORAGE_USE_TLS: "false"
-        run: uv run --group browser pytest ${{ matrix.pytest_args }}
+        # The slowest-test report keeps the next rebalance or prune visible.
+        run: uv run --group browser pytest --durations=25
 
   dashboard:
     needs: validate

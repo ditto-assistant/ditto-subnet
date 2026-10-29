@@ -64,8 +64,11 @@ import (
 )
 
 // ScorerVersion is reported with every result so Platform can audit which
-// executor produced it.
-const ScorerVersion = "challenge-scorer/3"
+// executor produced it. /6 advertises its grading policies explicitly
+// (grading_bench_versions); Platform reads the list, never this string.
+const ScorerVersion = "challenge-scorer/6"
+
+var releaseRevision = "development"
 
 const tokenEnv = "DITTO_GENERATOR_SCORER_TOKEN"
 
@@ -78,6 +81,12 @@ func main() {
 	defer stop()
 	var err error
 	switch os.Args[1] {
+	case "version":
+		err = json.NewEncoder(os.Stdout).Encode(map[string]any{
+			"revision": releaseRevision, "update_protocol": 1,
+			"scorer_version": ScorerVersion, "max_cases": challenge.MaxCases,
+			"builder_image": genrun.BuilderImage, "runner_image": genrun.RunnerImage,
+		})
 	case "run":
 		err = runLocal(ctx, os.Args[2:])
 	case "serve":
@@ -288,6 +297,11 @@ func evaluateArchive(ctx context.Context, sb genrun.Sandbox, raw []byte, plan ge
 		return genrun.Evaluation{}, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
 	}
 	defer os.RemoveAll(dir)
+	// The Docker sandbox bind-mounts this directory read-only for an
+	// unprivileged container user, which cannot traverse MkdirTemp's 0700.
+	if err := os.Chmod(dir, 0o755); err != nil {
+		return genrun.Evaluation{}, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
+	}
 	if _, err := challenge.ExtractArchive(raw, dir); err != nil {
 		return genrun.Evaluation{Sandbox: sb.Name(), Build: genrun.BuildOutput{Error: "archive: " + err.Error()}}, nil
 	}
@@ -363,6 +377,10 @@ type workItem struct {
 	Seeds        []string `json:"seeds"`
 	ProbeSeed    string   `json:"probe_seed"`
 	CasesPerSeed int      `json:"cases_per_seed"`
+	// BenchVersion is the generator-round contract new rounds open at; the
+	// requests accept every pack grading policy through it. Absent (a
+	// Platform that predates it) or 13 sends the original v13 request.
+	BenchVersion int `json:"bench_version,omitempty"`
 }
 
 type panelSlot struct {
@@ -384,10 +402,63 @@ type resultRequest struct {
 	Probe         *genrun.SeedOutput  `json:"probe"`
 }
 
+// faultReport tells Platform a leased item could not be done through no
+// fault of the generator. Mirrors GeneratorScorerFault in
+// apps/platform/ditto/api_models/generator.py.
+type faultReport struct {
+	Work          string `json:"work"` // "qualification" | "round"
+	LeaseID       string `json:"lease_id"`
+	RunID         string `json:"run_id,omitempty"`
+	SubmissionID  string `json:"submission_id,omitempty"`
+	RoundIndex    *int64 `json:"round_index,omitempty"`
+	ErrorKind     string `json:"error_kind"` // "unsupported_request" | "sandbox"
+	Detail        string `json:"detail"`
+	ScorerVersion string `json:"scorer_version"`
+}
+
+const maxFaultDetail = 2000
+
+// faultKind classifies a scorer-side evaluation error for Platform, or ""
+// when it is not reportable (a cancelled context: the scorer is stopping, and
+// the lease expiring is the right outcome).
+func faultKind(ctx context.Context, err error) string {
+	switch {
+	case err == nil || ctx.Err() != nil:
+		return ""
+	case errors.Is(err, genrun.ErrInvalidRequest):
+		return "unsupported_request"
+	case errors.Is(err, genrun.ErrSandbox):
+		return "sandbox"
+	}
+	return ""
+}
+
+// reportFault posts f when err is a reportable scorer fault and returns err
+// (joined with any report failure). A Platform without /fault answers 404 and
+// the lease simply expires, the pre-fault behaviour.
+func reportFault(ctx context.Context, client *platformClient, f faultReport, err error) error {
+	kind := faultKind(ctx, err)
+	if kind == "" {
+		return err
+	}
+	f.ErrorKind, f.ScorerVersion = kind, ScorerVersion
+	f.Detail = err.Error()
+	if len(f.Detail) > maxFaultDetail {
+		f.Detail = f.Detail[:maxFaultDetail]
+	}
+	if perr := client.do(ctx, http.MethodPost, "/api/v1/generator-scorer/fault", f, nil); perr != nil {
+		return errors.Join(err, fmt.Errorf("report fault: %w", perr))
+	}
+	log.Printf("%s %s: reported %s fault to Platform", f.Work, f.LeaseID, kind)
+	return err
+}
+
 type platformClient struct {
 	base  string
 	token string
 	http  *http.Client
+	// advertise is this build's capability, sent on every work poll.
+	advertise neturl.Values
 }
 
 func (c *platformClient) do(ctx context.Context, method, path string, body, out any) error {
@@ -426,11 +497,19 @@ func (c *platformClient) do(ctx context.Context, method, path string, body, out 
 }
 
 func serve(ctx context.Context, args []string) error {
+	// Drain only prevents the next claim; it must not cancel execution.
+	drain, stopDrain := signal.NotifyContext(context.Background(), syscall.SIGUSR1)
+	defer stopDrain()
+	return serveWithDrain(ctx, drain, args)
+}
+
+func serveWithDrain(ctx, drain context.Context, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	platform := fs.String("platform", "", "Platform base URL (required)")
 	interval := fs.Duration("interval", 30*time.Second, "idle poll interval")
 	once := fs.Bool("once", false, "process at most one work item of each kind and exit")
 	unsandboxed := fs.Bool("unsafe-local-sandbox", false, "build and run generators on the host with no isolation (local stacks only)")
+	scorerID := fs.String("scorer-id", defaultScorerID(), "name this scorer advertises to Platform (default: hostname)")
 	insecure := fs.Bool("insecure-platform", false, "allow an http:// Platform URL (local stacks only; the token travels in clear text)")
 	_ = fs.Parse(args)
 	token := strings.TrimSpace(os.Getenv(tokenEnv))
@@ -448,13 +527,21 @@ func serve(ctx context.Context, args []string) error {
 		log.Printf("WARNING: -unsafe-local-sandbox runs untrusted generator code on this host")
 		sb = genrun.Local{}
 	}
+	log.Printf("scorer started revision=%s max_cases=%d", releaseRevision, challenge.MaxCases)
 	client := &platformClient{base: strings.TrimRight(*platform, "/"), token: token, http: &http.Client{Timeout: 120 * time.Second}}
+	client.advertise = advertisement(*scorerID, sb)
 	for {
+		if drain.Err() != nil {
+			return nil
+		}
 		// Rounds first: a round's dataset gates every validator panel run, and
 		// its scoring gates the ledger. Qualification can wait a cycle.
 		roundBusy, roundErr := processRound(ctx, client, sb)
 		if roundErr != nil {
 			log.Printf("round cycle failed: %v", roundErr)
+		}
+		if drain.Err() != nil {
+			return nil
 		}
 		qualBusy, qualErr := processOne(ctx, client, sb)
 		if qualErr != nil {
@@ -473,6 +560,8 @@ func serve(ctx context.Context, args []string) error {
 		select {
 		case <-ctx.Done():
 			return nil
+		case <-drain.Done():
+			return nil
 		case <-time.After(*interval):
 		}
 	}
@@ -483,7 +572,7 @@ func serve(ctx context.Context, args []string) error {
 // expire, which is the only correct response to a scorer-side failure.
 func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox) (bool, error) {
 	var work workResponse
-	if err := client.do(ctx, http.MethodGet, "/api/v1/generator-scorer/work", nil, &work); err != nil {
+	if err := client.do(ctx, http.MethodGet, client.pollPath("/api/v1/generator-scorer/work"), nil, &work); err != nil {
 		return false, err
 	}
 	if work.Work == nil {
@@ -500,15 +589,21 @@ func processOne(ctx context.Context, client *platformClient, sb genrun.Sandbox) 
 		return true, fmt.Errorf("run %s: served source hashes to %s, lease pins %s", item.RunID, got, item.SourceSHA256)
 	}
 	plan := genrun.Plan{
-		MinerHotkey:      item.MinerHotkey,
-		Seeds:            item.Seeds,
-		ProbeSeed:        item.ProbeSeed,
-		Cases:            item.CasesPerSeed,
-		CheckDeterminism: true,
+		MinerHotkey:       item.MinerHotkey,
+		Seeds:             item.Seeds,
+		ProbeSeed:         item.ProbeSeed,
+		Cases:             item.CasesPerSeed,
+		CheckDeterminism:  true,
+		RoundBenchVersion: item.BenchVersion,
 	}
 	ev, err := evaluateArchive(ctx, sb, raw, plan)
 	if err != nil {
-		return true, fmt.Errorf("run %s: %w", item.RunID, err)
+		// Never posted as a result: a request this build refuses or a sandbox
+		// failure is the scorer's problem, reported as a fault so Platform
+		// backs the submission off instead of rejecting it.
+		return true, reportFault(ctx, client, faultReport{
+			Work: "qualification", LeaseID: item.LeaseID, RunID: item.RunID, SubmissionID: item.SubmissionID,
+		}, fmt.Errorf("run %s: %w", item.RunID, err))
 	}
 	if ctx.Err() != nil {
 		return true, ctx.Err()

@@ -1073,6 +1073,17 @@ CREATE FUNCTION public.reject_screening_review_event_mutation() RETURNS trigger
 
 
 --
+-- Name: reject_treasury_funding_mutation(); Type: FUNCTION; Schema: public; Owner: -
+--
+
+CREATE FUNCTION public.reject_treasury_funding_mutation() RETURNS trigger
+    LANGUAGE plpgsql
+    AS $$ BEGIN
+        RAISE EXCEPTION 'operator funding reconciliation history is append only';
+      END $$;
+
+
+--
 -- Name: reject_treasury_public_event_mutation(); Type: FUNCTION; Schema: public; Owner: -
 --
 
@@ -1462,8 +1473,12 @@ CREATE TABLE public.ath_copy_court_recommendations (
     model text,
     prompt_revision text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    triage_revision text DEFAULT 'rules-v1'::text NOT NULL,
+    application jsonb,
+    applied_at timestamp with time zone,
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_1d59 CHECK ((length(settings_checksum) = 64)),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_23b5 CHECK ((hold_class = ANY (ARRAY['near_duplicate'::text, 'rejected_resubmission_byte_identical'::text, 'rejected_resubmission_repack'::text, 'rejected_resubmission_cross_miner'::text, 'unknown'::text]))),
+    CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_2d55 CHECK (((length(TRIM(BOTH FROM triage_revision)) >= 1) AND (length(TRIM(BOTH FROM triage_revision)) <= 64))),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_66af CHECK ((length(TRIM(BOTH FROM reason)) >= 3)),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_7daa CHECK ((((model IS NULL) AND (prompt_revision IS NULL)) OR ((model IS NOT NULL) AND (prompt_revision IS NOT NULL)))),
     CONSTRAINT ck_ath_copy_court_recommendations_ath_copy_court_recomm_fded CHECK ((verdict = ANY (ARRAY['clear'::text, 'reject'::text, 'escalate'::text])))
@@ -3279,10 +3294,12 @@ CREATE TABLE public.confirmation_bundle_tickets (
     failure_stage text,
     prepare_rejection text,
     prepare_rejected_at timestamp with time zone,
+    failure_status integer,
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_att_89d2 CHECK ((attempt > 0)),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_dea_5293 CHECK ((deadline > issued_at)),
-    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_2246 CHECK (((failure_class IS NULL) OR (failure_class = ANY (ARRAY['sandbox_oom'::text, 'lease_revoked'::text, 'validator_infrastructure'::text, 'platform_infrastructure'::text, 'dittobench'::text, 'platform'::text, 'validator'::text, 'evidence_schema'::text, 'timeout'::text, 'transport'::text, 'unclassified'::text])))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_2246 CHECK (((failure_class IS NULL) OR (failure_class = ANY (ARRAY['sandbox_oom'::text, 'lease_revoked'::text, 'validator_infrastructure'::text, 'platform_infrastructure'::text, 'dittobench'::text, 'platform'::text, 'validator'::text, 'evidence_schema'::text, 'timeout'::text, 'transport'::text, 'unclassified'::text, 'longmem_run_http_status'::text, 'longmem_run_malformed_json'::text, 'longmem_run_missing_final_text'::text, 'longmem_run_request'::text, 'longmem_run_response_read'::text, 'longmem_run_response_too_large'::text, 'longmem_run_tool_endpoint'::text, 'longmem_seed_http_status'::text, 'longmem_seed_incomplete_ack'::text, 'longmem_seed_malformed_json'::text, 'longmem_seed_request'::text, 'longmem_seed_response_read'::text, 'longmem_seed_response_too_large'::text, 'longmem_exec_ablation_dataset'::text, 'longmem_exec_broker_session'::text, 'longmem_exec_dimension_execution'::text, 'longmem_exec_embedding_phase'::text, 'longmem_exec_execution'::text, 'longmem_exec_harness_health'::text, 'longmem_exec_installation_validation'::text, 'longmem_exec_longmem_dataset'::text, 'longmem_exec_provider_capabilities'::text, 'longmem_exec_provider_session'::text, 'longmem_exec_runtime_acquire'::text, 'longmem_exec_runtime_close'::text, 'longmem_exec_runtime_material'::text, 'longmem_exec_runtime_validation'::text, 'longmem_exec_sandbox_availability'::text, 'longmem_exec_sandbox_start'::text, 'longmem_exec_sandbox_stop'::text, 'longmem_exec_screened_image'::text, 'longmem_exec_source_validation'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_3459 CHECK (((failure_reason IS NULL) = (failed_at IS NULL))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_723f CHECK (((failure_status IS NULL) OR ((failure_class IS NOT NULL) AND ((failure_status >= 0) AND (failure_status <= 599))))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_76ea CHECK (((failure_class IS NULL) OR (failure_reason IS NOT NULL))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_a665 CHECK (((failure_stage IS NULL) OR (failure_stage = ANY (ARRAY['preparing'::text, 'running_confirmation'::text, 'finalizing'::text, 'submitting_result'::text, 'failed_retrying'::text, 'unknown'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_aa75 CHECK (((status = 'expired'::text) OR ((failure_reason IS NULL) AND (failed_at IS NULL)))),
@@ -3833,6 +3850,50 @@ CREATE TABLE public.efficiency_cohort_snapshots (
 
 
 --
+-- Name: emission_allocation_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.emission_allocation_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    allocation jsonb NOT NULL,
+    served jsonb NOT NULL,
+    burn_settings_revision integer NOT NULL,
+    track_share_settings_revision integer NOT NULL,
+    treasury_settings_revision integer NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ac_6add CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_ch_4c52 CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_pa_3099 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_re_f2f4 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_emission_allocation_revisions_emission_allocation_se_d33a CHECK (((burn_settings_revision >= 0) AND (track_share_settings_revision >= 0) AND (treasury_settings_revision >= 0)))
+);
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.emission_allocation_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: emission_allocation_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.emission_allocation_revisions_revision_seq OWNED BY public.emission_allocation_revisions.revision;
+
+
+--
 -- Name: emission_eligibility_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4128,6 +4189,26 @@ CREATE TABLE public.generator_round_case_verdicts (
 
 
 --
+-- Name: generator_round_commitment_publications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_round_commitment_publications (
+    round_index bigint NOT NULL,
+    validator_hotkey text NOT NULL,
+    commitment text NOT NULL,
+    status text NOT NULL,
+    claimed_at timestamp with time zone NOT NULL,
+    claim_expires_at timestamp with time zone NOT NULL,
+    reported_at timestamp with time zone,
+    block_number bigint,
+    extrinsic_hash text,
+    detail text,
+    CONSTRAINT ck_generator_round_commitment_publications_publication__0173 CHECK ((status = ANY (ARRAY['claimed'::text, 'confirmed'::text, 'failed'::text]))),
+    CONSTRAINT ck_generator_round_commitment_publications_publication__b208 CHECK (((status <> 'confirmed'::text) OR (block_number IS NOT NULL)))
+);
+
+
+--
 -- Name: generator_round_results; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -4182,6 +4263,8 @@ CREATE TABLE public.generator_rounds (
     scored_at timestamp with time zone,
     void_reason text,
     revealed_at timestamp with time zone,
+    bench_version integer,
+    CONSTRAINT ck_generator_rounds_generator_rounds_bench_version_check CHECK (((bench_version IS NULL) OR (bench_version >= 13))),
     CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
     CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
     CONSTRAINT ck_generator_rounds_generator_rounds_lease_check CHECK (((lease_id IS NULL) = (lease_expires_at IS NULL))),
@@ -4233,10 +4316,53 @@ CREATE TABLE public.generator_runs (
     scorer_version text,
     leased_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
-    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 64))),
+    CONSTRAINT ck_generator_runs_generator_runs_cases_check CHECK (((cases_per_seed >= 8) AND (cases_per_seed <= 80))),
     CONSTRAINT ck_generator_runs_generator_runs_finished_check CHECK (((status = 'leased'::text) = (finished_at IS NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_score_check CHECK (((status = 'scored'::text) = (score IS NOT NULL))),
     CONSTRAINT ck_generator_runs_generator_runs_status_check CHECK ((status = ANY (ARRAY['leased'::text, 'scored'::text, 'qualified'::text, 'invalid'::text, 'insufficient_panel'::text, 'copy'::text, 'abandoned'::text])))
+);
+
+
+--
+-- Name: generator_scorer_heartbeats; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_scorer_heartbeats (
+    scorer_id text NOT NULL,
+    scorer_version text NOT NULL,
+    min_cases integer,
+    max_cases integer,
+    sandbox text,
+    build_revision text,
+    last_poll text NOT NULL,
+    first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
+    grading_bench_versions jsonb,
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_4487 CHECK (((grading_bench_versions IS NULL) OR ((jsonb_typeof(grading_bench_versions) = 'array'::text) AND ((jsonb_array_length(grading_bench_versions) >= 1) AND (jsonb_array_length(grading_bench_versions) <= 16))))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text]))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_c3f0 CHECK ((((min_cases IS NULL) = (max_cases IS NULL)) AND ((min_cases IS NULL) OR ((min_cases >= 1) AND (max_cases >= min_cases)))))
+);
+
+
+--
+-- Name: generator_submission_payments; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.generator_submission_payments (
+    block_hash text NOT NULL,
+    extrinsic_index integer NOT NULL,
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    miner_coldkey text NOT NULL,
+    amount_rao bigint NOT NULL,
+    tao_usd_rate numeric(20,8),
+    dest_address text NOT NULL,
+    "timestamp" timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_548c CHECK ((amount_rao > 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_8849 CHECK ((extrinsic_index >= 0)),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_e702 CHECK ((block_hash = lower(block_hash))),
+    CONSTRAINT ck_generator_submission_payments_generator_submission_p_fea8 CHECK (((tao_usd_rate IS NULL) OR (tao_usd_rate > (0)::numeric)))
 );
 
 
@@ -4268,9 +4394,11 @@ CREATE TABLE public.generator_submissions (
     public_default boolean DEFAULT false NOT NULL,
     round_score double precision,
     round_scored_index bigint,
+    name text,
     CONSTRAINT ck_generator_submissions_generator_submissions_attempts_check CHECK ((attempts >= 0)),
     CONSTRAINT ck_generator_submissions_generator_submissions_digest_check CHECK (((source_sha256 ~ '^[0-9a-f]{64}$'::text) AND (tree_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_generator_submissions_generator_submissions_lease_check CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((lease_id IS NULL) = (lease_run_id IS NULL)))),
+    CONSTRAINT ck_generator_submissions_generator_submissions_name_check CHECK (((name IS NULL) OR ((char_length(name) >= 1) AND (char_length(name) <= 64)))),
     CONSTRAINT ck_generator_submissions_generator_submissions_size_check CHECK (((size_bytes > 0) AND (size_bytes = octet_length(source_bytes)) AND (size_bytes <= 4194304))),
     CONSTRAINT ck_generator_submissions_generator_submissions_status_check CHECK ((status = ANY (ARRAY['active'::text, 'superseded'::text, 'rejected'::text])))
 );
@@ -5762,7 +5890,15 @@ CREATE TABLE public.screening_attempts (
     private_failure_log_tail text,
     failure_captured_at timestamp with time zone,
     artifact_sha256 text,
+    lineage_parent_agent_id uuid,
+    lineage_scope text,
+    lineage_packet_sha256 text,
+    lineage_full_review_reasons jsonb,
+    lineage_reference_kind text,
     CONSTRAINT ck_screening_attempts_screening_attempts_artifact_sha_check CHECK (((artifact_sha256 IS NULL) OR (length(artifact_sha256) = 64))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_binding_check CHECK ((((lineage_scope IS NULL) AND (lineage_packet_sha256 IS NULL)) OR ((lineage_parent_agent_id IS NOT NULL) AND (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])) AND (length(lineage_packet_sha256) = 64)))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_record_check CHECK (((lineage_scope IS NOT NULL) OR ((lineage_full_review_reasons IS NULL) AND (lineage_reference_kind IS NULL)))),
+    CONSTRAINT ck_screening_attempts_screening_attempts_lineage_refere_feae CHECK (((lineage_reference_kind IS NULL) OR (lineage_reference_kind = ANY (ARRAY['same_owner_version'::text, 'same_owner'::text, 'released_base'::text])))),
     CONSTRAINT ck_screening_attempts_screening_attempts_review_setting_b74a CHECK ((((review_settings_revision IS NULL) AND (review_settings_instance_id IS NULL) AND (review_settings_scope IS NULL) AND (review_settings_checksum IS NULL)) OR ((review_settings_revision > 0) AND (review_settings_instance_id IS NOT NULL) AND (review_settings_scope IS NOT NULL) AND (length(review_settings_checksum) = 64)))),
     CONSTRAINT screening_attempts_deadline_check CHECK ((deadline >= started_at)),
     CONSTRAINT screening_attempts_finished_check CHECK (((finished_at IS NULL) OR (finished_at >= started_at))),
@@ -5981,6 +6117,28 @@ CREATE TABLE public.screening_review_events (
     CONSTRAINT ck_screening_review_events_sre_kind_check CHECK ((event_kind = ANY (ARRAY['automated'::text, 'manual'::text]))),
     CONSTRAINT ck_screening_review_events_sre_policy_check CHECK ((policy_version > 0)),
     CONSTRAINT ck_screening_review_events_sre_sha_check CHECK ((length(artifact_sha256) = 64))
+);
+
+
+--
+-- Name: screening_review_usage; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screening_review_usage (
+    attempt_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    screener_hotkey text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    stages jsonb NOT NULL,
+    total_input_tokens bigint NOT NULL,
+    total_output_tokens bigint NOT NULL,
+    total_cost_usd numeric(14,6) NOT NULL,
+    elapsed_ms bigint,
+    lineage_scope text,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_artifa_6670 CHECK ((length(artifact_sha256) = 64)),
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_lineag_ac7c CHECK (((lineage_scope IS NULL) OR (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])))),
+    CONSTRAINT ck_screening_review_usage_screening_review_usage_totals_check CHECK (((total_input_tokens >= 0) AND (total_output_tokens >= 0) AND (total_cost_usd >= (0)::numeric) AND ((elapsed_ms IS NULL) OR (elapsed_ms >= 0))))
 );
 
 
@@ -6339,8 +6497,10 @@ CREATE TABLE public.submission_settings_revisions (
     actor text NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     fee_amount_rao bigint NOT NULL,
+    competition_fees jsonb DEFAULT '{}'::jsonb NOT NULL,
     CONSTRAINT ck_submission_settings_revisions_submission_settings_ac_6db4 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_co_109c CHECK (((cooldown_seconds >= 60) AND (cooldown_seconds <= 86400))),
+    CONSTRAINT ck_submission_settings_revisions_submission_settings_co_c3f0 CHECK ((jsonb_typeof(competition_fees) = 'object'::text)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_fe_4fea CHECK (((fee_amount_rao >= 1) AND (fee_amount_rao <= '1000000000000'::bigint))),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_pa_46f1 CHECK ((parent_revision >= 0)),
     CONSTRAINT ck_submission_settings_revisions_submission_settings_re_fa8a CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
@@ -6405,6 +6565,47 @@ CREATE TABLE public.submission_source_reviews (
 
 
 --
+-- Name: track_share_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.track_share_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    scope text NOT NULL,
+    settings jsonb NOT NULL,
+    checksum text NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__1ff4 CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__3a5f CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__a93e CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__b1ff CHECK ((length(checksum) = 64)),
+    CONSTRAINT ck_track_share_settings_revisions_track_share_settings__d7e4 CHECK ((scope = '*'::text))
+);
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.track_share_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: track_share_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.track_share_settings_revisions_revision_seq OWNED BY public.track_share_settings_revisions.revision;
+
+
+--
 -- Name: transcript_mirror_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6439,6 +6640,21 @@ CREATE SEQUENCE public.transcript_mirror_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.transcript_mirror_settings_revisions_revision_seq OWNED BY public.transcript_mirror_settings_revisions.revision;
+
+
+--
+-- Name: treasury_funding_reconciliations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.treasury_funding_reconciliations (
+    purchase_id text NOT NULL,
+    payment_reference text NOT NULL,
+    payload jsonb NOT NULL,
+    digest text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL
+);
 
 
 --
@@ -7268,7 +7484,7 @@ CREATE TABLE public.validator_tickets (
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_valid CHECK ((purpose = ANY (ARRAY['legacy_unclassified'::text, 'canonical_quorum'::text, 'continual_retest'::text, 'benchmark_canary'::text, 'generator_round'::text]))),
     CONSTRAINT ck_validator_tickets_validator_tickets_seed_nonnegative CHECK (((seed IS NULL) OR (seed >= 0))),
     CONSTRAINT ck_validator_tickets_validator_tickets_slot_id CHECK ((slot_id = ANY (ARRAY['slot-0'::text, 'slot-1'::text, 'slot-2'::text, 'slot-3'::text, 'slot-4'::text, 'slot-5'::text, 'slot-6'::text, 'slot-7'::text]))),
-    CONSTRAINT validator_tickets_attempt_count_positive CHECK ((attempt_count > 0)),
+    CONSTRAINT validator_tickets_attempt_count_nonnegative CHECK ((attempt_count >= 0)),
     CONSTRAINT validator_tickets_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT validator_tickets_manual_retry_grants_nonnegative CHECK ((manual_retry_grants >= 0))
 );
@@ -7393,6 +7609,13 @@ ALTER TABLE ONLY public.core_qualification_policy_revisions ALTER COLUMN revisio
 --
 
 ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.efficiency_bonus_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: emission_allocation_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions ALTER COLUMN revision SET DEFAULT nextval('public.emission_allocation_revisions_revision_seq'::regclass);
 
 
 --
@@ -7522,6 +7745,13 @@ ALTER TABLE ONLY public.submission_settings_revisions ALTER COLUMN revision SET 
 
 
 --
+-- Name: track_share_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.track_share_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: transcript_mirror_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -7604,11 +7834,11 @@ ALTER TABLE ONLY public.artifact_release_settings_revisions
 
 
 --
--- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
+-- Name: ath_copy_court_recommendations ath_copy_court_recommendations_review_triage_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.ath_copy_court_recommendations
-    ADD CONSTRAINT ath_copy_court_recommendations_review_revision_key UNIQUE (review_id, settings_revision);
+    ADD CONSTRAINT ath_copy_court_recommendations_review_triage_key UNIQUE (review_id, settings_revision, triage_revision);
 
 
 --
@@ -8388,6 +8618,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_allocation_revisions emission_allocation_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT emission_allocation_parent_key UNIQUE (parent_revision);
+
+
+--
 -- Name: emission_eligibility_settings_revisions emission_eligibility_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8433,6 +8671,22 @@ ALTER TABLE ONLY public.feedback_track_contributions
 
 ALTER TABLE ONLY public.generator_competition_settings_revisions
     ADD CONSTRAINT generator_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_pkey PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: generator_submission_payments generator_submission_payments_submission_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_key UNIQUE (submission_id);
 
 
 --
@@ -9212,6 +9466,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 
 --
+-- Name: emission_allocation_revisions pk_emission_allocation_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.emission_allocation_revisions
+    ADD CONSTRAINT pk_emission_allocation_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: emission_eligibility_settings_revisions pk_emission_eligibility_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9292,6 +9554,14 @@ ALTER TABLE ONLY public.generator_round_case_verdicts
 
 
 --
+-- Name: generator_round_commitment_publications pk_generator_round_commitment_publications; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_commitment_publications
+    ADD CONSTRAINT pk_generator_round_commitment_publications PRIMARY KEY (round_index, validator_hotkey);
+
+
+--
 -- Name: generator_round_results pk_generator_round_results; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9313,6 +9583,14 @@ ALTER TABLE ONLY public.generator_rounds
 
 ALTER TABLE ONLY public.generator_runs
     ADD CONSTRAINT pk_generator_runs PRIMARY KEY (run_id);
+
+
+--
+-- Name: generator_scorer_heartbeats pk_generator_scorer_heartbeats; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_scorer_heartbeats
+    ADD CONSTRAINT pk_generator_scorer_heartbeats PRIMARY KEY (scorer_id);
 
 
 --
@@ -9628,6 +9906,14 @@ ALTER TABLE ONLY public.screening_review_events
 
 
 --
+-- Name: screening_review_usage pk_screening_review_usage; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT pk_screening_review_usage PRIMARY KEY (attempt_id);
+
+
+--
 -- Name: screening_review_windows pk_screening_review_windows; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9748,11 +10034,27 @@ ALTER TABLE ONLY public.submission_source_reviews
 
 
 --
+-- Name: track_share_settings_revisions pk_track_share_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT pk_track_share_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: transcript_mirror_settings_revisions pk_transcript_mirror_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.transcript_mirror_settings_revisions
     ADD CONSTRAINT pk_transcript_mirror_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: treasury_funding_reconciliations pk_treasury_funding_reconciliations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_funding_reconciliations
+    ADD CONSTRAINT pk_treasury_funding_reconciliations PRIMARY KEY (purchase_id);
 
 
 --
@@ -10252,6 +10554,14 @@ ALTER TABLE ONLY public.screening_verification_replays
 
 
 --
+-- Name: track_share_settings_revisions track_share_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.track_share_settings_revisions
+    ADD CONSTRAINT track_share_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
 -- Name: transcript_mirror_settings_revisions transcript_mirror_settings_parent_revision_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10657,6 +10967,14 @@ ALTER TABLE ONLY public.screener_node_bootstrap_grants
 
 ALTER TABLE ONLY public.screener_nodes
     ADD CONSTRAINT uq_screener_nodes_screener_hotkey UNIQUE (screener_hotkey);
+
+
+--
+-- Name: treasury_funding_reconciliations uq_treasury_funding_reconciliations_payment_reference; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.treasury_funding_reconciliations
+    ADD CONSTRAINT uq_treasury_funding_reconciliations_payment_reference UNIQUE (payment_reference);
 
 
 --
@@ -11444,6 +11762,13 @@ CREATE INDEX generator_runs_submission_idx ON public.generator_runs USING btree 
 
 
 --
+-- Name: generator_submission_payments_miner_coldkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_submission_payments_miner_coldkey_idx ON public.generator_submission_payments USING btree (miner_coldkey);
+
+
+--
 -- Name: generator_submissions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11955,6 +12280,13 @@ CREATE INDEX screening_retry_overrides_agent_created_idx ON public.screening_ret
 
 
 --
+-- Name: screening_review_usage_recorded_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX screening_review_usage_recorded_idx ON public.screening_review_usage USING btree (recorded_at);
+
+
+--
 -- Name: srda_policy_activate_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12078,6 +12410,13 @@ CREATE UNIQUE INDEX svrr_replay_code_idx ON public.screening_verification_replay
 --
 
 CREATE UNIQUE INDEX svrso_replay_check_idx ON public.screening_verification_replay_signed_observations USING btree (replay_id, check_code);
+
+
+--
+-- Name: track_share_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX track_share_settings_scope_revision_idx ON public.track_share_settings_revisions USING btree (scope, revision);
 
 
 --
@@ -13009,6 +13348,20 @@ CREATE TRIGGER screening_review_events_immutable BEFORE DELETE OR UPDATE ON publ
 --
 
 CREATE TRIGGER screening_verification_replay_private_receipts_immutable BEFORE DELETE OR UPDATE ON public.screening_verification_replay_private_receipts FOR EACH ROW EXECUTE FUNCTION public.reject_v13_private_generation_mutation();
+
+
+--
+-- Name: treasury_funding_reconciliations treasury_funding_immutable; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_funding_immutable BEFORE DELETE OR UPDATE ON public.treasury_funding_reconciliations FOR EACH ROW EXECUTE FUNCTION public.reject_treasury_funding_mutation();
+
+
+--
+-- Name: treasury_funding_reconciliations treasury_funding_no_truncate; Type: TRIGGER; Schema: public; Owner: -
+--
+
+CREATE TRIGGER treasury_funding_no_truncate BEFORE TRUNCATE ON public.treasury_funding_reconciliations FOR EACH STATEMENT EXECUTE FUNCTION public.reject_treasury_funding_mutation();
 
 
 --
@@ -14272,6 +14625,14 @@ ALTER TABLE ONLY public.generator_round_case_verdicts
 
 
 --
+-- Name: generator_round_commitment_publications fk_generator_round_commitment_publications_round_index__ea4c; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_round_commitment_publications
+    ADD CONSTRAINT fk_generator_round_commitment_publications_round_index__ea4c FOREIGN KEY (round_index) REFERENCES public.generator_rounds(round_index) ON DELETE CASCADE;
+
+
+--
 -- Name: generator_round_results fk_generator_round_results_round_index_generator_rounds; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14736,6 +15097,14 @@ ALTER TABLE ONLY public.v13_replay_private_generation_groups
 
 
 --
+-- Name: generator_submission_payments generator_submission_payments_submission_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.generator_submission_payments
+    ADD CONSTRAINT generator_submission_payments_submission_fkey FOREIGN KEY (submission_id) REFERENCES public.generator_submissions(submission_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: miner_device_grants miner_device_grants_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14960,6 +15329,14 @@ ALTER TABLE ONLY public.screening_attempts
 
 
 --
+-- Name: screening_attempts screening_attempts_lineage_parent_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_attempts
+    ADD CONSTRAINT screening_attempts_lineage_parent_fkey FOREIGN KEY (lineage_parent_agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
 -- Name: screening_disputes screening_disputes_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -15021,6 +15398,22 @@ ALTER TABLE ONLY public.screening_retry_overrides
 
 ALTER TABLE ONLY public.screening_retry_overrides
     ADD CONSTRAINT screening_retry_overrides_review_settings_revision_fkey FOREIGN KEY (review_settings_revision) REFERENCES public.screener_review_settings_revisions(revision) ON DELETE RESTRICT;
+
+
+--
+-- Name: screening_review_usage screening_review_usage_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT screening_review_usage_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: screening_review_usage screening_review_usage_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screening_review_usage
+    ADD CONSTRAINT screening_review_usage_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
 
 
 --

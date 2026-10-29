@@ -97,10 +97,6 @@ from ditto.api_server.koth import (
     koth_entries_from_ledger,
     project_koth,
 )
-from ditto.api_server.middleware.error_envelope import (
-    ERROR_CODE_HTTP_EXCEPTION,
-    envelope_response,
-)
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
@@ -359,8 +355,14 @@ async def read_board_snapshot(
     session: AsyncSession, request: Request, *, now: datetime | None = None
 ) -> BoardSnapshot:
     """Read the next-pin fold without producing a pin or materializing state."""
+    return await read_board_snapshot_for_state(session, request.app.state, now=now)
+
+
+async def read_board_snapshot_for_state(
+    session: AsyncSession, state: Any, *, now: datetime | None = None
+) -> BoardSnapshot:
+    """:func:`read_board_snapshot` for callers without a request (the court)."""
     read_at = now or datetime.now(UTC)
-    state = request.app.state
     context = await resolve_ledger_context(state, session, now=read_at)
     pin = (
         await latest_pin(session, netuid=state.config.chain.netuid)
@@ -1049,6 +1051,74 @@ async def _annotate_applied(
     return True, "ruling applied and audit rows annotated"
 
 
+async def apply_court_clear(
+    session: AsyncSession,
+    app_state: Any,
+    *,
+    agent_id: UUID,
+    expected_sha256: str,
+    reason: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Clear one pending hold for the copy-hold court through the ruling path.
+
+    The same guards an operator batch passes: the preview must be ``ready``
+    with exactly the ``clear`` step on a pending hold, and must not move the
+    champion or raw leader. Anything else is a skip with the reason; the court
+    never opens, rejects, reconsiders or attests.
+    """
+    score_count = int(
+        await session.scalar(
+            select(func.count()).select_from(Score).where(Score.agent_id == agent_id)
+        )
+        or 0
+    )
+    ruling = AdminAthRuling(
+        action="clear",
+        agent_id=agent_id,
+        expected_sha256=expected_sha256,
+        expected_score_count=score_count,
+        reason=reason,
+    )
+    try:
+        board = await read_board_snapshot_for_state(session, app_state)
+        item, _after = await _preview_ruling(
+            session, index=0, ruling=ruling, board=board
+        )
+    except HTTPException as exc:
+        await session.rollback()
+        return {"status": "skipped", "detail": f"preview unavailable: {exc.detail}"}
+    await session.rollback()
+    outcome: dict[str, Any] = {
+        "disposition": item.disposition,
+        "steps": list(item.steps or []),
+        "would_change_crown": item.would_change_crown,
+        "score_count": score_count,
+    }
+    if (
+        not item.ok
+        or item.disposition != "ready"
+        or list(item.steps or []) != ["clear"]
+    ):
+        return {
+            **outcome,
+            "status": "skipped",
+            "detail": item.conflict_reason or item.message,
+        }
+    if item.would_change_crown:
+        return {
+            **outcome,
+            "status": "skipped",
+            "detail": "clearing would change the champion or raw leader",
+        }
+    try:
+        await _apply_step(session, ruling=ruling, step="clear", actor=actor)
+    except HTTPException as exc:
+        await session.rollback()
+        return {**outcome, "status": "skipped", "detail": str(exc.detail)}
+    return {**outcome, "status": "applied", "detail": "hold cleared"}
+
+
 @router.post(
     "/ath-rulings/batch-execute", response_model=AdminAthRulingsExecuteResponse
 )
@@ -1358,6 +1428,13 @@ async def execute_ath_rulings_batch(
         logger.exception("ath rulings final board read failed batch_id=%s", batch_id)
         # The writes above already committed. Preserve their exact outcomes in
         # the failure response so an operator never blindly retries them.
+        # Imported here: error_envelope imports the endpoints package, so a
+        # module-level import is circular when middleware is imported first.
+        from ditto.api_server.middleware.error_envelope import (  # noqa: PLC0415
+            ERROR_CODE_HTTP_EXCEPTION,
+            envelope_response,
+        )
+
         return envelope_response(
             503,
             ERROR_CODE_HTTP_EXCEPTION,

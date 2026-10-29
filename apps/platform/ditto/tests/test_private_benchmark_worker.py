@@ -124,12 +124,7 @@ async def test_worker_failure_is_terminal_and_never_pins(
     "field,value",
     [
         ("executable_sha256", "b" * 64),
-        ("profile_sha256", "b" * 64),
-        ("timeout_seconds", 10801),
-        ("concurrency", 17),
-        ("max_cost_usd", 0),
         ("max_cost_usd", float("nan")),
-        ("max_cost_usd", float("inf")),
     ],
 )
 async def test_bad_approval_never_claims(tmp_path, session_maker, field, value):

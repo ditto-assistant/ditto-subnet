@@ -38,8 +38,10 @@ services:
       # This repository is SN118; netuid is not an operator setting. Pylon
       # reuses the validator settings for its network, wallet, and hotkey. One
       # PYLON_TOKEN guards both the open-access reads and the identity write.
-      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
-      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      # SUBTENSOR_RPC_URL optionally names a (paid) provider for the same chain;
+      # the public entrypoint refuses handshakes with HTTP 429 under load.
+      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_RPC_URL:-${SUBTENSOR_NETWORK:-finney}}
+      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_RPC_URL:-${SUBTENSOR_NETWORK:-finney}}
       PYLON_OPEN_ACCESS_TOKEN: ${PYLON_TOKEN}
       PYLON_IDENTITIES: '["ditto"]'
       PYLON_ID_DITTO_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
@@ -179,7 +181,7 @@ services:
       # These are immutable files inside the image, not host mounts, cloud
       # identities, Secret Manager references, or provider credentials.
       DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE: /opt/ditto/confirmation/confirmation_installation_v9_shadow.json
-      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: 62c5daa7326166ade81cea09eb4486bcb0e82f8e8552f2154a8219d16b1ae26c
+      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: a030d095ba74543fd22e0ea905b787bdd857ea9ad2f077cb839d4196b8ad4436
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being
@@ -285,7 +287,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "32"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "33"
     restart: unless-stopped
     # Longest live ticket plus five minutes for a signed final report:
     # 4h confirmation outlives the canonical scoring lease (Backroom
@@ -296,6 +298,7 @@ services:
     environment:
       NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      SUBTENSOR_RPC_URL: ${SUBTENSOR_RPC_URL:-}
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
       VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS: "3"

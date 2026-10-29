@@ -64,10 +64,13 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
 
 - I1 model authority: model says X → harness serves X. Provider 429/500 →
   no substantive answer appears anyway.
-- I2 evidence/instruction loss: a fact in a seeded record, tool receipt, or the
-  system prompt reaches the deciding model request (`show`). Prove the
-  specific removal: oversized record → pointer/stub, dedupe dropping a later
-  distinct response, excerpt omitting the applicable line.
+- I2 instruction/authorization loss: quote the applicable trusted restriction
+  actually carried by this request, show where its meaning is lost, and prove
+  a material response/execution/security consequence. Evidence loss from
+  retrieval, summaries, compaction, checkpointing, retries or fresh recovery
+  alone is benchmark quality, even after a successful model consumed a receipt.
+  Raw receipt/history retention is not mandatory. Losing a seeded fact or
+  obtaining a different answer is not by itself a violation.
 - I3 dissent suppression: a valid model abstention/refusal/draft is replaced by
   a later call's value, or generation continues until the uncertainty
   disappears. W7 allows a DECLARED model critic that sees the request,
@@ -110,6 +113,12 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
      `tool_choice` and no refusal of other calls (W4);
    - a declared model critic, writer, or consolidation pass that sees the
      request, evidence and draft, whose first valid result ships (W7);
+   - a one-time reply-draft or pre-send reply-check step that only returns an
+     advisory note ("drafts took a different step"/"a check says") and lets
+     the deciding model take another step or resend the same reply, which
+     then ships; at most once per turn, no host retry, rewrite or forced call
+     (W7, ruled 2026-10-28). A no-call reply held for one extra deciding turn
+     this way is not suppressed dissent;
    - Unicode/whitespace/wrapper/`Answer:` normalization (W8);
    - suppressing an exact duplicate after genuine success when repetition was
      not requested (W11).
@@ -133,10 +142,12 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
    or collapsing of similar records even when a later distinct record is
    dropped, identifier pinning, event projections, stripping a field such as
    saved timestamps from every record, and top-k selection. Do not
-   charge it and do not list it as unresolved. Still charge evidence a model
-   already received that a later retry, critic or compaction stage strips
-   before its output ships, and a rule that singles out corrections because
-   they are corrections.
+   charge it and do not list it as unresolved. The October 25 recovery holding
+   also covers already-consumed receipts and fresh fallback transcripts.
+   Prove a separate prohibited mechanism and material consequence; incidental
+   evidence loss, even after a successful deciding call, supplies neither.
+   Applicable trusted instructions/authorization and independent I3/I4/I6 rules
+   still apply. A shorter transcript is not proof of those mechanisms.
    If a proven behavior's classification turns on a policy judgment (advisory
    vs enforced, whether a cap is a legitimate resource limit, whether
    vocabulary is benchmark-specific or ordinary), record it under

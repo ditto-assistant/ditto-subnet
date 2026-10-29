@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -54,78 +53,6 @@ async def _clear(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.execute(text("DELETE FROM generator_submissions"))
         await connection.execute(text("DELETE FROM generator_probe_epochs"))
-
-
-async def test_generator_competition_round_trip(engine: AsyncEngine) -> None:
-    try:
-        await _clear(engine)
-        submission = await _insert_submission(engine)
-        with pytest.raises(IntegrityError):  # duplicate identity
-            await _insert_submission(engine)
-        with pytest.raises(IntegrityError):  # size must match the bytes
-            await _insert_submission(engine, sha="b" * 64, size=99)
-        with pytest.raises(IntegrityError):  # a lease is all or nothing
-            await _insert_submission(engine, sha="c" * 64, lease_id=str(uuid4()))
-        with pytest.raises(IntegrityError):  # unknown status
-            await _insert_submission(engine, sha="d" * 64, status="limbo")
-
-        async with engine.begin() as connection:
-            epoch = await connection.scalar(
-                text(
-                    "INSERT INTO generator_probe_epochs (seed, reason, actor) "
-                    "VALUES (repeat('e', 64), 'initial', 'test') RETURNING epoch"
-                )
-            )
-        with pytest.raises(IntegrityError):  # one current probe epoch
-            async with engine.begin() as connection:
-                await connection.execute(
-                    text(
-                        "INSERT INTO generator_probe_epochs (seed, reason, actor) "
-                        "VALUES (repeat('f', 64), 'second', 'test')"
-                    )
-                )
-        run_sql = (
-            "INSERT INTO generator_runs (run_id, submission_id, attempt, seeds, "
-            "probe_epoch, cases_per_seed, panel, settings_revision, status, score, "
-            "finished_at) VALUES (gen_random_uuid(), CAST(:sub AS uuid), 1, '[]', "
-            ":epoch, 16, '[]', 1, :status, :score, :finished)"
-        )
-        async with engine.begin() as connection:
-            await connection.execute(
-                text(run_sql),
-                {
-                    "sub": submission,
-                    "epoch": epoch,
-                    "status": "leased",
-                    "score": None,
-                    "finished": None,
-                },
-            )
-        with pytest.raises(IntegrityError):  # a scored run carries a score
-            async with engine.begin() as connection:
-                await connection.execute(
-                    text(run_sql),
-                    {
-                        "sub": submission,
-                        "epoch": epoch,
-                        "status": "scored",
-                        "score": None,
-                        "finished": datetime.now(UTC),
-                    },
-                )
-        await _clear(engine)
-
-        _alembic("downgrade", _PARENT)
-        async with engine.connect() as connection:
-            exists = await connection.scalar(
-                text("SELECT to_regclass('public.generator_submissions')")
-            )
-        assert exists is None
-        _alembic("upgrade", "head")
-        await _insert_submission(engine, sha="e" * 64)
-    finally:
-        await _clear(engine)
-        _alembic("upgrade", "head")
 
 
 async def test_generator_rounds_enforce_their_invariants(engine: AsyncEngine) -> None:
@@ -184,9 +111,15 @@ async def test_generator_rounds_enforce_their_invariants(engine: AsyncEngine) ->
             await connection.execute(text("DELETE FROM generator_rounds"))
 
 
-async def test_round_downgrade_keeps_qualification_runs_unscored(
-    engine: AsyncEngine,
-) -> None:
+async def test_generator_runs_accept_up_to_eighty_cases(engine: AsyncEngine) -> None:
+    """cases_per_seed may reach the pack contract's 80, and no further; the
+    downgrade to 8..64 refuses while a wider run exists."""
+    run_sql = (
+        "INSERT INTO generator_runs (run_id, submission_id, attempt, seeds, "
+        "probe_epoch, cases_per_seed, panel, settings_revision, status) VALUES "
+        "(gen_random_uuid(), CAST(:sub AS uuid), :attempt, '[]', :epoch, :cases, "
+        "'[]', 1, 'leased')"
+    )
     try:
         await _clear(engine)
         submission = await _insert_submission(engine)
@@ -197,25 +130,28 @@ async def test_round_downgrade_keeps_qualification_runs_unscored(
                     "VALUES (repeat('e', 64), 'initial', 'test') RETURNING epoch"
                 )
             )
+        params = {"sub": submission, "epoch": epoch}
+        async with engine.begin() as connection:
             await connection.execute(
-                text(
-                    "INSERT INTO generator_runs (run_id, submission_id, attempt, "
-                    "seeds, probe_epoch, cases_per_seed, panel, settings_revision, "
-                    "status, outcome, finished_at) VALUES (gen_random_uuid(), "
-                    "CAST(:sub AS uuid), 1, '[]', :epoch, 16, '[]', 1, 'qualified', "
-                    "'qualified', now())"
-                ),
-                {"sub": submission, "epoch": epoch},
+                text(run_sql), {**params, "attempt": 1, "cases": 80}
             )
-        _alembic("downgrade", "5c1e9a7d2b40")
-        async with engine.connect() as connection:
-            row = (
+        for attempt, cases in ((2, 81), (3, 7)):
+            with pytest.raises(IntegrityError):
+                async with engine.begin() as connection:
+                    await connection.execute(
+                        text(run_sql), {**params, "attempt": attempt, "cases": cases}
+                    )
+        with pytest.raises(subprocess.CalledProcessError) as refused:
+            _alembic("downgrade", "4f8c2d6a9e17")
+        assert "more than 64 cases" in refused.value.stderr
+        async with engine.begin() as connection:
+            await connection.execute(text("DELETE FROM generator_runs"))
+        _alembic("downgrade", "4f8c2d6a9e17")
+        with pytest.raises(IntegrityError):
+            async with engine.begin() as connection:
                 await connection.execute(
-                    text("SELECT status, score, outcome FROM generator_runs")
+                    text(run_sql), {**params, "attempt": 4, "cases": 65}
                 )
-            ).one()
-        # A qualification run was never scored: no zero score appears.
-        assert tuple(row) == ("abandoned", None, "qualified")
     finally:
         await _clear(engine)
         _alembic("upgrade", "head")

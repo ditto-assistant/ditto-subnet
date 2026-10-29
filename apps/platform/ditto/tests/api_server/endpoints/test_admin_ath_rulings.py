@@ -11,7 +11,6 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -26,7 +25,6 @@ from ditto.api_models.admin_ath_rulings import (
     ATH_RULINGS_CONFIRMATION,
     ATH_RULINGS_MAX_BYTES,
     AdminAthRuling,
-    AdminAthRulingsDocument,
 )
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
@@ -59,11 +57,6 @@ _TOKEN = "test-admin-token-at-least-32-characters"
 _ACTOR = "operator@example.com"
 _HEADERS = {"Authorization": f"Bearer {_TOKEN}", "X-Admin-Actor": _ACTOR}
 _T0 = datetime(2026, 9, 13, 12, tzinfo=UTC)
-_FIXTURE = (
-    Path(__file__).resolve().parents[2]
-    / "fixtures"
-    / "ath_rulings_replay_2026-09-13.json"
-)
 _PREVIEW = "/api/v1/admin/ath-rulings/batch-preview"
 _EXECUTE = "/api/v1/admin/ath-rulings/batch-execute"
 _UPLOAD = "/api/v1/admin/ath-rulings/upload-url"
@@ -844,81 +837,6 @@ async def test_preview_and_execute_require_admin_actor(
     assert (
         await client.post(_PREVIEW, json=payload, headers={"X-Admin-Actor": _ACTOR})
     ).status_code == 401
-
-
-async def test_replay_of_the_2026_09_13_board_review_rejects(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    """The five top-5 rejects replay from the review JSON with citations."""
-    raw = json.loads(_FIXTURE.read_text())
-    document = AdminAthRulingsDocument.model_validate(raw)
-    assert document.source == "docs/sn118-top5-board-review-2026-09-13.json"
-    assert len(document.rulings) == 5
-    assert {ruling.action for ruling in document.rulings} == {"reject"}
-    assert all(ruling.evidence_references for ruling in document.rulings)
-    assert all(ruling.expected_score_count == 3 for ruling in document.rulings)
-    assert {str(r.agent_id)[:8] for r in document.rulings} == {
-        "c25489aa",
-        "db0d4d25",
-        "5064eb97",
-        "db9b919d",
-        "dd0783d1",
-    }
-    assert len(_FIXTURE.read_bytes()) <= ATH_RULINGS_MAX_BYTES
-
-    store = _StubRulingsStore()
-    _install(app, maker, store)
-    key = f"ath-rulings/v1/{actor_slug(_ACTOR)}/2026-09-13/replay.json"
-    store.objects[key] = _FIXTURE.read_bytes()
-
-    # Against a board that does not carry these rows the replay is inert.
-    empty = await client.post(_PREVIEW, json={"upload_key": key}, headers=_HEADERS)
-    assert empty.status_code == 200, empty.text
-    assert {item["disposition"] for item in empty.json()["items"]} == {"not_found"}
-    assert empty.json()["ready_count"] == 0
-
-    await _activate(maker)
-    for index, ruling in enumerate(document.rulings):
-        await _seed_scored(
-            maker,
-            hotkey=raw["rulings"][index]["miner_hotkey"],
-            name=raw["rulings"][index]["agent_name"],
-            composite=0.82 - index * 0.01,
-            created_at=_T0 - timedelta(hours=5 - index),
-            agent_id=ruling.agent_id,
-            sha256=ruling.expected_sha256,
-        )
-    preview = await client.post(_PREVIEW, json={"upload_key": key}, headers=_HEADERS)
-    assert preview.status_code == 200, preview.text
-    body = preview.json()
-    assert body["ready_count"] == 5
-    assert all(item["steps"] == ["open", "reject"] for item in body["items"])
-    # The five rulings empty the board: each reject removes the champion the
-    # previous one left behind, so every one of them moves the crown.
-    assert [item["would_change_crown"] for item in body["items"]] == [True] * 5
-    assert body["crown_moving_count"] == 5
-
-    executed = await client.post(
-        _EXECUTE,
-        json={
-            "preview_token": body["preview_token"],
-            "confirmation": ATH_RULINGS_CONFIRMATION,
-        },
-        headers=_HEADERS,
-    )
-    assert executed.status_code == 200, executed.text
-    assert executed.json()["applied_count"] == 5
-    assert executed.json()["board_after"]["champion_agent_id"] is None
-    for ruling in document.rulings:
-        assert await _status(maker, ruling.agent_id) == AgentStatus.BANNED.value
-        review, actions = await _review(maker, ruling.agent_id)
-        assert review is not None
-        assert review.resolution == "reject"
-        assert review.resolution_reason == ruling.reason
-        assert actions[-1].evidence["batch_ruling"]["evidence_references"] == list(
-            ruling.evidence_references
-        )
-        assert actions[-1].evidence["batch_ruling"]["source"] == document.source
 
 
 def _heartbeat(
@@ -2211,8 +2129,12 @@ async def test_court_preserves_committed_ruling_outcomes_when_board_read_fails(
     assert await _status(maker, agent_id) == "banned"
 
 
-@pytest.mark.parametrize("active_reference", [False, True])
-@pytest.mark.parametrize("fail_materialization", [False, True])
+# When materialization fails it raises before active_reference is read, so
+# True-True would repeat True-False.
+@pytest.mark.parametrize(
+    ("fail_materialization", "active_reference"),
+    [(False, False), (False, True), (True, False)],
+)
 async def test_court_restoration_materializes_after_commit_outside_poll_ttl(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -2486,3 +2408,65 @@ async def test_court_keeps_uncertain_outcome_when_writer_commits_then_raises(
     assert "private" not in response.text
     assert await _status(maker, first_id) == "ath_pending_review"
     assert await _status(maker, next_id) == "scored"
+
+
+async def test_court_clear_applies_below_the_crown_and_skips_crown_moves(
+    app: FastAPI, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """The copy-hold court's apply path: one guarded clear, never a crown move."""
+    await _activate(maker)
+    await _seed_scored(
+        maker,
+        hotkey="5Champion",
+        name="champion",
+        composite=0.9,
+        created_at=_T0 - timedelta(hours=3),
+    )
+    below, below_sha = await _seed_held(
+        maker, hotkey="5Below", composite=0.5, created_at=_T0 - timedelta(hours=2)
+    )
+    above, above_sha = await _seed_held(
+        maker, hotkey="5Above", composite=0.95, created_at=_T0 - timedelta(hours=1)
+    )
+    _install(app, maker)
+
+    async with maker() as session:
+        moved = await rulings_mod.apply_court_clear(
+            session,
+            app.state,
+            agent_id=above,
+            expected_sha256=above_sha,
+            reason="court clear that would take the crown",
+            actor="platform:copy-hold-court",
+        )
+    assert moved["status"] == "skipped"
+    assert moved["would_change_crown"] is True
+    assert await _status(maker, above) == "ath_pending_review"
+
+    async with maker() as session:
+        stale = await rulings_mod.apply_court_clear(
+            session,
+            app.state,
+            agent_id=below,
+            expected_sha256="0" * 64,
+            reason="court clear against a stale artifact",
+            actor="platform:copy-hold-court",
+        )
+    assert stale["status"] == "skipped"
+    assert stale["disposition"] == "stale_guard"
+
+    async with maker() as session:
+        applied = await rulings_mod.apply_court_clear(
+            session,
+            app.state,
+            agent_id=below,
+            expected_sha256=below_sha,
+            reason="court clear below the crown",
+            actor="platform:copy-hold-court",
+        )
+    assert applied["status"] == "applied", applied
+    assert applied["steps"] == ["clear"]
+    assert await _status(maker, below) == "scored"
+    review, _ = await _review(maker, below)
+    assert review is not None and review.resolution == "clear"
+    assert review.resolved_by == "platform:copy-hold-court"

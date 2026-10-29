@@ -27,6 +27,12 @@ readiness and v14 canary issuance. No scorer image or version is
 activated by capability advertisement. See
 [the rollout plan](../../docs/benchmark-v14-rollout.md).
 
+V14 graders also read every graded reply field (`answer`, `final_text`) as
+rendered text before matching (`grade.ReplyAsRead`): markdown markup is removed
+and the text it marks up is kept, non-ASCII spaces read as a space, and a `.`
+or `,` that no digit follows ends a number token. The wire is unchanged; see
+the rollout plan's *V14 answer-normalization contract*.
+
 ## Benchmark-version negotiation (validator control plane)
 
 The benchmark contract is a deliberate input, never inferred from a dataset
@@ -163,6 +169,38 @@ stays 9); every v13 field above is additive and optional for a v9-era harness,
 which simply sees a few more tools and richer schemas.
 
 ## Dataset
+
+### Generator-round datasets
+
+`generator-round-v1` is advertised and admitted whenever the scorer runs in
+trusted screened-image mode (`DITTOBENCH_ALLOW_SCREENED_IMAGES=1`, which every
+validator stack sets). It is independent of the private V13 transport below:
+round tickets are issued only by Platform, and only while the generator
+competition's `validator_rounds_enabled` setting is on, so that setting is the
+operator kill switch. A round request carries the exact round dataset bytes
+(at most `challenge.MaxRoundDatasetBytes` decoded) and their canonical SHA-256.
+Its report goes to Platform's round endpoint and never enters the agent score
+ledger.
+
+Alongside it the scorer advertises `generator-round-max-cases-<n>`, the
+largest column (cases per pack) it runs: the pack contract's
+`challenge.MaxCases`, currently 80. The validator forwards it as
+`scorer_benchmarks.generator_round_max_cases`, and Platform leases a round only
+to a validator whose value covers the round's largest column. A scorer without
+the feature is treated as running 32-case columns, the bound earlier
+validators enforce on a round job.
+
+The mode also advertises `generator-round-bench-<n>` for every bench version
+it runs a round at: the pack grading policies
+`challenge.SupportedGradingBenchVersions` (13 and 14). A round request's
+`bench_version` must be one of them. The harness is seeded and run at that
+version, and each case is graded at the `grading_bench_version` its pack
+declares, which must be the round's version or the one before it (the
+two-version window, `challenge.GradingPolicyWindow`;
+`challenge.CheckRoundGradingVersions`; a dataset with any other column fails
+the run). The validator forwards the set as
+`scorer_benchmarks.generator_round_bench_versions`; a scorer without the
+features is treated as running only v13 rounds.
 
 ### Private V13 control-plane transport (default off)
 

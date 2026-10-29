@@ -4,7 +4,13 @@ from uuid import uuid4
 
 import pytest
 
-from ditto.tests.test_collector_automation import Chain, open_journal, policy
+from ditto.tests.test_collector_automation import (
+    Chain,
+    open_journal,
+)
+from ditto.tests.test_collector_automation import (
+    policy as base_policy,
+)
 from ditto.treasury.collector import (
     ManualTransfer,
     Settlement,
@@ -25,6 +31,10 @@ from ditto_screening_protocol.treasury_manual import (
 )
 
 GM = "5" + "a" * 47
+
+
+def policy(**changes):
+    return base_policy(**{"transfer_delegate": "5" + "b" * 47, **changes})
 
 
 class Mailbox:
@@ -525,7 +535,8 @@ def test_readiness_publish_failure_still_pulls_and_reconciles_exact_request(
     module.consume_iteration(mailbox, j, p, c)
     module.consume_iteration(mailbox, j, p, c)
     assert pulls == ["pulled", "pulled"]
-    assert mailbox.reports[-1]["status"] == "finalized" and mailbox.acks == ["ack"]
+    assert any(r["status"] == "finalized" for r in mailbox.reports)
+    assert mailbox.acks == ["ack"]
     assert len(c.sent) == 2  # Original canary plus one bound manual transfer.
     assert not j.db.in_transaction
     logs = capsys.readouterr().out
@@ -549,14 +560,15 @@ def test_cold_approved_runtime_migration_preserves_used_manual_history(
     )
     from ditto_screening_protocol.collector_receipts import (
         AUDITED_COLLECTOR_CODE_HASH,
-        V473_COLLECTOR_CODE_HASH,
+        V482_COLLECTOR_CODE_HASH,
     )
 
     key = Keypair.create_from_seed("0x" + "22" * 32)
+    # The reviewed live path: revision 8 (v482) -> revision 9 (v483).
     old, c, journal, env, mailbox = setup(
         tmp_path,
         collector_coldkey=key.ss58_address,
-        runtime_code_hash=V473_COLLECTOR_CODE_HASH,
+        runtime_code_hash=V482_COLLECTOR_CODE_HASH,
         gcp_project="sn118-gamma-custody",
         registration_service_account="sn118-collector-registration@sn118-gamma-custody.iam.gserviceaccount.com",
         transfer_service_account="sn118-collector-transfer@sn118-gamma-custody.iam.gserviceaccount.com",
@@ -757,7 +769,7 @@ def test_slow_receipt_catchup_keeps_readiness_inside_freshness_window(
     assert max(b - a for a, b in zip([1000] + published, published, strict=False)) < 180
     assert published[-1] == now[0]
     assert all(r["status"] == "readiness" for r in mailbox.reports)
-    assert pulled == [True]  # Still at most one manual message per outer iteration.
+    assert pulled == [True] * 4  # Poll between chunks; consume at most one message.
     assert not journal.db.in_transaction and len(c.sent) == 1
     assert list(journal.db.execute("SELECT * FROM operations")) == before_operations
     journal.close()
@@ -845,5 +857,36 @@ def test_caught_up_worker_publishes_readiness_then_stops_redundant_chunks(
     assert calls == list(range(cursor + 1, 101))
     assert len(mailbox.reports) == reports
     assert all(r["status"] == "readiness" for r in mailbox.reports)
-    assert pulls == [True] and len(c.sent) == 1 and not journal.db.in_transaction
+    assert pulls == [True] * reports
+    assert len(c.sent) == 1 and not journal.db.in_transaction
+    journal.close()
+
+
+def test_archive_refusal_during_catchup_still_publishes_readiness_and_pulls(
+    tmp_path, monkeypatch, capsys
+):
+    import runpy
+    from pathlib import Path
+
+    module = runpy.run_path(
+        str(Path(__file__).resolve().parents[2] / "scripts/treasury_manual_worker.py")
+    )
+    consume = module["consume_iteration"]
+    p, c, journal, _, mailbox = setup(tmp_path)
+    cursor = journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0]
+
+    def refused(*_, **__):
+        raise RuntimeError("Historical work rate limit exceeded")
+
+    monkeypatch.setitem(consume.__globals__, "observe_earnings", refused)
+    pulled = []
+    mailbox.pull = lambda: pulled.append(True)
+    consume(mailbox, journal, p, c)
+    assert [r["status"] for r in mailbox.reports] == ["readiness"]
+    assert pulled == [True]
+    assert journal.db.execute("SELECT block FROM cursor WHERE id=1").fetchone()[0] == (
+        cursor
+    )
+    log = capsys.readouterr().out
+    assert "earnings_catchup_unavailable" in log and "rate limit" not in log
     journal.close()

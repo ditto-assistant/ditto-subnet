@@ -62,6 +62,7 @@ from ditto_screener.review_settings import (
     ShadowReviewUsage,
     bootstrap_review_settings,
 )
+from ditto_screener.review_usage import ReviewUsageCollector, collect_review_usage
 from ditto_screener.router_screen import build_signed_router_source_screen
 from ditto_screener.signing import (
     sign_completion_receipt,
@@ -73,8 +74,10 @@ from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenerQueueItem,
     ScreenEvidenceItem,
+    ScreeningReviewUsageRequest,
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
@@ -767,6 +770,51 @@ class ScreenerWorker:
             int(self._credits_pause_seconds),
         )
 
+    async def _review_lineage(
+        self, item: ScreenerQueueItem, attempt_id: UUID
+    ) -> ReviewLineagePacket | None:
+        """The attempt's lineage packet, or None for an ordinary full review.
+
+        A packet that cannot be fetched never blocks screening: the attempt
+        falls back to the full review it would have had without a lineage.
+
+        The packet is requested even when the claim named no parent: under
+        the released-base lineage mode Platform may bind a declared, already
+        screened public base at packet time, and otherwise answers 409. The
+        bound reference may also differ from the claim-time parent.
+        """
+        try:
+            packet = await self._platform.get_review_lineage(
+                item.agent_id, attempt_id=attempt_id, artifact_sha256=item.sha256
+            )
+        except (PlatformError, ValidationError, ValueError) as error:
+            if item.lineage_parent_agent_id is None:
+                # The ordinary case for a first submission: no reference.
+                logger.info(
+                    "agent_id=%s no lineage reference; full review: %s",
+                    item.agent_id,
+                    str(error)[:120],
+                )
+            else:
+                logger.warning(
+                    "agent_id=%s lineage packet unavailable; full review: %s",
+                    item.agent_id,
+                    str(error)[:200],
+                )
+            return None
+        logger.info(
+            "agent_id=%s lineage parent=%s reference=%s scope=%s changed_files=%d "
+            "rulings=%d findings=%d",
+            item.agent_id,
+            packet.parent.agent_id,
+            packet.reference_kind or "same_owner_version",
+            packet.scope.value,
+            packet.changed_file_count,
+            len(packet.rulings),
+            len(packet.findings),
+        )
+        return packet
+
     async def _screen_one(
         self,
         item: ScreenerQueueItem,
@@ -921,6 +969,11 @@ class ScreenerWorker:
                         check_code,
                     )
 
+            # (collector, elapsed ms, lineage scope) of the model review, set
+            # only when the gate actually ran for this attempt.
+            review_usage_snapshot: (
+                tuple[ReviewUsageCollector, int, str | None] | None
+            ) = None
             if item.precheck_reason_code is not None:
                 if item.precheck_reason_code != EXACT_CROSS_MINER_DUPLICATE:
                     raise PlatformError(
@@ -956,32 +1009,41 @@ class ScreenerWorker:
                     artifact = await self._platform.get_artifact(
                         agent_id, attempt_id=attempt_id
                     )
+                    review_lineage = await self._review_lineage(item, attempt_id)
 
-                    result = await self._gate.screen(
-                        agent_id=agent_id,
-                        attempt_id=attempt_id,
-                        bench_version=item.bench_version,
-                        miner_hotkey=item.miner_hotkey,
-                        sha256=item.sha256,
-                        download_url=str(artifact.download_url),
-                        progress=self._set_progress,
-                        deadline=screen_deadline,
-                        publish_image=publish_image,
-                        publish_held_image=publish_held_image,
-                        record_archive_verification=record_archive_verification,
-                        record_runtime_verification=record_runtime_verification,
-                        # A build-only item requests the mechanical lane. That
-                        # lane is used both for an already-adjudicated rebuild
-                        # and for score-first admission when the complete source
-                        # and behavioral review is intentionally deferred. It
-                        # builds, serves, isolates, and exports the image without
-                        # spending private-policy/model budget.
-                        build_only=item.build_only,
-                        policy_only=item.policy_only,
-                        deferred_source_review=item.deferred_source_review,
-                        policy_version=policy_version,
-                        scored_runtime_evidence=item.scored_runtime_evidence,
-                        scored_runtime_evidence_received_at=received_at,
+                    review_started = time.monotonic()
+                    with collect_review_usage() as review_usage:
+                        result = await self._gate.screen(
+                            agent_id=agent_id,
+                            attempt_id=attempt_id,
+                            bench_version=item.bench_version,
+                            miner_hotkey=item.miner_hotkey,
+                            sha256=item.sha256,
+                            download_url=str(artifact.download_url),
+                            progress=self._set_progress,
+                            deadline=screen_deadline,
+                            publish_image=publish_image,
+                            publish_held_image=publish_held_image,
+                            record_archive_verification=record_archive_verification,
+                            record_runtime_verification=record_runtime_verification,
+                            # A build-only item requests the mechanical lane. That
+                            # lane is used both for an already-adjudicated rebuild
+                            # and for score-first admission when the complete source
+                            # and behavioral review is intentionally deferred. It
+                            # builds, serves, isolates, and exports the image without
+                            # spending private-policy/model budget.
+                            build_only=item.build_only,
+                            policy_only=item.policy_only,
+                            deferred_source_review=item.deferred_source_review,
+                            policy_version=policy_version,
+                            scored_runtime_evidence=item.scored_runtime_evidence,
+                            scored_runtime_evidence_received_at=received_at,
+                            review_lineage=review_lineage,
+                        )
+                    review_usage_snapshot = (
+                        review_usage,
+                        int((time.monotonic() - review_started) * 1000),
+                        review_lineage.scope.value if review_lineage else None,
                     )
             if result.policy_version != policy_version:
                 raise PlatformError(
@@ -1003,6 +1065,13 @@ class ScreenerWorker:
                     "shadow review telemetry failed attempt_id=%s error_type=%s",
                     attempt_id,
                     type(error).__name__,
+                )
+            if review_usage_snapshot is not None and not item.build_only:
+                await self._submit_review_usage(
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    artifact_sha256=item.sha256.lower(),
+                    snapshot=review_usage_snapshot,
                 )
             try:
                 battery = self._gate.pop_probe_battery(attempt_id)
@@ -1528,6 +1597,40 @@ class ScreenerWorker:
         except (ValidationError, ValueError, PlatformError) as error:
             logger.warning(
                 "probe battery telemetry was not persisted attempt_id=%s error_type=%s",
+                attempt_id,
+                type(error).__name__,
+            )
+
+    async def _submit_review_usage(
+        self,
+        *,
+        agent_id: UUID,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        snapshot: tuple[ReviewUsageCollector, int, str | None],
+    ) -> None:
+        """Best-effort per-attempt model usage telemetry before the verdict.
+
+        Never raises: a telemetry fault must not discard the decision, and the
+        exception text can carry private context, so only its type is logged.
+        """
+        collector, elapsed_ms, lineage_scope = snapshot
+        if collector.empty:
+            return
+        try:
+            await self._platform.submit_review_usage(
+                agent_id,
+                ScreeningReviewUsageRequest(
+                    attempt_id=attempt_id,
+                    artifact_sha256=artifact_sha256,
+                    stages=collector.entries(),
+                    elapsed_ms=max(0, elapsed_ms),
+                    lineage_scope=lineage_scope,  # type: ignore[arg-type]
+                ),
+            )
+        except Exception as error:
+            logger.warning(
+                "review usage telemetry failed attempt_id=%s error_type=%s",
                 attempt_id,
                 type(error).__name__,
             )
