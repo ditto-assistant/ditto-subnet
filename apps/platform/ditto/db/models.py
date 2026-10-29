@@ -1524,7 +1524,7 @@ class AthCopyCourtRecommendation(Base):
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Engine that produced the verdict (``rules-v1`` resubmission rules,
-    # ``family-diff-v2`` near-duplicate attribution). Part of the unique key,
+    # ``family-diff-v3`` near-duplicate attribution). Part of the unique key,
     # so an improved engine re-triages a hold under the same settings.
     triage_revision: Mapped[str] = mapped_column(
         Text, nullable=False, server_default=text("'rules-v1'")

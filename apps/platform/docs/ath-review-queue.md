@@ -349,7 +349,7 @@ before any verdict:
   (`triage_revision = rules-v1`) — sha256 or normalized-source identity with
   an already rejected ancestor. "Check whether the cited behavior was removed"
   is false by construction; the recommendation cites the ancestor's reject.
-- `near_duplicate` (`triage_revision = family-diff-v2`) — the family diff in
+- `near_duplicate` (`triage_revision = family-diff-v3`) — the family diff in
   `copy_court_family.py` / `copy_court_triage.py`, the same procedure an
   operator runs by hand:
   1. Candidate bases: SHAs and UUIDs named in either side's
@@ -374,7 +374,15 @@ before any verdict:
   5. Precedent: resolved copy-hold rulings from the live store (released-base
      clears, non-public-copy rejects), preferring ones naming the same base.
   6. Verdict: CLEAR when the overlap is fully explained by proven-public
-     bases and no distinctive line is present; REJECT (recommendation only)
+     bases, no distinctive line is present, and the held agent adds or
+     changes at least one runtime file of its primary base
+     (`held_delta.runtime_changed_count > 0`; declaration, attribution,
+     changelog and upstream prose, lockfiles and whitespace-only edits do not
+     count). A fork whose runtime files are byte-identical to its released
+     primary base is an exact duplicate with no contribution: REJECT
+     (recommendation only, basis `unmodified_fork_of_released_base`, operator
+     ruling 2026-10-29). Removal-only forks and an unmeasurable delta
+     ESCALATE. REJECT (recommendation only)
      when at least three distinctive lines, or an unexplained file plus a
      distinctive line, of the unreleased matched agent are present and some
      proven base shares a file with the matched agent (otherwise its
