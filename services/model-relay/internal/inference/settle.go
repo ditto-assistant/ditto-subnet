@@ -157,6 +157,20 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 				return false, err
 			}
 		}
+	} else if request.RequestKind == kindDecision {
+		active := grant.DecisionActiveRequests
+		if wasStarted {
+			active = max32(0, active-1)
+		}
+		if _, err := q.ApplyGrantDecisionSettlement(ctx, postgres.ApplyGrantDecisionSettlementParams{
+			DecisionActiveRequests: active,
+			DecisionTokens:         promptTokens,
+			DecisionCostMicrousd:   costMicrousd,
+			Now:                    pgTime(p.now),
+			GrantID:                pgUUID(p.grantID),
+		}); err != nil {
+			return false, err
+		}
 	} else {
 		active := grant.EmbeddingActiveRequests
 		if wasStarted {

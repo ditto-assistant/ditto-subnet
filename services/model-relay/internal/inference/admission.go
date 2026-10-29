@@ -21,6 +21,7 @@ import (
 const (
 	kindChat      = "chat"
 	kindEmbedding = "embedding"
+	kindDecision  = "decision"
 )
 
 // laneLimits are the admission rails for one lane, selected from the
@@ -35,6 +36,16 @@ type laneLimits struct {
 }
 
 func limitsForKind(cfg config.InferenceProxyConfig, kind string) laneLimits {
+	if kind == kindDecision {
+		return laneLimits{
+			perTicketConcurrency:    cfg.DecisionTicketConcurrency,
+			perValidatorConcurrency: cfg.DecisionValidatorConcurrency,
+			globalConcurrency:       cfg.DecisionGlobalConcurrency,
+			perTicketRPM:            cfg.DecisionTicketRPM,
+			perValidatorRPM:         cfg.DecisionValidatorRPM,
+			globalRPM:               cfg.DecisionGlobalRPM,
+		}
+	}
 	if kind == kindEmbedding {
 		return laneLimits{
 			perTicketConcurrency:    cfg.EmbeddingTicketConcurrency,
@@ -117,7 +128,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 		return nil, &d, nil
 	}
 	// Step 1: request-kind gate (no SQL).
-	if p.kind != kindChat && p.kind != kindEmbedding {
+	if p.kind != kindChat && p.kind != kindEmbedding && p.kind != kindDecision {
 		return decline(relayhttp.DeclineUnattributed)
 	}
 	// Step 2: unlocked snapshot, only to learn the owning ticket PK.
@@ -169,6 +180,12 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 			}
 		}
 		if !permitted {
+			return decline(relayhttp.DeclineModelNotPermitted)
+		}
+	} else if p.kind == kindDecision {
+		// The decision pin is stamped at mint; a grant minted with the lane
+		// off has none and every decision call is 4107.
+		if grant.BenchVersion < 7 || !grant.DecisionModel.Valid || p.model != grant.DecisionModel.String {
 			return decline(relayhttp.DeclineModelNotPermitted)
 		}
 	} else if grant.BenchVersion < 7 || p.model != grant.EmbeddingModel {
@@ -227,6 +244,15 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 				return nil, nil, err
 			}
 			grant.ActiveRequests = int32(activeCount)
+		} else if p.kind == kindDecision {
+			if err := q.SetGrantDecisionActiveRequests(ctx, postgres.SetGrantDecisionActiveRequestsParams{
+				DecisionActiveRequests: int32(activeCount),
+				Now:                    pgTime(p.now),
+				GrantID:                pgUUID(p.grantID),
+			}); err != nil {
+				return nil, nil, err
+			}
+			grant.DecisionActiveRequests = int32(activeCount)
 		} else {
 			if err := q.SetGrantEmbeddingActiveRequests(ctx, postgres.SetGrantEmbeddingActiveRequestsParams{
 				EmbeddingActiveRequests: int32(activeCount),
@@ -266,6 +292,10 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if p.kind == kindEmbedding && int64(grant.EmbeddingRequestCount) >= int64(grant.EmbeddingRequestBudget) {
 		return decline(relayhttp.DeclineBudgetExhausted)
 	}
+	// The decision walls never mark the grant exhausted either.
+	if p.kind == kindDecision && int64(grant.DecisionRequestCount) >= int64(grant.DecisionRequestBudget) {
+		return decline(relayhttp.DeclineBudgetExhausted)
+	}
 	// Step 12: caller-shape reservation gate. The reservation is stored on
 	// the request row for untrusted-receipt clamping; it is not spend.
 	if p.tokenReservation < 1 {
@@ -280,6 +310,9 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if p.kind == kindEmbedding {
 		spent = grant.EmbeddingTokens
 		tokenBudget = grant.EmbeddingTokenBudget
+	} else if p.kind == kindDecision {
+		spent = grant.DecisionTokens
+		tokenBudget = grant.DecisionTokenBudget
 	}
 	if spent >= tokenBudget {
 		if p.kind == kindChat {
@@ -297,6 +330,8 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	activeRequests := grant.ActiveRequests
 	if p.kind == kindEmbedding {
 		activeRequests = grant.EmbeddingActiveRequests
+	} else if p.kind == kindDecision {
+		activeRequests = grant.DecisionActiveRequests
 	}
 	if int(activeRequests) >= p.limits.perTicketConcurrency {
 		return decline(atCapacity(p.kind, metrics.ScopePerTicket))
@@ -416,6 +451,15 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 		}
 		grant.RequestCount++
 		grant.ActiveRequests++
+	} else if p.kind == kindDecision {
+		if err := q.IncrementGrantDecisionAdmission(ctx, postgres.IncrementGrantDecisionAdmissionParams{
+			Now:     pgTime(p.now),
+			GrantID: pgUUID(p.grantID),
+		}); err != nil {
+			return nil, nil, err
+		}
+		grant.DecisionRequestCount++
+		grant.DecisionActiveRequests++
 	} else {
 		if err := q.IncrementGrantEmbeddingAdmission(ctx, postgres.IncrementGrantEmbeddingAdmissionParams{
 			Now:     pgTime(p.now),

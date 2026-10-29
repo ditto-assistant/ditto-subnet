@@ -41,6 +41,13 @@ const (
 	defaultEmbeddingPerValidatorRPM         = 40_000
 	defaultEmbeddingGlobalRPM               = 100_000
 	maxRequestsPerMinute                    = 100_000
+	defaultDecisionPerTicketConcurrency     = 8
+	defaultDecisionPerValidatorConcurrency  = 32
+	defaultDecisionGlobalConcurrency        = 64
+	maxDecisionConcurrency                  = 512
+	defaultDecisionPerTicketRPM             = 600
+	defaultDecisionPerValidatorRPM          = 2400
+	defaultDecisionGlobalRPM                = 6000
 	settingsRefreshInterval                 = 5 * time.Second
 )
 
@@ -61,6 +68,95 @@ type concurrencySettings struct {
 	EmbeddingPerTicketRPM            int
 	EmbeddingPerValidatorRPM         int
 	EmbeddingGlobalRPM               int
+	// Decision is the nested decision_lane object. Enabled is a live kill
+	// switch here; the pinned model, price and walls are read from the grant.
+	Decision decisionLaneSettings
+}
+
+// decisionLaneSettings mirrors DecisionLaneSettings' live fields.
+type decisionLaneSettings struct {
+	Enabled                 bool
+	PerTicketConcurrency    int
+	PerValidatorConcurrency int
+	GlobalConcurrency       int
+	PerTicketRPM            int
+	PerValidatorRPM         int
+	GlobalRPM               int
+}
+
+func defaultDecisionLaneSettings() decisionLaneSettings {
+	return decisionLaneSettings{
+		PerTicketConcurrency:    defaultDecisionPerTicketConcurrency,
+		PerValidatorConcurrency: defaultDecisionPerValidatorConcurrency,
+		GlobalConcurrency:       defaultDecisionGlobalConcurrency,
+		PerTicketRPM:            defaultDecisionPerTicketRPM,
+		PerValidatorRPM:         defaultDecisionPerValidatorRPM,
+		GlobalRPM:               defaultDecisionGlobalRPM,
+	}
+}
+
+// parseDecisionLane validates the nested decision_lane object with the same
+// strict types, bounds and hierarchy as Pydantic. Unknown keys (model, price,
+// budgets: grant-stamped at mint) are ignored.
+func parseDecisionLane(raw json.RawMessage) (decisionLaneSettings, error) {
+	out := defaultDecisionLaneSettings()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return out, err
+	}
+	if rawEnabled, ok := fields["enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(rawEnabled, &enabled); err != nil {
+			return out, errors.New("decision_lane.enabled must be a boolean")
+		}
+		out.Enabled = enabled
+	}
+	if rawModel, ok := fields["model"]; ok && out.Enabled {
+		var model *string
+		if err := json.Unmarshal(rawModel, &model); err != nil || model == nil || *model == "" {
+			return out, errors.New("an enabled decision_lane must pin a model")
+		}
+	} else if out.Enabled {
+		return out, errors.New("an enabled decision_lane must pin a model")
+	}
+	for _, field := range []struct {
+		key  string
+		dst  *int
+		maxv int64
+	}{
+		{"per_ticket_concurrency", &out.PerTicketConcurrency, maxDecisionConcurrency},
+		{"per_validator_concurrency", &out.PerValidatorConcurrency, maxDecisionConcurrency},
+		{"global_concurrency", &out.GlobalConcurrency, maxDecisionConcurrency},
+		{"per_ticket_requests_per_minute", &out.PerTicketRPM, maxRequestsPerMinute},
+		{"per_validator_requests_per_minute", &out.PerValidatorRPM, maxRequestsPerMinute},
+		{"global_requests_per_minute", &out.GlobalRPM, maxRequestsPerMinute},
+	} {
+		rawValue, ok := fields[field.key]
+		if !ok {
+			continue
+		}
+		var num json.Number
+		dec := json.NewDecoder(bytes.NewReader(rawValue))
+		dec.UseNumber()
+		if err := dec.Decode(&num); err != nil {
+			return out, err
+		}
+		n, err := num.Int64()
+		if err != nil {
+			return out, err
+		}
+		if n < 1 || n > field.maxv {
+			return out, errors.New("out of range: decision_lane." + field.key)
+		}
+		*field.dst = int(n)
+	}
+	if out.PerTicketConcurrency > out.PerValidatorConcurrency || out.PerValidatorConcurrency > out.GlobalConcurrency {
+		return out, errors.New("decision concurrency hierarchy violated")
+	}
+	if out.PerTicketRPM > out.PerValidatorRPM || out.PerValidatorRPM > out.GlobalRPM {
+		return out, errors.New("decision requests-per-minute hierarchy violated")
+	}
+	return out, nil
 }
 
 func defaultConcurrencySettings() concurrencySettings {
@@ -79,6 +175,7 @@ func defaultConcurrencySettings() concurrencySettings {
 		EmbeddingPerTicketRPM:            defaultEmbeddingPerTicketRPM,
 		EmbeddingPerValidatorRPM:         defaultEmbeddingPerValidatorRPM,
 		EmbeddingGlobalRPM:               defaultEmbeddingGlobalRPM,
+		Decision:                         defaultDecisionLaneSettings(),
 	}
 }
 
@@ -188,6 +285,13 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	out.EmbeddingPerTicketRPM = int(embeddingTicketRPM)
 	out.EmbeddingPerValidatorRPM = int(embeddingValidatorRPM)
 	out.EmbeddingGlobalRPM = int(embeddingGlobalRPM)
+	if rawDecision, ok := raw["decision_lane"]; ok {
+		decision, err := parseDecisionLane(rawDecision)
+		if err != nil {
+			return defaultConcurrencySettings(), err
+		}
+		out.Decision = decision
+	}
 	return out, nil
 }
 
@@ -285,5 +389,12 @@ func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) confi
 	cfg.EmbeddingTicketRPM = s.EmbeddingPerTicketRPM
 	cfg.EmbeddingValidatorRPM = s.EmbeddingPerValidatorRPM
 	cfg.EmbeddingGlobalRPM = s.EmbeddingGlobalRPM
+	cfg.DecisionEnabled = s.Decision.Enabled
+	cfg.DecisionTicketConcurrency = s.Decision.PerTicketConcurrency
+	cfg.DecisionValidatorConcurrency = s.Decision.PerValidatorConcurrency
+	cfg.DecisionGlobalConcurrency = s.Decision.GlobalConcurrency
+	cfg.DecisionTicketRPM = s.Decision.PerTicketRPM
+	cfg.DecisionValidatorRPM = s.Decision.PerValidatorRPM
+	cfg.DecisionGlobalRPM = s.Decision.GlobalRPM
 	return cfg
 }

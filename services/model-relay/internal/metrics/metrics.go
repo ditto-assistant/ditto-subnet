@@ -43,6 +43,14 @@ var AdmissionAtCapacity = promauto.NewCounterVec(prometheus.CounterOpts{
 	Help: "Inference admissions declined with the retryable AT_CAPACITY decline, by lane and first-bound scope.",
 }, []string{"lane", "scope"})
 
+// DecisionRequests is ditto_inference_decision_requests_total{outcome}: one
+// increment per decision-lane call (completed, declined_<reason>,
+// provider_rejected, provider_unavailable, model_mismatch).
+var DecisionRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+	Name: "ditto_inference_decision_requests_total",
+	Help: "Decision-lane calls by outcome.",
+}, []string{"outcome"})
+
 // Platform-path families, declared for exposition parity (static on a relay).
 var (
 	ValidatorHeartbeatPayloadDegraded = promauto.NewCounterVec(prometheus.CounterOpts{

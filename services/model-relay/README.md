@@ -51,6 +51,8 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   upstream responses are fully buffered, sanitized, and re-serialized.
   The coding route is a separate disabled-by-default shadow lane; see
   [`CODING-SHADOW.md`](CODING-SHADOW.md).
+  `POST /api/v1/inference/decisions` is the dark decision-model lane; see
+  [Decision lane](#decision-lane-dark).
 - `internal/chain` — Pylon client: `/health` block probe and the
   validator-permit and registered-owner checks (`/block/recent/neurons`), with
   one-block snapshot caching and single-flight refreshes.
@@ -67,6 +69,53 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
 - `internal/testutil` — real-Postgres test harness (fresh database per test
   on the monorepo test container at `localhost:15433`; skips when
   unavailable).
+
+## Decision lane (dark)
+
+`POST /api/v1/inference/decisions` brokers a decision model (TypeSafe Jev)
+through OpenRouter's System One endpoint,
+`POST https://openrouter.ai/api/v1/systemone`, with the existing
+`OPENROUTER_API_KEY`. No other credential exists for it.
+`DITTO_DECISION_UPSTREAM_URL` may override the URL, but only to that same
+pinned OpenRouter path (it is a credential boundary like the chat and
+embedding URLs).
+
+The lane is off until the operator turns on `decision_lane` on the inference
+concurrency board (Backroom `set_inference_concurrency_settings`) with
+`enabled: true` and an exact `model`, e.g. `typesafe/jev-1.14` (never
+`~typesafe/jev-latest`). While it is off, the route answers the same 404 an
+unmounted path does, and grants are minted with no decision pin. The board
+also sets the stamped price (`input_microusd_per_mtok`, default 42000 =
+$0.042 per million input tokens), the per-run `request_budget` and
+`token_budget`, and the live concurrency and requests-per-minute rails. The
+model, price and walls are stamped onto each grant at mint, and `enabled` is
+a live kill switch.
+
+The body is the System One body (`{state, questions, assets?}`) passed
+through nearly verbatim. Harnesses may use any question type the provider
+supports (choice, score, noul, box), as many questions as the provider
+allows, and any state. The relay forces `model` to the grant's pin. It
+refuses only the fields it owns (`provider`, `session_id`, `user`,
+`trace`). It answers
+`{model, answers, usage: {input_tokens, output_tokens}}`, with `answers`
+passed through verbatim.
+
+The relay's controls are:
+
+- **Pin verification.** A response served by a model other than the pin
+  (or a dated snapshot of it, such as `typesafe/jev-1.13-20260917`) is an
+  uncharged infrastructure failure (502, `decision_model_mismatch`).
+- **Metering.** Receipted `usage.input_tokens` × the stamped price is booked
+  as `decision_cost_microusd`, which is ledger cost, never the provider
+  bill. Output is free.
+- **Walls.** The lane has its own request and token walls (4102/4104). They
+  never mark the grant exhausted, so chat survives a spent decision wall.
+- **Outages.** These use the existing 502/503/504 shapes, which the scorer
+  maps to the no-fault `model_relay_unavailable`.
+- **Provider rejections.** A provider 400/422 on the harness's own questions
+  is returned as an uncharged 400.
+
+No new decline or infra codes are introduced. The lane carries no score.
 
 ## Inference trace capture (`internal/traces`)
 
