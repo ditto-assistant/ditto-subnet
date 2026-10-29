@@ -96,6 +96,9 @@ its text to final_text changes field precedence even if the words survive.
 Identify the published protocol's actual overflow limit and permitted outcome;
 do not infer permission from a helper name or an invented local limit. Model-
 omitted optional fields and protocol-permitted serialization remain allowed.
+A reused model draft that reaches the deciding prompt only as text is not I4,
+with or without a disagree clause; see
+[october-29-reused-draft-no-disagree-clause](precedents/october-29-reused-draft-no-disagree-clause.md).
 
 W11 / W12: follow revoked capabilities beyond the model-visible catalog to
 the dispatch map and first side effect. Provider tool_choice is not an
