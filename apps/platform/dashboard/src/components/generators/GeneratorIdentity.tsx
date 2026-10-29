@@ -31,7 +31,7 @@ export function showGenerator(submissionId: string | null): void {
   window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
 }
 
-function plainClick(ev: MouseEvent): boolean {
+export function plainClick(ev: MouseEvent): boolean {
   return !(
     ev.defaultPrevented ||
     ev.button !== 0 ||
@@ -71,6 +71,8 @@ export function GeneratorIdentityCell(props: {
   minerHotkey: string | null | undefined;
   /** The public default generator has no owner and no panel. */
   publicDefault?: boolean;
+  /** The reader's own generator, tagged so the row mark is not colour alone. */
+  mine?: boolean;
 }): JSX.Element {
   return (
     <span class="gen-identity">
@@ -99,6 +101,9 @@ export function GeneratorIdentityCell(props: {
               </span>
             </Show>
             <HandleBadge handle={props.item.name_handle} />
+            <Show when={props.mine}>
+              <span class="gen-you">You</span>
+            </Show>
           </Show>
         </span>
         <Show when={props.minerHotkey && !props.publicDefault}>
