@@ -1626,6 +1626,7 @@ class ScreenerWorker:
                     stages=collector.entries(),
                     elapsed_ms=max(0, elapsed_ms),
                     lineage_scope=lineage_scope,  # type: ignore[arg-type]
+                    budget_stop=collector.budget_stop,
                 ),
             )
         except Exception as error:

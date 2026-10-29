@@ -13,13 +13,14 @@ or provider messages.
 from __future__ import annotations
 
 import math
+import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
-from ditto_screening_protocol import ReviewUsageStageEntry
+from ditto_screening_protocol import ReviewBudgetStop, ReviewUsageStageEntry
 
 _L2_ROLE_STAGES = {
     "analyst": "l2_analyst",
@@ -59,6 +60,8 @@ class _StageTotals:
     estimated_cost_usd: float = 0.0
     reported_cost_usd: float = 0.0
     reported_requests: int = 0
+    first_started: float | None = None
+    last_finished: float | None = None
 
 
 class ReviewUsageCollector:
@@ -66,6 +69,7 @@ class ReviewUsageCollector:
 
     def __init__(self) -> None:
         self._stages: dict[tuple[str, str], _StageTotals] = {}
+        self.budget_stop: ReviewBudgetStop | None = None
 
     def record(
         self,
@@ -78,8 +82,14 @@ class ReviewUsageCollector:
         reasoning_tokens: int = 0,
         estimated_cost_usd: float = 0.0,
         reported_cost_usd: float | None = None,
+        started_at: float | None = None,
     ) -> None:
         totals = self._stages.setdefault((stage, _model_id(model)), _StageTotals())
+        finished = time.monotonic()
+        started = finished if started_at is None else min(started_at, finished)
+        if totals.first_started is None or started < totals.first_started:
+            totals.first_started = started
+        totals.last_finished = finished
         totals.requests += 1
         totals.input_tokens += max(0, int(input_tokens))
         totals.cached_input_tokens += max(
@@ -121,6 +131,12 @@ class ReviewUsageCollector:
                         if totals.reported_requests == totals.requests
                         else None
                     ),
+                    wall_ms=(
+                        int((totals.last_finished - totals.first_started) * 1000)
+                        if totals.first_started is not None
+                        and totals.last_finished is not None
+                        else None
+                    ),
                 )
             )
         return out
@@ -149,8 +165,19 @@ def record_usage(stage: str, **values: Any) -> None:
         collector.record(stage, **values)
 
 
+def record_budget_stop(stop: ReviewBudgetStop) -> None:
+    """Keep the first model budget that stopped this attempt's review."""
+    collector = _CURRENT.get()
+    if collector is not None and collector.budget_stop is None:
+        collector.budget_stop = stop
+
+
 def record_chat_completion_usage(
-    stage: str, payload: Mapping[str, object], *, default_model: str
+    stage: str,
+    payload: Mapping[str, object],
+    *,
+    default_model: str,
+    started_at: float | None = None,
 ) -> None:
     """Record an OpenAI-compatible chat-completions ``usage`` block.
 
@@ -198,6 +225,7 @@ def record_chat_completion_usage(
         cached_input_tokens=cached,
         reasoning_tokens=reasoning,
         reported_cost_usd=reported,
+        started_at=started_at,
     )
 
 
@@ -205,6 +233,7 @@ __all__ = [
     "ReviewUsageCollector",
     "collect_review_usage",
     "l2_stage_for_role",
+    "record_budget_stop",
     "record_chat_completion_usage",
     "record_usage",
 ]

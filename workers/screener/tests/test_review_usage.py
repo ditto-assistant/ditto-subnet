@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
+from ditto_screener import l2_review
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.policy import ScreeningOutcome
 from ditto_screener.review_usage import (
@@ -20,6 +21,7 @@ from ditto_screener.review_usage import (
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from tests.test_l2_review import _FakeHarness, _response, _sol_agent
 from tests.test_worker import _decision, _FakeGate, _FakePlatform, _item, _worker
 
 
@@ -156,6 +158,50 @@ async def test_l1_turns_record_provider_usage_into_the_attempt_collector() -> No
     assert entry.stage == "l1" and entry.requests == 3
     assert entry.input_tokens == 12_000 and entry.output_tokens == 900
     assert entry.reported_cost_usd == pytest.approx(0.093)
+
+
+async def test_l3_budget_trip_records_the_tripped_limit_and_stage_wall_time(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _request: None)
+
+    async def post(*_args: object, **_kwargs: object) -> httpx.Response:
+        # 60k uncached + 300k cached at 10% = 90k billable > the 80k budget.
+        return _response([], input_tokens=360_000, cached_tokens=300_000, cost=0.0)
+
+    monkeypatch.setattr(agent, "_post", post)
+    with collect_review_usage() as usage:
+        async with httpx.AsyncClient() as client:
+            with pytest.raises(l2_review.L2TrajectoryError, match="total-budget"):
+                await agent._run_trajectory(
+                    client,
+                    "test-key",
+                    tmp_path,
+                    None,  # type: ignore[arg-type]
+                    artifact_sha256="d" * 64,
+                    dossier={"source": "x"},
+                    role="adjudicator",
+                    reasoning_effort="model_default",
+                    model="openai/gpt-6-sol",
+                    fallback_models=(),
+                    provider="azure",
+                    usage_before=l2_review.L2Usage(input_tokens=1_000),
+                    deadline=None,
+                    dossier_complete=True,
+                )
+    stop = usage.budget_stop
+    assert stop is not None
+    assert (stop.stage, stop.code, stop.tripped) == (
+        "l3_adjudicator",
+        "model-total-budget",
+        ["input"],
+    )
+    # Aggregate across roles at the stop, with the limits the worker applied.
+    assert stop.raw_input_tokens == 361_000
+    assert stop.effective_input_tokens == 91_000
+    assert (stop.max_input_tokens, stop.max_cost_usd) == (80_000, 1.5)
+    [entry] = usage.entries()
+    assert entry.stage == "l3_adjudicator" and entry.wall_ms is not None
 
 
 class _UsageGate(_FakeGate):

@@ -657,6 +657,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_failure_diagnostic',
         'list_screening_adjudication_attempts',
         'get_screening_review_cost',
+        'get_screening_review_budget',
         'get_screening_verification_readiness',
         'get_v13_private_generation_group',
         'get_v13_benign_approval',
@@ -936,7 +937,9 @@ describe('Backroom MCP tools', () => {
     // one-line summary) and the optional decision_lane object on the
     // set_inference_concurrency_settings input, measured 214,803 bytes; keep
     // about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(215_300)
+    // The per-attempt review budget read (one uuid input, one-line summary,
+    // detail in tool help) measures 215,494 bytes; keep about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(216_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -981,8 +984,9 @@ describe('Backroom MCP tools', () => {
       // about 150 chars. The one-line generator scorer capability read
       // measures 27,441. The validator request-outcome read (job polls and
       // the weight ledger, one line) brings the measured total to 27,653.
-      // The one-line decision-lane read measures 27,740.
-      27_800,
+      // The one-line decision-lane read measures 27,740; the one-line
+      // per-attempt review budget read brings it to 27,845.
+      28_000,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -10092,6 +10096,82 @@ describe('Backroom MCP tools', () => {
       })
       expect(String(fetchMock.mock.calls[0][0])).toContain(
         '/api/v1/admin/screening-review-cost?lookback_days=14',
+      )
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads one attempt\'s review budget with read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const attemptId = '16c416c6-1fc7-4244-9a07-b5e498014870'
+    const payload = {
+      attempt_id: attemptId,
+      agent_id: 'f9f69045-20df-41b8-ac96-c9b1959366b7',
+      status: 'quarantined',
+      reason_code: 'l3-adjudicator-model-total-budget',
+      build_only: false,
+      started_at: '2026-10-29T15:20:44Z',
+      finished_at: '2026-10-29T16:05:19Z',
+      wall_seconds: 2675.19,
+      telemetry_recorded: true,
+      recorded_at: '2026-10-29T16:05:14Z',
+      review_elapsed_ms: 2_645_680,
+      total_input_tokens: 61_300_139,
+      total_output_tokens: 173_136,
+      total_cost_usd: 0,
+      total_estimated_cost_usd: 23.535455,
+      stages: [
+        {
+          stage: 'l3_adjudicator', model: 'openai/gpt-6-sol', requests: 118,
+          input_tokens: 27_528_431, cached_input_tokens: 27_097_599, output_tokens: 19_626,
+          reasoning_tokens: 1_675, estimated_cost_usd: 12.954888, reported_cost_usd: 0,
+          wall_ms: null, tripped: [],
+        },
+      ],
+      l2_aggregate: {
+        raw_input_tokens: 40_316_969, cached_input_tokens: 39_222_870,
+        effective_input_tokens: 5_016_386, output_tokens: 90_848,
+        estimated_cost_usd: 23.535455, reported_cost_usd: 0, billable_cost_usd: 0,
+      },
+      limits: {
+        settings_revision: 140, settings_scope: 'subnet-screener-1',
+        max_input_tokens: 5_000_000, max_raw_input_tokens: 50_000_000,
+        max_output_tokens: 1_000_000, max_cost_usd: 25, l1_max_steps: 200,
+        l1_timeout_seconds: 3600, l2_max_steps: 256, l2_timeout_seconds: 1800,
+        adjudicator_max_steps: 128, adjudicator_timeout_seconds: 600,
+      },
+      exceeded_limits: ['input'],
+      budget_stop: null,
+      lineage: {
+        parent_agent_id: '9ea20eef-1ae6-4e93-bd50-bb6ce17edceb', parent_name: 'Hades',
+        parent_version: 16, scope: 'full', full_review_reasons: ['diff-too-large'],
+        reference_kind: 'same_owner_version', packet_sha256: '02'.repeat(32),
+        changed_file_count: null, changed_line_count: null,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const invalid = await client.callTool({
+        name: 'get_screening_review_budget',
+        arguments: { attemptId: 'not-a-uuid' },
+      })
+      expect(invalid.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await client.callTool({
+        name: 'get_screening_review_budget',
+        arguments: { attemptId },
+      })
+      expect(response.isError, JSON.stringify(response.content)).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        exceeded_limits: ['input'],
+        lineage: { full_review_reasons: ['diff-too-large'] },
+      })
+      expect(String(fetchMock.mock.calls[0][0])).toContain(
+        `/api/v1/admin/screening-attempts/${attemptId}/review-budget`,
       )
     } finally {
       await client.close()

@@ -3352,6 +3352,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-attempts/{attempt_id}/review-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Screening Review Budget
+         * @description One attempt's review model usage per stage, budgets and lineage scope.
+         */
+        get: operations["get_screening_review_budget_api_v1_admin_screening_attempts__attempt_id__review_budget_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-attempts/{attempt_id}/review-lineage": {
         parameters: {
             query?: never;
@@ -33867,6 +33887,68 @@ export interface components {
             updated_at?: string | null;
         };
         /**
+         * ReviewBudgetStop
+         * @description The model budget that ended an L2/L3 trajectory, as the worker saw it.
+         *
+         *     ``tripped`` names every limit exceeded at the stop. ``input`` is the
+         *     billable-equivalent aggregate (cached input counted at 10%), ``raw_input``
+         *     the uncached wire ceiling, ``cost`` the gateway-reported cost when every
+         *     turn reported one, else the worker estimate. Usage is the L2 aggregate
+         *     across analyst, critic and adjudicator roles at the stop, not the stage.
+         */
+        ReviewBudgetStop: {
+            /**
+             * Code
+             * @enum {string}
+             */
+            code: "model-total-budget" | "model-tool-budget" | "model-step-budget";
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /**
+             * Effective Input Tokens
+             * @default 0
+             */
+            effective_input_tokens: number;
+            /** Max Cost Usd */
+            max_cost_usd?: number | null;
+            /** Max Input Tokens */
+            max_input_tokens?: number | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
+            /** Max Raw Input Tokens */
+            max_raw_input_tokens?: number | null;
+            /** Max Steps */
+            max_steps?: number | null;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Raw Input Tokens
+             * @default 0
+             */
+            raw_input_tokens: number;
+            /**
+             * Stage
+             * @enum {string}
+             */
+            stage: "l1" | "l2_analyst" | "l2_critic" | "l3_adjudicator" | "l2_tiebreak" | "l2_total";
+            /**
+             * Steps Used
+             * @default 0
+             */
+            steps_used: number;
+            /**
+             * Tripped
+             * @default []
+             */
+            tripped: ("raw_input" | "input" | "output" | "cost" | "steps" | "tools")[];
+        };
+        /**
          * ReviewLineageAgent
          * @description One prior version in the lineage, newest first.
          */
@@ -34118,6 +34200,8 @@ export interface components {
              * @enum {string}
              */
             stage: "l1" | "l2_analyst" | "l2_critic" | "l3_adjudicator" | "l2_tiebreak" | "l2_total";
+            /** Wall Ms */
+            wall_ms?: number | null;
         };
         /** RotateV13ScorerCohortRequest */
         RotateV13ScorerCohortRequest: {
@@ -36887,6 +36971,57 @@ export interface components {
             policy: components["schemas"]["InfraRetryPolicy"];
             summary: components["schemas"]["InfraRetrySummary"];
         };
+        /**
+         * ScreeningReviewBudgetLimits
+         * @description Budgets from the review settings revision pinned on the attempt.
+         */
+        ScreeningReviewBudgetLimits: {
+            /** Adjudicator Max Steps */
+            adjudicator_max_steps: number;
+            /** Adjudicator Timeout Seconds */
+            adjudicator_timeout_seconds: number;
+            /** L1 Max Steps */
+            l1_max_steps: number;
+            /** L1 Timeout Seconds */
+            l1_timeout_seconds: number;
+            /** L2 Max Steps */
+            l2_max_steps: number;
+            /** L2 Timeout Seconds */
+            l2_timeout_seconds: number;
+            /** Max Cost Usd */
+            max_cost_usd: number;
+            /** Max Input Tokens */
+            max_input_tokens: number;
+            /** Max Output Tokens */
+            max_output_tokens: number;
+            /** Max Raw Input Tokens */
+            max_raw_input_tokens: number;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Settings Scope */
+            settings_scope: string;
+        };
+        /** ScreeningReviewBudgetLineage */
+        ScreeningReviewBudgetLineage: {
+            /** Changed File Count */
+            changed_file_count: number | null;
+            /** Changed Line Count */
+            changed_line_count: number | null;
+            /** Full Review Reasons */
+            full_review_reasons: string[] | null;
+            /** Packet Sha256 */
+            packet_sha256: string | null;
+            /** Parent Agent Id */
+            parent_agent_id: string | null;
+            /** Parent Name */
+            parent_name: string | null;
+            /** Parent Version */
+            parent_version: number | null;
+            /** Reference Kind */
+            reference_kind: string | null;
+            /** Scope */
+            scope: ("diff" | "full") | null;
+        };
         /** ScreeningReviewBudgetReason */
         ScreeningReviewBudgetReason: {
             /** Attempts */
@@ -36898,6 +37033,141 @@ export interface components {
             lineage_scope: "diff" | "full" | "none";
             /** Reason Code */
             reason_code: string;
+        };
+        /**
+         * ScreeningReviewBudgetResponse
+         * @description Per-attempt review model usage, budgets and lineage scope.
+         *
+         *     ``telemetry_recorded`` is false when the screener posted no usage (an
+         *     older worker, a build-only lane, no model spend, or a post that failed);
+         *     then every usage field is empty or null, never zero. ``budget_stop`` is
+         *     what the worker reported; ``exceeded_limits`` is re-derived here from the
+         *     L2 aggregate and the pinned limits, so it also covers attempts recorded
+         *     before workers reported a stop.
+         */
+        ScreeningReviewBudgetResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            budget_stop: components["schemas"]["ScreeningReviewBudgetStopView"] | null;
+            /** Build Only */
+            build_only: boolean;
+            /** Exceeded Limits */
+            exceeded_limits: string[];
+            /** Finished At */
+            finished_at: string | null;
+            l2_aggregate: components["schemas"]["ScreeningReviewL2Aggregate"] | null;
+            limits: components["schemas"]["ScreeningReviewBudgetLimits"] | null;
+            lineage: components["schemas"]["ScreeningReviewBudgetLineage"];
+            /** Reason Code */
+            reason_code: string | null;
+            /** Recorded At */
+            recorded_at: string | null;
+            /** Review Elapsed Ms */
+            review_elapsed_ms: number | null;
+            /** Stages */
+            stages: components["schemas"]["ScreeningReviewBudgetStage"][];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+            /** Telemetry Recorded */
+            telemetry_recorded: boolean;
+            /** Total Cost Usd */
+            total_cost_usd: number | null;
+            /** Total Estimated Cost Usd */
+            total_estimated_cost_usd: number | null;
+            /** Total Input Tokens */
+            total_input_tokens: number | null;
+            /** Total Output Tokens */
+            total_output_tokens: number | null;
+            /** Wall Seconds */
+            wall_seconds: number | null;
+        };
+        /**
+         * ScreeningReviewBudgetStage
+         * @description One (stage, model) row of an attempt's review usage.
+         */
+        ScreeningReviewBudgetStage: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Model */
+            model: string;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Reasoning Tokens */
+            reasoning_tokens: number;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+            /** Requests */
+            requests: number;
+            /** Stage */
+            stage: string;
+            /** Tripped */
+            tripped: string[];
+            /** Wall Ms */
+            wall_ms: number | null;
+        };
+        /**
+         * ScreeningReviewBudgetStopView
+         * @description The worker-reported budget stop, verbatim.
+         */
+        ScreeningReviewBudgetStopView: {
+            /** Code */
+            code: string;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
+            /**
+             * Effective Input Tokens
+             * @default 0
+             */
+            effective_input_tokens: number;
+            /** Max Cost Usd */
+            max_cost_usd?: number | null;
+            /** Max Input Tokens */
+            max_input_tokens?: number | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
+            /** Max Raw Input Tokens */
+            max_raw_input_tokens?: number | null;
+            /** Max Steps */
+            max_steps?: number | null;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+            /**
+             * Raw Input Tokens
+             * @default 0
+             */
+            raw_input_tokens: number;
+            /** Stage */
+            stage: string;
+            /**
+             * Steps Used
+             * @default 0
+             */
+            steps_used: number;
+            /** Tripped */
+            tripped: string[];
         };
         /**
          * ScreeningReviewCostGroup
@@ -36960,6 +37230,26 @@ export interface components {
             window_start: string;
         };
         /**
+         * ScreeningReviewL2Aggregate
+         * @description L2/L3 usage summed the way the worker's aggregate budget sums it.
+         */
+        ScreeningReviewL2Aggregate: {
+            /** Billable Cost Usd */
+            billable_cost_usd: number;
+            /** Cached Input Tokens */
+            cached_input_tokens: number;
+            /** Effective Input Tokens */
+            effective_input_tokens: number;
+            /** Estimated Cost Usd */
+            estimated_cost_usd: number;
+            /** Output Tokens */
+            output_tokens: number;
+            /** Raw Input Tokens */
+            raw_input_tokens: number;
+            /** Reported Cost Usd */
+            reported_cost_usd: number | null;
+        };
+        /**
          * ScreeningReviewUsageRequest
          * @description One attempt's review usage, posted by the screener that holds it.
          */
@@ -36971,6 +37261,7 @@ export interface components {
              * Format: uuid
              */
             attempt_id: string;
+            budget_stop?: components["schemas"]["ReviewBudgetStop"] | null;
             /** Elapsed Ms */
             elapsed_ms?: number | null;
             /** Lineage Scope */
@@ -49101,6 +49392,46 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminAdjudicationAttemptTelemetryList"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screening_review_budget_api_v1_admin_screening_attempts__attempt_id__review_budget_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                attempt_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreeningReviewBudgetResponse"];
+                };
+            };
+            /** @description No attempt with this id. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

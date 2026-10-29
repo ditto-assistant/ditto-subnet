@@ -4251,7 +4251,7 @@ class OpenRouterSourceReviewAgent:
                 message = _assistant_message(payload)
                 if isinstance(payload, dict):
                     record_chat_completion_usage(
-                        "l1", payload, default_model=self._model
+                        "l1", payload, default_model=self._model, started_at=started
                     )
                 return message
             except httpx.HTTPStatusError as error:

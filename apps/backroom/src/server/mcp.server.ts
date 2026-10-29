@@ -159,6 +159,7 @@ import {
   v13GenerationGroupInputSchema,
   adjudicationAttemptsInputSchema,
   screeningReviewCostInputSchema,
+  screeningReviewBudgetInputSchema,
   screeningSubmissionLookupInputSchema,
   sourceSearchInputSchema,
   ownerAttestationLookupInputSchema,
@@ -265,6 +266,7 @@ import {
   fetchScreeningFailureDiagnostic,
   fetchAdjudicationAttempts,
   fetchScreeningReviewCost,
+  fetchScreeningReviewBudget,
   fetchScreeningVerificationReadiness,
   fetchV13GenerationGroup,
   listV13BenignApprovals,
@@ -984,6 +986,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read append-only source-review decisions with exact attempt, artifact SHA, policy version, model or actor, evidence and receipt snapshots, and state transitions.',
   get_screening_review_cost:
     'Review tokens/cost per attempt by lineage scope and status; budget stops.',
+  get_screening_review_budget:
+    'One attempt: tokens/cost/wall time per review stage, budgets, tripped limit, lineage scope and diff size.',
   list_screening_adjudication_attempts:
     'Recent L4 outcomes with attempt SHA, manifest and pinned settings; observed timing/provider only when recorded. Null success telemetry is unavailable, not zero.',
   get_screening_quarantine_context:
@@ -1528,6 +1532,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchScreeningReviewCost(input)),
+  )
+
+  registerTool(
+    'get_screening_review_budget',
+    {
+      title: 'Get screening review budget',
+      description:
+        'One screening attempt\'s review model spend and the budget that bounded it. stages: one row per (stage, model) the screener reported (l1 source review; l2_analyst, l2_critic, l3_adjudicator, l2_tiebreak), with requests, input/cached/output/reasoning tokens, estimated_cost_usd (worker price table) and reported_cost_usd (gateway, only when every request reported one; a reported 0.0 is what the gateway said, not proof of no spend), wall_ms (first request to last response in that stage, tool time included; null from older workers) and tripped (limits this stage tripped). l2_aggregate sums every non-L1 stage the way the worker\'s aggregate L2/L3 budget does: effective_input_tokens counts cached input at 10%, billable_cost_usd is the reported cost when complete, else the estimate. limits come from the review settings revision pinned on the attempt (null when unpinned or its checksum no longer matches). exceeded_limits is re-derived here from l2_aggregate and limits (raw_input, input, output, cost); budget_stop is what the worker reported at the stop (stage, code, tripped, limits and aggregate usage), null when no budget stopped the review or the worker predates it. lineage: parent agent/name/version, scope (diff | full), full_review_reasons (e.g. diff-too-large), reference_kind, packet digest, and changed_file_count/changed_line_count (null before this was recorded; get_screening_review_lineage rebuilds the full packet). telemetry_recorded false means no usage was posted (older worker, build-only, no model spend, or a failed post): null, not zero. Read-only telemetry; it never changed an outcome. Requires backroom:read.',
+      inputSchema: screeningReviewBudgetInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningReviewBudget(input)),
   )
 
   registerTool(

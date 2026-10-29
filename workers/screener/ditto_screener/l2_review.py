@@ -34,7 +34,11 @@ from ditto_screener.causal_evidence import (
 from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.review_lineage_prompt import lineage_dossier
-from ditto_screener.review_usage import l2_stage_for_role, record_usage
+from ditto_screener.review_usage import (
+    l2_stage_for_role,
+    record_budget_stop,
+    record_usage,
+)
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
@@ -81,6 +85,7 @@ from ditto_screening_protocol.reason_codes import (
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
 )
+from ditto_screening_protocol.review_usage import ReviewBudgetLimit, ReviewBudgetStop
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +216,13 @@ L2_STARTER_MANIFESTS = tuple(
 _MAX_ARCHIVE_FILES = 512
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_AGGREGATE_RAW_INPUT_TOKENS = 50_000_000
+# The limit each budget failure code reports as tripped (the aggregate code
+# names its exceeded limits from usage instead).
+_BUDGET_STOP_LIMITS: dict[str, ReviewBudgetLimit] = {
+    "model-total-budget": "input",
+    "model-tool-budget": "tools",
+    "model-step-budget": "steps",
+}
 _MAX_TOOL_BYTES = 256_000
 _MAX_AUDIT_TAIL_BYTES = 64 * 1024 * 1024
 _ROLES = frozenset({"trigger", "decision", "effect", "sink", "context"})
@@ -4831,6 +4843,20 @@ class TerraSolSourceReviewAgent:
             )
 
         def failure(code: str, subcode: str | None = None) -> L2TrajectoryError:
+            if code in _BUDGET_STOP_LIMITS:
+                # Telemetry only: which limit ended the review and at what
+                # aggregate usage, so Backroom can show the trip per attempt.
+                # It must never change the failure the review reports.
+                with contextlib.suppress(Exception):
+                    record_budget_stop(
+                        self._budget_stop(
+                            code,
+                            role=role,
+                            usage=_add_usage(usage_before, usage),
+                            steps_used=steps_used,
+                            max_steps=max_steps or self._max_steps,
+                        )
+                    )
             return L2TrajectoryError(
                 code,
                 usage=usage,
@@ -4963,6 +4989,7 @@ class TerraSolSourceReviewAgent:
             usage = _add_usage(usage, turn_usage)
             record_usage(
                 l2_stage_for_role(role),
+                started_at=turn_started,
                 model=response_model or model,
                 input_tokens=turn_usage.input_tokens,
                 output_tokens=turn_usage.output_tokens,
@@ -5273,6 +5300,50 @@ class TerraSolSourceReviewAgent:
                 )
         raise failure("model-step-budget")
 
+    def _exceeded_budget(self, usage: L2Usage) -> list[ReviewBudgetLimit]:
+        """Every aggregate limit ``usage`` exceeds, in a fixed order."""
+        effective_input = _effective_input_tokens(usage)
+        exceeded: list[ReviewBudgetLimit] = []
+        if usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS:
+            exceeded.append("raw_input")
+        if effective_input > self._max_input_tokens:
+            exceeded.append("input")
+        if usage.output_tokens > self._max_output_tokens:
+            exceeded.append("output")
+        if _billable_cost_usd(usage) > self._max_cost_usd:
+            exceeded.append("cost")
+        return exceeded
+
+    def _budget_stop(
+        self,
+        code: str,
+        *,
+        role: str,
+        usage: L2Usage,
+        steps_used: int,
+        max_steps: int,
+    ) -> ReviewBudgetStop:
+        tripped = (
+            self._exceeded_budget(usage)
+            if code == "model-total-budget"
+            else [_BUDGET_STOP_LIMITS[code]]
+        )
+        return ReviewBudgetStop(
+            stage=l2_stage_for_role(role),  # type: ignore[arg-type]
+            code=code,  # type: ignore[arg-type]
+            tripped=tripped,
+            max_raw_input_tokens=_MAX_AGGREGATE_RAW_INPUT_TOKENS,
+            max_input_tokens=self._max_input_tokens,
+            max_output_tokens=self._max_output_tokens,
+            max_cost_usd=self._max_cost_usd,
+            max_steps=max_steps,
+            raw_input_tokens=usage.input_tokens,
+            effective_input_tokens=_effective_input_tokens(usage),
+            output_tokens=usage.output_tokens,
+            cost_usd=round(_billable_cost_usd(usage), 6),
+            steps_used=steps_used,
+        )
+
     def _require_budget(self, usage: L2Usage) -> None:
         if usage.cached_input_tokens > usage.input_tokens:
             raise ValueError("L2 cached input exceeds raw input")
@@ -5280,22 +5351,8 @@ class TerraSolSourceReviewAgent:
         # input is discounted by 90%; the separate raw ceiling bounds wire
         # traffic even when nearly every prompt prefix is cached. Spending is
         # independently bounded by max_cost_usd.
-        effective_input = (
-            usage.input_tokens
-            - usage.cached_input_tokens
-            + round(usage.cached_input_tokens * 0.1)
-        )
-        billable_cost = (
-            usage.reported_cost_usd
-            if usage.reported_cost_usd is not None
-            else usage.estimated_cost_usd
-        )
-        if (
-            usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS
-            or effective_input > self._max_input_tokens
-            or usage.output_tokens > self._max_output_tokens
-            or billable_cost > self._max_cost_usd
-        ):
+        effective_input = _effective_input_tokens(usage)
+        if self._exceeded_budget(usage):
             raise ValueError(
                 "L2 model exceeded token or cost budget "
                 f"raw_input={usage.input_tokens} "
@@ -7718,6 +7775,23 @@ def _nonnegative_int(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise ValueError("L2 response usage detail is invalid")
     return value
+
+
+def _effective_input_tokens(usage: L2Usage) -> int:
+    """Billable-equivalent input: cached input counts at 10%."""
+    return (
+        usage.input_tokens
+        - usage.cached_input_tokens
+        + round(usage.cached_input_tokens * 0.1)
+    )
+
+
+def _billable_cost_usd(usage: L2Usage) -> float:
+    return (
+        usage.reported_cost_usd
+        if usage.reported_cost_usd is not None
+        else usage.estimated_cost_usd
+    )
 
 
 def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:

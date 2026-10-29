@@ -2752,6 +2752,11 @@ async def submit_review_usage(
             "total_cost_usd": Decimal(str(round(payload.total_cost_usd, 6))),
             "elapsed_ms": payload.elapsed_ms,
             "lineage_scope": payload.lineage_scope,
+            "budget_stop": (
+                payload.budget_stop.model_dump(mode="json")
+                if payload.budget_stop is not None
+                else None
+            ),
         }
         existing = await session.get(ScreeningReviewUsage, payload.attempt_id)
         if existing is not None:
@@ -4366,6 +4371,8 @@ async def agent_review_lineage(
                 reason.value for reason in packet.full_review_reasons
             ]
             attempt.lineage_reference_kind = context.reference_kind
+            attempt.lineage_changed_file_count = packet.changed_file_count
+            attempt.lineage_changed_line_count = packet.changed_line_count
         elif attempt.lineage_packet_sha256 != packet.packet_sha256:
             raise AgentNotScreenableError(
                 "lineage packet changed after it was bound to this attempt"

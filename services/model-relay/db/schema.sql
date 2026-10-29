@@ -5904,6 +5904,8 @@ CREATE TABLE public.screening_attempts (
     lineage_packet_sha256 text,
     lineage_full_review_reasons jsonb,
     lineage_reference_kind text,
+    lineage_changed_file_count integer,
+    lineage_changed_line_count integer,
     CONSTRAINT ck_screening_attempts_screening_attempts_artifact_sha_check CHECK (((artifact_sha256 IS NULL) OR (length(artifact_sha256) = 64))),
     CONSTRAINT ck_screening_attempts_screening_attempts_lineage_binding_check CHECK ((((lineage_scope IS NULL) AND (lineage_packet_sha256 IS NULL)) OR ((lineage_parent_agent_id IS NOT NULL) AND (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])) AND (length(lineage_packet_sha256) = 64)))),
     CONSTRAINT ck_screening_attempts_screening_attempts_lineage_record_check CHECK (((lineage_scope IS NOT NULL) OR ((lineage_full_review_reasons IS NULL) AND (lineage_reference_kind IS NULL)))),
@@ -6145,6 +6147,7 @@ CREATE TABLE public.screening_review_usage (
     elapsed_ms bigint,
     lineage_scope text,
     recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    budget_stop jsonb,
     CONSTRAINT ck_screening_review_usage_screening_review_usage_artifa_6670 CHECK ((length(artifact_sha256) = 64)),
     CONSTRAINT ck_screening_review_usage_screening_review_usage_lineag_ac7c CHECK (((lineage_scope IS NULL) OR (lineage_scope = ANY (ARRAY['diff'::text, 'full'::text])))),
     CONSTRAINT ck_screening_review_usage_screening_review_usage_totals_check CHECK (((total_input_tokens >= 0) AND (total_output_tokens >= 0) AND (total_cost_usd >= (0)::numeric) AND ((elapsed_ms IS NULL) OR (elapsed_ms >= 0))))

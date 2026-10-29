@@ -290,6 +290,23 @@ telemetry, input-token mean/p50/p90, output tokens, mean and total cost,
 `*budget*` reason-code stops and mean wall-clock minutes. Attempts before the
 telemetry shipped carry none, so their cost reads as unavailable, not zero.
 
+Each stage entry also carries `wall_ms` (first request start to last response
+in that stage, analyzer tool time included), and the request carries
+`budget_stop` when an L2/L3 budget ended the trajectory: the stage, failure
+code, every limit `tripped` (`raw_input`, `input`, `output`, `cost`, `steps`,
+`tools`), the limits applied and the aggregate usage at the stop. Platform
+stores it as `screening_review_usage.budget_stop`. Binding a lineage packet
+also records its diff size as `screening_attempts.lineage_changed_file_count`
+and `lineage_changed_line_count`.
+
+`GET /api/v1/admin/screening-attempts/{attempt_id}/review-budget` (Backroom MCP
+`get_screening_review_budget`) reads one attempt: the per-stage rows, the L2/L3
+aggregate summed as the worker's budget sums it (cached input at 10%), the
+limits from the attempt's pinned review settings revision, the limits that
+aggregate exceeds (re-derived, so attempts recorded before `budget_stop` are
+covered), the worker's `budget_stop`, and the lineage parent, scope, reasons,
+reference kind and diff size.
+
 ## Miner disputes
 
 A miner may dispute a resolved quarantine rejection exactly once per submission.

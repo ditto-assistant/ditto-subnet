@@ -355,6 +355,8 @@ import {
   adjudicationAttemptsSchema,
   screeningReviewCostInputSchema,
   screeningReviewCostSchema,
+  screeningReviewBudgetInputSchema,
+  screeningReviewBudgetSchema,
   screeningVerificationReadinessSchema,
   screeningReviewDeadlineDiagnosticSchema,
   screeningSubmissionLookupInputSchema,
@@ -2940,6 +2942,14 @@ export async function fetchScreeningReviewCost(rawInput: unknown) {
     `/api/v1/admin/screening-review-cost?${query.toString()}`,
   )
   return screeningReviewCostSchema.parse(payload)
+}
+
+export async function fetchScreeningReviewBudget(rawInput: unknown) {
+  const input = screeningReviewBudgetInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-attempts/${encodeURIComponent(input.attemptId)}/review-budget`,
+  )
+  return screeningReviewBudgetSchema.parse(payload)
 }
 
 export async function fetchScreeningVerificationReadiness(rawInput: unknown, actor: string) {

@@ -65,6 +65,17 @@ the field. It is a seed id only. Dataset contents never leave Platform, and the
 confirmation plan's pending seeds stay server-side
 (`get_continual_retest_diagnostic` reports only `pending_seed_count`).
 
+`get_screening_review_budget` reads one screening attempt's review spend from
+`GET /api/v1/admin/screening-attempts/{attempt_id}/review-budget`: tokens, cost
+and wall time per (stage, model), the budgets of the review settings revision
+pinned on the attempt, which limit tripped (worker-reported `budget_stop` and
+the re-derived `exceeded_limits`), and the lineage parent, scope, full-review
+reasons and diff size. Use it for an `l3-adjudicator-model-total-budget` or any
+other `*budget*` stop; `list_screening_adjudication_attempts` covers only L4
+`adjudicated-source-review-*` outcomes, so it is empty for those. A gateway
+`reported_cost_usd` of 0.0 is what the gateway said, not proof of no spend:
+compare `estimated_cost_usd`. Requires `backroom:read`.
+
 `get_outlier_escalation` reads the anomalous-score escalation that can open ATH
 holds (`review_kind` `anomalous_score`) through
 `GET /api/v1/admin/outlier-escalation`. The escalation is configured only by

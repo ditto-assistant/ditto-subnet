@@ -584,6 +584,15 @@ class ScreeningAttempt(Base):
         _NULLABLE_JSON_VARIANT, nullable=True
     )
     lineage_reference_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Size of the bound packet's diff against its reference (every changed
+    # file and added+removed line, not only what the packet kept). NULL when
+    # no packet was bound or it predates this record.
+    lineage_changed_file_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    lineage_changed_line_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     """This attempt only rebuilds an already-adjudicated submission's missing
     prerequisites (screened image / dataset); the screener must NOT re-run the
     anti-cheat source review and cannot quarantine. Set when an EVALUATING agent
@@ -7047,6 +7056,11 @@ class ScreeningReviewUsage(Base):
     total_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
     elapsed_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The model budget that stopped the review (ReviewBudgetStop), when one
+    # did. NULL for a review no budget stopped and for older workers.
+    budget_stop: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
     recorded_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )

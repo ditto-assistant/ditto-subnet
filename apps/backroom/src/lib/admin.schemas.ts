@@ -14,6 +14,8 @@ type GeneratedDecisionLaneUsageWindow =
   PlatformComponents['schemas']['DecisionLaneUsageWindow']
 type GeneratedScreeningReviewCost =
   PlatformComponents['schemas']['ScreeningReviewCostResponse']
+type GeneratedScreeningReviewBudget =
+  PlatformComponents['schemas']['ScreeningReviewBudgetResponse']
 type GeneratedConfirmationBundleView =
   PlatformComponents['schemas']['ConfirmationBundleView']
 type GeneratedConfirmationBundleList =
@@ -6022,6 +6024,103 @@ export const screeningReviewCostSchema: z.ZodType<GeneratedScreeningReviewCost> 
         attempts: z.number().int().nonnegative(),
       }),
     ),
+  })
+
+// One attempt's review model usage per stage, budgets and lineage scope.
+export const screeningReviewBudgetInputSchema = z.object({
+  attemptId: z.string().uuid(),
+})
+
+const tokenCount = z.number().int().nonnegative()
+
+export const screeningReviewBudgetSchema: z.ZodType<GeneratedScreeningReviewBudget> =
+  z.object({
+    attempt_id: z.string().uuid(),
+    agent_id: z.string().uuid(),
+    status: z.string(),
+    reason_code: z.string().nullable(),
+    build_only: z.boolean(),
+    started_at: z.string(),
+    finished_at: z.string().nullable(),
+    wall_seconds: z.number().nullable(),
+    telemetry_recorded: z.boolean(),
+    recorded_at: z.string().nullable(),
+    review_elapsed_ms: tokenCount.nullable(),
+    total_input_tokens: tokenCount.nullable(),
+    total_output_tokens: tokenCount.nullable(),
+    total_cost_usd: z.number().nullable(),
+    total_estimated_cost_usd: z.number().nullable(),
+    stages: z.array(
+      z.object({
+        stage: z.string(),
+        model: z.string(),
+        requests: tokenCount,
+        input_tokens: tokenCount,
+        cached_input_tokens: tokenCount,
+        output_tokens: tokenCount,
+        reasoning_tokens: tokenCount,
+        estimated_cost_usd: z.number(),
+        reported_cost_usd: z.number().nullable(),
+        wall_ms: tokenCount.nullable(),
+        tripped: z.array(z.string()),
+      }),
+    ),
+    l2_aggregate: z
+      .object({
+        raw_input_tokens: tokenCount,
+        cached_input_tokens: tokenCount,
+        effective_input_tokens: tokenCount,
+        output_tokens: tokenCount,
+        estimated_cost_usd: z.number(),
+        reported_cost_usd: z.number().nullable(),
+        billable_cost_usd: z.number(),
+      })
+      .nullable(),
+    limits: z
+      .object({
+        settings_revision: z.number().int(),
+        settings_scope: z.string(),
+        max_input_tokens: tokenCount,
+        max_raw_input_tokens: tokenCount,
+        max_output_tokens: tokenCount,
+        max_cost_usd: z.number(),
+        l1_max_steps: tokenCount,
+        l1_timeout_seconds: tokenCount,
+        l2_max_steps: tokenCount,
+        l2_timeout_seconds: tokenCount,
+        adjudicator_max_steps: tokenCount,
+        adjudicator_timeout_seconds: tokenCount,
+      })
+      .nullable(),
+    exceeded_limits: z.array(z.string()),
+    budget_stop: z
+      .object({
+        stage: z.string(),
+        code: z.string(),
+        tripped: z.array(z.string()),
+        max_raw_input_tokens: tokenCount.nullish(),
+        max_input_tokens: tokenCount.nullish(),
+        max_output_tokens: tokenCount.nullish(),
+        max_cost_usd: z.number().nullish(),
+        max_steps: tokenCount.nullish(),
+        raw_input_tokens: tokenCount,
+        effective_input_tokens: tokenCount,
+        output_tokens: tokenCount,
+        cost_usd: z.number(),
+        steps_used: tokenCount,
+      })
+      .nullable(),
+    lineage: z.object({
+      parent_agent_id: z.string().uuid().nullable(),
+      parent_name: z.string().nullable(),
+      parent_version: z.number().int().nullable(),
+      scope: z.enum(['diff', 'full']).nullable(),
+      full_review_reasons: z.array(z.string()).nullable(),
+      reference_kind: z.string().nullable(),
+      packet_sha256: z.string().nullable(),
+      changed_file_count: tokenCount.nullable(),
+      changed_line_count: tokenCount.nullable(),
+    }),
   })
 
 export const adjudicationAttemptsInputSchema = z.object({
