@@ -1005,6 +1005,126 @@ def test_confirmation_judge_does_not_gain_gpt_oss_reasoning() -> None:
     assert upstream["max_completion_tokens"] == 64
 
 
+_SCORER_JUDGE_PROVIDER_GOLDEN = (
+    Path(__file__).resolve().parents[6]
+    / "services/dittobench-api/internal/longmemeval/testdata"
+    / "judge-provider-routing-v1.json"
+)
+
+
+def _together_judge_payload(provider: Any) -> dict[str, Any]:
+    return {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "messages": [{"role": "user", "content": "Is the answer correct?"}],
+        "max_completion_tokens": 64,
+        "provider": provider,
+    }
+
+
+def _together_judge_grant() -> SimpleNamespace:
+    return SimpleNamespace(
+        lane="judge", model="deepseek/deepseek-v4.1-flash", route_provider="together"
+    )
+
+
+def test_scorer_judge_provider_block_passes_the_confirmation_lock() -> None:
+    """The scorer's real judge block must be accepted by the real lock.
+
+    The golden is written by a Go test from ``judgeProviderRouting`` itself, so
+    this is the scorer's exact bytes meeting the proxy that receives them. It is
+    the test that was missing when #3167 added ``zdr`` to that block: the lock
+    compared it for equality with a dict lacking ``zdr`` and 403'd every judge
+    request, failing LongMem confirmation on every bundle (ditto-subnet#3214).
+    """
+    scorer_block = json.loads(_SCORER_JUDGE_PROVIDER_GOLDEN.read_text())
+    assert scorer_block.get("zdr") is True, "golden no longer exercises the zdr case"
+
+    upstream, _ = _locked_confirmation_chat_payload(
+        _together_judge_payload(scorer_block),
+        grant=_together_judge_grant(),
+        max_output_tokens=128,
+    )
+
+    assert upstream["provider"] == {
+        "only": ["together"],
+        "order": ["together"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+
+
+@pytest.mark.parametrize("lane", ["judge", "reader"])
+def test_confirmation_lock_accepts_zdr_absent_or_true_and_always_forces_it(
+    lane: str,
+) -> None:
+    if lane == "judge":
+        grant = _together_judge_grant()
+        base = _together_judge_payload(None)
+        expected = {
+            "only": ["together"],
+            "order": ["together"],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+            "data_collection": "deny",
+        }
+    else:
+        grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
+        base = _confirmation_reader_payload("openai/gpt-oss-20b")
+        expected = dict(base["provider"])
+    for provider in (dict(expected), {**expected, "zdr": True}):
+        upstream, _ = _locked_confirmation_chat_payload(
+            {**base, "provider": provider}, grant=grant, max_output_tokens=128
+        )
+        assert upstream["provider"] == {**expected, "zdr": True}
+
+
+@pytest.mark.parametrize("zdr", [False, None, "true", 1])
+def test_confirmation_lock_refuses_any_zdr_other_than_true(zdr: Any) -> None:
+    """An explicit opt-out is refused rather than silently overridden.
+
+    The outbound block always carries ``zdr: True``. Accepting ``zdr: False``
+    would mean quietly sending the opposite of what the caller asked for.
+    """
+    block = {
+        "only": ["together"],
+        "order": ["together"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": zdr,
+    }
+    with pytest.raises(HTTPException) as raised:
+        _locked_confirmation_chat_payload(
+            _together_judge_payload(block),
+            grant=_together_judge_grant(),
+            max_output_tokens=128,
+        )
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "confirmation route is not permitted"
+
+
+def test_confirmation_lock_still_refuses_an_extra_routing_key_beside_zdr() -> None:
+    """Tolerating ``zdr`` must not loosen the lock for any other key."""
+    block = {
+        "only": ["together"],
+        "order": ["together"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+        "sort": "price",
+    }
+    with pytest.raises(HTTPException) as raised:
+        _locked_confirmation_chat_payload(
+            _together_judge_payload(block),
+            grant=_together_judge_grant(),
+            max_output_tokens=128,
+        )
+    assert raised.value.status_code == 403
+
+
 def test_caller_reasoning_is_accepted_then_overwritten_with_the_pinned_effort() -> None:
     """The rejection that cost `Cooking` three submissions is now a normalisation.
 

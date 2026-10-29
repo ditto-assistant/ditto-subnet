@@ -166,7 +166,7 @@ func confirmationProviderPreferences(routeProvider string) map[string]any {
 const confirmationInstrumentBenchVersion int32 = 9
 
 // lockedConfirmationChatPayload mirrors _locked_confirmation_chat_payload:
-// exact provider-pin equality, schema validation of the remainder, the
+// provider-pin equality (ignoring an incoming zdr=true), schema validation of the remainder, the
 // grant-locked model, and the forced upstream shape (zdr added, usage
 // included, n=1, stream false). It also applies the same gpt-oss reasoning
 // contract and inert-field stripping as the ordinary scoring lane. The reader
@@ -178,7 +178,28 @@ func lockedConfirmationChatPayload(decoded any, grant *postgres.ConfirmationInfe
 		return nil, 0, httpErrorf(400, "invalid confirmation request")
 	}
 	expectedProvider := confirmationChatProviderPreferences(grant.Lane, grant.RouteProvider)
-	if !pythonJSONEqual(payload["provider"], expectedProvider) {
+	// zdr may arrive as exactly true or not at all; the comparison ignores it
+	// and the upstream pin always carries it. Exact equality with a pin that
+	// never contains zdr refused a caller for sending the very value added
+	// below -- which #3167 made the scorer's judge do, so every judge request
+	// was 403'd here (this relay owns /api/v1/inference/* in prod) and every
+	// LongMem confirmation bundle failed from v0.397.0 (ditto-subnet#3214).
+	// Any other zdr value is still refused rather than silently overridden.
+	// Kept identical to _locked_confirmation_chat_payload, which this mirrors.
+	provider, isMap := payload["provider"].(map[string]any)
+	if !isMap {
+		return nil, 0, httpErrorf(403, "confirmation route is not permitted")
+	}
+	if zdr, present := provider["zdr"]; present && zdr != true {
+		return nil, 0, httpErrorf(403, "confirmation route is not permitted")
+	}
+	withoutZDR := make(map[string]any, len(provider))
+	for key, value := range provider {
+		if key != "zdr" {
+			withoutZDR[key] = value
+		}
+	}
+	if !pythonJSONEqual(withoutZDR, expectedProvider) {
 		return nil, 0, httpErrorf(403, "confirmation route is not permitted")
 	}
 	withoutProvider := make(map[string]any, len(payload))

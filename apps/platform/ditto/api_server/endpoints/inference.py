@@ -2368,7 +2368,27 @@ def _locked_confirmation_chat_payload(
             "require_parameters": True,
             "data_collection": "deny",
         }
-    if provider != expected_provider:
+    # ``zdr`` may arrive set to exactly ``True`` or not at all; the comparison
+    # ignores it and the outbound block always carries it. Before this the lock
+    # compared the incoming block with ``expected_provider`` -- which never
+    # contains ``zdr`` -- so a caller that sent the very value this function
+    # then forces was refused. #3167 made the scorer's judge do exactly that,
+    # and every judge request since v0.397.0 was 403'd here before reaching
+    # OpenRouter: the 403 carries no receipt, the judge lane poisons, and the
+    # bundle fails as ``longmem_eval_accounting_judge_meter_unavailable`` with
+    # nothing admitted against the judge grant (ditto-subnet#3214). The scorer
+    # sends it because its judge can also address OpenRouter directly, where
+    # nothing else would add it; accepting it here keeps both routes correct.
+    # ``zdr: False`` and any other value are still refused: tolerating an
+    # explicit opt-out would be silently overridden below, and a lock that
+    # quietly rewrites what a caller asked for is worse than one that refuses.
+    if not isinstance(provider, dict) or provider.get("zdr", True) is not True:
+        raise HTTPException(
+            status_code=403, detail="confirmation route is not permitted"
+        )
+    if {key: value for key, value in provider.items() if key != "zdr"} != (
+        expected_provider
+    ):
         raise HTTPException(
             status_code=403, detail="confirmation route is not permitted"
         )
