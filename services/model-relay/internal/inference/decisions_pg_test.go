@@ -15,7 +15,12 @@ import (
 
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/testutil"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
+
+type recordedTraces struct{ records []*traces.Record }
+
+func (r *recordedTraces) Record(rec *traces.Record) { r.records = append(r.records, rec) }
 
 const (
 	decisionPin = "typesafe/jev-1.14"
@@ -119,6 +124,8 @@ func TestDecisionFullFlowForcesThePinAndBooksLedgerCost(t *testing.T) {
 	var calls atomic.Int32
 	upstream := decisionUpstream(t, decisionPin+"-20261020", http.StatusOK, &captured, &calls)
 	f := decisionFixture(t, upstream.URL, true)
+	recorded := &recordedTraces{}
+	f.deps.Traces = recorded
 
 	nonce := uuid.New()
 	w := postDecision(f, nonce)
@@ -165,6 +172,13 @@ func TestDecisionFullFlowForcesThePinAndBooksLedgerCost(t *testing.T) {
 	}
 	if count != 1 || active != 0 || tokens != 476 || decisionCost != 20 || chatPrompt != 0 {
 		t.Fatalf("grant decision accounting: %d %d %d %d chat=%d", count, active, tokens, decisionCost, chatPrompt)
+	}
+	if len(recorded.records) != 1 {
+		t.Fatalf("want one trace record, got %d", len(recorded.records))
+	}
+	rec := recorded.records[0]
+	if rec.Request.Kind != traces.KindDecision || rec.Grant.Model != decisionPin || rec.Usage.CostMicrousd != 20 {
+		t.Fatalf("decision trace: kind=%s model=%s cost=%d", rec.Request.Kind, rec.Grant.Model, rec.Usage.CostMicrousd)
 	}
 }
 

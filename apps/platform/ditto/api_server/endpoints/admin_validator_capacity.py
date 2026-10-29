@@ -154,7 +154,7 @@ async def get_validator_capacity(
     for row in await load_inference_current_rows(
         session, stale_after_seconds=inference_config.timeout_seconds * 2
     ):
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         active = int(row["active_requests"])
         relay.append(
             RelayLaneSaturation(

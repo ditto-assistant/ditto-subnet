@@ -201,7 +201,9 @@ async def get_inference_runtime_metrics(
     windows = [
         InferenceLaneWindow(
             window_seconds=int(row["window_seconds"]),
-            request_kind=cast(Literal["chat", "embedding"], str(row["request_kind"])),
+            request_kind=cast(
+                Literal["chat", "embedding", "decision"], str(row["request_kind"])
+            ),
             calls=int(row["calls"]),
             calls_per_second=round(float(row["calls_per_second"]), 4),
             tokens=int(row["tokens"]),
@@ -232,7 +234,7 @@ async def get_inference_runtime_metrics(
     }
     lanes: list[InferenceLaneCurrent] = []
     for row in current_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         if kind == "chat":
             per_ticket = settings.chat_per_ticket_concurrency
             per_validator = settings.chat_per_validator_concurrency
@@ -313,7 +315,7 @@ async def get_inference_failure_taxonomy(
         groups.append(
             InferenceFailureGroup(
                 window_seconds=key[0],
-                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
                 model=str(row["model"]),
                 gateway=cast(InferenceGateway, str(row["gateway"])),
                 upstream_route=row["upstream_route"],
@@ -341,7 +343,7 @@ async def get_inference_failure_taxonomy(
         lanes.append(
             InferenceFailureLaneWindow(
                 window_seconds=key[0],
-                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
                 calls=int(row["calls"]),
                 settled=settled,
                 completed=int(row["completed"]),
@@ -463,7 +465,7 @@ async def _rate_limit_bursts(
         )
     bursts: list[InferenceRateLimitBurst] = []
     for row in peak_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         count = rate_limited.get(kind, 0)
         peak = int(row["peak_global_concurrency"])
         returned = tickets.get(kind, [])

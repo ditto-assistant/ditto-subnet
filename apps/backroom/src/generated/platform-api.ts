@@ -2265,6 +2265,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-concurrency-settings/decision-lane": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Decision Lane
+         * @description The dark decision lane: effective switch and pin, plus ledger usage.
+         *
+         *     Read-only. The lane is changed through the whole-board revision above
+         *     (``decision_lane``); this read exists so an operator, or an agent through
+         *     Backroom MCP, can see whether it is on, what it is pinned to, and what it
+         *     has cost, without inferring any of it from the board history.
+         */
+        get: operations["get_decision_lane_api_v1_admin_inference_concurrency_settings_decision_lane_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-failure-taxonomy": {
         parameters: {
             query?: never;
@@ -20765,6 +20790,13 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** DecisionLaneErrorCount */
+        DecisionLaneErrorCount: {
+            /** Requests */
+            requests: number;
+            /** Terminal Error Code */
+            terminal_error_code: string;
+        };
         /**
          * DecisionLaneSettings
          * @description The operator knob for the dark decision-model lane. Off by default.
@@ -20839,6 +20871,68 @@ export interface components {
              * @default 25000000
              */
             token_budget: number;
+        };
+        /**
+         * DecisionLaneStatus
+         * @description What the operator board says, and what the lane has actually done.
+         */
+        DecisionLaneStatus: {
+            /** Last Request At */
+            last_request_at: string | null;
+            /** Live Grants With Lane */
+            live_grants_with_lane: number;
+            settings: components["schemas"]["DecisionLaneSettings"];
+            /** Settings Revision */
+            settings_revision: number;
+            /**
+             * Settings Source
+             * @enum {string}
+             */
+            settings_source: "revision" | "default";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "disabled" | "enabled";
+            /** Terminal Error Codes 24H */
+            terminal_error_codes_24h: components["schemas"]["DecisionLaneErrorCount"][];
+            /** Upstream */
+            upstream: string;
+            /** Usage */
+            usage: components["schemas"]["DecisionLaneUsageWindow"][];
+        };
+        /**
+         * DecisionLaneUsageWindow
+         * @description Decision-lane ledger totals over one trailing window.
+         *
+         *     ``input_tokens`` and ``ledger_cost_microusd`` are receipted usage priced at
+         *     each grant's stamped list price, the same figures the per-run walls and the
+         *     dollar ceiling read. Infra failures (``model_mismatches``,
+         *     ``provider_failures``) are settled uncharged.
+         */
+        DecisionLaneUsageWindow: {
+            /** Canceled */
+            canceled: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Grants With Lane */
+            grants_with_lane: number;
+            /** Input Tokens */
+            input_tokens: number;
+            /** Ledger Cost Microusd */
+            ledger_cost_microusd: number;
+            /** Model Mismatches */
+            model_mismatches: number;
+            /** Provider Failures */
+            provider_failures: number;
+            /** Provider Rejections */
+            provider_rejections: number;
+            /** Requests */
+            requests: number;
+            /** Window Seconds */
+            window_seconds: number;
         };
         /**
          * DeferredSourceReviewSettings
@@ -24476,7 +24570,7 @@ export interface components {
              * Request Kind
              * @enum {string}
              */
-            request_kind: "chat" | "embedding";
+            request_kind: "chat" | "embedding" | "decision";
             /**
              * Route Basis
              * @enum {string}
@@ -24524,7 +24618,7 @@ export interface components {
              * Request Kind
              * @enum {string}
              */
-            request_kind: "chat" | "embedding";
+            request_kind: "chat" | "embedding" | "decision";
             /** Settled */
             settled: number;
             /** Timed Out */
@@ -24685,7 +24779,7 @@ export interface components {
              * Request Kind
              * @enum {string}
              */
-            request_kind: "chat" | "embedding";
+            request_kind: "chat" | "embedding" | "decision";
             /** Stale Started Requests */
             stale_started_requests: number;
         };
@@ -24713,7 +24807,7 @@ export interface components {
              * Request Kind
              * @enum {string}
              */
-            request_kind: "chat" | "embedding";
+            request_kind: "chat" | "embedding" | "decision";
             /** Timed Out */
             timed_out: number;
             /** Tokens */
@@ -24745,7 +24839,7 @@ export interface components {
              * Request Kind
              * @enum {string}
              */
-            request_kind: "chat" | "embedding";
+            request_kind: "chat" | "embedding" | "decision";
             /** Threshold */
             threshold: number;
             /** Tickets */
@@ -33404,7 +33498,7 @@ export interface components {
              * Request Kind
              * @enum {string}
              */
-            request_kind: "chat" | "embedding";
+            request_kind: "chat" | "embedding" | "decision";
             /**
              * Saturation
              * @description `active_requests / global_limit`.
@@ -47121,6 +47215,37 @@ export interface operations {
             };
         };
     };
+    get_decision_lane_api_v1_admin_inference_concurrency_settings_decision_lane_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DecisionLaneStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_inference_failure_taxonomy_api_v1_admin_inference_failure_taxonomy_get: {
         parameters: {
             query?: never;
@@ -50805,7 +50930,7 @@ export interface operations {
             query?: {
                 scope?: "traces" | "ledger";
                 lane?: ("inference" | "confirmation" | "screening") | null;
-                kind?: ("chat" | "embedding" | "kaniko" | "smoke" | "review") | null;
+                kind?: ("chat" | "embedding" | "decision" | "kaniko" | "smoke" | "review") | null;
                 dt?: string | null;
                 hour?: string | null;
                 prefix?: string | null;

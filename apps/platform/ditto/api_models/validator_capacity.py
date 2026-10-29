@@ -113,7 +113,7 @@ class RelayLaneSaturation(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    request_kind: Literal["chat", "embedding"]
+    request_kind: Literal["chat", "embedding", "decision"]
     active_requests: Annotated[int, Field(ge=0)]
     global_limit: Annotated[int, Field(ge=1)]
     saturation: Annotated[

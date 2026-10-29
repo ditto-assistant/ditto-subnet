@@ -25,6 +25,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.decision_lane import (
+    DECISION_UPSTREAM,
+    DecisionLaneErrorCount,
+    DecisionLaneStatus,
+    DecisionLaneUsageWindow,
+)
 from ditto.api_models.inference_concurrency_settings import (
     AdminInferenceConcurrencySettingsRequest,
     AdminInferenceConcurrencySettingsResponse,
@@ -42,6 +48,7 @@ from ditto.api_server.inference_concurrency_settings import (
 from ditto.db.models import (
     InferenceConcurrencySettingsRevision as RevisionRow,
 )
+from ditto.db.queries.decision_lane import load_decision_lane_usage
 from ditto.db.queries.inference_concurrency_settings import (
     GLOBAL_SCOPE,
     insert_inference_concurrency_settings_revision,
@@ -107,6 +114,36 @@ async def get_settings(
         history=[_revision(row) for row in history],
         default=DEFAULT_SETTINGS,
         effective=_effective(latest),
+    )
+
+
+@router.get("/decision-lane", response_model=DecisionLaneStatus)
+async def get_decision_lane(
+    _admin: AdminDep, session: SessionDep
+) -> DecisionLaneStatus:
+    """The dark decision lane: effective switch and pin, plus ledger usage.
+
+    Read-only. The lane is changed through the whole-board revision above
+    (``decision_lane``); this read exists so an operator, or an agent through
+    Backroom MCP, can see whether it is on, what it is pinned to, and what it
+    has cost, without inferring any of it from the board history.
+    """
+    latest = await latest_inference_concurrency_settings_revision(session)
+    effective = _effective(latest)
+    lane = effective.settings.decision_lane
+    usage, errors, summary = await load_decision_lane_usage(session)
+    return DecisionLaneStatus(
+        state="enabled" if lane.enabled and lane.model else "disabled",
+        settings_revision=effective.revision,
+        settings_source="revision" if effective.source == "revision" else "default",
+        settings=lane,
+        upstream=DECISION_UPSTREAM,
+        live_grants_with_lane=int(summary["live_grants_with_lane"]),
+        usage=[DecisionLaneUsageWindow.model_validate(dict(row)) for row in usage],
+        terminal_error_codes_24h=[
+            DecisionLaneErrorCount.model_validate(dict(row)) for row in errors
+        ],
+        last_request_at=summary["last_request_at"],
     )
 
 

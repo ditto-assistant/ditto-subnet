@@ -10,6 +10,8 @@ type PlatformResponseShape<Response extends object> = {
   [Field in keyof Response]-?: z.ZodType<Response[Field]>
 }
 
+type GeneratedDecisionLaneUsageWindow =
+  PlatformComponents['schemas']['DecisionLaneUsageWindow']
 type GeneratedScreeningReviewCost =
   PlatformComponents['schemas']['ScreeningReviewCostResponse']
 type GeneratedConfirmationBundleView =
@@ -3153,7 +3155,7 @@ export const INFERENCE_CONCURRENCY_SCOPE = '*'
 export const INFERENCE_CONCURRENCY_CONFIRMATION = 'APPLY INFERENCE CONCURRENCY SETTINGS'
 export const RUNTIME_PROFILE_CONFIRMATION = 'CAPTURE RUNTIME PROFILE'
 
-const inferenceRequestKindSchema = z.enum(['chat', 'embedding'])
+const inferenceRequestKindSchema = z.enum(['chat', 'embedding', 'decision'])
 const runtimeProfileTargetSchema = z.enum(['platform-relay-1', 'platform-relay-2'])
 const runtimeProfileTypeSchema = z.enum(['cpu', 'heap', 'allocs', 'goroutine'])
 
@@ -3465,6 +3467,47 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
   sandbox_memory_limit_mib: DEFAULT_SANDBOX_MEMORY_LIMIT_MIB,
 }
 
+// The dark decision-model lane (TypeSafe Jev via OpenRouter System One). Off by
+// default. Enabling needs `enabled: true` and ONE exact `model` (e.g.
+// typesafe/jev-1.14, never a -latest alias); the price and walls are stamped
+// onto each grant at mint, the rails are live. Carries no score.
+export const decisionLaneSettingsSchema = z
+  .object({
+    enabled: z.boolean(),
+    model: z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/)
+      .refine((value) => !value.endsWith('latest'), 'Pin an exact model version, not -latest')
+      .nullable(),
+    input_microusd_per_mtok: z.number().int().min(0).max(100_000_000),
+    request_budget: z.number().int().min(1).max(32_768),
+    token_budget: z.number().int().min(1).max(200_000_000),
+    per_ticket_concurrency: z.number().int().min(1).max(512),
+    per_validator_concurrency: z.number().int().min(1).max(512),
+    global_concurrency: z.number().int().min(1).max(512),
+    per_ticket_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+    per_validator_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+    global_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+  })
+  .refine((value) => !value.enabled || value.model !== null, {
+    message: 'An enabled decision lane must pin a model',
+    path: ['model'],
+  })
+
+export const DEFAULT_DECISION_LANE_SETTINGS = {
+  enabled: false,
+  model: null,
+  input_microusd_per_mtok: 42_000,
+  request_budget: 4_096,
+  token_budget: 25_000_000,
+  per_ticket_concurrency: 8,
+  per_validator_concurrency: 32,
+  global_concurrency: 64,
+  per_ticket_requests_per_minute: 600,
+  per_validator_requests_per_minute: 2_400,
+  global_requests_per_minute: 6_000,
+}
+
 const inferenceConcurrencySettingsBaseSchema = z.object({
   // Chat completions one scoring ticket's grant may spend in total. Ships at
   // 16384, ~15x the heaviest observed run.
@@ -3497,13 +3540,18 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   benchmark_runtime: benchmarkRuntimeSettingsSchema
     .nullish()
     .transform((value) => value ?? DEFAULT_BENCHMARK_RUNTIME_SETTINGS),
+  // Additive rolling-upgrade field: a Platform predating the decision lane
+  // omits it, which reads as the shipped (disabled) lane.
+  decision_lane: decisionLaneSettingsSchema
+    .nullish()
+    .transform((value) => value ?? DEFAULT_DECISION_LANE_SETTINGS),
 })
 
 // The platform enforces this hierarchy with its own model validator and 422s a
 // violation. Mirrored here so the operator sees which field is wrong before a
 // round trip.
 const refineInferenceConcurrencyHierarchy = (
-  value: z.infer<typeof inferenceConcurrencySettingsBaseSchema>,
+  value: Omit<z.infer<typeof inferenceConcurrencySettingsBaseSchema>, 'decision_lane'>,
   context: z.RefinementCtx,
 ) => {
   if (value.chat_per_ticket_concurrency > value.chat_per_validator_concurrency) {
@@ -3580,8 +3628,14 @@ const refineInferenceConcurrencyHierarchy = (
 export const inferenceConcurrencySettingsSchema =
   inferenceConcurrencySettingsBaseSchema.superRefine(refineInferenceConcurrencyHierarchy)
 
+// decision_lane is optional on writes and never defaulted: Platform preserves
+// the effective lane when a revision omits it, so a concurrency change can
+// never silently switch the decision lane off (or on).
 const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBaseSchema
-  .extend({ benchmark_runtime: benchmarkRuntimeSettingsSchema })
+  .extend({
+    benchmark_runtime: benchmarkRuntimeSettingsSchema,
+    decision_lane: decisionLaneSettingsSchema.optional(),
+  })
   .superRefine(refineInferenceConcurrencyHierarchy)
 
 export const inferenceConcurrencySettingsRevisionSchema = z.object({
@@ -3622,6 +3676,34 @@ export const setInferenceConcurrencySettingsInputSchema = z.object({
   settings: inferenceConcurrencySettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.literal(INFERENCE_CONCURRENCY_CONFIRMATION),
+})
+
+const decisionLaneUsageWindowSchema = z.object({
+  window_seconds: z.number().int().positive(),
+  requests: z.number().int().nonnegative(),
+  completed: z.number().int().nonnegative(),
+  failed: z.number().int().nonnegative(),
+  canceled: z.number().int().nonnegative(),
+  input_tokens: z.number().int().nonnegative(),
+  ledger_cost_microusd: z.number().int().nonnegative(),
+  model_mismatches: z.number().int().nonnegative(),
+  provider_rejections: z.number().int().nonnegative(),
+  provider_failures: z.number().int().nonnegative(),
+  grants_with_lane: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedDecisionLaneUsageWindow>)
+
+export const decisionLaneStatusSchema = z.object({
+  state: z.enum(['disabled', 'enabled']),
+  settings_revision: z.number().int().nonnegative(),
+  settings_source: z.enum(['revision', 'default']),
+  settings: decisionLaneSettingsSchema,
+  upstream: z.string(),
+  live_grants_with_lane: z.number().int().nonnegative(),
+  usage: z.array(decisionLaneUsageWindowSchema),
+  terminal_error_codes_24h: z.array(
+    z.object({ terminal_error_code: z.string(), requests: z.number().int().nonnegative() }),
+  ),
+  last_request_at: z.string().nullable(),
 })
 
 export type InferenceConcurrencySettings = z.infer<typeof inferenceConcurrencySettingsSchema>
@@ -9511,7 +9593,7 @@ export const traceObjectListSchema = z.object({
 export const listInferenceTracesInputSchema = z.object({
   scope: z.enum(['traces', 'ledger']).default('traces'),
   lane: z.enum(['inference', 'confirmation', 'screening']).optional(),
-  kind: z.enum(['chat', 'embedding', 'kaniko', 'smoke', 'review']).optional(),
+  kind: z.enum(['chat', 'embedding', 'decision', 'kaniko', 'smoke', 'review']).optional(),
   dt: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'dt is a UTC day like 2026-08-24')
@@ -10014,7 +10096,7 @@ export const validatorCapacityEntrySchema = z.object({
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityEntry>)
 
 const relayLaneSaturationSchema = z.object({
-  request_kind: z.enum(['chat', 'embedding']),
+  request_kind: z.enum(['chat', 'embedding', 'decision']),
   active_requests: z.number().int().nonnegative(),
   global_limit: z.number().int().positive(),
   saturation: z.number().nonnegative(),

@@ -588,6 +588,7 @@ describe('Backroom MCP tools', () => {
         'get_efficiency_bonus_settings',
         'get_emission_eligibility_policy',
         'get_inference_concurrency_settings',
+        'get_decision_lane',
         'get_inference_runtime_metrics',
         'get_source_review_queue_slo',
         'get_outlier_escalation',
@@ -931,7 +932,11 @@ describe('Backroom MCP tools', () => {
     // The screening review cost read (one bounded integer input, one-line
     // summary, detail in tool help) brings the measured catalog to 212,797
     // bytes; keep about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(213_300)
+    // The dark decision lane adds the get_decision_lane read (no input,
+    // one-line summary) and the optional decision_lane object on the
+    // set_inference_concurrency_settings input, measured 214,803 bytes; keep
+    // about 0.5 KB headroom.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(215_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -976,7 +981,8 @@ describe('Backroom MCP tools', () => {
       // about 150 chars. The one-line generator scorer capability read
       // measures 27,441. The validator request-outcome read (job polls and
       // the weight ledger, one line) brings the measured total to 27,653.
-      27_700,
+      // The one-line decision-lane read measures 27,740.
+      27_800,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -4619,6 +4625,52 @@ describe('Backroom MCP tools', () => {
     const [url] = fetchMock.mock.calls[0] as [string]
     expect(url).toBe(
       'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings',
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the dark decision lane switch, pin and ledger usage', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const window = {
+      window_seconds: 3600, requests: 0, completed: 0, failed: 0, canceled: 0,
+      input_tokens: 0, ledger_cost_microusd: 0, model_mismatches: 0,
+      provider_rejections: 0, provider_failures: 0, grants_with_lane: 0,
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        state: 'disabled',
+        settings_revision: 0,
+        settings_source: 'default',
+        settings: {
+          enabled: false, model: null, input_microusd_per_mtok: 42_000,
+          request_budget: 4096, token_budget: 25_000_000,
+          per_ticket_concurrency: 8, per_validator_concurrency: 32, global_concurrency: 64,
+          per_ticket_requests_per_minute: 600, per_validator_requests_per_minute: 2400,
+          global_requests_per_minute: 6000,
+        },
+        upstream: 'https://openrouter.ai/api/v1/systemone',
+        live_grants_with_lane: 0,
+        usage: [window],
+        terminal_error_codes_24h: [],
+        last_request_at: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_decision_lane', arguments: {} })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      state: 'disabled',
+      settings: { enabled: false, model: null },
+      usage: [{ window_seconds: 3600, ledger_cost_microusd: 0 }],
+    })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings/decision-lane',
     )
 
     await client.close()

@@ -454,6 +454,7 @@ import {
   parseContinualRetestSettingsControl,
   setContinualRetestSettingsInputSchema,
   inferenceConcurrencySettingsControlSchema,
+  decisionLaneStatusSchema,
   inferenceFailureTaxonomySchema,
   inferenceRuntimeMetricsSchema,
   inferenceGrantCostsSchema,
@@ -2149,6 +2150,11 @@ export async function downloadRuntimeProfile(rawInput: unknown, actor: string) {
     encoding: 'base64',
     data_base64: bytesToBase64(artifact.bytes),
   })
+}
+
+export async function fetchDecisionLane() {
+  const payload = await platformAdminRequest(`${INFERENCE_CONCURRENCY_SETTINGS_PATH}/decision-lane`)
+  return decisionLaneStatusSchema.parse(payload)
 }
 
 export async function fetchInferenceConcurrencySettings() {

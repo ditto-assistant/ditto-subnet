@@ -13,7 +13,7 @@ class InferenceLaneWindow(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     window_seconds: int
-    request_kind: Literal["chat", "embedding"]
+    request_kind: Literal["chat", "embedding", "decision"]
     calls: int
     calls_per_second: float
     tokens: int
@@ -31,7 +31,7 @@ class InferenceLaneWindow(BaseModel):
 class InferenceLaneCurrent(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    request_kind: Literal["chat", "embedding"]
+    request_kind: Literal["chat", "embedding", "decision"]
     active_requests: int
     live_grants: int
     stale_started_requests: int

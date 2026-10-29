@@ -67,6 +67,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
   inferenceConcurrencySettingsSchema,
+  DEFAULT_DECISION_LANE_SETTINGS,
   INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_CONCURRENCY,
   MAX_CHAT_REQUEST_BUDGET,
@@ -171,7 +172,10 @@ describe('admin API schemas', () => {
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_request_budget: MAX_CHAT_REQUEST_BUDGET + 1,
@@ -198,7 +202,10 @@ describe('admin API schemas', () => {
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
@@ -227,7 +234,10 @@ describe('admin API schemas', () => {
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
     expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
     expect(MAX_REQUESTS_PER_MINUTE).toBe(100_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       embedding_global_concurrency: 513,

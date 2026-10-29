@@ -325,6 +325,7 @@ import {
   fetchContinualRetestSettings,
   setContinualRetestSettings,
   fetchInferenceConcurrencySettings,
+  fetchDecisionLane,
   fetchScoringLeaseSettings,
   fetchInferenceRuntimeMetrics,
   fetchInferenceGrantCosts,
@@ -877,6 +878,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read payment links; common-control signal, not ownership. Verify chain.',
   get_inference_concurrency_settings:
     'Read hosted budgets/concurrency, relay policy and optional history (default 0).',
+  get_decision_lane:
+    'Read the dark decision-model lane: switch, pinned model, price, walls and ledger usage.',
   set_source_release_policy:
     'Set complete disclosure policy with CAS, reason and exact confirmation. Shortening may publish; releases cannot be recalled. See tool help.',
   set_efficiency_bonus_settings:
@@ -3457,6 +3460,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_decision_lane',
+    {
+      title: 'Get the decision-model lane',
+      description:
+        'Read the dark decision-model lane (TypeSafe Jev through OpenRouter System One, POST /api/v1/inference/decisions on the relay): whether it is enabled, the ONE pinned model version, the stamped price (input_microusd_per_mtok; output is free), the per-run request and token walls, the live concurrency and requests-per-minute rails, and the settings revision they come from. Also returns ledger usage over 1h/24h/7d: calls by status, receipted input tokens, ledger cost in micro-USD (the figure the walls and a dollar ceiling read, never the provider bill), served-model mismatches and provider failures (both settled uncharged as infrastructure), provider rejections of a harness\'s own questions, grants minted with the lane, and the top terminal error codes. ' +
+        'The lane is changed only through set_inference_concurrency_settings: send settings.decision_lane with enabled=true and an exact model such as typesafe/jev-1.14 (omit decision_lane to leave it unchanged). It authenticates with the existing OpenRouter key; no other credential exists. The pin, price and walls are stamped on each grant at mint, and turning enabled off refuses new decision calls fleet-wide within seconds. The lane carries no score. Requires backroom:read and changes nothing.',
+      inputSchema: {},
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchDecisionLane()),
   )
 
   registerTool(

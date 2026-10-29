@@ -2,10 +2,12 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -211,3 +213,89 @@ class TestWrite:
         )
         resolved = await resolver.resolve(settings_maker)
         assert resolved.embedding_per_ticket_concurrency == 2
+
+
+class TestDecisionLaneRead:
+    async def test_reports_switch_pin_and_ledger_usage(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        url = f"{_URL}/decision-lane"
+        dark = (await client.get(url, headers=_HEADERS)).json()
+        assert dark["state"] == "disabled"
+        assert dark["settings"]["enabled"] is False
+        assert dark["upstream"] == "https://openrouter.ai/api/v1/systemone"
+        assert [w["requests"] for w in dark["usage"]] == [0, 0, 0]
+
+        agent, grant = uuid4(), uuid4()
+        async with settings_maker() as session, session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO agents (agent_id, miner_hotkey, name, sha256) "
+                    "VALUES (:a, 'miner', 'decision-agent', repeat('d', 64))"
+                ),
+                {"a": agent},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO validator_tickets (agent_id, validator_hotkey, "
+                    "slot_id, status, deadline, bench_version, attempt_count) "
+                    "VALUES (:a, 'validator', 'slot-0', 'issued', "
+                    "now() + interval '1 hour', 9, 1)"
+                ),
+                {"a": agent},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO inference_grants (grant_id, agent_id, bench_version, "
+                    "validator_hotkey, slot_id, ticket_deadline, status, generation, "
+                    "allowed_models, request_budget, token_budget, expires_at, "
+                    "decision_model, decision_input_microusd_per_mtok, "
+                    "decision_request_budget, decision_token_budget) "
+                    "VALUES (:g, :a, 9, 'validator', 'slot-0', "
+                    "now() + interval '1 hour', 'active', 1, '[\"m\"]'::jsonb, 10, "
+                    "10, now() + interval '1 hour', 'typesafe/jev-1.14', 42000, 10, "
+                    "1000)"
+                ),
+                {"g": grant, "a": agent},
+            )
+            for code, tokens, cost in (
+                (None, 476, 20),
+                ("decision_model_mismatch", 0, 0),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO inference_requests (grant_id, nonce, generation, "
+                        "request_kind, model, reserved_tokens, max_chargeable_tokens, "
+                        "started_at, status, prompt_tokens, completion_tokens, "
+                        "cost_microusd, timed_out, terminal_error_code) VALUES "
+                        "(:g, :n, 1, 'decision', 'typesafe/jev-1.14', 1, 2000, now(), "
+                        ":s, :t, 0, :c, false, :code)"
+                    ),
+                    {
+                        "g": grant,
+                        "n": uuid4(),
+                        "s": "completed" if code is None else "failed",
+                        "t": tokens,
+                        "c": cost,
+                        "code": code,
+                    },
+                )
+
+        body = (await client.get(url, headers=_HEADERS)).json()
+        hour = body["usage"][0]
+        assert hour["window_seconds"] == 3600
+        assert (hour["requests"], hour["completed"], hour["model_mismatches"]) == (
+            2,
+            1,
+            1,
+        )
+        assert (hour["input_tokens"], hour["ledger_cost_microusd"]) == (476, 20)
+        assert hour["provider_failures"] == 0
+        assert body["live_grants_with_lane"] == 1
+        assert body["terminal_error_codes_24h"] == [
+            {"terminal_error_code": "decision_model_mismatch", "requests": 1}
+        ]

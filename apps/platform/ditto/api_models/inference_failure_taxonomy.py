@@ -12,7 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
 
-InferenceRequestKind = Literal["chat", "embedding"]
+InferenceRequestKind = Literal["chat", "embedding", "decision"]
 
 InferenceGateway = Literal["openrouter", "reliable", "direct", "ditto-router"]
 """Which door the call went through, derived from lane + ``fallback_phase``.

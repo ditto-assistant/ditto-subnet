@@ -16,6 +16,7 @@ import (
 
 	"github.com/ditto-assistant/model-relay/internal/metrics"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
 
 // The dark decision-model lane: POST /api/v1/inference/decisions.
@@ -288,6 +289,8 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	}
 	if decline != nil {
 		metrics.DecisionRequests.WithLabelValues("declined_" + decline.String()).Inc()
+		d.traceDeclined(r, headers, traces.LaneInference, traces.KindDecision, body, now,
+			traceInferenceGrant(&grantSnapshot, pin), decline.String())
 		relayhttp.WriteDecline(w, r, *decline, relayhttp.LaneDecision)
 		return
 	}
@@ -385,6 +388,12 @@ func (d *Deps) handleDecisions(w http.ResponseWriter, r *http.Request) {
 	}
 	settle()
 	metrics.DecisionRequests.WithLabelValues(decisionOutcomeLabel(outcome, requestFailure)).Inc()
+	d.traceDecisionSettled(decisionTrace{
+		r: r, headers: headers, body: body, receivedAt: now, grant: &result.grant, model: pin,
+		locked: payload, outcome: outcome, upstream: upstream, callErr: callErr, raw: raw, started: started,
+		deliverable: deliverable, failure: requestFailure, settleErr: settleErr,
+		reserved: result.request.ReservedTokens, chargeable: result.request.MaxChargeableTokens,
+	})
 	if settleErr != nil {
 		relayhttp.WriteInternalError(w, r)
 		return

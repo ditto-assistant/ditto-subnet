@@ -116,7 +116,8 @@ async def list_trace_objects(
         Literal["inference", "confirmation", "screening"] | None, Query()
     ] = None,
     kind: Annotated[
-        Literal["chat", "embedding", "kaniko", "smoke", "review"] | None, Query()
+        Literal["chat", "embedding", "decision", "kaniko", "smoke", "review"] | None,
+        Query(),
     ] = None,
     dt: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
     hour: Annotated[str | None, Query(pattern=r"^\d{2}$")] = None,

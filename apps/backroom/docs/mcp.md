@@ -840,6 +840,28 @@ The review console exposes this release action on the resolved quarantine when i
 submission is still `screening_failed`; older Platform contexts without score
 counts fail closed. Inconclusive reviews alone do not establish a policy violation.
 
+## Decision lane (dark)
+
+`get_decision_lane` reads the decision-model lane: TypeSafe Jev through
+OpenRouter System One, served by the relay at
+`POST /api/v1/inference/decisions`. It is backed by
+`GET /api/v1/admin/inference-concurrency-settings/decision-lane`. The read
+returns:
+
+- whether the lane is enabled;
+- the one pinned model version;
+- the stamped price, the per-run walls and the live rails;
+- 1h/24h/7d ledger usage: calls, receipted input tokens, ledger cost in
+  micro-USD, served-model mismatches, provider failures and provider
+  rejections;
+- the top terminal error codes.
+
+The lane ships disabled and carries no score. To enable it, send
+`set_inference_concurrency_settings` with `settings.decision_lane` set to
+`{enabled: true, model: "typesafe/jev-1.14", ...}`, always an exact version.
+Omitting `decision_lane` keeps the current value. The lane authenticates with
+the relay's existing OpenRouter key, and it needs no other credential.
+
 ## Inference cost attribution
 
 `get_inference_runtime_metrics` accepts optional `costWindowHours` (1–744).
