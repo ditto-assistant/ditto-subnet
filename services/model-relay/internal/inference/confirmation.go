@@ -439,7 +439,35 @@ type finishConfirmationParams struct {
 	costMicrousd     int64
 	upstreamProvider pgtype.Text
 	failure          confirmationFailureDetail
+	upstreamAttempts int
 	now              time.Time
+}
+
+// confirmationTransientAttemptsForGrant returns the per-call attempt cap for
+// transient retries, bounded by the grant's remaining retry budget, and clamps
+// the backpressure cap to the same remainder so the two paths together cannot
+// overspend it. A failed budget read fails closed to single-shot: an unbounded
+// retry is the thing the budget exists to prevent.
+func confirmationTransientAttemptsForGrant(ctx context.Context, d *Deps, grantID uuid.UUID, backpressureMax *int) int {
+	used, err := d.Queries.ConfirmationGrantRetriesUsed(ctx, pgUUID(grantID))
+	if err != nil {
+		d.Logger.Warn("confirmation retry budget unreadable; retries disabled for this call",
+			slog.String("error", err.Error()))
+		*backpressureMax = providerMaxAttempts
+		return providerMaxAttempts
+	}
+	remaining := int64(confirmationGrantRetryBudget) - used
+	if remaining <= 0 {
+		d.Logger.Warn("confirmation retry budget exhausted; call is single-shot",
+			slog.String("grant_id", grantID.String()),
+			slog.Int64("retries_used", used),
+			slog.Int("retry_budget", confirmationGrantRetryBudget))
+		*backpressureMax = providerMaxAttempts
+		return providerMaxAttempts
+	}
+	attempts := int(min(int64(confirmationTransientMaxAttempts), 1+remaining))
+	*backpressureMax = min(*backpressureMax, attempts)
+	return attempts
 }
 
 // confirmationFailureDetail is why a provider call failed, as this relay saw
@@ -452,7 +480,6 @@ type finishConfirmationParams struct {
 type confirmationFailureDetail struct {
 	kind        string
 	httpStatus  int  // 0 when no response arrived
-	attempts    int  // 0 when no dispatch was made
 	receiptFree bool // meaningful only when known is true
 	known       bool // receiptFree was determined for this failure
 }
@@ -469,24 +496,31 @@ const (
 	confirmationFailureUpstreamStatus   = "upstream_status"
 )
 
-func (detail confirmationFailureDetail) params() (pgtype.Text, pgtype.Int4, pgtype.Int4, pgtype.Bool) {
+func (detail confirmationFailureDetail) params() (pgtype.Text, pgtype.Int4, pgtype.Bool) {
 	if detail.kind == "" {
-		return pgtype.Text{}, pgtype.Int4{}, pgtype.Int4{}, pgtype.Bool{}
+		return pgtype.Text{}, pgtype.Int4{}, pgtype.Bool{}
 	}
 	kind := pgtype.Text{String: detail.kind, Valid: true}
 	var status pgtype.Int4
 	if detail.httpStatus >= 100 && detail.httpStatus <= 599 {
 		status = pgtype.Int4{Int32: int32(detail.httpStatus), Valid: true}
 	}
-	var attempts pgtype.Int4
-	if detail.attempts >= 0 && detail.attempts <= 16 {
-		attempts = pgtype.Int4{Int32: int32(detail.attempts), Valid: true}
-	}
 	var receiptFree pgtype.Bool
 	if detail.known {
 		receiptFree = pgtype.Bool{Bool: detail.receiptFree, Valid: true}
 	}
-	return kind, status, attempts, receiptFree
+	return kind, status, receiptFree
+}
+
+// attemptsParam records the upstream dispatch count on every settled call,
+// completed or failed. The grant retry budget sums it, so a call that only
+// succeeded after retrying must still show those retries: recording attempts
+// on failures alone would let a degraded upstream spend retries invisibly.
+func attemptsParam(attempts int) pgtype.Int4 {
+	if attempts < 1 || attempts > 16 {
+		return pgtype.Int4{}
+	}
+	return pgtype.Int4{Int32: int32(attempts), Valid: true}
 }
 
 // finishConfirmationInferenceRequest reproduces ditto/db/queries/
@@ -542,7 +576,8 @@ func finishConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries
 			failure = confirmationFailureDetail{kind: confirmationFailureSettleRejected}
 		}
 	}
-	failureKind, failureStatus, failureAttempts, receiptFree := failure.params()
+	failureKind, failureStatus, receiptFree := failure.params()
+	failureAttempts := attemptsParam(p.upstreamAttempts)
 	if err := q.SettleConfirmationInferenceRequest(ctx, postgres.SettleConfirmationInferenceRequestParams{
 		Status:             status,
 		PromptTokens:       promptTokens,
@@ -655,6 +690,7 @@ type confirmationOutcome struct {
 	costMicrousd     int64
 	upstreamProvider pgtype.Text
 	failure          confirmationFailureDetail
+	upstreamAttempts int // dispatches made, success or failure; 0 = none
 }
 
 // handleConfirmationChatCompletions is POST /api/v1/inference/confirmation/
@@ -785,6 +821,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			costMicrousd:     max64(0, outcome.costMicrousd),
 			upstreamProvider: outcome.upstreamProvider,
 			failure:          outcome.failure,
+			upstreamAttempts: outcome.upstreamAttempts,
 		})
 		if settleErr != nil {
 			d.Logger.Error("confirmation chat: settle", slog.String("error", settleErr.Error()))
@@ -806,10 +843,18 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		// calls has nowhere to route and otherwise ends the whole bundle. Only
 		// a provably receipt-free rejection is ever re-dispatched.
 		backpressureMaxAttempts := providerMaxAttempts
+		transientMaxAttempts := providerMaxAttempts
 		var maxElapsed time.Duration
 		if cfg.ConfirmationBackpressureRetry {
 			backpressureMaxAttempts = confirmationBackpressureMaxAttempts
 			maxElapsed = confirmationBackpressureMaxElapsed
+			// Transient retries ride on the same operator activation. Their
+			// per-call cap is further bounded by what this grant has left of
+			// its retry budget, so a degraded upstream cannot be multiplied
+			// across a whole bundle; with nothing left the call is single-shot.
+			transientMaxAttempts = confirmationTransientAttemptsForGrant(
+				ctx, d, headers.grant, &backpressureMaxAttempts,
+			)
 		}
 		result, callErr := postProviderWithRetryPolicy(ctx, d.Upstream, cfg.UpstreamURL, upstreamPayload,
 			openrouterHeaders(cfg.OpenRouterAPIKey, true), cfg.ResponseBodyBytes, cfg.TimeoutSeconds,
@@ -819,6 +864,8 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 				backpressureMaxAttempts:       backpressureMaxAttempts,
 				receiptFreeExpectedModel:      expectedModel,
 				maxElapsed:                    maxElapsed,
+				retryTransient:                transientMaxAttempts > 1,
+				transientMaxAttempts:          transientMaxAttempts,
 			}, d.sleep())
 		upstreamRes, upstreamErr = result, callErr
 		if callErr != nil {
@@ -833,10 +880,14 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			if callErr.timedOut {
 				kind = confirmationFailureTransportTimeout
 			}
-			// No response means no receipt, so a transport failure is always
-			// receipt-free from this relay's side.
+			// Only a connection that never opened is provably receipt-free. A
+			// timeout or a reset may have reached the gateway and been billed,
+			// so receipt_free is left unknown (NULL) rather than claimed --
+			// recording true here would mark exactly the unsafe case as safe
+			// to retry.
 			outcome.failure = confirmationFailureDetail{
-				kind: kind, attempts: callErr.attempts, receiptFree: true, known: true,
+				kind:        kind,
+				receiptFree: callErr.neverSent, known: callErr.neverSent,
 			}
 			return &httpError{status: 500, message: "internal server error"}
 		}
@@ -856,7 +907,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 				kind = confirmationFailureBackpressure
 			}
 			outcome.failure = confirmationFailureDetail{
-				kind: kind, httpStatus: result.status, attempts: result.attempts,
+				kind: kind, httpStatus: result.status,
 				receiptFree: providerFailureIsReceiptFree(result, expectedModel), known: true,
 			}
 			return httpErrorf(502, "confirmation provider unavailable")
@@ -865,7 +916,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		// work; receipt-freeness is not established and is left unknown.
 		received := func(kind string) {
 			outcome.failure = confirmationFailureDetail{
-				kind: kind, httpStatus: result.status, attempts: result.attempts,
+				kind: kind, httpStatus: result.status,
 			}
 		}
 		if result.bodyOverLimit {
@@ -943,6 +994,12 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		outcome.failure = confirmationFailureDetail{}
 		return nil
 	}()
+	switch {
+	case upstreamRes != nil:
+		outcome.upstreamAttempts = upstreamRes.attempts
+	case upstreamErr != nil:
+		outcome.upstreamAttempts = upstreamErr.attempts
+	}
 	if receiptFreeResultOverload(upstreamRes, expectedModel) {
 		_ = d.openProviderCircuit(
 			ctx,

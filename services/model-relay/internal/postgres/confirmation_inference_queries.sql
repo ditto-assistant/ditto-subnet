@@ -142,3 +142,12 @@ SET active_requests = sqlc.arg(active_requests)::integer,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 RETURNING *;
+
+-- name: ConfirmationGrantRetriesUsed :one
+-- Retries this grant has already spent: every upstream dispatch beyond the
+-- first, across all of its settled calls. Rows settled before upstream_attempts
+-- was recorded count as a single dispatch. Bounded by the grant's own request
+-- cap, so it reads at most a few thousand rows.
+SELECT COALESCE(SUM(GREATEST(COALESCE(upstream_attempts, 1) - 1, 0)), 0)::bigint AS retries_used
+FROM confirmation_inference_requests
+WHERE grant_id = sqlc.arg(grant_id)::uuid;

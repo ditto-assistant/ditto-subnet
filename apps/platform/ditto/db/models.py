@@ -11694,8 +11694,11 @@ class ConfirmationInferenceRequest(Base):
     # failure looked identical off-host -- 11 reader failures over seven days
     # with no status, no attempt count, and no way to tell a 5xx from a reset.
     # That fact decides whether a retry is safe and useful, so it is recorded
-    # where an operator can read it. All four are null on a completed call and
-    # on rows written before this revision; a consumer must not require them.
+    # where an operator can read it. upstream_attempts is written on every
+    # settled call (the grant retry budget sums it, so a call that succeeded
+    # only after retrying must still show those retries); the other three are
+    # null on a completed call. All four are null on rows written before they
+    # existed; a consumer must not require them.
     failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Bounded reason (see the CHECK) the relay's provider call failed."""
     upstream_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -11703,7 +11706,12 @@ class ConfirmationInferenceRequest(Base):
     upstream_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Upstream dispatches the relay made, including any it retried."""
     receipt_free: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
-    """Whether the failure provably left no provider receipt, i.e. retry-safe."""
+    """Whether the failure provably left no provider receipt, i.e. retry-safe.
+
+    True only on positive evidence: a dial failure, or a gateway envelope
+    proving no endpoint was selected. A timeout is NULL, not true -- it may
+    have reached the gateway and been billed.
+    """
 
     __table_args__ = (
         PrimaryKeyConstraint("grant_id", "nonce"),

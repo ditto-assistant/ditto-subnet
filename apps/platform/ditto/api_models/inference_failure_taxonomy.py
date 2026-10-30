@@ -186,7 +186,9 @@ class ConfirmationFailureGroup(BaseModel):
     ``failure_kind``, ``upstream_http_status`` and ``receipt_free`` are what the
     relay recorded on the failed call; all three are null on completed calls and
     on failures settled before they were persisted, so a null here on a failed
-    group means "unexplained", never "fine".
+    group means "unexplained", never "fine". ``max_upstream_attempts`` is
+    recorded on completed calls too: above 1 there means a call that only
+    succeeded after the relay retried it.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True)
