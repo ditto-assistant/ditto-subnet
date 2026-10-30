@@ -23,6 +23,7 @@ from ditto.validator.resource_gate import (
     parse_resource_ceilings_from_env,
 )
 from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 # --- Frozen consensus constants (KOTH + ATH gate) ---
 # NOT env-tunable: every validator must fold the public ledger with byte-identical
@@ -906,7 +907,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")
         ),
         dittobench_timeout_seconds=float(
-            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "9900")
+            os.environ.get(
+                "VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS",
+                str(runtime_envelope().run_wall_seconds),
+            )
         ),
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")

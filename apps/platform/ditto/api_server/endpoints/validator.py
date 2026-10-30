@@ -109,7 +109,12 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.upload import _SS58_PATTERN
-from ditto.api_models.validator import ConfirmationDatasetPin, HeldLease, V9BaseEvidence
+from ditto.api_models.validator import (
+    HARNESS_OOM_FAILURE_DETAIL,
+    ConfirmationDatasetPin,
+    HeldLease,
+    V9BaseEvidence,
+)
 from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
@@ -6669,6 +6674,14 @@ async def fail_job(
             # operation that can extend its attempt cap.
             ticket.status = TicketStatus.EXPIRED
             ticket.deadline = now
+            # An OOM is the miner's only under the published rule, which the
+            # scorer proves and names ``harness_oom``. A validator that cannot
+            # (one predating the rule sends every OOM kill as ``sandbox_oom``
+            # with no cap or host evidence) gets the no-fault branch.
+            unproven_oom = (
+                payload.reason == "sandbox_oom"
+                and payload.failure_detail != HARNESS_OOM_FAILURE_DETAIL
+            )
             if grant_spent_allowance and payload.reason == "infrastructure":
                 # Correct both billing and diagnosis. The stuck-list withdraws
                 # only on named agent codes; leaving budget_evidence_absent
@@ -6682,6 +6695,16 @@ async def fail_job(
                     payload.agent_id,
                     payload.validator_hotkey,
                     payload.reason,
+                    payload.failure_detail,
+                )
+            elif unproven_oom:
+                ticket.failure_reason = "infrastructure"
+                ticket.failure_detail = payload.failure_detail or "sandbox_oom"
+                logger.warning(
+                    "unproven sandbox OOM parked as infrastructure agent=%s "
+                    "validator=%s detail=%s",
+                    payload.agent_id,
+                    payload.validator_hotkey,
                     payload.failure_detail,
                 )
             else:
@@ -6716,11 +6739,11 @@ async def fail_job(
                         payload.validator_hotkey,
                         payload.ticket_deadline.isoformat(),
                     )
-            elif payload.reason == "sandbox_oom":
-                # The sandbox, rather than validator-owned infrastructure,
-                # exhausted its memory allowance. Preserve the failed attempt
-                # and defer this artifact so the validator immediately advances
-                # to another eligible harness instead of reclaiming it.
+            elif ticket.failure_reason == "sandbox_oom":
+                # The harness reached its own published memory cap on a host
+                # with headroom. Preserve the failed attempt and defer this
+                # artifact so the validator immediately advances to another
+                # eligible harness instead of reclaiming it.
                 ticket.retry_after = now + RETRY_COOLDOWN
             elif ticket.purpose == TicketPurpose.CONTINUAL_RETEST:
                 # This pair stays parked. Other validators may still take their

@@ -150,6 +150,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
 | `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
 | `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |
+| `VALIDATOR_HOST_MEMORY_RESERVE_MIB` | Host memory held back from harness caps (default `4096`). The worker offers at most `(host RAM - reserve) // live harness cap` benchmark slots, so the sum of caps always fits the host. With the live 8192 MiB cap a 16 GiB host offers 1 slot and a 64 GiB host 7. See [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md). |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Keep `true`; v7/v8 scoring fails closed without a ticket session. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Keep `true`; the validator must not claim work without the platform proxy. |
 
@@ -385,11 +386,16 @@ to be visible.
   `docker system prune`, never removes containers, volumes, networks, or
   third-party images, and never forces removal of an image still referenced by
   a container. Do not run broad cleanup against the host Docker daemon.
-- **Sandbox resource failure (`sandbox_oom`, `sandbox_tmpfs_exhausted`):**
-  these are validator-infrastructure classifications, not miner verdicts; the
-  worker stops claiming work and the ticket expires safely. Fix the resource
-  issue, then ask the Ditto team for the audited single-agent retry; never
-  bulk retry or alter accepted scores.
+- **Sandbox resource failure (`host_memory_pressure`, `harness_killed_137`,
+  `sandbox_tmpfs_exhausted`, legacy `sandbox_oom`):** these are
+  validator-infrastructure classifications, not miner verdicts; the worker
+  blocks that slot, stops claiming work for the sweep, and the ticket is parked
+  without charging the miner. Fix the resource issue (usually too many slots for
+  the host's RAM; see `VALIDATOR_HOST_MEMORY_RESERVE_MIB`), then ask the Ditto
+  team for the audited single-agent retry; never bulk retry or alter accepted
+  scores. Only `harness_oom` -- an OOM kill at the harness's own published cap
+  while the host kept headroom -- is charged to the miner. The rules are in
+  [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md).
 
 ## Automatic full-stack updates (recommended)
 

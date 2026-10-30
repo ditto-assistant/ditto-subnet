@@ -2565,7 +2565,8 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert ca_mount.endswith(",readonly")
     assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
-    assert {"--memory", "3g", "--pids-limit", "512"} <= set(harness)
+    # The published envelope cap when Platform stamps none; never a stale 3g.
+    assert {"--memory", "8192m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
     assert {"--init", "--user", "65532:65532", "--read-only"} <= set(harness)
     assert {"--ipc", "none", "--log-driver", "local"} <= set(harness)
     assert {"max-size=8m", "max-file=1", "compress=false"} <= set(harness)
@@ -3806,10 +3807,27 @@ async def test_seed_probe_reports_the_memory_cap_when_the_container_is_oom_kille
         tarball=tarball,
     )
     async with gate._client:
-        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            sandbox_memory_limit_mib=6144,
+        )
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
-    assert "memory cap" in result.detail
+    # The probe ran at the live cap Platform stamped, and the rejection names
+    # that cap rather than claiming a parity it does not have.
+    harness = next(
+        call
+        for call in calls
+        if "--network-alias" in call
+        and call[call.index("--network-alias") + 1] == "harness"
+    )
+    assert harness[harness.index("--memory") + 1] == "6144m"
+    assert "6144 MiB sandbox memory cap" in result.detail
     assert any(item.code == "seed-memory-cap" for item in result.evidence)
 
 
@@ -3849,7 +3867,7 @@ async def test_envelope_usage_is_recorded_for_a_passing_image(
     # A passing image is exactly the case rejections cannot answer: how much of
     # the envelope the fleet actually uses.
     assert "393 MiB" in usage.summary
-    assert "3g" in usage.summary
+    assert "8192 MiB" in usage.summary
     assert "12 MiB" in usage.summary
 
 

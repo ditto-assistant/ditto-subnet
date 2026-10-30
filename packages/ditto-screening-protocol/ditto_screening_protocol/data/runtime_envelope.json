@@ -1,0 +1,47 @@
+{
+  "schema": "ditto.sn118.runtime_envelope.v1",
+  "doc": "docs/RUNTIME-ENVELOPE.md",
+  "harness": {
+    "memory_limit_mib": 8192,
+    "memory_limit_live_setting": "inference_concurrency_settings.benchmark_runtime.sandbox_memory_limit_mib",
+    "swap_mib": 0,
+    "cpus": 2,
+    "pids_limit": 512,
+    "tmpfs_mib": 512,
+    "nofile": 1024,
+    "read_only_root": true,
+    "user": "65532:65532"
+  },
+  "timing": {
+    "container_start_seconds": 120,
+    "healthy_within_seconds": 180,
+    "seed_call_seconds": 900,
+    "case_call_seconds": 300,
+    "run_wall_seconds": 9900,
+    "lease_ttl_minutes": 180
+  },
+  "concurrency": {
+    "case_concurrency": 8,
+    "case_concurrency_live_setting": "inference_concurrency_settings.benchmark_runtime.case_concurrency"
+  },
+  "image": {
+    "screened_image_bytes": 8589934592,
+    "source_bytes": 67108864
+  },
+  "inference": {
+    "chat_request_budget": 16384,
+    "chat_token_budget": 75000000,
+    "chat_per_ticket_concurrency": 32,
+    "chat_per_ticket_requests_per_minute": 1920,
+    "max_tokens_per_request": 32768,
+    "request_body_bytes": 4194304,
+    "upstream_call_seconds": 90
+  },
+  "oom": {
+    "peak_tolerance_mib": 64,
+    "host_available_floor_mib": 1024
+  },
+  "host": {
+    "memory_reserve_mib": 4096
+  }
+}

@@ -40,6 +40,24 @@ class LocalRehearsalTest(unittest.TestCase):
         )
         self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 14)
 
+    def test_practice_runs_the_validator_envelope(self) -> None:
+        envelope = LOCAL.runtime_envelope()
+        published = json.loads(LOCAL.RUNTIME_ENVELOPE_PATH.read_text())
+        self.assertEqual(
+            envelope["memory_limit_mib"], published["harness"]["memory_limit_mib"]
+        )
+        self.assertEqual(LOCAL._ENVELOPE_FALLBACK, envelope)
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}):
+            os.environ.pop("DITTOBENCH_V8_CASE_CONCURRENCY", None)
+            env = LOCAL.scorer_environment(Path(directory), 0)
+        self.assertEqual(
+            env["DITTOBENCH_V8_CASE_CONCURRENCY"], str(envelope["case_concurrency"])
+        )
+        cap = envelope["memory_limit_mib"]
+        self.assertIn("50%", LOCAL.enforce_memory_envelope(cap << 19, cap))
+        with self.assertRaisesRegex(LOCAL.RehearsalError, "harness_oom"):
+            LOCAL.enforce_memory_envelope(cap << 20, cap)
+
     def test_submit_body_can_pin_an_older_contract(self) -> None:
         body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)
         self.assertEqual(body["bench_version"], 9)

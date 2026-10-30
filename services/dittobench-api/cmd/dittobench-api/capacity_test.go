@@ -98,8 +98,32 @@ func TestFinishSandboxRunClassifiesOOMBeforeStop(t *testing.T) {
 	if job.Error != "validator sandbox resource envelope exhausted" {
 		t.Fatalf("private error was not replaced: %q", job.Error)
 	}
-	if job.Failure == nil || job.Failure.Code != "sandbox_oom" || !job.Failure.Retryable {
+	// No cap or host evidence on the diagnostics: never the miner's.
+	if job.Failure == nil || job.Failure.Code != sandbox.CodeHostMemoryPressure ||
+		job.Failure.Kind != "validator_infrastructure" || !job.Failure.Retryable {
 		t.Fatalf("infrastructure classifier missing: %+v", job.Failure)
+	}
+}
+
+// The wire kind matches the charge: an OOM at the harness's own cap on a host
+// with headroom is a terminal sandbox_failure, not retryable infrastructure.
+func TestFinishSandboxRunChargesOOMAtOwnCapToHarness(t *testing.T) {
+	backend := &diagnosticSandbox{diagnostics: sandbox.RuntimeDiagnostics{
+		OOMKilled:                true,
+		ExitCode:                 137,
+		MemoryPeakBytes:          pointer(uint64(8 << 30)),
+		MemoryLimitBytes:         pointer(uint64(8 << 30)),
+		HostMemAvailableMinBytes: pointer(uint64(20 << 30)),
+	}}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-own-oom", "sandbox", store.StatusRunning, 1, 114)
+	s.store.Fail("run-own-oom", "harness died")
+
+	s.finishSandboxRun("run-own-oom", &sandbox.Handle{ContainerID: "private"})
+	job, _ := s.store.Get("run-own-oom")
+	if job.Failure == nil || job.Failure.Code != sandbox.CodeHarnessOOM ||
+		job.Failure.Kind != "sandbox_failure" || job.Failure.Retryable {
+		t.Fatalf("harness OOM not charged as terminal sandbox_failure: %+v", job.Failure)
 	}
 }
 

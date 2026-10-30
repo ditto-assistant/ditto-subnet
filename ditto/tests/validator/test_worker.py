@@ -29,7 +29,7 @@ from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
     ValidatorStackHealth,
 )
-from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.api_models.system_health import DockerHealth, HostSpecs, SystemMetrics
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
@@ -6455,6 +6455,28 @@ class TestResourceConstrainedAdmission:
             system_metrics=collector,
         )
         return worker, platform
+
+    def test_host_memory_admits_only_caps_that_fit(self) -> None:
+        """Sum of harness caps must fit host memory less the reserve.
+
+        Eight 8 GiB caps on a 16 GiB host let two in-cap harnesses exhaust the
+        host together; the kernel then kills one for a fault it did not commit.
+        """
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=8,
+                memory_total_mib=16_000,
+                disk_total_gib=100,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        worker._sandbox_memory_limit_mib = 8192
+        # (16000 - 4096 reserve) // 8192 = 1 of 4 configured slots.
+        assert len(worker._available_slots()) == 1
+        worker._sandbox_memory_limit_mib = 3072
+        assert len(worker._available_slots()) == 3
 
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,
