@@ -12,7 +12,7 @@ import "github.com/ditto-assistant/dittobench-datagen/protocol"
 func AuditBankV15() AuditBank {
 	bank := AuditBankV14()
 	bank.Version = "v15-1"
-	bank.FloorBenchVersion = protocol.BenchVersionV15
+	bank.FloorBenchVersion = PolicyFloorV15
 	bank.Negatives = append(append([]AuditNegative(nil), bank.Negatives...), auditNegativesV15...)
 	bank.Positives = append(append([]AuditPositive(nil), bank.Positives...), auditPositivesV15...)
 	return bank

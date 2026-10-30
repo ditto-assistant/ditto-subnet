@@ -170,12 +170,6 @@ const (
 	BenchVersion = CurrentBenchVersion
 )
 
-// BenchVersionV15 is a grader-only policy floor ahead of its generation
-// contract, as BenchVersionV13 once was: the grader's >= BenchVersionV15 branch
-// and its audit bank are pinned now, while SupportedBenchVersion and
-// DatasetEpochForVersion admit v15 only once that contract lands.
-const BenchVersionV15 = 15
-
 var (
 	datasetEpochV2  = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV3  = time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)

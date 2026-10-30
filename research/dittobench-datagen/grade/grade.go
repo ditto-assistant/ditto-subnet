@@ -181,7 +181,7 @@ type gradingPolicy struct {
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
-	case benchVersion >= protocol.BenchVersionV15:
+	case benchVersion >= PolicyFloorV15:
 		policy := gradingPolicyForVersion(protocol.BenchVersionV14)
 		policy.caseValuesAreAtomic = true
 		return policy

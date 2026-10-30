@@ -1320,7 +1320,7 @@ Supporting v14 does not change Platform's active version or qualify a fleet.
 
 ## Bench v15 grading policy (grader-only floor, no generation contract yet)
 
-`BenchVersionV15` exists only as a grading-policy floor, as v13 once did. It
+`grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It
 is not generatable, advertised or active, and it does not change any v2–v14
 generation or grading vector. The v15 generation contract (see
 [dueling-bench.md](dueling-bench.md)) inherits this policy when it lands.

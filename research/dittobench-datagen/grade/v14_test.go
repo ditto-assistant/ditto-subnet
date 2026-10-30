@@ -407,11 +407,11 @@ func TestConjunctionValueIsOneValueFromV15(t *testing.T) {
 		{"declarative acknowledgement", ack, "Got it, macaroni and cheese noted.", declarativeAckCredit, 1},
 		{"rejected value", behavior, "Not macaroni and cheese; pale brown.", 0, 0},
 	} {
-		for _, version := range []int{protocol.BenchVersionV14, protocol.BenchVersionV15} {
+		for _, version := range []int{protocol.BenchVersionV14, PolicyFloorV15} {
 			mc := tt.mc
 			mc.BenchVersion = version
 			want := tt.v14
-			if version == protocol.BenchVersionV15 {
+			if version == PolicyFloorV15 {
 				want = tt.v15
 			}
 			if got := Memory(mc, protocol.RunResponse{FinalText: tt.text}); got.Score != want {

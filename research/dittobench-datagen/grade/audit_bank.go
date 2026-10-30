@@ -116,10 +116,17 @@ func GradingPolicyFloor(v int) int {
 // grading policy, ascending. The audit floor (BenchVersionV9) and everything
 // above it must own an audit bank.
 func GradingPolicyFloors() []int {
-	floors := []int{protocol.BenchVersionV2, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14, protocol.BenchVersionV15}
+	floors := []int{protocol.BenchVersionV2, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV12, protocol.BenchVersionV13, protocol.BenchVersionV14, PolicyFloorV15}
 	sort.Ints(floors)
 	return floors
 }
+
+// PolicyFloorV15 is a grader-only policy floor ahead of the v15 generation
+// contract, as v13's grader floor once was. It deliberately lives here, not
+// in protocol: protocol's BenchVersionVN constants track only versions the
+// generator can reproduce (ditto/tests/test_bench_version_pins.py). When the
+// v15 contract lands, protocol.BenchVersionV15 replaces this constant.
+const PolicyFloorV15 = 15
 
 // AuditBankFloor is the first bench version with a public grader audit bank.
 const AuditBankFloor = protocol.BenchVersionV9

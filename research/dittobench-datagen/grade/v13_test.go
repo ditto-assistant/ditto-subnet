@@ -709,7 +709,7 @@ func TestGradingPolicyFloorsMatchSwitch(t *testing.T) {
 	if GradingPolicyFloor(last+5) != last || gradingPolicyForVersion(last+5) != gradingPolicyForVersion(last) {
 		t.Fatalf("policy is not a floor above %d", last)
 	}
-	if last != protocol.BenchVersionV15 {
-		t.Fatalf("newest policy floor = %d, want %d", last, protocol.BenchVersionV15)
+	if last != PolicyFloorV15 {
+		t.Fatalf("newest policy floor = %d, want %d", last, PolicyFloorV15)
 	}
 }

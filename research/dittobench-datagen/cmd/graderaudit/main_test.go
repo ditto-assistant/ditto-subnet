@@ -708,7 +708,7 @@ func TestRunTranscriptModeRemainsBackwardCompatible(t *testing.T) {
 // a rejected value, an asserted conjunction distractor, a bare fragment) stay
 // at 0, on top of every v14 check.
 func TestSyntheticRobustnessV15BankIsClean(t *testing.T) {
-	report, err := syntheticRobustnessAudit(protocol.BenchVersionV15)
+	report, err := syntheticRobustnessAudit(grade.PolicyFloorV15)
 	if err != nil {
 		t.Fatal(err)
 	}
