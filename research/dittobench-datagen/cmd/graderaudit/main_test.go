@@ -702,3 +702,21 @@ func TestRunTranscriptModeRemainsBackwardCompatible(t *testing.T) {
 		t.Fatalf("legacy summary changed: %q", stderr.String())
 	}
 }
+
+// TestSyntheticRobustnessV15BankIsClean runs the v15 bank under the v15
+// policy: the conjunction-value positives score and their negatives (a hedge,
+// a rejected value, an asserted conjunction distractor, a bare fragment) stay
+// at 0, on top of every v14 check.
+func TestSyntheticRobustnessV15BankIsClean(t *testing.T) {
+	report, err := syntheticRobustnessAudit(protocol.BenchVersionV15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bank := grade.AuditBankV15()
+	if report.BankVersion != bank.Version || report.ReviewedPositives != len(bank.Positives) || report.NegativeChecks != len(bank.Negatives) {
+		t.Fatalf("wrong or partial bank: %+v", report)
+	}
+	if !report.CoverageOK || !report.WithinLimits || report.NegativeFailures != 0 || report.ReviewedPositiveFailures != 0 || report.PositiveFailures != 0 {
+		t.Fatalf("v15 bank not clean: failed=%v report=%+v", report.FailedChecks, report)
+	}
+}

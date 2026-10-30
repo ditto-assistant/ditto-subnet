@@ -385,3 +385,38 @@ func TestV14ClaimAlternativesCarryMixedHyphenForms(t *testing.T) {
 		t.Fatalf("v14 long-form vocabulary must stay bounded: %q", got)
 	}
 }
+
+// TestConjunctionValueIsOneValueFromV15 is the "macaroni and cheese" report
+// (2026-10-29). The xkcd accent contains the clause boundary "and", so v14
+// splits a correct reply into "macaroni" and "cheese" and misses it. V14 is
+// the active immutable contract and keeps that reading; v15 reads the case's
+// own multi-word value as one phrase.
+func TestConjunctionValueIsOneValueFromV15(t *testing.T) {
+	behavior := protocol.MemoryCase{QuestionType: "declarative-behavior", AnswerKind: protocol.AnswerValue,
+		ExpectedAnswer: "macaroni and cheese", DistractorAnswers: []string{"pale brown", "forest green", "rebecca purple"}}
+	ack := protocol.MemoryCase{QuestionType: DeclarativeAckQuestionType, AnswerKind: protocol.AnswerValue,
+		ExpectedAnswer: "macaroni and cheese", AcceptAny: []string{"got it", "noted"}}
+	for _, tt := range []struct {
+		name string
+		mc   protocol.MemoryCase
+		text string
+		v14  float64
+		v15  float64
+	}{
+		{"behavior answer", behavior, "You should apply macaroni and cheese.", 0, 1},
+		{"declarative acknowledgement", ack, "Got it, macaroni and cheese noted.", declarativeAckCredit, 1},
+		{"rejected value", behavior, "Not macaroni and cheese; pale brown.", 0, 0},
+	} {
+		for _, version := range []int{protocol.BenchVersionV14, protocol.BenchVersionV15} {
+			mc := tt.mc
+			mc.BenchVersion = version
+			want := tt.v14
+			if version == protocol.BenchVersionV15 {
+				want = tt.v15
+			}
+			if got := Memory(mc, protocol.RunResponse{FinalText: tt.text}); got.Score != want {
+				t.Errorf("%s at v%d: scored %v, want %v (%v)", tt.name, version, got.Score, want, got.Notes)
+			}
+		}
+	}
+}

@@ -1318,6 +1318,29 @@ pins 1,536 historical composite replay vectors against source
 See [the separately gated rollout plan](../../../docs/benchmark-v14-rollout.md).
 Supporting v14 does not change Platform's active version or qualify a fleet.
 
+## Bench v15 grading policy (grader-only floor, no generation contract yet)
+
+`BenchVersionV15` exists only as a grading-policy floor, as v13 once did. It
+is not generatable, advertised or active, and it does not change any v2–v14
+generation or grading vector. The v15 generation contract (see
+[dueling-bench.md](dueling-bench.md)) inherits this policy when it lands.
+
+- **Case values are atomic** (`caseValuesAreAtomic`). Clause segmentation
+  reads every multi-word hidden value of a value or list case (expected,
+  accepted, list item, distractor) as one phrase. Below v15 the boundary word
+  `and` and openers such as `no` or `not` split a value that contains them, so
+  a correct `macaroni and cheese` (an xkcd accent colour in the v13+ corpus)
+  graded as the fragments `macaroni` and `cheese` and missed. An outer
+  rejection, hedge or distractor still applies ("not macaroni and cheese",
+  "either macaroni and cheese or pale brown").
+
+V14 keeps the split: it is the active immutable contract. In the frozen
+corpora, the reachable v14 values it affects are the accent `macaroni and
+cheese` (1 of 952 world seeds; its behaviour and acknowledgement cases) and,
+only as decoys, the fonts `Swanky and Moo Moo`, `Black And White Picture`,
+`Stick No Bills` and `Playwrite NO`. The audit bank is `v15-1`
+(`grade.AuditBankV15`).
+
 ## Auditing an old score
 
 Pin two things: the `bench_version` published with the score, and the **module

@@ -170,10 +170,21 @@ type gradingPolicy struct {
 	// percentClaims (v14) lets a quantity claim whose unit is a percentage
 	// read "15%" as "15 percent". Counts keep ignoring percentages.
 	percentClaims bool
+	// caseValuesAreAtomic (v15) reads every multi-word hidden value of a case
+	// (expected, accepted, list item, distractor) as one phrase when the reply
+	// is split into clauses. Below v15 the boundary word "and" and openers such
+	// as "no" or "not" split a value that contains them, so a correct
+	// "macaroni and cheese" scored as two fragments and missed. Outer
+	// rejection still applies: "not macaroni and cheese" stays rejected.
+	caseValuesAreAtomic bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
+	case benchVersion >= protocol.BenchVersionV15:
+		policy := gradingPolicyForVersion(protocol.BenchVersionV14)
+		policy.caseValuesAreAtomic = true
+		return policy
 	case benchVersion >= protocol.BenchVersionV14:
 		return gradingPolicy{
 			strictGenericKinds:           true,

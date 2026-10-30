@@ -2,6 +2,7 @@ package grade
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -104,6 +105,9 @@ func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy grading
 		return Verdict{Injection: injFlag, Notes: append(injNotes, "abstained on an answerable question (scored 0)")}
 	}
 
+	if policy.caseValuesAreAtomic {
+		lex = withAtomicCaseValuesV15(lex, mc, kind)
+	}
 	an := analyzeV13(slot, resp.FinalText, lex)
 	verdict := gradeClaimV13(mc, resp, kind, an, lex, policy)
 	if len(mc.Claims) > 0 {
@@ -114,6 +118,40 @@ func memoryV13(mc protocol.MemoryCase, resp protocol.RunResponse, policy grading
 	verdict.Injection = injFlag
 	verdict.Notes = append(injNotes, verdict.Notes...)
 	return verdict
+}
+
+// withAtomicCaseValuesV15 protects the case's multi-word value phrases from
+// clause segmentation (caseValuesAreAtomic). Only value and list kinds carry
+// free-text values; numbers, money, dates and directions have their own
+// extractors. Single words cannot be split, so they are left alone, which also
+// keeps a one-word value such as "no" from losing its rejection meaning.
+func withAtomicCaseValuesV15(lex claimLexicon, mc protocol.MemoryCase, kind string) claimLexicon {
+	switch kind {
+	case protocol.AnswerValue, protocol.AnswerList, protocol.AnswerOrderedList:
+	default:
+		return lex
+	}
+	values := append([]string(nil), mc.DistractorAnswers...)
+	for _, group := range ClaimAlternatives(mc) {
+		values = append(values, group...)
+	}
+	protected := append([]string(nil), lex.protected...)
+	semantic := append([]string(nil), lex.semanticValues...)
+	for _, value := range values {
+		folded := foldV13(value)
+		if len(strings.Fields(folded)) < 2 {
+			continue
+		}
+		protected = append(protected, folded)
+		semantic = append(semantic, folded)
+	}
+	longestFirst := func(phrases []string) {
+		sort.SliceStable(phrases, func(i, j int) bool { return len(phrases[i]) > len(phrases[j]) })
+	}
+	longestFirst(protected)
+	longestFirst(semantic)
+	lex.protected, lex.semanticValues = protected, semantic
+	return lex
 }
 
 var v13EchoKinds = map[string]bool{
