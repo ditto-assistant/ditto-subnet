@@ -27,12 +27,15 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import PROVISIONAL_INCUMBENT_PROTOCOL
 from ditto.api_models.emission_eligibility import (
     DEFAULT_SETTINGS,
+    STATE_REASONS,
     AdminAgentEmissionEligibilityResponse,
     AdminEmissionEligibilitySettingsRequest,
     AdminEmissionEligibilitySettingsResponse,
@@ -55,7 +58,7 @@ from ditto.api_server.emission_eligibility import (
     records_from_pin_context,
 )
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent, LedgerEpochSnapshot
+from ditto.db.models import Agent, LedgerEpochSnapshot, Score
 from ditto.db.models import (
     EmissionEligibilitySettingsRevision as RevisionRow,
 )
@@ -89,6 +92,7 @@ CONFIRMATION = "APPLY EMISSION ELIGIBILITY"
 every field here can change who is paid, not just ``enforcement``."""
 
 _SHADOW_PREVIEW_LIMIT = 50
+_SCORED_STATUSES = frozenset({AgentStatus.SCORED, AgentStatus.LIVE})
 
 
 def _revision(row: RevisionRow) -> EmissionEligibilitySettingsRevision:
@@ -346,6 +350,23 @@ async def get_agent_eligibility(
         ),
         now=now,
     )
+    if not pinned_member and (
+        agent.status not in _SCORED_STATUSES
+        or await session.scalar(
+            select(Score.agent_id).where(Score.agent_id == agent_id).limit(1)
+        )
+        is None
+    ):
+        # Wording only: the gate classifies an exact artifact as if it were a
+        # ledger row, and under ``off`` that is "eligible / earning" even for an
+        # upload that never scored. Nothing is paid or withheld here.
+        eligibility = eligibility.model_copy(
+            update={
+                "state": "not_scored",
+                "reason": STATE_REASONS["not_scored"],
+                "reward_eligible": False,
+            }
+        )
     shadow = await list_shadow_records(session, agent_id=agent_id, limit=shadow_limit)
     return AdminAgentEmissionEligibilityResponse(
         eligibility=eligibility,

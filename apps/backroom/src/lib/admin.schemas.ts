@@ -2211,6 +2211,7 @@ export const EMISSION_ELIGIBILITY_STATES = [
   'review_missing',
   'review_rejected',
   'awaiting_next_window',
+  'not_scored',
 ] as const
 
 // Deliberately not `z.enum`: Platform may add a withheld class before this

@@ -11722,7 +11722,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window";
+            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window" | "not_scored";
             /**
              * Window Start
              * Format: date-time
@@ -16048,7 +16048,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window";
+            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window" | "not_scored";
             /**
              * Window Start
              * Format: date-time
