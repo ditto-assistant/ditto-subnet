@@ -102,6 +102,8 @@ from scripts.generate_starter_provenance import (
     starter_files,
 )
 
+from .markers import non_root_only as _non_root_only
+
 SYSTEM_PROMPT = _l2_review_system_prompt(SCREENING_POLICY_VERSION)
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -3136,16 +3138,6 @@ async def test_inprocess_starter_diff_reads_only_runtime_manifests(
 async def test_inprocess_harness_rejects_unknown_command(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="non-allowlisted"):
         await InProcessAnalyzerHarness().run(tmp_path, "rm_rf", {})
-
-
-# IsolatedCodingHarness refuses uid 0 on its first line, so every test that
-# reaches its run() has to have a non-root worker. Containerised development
-# usually runs as root; skipping there reports the precondition instead of
-# failing on it, and CI runners are non-root so the coverage is unchanged.
-_non_root_only = pytest.mark.skipif(
-    os.getuid() == 0,
-    reason="the L2 analyzer harness refuses to run from a root worker",
-)
 
 
 @_non_root_only
