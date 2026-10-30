@@ -22,6 +22,7 @@ import json
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,6 +33,7 @@ from ditto.api_models.decision_lane import (
     DecisionLaneUsageWindow,
 )
 from ditto.api_models.inference_concurrency_settings import (
+    ADDITIVE_SETTINGS_FIELDS,
     AdminInferenceConcurrencySettingsRequest,
     AdminInferenceConcurrencySettingsResponse,
     EffectiveInferenceConcurrencySettings,
@@ -184,17 +186,26 @@ async def create_settings_revision(
             ),
         )
     settings = payload.settings
-    # Rolling-upgrade compatibility: an older Backroom knows the original
-    # hosted-inference fields but not these additive objects. Preserve the
-    # effective value rather than resetting an operator's case-concurrency,
-    # delay selection, or decision-lane pin to the shipped defaults.
-    preserved = {
-        field: getattr(settings_from_row(latest), field)
-        for field in ("benchmark_runtime", "decision_lane")
-        if field not in payload.settings.model_fields_set
-    }
-    if preserved:
-        settings = settings.model_copy(update=preserved)
+    omitted = ADDITIVE_SETTINGS_FIELDS - payload.settings.model_fields_set
+    if omitted:
+        # Rolling-upgrade compatibility: an older Backroom knows the original
+        # hosted-inference fields but not these additive ones (the v10
+        # runtime object, the decision-lane pin, the #3271 cost ceiling).
+        # Preserve the effective values rather than resetting an operator's
+        # selection to the shipped defaults. Re-validate the merged policy: a
+        # preserved ceiling mode is only coherent with a preserved ceiling.
+        effective = settings_from_row(latest)
+        merged = {
+            name: getattr(effective if name in omitted else settings, name)
+            for name in InferenceConcurrencySettings.model_fields
+        }
+        try:
+            settings = InferenceConcurrencySettings.model_validate(merged)
+        except ValidationError as error:
+            raise HTTPException(
+                status_code=422,
+                detail="; ".join(issue["msg"] for issue in error.errors()),
+            ) from error
     try:
         row = await insert_inference_concurrency_settings_revision(
             session,

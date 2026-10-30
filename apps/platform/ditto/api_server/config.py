@@ -188,6 +188,14 @@ class InferenceProxyConfig:
     decision_input_microusd_per_mtok: int = 0
     decision_request_budget: int = 0
     decision_token_budget: int = 0
+    run_cost_ceiling_microusd: int | None = None
+    """Per-run ledger-cost ceiling stamped on new grants (#3271); overlaid from
+    the inference concurrency board, never an env var."""
+    cost_ceiling_mode: str = "off"
+    """``off`` / ``shadow`` / ``enforce``; overlaid from the board."""
+    embedding_price_microusd_per_token: float = 0.004
+    """Embedding list price stamped on new grants: $0.004 per 1M input tokens,
+    the catalog price the proxy has always settled embeddings at."""
 
 
 @dataclass(frozen=True)

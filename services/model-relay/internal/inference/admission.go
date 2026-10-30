@@ -99,7 +99,10 @@ type beginParams struct {
 
 // beginResult is the successful admission: the LOCKED grant row (with the
 // in-transaction mutations applied to the in-memory copy) and the inserted
-// request row.
+// request row. On an AUTHENTICATED decline (past the bearer gate, and not the
+// deliberately anonymous 4100) beginInferenceRequest also returns a result
+// carrying only the locked grant, so the endpoint can attach the settled
+// ledger evidence (X-Ditto-Ledger-Cost-Microusd, #3271); request is zero.
 type beginResult struct {
 	grant   postgres.InferenceGrant
 	request postgres.InferenceRequest
@@ -124,7 +127,12 @@ func atCapacity(kind, scope string) relayhttp.Decline {
 // Lock order: validator_tickets (rank 1) -> inference_grants (rank 2) ->
 // inference_requests (rank 3). Never deviate.
 func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, p beginParams) (*beginResult, *relayhttp.Decline, error) {
+	var grant postgres.InferenceGrant
+	authenticated := false
 	decline := func(d relayhttp.Decline) (*beginResult, *relayhttp.Decline, error) {
+		if authenticated && d != relayhttp.DeclineUnattributed {
+			return &beginResult{grant: grant}, &d, nil
+		}
 		return nil, &d, nil
 	}
 	// Step 1: request-kind gate (no SQL).
@@ -154,7 +162,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	}
 	// Step 4: grant FOR UPDATE (lock rank 2). Every gate below uses ONLY
 	// this row's values (the populate_existing re-read equivalent).
-	grant, err := q.GetInferenceGrantForUpdate(ctx, pgUUID(p.grantID))
+	grant, err = q.GetInferenceGrantForUpdate(ctx, pgUUID(p.grantID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return decline(relayhttp.DeclineUnattributed)
@@ -166,6 +174,7 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if !grant.BearerDigest.Valid || !constantTimeEqual(grant.BearerDigest.String, bearerDigest(p.bearer)) {
 		return decline(relayhttp.DeclineUnattributed)
 	}
+	authenticated = true
 	// Step 6: lease expiry.
 	if !grant.ExpiresAt.Time.After(p.now) {
 		return decline(relayhttp.DeclineLeaseExpired)
@@ -196,6 +205,12 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if grant.Status != "active" {
 		switch grant.Status {
 		case "exhausted":
+			// The run's enforced cost ceiling is checked FIRST and answers
+			// on BOTH lanes (#3271): a run that spent its dollar allowance
+			// must not decay into the token or request wall on later calls.
+			if costCeilingEnforcedAndReached(&grant) {
+				return decline(relayhttp.DeclineCostCeilingExhausted)
+			}
 			if p.kind == kindChat && grant.PromptTokens+grant.CompletionTokens >= grant.TokenBudget {
 				return decline(relayhttp.DeclineTokenBudgetExhausted)
 			}
@@ -324,6 +339,32 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 			}
 		}
 		return decline(relayhttp.DeclineTokenBudgetExhausted)
+	}
+	// Step 13b: the run's cost ceiling (#3271), over EVERY lane, from settled
+	// ledger cost only: the call that crossed it was allowed to finish and is
+	// billed; this is the next one. Enforce declines 4110 and marks the grant
+	// exhausted (a write the decline rollback discards; the committed writer
+	// is the settle transaction, as for the token wall), so both lanes are
+	// refused after. Shadow admits and counts what enforce would have
+	// refused. Off mode or a null ceiling never enters this branch.
+	if costCeilingReached(&grant) {
+		if grant.CostCeilingMode == costCeilingModeEnforce {
+			if err := q.MarkInferenceGrantExhausted(ctx, postgres.MarkInferenceGrantExhaustedParams{
+				Now:     pgTime(p.now),
+				GrantID: pgUUID(p.grantID),
+			}); err != nil {
+				return nil, nil, err
+			}
+			return decline(relayhttp.DeclineCostCeilingExhausted)
+		}
+		if err := q.IncrementGrantCostCeilingWouldDecline(ctx, postgres.IncrementGrantCostCeilingWouldDeclineParams{
+			Now:     pgTime(p.now),
+			GrantID: pgUUID(p.grantID),
+		}); err != nil {
+			return nil, nil, err
+		}
+		grant.CostCeilingWouldDecline++
+		metrics.CostCeilingWouldDecline.WithLabelValues(p.kind).Inc()
 	}
 	// Step 14: exact per-ticket concurrency (protected by the grant row
 	// lock).

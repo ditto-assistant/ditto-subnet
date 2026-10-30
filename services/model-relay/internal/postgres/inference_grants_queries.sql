@@ -137,30 +137,47 @@ SET active_requests = sqlc.arg(active_requests)::integer,
     prompt_tokens = prompt_tokens + sqlc.arg(prompt_tokens)::bigint,
     completion_tokens = completion_tokens + sqlc.arg(completion_tokens)::bigint,
     cost_microusd = cost_microusd + sqlc.arg(cost_microusd)::bigint,
+    ledger_cost_microusd = ledger_cost_microusd + sqlc.arg(ledger_cost_microusd)::bigint,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 RETURNING *;
 
 -- name: ApplyGrantEmbeddingSettlement :one
--- Embedding-lane settle accounting. No exhaustion rule on this lane (killing
--- the grant would take the chat lane down with it).
+-- Embedding-lane settle accounting. No token exhaustion rule on this lane
+-- (killing the grant would take the chat lane down with it); only the run's
+-- enforced cost ceiling, applied by the caller, ends both lanes.
+-- ledger_cost_microusd is the lane-agnostic list-price total (#3271): any lane
+-- joins the cost ceiling purely by adding to it here.
 UPDATE inference_grants
 SET embedding_active_requests = sqlc.arg(embedding_active_requests)::integer,
     embedding_tokens = embedding_tokens + sqlc.arg(embedding_tokens)::bigint,
     embedding_cost_microusd = embedding_cost_microusd + sqlc.arg(embedding_cost_microusd)::bigint,
+    ledger_cost_microusd = ledger_cost_microusd + sqlc.arg(ledger_cost_microusd)::bigint,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 RETURNING *;
 
+-- name: IncrementGrantCostCeilingWouldDecline :exec
+-- Shadow-mode cost ceiling (#3271): one more admission that enforce mode
+-- would have declined with 4110. Runs inside the (committing) admission
+-- transaction of an admitted request, on the caller-locked grant row.
+UPDATE inference_grants
+SET cost_ceiling_would_decline = cost_ceiling_would_decline + 1,
+    updated_at = sqlc.arg(now)::timestamptz
+WHERE grant_id = sqlc.arg(grant_id)::uuid;
+
 -- name: ApplyGrantDecisionSettlement :one
 -- Decision-lane settle accounting. decision_cost_microusd is LEDGER cost
 -- (receipted input tokens x the grant-stamped price), never the provider
--- bill, so a per-run dollar ceiling can sum it with the other lanes. No
--- exhaustion rule: a spent decision wall must not take chat down with it.
+-- bill. The same figure is added to the lane-agnostic ledger_cost_microusd
+-- total the per-run cost ceiling (#3271) compares. No token/request exhaustion
+-- rule: a spent decision wall must not take chat down with it (only the run's
+-- enforced cost ceiling, applied by the caller, ends every lane).
 UPDATE inference_grants
 SET decision_active_requests = sqlc.arg(decision_active_requests)::integer,
     decision_tokens = decision_tokens + sqlc.arg(decision_tokens)::bigint,
     decision_cost_microusd = decision_cost_microusd + sqlc.arg(decision_cost_microusd)::bigint,
+    ledger_cost_microusd = ledger_cost_microusd + sqlc.arg(ledger_cost_microusd)::bigint,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 RETURNING *;

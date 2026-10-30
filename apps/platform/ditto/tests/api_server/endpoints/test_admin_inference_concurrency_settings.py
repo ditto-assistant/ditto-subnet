@@ -166,6 +166,79 @@ class TestWrite:
         assert legacy.json()["settings"]["benchmark_runtime"] == runtime
         assert legacy.json()["settings"]["decision_lane"] == decision_lane
 
+    async def test_cost_ceiling_round_trips_with_actor_and_reason(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        created = await client.post(
+            _URL,
+            json=_payload(
+                run_cost_ceiling_microusd=5_000_000,
+                cost_ceiling_mode="shadow",
+                case_cost_report_microusd=50_000,
+            ),
+            headers=_HEADERS,
+        )
+        assert created.status_code == 200, created.text
+        revision = created.json()
+        assert revision["actor"] == "backroom:test"
+        assert revision["reason"].startswith("widen the hosted")
+        assert revision["settings"]["run_cost_ceiling_microusd"] == 5_000_000
+        assert revision["settings"]["cost_ceiling_mode"] == "shadow"
+        assert revision["settings"]["case_cost_report_microusd"] == 50_000
+        body = (await client.get(_URL, headers=_HEADERS)).json()
+        assert body["effective"]["settings"]["cost_ceiling_mode"] == "shadow"
+        assert body["default"]["cost_ceiling_mode"] == "off"
+        assert body["default"]["run_cost_ceiling_microusd"] is None
+
+    async def test_cost_ceiling_bounds_are_enforced_on_write(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        for overrides in (
+            {"run_cost_ceiling_microusd": 0},
+            {"cost_ceiling_mode": "enforce"},  # a live mode with no ceiling
+            {"run_cost_ceiling_microusd": 10, "cost_ceiling_mode": "panic"},
+        ):
+            response = await client.post(
+                _URL, json=_payload(**overrides), headers=_HEADERS
+            )
+            assert response.status_code == 422, (overrides, response.text)
+
+    async def test_legacy_write_preserves_the_cost_ceiling(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        first = await client.post(
+            _URL,
+            json=_payload(
+                run_cost_ceiling_microusd=5_000_000, cost_ceiling_mode="enforce"
+            ),
+            headers=_HEADERS,
+        )
+        assert first.status_code == 200, first.text
+        # A Backroom that predates #3271 sends neither field; the live ceiling
+        # must survive its write instead of resetting to off.
+        legacy = await client.post(
+            _URL,
+            json=_payload(expected_revision=1, embedding_per_ticket_concurrency=10),
+            headers=_HEADERS,
+        )
+        assert legacy.status_code == 200, legacy.text
+        settings = legacy.json()["settings"]
+        assert settings["run_cost_ceiling_microusd"] == 5_000_000
+        assert settings["cost_ceiling_mode"] == "enforce"
+        assert settings["embedding_per_ticket_concurrency"] == 10
+
     async def test_wrong_confirmation_is_refused(
         self,
         app: FastAPI,

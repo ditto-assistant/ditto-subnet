@@ -129,6 +129,17 @@ INFERENCE_ADMISSION_AT_CAPACITY = Counter(
     ("lane", "scope"),
 )
 
+# Shadow-mode cost ceiling (#3271): admissions ``enforce`` would have declined
+# with 4110 because settled ledger cost already met the grant's stamped
+# ceiling. The grant row keeps the per-run count
+# (``inference_grants.cost_ceiling_would_decline``); this is the fleet rate the
+# operator watches before switching to ``enforce``.
+INFERENCE_COST_CEILING_WOULD_DECLINE = Counter(
+    "ditto_inference_cost_ceiling_would_decline_total",
+    "Hosted-inference admissions a shadow cost ceiling would have declined, by lane.",
+    ("lane",),
+)
+
 # Fires on every 429 from the opt-in per-client-IP limit on unauthenticated
 # routes (``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE``). ``route`` is the limited
 # router -- ``upload``, ``retrieval``, ``public``, or ``cla`` -- a closed set.

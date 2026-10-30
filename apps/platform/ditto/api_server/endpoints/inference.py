@@ -53,7 +53,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any, cast
 from uuid import UUID
 
 import httpx
@@ -65,6 +65,7 @@ from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.inference_concurrency_settings import CostCeilingMode
 from ditto.api_server.endpoints.validator import (
     ChainDep,
     SessionDep,
@@ -90,7 +91,9 @@ from ditto.db.queries.inference import (
     InferenceDecline,
     activate_inference_grant,
     begin_inference_request,
+    cost_ceiling_active,
     finish_inference_request,
+    ledger_cost_headers,
 )
 from ditto.db.queries.inference_admission import (
     record_inference_admission_rejection,
@@ -192,10 +195,19 @@ class InferenceDeclinedError(Exception):
     importing it back into an endpoint would close an import cycle.
     """
 
-    def __init__(self, decline: InferenceDecline, *, lane: str) -> None:
+    def __init__(
+        self,
+        decline: InferenceDecline,
+        *,
+        lane: str,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(f"{lane} inference declined: {decline}")
         self.decline = decline
         self.lane = lane
+        # Authenticated terminal declines on a grant with a live cost ceiling
+        # carry ``X-Ditto-Ledger-Cost-Microusd`` (#3271); empty otherwise.
+        self.headers = headers or {}
 
 
 @dataclass(frozen=True)
@@ -1708,6 +1720,14 @@ async def exchange_inference_grant(
         grant.embedding_token_budget
     )
     response.headers["X-Ditto-Max-Output-Tokens"] = str(config.max_output_tokens)
+    # The run's cost ceiling (#3271), only when one is stamped and live, so an
+    # off-mode exchange is byte-identical to today's.
+    ceiling_live = cost_ceiling_active(grant)
+    if ceiling_live:
+        response.headers["X-Ditto-Cost-Ceiling-Microusd"] = str(
+            grant.cost_ceiling_microusd
+        )
+        response.headers["X-Ditto-Cost-Ceiling-Mode"] = grant.cost_ceiling_mode
     return InferenceExchangeResponse(
         grant_id=grant.grant_id,
         bearer=bearer,
@@ -1729,7 +1749,24 @@ async def exchange_inference_grant(
         decision_token_budget=(
             grant.decision_token_budget if grant.decision_model else None
         ),
+        cost_ceiling_microusd=grant.cost_ceiling_microusd if ceiling_live else None,
+        cost_ceiling_mode=(
+            cast("CostCeilingMode", grant.cost_ceiling_mode) if ceiling_live else None
+        ),
     )
+
+
+def _decline_headers(decline: InferenceDecline, grant: Any) -> dict[str, str]:
+    """Ledger evidence for an authenticated decline (#3271).
+
+    ``UNATTRIBUTED`` is the pre-authentication refusal and must reveal nothing
+    about the grant. Every other decline was reached by a caller holding the
+    bearer, and ``grant`` is the identity-mapped row the admission lock
+    refreshed, so its ledger total is the current settled figure.
+    """
+    if decline is InferenceDecline.UNATTRIBUTED:
+        return {}
+    return ledger_cost_headers(grant)
 
 
 async def _remember_admission_rejection(
@@ -1942,7 +1979,9 @@ async def proxy_chat_completions(
         # here was a spent token budget, which reached the broker as 4100 and
         # was retried until the run died with hours left on the lease.
         if isinstance(reserved, InferenceDecline):
-            raise InferenceDeclinedError(reserved, lane="inference")
+            raise InferenceDeclinedError(
+                reserved, lane="inference", headers=_decline_headers(reserved, grant)
+            )
 
     reserved_grant = reserved[0]
     upstream_payload = _locked_upstream_payload(
@@ -2025,6 +2064,7 @@ async def proxy_chat_completions(
             from ditto.db.models import InferenceGrant
 
             observed_grant = await session.get(InferenceGrant, x_ditto_grant)
+            ledger_headers = ledger_cost_headers(observed_grant)
             if observed_grant is not None and route_observable:
                 await record_route_observation(
                     session,
@@ -2037,12 +2077,16 @@ async def proxy_chat_completions(
                     now=finished_at,
                 )
     if not deliverable or raw is None:
-        raise HTTPException(status_code=409, detail="inference grant is no longer live")
+        raise HTTPException(
+            status_code=409,
+            detail="inference grant is no longer live",
+            headers=ledger_headers or None,
+        )
     return Response(
         content=raw,
         status_code=200,
         media_type="application/json",
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", **ledger_headers},
     )
 
 
@@ -2191,7 +2235,9 @@ async def proxy_embeddings(
         # a fleet that has not learned about backpressure still backs off and
         # survives. Every other refusal now carries its own code as well.
         if isinstance(reserved, InferenceDecline):
-            raise InferenceDeclinedError(reserved, lane="embedding")
+            raise InferenceDeclinedError(
+                reserved, lane="embedding", headers=_decline_headers(reserved, grant)
+            )
 
     status = "failed"
     prompt_tokens = 0
@@ -2271,9 +2317,12 @@ async def proxy_embeddings(
                 status=status,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
-                # Catalog price is $0.004 / 1M input tokens. Provider-reported
+                # The grant-stamped catalog price ($0.004 / 1M input tokens
+                # unless an operator stamped otherwise). Provider-reported
                 # direct cost is intentionally not trusted.
-                cost_microusd=round(prompt_tokens * 0.004),
+                cost_microusd=round(
+                    prompt_tokens * reserved[0].embedding_price_microusd_per_token
+                ),
                 usage_available=status == "completed",
                 now=finished_at,
                 upstream_provider=config.embedding_provider,
@@ -2282,13 +2331,20 @@ async def proxy_embeddings(
                 upstream_attempts=upstream_attempts,
                 terminal_error_code=terminal_error_code,
             )
+            ledger_headers = ledger_cost_headers(
+                await session.get(InferenceGrant, x_ditto_grant)
+            )
     if not deliverable or raw is None:
-        raise HTTPException(status_code=409, detail="embedding grant is no longer live")
+        raise HTTPException(
+            status_code=409,
+            detail="embedding grant is no longer live",
+            headers=ledger_headers or None,
+        )
     return Response(
         content=raw,
         status_code=200,
         media_type="application/json",
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", **ledger_headers},
     )
 
 

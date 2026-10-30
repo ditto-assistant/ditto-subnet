@@ -77,7 +77,8 @@ def apply_settings(
     503 as concurrency, and leaving them boot-time is what made 8-wide runs
     look like a saturated lane.
 
-    ``request_budget`` and ``token_budget`` are overlaid here too, but note where
+    ``request_budget``, ``token_budget`` and the #3271 cost ceiling and mode are
+    overlaid here too, but note where
     they are *consumed*: the grant-minting path (``ensure_inference_grant``)
     stamps both onto the new grant's row. The admission path compares against
     ``grant.request_budget`` and ``grant.token_budget``, the stamped columns, and
@@ -111,6 +112,8 @@ def apply_settings(
             settings.embedding_global_requests_per_minute
         ),
         **_decision_stamps(settings),
+        run_cost_ceiling_microusd=settings.run_cost_ceiling_microusd,
+        cost_ceiling_mode=settings.cost_ceiling_mode,
     )
 
 

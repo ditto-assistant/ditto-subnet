@@ -42,11 +42,12 @@ FOR UPDATE;
 -- name: CancelInferenceRequestChargingReservation :exec
 -- Reclamation write: cancel a (locked) started request without booking the
 -- reservation estimate. Token spend is receipted provider usage only; a stale
--- or rotated call that never settled charges zero. The request still counts
--- against the request-count budget.
+-- or rotated call that never settled charges zero, and so does its ledger
+-- cost (#3271). The request still counts against the request-count budget.
 UPDATE inference_requests
 SET status = 'canceled',
     prompt_tokens = 0,
+    ledger_cost_microusd = 0,
     completed_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
   AND nonce = sqlc.arg(nonce)::uuid;
@@ -137,6 +138,7 @@ SET status = sqlc.arg(status)::text,
     prompt_tokens = sqlc.arg(prompt_tokens)::bigint,
     completion_tokens = sqlc.arg(completion_tokens)::bigint,
     cost_microusd = sqlc.arg(cost_microusd)::bigint,
+    ledger_cost_microusd = sqlc.arg(ledger_cost_microusd)::bigint,
     upstream_provider = sqlc.narg(upstream_provider)::text,
     upstream_attempts = sqlc.arg(upstream_attempts)::integer,
     openrouter_attempts = sqlc.arg(openrouter_attempts)::integer,

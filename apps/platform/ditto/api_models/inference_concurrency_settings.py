@@ -155,6 +155,28 @@ DEFAULT_CHAT_TOKEN_BUDGET = 25_000_000
 # board accepts can never be a value the next restart rejects.
 MAX_CHAT_TOKEN_BUDGET = 200_000_000
 
+# The per-run cost ceiling (#3271), in ledger micro-USD: receipted units times
+# the list prices stamped on the grant, summed over every lane. ``None`` means
+# no ceiling. The hard bound is $1,000 per run -- two orders of magnitude above
+# a 200M-token chat run at today's list prices -- so a typo cannot disarm the
+# guard by accident while the operator still sizes the live value from the
+# ledger-cost distribution.
+MAX_RUN_COST_CEILING_MICROUSD = 1_000_000_000
+COST_CEILING_MODES = ("off", "shadow", "enforce")
+CostCeilingMode = Literal["off", "shadow", "enforce"]
+# Fields added after the whole-object board shipped. A pre-upgrade Backroom
+# may omit them; the write endpoint preserves their current values instead of
+# resetting them to the defaults.
+ADDITIVE_SETTINGS_FIELDS = frozenset(
+    (
+        "benchmark_runtime",
+        "decision_lane",
+        "run_cost_ceiling_microusd",
+        "cost_ceiling_mode",
+        "case_cost_report_microusd",
+    )
+)
+
 DEFAULT_BENCHMARK_CASE_CONCURRENCY = 4
 MAX_BENCHMARK_CASE_CONCURRENCY = 64
 DEFAULT_RELAY_DELAY_FINGERPRINT_MIN_MS = 25
@@ -443,9 +465,53 @@ class InferenceConcurrencySettings(BaseModel):
 
     decision_lane: DecisionLaneSettings = Field(default_factory=DecisionLaneSettings)
     """The dark decision-model lane: pin, price, walls and rails. Off by default."""
+    run_cost_ceiling_microusd: (
+        Annotated[int, Field(ge=1, le=MAX_RUN_COST_CEILING_MICROUSD)] | None
+    ) = None
+    """Ledger cost, in micro-USD, one scoring run's grant may settle (#3271).
+
+    Ledger cost is receipted units times the list prices stamped on the grant
+    at mint -- chat prompt/completion and embedding alike -- never the
+    provider bill, so routing and aggregator cost reports cannot move it.
+    ``None`` means no ceiling. Stamped onto the grant at mint like the chat
+    budgets, so a revision changes only the next lease.
+    """
+
+    cost_ceiling_mode: CostCeilingMode = "off"
+    """``off`` (default): no admission effect. ``shadow``: admit, but count
+    every admission ``enforce`` would decline on the grant and in metrics.
+    ``enforce``: the first admission after settled ledger cost reaches the
+    ceiling is declined with 4110 and the grant is exhausted on both lanes.
+
+    Rollout order: ship the 4110-aware scorer first, run ``shadow`` until the
+    validator fleet runs it, then ``enforce``. An old broker treats an unknown
+    4110 as platform fault and re-leases the run indefinitely.
+    """
+
+    case_cost_report_microusd: (
+        Annotated[int, Field(ge=1, le=MAX_RUN_COST_CEILING_MICROUSD)] | None
+    ) = None
+    """Report-only per-case ledger-cost threshold. Never an admission input:
+    case attribution is an advisory claim from the scorer."""
 
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
+        if self.cost_ceiling_mode != "off" and self.run_cost_ceiling_microusd is None:
+            raise ValueError(
+                f"cost_ceiling_mode {self.cost_ceiling_mode!r} needs "
+                "run_cost_ceiling_microusd: a mode with no ceiling would read "
+                "as protected while bounding nothing"
+            )
+        if (
+            self.case_cost_report_microusd is not None
+            and self.run_cost_ceiling_microusd is not None
+            and self.case_cost_report_microusd > self.run_cost_ceiling_microusd
+        ):
+            raise ValueError(
+                "case_cost_report_microusd "
+                f"({self.case_cost_report_microusd}) may not exceed "
+                f"run_cost_ceiling_microusd ({self.run_cost_ceiling_microusd})"
+            )
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
             raise ValueError(
                 "chat_per_ticket_concurrency "
@@ -568,13 +634,13 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         changed one number. ``expected_revision`` cannot catch that -- they hold
         the current revision, they just under-specified the body.
         """
-        # ``benchmark_runtime`` and ``decision_lane`` were added after this
-        # whole-object board shipped. A pre-upgrade Backroom may omit only those
-        # additive objects; the endpoint preserves their current values instead
-        # of resetting them.
+        # ``benchmark_runtime``, ``decision_lane`` and the cost-ceiling fields
+        # were added after this whole-object board shipped. A pre-upgrade
+        # Backroom may omit only those additive fields; the endpoint preserves
+        # their current values instead of resetting them.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
-            - {"benchmark_runtime", "decision_lane"}
+            - ADDITIVE_SETTINGS_FIELDS
             - self.settings.model_fields_set
         )
         if missing:

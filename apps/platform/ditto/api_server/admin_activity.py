@@ -90,6 +90,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
         frozenset(
             (
                 "benchmark_runtime",
+                "case_cost_report_microusd",
                 "chat_global_concurrency",
                 "chat_global_requests_per_minute",
                 "chat_per_ticket_concurrency",
@@ -98,6 +99,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "chat_per_validator_requests_per_minute",
                 "chat_request_budget",
                 "chat_token_budget",
+                "cost_ceiling_mode",
                 "decision_lane",
                 "embedding_global_concurrency",
                 "embedding_global_requests_per_minute",
@@ -105,6 +107,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "embedding_per_ticket_requests_per_minute",
                 "embedding_per_validator_concurrency",
                 "embedding_per_validator_requests_per_minute",
+                "run_cost_ceiling_microusd",
             )
         ),
     ),

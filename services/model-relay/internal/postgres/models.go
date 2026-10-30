@@ -251,51 +251,58 @@ type InferenceConcurrencySettingsRevision struct {
 }
 
 type InferenceGrant struct {
-	GrantID                      pgtype.UUID        `json:"grantId"`
-	AgentID                      pgtype.UUID        `json:"agentId"`
-	BenchVersion                 int32              `json:"benchVersion"`
-	ValidatorHotkey              string             `json:"validatorHotkey"`
-	SlotID                       string             `json:"slotId"`
-	TicketDeadline               pgtype.Timestamptz `json:"ticketDeadline"`
-	Status                       string             `json:"status"`
-	BearerDigest                 pgtype.Text        `json:"bearerDigest"`
-	BrokerPublicKey              pgtype.Text        `json:"brokerPublicKey"`
-	Generation                   int32              `json:"generation"`
-	AllowedModels                []byte             `json:"allowedModels"`
-	RequestBudget                int32              `json:"requestBudget"`
-	TokenBudget                  int64              `json:"tokenBudget"`
-	RequestCount                 int32              `json:"requestCount"`
-	PromptTokens                 int64              `json:"promptTokens"`
-	CompletionTokens             int64              `json:"completionTokens"`
-	CostMicrousd                 int64              `json:"costMicrousd"`
-	ActiveRequests               int32              `json:"activeRequests"`
-	ExpiresAt                    pgtype.Timestamptz `json:"expiresAt"`
-	CreatedAt                    pgtype.Timestamptz `json:"createdAt"`
-	UpdatedAt                    pgtype.Timestamptz `json:"updatedAt"`
-	RouteProvider                pgtype.Text        `json:"routeProvider"`
-	RouteProfile                 pgtype.Text        `json:"routeProfile"`
-	RouteQuantization            pgtype.Text        `json:"routeQuantization"`
-	RoutePromptPricePerToken     pgtype.Float8      `json:"routePromptPricePerToken"`
-	RouteCompletionPricePerToken pgtype.Float8      `json:"routeCompletionPricePerToken"`
-	EmbeddingModel               string             `json:"embeddingModel"`
-	EmbeddingProfile             string             `json:"embeddingProfile"`
-	EmbeddingProvider            string             `json:"embeddingProvider"`
-	EmbeddingDimensions          int32              `json:"embeddingDimensions"`
-	EmbeddingRequestBudget       int32              `json:"embeddingRequestBudget"`
-	EmbeddingTokenBudget         int64              `json:"embeddingTokenBudget"`
-	EmbeddingRequestCount        int32              `json:"embeddingRequestCount"`
-	EmbeddingTokens              int64              `json:"embeddingTokens"`
-	EmbeddingCostMicrousd        int64              `json:"embeddingCostMicrousd"`
-	EmbeddingActiveRequests      int32              `json:"embeddingActiveRequests"`
-	UsageAccountingVersion       int32              `json:"usageAccountingVersion"`
-	DecisionModel                pgtype.Text        `json:"decisionModel"`
-	DecisionInputMicrousdPerMtok int64              `json:"decisionInputMicrousdPerMtok"`
-	DecisionRequestBudget        int32              `json:"decisionRequestBudget"`
-	DecisionTokenBudget          int64              `json:"decisionTokenBudget"`
-	DecisionRequestCount         int32              `json:"decisionRequestCount"`
-	DecisionTokens               int64              `json:"decisionTokens"`
-	DecisionCostMicrousd         int64              `json:"decisionCostMicrousd"`
-	DecisionActiveRequests       int32              `json:"decisionActiveRequests"`
+	GrantID                        pgtype.UUID        `json:"grantId"`
+	AgentID                        pgtype.UUID        `json:"agentId"`
+	BenchVersion                   int32              `json:"benchVersion"`
+	ValidatorHotkey                string             `json:"validatorHotkey"`
+	SlotID                         string             `json:"slotId"`
+	TicketDeadline                 pgtype.Timestamptz `json:"ticketDeadline"`
+	Status                         string             `json:"status"`
+	BearerDigest                   pgtype.Text        `json:"bearerDigest"`
+	BrokerPublicKey                pgtype.Text        `json:"brokerPublicKey"`
+	Generation                     int32              `json:"generation"`
+	AllowedModels                  []byte             `json:"allowedModels"`
+	RequestBudget                  int32              `json:"requestBudget"`
+	TokenBudget                    int64              `json:"tokenBudget"`
+	RequestCount                   int32              `json:"requestCount"`
+	PromptTokens                   int64              `json:"promptTokens"`
+	CompletionTokens               int64              `json:"completionTokens"`
+	CostMicrousd                   int64              `json:"costMicrousd"`
+	ActiveRequests                 int32              `json:"activeRequests"`
+	ExpiresAt                      pgtype.Timestamptz `json:"expiresAt"`
+	CreatedAt                      pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt                      pgtype.Timestamptz `json:"updatedAt"`
+	RouteProvider                  pgtype.Text        `json:"routeProvider"`
+	RouteProfile                   pgtype.Text        `json:"routeProfile"`
+	RouteQuantization              pgtype.Text        `json:"routeQuantization"`
+	RoutePromptPricePerToken       pgtype.Float8      `json:"routePromptPricePerToken"`
+	RouteCompletionPricePerToken   pgtype.Float8      `json:"routeCompletionPricePerToken"`
+	EmbeddingModel                 string             `json:"embeddingModel"`
+	EmbeddingProfile               string             `json:"embeddingProfile"`
+	EmbeddingProvider              string             `json:"embeddingProvider"`
+	EmbeddingDimensions            int32              `json:"embeddingDimensions"`
+	EmbeddingRequestBudget         int32              `json:"embeddingRequestBudget"`
+	EmbeddingTokenBudget           int64              `json:"embeddingTokenBudget"`
+	EmbeddingRequestCount          int32              `json:"embeddingRequestCount"`
+	EmbeddingTokens                int64              `json:"embeddingTokens"`
+	EmbeddingCostMicrousd          int64              `json:"embeddingCostMicrousd"`
+	EmbeddingActiveRequests        int32              `json:"embeddingActiveRequests"`
+	UsageAccountingVersion         int32              `json:"usageAccountingVersion"`
+	DecisionModel                  pgtype.Text        `json:"decisionModel"`
+	DecisionInputMicrousdPerMtok   int64              `json:"decisionInputMicrousdPerMtok"`
+	DecisionRequestBudget          int32              `json:"decisionRequestBudget"`
+	DecisionTokenBudget            int64              `json:"decisionTokenBudget"`
+	DecisionRequestCount           int32              `json:"decisionRequestCount"`
+	DecisionTokens                 int64              `json:"decisionTokens"`
+	DecisionCostMicrousd           int64              `json:"decisionCostMicrousd"`
+	DecisionActiveRequests         int32              `json:"decisionActiveRequests"`
+	LedgerCostMicrousd             int64              `json:"ledgerCostMicrousd"`
+	CostCeilingMicrousd            pgtype.Int8        `json:"costCeilingMicrousd"`
+	CostCeilingMode                string             `json:"costCeilingMode"`
+	CostCeilingWouldDecline        int64              `json:"costCeilingWouldDecline"`
+	LedgerPromptPricePerToken      pgtype.Float8      `json:"ledgerPromptPricePerToken"`
+	LedgerCompletionPricePerToken  pgtype.Float8      `json:"ledgerCompletionPricePerToken"`
+	EmbeddingPriceMicrousdPerToken float64            `json:"embeddingPriceMicrousdPerToken"`
 }
 
 type InferenceProviderRoute struct {
@@ -352,6 +359,7 @@ type InferenceRequest struct {
 	OpenrouterAttempts  int32              `json:"openrouterAttempts"`
 	FallbackPhase       int32              `json:"fallbackPhase"`
 	TerminalErrorCode   pgtype.Text        `json:"terminalErrorCode"`
+	LedgerCostMicrousd  int64              `json:"ledgerCostMicrousd"`
 }
 
 type InferenceRoutingPolicy struct {

@@ -8018,6 +8018,39 @@ class InferenceGrant(Base):
     active_requests: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    ledger_cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    """Settled list-price cost over every lane (#3271).
+
+    Receipted units times the prices stamped on this grant, summed at
+    settlement. Never the provider bill (``cost_microusd`` /
+    ``embedding_cost_microusd`` stay that), so provider routing, aggregator
+    cost reports and cache hits cannot change what a run is charged. A future
+    lane joins the run's cost ceiling purely by adding to this column.
+    """
+    cost_ceiling_microusd: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    """Per-run ledger-cost ceiling stamped at mint; ``NULL`` means none."""
+    cost_ceiling_mode: Mapped[str] = mapped_column(
+        Text, nullable=False, default="off", server_default=text("'off'")
+    )
+    """``off`` / ``shadow`` / ``enforce``, stamped at mint with the ceiling."""
+    cost_ceiling_would_decline: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    """Shadow-mode admissions that ``enforce`` would have declined."""
+    ledger_prompt_price_per_token: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    """Stamped chat prompt list price, USD per token (the route_* unit)."""
+    ledger_completion_price_per_token: Mapped[float | None] = mapped_column(
+        Float, nullable=True
+    )
+    """Stamped chat completion list price, USD per token."""
+    embedding_price_microusd_per_token: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.004, server_default=text("0.004")
+    )
+    """Stamped embedding list price, micro-USD per input token ($0.004/1M)."""
     usage_accounting_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=2, server_default=text("1")
     )
@@ -8101,6 +8134,22 @@ class InferenceGrant(Base):
             "AND (decision_model IS NULL OR "
             "(decision_request_budget > 0 AND decision_token_budget > 0))",
             name="inference_grants_decision_accounting",
+        ),
+        CheckConstraint(
+            "cost_ceiling_mode IN ('off', 'shadow', 'enforce')",
+            name="inference_grants_cost_ceiling_mode",
+        ),
+        CheckConstraint(
+            "cost_ceiling_microusd IS NULL OR cost_ceiling_microusd > 0",
+            name="inference_grants_cost_ceiling_microusd",
+        ),
+        CheckConstraint(
+            "ledger_cost_microusd >= 0",
+            name="inference_grants_ledger_cost_microusd",
+        ),
+        CheckConstraint(
+            "embedding_price_microusd_per_token >= 0",
+            name="inference_grants_embedding_price",
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
     )
@@ -8428,6 +8477,10 @@ class InferenceRequest(Base):
         BigInteger, nullable=False, default=0
     )
     cost_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    ledger_cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    """This request's list-price cost, booked at settlement (#3271)."""
     upstream_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
     upstream_attempts: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -8465,6 +8518,10 @@ class InferenceRequest(Base):
             "reserved_tokens > 0", name="inference_requests_reserved_tokens"
         ),
         CheckConstraint("generation > 0", name="inference_requests_generation"),
+        CheckConstraint(
+            "ledger_cost_microusd >= 0",
+            name="inference_requests_ledger_cost_microusd",
+        ),
         CheckConstraint(
             "upstream_attempts >= 0", name="inference_requests_upstream_attempts"
         ),

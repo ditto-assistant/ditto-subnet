@@ -3,20 +3,34 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import secrets
+import statistics
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ditto.api_models.ticket_status import TicketStatus
-from ditto.api_server.inference_routing import benchmark_model, select_route
-from ditto.db.models import InferenceGrant, InferenceRequest, ValidatorTicket
-from ditto.metrics import INFERENCE_ADMISSION_AT_CAPACITY
+from ditto.api_server.inference_routing import (
+    AGGREGATE_PROVIDER,
+    benchmark_model,
+    select_route,
+)
+from ditto.db.models import (
+    InferenceGrant,
+    InferenceProviderRoute,
+    InferenceRequest,
+    ValidatorTicket,
+)
+from ditto.metrics import (
+    INFERENCE_ADMISSION_AT_CAPACITY,
+    INFERENCE_COST_CEILING_WOULD_DECLINE,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,6 +55,7 @@ def _cancel_unsettled_request(request: InferenceRequest, now: datetime) -> None:
     """
     request.status = "canceled"
     request.prompt_tokens = 0
+    request.ledger_cost_microusd = 0
     request.completed_at = now
 
 
@@ -62,6 +77,152 @@ def _decision_grant_stamps(
         "decision_request_budget": config.decision_request_budget,
         "decision_token_budget": config.decision_token_budget,
     }
+
+
+COST_CEILING_ACTIVE_MODES = frozenset(("shadow", "enforce"))
+"""Cost-ceiling modes that have any effect. ``off`` is byte-identical to a
+grant minted before the ceiling existed."""
+
+_MAX_LEDGER_COST_MICROUSD = 1 << 53
+"""Per-request ledger clamp: the largest integer a float carries exactly."""
+
+
+def cost_ceiling_active(grant: InferenceGrant) -> bool:
+    """Does this grant carry a stamped ceiling that admission must consult?"""
+    return (
+        grant.cost_ceiling_microusd is not None
+        and grant.cost_ceiling_mode in COST_CEILING_ACTIVE_MODES
+    )
+
+
+def cost_ceiling_reached(grant: InferenceGrant) -> bool:
+    """Settled ledger cost is at or past an active stamped ceiling."""
+    return (
+        cost_ceiling_active(grant)
+        and grant.cost_ceiling_microusd is not None
+        and int(grant.ledger_cost_microusd or 0) >= grant.cost_ceiling_microusd
+    )
+
+
+def cost_ceiling_enforced_and_reached(grant: InferenceGrant) -> bool:
+    return grant.cost_ceiling_mode == "enforce" and cost_ceiling_reached(grant)
+
+
+def ledger_cost_headers(grant: InferenceGrant | None) -> dict[str, str]:
+    """``X-Ditto-Ledger-Cost-Microusd`` for a grant with an active ceiling.
+
+    Empty otherwise, so ``off`` mode and a null ceiling stay byte-identical.
+    """
+    if grant is None or not cost_ceiling_active(grant):
+        return {}
+    return {"X-Ditto-Ledger-Cost-Microusd": str(int(grant.ledger_cost_microusd or 0))}
+
+
+def _finite_price(value: float | None) -> float | None:
+    if value is None or not math.isfinite(value) or value < 0:
+        return None
+    return float(value)
+
+
+def _clamp_ledger(value: float) -> int:
+    if not math.isfinite(value) or value <= 0:
+        return 0
+    return min(_MAX_LEDGER_COST_MICROUSD, round(value))
+
+
+def ledger_cost_microusd(
+    grant: InferenceGrant,
+    *,
+    request_kind: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    provider_cost_microusd: int,
+) -> int:
+    """Receipted units times the grant-stamped list price (#3271).
+
+    The caller passes the *settled* (already clamped) token counts. Chat uses
+    the stamped ledger prompt/completion prices (USD per token); a grant with
+    no stamped chat price -- nothing was priced at mint -- falls back to the
+    provider bill so the ceiling still binds. Embeddings use the stamped
+    micro-USD price, which with the shipped 0.004 is exactly the catalog
+    figure the proxy has always booked. Rounds half-to-even like the
+    embedding settle always has.
+    """
+    if request_kind == "decision":
+        # Decision lane (#3273): integer micro-USD per million input tokens,
+        # output unbilled. Exact integer arithmetic, half-to-even. The decision
+        # settle must add this to ``ledger_cost_microusd`` as well as to
+        # ``decision_cost_microusd`` for the run's ceiling to see it.
+        price_per_mtok = max(0, int(grant.decision_input_microusd_per_mtok or 0))
+        quotient, remainder = divmod(max(0, prompt_tokens) * price_per_mtok, 1_000_000)
+        if remainder * 2 > 1_000_000 or (
+            remainder * 2 == 1_000_000 and quotient % 2 == 1
+        ):
+            quotient += 1
+        return min(_MAX_LEDGER_COST_MICROUSD, quotient)
+    if request_kind == "embedding":
+        price = _finite_price(grant.embedding_price_microusd_per_token)
+        if price is None:
+            return 0
+        return _clamp_ledger(max(0, prompt_tokens) * price)
+    prompt_price = _finite_price(grant.ledger_prompt_price_per_token)
+    completion_price = _finite_price(grant.ledger_completion_price_per_token)
+    if prompt_price is None or completion_price is None:
+        return min(_MAX_LEDGER_COST_MICROUSD, max(0, provider_cost_microusd))
+    return _clamp_ledger(
+        (
+            max(0, prompt_tokens) * prompt_price
+            + max(0, completion_tokens) * completion_price
+        )
+        * 1_000_000
+    )
+
+
+async def _ledger_list_prices(
+    session: AsyncSession,
+    *,
+    model: str,
+    route_prompt_price_per_token: float | None,
+    route_completion_price_per_token: float | None,
+) -> tuple[float | None, float | None]:
+    """The chat list prices a new grant's ledger is booked at.
+
+    A priced (adaptive-mode) route stamps its own prices. The aggregate route
+    carries none -- the upstream picks the provider per call -- so the list
+    price is the median over the model's discovered, priced, non-offline
+    provider endpoints at mint time. Median rather than min or max: one
+    outlier endpoint appearing or disappearing should not move what a run is
+    charged. Read once at mint, never on the request path.
+    """
+    prompt = _finite_price(route_prompt_price_per_token)
+    completion = _finite_price(route_completion_price_per_token)
+    if prompt is not None and completion is not None:
+        return prompt, completion
+    rows = (
+        await session.execute(
+            select(
+                InferenceProviderRoute.prompt_price_per_token,
+                InferenceProviderRoute.completion_price_per_token,
+            ).where(
+                InferenceProviderRoute.model == model,
+                InferenceProviderRoute.provider != AGGREGATE_PROVIDER,
+                InferenceProviderRoute.status != "offline",
+                InferenceProviderRoute.prompt_price_per_token.is_not(None),
+                InferenceProviderRoute.completion_price_per_token.is_not(None),
+            )
+        )
+    ).all()
+    priced = [
+        (p, c)
+        for p, c in ((_finite_price(a), _finite_price(b)) for a, b in rows)
+        if p is not None and c is not None
+    ]
+    if not priced:
+        return None, None
+    return (
+        float(statistics.median(p for p, _ in priced)),
+        float(statistics.median(c for _, c in priced)),
+    )
 
 
 USAGE_ACCOUNTING_VERSION = 2
@@ -213,6 +374,20 @@ async def ensure_inference_grant(
                     route_quantization = route.quantization
                     route_prompt_price_per_token = route.prompt_price_per_token
                     route_completion_price_per_token = route.completion_price_per_token
+                ledger_prices = await _ledger_list_prices(
+                    session,
+                    model=model,
+                    route_prompt_price_per_token=route_prompt_price_per_token,
+                    route_completion_price_per_token=route_completion_price_per_token,
+                )
+                # Stamp the ceiling only when it can act, so "a ceiling is
+                # stamped" and "the ceiling is live" are the same fact on the
+                # wire and an off-mode grant is byte-identical to today's.
+                cost_ceiling_microusd = (
+                    config.run_cost_ceiling_microusd
+                    if config.cost_ceiling_mode in COST_CEILING_ACTIVE_MODES
+                    else None
+                )
                 grant = InferenceGrant(
                     grant_id=uuid4(),
                     agent_id=ticket.agent_id,
@@ -249,6 +424,19 @@ async def ensure_inference_grant(
                     completion_tokens=0,
                     cost_microusd=0,
                     active_requests=0,
+                    ledger_cost_microusd=0,
+                    cost_ceiling_microusd=cost_ceiling_microusd,
+                    cost_ceiling_mode=(
+                        config.cost_ceiling_mode
+                        if cost_ceiling_microusd is not None
+                        else "off"
+                    ),
+                    cost_ceiling_would_decline=0,
+                    ledger_prompt_price_per_token=ledger_prices[0],
+                    ledger_completion_price_per_token=ledger_prices[1],
+                    embedding_price_microusd_per_token=(
+                        config.embedding_price_microusd_per_token
+                    ),
                     expires_at=deadline,
                 )
                 session.add(grant)
@@ -413,6 +601,10 @@ class InferenceDecline(StrEnum):
       can never succeed; the caller must mint a fresh nonce.
     * :attr:`GRANT_NOT_EXCHANGED` — minted but never exchanged for a bearer, so
       there is no live lease here yet. The broker must exchange first.
+    * :attr:`COST_CEILING_EXHAUSTED` — settled ledger cost (list price over
+      every lane) already meets the grant's stamped ``enforce`` ceiling. Same
+      settled-receipts rule as the token wall: the crossing call finishes.
+      Refuses both lanes (#3271).
     * :attr:`RESERVATION_TOO_LARGE` — historical. Admission no longer estimates
       a call against the grant before the provider returns; leftover 4109s are
       kept on the wire so older brokers still parse the code.
@@ -449,6 +641,7 @@ class InferenceDecline(StrEnum):
     NONCE_REPLAYED = "nonce_replayed"
     GRANT_NOT_EXCHANGED = "grant_not_exchanged"
     RESERVATION_TOO_LARGE = "reservation_too_large"
+    COST_CEILING_EXHAUSTED = "cost_ceiling_exhausted"
     UNATTRIBUTED = "unattributed"
 
 
@@ -617,6 +810,11 @@ async def begin_inference_request(
     # actually only request-count exhausted, or vice versa.
     if grant.status != "active":
         if grant.status == "exhausted":
+            # The cost ceiling is checked first and answers on BOTH lanes: a
+            # run that spent its dollar allowance must not decay into the
+            # token or request wall on the next call.
+            if cost_ceiling_enforced_and_reached(grant):
+                return InferenceDecline.COST_CEILING_EXHAUSTED
             if (
                 request_kind == "chat"
                 and grant.prompt_tokens + grant.completion_tokens >= grant.token_budget
@@ -709,6 +907,16 @@ async def begin_inference_request(
         if request_kind == "chat":
             grant.status = "exhausted"
         return InferenceDecline.TOKEN_BUDGET_EXHAUSTED
+    # The run's dollar ceiling (#3271), over every lane, from settled receipts
+    # only: the call that crossed it was allowed to finish and is billed; this
+    # is the next one. ``shadow`` admits and counts what ``enforce`` would
+    # have refused; ``off`` or a null ceiling never reaches either branch.
+    if cost_ceiling_reached(grant):
+        if grant.cost_ceiling_mode == "enforce":
+            grant.status = "exhausted"
+            return InferenceDecline.COST_CEILING_EXHAUSTED
+        grant.cost_ceiling_would_decline = int(grant.cost_ceiling_would_decline) + 1
+        INFERENCE_COST_CEILING_WOULD_DECLINE.labels(lane=request_kind).inc()
     active_requests = (
         grant.active_requests
         if request_kind == "chat"
@@ -909,6 +1117,7 @@ async def finish_inference_request(
         request.prompt_tokens > 0
         or request.completion_tokens > 0
         or request.cost_microusd > 0
+        or (request.ledger_cost_microusd or 0) > 0
     ):
         return False
     deliverable = (
@@ -926,6 +1135,7 @@ async def finish_inference_request(
     prompt_tokens = max(0, prompt_tokens)
     completion_tokens = max(0, completion_tokens)
     cost_microusd = max(0, cost_microusd)
+    usage_clamped = False
     if not usage_available:
         # No receipt, no spend. Charging the reservation estimate here is what
         # booked megatokens against grants that never saw a provider usage
@@ -944,12 +1154,25 @@ async def finish_inference_request(
         prompt_tokens = request.max_chargeable_tokens
         completion_tokens = 0
         deliverable = False
+        usage_clamped = True
+    ledger_cost = ledger_cost_microusd(
+        grant,
+        request_kind=request.request_kind,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        # The provider bill is a ledger input only for an unpriced chat grant,
+        # and only when the receipt was trusted.
+        provider_cost_microusd=(
+            cost_microusd if usage_available and not usage_clamped else 0
+        ),
+    )
     request.status = (
         status if was_started and (deliverable or status != "completed") else "canceled"
     )
     request.prompt_tokens = prompt_tokens
     request.completion_tokens = completion_tokens
     request.cost_microusd = cost_microusd
+    request.ledger_cost_microusd = ledger_cost
     request.upstream_provider = upstream_provider
     request.upstream_attempts = max(0, upstream_attempts)
     request.openrouter_attempts = max(0, openrouter_attempts)
@@ -971,11 +1194,17 @@ async def finish_inference_request(
             )
         grant.embedding_tokens += prompt_tokens
         grant.embedding_cost_microusd += cost_microusd
+    grant.ledger_cost_microusd = int(grant.ledger_cost_microusd or 0) + ledger_cost
     grant.updated_at = now
     if (
         request.request_kind == "chat"
         and grant.prompt_tokens + grant.completion_tokens >= grant.token_budget
     ):
+        grant.status = "exhausted"
+    if grant.status == "active" and cost_ceiling_enforced_and_reached(grant):
+        # The committed writer for the cost wall (admission declines roll
+        # back). Unlike the embedding token wall this ends BOTH lanes: the
+        # dollar allowance is the run's, not one lane's.
         grant.status = "exhausted"
     return deliverable
 
@@ -1062,6 +1291,12 @@ async def ticket_inference_grant_spent_allowance(
                 (InferenceGrant.prompt_tokens + InferenceGrant.completion_tokens)
                 >= InferenceGrant.token_budget,
                 InferenceGrant.request_count >= InferenceGrant.request_budget,
+                and_(
+                    InferenceGrant.cost_ceiling_mode == "enforce",
+                    InferenceGrant.cost_ceiling_microusd.is_not(None),
+                    InferenceGrant.ledger_cost_microusd
+                    >= InferenceGrant.cost_ceiling_microusd,
+                ),
             ),
         )
     )
@@ -1074,7 +1309,10 @@ __all__ = [
     "bearer_digest",
     "InferenceDecline",
     "begin_inference_request",
+    "cost_ceiling_active",
     "ensure_inference_grant",
+    "ledger_cost_headers",
+    "ledger_cost_microusd",
     "finish_inference_request",
     "revoke_ticket_inference",
     "ticket_inference_grant_spent_allowance",

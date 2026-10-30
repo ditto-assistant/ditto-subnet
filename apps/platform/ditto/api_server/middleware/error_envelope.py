@@ -130,6 +130,12 @@ ERROR_CODE_BENCH_VERSION_RETIRED = 4002
 #                             allowance; it would not fit in a fresh grant
 #                             either. Distinct from 4104 because nothing has
 #                             been spent and the lease is still good.
+#   4110 COST_CEILING_EXHAUSTED -> 429. As 4104, but the run's dollar ceiling:
+#                             settled list-price ledger cost over every lane
+#                             already meets the grant's stamped ``enforce``
+#                             ceiling. Refuses both lanes. Ship the 4110-aware
+#                             scorer before enforcing: an old broker treats an
+#                             unknown 4110 as platform fault (#3271).
 #   4100 unattributed      -> 429. The deliberate remainder: an unknown grant id
 #                             or a failed bearer comparison, which are held
 #                             indistinguishable on purpose so an unauthenticated
@@ -153,6 +159,7 @@ ERROR_CODE_INFERENCE_NONCE_REPLAYED = 4106
 ERROR_CODE_INFERENCE_MODEL_NOT_PERMITTED = 4107
 ERROR_CODE_INFERENCE_GRANT_NOT_EXCHANGED = 4108
 ERROR_CODE_INFERENCE_RESERVATION_TOO_LARGE = 4109
+ERROR_CODE_INFERENCE_COST_CEILING_EXHAUSTED = 4110
 
 # Screener-side error codes (5xxx range). Surfaced to the screener worker
 # driving the uploaded -> evaluating promotion gate.
@@ -202,6 +209,10 @@ _TERMINAL_DECLINE_RESPONSES: dict[InferenceDecline, tuple[int, str]] = {
     InferenceDecline.RESERVATION_TOO_LARGE: (
         ERROR_CODE_INFERENCE_RESERVATION_TOO_LARGE,
         "request exceeds the grant's entire token budget",
+    ),
+    InferenceDecline.COST_CEILING_EXHAUSTED: (
+        ERROR_CODE_INFERENCE_COST_CEILING_EXHAUSTED,
+        "grant has spent its cost ceiling",
     ),
 }
 
@@ -314,7 +325,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         terminal = _TERMINAL_DECLINE_RESPONSES.get(exc.decline)
         if terminal is not None:
             error_code, message = terminal
-            return envelope_response(429, error_code, f"{exc.lane} {message}")
+            return envelope_response(
+                429, error_code, f"{exc.lane} {message}", headers=exc.headers or None
+            )
         # The deliberate remainder. The message says so rather than implying the
         # platform merely failed to have an opinion: an unnamed refusal that
         # reads like an oversight invites exactly the "retry until it works"

@@ -89,13 +89,16 @@ type settleOutcome struct {
 // settleRequest runs transaction B. It must run exactly once for every
 // admitted request, even when the client disconnected (the context is
 // detached from the request).
-func (d *Deps) settleRequest(parent context.Context, h *proxyHeaders, o *settleOutcome) (bool, error) {
+//
+// Besides deliverable it returns the grant as it stands after this
+// settlement (nil if gone) for the ledger evidence header (#3271).
+func (d *Deps) settleRequest(parent context.Context, h *proxyHeaders, o *settleOutcome) (bool, *postgres.InferenceGrant, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), 30*time.Second)
 	defer cancel()
 	finishedAt := d.now()
 	tx, err := d.Pool.Begin(ctx)
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := d.Queries.WithTx(tx)
@@ -103,7 +106,7 @@ func (d *Deps) settleRequest(parent context.Context, h *proxyHeaders, o *settleO
 	if latencyMs < 0 {
 		latencyMs = 0
 	}
-	deliverable, err := finishInferenceRequest(ctx, q, finishParams{
+	deliverable, settledGrant, err := finishInferenceRequest(ctx, q, finishParams{
 		grantID:            h.grant,
 		nonce:              h.nonce,
 		generation:         h.generation,
@@ -122,12 +125,12 @@ func (d *Deps) settleRequest(parent context.Context, h *proxyHeaders, o *settleO
 		terminalErrorCode:  o.terminalErrorCode,
 	})
 	if err != nil {
-		return false, err
+		return false, nil, err
 	}
 	if o.recordObservation && o.routeObservable {
 		observed, gerr := q.GetInferenceGrant(ctx, pgUUID(h.grant))
 		if gerr != nil && !isNoRows(gerr) {
-			return false, gerr
+			return false, nil, gerr
 		}
 		if gerr == nil {
 			success := o.status == "completed" && o.usageAvailable
@@ -139,14 +142,14 @@ func (d *Deps) settleRequest(parent context.Context, h *proxyHeaders, o *settleO
 			}
 			if oerr := recordRouteObservation(ctx, q, &observed, success,
 				o.elapsed.Seconds()*1000, completion, cost, o.timedOut, finishedAt); oerr != nil {
-				return false, oerr
+				return false, nil, oerr
 			}
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
-		return false, err
+		return false, nil, err
 	}
-	return deliverable, nil
+	return deliverable, settledGrant, nil
 }
 
 func clampInt(v, lo, hi int) int {
@@ -302,6 +305,9 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		// rollback): stale reclamation and status writes are discarded.
 		d.traceDeclined(r, headers, traces.LaneInference, traces.KindChat, body, now,
 			traceInferenceGrant(&grantSnapshot, model), decline.String())
+		if result != nil {
+			setLedgerCostHeader(w, &result.grant)
+		}
 		relayhttp.WriteDecline(w, r, *decline, relayhttp.LaneInference)
 		return
 	}
@@ -349,6 +355,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	settled := false
 	var deliverable bool
+	var settledGrant *postgres.InferenceGrant
 	var settleErr error
 	settle := func() {
 		if settled {
@@ -356,7 +363,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 		settled = true
 		outcome.elapsed = time.Since(started)
-		deliverable, settleErr = d.settleRequest(ctx, headers, outcome)
+		deliverable, settledGrant, settleErr = d.settleRequest(ctx, headers, outcome)
 		if settleErr != nil {
 			d.Logger.Error("chat: settle", slog.String("error", settleErr.Error()),
 				slog.String("request_id", relayhttp.RequestID(r.Context())),
@@ -429,6 +436,9 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		relayhttp.WriteInternalError(w, r)
 		return
 	}
+	// Every authenticated proxied response carries the settled ledger total
+	// when the grant has a live cost ceiling (#3271); nothing otherwise.
+	setLedgerCostHeader(w, settledGrant)
 	if providerFailure != nil {
 		writeHTTPError(w, r, providerFailure)
 		return
