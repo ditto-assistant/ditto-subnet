@@ -194,6 +194,58 @@ async def test_parked_provider_fault_names_its_bounded_subcode(
     assert decision.detail == expected_detail
 
 
+@pytest.mark.parametrize(
+    ("error_code", "expected_detail"),
+    [
+        (
+            "source-review-model-tool-call-invalid",
+            "screener error: private source review model fault, not infrastructure",
+        ),
+        (
+            "source-review-archive-invalid",
+            "screener error: private source review could not read the archive",
+        ),
+        (
+            "l2-late-result",
+            "screener error: private review finished after its lease deadline",
+        ),
+        (
+            "source-review-http-503",
+            "screener error: private policy infrastructure unavailable",
+        ),
+    ],
+)
+async def test_retryable_review_detail_does_not_blame_infra_for_a_model_fault(
+    error_code: str, expected_detail: str
+) -> None:
+    """DrPresident v20: a malformed reviewer tool call read as an outage."""
+
+    async def review() -> SourceReviewObservation:
+        return SourceReviewObservation(
+            ok=False,
+            risk_level=None,
+            finding_digest=None,
+            categories=(),
+            error_code=error_code,
+            failure_disposition="retryable_infra",
+        )
+
+    async def challenge(*_args: object) -> ChallengeObservation:
+        raise AssertionError("failed source review must stop before challenge")
+
+    engine = PolicyEngine(
+        PolicyManifest(
+            rotation_id="retryable-review-detail",
+            module_specs=({"kind": "agentic_source_review"},),
+        ),
+        (AgenticSourceReviewModule(module_id="private-source-review"),),
+    )
+    decision = await engine.evaluate(_context(challenge, review))
+    assert decision.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert decision.reason_code == error_code
+    assert decision.detail == expected_detail
+
+
 async def test_exhausted_review_keeps_its_subcode_through_aggregation() -> None:
     """A pass-inconclusive selector result is aggregated, not returned at once."""
 

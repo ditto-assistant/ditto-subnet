@@ -308,6 +308,34 @@ class SourceReviewObservation:
 _FAILURE_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
 
 
+_INFRA_UNAVAILABLE_DETAIL = "screener error: private policy infrastructure unavailable"
+# Review failures that park as retryable but are not our infrastructure: the
+# reviewer model misbehaved (malformed tool call, unusable response,
+# self-inconsistent verdict, turn timeout), the submitted archive could not be
+# read, or the review outran its lease. They keep their exact reason code and
+# stay on the operator retry; only the private detail stops claiming an
+# infrastructure outage, which sent operators chasing the fleet for a model
+# fault (DrPresident v20, 2026-10-29).
+_MODEL_FAULT_CODE_PREFIXES = (
+    "source-review-model-",
+    "source-review-inconsistent-verdict",
+)
+_ARCHIVE_UNREADABLE_CODE = "source-review-archive-invalid"
+# L2 finished, but after the attempt's lease deadline: a time outcome.
+_LATE_RESULT_CODE = "l2-late-result"
+
+
+def _retryable_detail(reason_code: str | None) -> str:
+    """Name a parked retryable failure's owner without claiming an outage."""
+    if reason_code is not None and reason_code.startswith(_MODEL_FAULT_CODE_PREFIXES):
+        return "screener error: private source review model fault, not infrastructure"
+    if reason_code == _ARCHIVE_UNREADABLE_CODE:
+        return "screener error: private source review could not read the archive"
+    if reason_code == _LATE_RESULT_CODE:
+        return "screener error: private review finished after its lease deadline"
+    return _INFRA_UNAVAILABLE_DETAIL
+
+
 def _failure_subcode_suffix(subcode: str | None) -> str:
     """Render a failure subcode for the private detail, or nothing if unsafe."""
     if subcode is None:
@@ -1511,7 +1539,7 @@ class PolicyEngine:
         bounded = _bounded_reason_evidence(evidence, reason_code=reason_code)
         detail = ""
         if outcome == ScreeningOutcome.RETRYABLE_INFRA:
-            detail = "screener error: private policy infrastructure unavailable"
+            detail = _retryable_detail(reason_code)
         elif outcome == ScreeningOutcome.QUARANTINE:
             detail = "private policy quarantine pending operator review"
         elif outcome == ScreeningOutcome.INCONCLUSIVE:
@@ -1645,7 +1673,13 @@ class PolicyEngine:
                         "agentic-preexecution-review",
                         observation.error_code or "source-review-inconclusive",
                         (
-                            "private source review infrastructure was unavailable"
+                            (
+                                "private source review infrastructure was unavailable"
+                                if _retryable_detail(observation.error_code)
+                                == _INFRA_UNAVAILABLE_DETAIL
+                                else "private source review did not produce a "
+                                "usable result"
+                            )
                             if retryable
                             else "private source review could not resolve the lead"
                         ),
