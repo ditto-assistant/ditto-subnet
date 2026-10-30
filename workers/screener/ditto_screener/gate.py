@@ -144,7 +144,7 @@ _PROBE_INTERVAL_SECONDS = 1.0
 # entered with less than this many seconds of lease budget is abandoned as an
 # infrastructure failure so Platform can park it with exact evidence.
 _LEASE_MIN_STAGE_SECONDS = 5.0
-_MAX_UNPACKED_BYTES = runtime_envelope().source_bytes
+_MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 20_000
 _MAX_SCREENED_IMAGE_BYTES = runtime_envelope().screened_image_bytes
 _IMAGE_EXPORT_DISK_RESERVE_BYTES = 256 * 1024**2
