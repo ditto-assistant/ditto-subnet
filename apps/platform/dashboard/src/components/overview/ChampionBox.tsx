@@ -56,10 +56,24 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
       ? recipient.share_of_miner_pool
       : e?.champion_share;
   };
+  /** The King as the crown rules see it (protocol 34); absent from an older
+   * Platform, which falls back to the board entry. */
+  const king = () => {
+    const current = emissions()?.king;
+    return current && String(current.agent_id) === String(emissions()?.champion_agent_id)
+      ? current
+      : null;
+  };
   const composite = (): number | null => {
+    const official = king()?.official_score;
+    if (official != null && Number.isFinite(official)) return official;
     const entry = championEntry();
     return entry ? displayComposite(entry, store.settledView()) : null;
   };
+  const officialRank = (): number | null =>
+    king()?.official_rank ?? (championEntry()?.rank as number | null | undefined) ?? null;
+  const confirmations = (): number | null =>
+    king()?.shared_seed_confirmations ?? championRecipient()?.shared_seed_confirmations ?? null;
 
   return (
     <section class="champion-box" aria-labelledby="champion-box-kicker">
@@ -67,7 +81,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
         <span class="crown" aria-hidden="true">
           ♛
         </span>
-        {scoreCeilingPool() ? "KOTH · score-ceiling joint crown" : "KOTH · reigning champion"}
+        {scoreCeilingPool() ? "Score-ceiling joint crown" : "King"}
       </div>
       <div class="champion-body" id="champion-body" role="status" aria-live="polite">
         <Show
@@ -82,7 +96,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 >
                   <div class="champion-state">
                     No reigning champion in the current pool — the KOTH fold has no eligible
-                    finalized run yet. Raw rank #1 leads the board below.
+                    finalized run yet. Rank #1 leads the board below.
                   </div>
                 </Show>
               }
@@ -118,9 +132,9 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               <TipTarget
                 tag="div"
                 class="champion-score tip-chip"
-                text="Finalized Score-column number in [0,1] that drives rank. The crown can sit on a lower-ranked row: rank is not the crown test."
+                text="Official score: the continual mean of the three quorum scores plus completed retest waves. The board's rank orders by it; the crown moves only on a head-to-head over shared seeds."
               >
-                <span class="champion-score-label">Composite</span>
+                <span class="champion-score-label">Official score</span>
                 {fx(composite() as number)}
               </TipTarget>
             </Show>
@@ -131,9 +145,14 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 Joint champions <b>{jointChampions().length}</b>
               </span>
             </Show>
-            <Show when={!scoreCeilingPool() && championEntry()?.rank}>
+            <Show when={!scoreCeilingPool() && officialRank()}>
               <span>
-                Raw rank <b>{"#" + championEntry()?.rank}</b>
+                Official rank <b>{"#" + officialRank()}</b>
+              </span>
+            </Show>
+            <Show when={!scoreCeilingPool() && confirmations() != null}>
+              <span id="champion-confirmations">
+                <b>{confirmations()}</b> shared-seed confirmations
               </span>
             </Show>
             <Show
@@ -230,7 +249,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                     above === 1 ? "1 agent scores higher" : above + " agents score higher";
                   if (!contest) {
                     return (
-                      "Holds the crown from raw #" +
+                      "Holds the crown from official #" +
                       rank +
                       ": " +
                       aboveText +
@@ -238,7 +257,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                     );
                   }
                   return (
-                    "Holds the crown from raw #" +
+                    "Holds the crown from official #" +
                     rank +
                     ". " +
                     aboveText +

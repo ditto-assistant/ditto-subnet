@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import (
 import ditto.api_server.endpoints.scoring as scoring_mod
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
-from ditto.api_models.validator import LedgerResponse
+from ditto.api_models.validator import CrownGateMarker, LedgerResponse
 from ditto.api_server import validator_request_outcomes
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
@@ -87,6 +87,36 @@ async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
     assert rejected.value.status_code == 428
 
     heartbeat_get.return_value.protocol_version = 29
+    assert (
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+        is ledger
+    )
+
+
+@pytest.mark.asyncio
+async def test_protocol_33_requester_cannot_read_gated_pin() -> None:
+    now = datetime.now(UTC)
+    heartbeat_get = AsyncMock(
+        return_value=SimpleNamespace(protocol_version=33, seen_at=now)
+    )
+    session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
+    ledger = LedgerResponse(
+        entries=[],
+        count=0,
+        crown_gate=CrownGateMarker(
+            min_dethrone_confirmations=3, champion_standing_rank=3
+        ),
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+    assert rejected.value.status_code == 428
+
+    heartbeat_get.return_value.protocol_version = 34
     assert (
         await scoring_mod._require_statistical_cap_requester(
             session, _VALIDATOR_HOTKEY, ledger, now=now
@@ -904,6 +934,62 @@ class TestScoringLedger:
         ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert ready.status_code == 200
         assert ready.json()["statistical_band_mode"] == "capped"
+
+    async def test_crown_gate_requires_operator_and_protocol_34(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A v33 weight setter would walk the crown ungated: never serve it then."""
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.414.0",
+                    protocol_version=33,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=ContinualRetestSettings(
+                        crown_gate_mode="fleet_ready"
+                    ).model_dump(mode="json"),
+                    checksum="ab" * 32,
+                    reason="gate the crown on shared seeds",
+                    actor="operator@example.com",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("crown_gate") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 34
+        app.state.continual_retest_settings.invalidate()
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["crown_gate"] == {
+            "min_dethrone_confirmations": 3,
+            "champion_standing_rank": 3,
+        }
 
     async def test_missing_auth_returns_401(
         self,

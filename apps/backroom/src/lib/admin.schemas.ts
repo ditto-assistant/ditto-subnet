@@ -2346,6 +2346,11 @@ export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // Not `strict`. The platform ships `participants` deliberately, and `strict` is
 // kept as the audited rollback path rather than as the default.
 export const DEFAULT_WAVE_MEMBERSHIP = 'participants'
+// Protocol-34 crown rules, mirroring the platform's shipped defaults and bounds.
+// A challenger cannot hold more shared seeds than the lane retains (15).
+export const DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
+export const MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+export const DEFAULT_CHAMPION_STANDING_RANK = 3
 
 // The ceiling can never cut into the cohort the rank cutoff already admitted.
 // Mirrored from the platform's own model validator so the operator sees which
@@ -2380,6 +2385,22 @@ const continualRetestSettingsBaseSchema = z.object({
   // Fold change behind fleet protocol 27: defend the crown from the served
   // incumbent instead of re-deriving it from the earliest lineage every read.
   crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  // Fold change behind fleet protocol 34: the crown moves only on the paired
+  // shared-seed statistic with at least min_dethrone_confirmations shared
+  // seeds, and only within the top champion_standing_rank official places.
+  crown_gate_mode: z.enum(['disabled', 'fleet_ready']).default('disabled'),
+  min_dethrone_confirmations: z
+    .number()
+    .int()
+    .min(2)
+    .max(MAX_MIN_DETHRONE_CONFIRMATIONS)
+    .default(DEFAULT_MIN_DETHRONE_CONFIRMATIONS),
+  champion_standing_rank: z
+    .number()
+    .int()
+    .min(1)
+    .max(EMISSION_SET_SIZE)
+    .default(DEFAULT_CHAMPION_STANDING_RANK),
   idle_retests_enabled: z.boolean(),
   rollout_standdown: z
     .enum(['off', 'capable_validators', 'all'])
@@ -2436,6 +2457,9 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     statistical_band_mode: z.enum(['disabled', 'fleet_ready']),
     ledger_pin_mode: z.enum(['live', 'epoch']),
     crown_incumbent_mode: z.enum(['disabled', 'fleet_ready']),
+    crown_gate_mode: z.enum(['disabled', 'fleet_ready']),
+    min_dethrone_confirmations: z.number().int().min(2).max(MAX_MIN_DETHRONE_CONFIRMATIONS),
+    champion_standing_rank: z.number().int().min(1).max(EMISSION_SET_SIZE),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
@@ -2518,6 +2542,9 @@ export const effectiveContinualRetestSettingsSchema = z.object({
   statistical_band_fleet_ready: z.boolean().default(false),
   statistical_band_active: z.boolean().default(false),
   statistical_band_required_protocol: z.number().int().default(29),
+  crown_gate_fleet_ready: z.boolean().default(false),
+  crown_gate_active: z.boolean().default(false),
+  crown_gate_required_protocol: z.number().int().positive().default(34),
   crown_incumbent_fleet_ready: z.boolean().default(false),
   crown_incumbent_active: z.boolean().default(false),
   crown_incumbent_required_protocol: z.number().int().positive().default(27),
@@ -2578,6 +2605,25 @@ type ContinualRetestExtendedFieldSpec = {
 }
 
 export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExtendedFieldSpec> = [
+  {
+    field: 'crown_gate_mode',
+    label: 'a shared-seed crown gate',
+    legacyValue: () => 'disabled',
+    legacyBehaviour: () =>
+      'any challenger that clears the band takes the crown, even with no shared-seed confirmations',
+  },
+  {
+    field: 'min_dethrone_confirmations',
+    label: 'a dethrone confirmation minimum',
+    legacyValue: () => DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+    legacyBehaviour: () => 'the crown is not gated on shared-seed confirmations',
+  },
+  {
+    field: 'champion_standing_rank',
+    label: 'a champion standing rule',
+    legacyValue: () => DEFAULT_CHAMPION_STANDING_RANK,
+    legacyBehaviour: () => 'the champion keeps the crown at any official rank',
+  },
   {
     field: 'statistical_band_mode',
     label: 'a capped KOTH statistical band',
@@ -9183,6 +9229,37 @@ export const publicEmissionRecipientSchema = z.object({
   shared_seed_confirmations: z.number().int().nonnegative().default(0),
 })
 
+// Protocol-34 crown standings. Nullish/defaulted so an older Platform without
+// them still parses; the King and challengers are the operator's crown read.
+export const publicCrownRulesSchema = z.object({
+  active: z.boolean(),
+  required_protocol: z.number().int().positive(),
+  min_dethrone_confirmations: z.number().int().min(2),
+  champion_standing_rank: z.number().int().positive(),
+})
+
+export const publicCrownKingSchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  official_rank: z.number().int().positive(),
+  official_score: z.number(),
+  shared_seed_confirmations: z.number().int().nonnegative().default(0),
+})
+
+export const publicCrownChallengerSchema = z.object({
+  agent_id: z.string().uuid(),
+  miner_hotkey: z.string(),
+  official_rank: z.number().int().positive(),
+  official_score: z.number(),
+  shared_seed_confirmations: z.number().int().nonnegative(),
+  required_confirmations: z.number().int().min(2),
+  within_standing: z.boolean(),
+  paired_lead: z.number().nullable().optional(),
+  required_lead: z.number().nonnegative().nullable().optional(),
+  lead_needed: z.number().nonnegative().nullable().optional(),
+  status: z.enum(['outside_standing', 'needs_confirmations', 'dueling', 'would_dethrone']),
+})
+
 export const publicKothEmissionsSchema = z.object({
   margin: z.number().min(0).max(1),
   dethrone_z: z.number().nonnegative(),
@@ -9204,6 +9281,9 @@ export const publicKothEmissionsSchema = z.object({
   raw_leader_miner_hotkey: z.string(),
   raw_leader_decision: publicDethroneDecisionSchema.nullable().optional(),
   recipients: z.array(publicEmissionRecipientSchema),
+  crown_rules: publicCrownRulesSchema.nullish().default(null),
+  king: publicCrownKingSchema.nullish().default(null),
+  challengers: z.array(publicCrownChallengerSchema).default([]),
 })
 
 export const publicLeaderboardSchema = z.object({

@@ -82,6 +82,11 @@ async def test_defaults_are_safe_and_revision_is_audited(
         "statistical_band_mode": "disabled",
         "ledger_pin_mode": "epoch",
         "crown_incumbent_mode": "disabled",
+        # Ships off: the crown gate changes the weight fold, so the operator
+        # selects it and the whole fleet must report protocol 34 first.
+        "crown_gate_mode": "disabled",
+        "min_dethrone_confirmations": 3,
+        "champion_standing_rank": 3,
         "idle_retests_enabled": False,
         "rollout_standdown": "capable_validators",
         "retest_cohort_size": 5,

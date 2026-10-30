@@ -38,11 +38,11 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   },
   overview: {
     title: "Overview",
-    sub: "Subnet snapshot and the full leaderboard · ranked by composite",
+    sub: "Subnet snapshot and the full leaderboard · ranked by official score",
   },
   leaderboard: {
     title: "Leaderboard",
-    sub: "Every scored miner · canonical ranks · sortable by any metric",
+    sub: "Every scored miner · ranked by official score · sortable by any metric",
   },
   pipeline: {
     title: "Submission pipeline",
