@@ -1758,3 +1758,200 @@ tbody tr.champion:focus-visible .miner-avatar {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
 }
+
+/* ── Crown duel: the King and the challengers dueling it ─────────────────
+   Protocol 34 moves the crown only on a head-to-head over shared seeds, so
+   each challenger reads as one ruled line: rank, name, official score,
+   confirmation progress, paired lead, and what it still needs. Hairlines,
+   no card chrome; gold stays reserved for the King. */
+.crown-duel {
+  container: crown-duel / inline-size;
+  margin: 0 0 16px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--hair, var(--border));
+  border-bottom: 1px solid var(--hair, var(--border));
+}
+.crown-duel-king {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin-bottom: 12px;
+  font-size: 14px;
+}
+.crown-duel-crown {
+  color: var(--gold);
+  font-size: 15px;
+}
+.crown-duel-king-label {
+  color: var(--rank-one-text);
+  font-weight: 700;
+}
+.crown-duel-king-name {
+  font: 700 17px/1.2 var(--display);
+  letter-spacing: -0.015em;
+}
+.crown-duel-king-name .entity-link {
+  color: var(--text);
+}
+.crown-duel-king-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 14px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.crown-duel-king-facts b {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.crown-duel-version {
+  margin-left: 4px;
+  color: var(--text-dim);
+  font: 400 12px/1 var(--sans);
+  letter-spacing: 0;
+}
+.crown-duel-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+}
+.crown-duel-head h3 {
+  margin: 0;
+  font: 600 14px/1.4 var(--sans);
+  color: var(--text);
+}
+.crown-duel-hint,
+.crown-duel-empty,
+.crown-duel-rollout {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.crown-duel-empty,
+.crown-duel-rollout {
+  margin: 6px 0 0;
+}
+.crown-duel-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.crown-duel-row {
+  display: grid;
+  grid-template-columns: 2.5rem minmax(0, 1.4fr) 4rem minmax(9rem, 1fr) 4.5rem minmax(0, 1.6fr);
+  align-items: center;
+  gap: 6px 14px;
+  padding: 7px 0;
+  border-top: 1px solid var(--hair, var(--border));
+  font-size: 13px;
+}
+.crown-duel-row:first-child {
+  border-top: 0;
+}
+.crown-duel-rank,
+.crown-duel-score,
+.crown-duel-lead {
+  font-variant-numeric: tabular-nums;
+}
+.crown-duel-rank {
+  color: var(--text-dim);
+}
+.crown-duel-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+}
+.crown-duel-name .entity-link {
+  color: var(--text);
+}
+.crown-duel-score {
+  text-align: right;
+}
+.crown-duel-confs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.crown-duel-bar {
+  position: relative;
+  flex: 0 0 44px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border);
+  overflow: hidden;
+}
+.crown-duel-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--text-dim);
+  transition: width 200ms cubic-bezier(0.25, 1, 0.5, 1);
+}
+.crown-duel-row[data-status="dueling"] .crown-duel-bar > span,
+.crown-duel-row[data-status="would_dethrone"] .crown-duel-bar > span {
+  background: var(--text);
+}
+.crown-duel-lead {
+  text-align: right;
+  color: var(--text-dim);
+}
+.crown-duel-lead.ahead {
+  color: var(--good);
+}
+.crown-duel-lead.behind {
+  color: var(--warn);
+}
+.crown-duel-needs {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.crown-duel-status {
+  color: var(--text);
+  font-weight: 600;
+}
+.crown-duel-row[data-status="would_dethrone"] .crown-duel-status {
+  color: var(--rank-one-text);
+}
+.crown-duel-fold {
+  margin: 8px 0 6px;
+}
+.crown-duel-explainer {
+  max-width: 68ch;
+  margin: 6px 0 4px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+/* Narrow containers (the overview's main pane, tablets, phones): rank,
+   name, score on the first line; evidence and lead beneath; the need on its
+   own line. A container query, because the overview column is narrow at
+   every viewport width. */
+@container crown-duel (max-width: 760px) {
+  .crown-duel-row {
+    grid-template-columns: 2.25rem minmax(0, 1fr) auto;
+    gap: 3px 12px;
+  }
+  .crown-duel-confs {
+    grid-column: 2;
+  }
+  .crown-duel-lead {
+    grid-column: 3;
+  }
+  .crown-duel-needs {
+    grid-column: 2 / -1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .crown-duel-bar > span {
+    transition: none;
+  }
+}

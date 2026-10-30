@@ -33,7 +33,9 @@ _T0 = datetime(2026, 10, 29, tzinfo=UTC)
 def _entries(case: dict[str, Any]) -> dict[str, KothEntry]:
     out: dict[str, KothEntry] = {}
     for index, spec in enumerate(case["entries"], start=1):
-        seeds = sorted((int(seed), value) for seed, value in spec.get("seeds", {}).items())
+        seeds = sorted(
+            (int(seed), value) for seed, value in spec.get("seeds", {}).items()
+        )
         out[spec["name"]] = KothEntry(
             miner_hotkey=f"hotkey-{spec['name']}",
             agent_id=UUID(int=index),
@@ -90,7 +92,9 @@ def test_standings_explain_what_each_challenger_needs() -> None:
 
 
 def test_pins_replay_only_a_well_formed_gate() -> None:
-    served = {"crown_gate": {"min_dethrone_confirmations": 3, "champion_standing_rank": 3}}
+    served = {
+        "crown_gate": {"min_dethrone_confirmations": 3, "champion_standing_rank": 3}
+    }
     assert served_crown_gate(served) == CrownGate(3, 3)
     assert served_crown_gate({}) is None
     bad = {"crown_gate": {"min_dethrone_confirmations": 1, "champion_standing_rank": 3}}

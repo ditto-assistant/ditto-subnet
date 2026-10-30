@@ -122,6 +122,56 @@ export interface EmissionsFold {
   next_pin_projection?: NextPinProjection | null;
   /** The epoch-pinned ledger validators are folding right now. */
   ledger_pin?: LedgerPin | null;
+  /** Protocol 34 crown rules; absent from an older Platform. */
+  crown_rules?: CrownRules | null;
+  /** The single reigning King, as the crown rules see it. */
+  king?: CrownKing | null;
+  /** The next distinct miners in official order, each dueling the King. */
+  challengers?: CrownChallenger[] | null;
+}
+
+/** `emissions.crown_rules`: shared-seed evidence and standing the crown needs. */
+export interface CrownRules {
+  /** Whether validators fold these rules yet (false while rolling out). */
+  active: boolean;
+  required_protocol?: number;
+  min_dethrone_confirmations: number;
+  champion_standing_rank: number;
+}
+
+export interface CrownKing {
+  agent_id: string;
+  miner_hotkey: string;
+  /** Position in the board's official order (the rank column). */
+  official_rank: number;
+  /** The board's official_composite: quorum plus completed retest waves. */
+  official_score: number;
+  shared_seed_confirmations?: number;
+}
+
+/** "outside_standing" | "needs_confirmations" | "dueling" | "would_dethrone";
+ * read as a string so a newer Platform status still renders. */
+export type CrownChallengerStatus =
+  | "outside_standing"
+  | "needs_confirmations"
+  | "dueling"
+  | "would_dethrone"
+  | (string & {});
+
+export interface CrownChallenger {
+  agent_id: string;
+  miner_hotkey: string;
+  official_rank: number;
+  official_score: number;
+  /** Seeds this challenger and the King were both scored on. */
+  shared_seed_confirmations: number;
+  required_confirmations: number;
+  within_standing: boolean;
+  /** Mean per-seed lead over the King on shared seeds; null under two seeds. */
+  paired_lead?: number | null;
+  required_lead?: number | null;
+  lead_needed?: number | null;
+  status: CrownChallengerStatus;
 }
 
 /** `emissions.ledger_pin`: identity of the frozen ledger the fleet folds this
