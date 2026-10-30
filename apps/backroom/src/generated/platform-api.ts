@@ -20172,6 +20172,17 @@ export interface components {
              */
             aggregate_mode: "disabled" | "fleet_ready" | "enabled";
             /**
+             * Champion Standing Rank
+             * @default 3
+             */
+            champion_standing_rank: number;
+            /**
+             * Crown Gate Mode
+             * @default disabled
+             * @enum {string}
+             */
+            crown_gate_mode: "disabled" | "fleet_ready";
+            /**
              * Crown Incumbent Mode
              * @default disabled
              * @enum {string}
@@ -20188,6 +20199,11 @@ export interface components {
              * @enum {string}
              */
             ledger_pin_mode: "live" | "epoch";
+            /**
+             * Min Dethrone Confirmations
+             * @default 3
+             */
+            min_dethrone_confirmations: number;
             /**
              * Retest Cohort Max Size
              * @default 25
@@ -20725,6 +20741,22 @@ export interface components {
         CreateScreeningDisputeResponse: {
             dispute: components["schemas"]["PublicScreeningDispute"];
         };
+        /**
+         * CrownGateMarker
+         * @description Protocol-34 crown rules a validator applies to the KOTH walk.
+         */
+        CrownGateMarker: {
+            /**
+             * Champion Standing Rank
+             * @description Only an entry inside this many places of the fold's official ranking may hold or take the crown.
+             */
+            champion_standing_rank: number;
+            /**
+             * Min Dethrone Confirmations
+             * @description Shared-seed confirmations a challenger must hold against the champion before the paired comparison may move the crown.
+             */
+            min_dethrone_confirmations: number;
+        };
         /** DatabaseBackupManifest */
         DatabaseBackupManifest: {
             /** Alembic Version */
@@ -21161,6 +21193,21 @@ export interface components {
             aggregate_active: boolean;
             /** Checksum */
             checksum: string;
+            /**
+             * Crown Gate Active
+             * @default false
+             */
+            crown_gate_active: boolean;
+            /**
+             * Crown Gate Fleet Ready
+             * @default false
+             */
+            crown_gate_fleet_ready: boolean;
+            /**
+             * Crown Gate Required Protocol
+             * @default 34
+             */
+            crown_gate_required_protocol: number;
             /**
              * Crown Incumbent Active
              * @default false
@@ -25943,6 +25990,8 @@ export interface components {
              * @description Number of entries returned.
              */
             count: number;
+            /** @description Protocol-34 consensus marker. When present, a challenger dethrones only on the paired shared-seed statistic with at least min_dethrone_confirmations shared seeds, and the crown must sit inside the top champion_standing_rank official places. Absent preserves the pre-34 walk. */
+            crown_gate?: components["schemas"]["CrownGateMarker"] | null;
             /**
              * Crown Incumbent Agent Id
              * @description The incumbent the fold defends when crown_mode is incumbent; one of entries, or provisional_incumbent when that is served. Absent whenever crown_mode is absent.
@@ -29577,6 +29626,111 @@ export interface components {
             agent_name: string;
         };
         /**
+         * PublicCrownChallenger
+         * @description One challenger dueling the King for the crown.
+         */
+        PublicCrownChallenger: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Lead Needed
+             * @description How much more paired lead it needs (zero once it is ahead enough). Null until they share two seeds.
+             */
+            lead_needed?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Official Rank */
+            official_rank: number;
+            /** Official Score */
+            official_score: number;
+            /**
+             * Paired Lead
+             * @description Mean per-seed score lead over the King on their shared seeds (negative is a deficit). Null until they share two seeds.
+             */
+            paired_lead?: number | null;
+            /** Required Confirmations */
+            required_confirmations: number;
+            /**
+             * Required Lead
+             * @description The paired lead it must strictly exceed to dethrone. Null until they share two seeds.
+             */
+            required_lead?: number | null;
+            /**
+             * Shared Seed Confirmations
+             * @description Confirmation seeds this challenger and the King have both been scored on. The crown can move only once this reaches required_confirmations.
+             */
+            shared_seed_confirmations: number;
+            /**
+             * Status
+             * @description outside_standing: below the official places that may hold the crown. needs_confirmations: too few shared seeds for the duel to count. dueling: enough evidence, not enough lead. would_dethrone: clears the King under the crown rules.
+             * @enum {string}
+             */
+            status: "outside_standing" | "needs_confirmations" | "dueling" | "would_dethrone";
+            /**
+             * Within Standing
+             * @description Whether it sits inside the official places that may hold the crown (crown_rules.champion_standing_rank).
+             */
+            within_standing: boolean;
+        };
+        /**
+         * PublicCrownKing
+         * @description The single reigning King of the emission fold.
+         */
+        PublicCrownKing: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Official Rank
+             * @description Position in the board's official order.
+             */
+            official_rank: number;
+            /**
+             * Official Score
+             * @description The score the crown comparison uses: the continual mean of the quorum and completed retest waves (the board's official_composite).
+             */
+            official_score: number;
+            /**
+             * Shared Seed Confirmations
+             * @description Champion-anchored confirmation seeds it holds.
+             * @default 0
+             */
+            shared_seed_confirmations: number;
+        };
+        /**
+         * PublicCrownRules
+         * @description The operator's crown rules and whether validators enforce them yet.
+         */
+        PublicCrownRules: {
+            /**
+             * Active
+             * @description Whether validators fold these rules now. False while the operator has them off or until every recently-live weight setter reports required_protocol; the King and challenger standings below always explain the configured rules.
+             */
+            active: boolean;
+            /**
+             * Champion Standing Rank
+             * @description Official places (the board's rank) the King must stay within. A King that drops below hands the crown to the best-qualified challenger inside them.
+             */
+            champion_standing_rank: number;
+            /**
+             * Min Dethrone Confirmations
+             * @description Shared-seed confirmations a challenger must hold against the King before the paired comparison may move the crown.
+             */
+            min_dethrone_confirmations: number;
+            /**
+             * Required Protocol
+             * @default 34
+             */
+            required_protocol: number;
+        };
+        /**
          * PublicDatasetReveal
          * @description The full labeled dataset a finalized submission was scored against.
          *
@@ -30297,6 +30451,11 @@ export interface components {
              */
             ceiling_headroom_share: number;
             /**
+             * Challengers
+             * @description The next distinct miners in official order, each dueling the King: shared-seed confirmations, paired lead or deficit, and what it still needs to take the crown.
+             */
+            challengers?: components["schemas"]["PublicCrownChallenger"][];
+            /**
              * Champion Agent Id
              * Format: uuid
              */
@@ -30330,8 +30489,12 @@ export interface components {
              * @default 27
              */
             crown_incumbent_required_protocol: number;
+            /** @description The crown rules: shared-seed confirmations needed to dethrone and the official standing the King must keep. */
+            crown_rules?: components["schemas"]["PublicCrownRules"] | null;
             /** Dethrone Z */
             dethrone_z: number;
+            /** @description The reigning King of the fold. */
+            king?: components["schemas"]["PublicCrownKing"] | null;
             /** @description The epoch-pinned ledger validators are folding right now. The board above is live and can move within an epoch; weights only move at the next pin, so this is the snapshot any on-chain vector should be read against. Null while pinning is switched off or before the first pin was taken. */
             ledger_pin?: components["schemas"]["PublicLedgerPin"] | null;
             /**

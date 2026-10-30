@@ -1986,6 +1986,35 @@ class LedgerEntry(BaseModel):
     ]
 
 
+class CrownGateMarker(BaseModel):
+    """Protocol-34 crown rules a validator applies to the KOTH walk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    min_dethrone_confirmations: Annotated[
+        int,
+        Field(
+            ge=2,
+            le=15,
+            description=(
+                "Shared-seed confirmations a challenger must hold against the "
+                "champion before the paired comparison may move the crown."
+            ),
+        ),
+    ]
+    champion_standing_rank: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=5,
+            description=(
+                "Only an entry inside this many places of the fold's official "
+                "ranking may hold or take the crown."
+            ),
+        ),
+    ]
+
+
 class LedgerResponse(BaseModel):
     """Returned by ``GET /scoring/scores``.
 
@@ -2077,6 +2106,20 @@ class LedgerResponse(BaseModel):
                 "Protocol-29 consensus marker. When capped, paired tie and "
                 "unpaired dethrone statistics are limited to twice the KOTH "
                 "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
+    crown_gate: Annotated[
+        CrownGateMarker | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-34 consensus marker. When present, a challenger "
+                "dethrones only on the paired shared-seed statistic with at "
+                "least min_dethrone_confirmations shared seeds, and the crown "
+                "must sit inside the top champion_standing_rank official "
+                "places. Absent preserves the pre-34 walk."
             ),
         ),
     ] = None

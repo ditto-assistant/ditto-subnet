@@ -40,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
 from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL, BurnSettings
 from ditto.api_models.continual_retest_settings import (
+    CROWN_GATE_PROTOCOL,
     CROWN_INCUMBENT_PROTOCOL,
     PROVISIONAL_INCUMBENT_PROTOCOL,
     ContinualRetestSettings,
@@ -62,6 +63,7 @@ from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.confirmation_seed_anchor import list_reign_seed_anchors
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    crown_gate_for,
     crown_incumbent_is_active,
     statistical_band_cap_is_active,
     tie_weighting_is_active,
@@ -93,6 +95,7 @@ from ditto.api_server.generator_competition import (
 from ditto.api_server.generator_competition import (
     load_settings as load_generator_settings,
 )
+from ditto.api_server.koth import CrownGate, crown_gate_marker
 from ditto.api_server.treasury_read_diagnostics import treasury_read_failure_kind
 from ditto.api_server.validator_request_outcomes import (
     ledger_outcome,
@@ -191,6 +194,10 @@ _CROWN_INCUMBENT_PROTOCOL = CROWN_INCUMBENT_PROTOCOL
 # or an older validator would crown and pay the held incumbent's runner-up.
 _PROVISIONAL_INCUMBENT_PROTOCOL = PROVISIONAL_INCUMBENT_PROTOCOL
 _STATISTICAL_BAND_CAP_PROTOCOL = 29
+# Protocol 34 gates the crown on shared-seed evidence and official standing.
+# Served only once every recently-live weight setter reports it; a v33
+# validator would ignore the marker and walk the crown ungated.
+_CROWN_GATE_PROTOCOL = CROWN_GATE_PROTOCOL
 # The first validator protocol whose fold reads the served ``rank_shares``
 # payout curve. Withheld until every recently-live weight setter reports it, or
 # a mixed fleet would fold two curves in one epoch.
@@ -243,6 +250,9 @@ class _LedgerSnapshot:
     tie_weighting_mode: Literal["pool"] | None = None
     dethrone_band_mode: Literal["headroom_capped"] | None = None
     statistical_band_mode: Literal["capped"] | None = None
+    crown_gate: CrownGate | None = None
+    """The protocol-34 crown rules served to the fleet, or ``None`` for the
+    ungated walk. Replayed on the stale path like ``burn_share``."""
     rank_shares: tuple[float, ...] | None = None
     """The operator payout curve served to the fleet, or ``None`` for the frozen
     curve. Replayed on the stale path like ``burn_share``."""
@@ -309,6 +319,7 @@ class _LedgerContext:
     unbounded_factor_fleet_ready: bool = False
     dethrone_band_clamp_fleet_ready: bool = False
     statistical_band_cap_fleet_ready: bool = False
+    crown_gate_fleet_ready: bool = False
     crown_incumbent_fleet_ready: bool = False
     reward_eligibility_fleet_ready: bool = False
     rank_shares_fleet_ready: bool = False
@@ -527,6 +538,9 @@ async def resolve_ledger_context(
     statistical_band_cap_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_STATISTICAL_BAND_CAP_PROTOCOL, now=now
     )
+    crown_gate_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        session, minimum_protocol=_CROWN_GATE_PROTOCOL, now=now
+    )
     rank_shares_fleet_ready = await live_weight_setter_fleet_supports_protocol(
         session, minimum_protocol=_RANK_SHARES_PROTOCOL, now=now
     )
@@ -559,6 +573,7 @@ async def resolve_ledger_context(
         unbounded_factor_fleet_ready=unbounded_factor_fleet_ready,
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
         statistical_band_cap_fleet_ready=statistical_band_cap_fleet_ready,
+        crown_gate_fleet_ready=crown_gate_fleet_ready,
         crown_incumbent_fleet_ready=crown_incumbent_fleet_ready,
         reward_eligibility_fleet_ready=reward_eligibility_fleet_ready,
         rank_shares_fleet_ready=rank_shares_fleet_ready,
@@ -642,6 +657,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         statistical_band_mode=snapshot.statistical_band_mode,
+        crown_gate=crown_gate_marker(snapshot.crown_gate),
         rank_shares=(
             list(snapshot.rank_shares) if snapshot.rank_shares is not None else None
         ),
@@ -1234,6 +1250,10 @@ async def materialize_ledger_snapshot(
             )
             else None
         ),
+        crown_gate=crown_gate_for(
+            continual_settings,
+            fleet_protocol_ready=ledger_context.crown_gate_fleet_ready,
+        ),
         rank_shares=(
             burn_settings.rank_shares
             if ledger_context.rank_shares_fleet_ready
@@ -1269,6 +1289,7 @@ async def materialize_ledger_snapshot(
             "unbounded_factor": ledger_context.unbounded_factor_fleet_ready,
             "dethrone_band_clamp": ledger_context.dethrone_band_clamp_fleet_ready,
             "statistical_band_cap": ledger_context.statistical_band_cap_fleet_ready,
+            "crown_gate": ledger_context.crown_gate_fleet_ready,
             "crown_incumbent": ledger_context.crown_incumbent_fleet_ready,
             "reward_eligibility": ledger_context.reward_eligibility_fleet_ready,
             "rank_shares": ledger_context.rank_shares_fleet_ready,
@@ -1411,7 +1432,9 @@ async def _require_statistical_cap_requester(
     # Likewise a served track split: a sub-33 rejoiner folds the generator in
     # shadow and would burn its share instead of paying generators or memory.
     split = bool(ledger.track_shares_bps)
-    if not capped and not curved and not split:
+    # And the crown gate: a sub-34 rejoiner walks the crown ungated.
+    gated = ledger.crown_gate is not None
+    if not capped and not curved and not split and not gated:
         return ledger
     heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
     seen_at = heartbeat.seen_at if heartbeat is not None else None
@@ -1437,6 +1460,11 @@ async def _require_statistical_cap_requester(
         raise HTTPException(
             status_code=428,
             detail="validator protocol 33 is required for the pinned track split",
+        )
+    if gated and protocol < _CROWN_GATE_PROTOCOL:
+        raise HTTPException(
+            status_code=428,
+            detail="validator protocol 34 is required for the pinned crown gate",
         )
     return ledger
 
@@ -1824,6 +1852,11 @@ def _serve_last_known(
             status_code=503,
             detail="scoring ledger unavailable; cannot verify protocol-29 requester",
         ) from error
+    if snapshot is not None and getattr(snapshot, "crown_gate", None) is not None:
+        raise HTTPException(
+            status_code=503,
+            detail="scoring ledger unavailable; cannot verify protocol-34 requester",
+        ) from error
     if snapshot is not None and getattr(snapshot, "rank_shares", None) is not None:
         raise HTTPException(
             status_code=503,
@@ -1901,6 +1934,7 @@ def _serve_last_known(
         tie_weighting_mode=snapshot.tie_weighting_mode,
         dethrone_band_mode=snapshot.dethrone_band_mode,
         statistical_band_mode=snapshot.statistical_band_mode,
+        crown_gate=None,
         rank_shares=(
             list(snapshot.rank_shares) if snapshot.rank_shares is not None else None
         ),

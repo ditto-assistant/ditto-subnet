@@ -152,7 +152,16 @@ from ditto import __version__
 # requester while a split is served or pinned). Until that Platform setting
 # exists and is written, no split is served and v33 folds exactly as v32.
 # Heartbeat signing bytes are unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 33
+# v34 consumes ``LedgerResponse.crown_gate``: a challenger dethrones only on the
+# paired shared-seed statistic with at least ``min_dethrone_confirmations``
+# seeds shared with the champion, and only an entry inside the top
+# ``champion_standing_rank`` official places may hold or take the crown (an
+# incumbent that falls out hands it to the best-qualified standing entry). A
+# v33 validator ignores the additive marker and keeps the ungated walk -- a
+# different champion, and so a different weight vector -- so Platform must
+# withhold it until every recently-live weight setter reports v34+. Heartbeat
+# signing bytes are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 34
 
 
 @dataclass(frozen=True)

@@ -44,7 +44,13 @@ from ditto.api_models.treasury_readiness import (
     LedgerPinStage,
 )
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
-from ditto.api_server.koth import koth_entries_from_ledger, project_koth
+from ditto.api_server.koth import (
+    TOP5_MAX_CONFIRMATION_SEEDS,
+    CrownGate,
+    crown_gate_marker,
+    koth_entries_from_ledger,
+    project_koth,
+)
 from ditto.api_server.treasury_read_diagnostics import record_treasury_read
 from ditto.api_server.treasury_shadow import observe_shadow_treasury
 from ditto.chain.errors import (
@@ -216,6 +222,29 @@ def served_rank_shares(served: dict[str, Any]) -> list[float] | None:
     return shares
 
 
+def served_crown_gate(served: dict[str, Any]) -> CrownGate | None:
+    """The protocol-34 crown rules frozen with a pin, or ``None`` for none.
+
+    Validated exactly as validators validate ``LedgerResponse.crown_gate``:
+    anything malformed folds the pre-34 walk on every side.
+    """
+    raw = served.get("crown_gate")
+    if not isinstance(raw, dict):
+        return None
+    min_seeds = raw.get("min_dethrone_confirmations")
+    standing = raw.get("champion_standing_rank")
+    if (
+        isinstance(min_seeds, bool)
+        or isinstance(standing, bool)
+        or not isinstance(min_seeds, int)
+        or not isinstance(standing, int)
+        or not 2 <= min_seeds <= TOP5_MAX_CONFIRMATION_SEEDS
+        or not 1 <= standing <= 5
+    ):
+        return None
+    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+
+
 def served_track_shares(served: dict[str, Any]) -> dict[str, int]:
     """The protocol-33 track split frozen with a pin, or ``{}`` for none.
 
@@ -298,6 +327,7 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         tie_weighting_mode=served.get("tie_weighting_mode"),
         dethrone_band_mode=served.get("dethrone_band_mode"),
         statistical_band_mode=served.get("statistical_band_mode"),
+        crown_gate=crown_gate_marker(served_crown_gate(served)),
         rank_shares=served_rank_shares(served),
         count=len(pin.entries),
         generated_at=pin.pinned_at,
@@ -528,6 +558,7 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
         incumbent_agent_id=(
             pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
         ),
+        crown_gate=served_crown_gate(served),
     )
     if projection is None:
         return None
@@ -1020,6 +1051,14 @@ def build_pin_draft(
         served["treasury_pin"] = treasury.model_dump(mode="json")
     if getattr(snapshot, "statistical_band_mode", None) == "capped":
         served["statistical_band_mode"] = "capped"
+    # Keyed only when the protocol-34 crown gate is served, so every pin taken
+    # without it keeps its digest byte for byte.
+    crown_gate = getattr(snapshot, "crown_gate", None)
+    if crown_gate is not None:
+        served["crown_gate"] = {
+            "min_dethrone_confirmations": crown_gate.min_shared_seeds,
+            "champion_standing_rank": crown_gate.standing_rank,
+        }
     # Keyed only when a fleet-ready operator curve is served, so every pin taken
     # on the frozen curve keeps its digest byte for byte.
     rank_shares = getattr(snapshot, "rank_shares", None)
@@ -1101,6 +1140,7 @@ def build_pin_draft(
         statistical_band_cap=getattr(snapshot, "statistical_band_mode", None)
         == "capped",
         incumbent_agent_id=(incumbent if snapshot.crown_mode == "incumbent" else None),
+        crown_gate=crown_gate,
     )
     champion_id = projection.champion.agent_id if projection is not None else None
     context = {
@@ -1259,6 +1299,7 @@ __all__ = [
     "pin_expected_shares",
     "pin_generator_fraction",
     "pin_provisional_incumbent",
+    "served_crown_gate",
     "served_rank_shares",
     "served_track_shares",
     "ledger_digest",

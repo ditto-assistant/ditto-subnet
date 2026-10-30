@@ -1,0 +1,72 @@
+{
+  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen.",
+  "cases": [
+    {
+      "name": "unretested newcomer cannot take the crown",
+      "entries": [
+        {"name": "king", "composite": 0.935, "stderr": 0.008, "minutes": 0,
+         "seeds": {"1": 0.93, "2": 0.95, "3": 0.92, "4": 0.94, "5": 0.93, "6": 0.95, "7": 0.92, "8": 0.94, "9": 0.93, "10": 0.94, "11": 0.95, "12": 0.93}},
+        {"name": "newcomer", "composite": 0.962, "stderr": 0.009, "minutes": 600}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "newcomer",
+      "gated_champion": "king"
+    },
+    {
+      "name": "a paired lead on enough shared seeds still dethrones",
+      "entries": [
+        {"name": "king", "composite": 0.90, "stderr": 0.008, "minutes": 0,
+         "seeds": {"1": 0.90, "2": 0.91, "3": 0.89, "4": 0.90, "5": 0.91, "6": 0.89}},
+        {"name": "challenger", "composite": 0.95, "stderr": 0.008, "minutes": 600,
+         "seeds": {"1": 0.95, "2": 0.96, "3": 0.945}}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "challenger",
+      "gated_champion": "challenger"
+    },
+    {
+      "name": "two shared seeds are below a three-seed minimum",
+      "entries": [
+        {"name": "king", "composite": 0.90, "stderr": 0.008, "minutes": 0,
+         "seeds": {"1": 0.90, "2": 0.91, "3": 0.89, "4": 0.90, "5": 0.91, "6": 0.89}},
+        {"name": "challenger", "composite": 0.95, "stderr": 0.008, "minutes": 600,
+         "seeds": {"1": 0.95, "2": 0.96}}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "challenger",
+      "gated_champion": "king"
+    },
+    {
+      "name": "a king below the standing cut hands the crown to the best-qualified standing entry",
+      "entries": [
+        {"name": "king", "composite": 0.85, "stderr": 0.008, "minutes": 0,
+         "seeds": {"1": 0.85, "2": 0.86, "3": 0.84, "4": 0.85, "5": 0.86}},
+        {"name": "leader", "composite": 0.95, "stderr": 0.008, "minutes": 300},
+        {"name": "qualified", "composite": 0.93, "stderr": 0.008, "minutes": 400,
+         "seeds": {"1": 0.93, "2": 0.94, "3": 0.92}},
+        {"name": "third", "composite": 0.90, "stderr": 0.008, "minutes": 500,
+         "seeds": {"1": 0.90, "2": 0.91, "3": 0.89, "4": 0.90, "5": 0.91}}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "leader",
+      "gated_champion": "qualified"
+    },
+    {
+      "name": "with no qualified standing entry the official leader takes over",
+      "entries": [
+        {"name": "king", "composite": 0.85, "stderr": 0.008, "minutes": 0},
+        {"name": "leader", "composite": 0.95, "stderr": 0.008, "minutes": 300},
+        {"name": "second", "composite": 0.93, "stderr": 0.008, "minutes": 400},
+        {"name": "third", "composite": 0.90, "stderr": 0.008, "minutes": 500}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "leader",
+      "gated_champion": "leader"
+    }
+  ]
+}

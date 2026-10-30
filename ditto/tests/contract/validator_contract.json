@@ -3764,6 +3764,25 @@
         ],
         "type": "object"
       },
+      "CrownGateMarker": {
+        "properties": {
+          "champion_standing_rank": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_dethrone_confirmations": {
+            "maximum": 15,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "min_dethrone_confirmations",
+          "champion_standing_rank"
+        ],
+        "type": "object"
+      },
       "EnforcingTreasuryPin": {
         "properties": {
           "allocations": {
@@ -5764,6 +5783,17 @@
       "count": {
         "minimum": 0,
         "type": "integer"
+      },
+      "crown_gate": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CrownGateMarker"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "crown_incumbent_agent_id": {
         "anyOf": [
