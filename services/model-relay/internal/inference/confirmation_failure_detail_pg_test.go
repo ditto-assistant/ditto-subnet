@@ -90,17 +90,20 @@ func TestConfirmationFailureDetailRecordsATransportTimeout(t *testing.T) {
 	if row.status != "failed" || row.kind.String != "transport_timeout" {
 		t.Fatalf("kind: status=%s kind=%v", row.status, row.kind)
 	}
-	// No response arrived, so there is no status to record -- and no receipt,
-	// which makes a transport failure receipt-free by construction.
+	// No response arrived, so there is no status to record. receipt_free must
+	// be NULL, not true: a timed-out request may have reached the gateway and
+	// been billed, so nothing proves it was receipt-free. #3287 first recorded
+	// true here, which would have marked exactly the unsafe case as safe to
+	// re-dispatch once retries keyed on this column.
 	if row.httpStatus.Valid {
 		t.Fatalf("upstream_http_status = %v on a timeout, want NULL", row.httpStatus)
 	}
-	if !row.receiptFree.Valid || !row.receiptFree.Bool {
-		t.Fatalf("receipt_free = %v on a timeout, want true", row.receiptFree)
+	if row.receiptFree.Valid {
+		t.Fatalf("receipt_free = %v on a timeout, want NULL (unknown)", row.receiptFree)
 	}
 }
 
-func TestConfirmationFailureDetailLeavesACompletedCallNull(t *testing.T) {
+func TestConfirmationFailureDetailRecordsOnlyAttemptsOnACompletedCall(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
@@ -122,7 +125,12 @@ func TestConfirmationFailureDetailLeavesACompletedCallNull(t *testing.T) {
 	}
 
 	row := readFailureDetail(t, f, nonce)
-	if row.status != "completed" || row.kind.Valid || row.httpStatus.Valid || row.attempts.Valid || row.receiptFree.Valid {
+	if row.status != "completed" || row.kind.Valid || row.httpStatus.Valid || row.receiptFree.Valid {
 		t.Fatalf("completed call carries failure detail: %+v", row)
+	}
+	// Attempts ARE recorded on success: the grant retry budget sums them, and a
+	// call that succeeded only after retrying must still show those retries.
+	if !row.attempts.Valid || row.attempts.Int32 != 1 {
+		t.Fatalf("upstream_attempts = %v on a first-try success, want 1", row.attempts)
 	}
 }

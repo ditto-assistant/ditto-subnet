@@ -76,6 +76,23 @@ func (q *Queries) ApplyConfirmationGrantSettlement(ctx context.Context, arg Appl
 	return i, err
 }
 
+const confirmationGrantRetriesUsed = `-- name: ConfirmationGrantRetriesUsed :one
+SELECT COALESCE(SUM(GREATEST(COALESCE(upstream_attempts, 1) - 1, 0)), 0)::bigint AS retries_used
+FROM confirmation_inference_requests
+WHERE grant_id = $1::uuid
+`
+
+// Retries this grant has already spent: every upstream dispatch beyond the
+// first, across all of its settled calls. Rows settled before upstream_attempts
+// was recorded count as a single dispatch. Bounded by the grant's own request
+// cap, so it reads at most a few thousand rows.
+func (q *Queries) ConfirmationGrantRetriesUsed(ctx context.Context, grantID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, confirmationGrantRetriesUsed, grantID)
+	var retries_used int64
+	err := row.Scan(&retries_used)
+	return retries_used, err
+}
+
 const deleteConfirmationInferenceRequest = `-- name: DeleteConfirmationInferenceRequest :exec
 DELETE FROM confirmation_inference_requests
 WHERE grant_id = $1::uuid
