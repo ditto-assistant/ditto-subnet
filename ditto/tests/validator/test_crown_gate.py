@@ -12,12 +12,12 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
 
-from ditto.api_models.validator import CrownGateMarker
+from ditto.api_models.validator import CrownGateMarker, LedgerResponse
 from ditto.validator.config import KOTH_DETHRONE_Z, KOTH_MARGIN
 from ditto.validator.weights import CrownGate, _champion
 from ditto.validator.worker import _ledger_crown_gate
@@ -69,11 +69,15 @@ def test_validator_fold_matches_shared_crown_gate_cases(case: dict[str, Any]) ->
     assert fold(gate) == case["gated_champion"]
 
 
+def _ledger(**fields: object) -> LedgerResponse:
+    return cast(LedgerResponse, SimpleNamespace(**fields))
+
+
 def test_only_a_well_formed_served_marker_gates_the_crown() -> None:
     marker = CrownGateMarker(min_dethrone_confirmations=3, champion_standing_rank=3)
-    assert _ledger_crown_gate(SimpleNamespace(crown_gate=marker)) == CrownGate(3, 3)
-    assert _ledger_crown_gate(SimpleNamespace(crown_gate=None)) is None
+    assert _ledger_crown_gate(_ledger(crown_gate=marker)) == CrownGate(3, 3)
+    assert _ledger_crown_gate(_ledger(crown_gate=None)) is None
     # An older Platform without the field folds the pre-34 walk.
-    assert _ledger_crown_gate(SimpleNamespace()) is None
+    assert _ledger_crown_gate(_ledger()) is None
     bogus = SimpleNamespace(min_dethrone_confirmations=1, champion_standing_rank=3)
-    assert _ledger_crown_gate(SimpleNamespace(crown_gate=bogus)) is None
+    assert _ledger_crown_gate(_ledger(crown_gate=bogus)) is None
