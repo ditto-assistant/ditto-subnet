@@ -61,6 +61,14 @@ must type the exact displayed amount-and-wallet confirmation and click
 **Transfer once**. The live signed-in Backroom actor is recorded by the server;
 read-only users and cross-origin requests cannot queue a transfer.
 
+When custody cannot finish a request in one pass (a transient archive read, or
+a broadcast still waiting for finality) it leaves the message unacknowledged
+and immediately releases its lease, so Pub/Sub redelivers it under the
+subscription's 15s-300s retry backoff. Before this, every such pass waited out
+the 600s ack deadline: transfers with 19-20 sources took 25-35 minutes to reach
+the chain, and one expired unsigned after eight deliveries. Each redelivery
+reuses the same UUID and journal claim and never signs a second transaction.
+
 Platform serializes confirmed requests in SQL before dispatch. A UUID binds
 one immutable envelope, including previous claim, source, expiry and reason.
 One pending claim or unpublished receipt blocks a second request. If delivery
