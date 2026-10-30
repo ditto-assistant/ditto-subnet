@@ -108,7 +108,8 @@ def test_reused_draft_prompt_note_is_not_i4(render) -> None:
     ).read_text()
     i4 = policy.split("### I4:", 1)[1].split("### I5:", 1)[0]
     for fragment in (
-        "#### Clarification: reused drafts and earlier replies as prompt text (2026-10-29)",
+        "#### Clarification: reused drafts and earlier replies as prompt text"
+        " (2026-10-29)",
         "has no clause saying the model may disagree",
         "is W7 shape recovery, not\nsubstitution",
         "It is still a violation when host code:",
