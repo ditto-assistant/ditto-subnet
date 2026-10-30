@@ -119,6 +119,11 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
      then ships; at most once per turn, no host retry, rewrite or forced call
      (W7, ruled 2026-10-28). A no-call reply held for one extra deciding turn
      this way is not suppressed dissent;
+   - a reused model-sampled draft or earlier reply placed in the deciding
+     prompt only as text, even one labeled "your reply" that says to keep
+     the same answer with no disagree clause, when the deciding model's own
+     reply ships and no host compare, retry, overwrite or rebuild acts on
+     it (not I3/I4, ruled 2026-10-29);
    - Unicode/whitespace/wrapper/`Answer:` normalization (W8);
    - suppressing an exact duplicate after genuine success when repetition was
      not requested (W11).

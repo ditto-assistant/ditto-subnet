@@ -733,6 +733,59 @@ direction, or other scorer-visible value.
 Preserving original words elsewhere does not cure changing their authoritative
 field.
 
+#### Clarification: reused drafts and earlier replies as prompt text (2026-10-29)
+
+A reused, model-sampled draft of the answer, or an earlier model reply, that
+reaches the deciding model **only as prompt text** is not an I4 violation, and
+not an I3 violation, when the deciding model's own reply then ships. A typical
+case is a draft written once by a genuine model call over the same user's
+notes and reused when the same question is reworded over those notes. This
+holds even when the note:
+
+- labels the draft as the model's own earlier reply or as "the reply" to the
+  question;
+- tells the model to keep to it, give the same answer, or agree with it unless
+  the notes plainly show it wrong; or
+- has no clause saying the model may disagree.
+
+I4 covers host processing that changes a finalized field. Prescriptive prompt
+wording that asks the deciding model to agree with a draft is not host
+processing of a finalized field: the deciding model still writes the reply,
+and nothing in host code enforces the agreement. A new deciding call that
+reads such a note is that model's free decision for I3 and I4 purposes.
+Content-keyed reuse of the draft (for example by user, the notes shown and the
+asked words) is caching, not semantic selection. Carrying an earlier answer
+onto a question about a different state is a quality risk for the benchmark's
+scoring to penalize, not an integrity ground.
+
+A fallback that fires only when the final reply is missing or empty, and then
+ships a model-authored reply from the same request, is W7 shape recovery, not
+substitution. Trace whether the fallback can carry content on the cited path;
+a fallback variable that stays empty on that path is not a reachable writer.
+
+It is still a violation when host code:
+
+- compares the reply against the draft, retries on disagreement, overwrites a
+  well-formed reply with the draft, or substitutes the draft's value
+  (I3, I4); or
+- rejects a well-formed model reply on a semantic test, or builds the final
+  text itself instead of forwarding the model's reply (I3, I4).
+
+For example, a host check that detects an echo of the user's sentence, sends
+the model back once, and on a second hit ships a host-built reply such as
+"Noted: your setting is now ..." from a separate value-only call is a
+violation (crown-v193).
+
+A reviewer that finds only this resolves those I3 and I4 leads as refuted
+under this clarification rather than leaving them unresolved. A reject of a
+submission that has such a note needs an independent ground, proven under its
+own condition.
+
+The 2026-10 screening rejects that rested only on this mechanism (a
+`SHARED_DRAFT_NOTE` reused-draft note on the short path, as in crown-v192,
+crown-v194 and nanodevs v6) are withdrawn as precedent. A holding that also
+proved an independent ground keeps that ground.
+
 ### I5: benchmark-shaped semantic compiler
 
 Reject when a benchmark-shaped phrase table, prompt, worksheet, formula

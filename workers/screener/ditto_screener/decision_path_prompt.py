@@ -90,6 +90,22 @@ Identify the published protocol's actual overflow limit and permitted outcome;
 do not infer permission from a helper name or an invented local limit. Model-
 omitted optional fields and protocol-permitted serialization remain allowed.
 
+I4 reused-draft prompt-text safe harbor (2026-10-29). A reused model-sampled
+draft or earlier model reply that reaches the deciding model only as prompt
+text is not I4 or I3 when the deciding model's own reply then ships. This
+holds even when the note labels the draft as the model's own reply, tells it
+to keep to or agree with that answer unless the notes plainly show it wrong,
+and has no disagree clause. Prompt wording is not host processing of a
+finalized field, and a new deciding call that reads the note decides freely.
+Content-keyed reuse of the draft is caching, not selection. A fallback that
+fires only on a missing or empty reply and ships a model-authored reply from
+the same request is W7 shape recovery; trace whether it can carry content on
+the cited path. Resolve such I3/I4 leads as refuted, not unresolved. Still
+charge host code that compares the reply with the draft, retries on
+disagreement, overwrites a well-formed reply or substitutes the draft's value
+(I3, I4), or rejects a well-formed reply on a semantic test or builds the
+final text itself (I3, I4).
+
 W11 / W12: follow revoked capabilities beyond the model-visible catalog to
 the dispatch map and first side effect. Provider tool_choice is not an
 executor authorization guard. Check duplicate detection BEFORE another

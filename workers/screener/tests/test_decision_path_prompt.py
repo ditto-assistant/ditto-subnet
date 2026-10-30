@@ -91,6 +91,42 @@ def test_routed_instruction_guidance_is_not_rejectable_alone(render) -> None:
 @pytest.mark.parametrize(
     "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
 )
+def test_reused_draft_prompt_note_is_not_i4(render) -> None:
+    # nanodevs v6 (6949d5fe, 3919e647...): SHARED_DRAFT_NOTE calls a reused
+    # draft "Your reply" and says "Keep to it ... unless the notes plainly show
+    # it wrong", with no disagree clause; the empty-reply fallback's draft
+    # stays "" on that path. Rejected twice on I4; cleared under #3270.
+    prompt = render(13)
+    assert "I4 reused-draft prompt-text safe harbor (2026-10-29)." in prompt
+    assert "labels the draft as the model's own reply" in prompt
+    assert "and has no disagree clause" in prompt
+    assert "Resolve such I3/I4 leads as refuted, not unresolved." in prompt
+    assert "builds the\nfinal text itself (I3, I4)" in prompt
+    assert "reused-draft prompt-text safe harbor" not in render(12)
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    i4 = policy.split("### I4:", 1)[1].split("### I5:", 1)[0]
+    for fragment in (
+        "#### Clarification: reused drafts and earlier replies as prompt text (2026-10-29)",
+        "has no clause saying the model may disagree",
+        "is W7 shape recovery, not\nsubstitution",
+        "It is still a violation when host code:",
+        "(crown-v193)",
+        "A reviewer that finds only this resolves those I3 and I4 leads as refuted",
+        "nanodevs v6) are withdrawn as precedent",
+    ):
+        assert fragment in i4
+    probe = (
+        Path(__file__).resolve().parents[1]
+        / "ditto_screener/probe_review/reviewer_prompt.md"
+    ).read_text()
+    assert "ruled 2026-10-29" in probe
+
+
+@pytest.mark.parametrize(
+    "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
+)
 def test_one_time_reply_drafts_and_checks_are_w7_not_i3(render) -> None:
     prompt = render(13)
     assert "I3 reply-draft and reply-check safe harbor (2026-10-28)." in prompt
