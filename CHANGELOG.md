@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.415.0 (2026-10-30)
+
+### Features
+
+- Retry receipt-free confirmation provider failures with a bounded budget
+  ([#3289](https://github.com/ditto-assistant/ditto-subnet/pull/3289),
+  [`d9f23d0`](https://github.com/ditto-assistant/ditto-subnet/commit/d9f23d0d71a45c834b1c2e2bebdfc0531c6d6a10))
+
+
 ## v0.414.0 (2026-10-30)
 
 ### Bug Fixes
