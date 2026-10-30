@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.414.0 (2026-10-30)
+
+### Bug Fixes
+
+- **treasury**: Release unacked manual request leases instead of waiting out the ack deadline
+  ([#3288](https://github.com/ditto-assistant/ditto-subnet/pull/3288),
+  [`0ea5551`](https://github.com/ditto-assistant/ditto-subnet/commit/0ea5551e9d623ec1cdd9839486e2c2b5fc81397d))
+
+### Features
+
+- Record why a confirmation provider call failed
+  ([#3287](https://github.com/ditto-assistant/ditto-subnet/pull/3287),
+  [`c2449f3`](https://github.com/ditto-assistant/ditto-subnet/commit/c2449f301b4423dac063c12ef6098b2a20a64d77))
+
+
 ## v0.413.3 (2026-10-30)
 
 ### Bug Fixes
