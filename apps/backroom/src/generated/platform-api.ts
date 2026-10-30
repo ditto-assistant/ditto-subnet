@@ -24393,6 +24393,12 @@ export interface components {
              * @default 40000
              */
             embedding_per_validator_requests_per_minute: number;
+            /**
+             * Scored Provider Routing
+             * @default throughput
+             * @enum {string}
+             */
+            scored_provider_routing: "throughput" | "bf16_price_order_canary" | "bf16_price_order";
         };
         /** InferenceConcurrencySettingsRevision */
         InferenceConcurrencySettingsRevision: {

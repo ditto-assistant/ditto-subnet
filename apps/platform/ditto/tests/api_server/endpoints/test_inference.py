@@ -34,6 +34,7 @@ from ditto.api_server.endpoints.inference import (
     _bounded_provider_cost,
     _ChatProviderExhausted,
     _complete_chat_with_recovery,
+    _effective_scored_provider_routing,
     _estimated_tokens,
     _exchange_message,
     _locked_confirmation_chat_payload,
@@ -762,6 +763,37 @@ def test_aggregate_route_is_throughput_sorted_and_excludes_unreviewed_routes() -
     assert _bounded_provider_cost({"usage": {"cost": float("nan")}}) is None
 
 
+def test_bf16_price_order_pins_bf16_providers_and_keeps_privacy() -> None:
+    providers = ["deepinfra", "amazon-bedrock", "groq", "dekallm"]
+    assert _provider_preferences(
+        routing_mode="aggregate_throughput",
+        provider="openrouter",
+        quantization=None,
+        scored_routing="bf16_price_order",
+    ) == {
+        "order": providers,
+        "only": providers,
+        "ignore": ["coreweave"],
+        "allow_fallbacks": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+    # The canary mode is resolved per ticket before this call.
+    assert _effective_scored_provider_routing(
+        "bf16_price_order_canary", "benchmark_canary"
+    ) == ("bf16_price_order")
+    for routing, purpose in (
+        ("bf16_price_order_canary", "continual_retest"),
+        ("bf16_price_order_canary", None),
+        ("throughput", "benchmark_canary"),
+    ):
+        assert _effective_scored_provider_routing(routing, purpose) == "throughput"
+    assert (
+        _effective_scored_provider_routing("bf16_price_order", "canonical_quorum")
+        == "bf16_price_order"
+    )
+
+
 def _recovery_config() -> InferenceProxyConfig:
     return cast(
         InferenceProxyConfig,
@@ -770,6 +802,7 @@ def _recovery_config() -> InferenceProxyConfig:
             upstream_url="https://openrouter.ai/api/v1/chat/completions",
             openrouter_api_key="test-key",
             response_body_bytes=2 << 20,
+            scored_provider_routing="throughput",
         ),
     )
 

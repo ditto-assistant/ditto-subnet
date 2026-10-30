@@ -103,7 +103,13 @@ type beginParams struct {
 type beginResult struct {
 	grant   postgres.InferenceGrant
 	request postgres.InferenceRequest
+	// ticketPurpose is the locked ticket's purpose ("" when the row was
+	// missing). It selects only the scored provider-routing canary.
+	ticketPurpose string
 }
+
+// ticketPurposeBenchmarkCanary mirrors TicketPurpose.BENCHMARK_CANARY.
+const ticketPurposeBenchmarkCanary = "benchmark_canary"
 
 // atCapacity records which admission gate declined (metric label), then
 // answers the one wire value.
@@ -471,5 +477,9 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 		grant.EmbeddingActiveRequests++
 	}
 	grant.UpdatedAt = pgTime(p.now)
-	return &beginResult{grant: grant, request: request}, nil, nil
+	purpose := ""
+	if ticket != nil {
+		purpose = ticket.Purpose
+	}
+	return &beginResult{grant: grant, request: request, ticketPurpose: purpose}, nil, nil
 }

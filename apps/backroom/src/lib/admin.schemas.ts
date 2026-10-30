@@ -3522,6 +3522,17 @@ export const DEFAULT_DECISION_LANE_SETTINGS = {
   global_requests_per_minute: 6_000,
 }
 
+// OpenRouter provider preference for the aggregate scored chat route.
+// throughput: OpenRouter sorts eligible ZDR providers by throughput (mostly
+// Bedrock). bf16_price_order: DeepInfra bf16 first, then Bedrock, Groq and
+// DekaLLM bf16, pinned with `only`, fallbacks on, ZDR unchanged.
+// bf16_price_order_canary: the price order for benchmark_canary tickets only.
+export const scoredProviderRoutingSchema = z.enum([
+  'throughput',
+  'bf16_price_order_canary',
+  'bf16_price_order',
+])
+
 const inferenceConcurrencySettingsBaseSchema = z.object({
   // Chat completions one scoring ticket's grant may spend in total. Ships at
   // 16384, ~15x the heaviest observed run.
@@ -3559,13 +3570,21 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   decision_lane: decisionLaneSettingsSchema
     .nullish()
     .transform((value) => value ?? DEFAULT_DECISION_LANE_SETTINGS),
+  // Additive rolling-upgrade field: a Platform predating it omits it, which
+  // reads as the historical throughput route.
+  scored_provider_routing: scoredProviderRoutingSchema
+    .nullish()
+    .transform((value) => value ?? 'throughput'),
 })
 
 // The platform enforces this hierarchy with its own model validator and 422s a
 // violation. Mirrored here so the operator sees which field is wrong before a
 // round trip.
 const refineInferenceConcurrencyHierarchy = (
-  value: Omit<z.infer<typeof inferenceConcurrencySettingsBaseSchema>, 'decision_lane'>,
+  value: Omit<
+    z.infer<typeof inferenceConcurrencySettingsBaseSchema>,
+    'decision_lane' | 'scored_provider_routing'
+  >,
   context: z.RefinementCtx,
 ) => {
   if (value.chat_per_ticket_concurrency > value.chat_per_validator_concurrency) {
@@ -3649,6 +3668,9 @@ const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBase
   .extend({
     benchmark_runtime: benchmarkRuntimeSettingsSchema,
     decision_lane: decisionLaneSettingsSchema.optional(),
+    // Optional on writes for the same reason: an omitted value keeps the
+    // effective route, so a concurrency change never flips provider routing.
+    scored_provider_routing: scoredProviderRoutingSchema.optional(),
   })
   .superRefine(refineInferenceConcurrencyHierarchy)
 

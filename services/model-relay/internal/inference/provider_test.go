@@ -431,7 +431,7 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 }
 
 func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *testing.T) {
-	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "")
+	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", "")
 	if aggregate["sort"] != "throughput" || aggregate["allow_fallbacks"] != true ||
 		aggregate["data_collection"] != "deny" || aggregate["zdr"] != true {
 		t.Fatalf("aggregate provider preferences: %v", aggregate)
@@ -440,9 +440,39 @@ func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *test
 	if !ok || len(ignored) != 1 || ignored[0] != "coreweave" {
 		t.Fatalf("aggregate ignored providers: %v", aggregate["ignore"])
 	}
-	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8")
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8", "")
 	if adaptive["allow_fallbacks"] != false {
 		t.Fatalf("adaptive provider unexpectedly gained fallbacks: %v", adaptive)
+	}
+}
+
+func TestBF16PriceOrderPinsBF16ProvidersWithPrivacyAndFallbacks(t *testing.T) {
+	preferences := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "",
+		config.ScoredProviderRoutingBF16PriceOrder)
+	if _, sorted := preferences["sort"]; sorted {
+		t.Fatalf("bf16 price order must not also sort: %v", preferences)
+	}
+	if preferences["allow_fallbacks"] != true || preferences["data_collection"] != "deny" ||
+		preferences["zdr"] != true {
+		t.Fatalf("bf16 price order lost fallbacks or privacy: %v", preferences)
+	}
+	want := "deepinfra,amazon-bedrock,groq,dekallm"
+	for _, key := range []string{"order", "only"} {
+		got, _ := preferences[key].([]string)
+		if strings.Join(got, ",") != want {
+			t.Fatalf("%s = %v, want %s", key, got, want)
+		}
+	}
+	// Adaptive routing and the canary mode (resolved before this call) never
+	// reach the price order.
+	for _, routing := range []string{"", config.ScoredProviderRoutingThroughput, config.ScoredProviderRoutingBF16Canary} {
+		if got := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", routing); got["sort"] != "throughput" {
+			t.Fatalf("routing %q: %v", routing, got)
+		}
+	}
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "bf16", config.ScoredProviderRoutingBF16PriceOrder)
+	if only, _ := adaptive["only"].([]string); len(only) != 1 || only[0] != "deepinfra" {
+		t.Fatalf("adaptive route changed: %v", adaptive)
 	}
 }
 

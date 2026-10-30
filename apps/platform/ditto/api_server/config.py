@@ -188,6 +188,9 @@ class InferenceProxyConfig:
     decision_input_microusd_per_mtok: int = 0
     decision_request_budget: int = 0
     decision_token_budget: int = 0
+    # The board's ``scored_provider_routing``; never read from env. The chat
+    # endpoint resolves the canary mode per ticket before the provider call.
+    scored_provider_routing: str = "throughput"
 
 
 @dataclass(frozen=True)
