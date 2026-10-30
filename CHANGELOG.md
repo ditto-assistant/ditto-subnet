@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.416.0 (2026-10-30)
+
+### Features
+
+- **platform**: Add a live bf16 price-order route for scored inference
+  ([#3291](https://github.com/ditto-assistant/ditto-subnet/pull/3291),
+  [`ca0aaca`](https://github.com/ditto-assistant/ditto-subnet/commit/ca0aaca482be4219b88286ce10bc48cd517b1382))
+
+
 ## v0.415.0 (2026-10-30)
 
 ### Features
