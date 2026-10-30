@@ -21,18 +21,17 @@ Two asymmetries are deliberate and load-bearing:
   windows are hours and days instead, which is only affordable because the
   confirmation tables are small -- do not copy them back onto
   ``inference_requests``.
-* **No terminal error code is reported, because none is stored.**
-  ``inference_requests`` carries ``terminal_error_code`` and
-  ``upstream_http_status``; ``confirmation_inference_requests`` carries
-  neither, so the 429-versus-timeout split genuinely cannot be answered from
-  Postgres and lives only in the trace archive. Rather than invent a cause
-  label the ledger cannot testify to, this module reports the facts it does
-  hold -- whether a serving provider was ever recorded, whether anything was
-  billed, and how long the call ran -- and leaves the naming to the reader.
-  A group with ``failed_without_provider == failed`` at sub-second duration is
-  a pre-provider rejection; one whose duration sits at the configured
-  ``DITTO_INFERENCE_TIMEOUT_SECONDS`` is a hang. Persisting the real code is
-  tracked separately; it needs an Alembic migration plus a relay write.
+* **The failure detail is the relay's, not inferred.** Since revision
+  ``d09a6cba3154`` the relay records, on each failed call, a bounded
+  ``failure_kind``, the final ``upstream_http_status``, its
+  ``upstream_attempts``, and whether the failure was provably
+  ``receipt_free``. Groups are keyed on those, so a 5xx, a timeout and a
+  connection reset are separate rows instead of one "failed, no provider, no
+  cost" line. That separation is what decides whether a retry is safe (only a
+  receipt-free failure can be re-dispatched without double-charging) and how
+  it must back off. Before that revision all four are NULL, so a window that
+  spans the deploy reports older failures as ``failure_kind = NULL``: they are
+  unexplained, not healthy.
 
 Cost rules are inherited from ``inference_failure_taxonomy``: every statement is
 bounded by window, projects only the columns it aggregates, and returns a capped
@@ -84,6 +83,10 @@ _RECENT_SQL = f"""
              ELSE 'unrecognized'
            END                                          AS provider_basis,
            r.status                                     AS status,
+           r.failure_kind                               AS failure_kind,
+           r.upstream_http_status                       AS upstream_http_status,
+           r.upstream_attempts                          AS upstream_attempts,
+           r.receipt_free                               AS receipt_free,
            r.cost_microusd                              AS cost_microusd,
            r.started_at                                 AS started_at,
            r.completed_at                               AS completed_at,
@@ -131,7 +134,11 @@ grouped AS (
          r.upstream_provider,
          r.provider_basis,
          r.status,
+         r.failure_kind,
+         r.upstream_http_status,
+         r.receipt_free,
          count(*)                                                        AS calls,
+         COALESCE(max(r.upstream_attempts), 0)                           AS max_upstream_attempts,
          count(*) FILTER (WHERE r.cost_microusd = 0)                     AS without_cost,
          count(DISTINCT r.bundle_id)                                     AS bundles_affected,
          COALESCE(max(r.duration_ms), 0)                                 AS max_duration_ms,
@@ -139,13 +146,15 @@ grouped AS (
     FROM windows w
     JOIN recent r
       ON r.started_at >= now() - make_interval(secs => w.window_seconds)
-   GROUP BY w.window_seconds, r.lane, r.model, r.upstream_provider, r.provider_basis, r.status
+   GROUP BY w.window_seconds, r.lane, r.model, r.upstream_provider, r.provider_basis, r.status,
+            r.failure_kind, r.upstream_http_status, r.receipt_free
 ),
 ranked AS (
   SELECT grouped.*,
          row_number() OVER (
            PARTITION BY window_seconds, lane
-           ORDER BY calls DESC, model ASC, status ASC
+           ORDER BY calls DESC, model ASC, status ASC,
+                    failure_kind ASC NULLS FIRST, upstream_http_status ASC NULLS FIRST
          ) AS rank_in_lane
     FROM grouped
 )

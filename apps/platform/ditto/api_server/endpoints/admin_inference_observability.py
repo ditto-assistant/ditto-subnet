@@ -20,6 +20,7 @@ from ditto.api_models.inference_costs import (
 )
 from ditto.api_models.inference_failure_taxonomy import (
     ConfirmationFailureGroup,
+    ConfirmationFailureKind,
     ConfirmationFailureLaneWindow,
     InferenceFailureGroup,
     InferenceFailureLaneWindow,
@@ -420,6 +421,19 @@ async def _confirmation_failure_rows(
             ),
             provider_basis=cast(InferenceRouteBasis, str(row["provider_basis"])),
             status=str(row["status"]),
+            failure_kind=cast(
+                ConfirmationFailureKind | None,
+                str(row["failure_kind"]) if row["failure_kind"] is not None else None,
+            ),
+            upstream_http_status=(
+                int(row["upstream_http_status"])
+                if row["upstream_http_status"] is not None
+                else None
+            ),
+            receipt_free=(
+                bool(row["receipt_free"]) if row["receipt_free"] is not None else None
+            ),
+            max_upstream_attempts=int(row["max_upstream_attempts"]),
             calls=int(row["calls"]),
             without_cost=int(row["without_cost"]),
             bundles_affected=int(row["bundles_affected"]),

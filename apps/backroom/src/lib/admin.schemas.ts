@@ -3364,6 +3364,17 @@ export const inferenceFailureTaxonomySchema = z.object({
         upstream_provider: z.string().nullable(),
         provider_basis: z.string(),
         status: z.string(),
+        // Why a failed call failed, as the relay recorded it. Without these
+        // every confirmation provider failure read "failed, no provider, no
+        // cost" and a 5xx could not be told from a timeout or a reset. This
+        // object is non-strict, so an undeclared field would be stripped
+        // silently and never reach the operator: declare them. Null on
+        // completed calls and on failures settled before they were recorded,
+        // so a null on a failed group means "unexplained", never "fine".
+        failure_kind: z.string().nullable().default(null),
+        upstream_http_status: z.number().int().min(100).max(599).nullable().default(null),
+        receipt_free: z.boolean().nullable().default(null),
+        max_upstream_attempts: z.number().int().nonnegative().default(0),
         calls: z.number().int().nonnegative(),
         without_cost: z.number().int().nonnegative(),
         bundles_affected: z.number().int().nonnegative(),

@@ -224,7 +224,7 @@ func (q *Queries) GetConfirmationInferenceGrantForUpdate(ctx context.Context, gr
 }
 
 const getConfirmationInferenceRequestForUpdate = `-- name: GetConfirmationInferenceRequestForUpdate :one
-SELECT grant_id, nonce, generation, status, model, reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, upstream_provider, started_at, completed_at FROM confirmation_inference_requests
+SELECT grant_id, nonce, generation, status, model, reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, upstream_provider, started_at, completed_at, failure_kind, upstream_http_status, upstream_attempts, receipt_free FROM confirmation_inference_requests
 WHERE grant_id = $1::uuid
   AND nonce = $2::uuid
 FOR UPDATE
@@ -253,6 +253,10 @@ func (q *Queries) GetConfirmationInferenceRequestForUpdate(ctx context.Context, 
 		&i.UpstreamProvider,
 		&i.StartedAt,
 		&i.CompletedAt,
+		&i.FailureKind,
+		&i.UpstreamHttpStatus,
+		&i.UpstreamAttempts,
+		&i.ReceiptFree,
 	)
 	return i, err
 }
@@ -304,7 +308,7 @@ INSERT INTO confirmation_inference_requests (
     $7::timestamptz
 )
 ON CONFLICT (grant_id, nonce) DO NOTHING
-RETURNING grant_id, nonce, generation, status, model, reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, upstream_provider, started_at, completed_at
+RETURNING grant_id, nonce, generation, status, model, reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, upstream_provider, started_at, completed_at, failure_kind, upstream_http_status, upstream_attempts, receipt_free
 `
 
 type InsertConfirmationInferenceRequestParams struct {
@@ -351,6 +355,10 @@ func (q *Queries) InsertConfirmationInferenceRequest(ctx context.Context, arg In
 		&i.UpstreamProvider,
 		&i.StartedAt,
 		&i.CompletedAt,
+		&i.FailureKind,
+		&i.UpstreamHttpStatus,
+		&i.UpstreamAttempts,
+		&i.ReceiptFree,
 	)
 	return i, err
 }
@@ -401,20 +409,28 @@ SET status = $1::text,
     completion_tokens = $3::bigint,
     cost_microusd = $4::bigint,
     upstream_provider = $5::text,
-    completed_at = $6::timestamptz
-WHERE grant_id = $7::uuid
-  AND nonce = $8::uuid
+    completed_at = $6::timestamptz,
+    failure_kind = $7::text,
+    upstream_http_status = $8::integer,
+    upstream_attempts = $9::integer,
+    receipt_free = $10::boolean
+WHERE grant_id = $11::uuid
+  AND nonce = $12::uuid
 `
 
 type SettleConfirmationInferenceRequestParams struct {
-	Status           string             `json:"status"`
-	PromptTokens     int64              `json:"promptTokens"`
-	CompletionTokens int64              `json:"completionTokens"`
-	CostMicrousd     int64              `json:"costMicrousd"`
-	UpstreamProvider pgtype.Text        `json:"upstreamProvider"`
-	CompletedAt      pgtype.Timestamptz `json:"completedAt"`
-	GrantID          pgtype.UUID        `json:"grantId"`
-	Nonce            pgtype.UUID        `json:"nonce"`
+	Status             string             `json:"status"`
+	PromptTokens       int64              `json:"promptTokens"`
+	CompletionTokens   int64              `json:"completionTokens"`
+	CostMicrousd       int64              `json:"costMicrousd"`
+	UpstreamProvider   pgtype.Text        `json:"upstreamProvider"`
+	CompletedAt        pgtype.Timestamptz `json:"completedAt"`
+	FailureKind        pgtype.Text        `json:"failureKind"`
+	UpstreamHttpStatus pgtype.Int4        `json:"upstreamHttpStatus"`
+	UpstreamAttempts   pgtype.Int4        `json:"upstreamAttempts"`
+	ReceiptFree        pgtype.Bool        `json:"receiptFree"`
+	GrantID            pgtype.UUID        `json:"grantId"`
+	Nonce              pgtype.UUID        `json:"nonce"`
 }
 
 // The settle write for a (locked) confirmation request row. The
@@ -428,6 +444,10 @@ func (q *Queries) SettleConfirmationInferenceRequest(ctx context.Context, arg Se
 		arg.CostMicrousd,
 		arg.UpstreamProvider,
 		arg.CompletedAt,
+		arg.FailureKind,
+		arg.UpstreamHttpStatus,
+		arg.UpstreamAttempts,
+		arg.ReceiptFree,
 		arg.GrantID,
 		arg.Nonce,
 	)
