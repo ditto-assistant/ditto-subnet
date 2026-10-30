@@ -77,7 +77,7 @@ from ditto.api_models.validator_weights_fold import (
 )
 from ditto.chain import ChainError
 from ditto.validator.build_info import validator_build_info
-from ditto.validator.config import lease_budget_seconds
+from ditto.validator.config import TOP5_MAX_CONFIRMATION_SEEDS, lease_budget_seconds
 from ditto.validator.crn import (
     confirmation_seeds,
     crn_block_binding_active,
@@ -153,6 +153,7 @@ from ditto.validator.update_control import write_update_state
 from ditto.validator.updater_status import collect_updater_status
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
+    CrownGate,
     _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
@@ -250,6 +251,31 @@ def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
 def _ledger_statistical_band_cap(ledger: LedgerResponse) -> bool:
     """Use the protocol-29 cap only when the served pin activates it."""
     return getattr(ledger, "statistical_band_mode", None) == "capped"
+
+
+def _ledger_crown_gate(ledger: LedgerResponse) -> CrownGate | None:
+    """The protocol-34 crown rules when the served ledger carries them.
+
+    Platform withholds ``crown_gate`` until the operator selects it and every
+    recently-live weight setter reports v34, so the whole fleet starts gating
+    the crown in the same epoch. A missing or out-of-range marker is treated
+    as absent by every validator identically and folds the pre-34 walk.
+    """
+    served = getattr(ledger, "crown_gate", None)
+    if served is None:
+        return None
+    min_seeds = getattr(served, "min_dethrone_confirmations", None)
+    standing = getattr(served, "champion_standing_rank", None)
+    if (
+        isinstance(min_seeds, bool)
+        or isinstance(standing, bool)
+        or not isinstance(min_seeds, int)
+        or not isinstance(standing, int)
+        or not 2 <= min_seeds <= TOP5_MAX_CONFIRMATION_SEEDS
+        or not 1 <= standing <= 5
+    ):
+        return None
+    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
 
 
 def _ledger_rank_shares(
@@ -2641,6 +2667,7 @@ class ValidatorWorker:
                 ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
                 statistical_band_cap=_ledger_statistical_band_cap(ledger),
                 incumbent_agent_id=_ledger_crown_incumbent(ledger),
+                crown_gate=_ledger_crown_gate(ledger),
                 unpaid_agent_id=(
                     provisional.agent_id if provisional is not None else None
                 ),
@@ -2773,6 +2800,7 @@ class ValidatorWorker:
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            crown_gate=_ledger_crown_gate(ledger),
         )
         if not miner_weights:
             logger.info(
@@ -3956,6 +3984,7 @@ class ValidatorWorker:
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            crown_gate=_ledger_crown_gate(ledger),
         )
         if not stale:
             return ledger
@@ -4076,6 +4105,7 @@ class ValidatorWorker:
             ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
             statistical_band_cap=_ledger_statistical_band_cap(ledger),
             incumbent_agent_id=_ledger_crown_incumbent(ledger),
+            crown_gate=_ledger_crown_gate(ledger),
         )
         if not contested:
             return

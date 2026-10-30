@@ -786,6 +786,38 @@ no force override, and `crown_incumbent_mode: disabled` is the exact
 rollback. A pin taken while the marker is off records no incumbent, so a
 flip lands at the next pin for the whole fleet.
 
+### Crown gate (protocol 34)
+
+Incumbency stops a senior lineage from retaking the crown, but it still let
+any challenger that cleared the band take it on an **unpaired** comparison:
+a newcomer's unretested three-seed canonical against the incumbent's
+retest-folded official score. On 2026-10-29/30 that moved the crown five
+times in a day, including to entries with zero shared-seed confirmations and
+to one ranked eighth on the board.
+
+Under the operator policy `crown_gate_mode: fleet_ready` each pin carries
+`crown_gate: {min_dethrone_confirmations, champion_standing_rank}` (defaults
+3 and 3, operator settings on the continual retest board). The fold then:
+
+1. Ranks the pool exactly as the tail does (official quality first). If the
+   opening champion is outside the top `champion_standing_rank`, the crown
+   passes to the highest-ranked standing entry that shares at least
+   `min_dethrone_confirmations` seeds with it, or to rank 1 when none does.
+2. Walks only standing challengers in `first_seen` order. A challenger
+   dethrones only through the paired shared-seed statistic, and only with at
+   least `min_dethrone_confirmations` shared seeds. An unpaired or flat
+   comparison never moves the crown.
+
+The rule is symmetric and deterministic: both entries' seed maps and the
+served ranking are on the pin, so every validator computes the same King.
+Activation follows the earlier fold markers: served only after every
+recently-live weight setter reports protocol 34, a sub-34 requester gets 428
+while a pinned gate is served, the stale path refuses rather than replays it,
+and `crown_gate_mode: disabled` is the exact rollback. The public board shows
+the King, each challenger's shared seeds vs `min_dethrone_confirmations`, the
+paired lead or deficit, and what it still needs, under `emissions.king` and
+`emissions.challengers`.
+
 ### Provisional incumbent (protocol 28)
 
 Holding the crown and being paid are separate facts. When the operator's

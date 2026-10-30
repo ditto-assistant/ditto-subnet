@@ -167,13 +167,16 @@ from ditto.api_models.burn_settings import RANK_SHARES_PROTOCOL
 from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.continual_retest_settings import (
+    CROWN_GATE_PROTOCOL,
+    DEFAULT_CHAMPION_STANDING_RANK,
+    DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+    ContinualRetestSettings,
+)
+from ditto.api_models.continual_retest_settings import (
     CROWN_INCUMBENT_PROTOCOL as _CROWN_INCUMBENT_PROTOCOL,
 )
 from ditto.api_models.continual_retest_settings import (
     PROVISIONAL_INCUMBENT_PROTOCOL as _PROVISIONAL_INCUMBENT_PROTOCOL,
-)
-from ditto.api_models.continual_retest_settings import (
-    ContinualRetestSettings,
 )
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
@@ -181,6 +184,9 @@ from ditto.api_models.public import (
     FleetAvailability,
     FleetHealth,
     PublicAdmissionLane,
+    PublicCrownChallenger,
+    PublicCrownKing,
+    PublicCrownRules,
     PublicDeferredReviewTrigger,
     PublicReviewConclusion,
     PublicScreeningInvariantAssessment,
@@ -227,6 +233,7 @@ from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retir
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
+    crown_gate_for,
     crown_incumbent_is_active,
     statistical_band_cap_is_active,
     tie_weighting_is_active,
@@ -282,9 +289,12 @@ from ditto.api_server.koth import (
     KOTH_MARGIN,
     KOTH_RANK_SHARES,
     KOTH_TAIL_SIZE,
+    ChallengerStanding,
+    CrownGate,
     KothEntry,
     bounded_efficiency_adjusted_quality,
     champion_defense,
+    crown_standings,
     emission_allocation,
     koth_entries_from_ledger,
     project_koth,
@@ -294,6 +304,7 @@ from ditto.api_server.ledger_pin import (
     pin_expected_shares,
     pin_generator_fraction,
     pin_provisional_incumbent,
+    served_crown_gate,
     served_rank_shares,
 )
 from ditto.api_server.miner_avatar import public_avatar_path
@@ -2867,6 +2878,41 @@ def _public_leaderboard_family(
     return PublicLeaderboardFamily(members=children) if children else None
 
 
+def _public_challenger(
+    standing: ChallengerStanding, rules: CrownGate
+) -> PublicCrownChallenger:
+    """One challenger's duel with the King, in the board's words."""
+    decision = standing.decision
+    paired = decision.method == "paired"
+    if not standing.within_standing:
+        status: Literal[
+            "outside_standing", "needs_confirmations", "dueling", "would_dethrone"
+        ] = "outside_standing"
+    elif standing.shared_seeds < rules.min_shared_seeds or not paired:
+        status = "needs_confirmations"
+    elif decision.dethrones:
+        status = "would_dethrone"
+    else:
+        status = "dueling"
+    return PublicCrownChallenger(
+        agent_id=standing.entry.agent_id,
+        miner_hotkey=standing.entry.miner_hotkey,
+        official_rank=standing.official_rank,
+        official_score=standing.official_score,
+        shared_seed_confirmations=standing.shared_seeds,
+        required_confirmations=rules.min_shared_seeds,
+        within_standing=standing.within_standing,
+        paired_lead=decision.challenger_lead if paired else None,
+        required_lead=decision.required_lead if paired else None,
+        lead_needed=(
+            max(0.0, decision.required_lead - decision.challenger_lead)
+            if paired
+            else None
+        ),
+        status=status,
+    )
+
+
 def _public_koth_emissions(
     rows: list[LedgerRow],
     *,
@@ -2889,6 +2935,8 @@ def _public_koth_emissions(
     incumbent_agent_id: UUID | None = None,
     provisional_incumbent: LedgerRow | None = None,
     rank_shares: Sequence[float] | None = None,
+    crown_gate: CrownGate | None = None,
+    crown_rules: CrownGate | None = None,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool.
 
@@ -2993,6 +3041,7 @@ def _public_koth_emissions(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_id,
+        crown_gate=crown_gate,
     )
     if projection is None:
         return None
@@ -3041,6 +3090,26 @@ def _public_koth_emissions(
     defense = champion_defense(
         fold_entries,
         projection,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
+        crown_gate=crown_gate,
+    )
+    # The King and challenger standings always explain the operator's
+    # configured rules (``crown_rules``); ``crown_rules.active`` says whether
+    # the fleet folds them yet. Before any rules are configured they explain
+    # the shipped defaults.
+    rules = (
+        crown_rules
+        or crown_gate
+        or CrownGate(
+            min_shared_seeds=DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+            standing_rank=DEFAULT_CHAMPION_STANDING_RANK,
+        )
+    )
+    standings = crown_standings(
+        fold_entries,
+        projection,
+        crown_gate=rules,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
     )
@@ -3113,6 +3182,27 @@ def _public_koth_emissions(
             else None
         ),
         recipients=recipients,
+        crown_rules=PublicCrownRules(
+            active=crown_gate is not None,
+            required_protocol=CROWN_GATE_PROTOCOL,
+            min_dethrone_confirmations=rules.min_shared_seeds,
+            champion_standing_rank=rules.standing_rank,
+        ),
+        king=(
+            PublicCrownKing(
+                agent_id=projection.champion.agent_id,
+                miner_hotkey=projection.champion.miner_hotkey,
+                official_rank=standings.king_official_rank,
+                official_score=standings.king_official_score,
+                shared_seed_confirmations=depths.get(projection.champion.agent_id, 0),
+            )
+            if standings is not None
+            else None
+        ),
+        challengers=[
+            _public_challenger(standing, rules)
+            for standing in (standings.challengers if standings is not None else ())
+        ],
         ledger_pin=ledger_pin,
         crown_incumbent_active=crown_incumbent_active,
         crown_incumbent_required_protocol=_CROWN_INCUMBENT_PROTOCOL,
@@ -3572,6 +3662,26 @@ async def build_public_leaderboard(
                 freshness=_VALIDATOR_STALE_WINDOW,
             ),
         )
+    )
+    # The protocol-34 crown rules: configured by the operator, folded only
+    # once every recently-live weight setter reports v34 -- the same gate the
+    # validator ledger applies, so the board's King is the fleet's King.
+    crown_rules = CrownGate(
+        min_shared_seeds=continual_settings.min_dethrone_confirmations,
+        standing_rank=continual_settings.champion_standing_rank,
+    )
+    crown_gate_active_rules = (
+        crown_gate_for(
+            continual_settings,
+            fleet_protocol_ready=await live_weight_setter_fleet_supports_protocol(
+                session,
+                minimum_protocol=CROWN_GATE_PROTOCOL,
+                now=now,
+                freshness=_VALIDATOR_STALE_WINDOW,
+            ),
+        )
+        if bench_version is None
+        else None
     )
     # The operator payout curve, projected exactly when the ledger serves it:
     # set in burn settings and withheld until the weight setters report v31.
@@ -4391,6 +4501,8 @@ async def build_public_leaderboard(
                 incumbent_agent_id=emission_incumbent_id,
                 provisional_incumbent=provisional_incumbent,
                 rank_shares=board_rank_shares,
+                crown_gate=crown_gate_active_rules,
+                crown_rules=crown_rules,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -4546,6 +4658,7 @@ async def ledger_epochs(
                 if served.get("crown_mode") == "incumbent"
                 else None
             ),
+            crown_gate=served_crown_gate(served),
         )
         allocation = (
             emission_allocation(

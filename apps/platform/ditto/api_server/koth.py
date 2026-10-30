@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from ditto.api_models.validator import LedgerEntry
+from ditto.api_models.validator import CrownGateMarker, LedgerEntry
 from ditto.api_server.efficiency import (
     CURVE_VERSION_BOUNDED_FACTOR,
     CURVE_VERSION_UNBOUNDED_FACTOR,
@@ -57,6 +57,20 @@ TOP5_MAX_CONFIRMATION_SEEDS = 15
 
 
 @dataclass(frozen=True)
+class CrownGate:
+    """Mirror of the validator's protocol-34 ``CrownGate``.
+
+    ``min_shared_seeds``: the crown moves only on the paired shared-seed
+    statistic, and only once the challenger holds this many seeds in common
+    with the champion. ``standing_rank``: only an entry inside the top
+    ``standing_rank`` of the fold's official ranking may hold or take it.
+    """
+
+    min_shared_seeds: int
+    standing_rank: int
+
+
+@dataclass(frozen=True)
 class KothEntry:
     """The public-safe subset of one active ledger row used by the fold."""
 
@@ -74,6 +88,16 @@ class KothEntry:
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
     efficiency_curve_version: int | None = None
+
+
+def crown_gate_marker(gate: CrownGate | None) -> CrownGateMarker | None:
+    """Wire form of a crown gate, or ``None`` when the gate is off."""
+    if gate is None:
+        return None
+    return CrownGateMarker(
+        min_dethrone_confirmations=gate.min_shared_seeds,
+        champion_standing_rank=gate.standing_rank,
+    )
 
 
 def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
@@ -202,6 +226,10 @@ class DethroneDecision:
     paired_standard_error: float | None = None
     shared_seed_count: int | None = None
     seed_differences: tuple[float, ...] | None = None
+    # Protocol 34: the comparison would clear the band but the crown gate
+    # refuses it (too few shared seeds, or no paired statistic at all).
+    required_shared_seeds: int | None = None
+    gate_blocked: bool = False
 
 
 @dataclass(frozen=True)
@@ -407,6 +435,7 @@ def champion_defense(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    crown_gate: CrownGate | None = None,
 ) -> DethroneDecision | None:
     """What the best rival miner currently needs to take the crown.
 
@@ -439,6 +468,81 @@ def champion_defense(
         projection.champion,
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
+        crown_gate=crown_gate,
+    )
+
+
+@dataclass(frozen=True)
+class ChallengerStanding:
+    """One challenger's duel with the King, as the crown rules see it."""
+
+    entry: KothEntry
+    official_rank: int
+    official_score: float
+    shared_seeds: int
+    within_standing: bool
+    decision: DethroneDecision
+
+
+@dataclass(frozen=True)
+class CrownStandings:
+    """The King and the challengers dueling it, in official order."""
+
+    king_official_rank: int
+    king_official_score: float
+    challengers: tuple[ChallengerStanding, ...]
+
+
+def crown_standings(
+    entries: Sequence[KothEntry],
+    projection: KothProjection | None,
+    *,
+    crown_gate: CrownGate,
+    ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    limit: int = KOTH_TAIL_SIZE,
+) -> CrownStandings | None:
+    """Explain the crown: where the King stands and what each challenger needs.
+
+    Challengers are the next ``limit`` distinct miners in the fold's official
+    order (the board's ``rank``). Each is compared with the King through the
+    same paired decision the fold runs, under ``crown_gate``, so a challenger
+    shown as able to dethrone is one the gated fold would crown.
+    """
+    if projection is None:
+        return None
+    scored = [entry for entry in entries if entry.composite > 0.0]
+    ranked = _ranked_entries(scored)
+    positions = {entry.agent_id: index for index, entry in enumerate(ranked, start=1)}
+    quality_primary = _quality_primary_efficiency_active(scored)
+    king = projection.champion
+    rivals = [
+        entry
+        for entry in _distinct_ranked(scored)
+        if entry.miner_hotkey != king.miner_hotkey
+    ][: max(0, limit)]
+    return CrownStandings(
+        king_official_rank=positions.get(king.agent_id, len(ranked) + 1),
+        king_official_score=_dethrone_composite(king, quality_primary=quality_primary),
+        challengers=tuple(
+            ChallengerStanding(
+                entry=entry,
+                official_rank=positions[entry.agent_id],
+                official_score=_dethrone_composite(
+                    entry, quality_primary=quality_primary
+                ),
+                shared_seeds=shared_seed_count(entry, king),
+                within_standing=positions[entry.agent_id] <= crown_gate.standing_rank,
+                decision=_dethrone_decision(
+                    entry,
+                    king,
+                    ceiling_band_clamp=ceiling_band_clamp,
+                    statistical_band_cap=statistical_band_cap,
+                    crown_gate=crown_gate,
+                ),
+            )
+            for entry in rivals
+        ),
     )
 
 
@@ -707,6 +811,7 @@ def project_koth(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
 
@@ -722,6 +827,12 @@ def project_koth(
     Protocol-21 efficiency ranks the tail quality-first and breaks exact
     quality ties by efficiency. It does not skip this hysteresis loop. A
     later 0.001 official lead is the raw leader, not the champion.
+
+    A protocol-34 ``crown_gate`` mirrors the validator's ``_champion``: an
+    opener outside the top ``standing_rank`` official places hands the crown
+    to the highest-ranked standing entry holding ``min_shared_seeds`` shared
+    seeds against it (else the rank-1 entry), and only standing challengers
+    are walked, each needing a paired win on ``min_shared_seeds`` seeds.
     """
     scored = [entry for entry in entries if entry.composite > 0.0]
     if not scored:
@@ -746,12 +857,31 @@ def project_koth(
     else:
         champion = ordered[0]
         challengers = ordered[1:]
+    if crown_gate is not None:
+        standing = ranked[: max(1, crown_gate.standing_rank)]
+        standing_ids = {entry.agent_id for entry in standing}
+        if champion.agent_id not in standing_ids:
+            outgoing = champion
+            champion = next(
+                (
+                    entry
+                    for entry in standing
+                    if shared_seed_count(entry, outgoing) >= crown_gate.min_shared_seeds
+                ),
+                standing[0],
+            )
+        challengers = [
+            entry
+            for entry in ordered
+            if entry.agent_id in standing_ids and entry.agent_id != champion.agent_id
+        ]
     for challenger in challengers:
         if _dethrone_decision(
             challenger,
             champion,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            crown_gate=crown_gate,
         ).dethrones:
             champion = challenger
 
@@ -780,6 +910,7 @@ def project_koth(
             champion,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            crown_gate=crown_gate,
         )
     )
     return KothProjection(
@@ -1004,6 +1135,19 @@ def _seed_composites(entry: KothEntry) -> dict[int, float] | None:
     return out
 
 
+def shared_seed_count(a: KothEntry, b: KothEntry) -> int:
+    """Confirmation seeds both entries carry a validated composite for.
+
+    Mirrors the validator's ``_shared_seed_count``: the depth the protocol-34
+    crown gate counts, and the depth the public board reports per challenger.
+    """
+    a_map = _seed_composites(a)
+    b_map = _seed_composites(b)
+    if a_map is None or b_map is None:
+        return 0
+    return len(a_map.keys() & b_map.keys())
+
+
 def _paired_statistic(
     challenger: KothEntry, champion: KothEntry
 ) -> PairedStatistic | None:
@@ -1063,6 +1207,41 @@ def _weight_tied(
 
 
 def _dethrone_decision(
+    challenger: KothEntry,
+    champion: KothEntry,
+    *,
+    ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    crown_gate: CrownGate | None = None,
+) -> DethroneDecision:
+    """Compare one challenger with the champion exactly as the fold does.
+
+    ``ceiling_deadlocked`` always reflects the ungated comparison, as the
+    validator's score-ceiling cohort does. A protocol-34 ``crown_gate`` only
+    vetoes ``dethrones``: without a paired statistic on at least
+    ``min_shared_seeds`` shared seeds the crown cannot move, whatever the lead.
+    """
+    decision = _ungated_dethrone_decision(
+        challenger,
+        champion,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
+    )
+    if crown_gate is None:
+        return decision
+    qualified = (
+        decision.method == "paired"
+        and shared_seed_count(challenger, champion) >= crown_gate.min_shared_seeds
+    )
+    return replace(
+        decision,
+        dethrones=decision.dethrones and qualified,
+        required_shared_seeds=crown_gate.min_shared_seeds,
+        gate_blocked=decision.dethrones and not qualified,
+    )
+
+
+def _ungated_dethrone_decision(
     challenger: KothEntry,
     champion: KothEntry,
     *,

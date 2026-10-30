@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_server.koth import CrownGate
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -65,6 +66,18 @@ def statistical_band_cap_is_active(
 ) -> bool:
     """Resolve the operator-selected protocol-29 fold only for a ready fleet."""
     return settings.statistical_band_mode == "fleet_ready" and fleet_protocol_ready
+
+
+def crown_gate_for(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> CrownGate | None:
+    """The protocol-34 crown rules to serve, or ``None`` for the pre-34 walk."""
+    if settings.crown_gate_mode != "fleet_ready" or not fleet_protocol_ready:
+        return None
+    return CrownGate(
+        min_shared_seeds=settings.min_dethrone_confirmations,
+        standing_rank=settings.champion_standing_rank,
+    )
 
 
 def crown_incumbent_is_active(
