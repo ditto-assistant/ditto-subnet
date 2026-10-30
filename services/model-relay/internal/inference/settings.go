@@ -71,6 +71,9 @@ type concurrencySettings struct {
 	// Decision is the nested decision_lane object. Enabled is a live kill
 	// switch here; the pinned model, price and walls are read from the grant.
 	Decision decisionLaneSettings
+	// ScoredProviderRouting mirrors scored_provider_routing: which OpenRouter
+	// provider preference the aggregate scored chat route sends.
+	ScoredProviderRouting string
 }
 
 // decisionLaneSettings mirrors DecisionLaneSettings' live fields.
@@ -176,6 +179,7 @@ func defaultConcurrencySettings() concurrencySettings {
 		EmbeddingPerValidatorRPM:         defaultEmbeddingPerValidatorRPM,
 		EmbeddingGlobalRPM:               defaultEmbeddingGlobalRPM,
 		Decision:                         defaultDecisionLaneSettings(),
+		ScoredProviderRouting:            config.ScoredProviderRoutingThroughput,
 	}
 }
 
@@ -292,7 +296,42 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 		}
 		out.Decision = decision
 	}
+	if rawRouting, ok := raw["scored_provider_routing"]; ok {
+		var routing string
+		if err := json.Unmarshal(rawRouting, &routing); err != nil {
+			return defaultConcurrencySettings(), errors.New("scored_provider_routing must be a string")
+		}
+		out.ScoredProviderRouting = normalizeScoredProviderRouting(routing)
+	}
 	return out, nil
+}
+
+// normalizeScoredProviderRouting maps a stored routing mode onto one this
+// relay knows. A mode written by a newer Platform falls back to throughput,
+// the historical route, instead of failing the whole board and freezing every
+// other admission limit at its last-known-good value.
+func normalizeScoredProviderRouting(routing string) string {
+	switch routing {
+	case config.ScoredProviderRoutingBF16PriceOrder, config.ScoredProviderRoutingBF16Canary:
+		return routing
+	default:
+		return config.ScoredProviderRoutingThroughput
+	}
+}
+
+// effectiveScoredProviderRouting resolves the board mode for one ticket. The
+// canary mode moves only benchmark_canary tickets, so an operator can compare
+// a canary run against accepted scores before moving the fleet.
+func effectiveScoredProviderRouting(routing, ticketPurpose string) string {
+	switch routing {
+	case config.ScoredProviderRoutingBF16PriceOrder:
+		return config.ScoredProviderRoutingBF16PriceOrder
+	case config.ScoredProviderRoutingBF16Canary:
+		if ticketPurpose == ticketPurposeBenchmarkCanary {
+			return config.ScoredProviderRoutingBF16PriceOrder
+		}
+	}
+	return config.ScoredProviderRoutingThroughput
 }
 
 // SettingsResolver owns a last-known-good atomic snapshot of the operator
@@ -396,5 +435,6 @@ func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) confi
 	cfg.DecisionTicketRPM = s.Decision.PerTicketRPM
 	cfg.DecisionValidatorRPM = s.Decision.PerValidatorRPM
 	cfg.DecisionGlobalRPM = s.Decision.GlobalRPM
+	cfg.ScoredProviderRouting = s.ScoredProviderRouting
 	return cfg
 }

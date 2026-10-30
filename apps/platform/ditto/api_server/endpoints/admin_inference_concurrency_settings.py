@@ -190,7 +190,7 @@ async def create_settings_revision(
     # delay selection, or decision-lane pin to the shipped defaults.
     preserved = {
         field: getattr(settings_from_row(latest), field)
-        for field in ("benchmark_runtime", "decision_lane")
+        for field in ("benchmark_runtime", "decision_lane", "scored_provider_routing")
         if field not in payload.settings.model_fields_set
     }
     if preserved:

@@ -310,6 +310,11 @@ class DecisionLaneSettings(BaseModel):
         return self
 
 
+ScoredProviderRouting = Literal[
+    "throughput", "bf16_price_order_canary", "bf16_price_order"
+]
+
+
 class InferenceConcurrencySettings(BaseModel):
     """The whole hosted-inference admission policy, stored as one object.
 
@@ -444,6 +449,20 @@ class InferenceConcurrencySettings(BaseModel):
     decision_lane: DecisionLaneSettings = Field(default_factory=DecisionLaneSettings)
     """The dark decision-model lane: pin, price, walls and rails. Off by default."""
 
+    scored_provider_routing: ScoredProviderRouting = "throughput"
+    """OpenRouter provider preference for the aggregate scored chat route.
+
+    ``throughput`` is the historical route: OpenRouter sorts every eligible ZDR
+    provider (CoreWeave excluded) by throughput, which lands most traffic on
+    Bedrock. ``bf16_price_order`` sends an explicit order -- DeepInfra bf16,
+    then Bedrock, Groq and DekaLLM bf16 -- with ``only`` pinning that set,
+    fallbacks on, ZDR and ``data_collection: deny`` unchanged.
+    ``bf16_price_order_canary`` applies the price order to ``benchmark_canary``
+    tickets only. The model, reasoning contract and route profile identity do
+    not change, so no calibration or validator release is involved. Live
+    within the relay's five-second refresh; set ``throughput`` to revert.
+    """
+
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
@@ -568,13 +587,13 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         changed one number. ``expected_revision`` cannot catch that -- they hold
         the current revision, they just under-specified the body.
         """
-        # ``benchmark_runtime`` and ``decision_lane`` were added after this
-        # whole-object board shipped. A pre-upgrade Backroom may omit only those
-        # additive objects; the endpoint preserves their current values instead
-        # of resetting them.
+        # ``benchmark_runtime``, ``decision_lane`` and ``scored_provider_routing``
+        # were added after this whole-object board shipped. A pre-upgrade
+        # Backroom may omit only those additive fields; the endpoint preserves
+        # their current values instead of resetting them.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
-            - {"benchmark_runtime", "decision_lane"}
+            - {"benchmark_runtime", "decision_lane", "scored_provider_routing"}
             - self.settings.model_fields_set
         )
         if missing:

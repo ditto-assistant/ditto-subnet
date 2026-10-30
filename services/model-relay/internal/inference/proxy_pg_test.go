@@ -1034,3 +1034,48 @@ func TestEmbeddingSettingsBoardRaisesTicketLimit(t *testing.T) {
 		t.Fatalf("raised board must admit: got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+func TestChatScoredProviderRoutingCanaryMovesOnlyCanaryTickets(t *testing.T) {
+	var captured map[string]any
+	upstream := fakeChatUpstream(t, &captured)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO inference_concurrency_settings_revisions
+		    (parent_revision, scope, settings, checksum, reason, actor)
+		 VALUES (0, '*', $1::jsonb, repeat('a', 64), $2, 'test')`,
+		`{"scored_provider_routing": "bf16_price_order_canary"}`,
+		"canary the bf16 price order")
+	if err := f.deps.Settings.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh settings: %v", err)
+	}
+
+	send := func() map[string]any {
+		t.Helper()
+		body := []byte(chatBody)
+		w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body),
+			f.signedProxyHeaders(1, uuid.New(), body)))
+		if w.Code != 200 {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+		provider, _ := captured["provider"].(map[string]any)
+		return provider
+	}
+
+	// The fixture ticket is not a canary: it keeps the throughput sort.
+	if provider := send(); provider["sort"] != "throughput" {
+		t.Fatalf("non-canary ticket left the throughput route: %v", provider)
+	}
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE validator_tickets SET purpose = 'benchmark_canary' WHERE agent_id = $1`, f.agentID)
+	provider := send()
+	if _, sorted := provider["sort"]; sorted || provider["zdr"] != true ||
+		provider["allow_fallbacks"] != true || provider["data_collection"] != "deny" {
+		t.Fatalf("canary ticket did not take the bf16 price order: %v", provider)
+	}
+	order, _ := provider["order"].([]any)
+	if len(order) == 0 || order[0] != "deepinfra" {
+		t.Fatalf("canary order: %v", provider["order"])
+	}
+}

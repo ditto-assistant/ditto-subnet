@@ -299,7 +299,7 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 	}
 
 	groq := base()
-	groqPreferences := providerPreferences(config.RoutingModeAdaptive, "Groq", "")
+	groqPreferences := providerPreferences(config.RoutingModeAdaptive, "Groq", "", "")
 	adaptProviderRequestCompatibility(groq, groqPreferences)
 	if _, present := groq["response_format"]; present {
 		t.Fatal("Groq-only JSON-object mode must be removed when tools are active")
@@ -312,7 +312,7 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 		payload     map[string]any
 		preferences map[string]any
 	}{
-		"other provider":    {base(), providerPreferences(config.RoutingModeAdaptive, "Amazon Bedrock", "")},
+		"other provider":    {base(), providerPreferences(config.RoutingModeAdaptive, "Amazon Bedrock", "", "")},
 		"tools disabled":    {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "none", "response_format": map[string]any{"type": "json_object"}}, groqPreferences},
 		"structured schema": {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "auto", "response_format": map[string]any{"type": "json_schema"}}, groqPreferences},
 	} {
@@ -325,7 +325,7 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 	}
 
 	aggregate := base()
-	aggregatePreferences := providerPreferences(config.RoutingModeAggregateThroughput, "nebius", "")
+	aggregatePreferences := providerPreferences(config.RoutingModeAggregateThroughput, "nebius", "", "")
 	adaptProviderRequestCompatibility(aggregate, aggregatePreferences)
 	if _, present := aggregate["response_format"]; !present {
 		t.Fatal("aggregate route should preserve JSON-object mode")
@@ -344,6 +344,30 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 	order, _ := reliabilityPreferences["order"].([]string)
 	if len(order) != 1 || order[0] != "deepinfra" {
 		t.Fatalf("reliability route must remove only Groq, got %v", reliabilityPreferences)
+	}
+}
+
+func TestAdaptProviderRequestCompatibilityDropsGroqFromBF16PriceOrder(t *testing.T) {
+	payload := map[string]any{
+		"tools":           []any{map[string]any{"type": "function"}},
+		"tool_choice":     "auto",
+		"response_format": map[string]any{"type": "json_object"},
+	}
+	preferences := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "",
+		config.ScoredProviderRoutingBF16PriceOrder)
+	adaptProviderRequestCompatibility(payload, preferences)
+	if _, present := payload["response_format"]; !present {
+		t.Fatal("bf16 price order should preserve JSON-object mode")
+	}
+	want := []string{"deepinfra", "amazon-bedrock", "dekallm"}
+	for _, key := range []string{"only", "order"} {
+		got, _ := preferences[key].([]string)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s = %v, want %v", key, got, want)
+		}
+	}
+	if strings.Join(bf16PriceOrderProviders, ",") != "deepinfra,amazon-bedrock,groq,dekallm" {
+		t.Fatalf("adapter mutated the shared provider list: %v", bf16PriceOrderProviders)
 	}
 }
 

@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import dataclasses
 import hashlib
 import json
 import logging
@@ -573,12 +574,39 @@ def _public_provider_response(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# The scored ``bf16_price_order`` route: DeepInfra's bf16 endpoint (the
+# cheapest high-capacity ZDR endpoint) first, then Bedrock and Groq (which
+# carried the throughput route), then DekaLLM's bf16 endpoint, which also serves
+# logprobs. ``only`` pins the same set, so a fallback cannot land on a 4-bit or
+# fp8 endpoint the way the throughput sort can. Mirrored by the Go relay.
+_BF16_PRICE_ORDER_PROVIDERS = ("deepinfra", "amazon-bedrock", "groq", "dekallm")
+
+
+def _effective_scored_provider_routing(routing: str, ticket_purpose: str | None) -> str:
+    """Resolve the board mode for one ticket: canary mode moves only canaries."""
+    if routing == "bf16_price_order":
+        return "bf16_price_order"
+    if routing == "bf16_price_order_canary" and ticket_purpose == "benchmark_canary":
+        return "bf16_price_order"
+    return "throughput"
+
+
 def _provider_preferences(
     *,
     routing_mode: str,
     provider: str,
     quantization: str | None,
+    scored_routing: str = "throughput",
 ) -> dict[str, Any]:
+    if routing_mode == "aggregate_throughput" and scored_routing == "bf16_price_order":
+        return {
+            "order": list(_BF16_PRICE_ORDER_PROVIDERS),
+            "only": list(_BF16_PRICE_ORDER_PROVIDERS),
+            "ignore": ["coreweave"],
+            "allow_fallbacks": True,
+            "data_collection": "deny",
+            "zdr": True,
+        }
     if routing_mode == "aggregate_throughput":
         return {
             # Normal traffic optimizes for the throughput miners actually feel.
@@ -677,6 +705,7 @@ async def _complete_chat_with_recovery(
         routing_mode=config.routing_mode,
         provider=expected_provider,
         quantization=expected_quantization,
+        scored_routing=config.scored_provider_routing,
     )
     phases.append(
         (
@@ -1943,8 +1972,27 @@ async def proxy_chat_completions(
         # was retried until the run died with hours left on the lease.
         if isinstance(reserved, InferenceDecline):
             raise InferenceDeclinedError(reserved, lane="inference")
+        from sqlalchemy import select
+
+        from ditto.db.models import ValidatorTicket
+
+        ticket_purpose = await session.scalar(
+            select(ValidatorTicket.purpose).where(
+                ValidatorTicket.agent_id == reserved[0].agent_id,
+                ValidatorTicket.bench_version == reserved[0].bench_version,
+                ValidatorTicket.validator_hotkey == reserved[0].validator_hotkey,
+            )
+        )
 
     reserved_grant = reserved[0]
+    live_config = await _resolve_admission_config(request, config)
+    config = dataclasses.replace(
+        config,
+        scored_provider_routing=_effective_scored_provider_routing(
+            live_config.scored_provider_routing,
+            str(ticket_purpose) if ticket_purpose is not None else None,
+        ),
+    )
     upstream_payload = _locked_upstream_payload(
         payload,
         model=model,

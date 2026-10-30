@@ -175,6 +175,7 @@ describe('admin API schemas', () => {
     expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -205,6 +206,7 @@ describe('admin API schemas', () => {
     expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -237,6 +239,7 @@ describe('admin API schemas', () => {
     expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -271,6 +274,38 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       }),
     ).toThrow(/benchmark_runtime/)
+  })
+
+  it('keeps scored provider routing optional on writes and rejects unknown modes', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: 25_000_000,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
+      embedding_per_ticket_concurrency: 12,
+      embedding_per_validator_concurrency: 48,
+      embedding_global_concurrency: 96,
+      ...INFERENCE_RPM,
+      benchmark_runtime: {
+        case_concurrency: 4,
+        relay_delay_fingerprint_mode: 'off' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
+      },
+    }
+    const write = (extra: Record<string, unknown>) =>
+      setInferenceConcurrencySettingsInputSchema.parse({
+        expectedRevision: 0,
+        settings: { ...settings, ...extra },
+        reason: 'canary the bf16 price order',
+        confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
+      })
+    expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
+      .scored_provider_routing).toBe('bf16_price_order_canary')
+    expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()
   })
 
   it('requires exact confirmation for v9 contract retests only', () => {

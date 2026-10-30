@@ -740,8 +740,29 @@ func openrouterHeaders(apiKey string, includeMetadata bool) map[string]string {
 	return headers
 }
 
-// providerPreferences mirrors _provider_preferences.
-func providerPreferences(routingMode, provider string, quantization string) map[string]any {
+// bf16PriceOrderProviders is the scored bf16_price_order route: DeepInfra's
+// bf16 endpoint (the cheapest high-capacity ZDR endpoint) first, then the
+// two providers that carried the throughput route (Bedrock, Groq), then
+// DekaLLM's bf16 endpoint, which also serves logprobs. "only" pins the same
+// set, so a fallback can never land on a 4-bit or fp8 endpoint (AkashML,
+// Parasail, SiliconFlow, CoreWeave) the way the throughput sort can.
+var bf16PriceOrderProviders = []string{"deepinfra", "amazon-bedrock", "groq", "dekallm"}
+
+// providerPreferences mirrors _provider_preferences. scoredRouting is the
+// resolved scored_provider_routing (throughput or bf16_price_order) and only
+// affects the aggregate route.
+func providerPreferences(routingMode, provider string, quantization string, scoredRouting string) map[string]any {
+	if routingMode == config.RoutingModeAggregateThroughput &&
+		scoredRouting == config.ScoredProviderRoutingBF16PriceOrder {
+		return map[string]any{
+			"order":           append([]string{}, bf16PriceOrderProviders...),
+			"only":            append([]string{}, bf16PriceOrderProviders...),
+			"ignore":          []string{"coreweave"},
+			"allow_fallbacks": true,
+			"data_collection": "deny",
+			"zdr":             true,
+		}
+	}
 	if routingMode == config.RoutingModeAggregateThroughput {
 		return map[string]any{
 			"sort":            "throughput",
@@ -1301,7 +1322,8 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	for k, v := range payload {
 		primary[k] = v
 	}
-	preferences := providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization)
+	preferences := providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization,
+		cfg.ScoredProviderRouting)
 	adaptProviderRequestCompatibility(primary, preferences)
 	primary["provider"] = preferences
 	phases := []phaseSpec{{phase: 0, payload: primary}}

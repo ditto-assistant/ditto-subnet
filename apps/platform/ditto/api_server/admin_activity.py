@@ -105,6 +105,7 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
                 "embedding_per_ticket_requests_per_minute",
                 "embedding_per_validator_concurrency",
                 "embedding_per_validator_requests_per_minute",
+                "scored_provider_routing",
             )
         ),
     ),
