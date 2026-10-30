@@ -438,7 +438,55 @@ type finishConfirmationParams struct {
 	completionTokens int64
 	costMicrousd     int64
 	upstreamProvider pgtype.Text
+	failure          confirmationFailureDetail
 	now              time.Time
+}
+
+// confirmationFailureDetail is why a provider call failed, as this relay saw
+// it. It used to reach only a host-local log line, which left every
+// confirmation provider failure identical off-host ("failed, no provider, no
+// cost") and made retry safety unanswerable without shell access. kind is a
+// closed vocabulary pinned by the confirmation_inference_requests CHECK; an
+// empty kind is written as NULL (a completed call, or a panic before any
+// provider result existed).
+type confirmationFailureDetail struct {
+	kind        string
+	httpStatus  int  // 0 when no response arrived
+	attempts    int  // 0 when no dispatch was made
+	receiptFree bool // meaningful only when known is true
+	known       bool // receiptFree was determined for this failure
+}
+
+const (
+	confirmationFailureIdentityMismatch = "identity_mismatch"
+	confirmationFailureReceiptInvalid   = "receipt_invalid"
+	confirmationFailureResponseInvalid  = "response_invalid"
+	confirmationFailureTooLarge         = "response_too_large"
+	confirmationFailureSettleRejected   = "settle_rejected"
+	confirmationFailureTransportError   = "transport_error"
+	confirmationFailureTransportTimeout = "transport_timeout"
+	confirmationFailureBackpressure     = "upstream_backpressure"
+	confirmationFailureUpstreamStatus   = "upstream_status"
+)
+
+func (detail confirmationFailureDetail) params() (pgtype.Text, pgtype.Int4, pgtype.Int4, pgtype.Bool) {
+	if detail.kind == "" {
+		return pgtype.Text{}, pgtype.Int4{}, pgtype.Int4{}, pgtype.Bool{}
+	}
+	kind := pgtype.Text{String: detail.kind, Valid: true}
+	var status pgtype.Int4
+	if detail.httpStatus >= 100 && detail.httpStatus <= 599 {
+		status = pgtype.Int4{Int32: int32(detail.httpStatus), Valid: true}
+	}
+	var attempts pgtype.Int4
+	if detail.attempts >= 0 && detail.attempts <= 16 {
+		attempts = pgtype.Int4{Int32: int32(detail.attempts), Valid: true}
+	}
+	var receiptFree pgtype.Bool
+	if detail.known {
+		receiptFree = pgtype.Bool{Bool: detail.receiptFree, Valid: true}
+	}
+	return kind, status, attempts, receiptFree
 }
 
 // finishConfirmationInferenceRequest reproduces ditto/db/queries/
@@ -481,21 +529,33 @@ func finishConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries
 	completionTokens := p.completionTokens
 	costMicrousd := p.costMicrousd
 	status := p.status
+	failure := p.failure
 	if !delivered {
 		promptTokens = 0
 		completionTokens = 0
 		costMicrousd = 0
 		status = "failed"
+		if p.status == "completed" {
+			// The provider answered and the relay accepted it, but the grant
+			// refused the usage at settle. Record that, not the empty detail a
+			// completed call carries, or the row reads as an unexplained failure.
+			failure = confirmationFailureDetail{kind: confirmationFailureSettleRejected}
+		}
 	}
+	failureKind, failureStatus, failureAttempts, receiptFree := failure.params()
 	if err := q.SettleConfirmationInferenceRequest(ctx, postgres.SettleConfirmationInferenceRequestParams{
-		Status:           status,
-		PromptTokens:     promptTokens,
-		CompletionTokens: completionTokens,
-		CostMicrousd:     costMicrousd,
-		UpstreamProvider: p.upstreamProvider,
-		CompletedAt:      pgTime(p.now),
-		GrantID:          pgUUID(p.grantID),
-		Nonce:            pgUUID(p.nonce),
+		Status:             status,
+		PromptTokens:       promptTokens,
+		CompletionTokens:   completionTokens,
+		CostMicrousd:       costMicrousd,
+		UpstreamProvider:   p.upstreamProvider,
+		CompletedAt:        pgTime(p.now),
+		FailureKind:        failureKind,
+		UpstreamHttpStatus: failureStatus,
+		UpstreamAttempts:   failureAttempts,
+		ReceiptFree:        receiptFree,
+		GrantID:            pgUUID(p.grantID),
+		Nonce:              pgUUID(p.nonce),
 	}); err != nil {
 		return false, err
 	}
@@ -594,6 +654,7 @@ type confirmationOutcome struct {
 	completionTokens int64
 	costMicrousd     int64
 	upstreamProvider pgtype.Text
+	failure          confirmationFailureDetail
 }
 
 // handleConfirmationChatCompletions is POST /api/v1/inference/confirmation/
@@ -723,6 +784,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			completionTokens: outcome.completionTokens,
 			costMicrousd:     max64(0, outcome.costMicrousd),
 			upstreamProvider: outcome.upstreamProvider,
+			failure:          outcome.failure,
 		})
 		if settleErr != nil {
 			d.Logger.Error("confirmation chat: settle", slog.String("error", settleErr.Error()))
@@ -767,6 +829,15 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			// _ProviderCallError is UNCAUGHT in the Python endpoint (only
 			// ValueError is handled): it escapes as an internal server error
 			// after the finally settles. Reproduced deliberately.
+			kind := confirmationFailureTransportError
+			if callErr.timedOut {
+				kind = confirmationFailureTransportTimeout
+			}
+			// No response means no receipt, so a transport failure is always
+			// receipt-free from this relay's side.
+			outcome.failure = confirmationFailureDetail{
+				kind: kind, attempts: callErr.attempts, receiptFree: true, known: true,
+			}
 			return &httpError{status: 500, message: "internal server error"}
 		}
 		if result.status >= 400 {
@@ -780,24 +851,44 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 				slog.Bool("backpressure", providerIsBackpressure(result.status, result.header)),
 				slog.Bool("receipt_free", providerFailureIsReceiptFree(result, expectedModel)),
 				slog.Bool("retry_activated", cfg.ConfirmationBackpressureRetry))
+			kind := confirmationFailureUpstreamStatus
+			if providerIsBackpressure(result.status, result.header) {
+				kind = confirmationFailureBackpressure
+			}
+			outcome.failure = confirmationFailureDetail{
+				kind: kind, httpStatus: result.status, attempts: result.attempts,
+				receiptFree: providerFailureIsReceiptFree(result, expectedModel), known: true,
+			}
 			return httpErrorf(502, "confirmation provider unavailable")
 		}
+		// Past this point a 2xx arrived, so a provider may have done billable
+		// work; receipt-freeness is not established and is left unknown.
+		received := func(kind string) {
+			outcome.failure = confirmationFailureDetail{
+				kind: kind, httpStatus: result.status, attempts: result.attempts,
+			}
+		}
 		if result.bodyOverLimit {
+			received(confirmationFailureTooLarge)
 			return httpErrorf(502, "confirmation response is too large")
 		}
 		decodedResponse, decodeOk := decodeJSONNumbers(result.body)
 		if !decodeOk {
+			received(confirmationFailureResponseInvalid)
 			return httpErrorf(502, "invalid provider response")
 		}
 		decodedMap, isMap := decodedResponse.(map[string]any)
 		if !isMap {
+			received(confirmationFailureResponseInvalid)
 			return httpErrorf(502, "provider identity mismatch")
 		}
 		if m, ok := decodedMap["model"].(string); !ok || m != expectedModel {
+			received(confirmationFailureIdentityMismatch)
 			return httpErrorf(502, "provider identity mismatch")
 		}
 		receiptProvider, herr := upstreamProviderIdentity(decodedMap)
 		if herr != nil {
+			received(confirmationFailureIdentityMismatch)
 			return herr
 		}
 		if receiptProvider != "" {
@@ -814,6 +905,11 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			receiptProvider == expectedProvider)
 		if !providerMatches || !usageOk || costMicrousd < 0 {
 			outcome.costMicrousd = costMicrousd
+			if providerMatches {
+				received(confirmationFailureReceiptInvalid)
+			} else {
+				received(confirmationFailureIdentityMismatch)
+			}
 			return httpErrorf(502, "provider identity mismatch")
 		}
 		outcome.promptTokens = prompt
@@ -821,6 +917,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		outcome.costMicrousd = costMicrousd
 		trusted, herr := publicProviderResponse(decodedMap, result.body)
 		if herr != nil {
+			received(confirmationFailureResponseInvalid)
 			return herr
 		}
 		encoded, encodeErr := compactJSON(confirmationChatResponse{
@@ -838,10 +935,12 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 			Provider: receiptProvider,
 		})
 		if encodeErr != nil {
+			received(confirmationFailureResponseInvalid)
 			return httpErrorf(502, "invalid provider response")
 		}
 		raw = encoded
 		outcome.status = "completed"
+		outcome.failure = confirmationFailureDetail{}
 		return nil
 	}()
 	if receiptFreeResultOverload(upstreamRes, expectedModel) {

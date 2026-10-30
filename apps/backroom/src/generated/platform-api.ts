@@ -19820,13 +19820,20 @@ export interface components {
         };
         /**
          * ConfirmationFailureGroup
-         * @description One (window, lane, model, provider, status) confirmation bucket.
+         * @description One confirmation bucket, split by why a failed call failed.
+         *
+         *     ``failure_kind``, ``upstream_http_status`` and ``receipt_free`` are what the
+         *     relay recorded on the failed call; all three are null on completed calls and
+         *     on failures settled before they were persisted, so a null here on a failed
+         *     group means "unexplained", never "fine".
          */
         ConfirmationFailureGroup: {
             /** Bundles Affected */
             bundles_affected: number;
             /** Calls */
             calls: number;
+            /** Failure Kind */
+            failure_kind?: ("identity_mismatch" | "receipt_invalid" | "response_invalid" | "response_too_large" | "settle_rejected" | "transport_error" | "transport_timeout" | "upstream_backpressure" | "upstream_status") | null;
             /**
              * Lane
              * @enum {string}
@@ -19834,6 +19841,11 @@ export interface components {
             lane: "reader" | "judge" | "embedding";
             /** Max Duration Ms */
             max_duration_ms: number;
+            /**
+             * Max Upstream Attempts
+             * @default 0
+             */
+            max_upstream_attempts: number;
             /** Model */
             model: string;
             /** P50 Duration Ms */
@@ -19843,8 +19855,12 @@ export interface components {
              * @enum {string}
              */
             provider_basis: "confirmed_selected" | "last_attempted" | "configured" | "router_internal" | "unknown" | "unrecognized";
+            /** Receipt Free */
+            receipt_free?: boolean | null;
             /** Status */
             status: string;
+            /** Upstream Http Status */
+            upstream_http_status?: number | null;
             /** Upstream Provider */
             upstream_provider: string | null;
             /** Window Seconds */

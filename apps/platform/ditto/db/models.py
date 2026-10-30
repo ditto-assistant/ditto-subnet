@@ -11689,6 +11689,21 @@ class ConfirmationInferenceRequest(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    # Why a failed call failed, as the relay observed it. Before these existed
+    # a failed row carried only status='failed', so every confirmation provider
+    # failure looked identical off-host -- 11 reader failures over seven days
+    # with no status, no attempt count, and no way to tell a 5xx from a reset.
+    # That fact decides whether a retry is safe and useful, so it is recorded
+    # where an operator can read it. All four are null on a completed call and
+    # on rows written before this revision; a consumer must not require them.
+    failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Bounded reason (see the CHECK) the relay's provider call failed."""
+    upstream_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Final upstream HTTP status, when a response arrived at all."""
+    upstream_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Upstream dispatches the relay made, including any it retried."""
+    receipt_free: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    """Whether the failure provably left no provider receipt, i.e. retry-safe."""
 
     __table_args__ = (
         PrimaryKeyConstraint("grant_id", "nonce"),
@@ -11709,6 +11724,20 @@ class ConfirmationInferenceRequest(Base):
         CheckConstraint(
             "prompt_tokens >= 0 AND completion_tokens >= 0 AND cost_microusd >= 0",
             name="confirmation_inference_requests_accounting_check",
+        ),
+        CheckConstraint(
+            "failure_kind IS NULL OR failure_kind IN ("
+            "'identity_mismatch', 'receipt_invalid', 'response_invalid', "
+            "'response_too_large', 'settle_rejected', 'transport_error', "
+            "'transport_timeout', "
+            "'upstream_backpressure', 'upstream_status')",
+            name="confirmation_inference_requests_failure_kind_check",
+        ),
+        CheckConstraint(
+            "(upstream_http_status IS NULL "
+            "OR upstream_http_status BETWEEN 100 AND 599) "
+            "AND (upstream_attempts IS NULL OR upstream_attempts BETWEEN 0 AND 16)",
+            name="confirmation_inference_requests_failure_detail_check",
         ),
         Index("confirmation_inference_requests_started_idx", "started_at"),
     )

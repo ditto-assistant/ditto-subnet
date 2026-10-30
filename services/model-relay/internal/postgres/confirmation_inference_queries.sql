@@ -120,7 +120,11 @@ SET status = sqlc.arg(status)::text,
     completion_tokens = sqlc.arg(completion_tokens)::bigint,
     cost_microusd = sqlc.arg(cost_microusd)::bigint,
     upstream_provider = sqlc.narg(upstream_provider)::text,
-    completed_at = sqlc.arg(completed_at)::timestamptz
+    completed_at = sqlc.arg(completed_at)::timestamptz,
+    failure_kind = sqlc.narg(failure_kind)::text,
+    upstream_http_status = sqlc.narg(upstream_http_status)::integer,
+    upstream_attempts = sqlc.narg(upstream_attempts)::integer,
+    receipt_free = sqlc.narg(receipt_free)::boolean
 WHERE grant_id = sqlc.arg(grant_id)::uuid
   AND nonce = sqlc.arg(nonce)::uuid;
 

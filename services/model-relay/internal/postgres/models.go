@@ -237,6 +237,10 @@ type ConfirmationInferenceRequest struct {
 	UpstreamProvider    pgtype.Text        `json:"upstreamProvider"`
 	StartedAt           pgtype.Timestamptz `json:"startedAt"`
 	CompletedAt         pgtype.Timestamptz `json:"completedAt"`
+	FailureKind         pgtype.Text        `json:"failureKind"`
+	UpstreamHttpStatus  pgtype.Int4        `json:"upstreamHttpStatus"`
+	UpstreamAttempts    pgtype.Int4        `json:"upstreamAttempts"`
+	ReceiptFree         pgtype.Bool        `json:"receiptFree"`
 }
 
 type InferenceConcurrencySettingsRevision struct {

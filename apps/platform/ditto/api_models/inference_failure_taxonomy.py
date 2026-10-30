@@ -167,8 +167,27 @@ class ConfirmationFailureLaneWindow(BaseModel):
     failure_share: float
 
 
+ConfirmationFailureKind = Literal[
+    "identity_mismatch",
+    "receipt_invalid",
+    "response_invalid",
+    "response_too_large",
+    "settle_rejected",
+    "transport_error",
+    "transport_timeout",
+    "upstream_backpressure",
+    "upstream_status",
+]
+
+
 class ConfirmationFailureGroup(BaseModel):
-    """One (window, lane, model, provider, status) confirmation bucket."""
+    """One confirmation bucket, split by why a failed call failed.
+
+    ``failure_kind``, ``upstream_http_status`` and ``receipt_free`` are what the
+    relay recorded on the failed call; all three are null on completed calls and
+    on failures settled before they were persisted, so a null here on a failed
+    group means "unexplained", never "fine".
+    """
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -178,6 +197,10 @@ class ConfirmationFailureGroup(BaseModel):
     upstream_provider: str | None
     provider_basis: InferenceRouteBasis
     status: str
+    failure_kind: ConfirmationFailureKind | None = None
+    upstream_http_status: int | None = None
+    receipt_free: bool | None = None
+    max_upstream_attempts: int = 0
     calls: int
     without_cost: int
     bundles_affected: int
