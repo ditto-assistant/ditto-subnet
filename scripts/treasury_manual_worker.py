@@ -25,7 +25,8 @@ def consume_queued(mailbox, journal, policy, chain):
     message = mailbox.pull()
     if message:
         try:
-            consume_manual(mailbox, journal, policy, chain, *message)
+            report = consume_manual(mailbox, journal, policy, chain, *message)
+            retry = report is not None and report.status == "pending"
         except Exception as error:
             print(
                 json.dumps(
@@ -36,9 +37,31 @@ def consume_queued(mailbox, journal, policy, chain):
                 ),
                 flush=True,
             )
+            retry = True
+        if retry:
+            # A transient archive read or unfinalized broadcast used to sit out
+            # the 600s ack deadline per attempt, which expired a confirmed
+            # request on 2026-10-26. Redelivery reuses the same journal claim.
+            release_request(mailbox, message[0])
         publish_current_readiness(mailbox, journal, policy, chain)
         return True
     return False
+
+
+def release_request(mailbox, ack_id):
+    try:
+        mailbox.release(ack_id)
+    except Exception as error:
+        # The lease then simply runs to its deadline, as before.
+        print(
+            json.dumps(
+                {
+                    "status": "manual_request_release_failed",
+                    "error_type": type(error).__name__,
+                }
+            ),
+            flush=True,
+        )
 
 
 def consume_iteration(mailbox, journal, policy, chain):

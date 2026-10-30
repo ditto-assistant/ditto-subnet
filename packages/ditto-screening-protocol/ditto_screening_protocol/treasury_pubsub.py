@@ -85,7 +85,7 @@ class TreasuryMailbox:
                 ),
                 # Pub/Sub acknowledge may return no response payload. Metadata,
                 # publish and pull must still provide their bounded JSON object.
-                allow_empty=method == "acknowledge",
+                allow_empty=method in {"acknowledge", "modifyAckDeadline"},
             )
         except HTTPError as error:
             if error.code == 401:
@@ -143,3 +143,16 @@ class TreasuryMailbox:
 
     def ack(self, ack_id):
         self._call(self.subscription, "acknowledge", {"ackIds": [ack_id]})
+
+    def release(self, ack_id):
+        """Return an unacknowledged message for redelivery under retryPolicy.
+
+        Without this a retryable request waits out the whole ack deadline
+        (600s) before custody sees it again. Releasing changes only when the
+        same UUID is redelivered; the journal still binds its exact claim.
+        """
+        self._call(
+            self.subscription,
+            "modifyAckDeadline",
+            {"ackIds": [ack_id], "ackDeadlineSeconds": 0},
+        )
