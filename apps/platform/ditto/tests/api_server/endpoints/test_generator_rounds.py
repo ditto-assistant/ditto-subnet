@@ -2060,6 +2060,58 @@ class TestRoundRunsNeverSpendScoringAttempts:
             assert row.status == TicketStatus.SCORED
             assert (row.attempt_count, row.manual_retry_grants) == (1, 1)
 
+    async def test_round_on_a_canary_row_drops_the_canary_attempt(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, 0)
+        key = (agent_id, 13, _VALIDATOR.ss58_address)
+        now = datetime.now(UTC)
+        failed_at = now - timedelta(hours=2)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATOR.ss58_address,
+                    slot_id="slot-1",
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.BENCHMARK_CANARY,
+                    purpose_revision=1,
+                    issued_at=failed_at - timedelta(hours=1),
+                    deadline=failed_at,
+                    bench_version=13,
+                    seed=77,
+                    attempt_count=1,
+                    manual_retry_grants=0,
+                    failure_reason="scoring_error",
+                    failure_detail="canary_failed",
+                    failed_at=failed_at,
+                    legacy_completion_allowed=False,
+                )
+            )
+
+        # The canary's attempt is not scoring history: the round lease reads
+        # as a round-only row, not one with a spent scoring attempt.
+        ticket = await self._lease(session_maker, agent_id, now=now)
+        assert (ticket.attempt_count, ticket.manual_retry_grants) == (0, 0)
+        assert ticket.failure_reason is None
+        assert tickets_mod.is_round_only_ticket(ticket)
+
+        async with session_maker() as session, session.begin():
+            row = await session.get(ValidatorTicket, key, with_for_update=True)
+            assert row is not None
+            tickets_mod.finish_generator_round_ticket(row)
+        async with session_maker() as session:
+            row = await session.get(ValidatorTicket, key)
+            assert row is not None
+            # Closed like any round-only row: no quorum slot, budget intact.
+            assert (row.status, row.attempt_count, row.retry_after) == (
+                TicketStatus.EXPIRED,
+                0,
+                None,
+            )
+            assert not tickets_mod.counts_toward_scoring_retry(row)
+            assert not tickets_mod.ticket_retry_budget_spent(row)
+
 
 def test_round_capability_does_not_need_the_private_v13_transport() -> None:
     """A scorer serving rounds is round-capable with private datasets off.
