@@ -430,6 +430,11 @@ async def _confirmation_failure_rows(
                 if row["upstream_http_status"] is not None
                 else None
             ),
+            upstream_error_code=(
+                int(row["upstream_error_code"])
+                if row["upstream_error_code"] is not None
+                else None
+            ),
             receipt_free=(
                 bool(row["receipt_free"]) if row["receipt_free"] is not None else None
             ),

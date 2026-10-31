@@ -3373,6 +3373,7 @@ export const inferenceFailureTaxonomySchema = z.object({
         // so a null on a failed group means "unexplained", never "fine".
         failure_kind: z.string().nullable().default(null),
         upstream_http_status: z.number().int().min(100).max(599).nullable().default(null),
+        upstream_error_code: z.number().int().min(400).max(599).nullable().default(null),
         receipt_free: z.boolean().nullable().default(null),
         max_upstream_attempts: z.number().int().nonnegative().default(0),
         calls: z.number().int().nonnegative(),

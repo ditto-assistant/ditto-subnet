@@ -19835,7 +19835,7 @@ export interface components {
             /** Calls */
             calls: number;
             /** Failure Kind */
-            failure_kind?: ("identity_mismatch" | "receipt_invalid" | "response_invalid" | "response_too_large" | "settle_rejected" | "transport_error" | "transport_timeout" | "upstream_backpressure" | "upstream_status") | null;
+            failure_kind?: ("identity_mismatch" | "receipt_invalid" | "response_invalid" | "response_too_large" | "settle_rejected" | "transport_error" | "transport_timeout" | "upstream_backpressure" | "upstream_status" | "upstream_error_envelope") | null;
             /**
              * Lane
              * @enum {string}
@@ -19861,6 +19861,8 @@ export interface components {
             receipt_free?: boolean | null;
             /** Status */
             status: string;
+            /** Upstream Error Code */
+            upstream_error_code?: number | null;
             /** Upstream Http Status */
             upstream_http_status?: number | null;
             /** Upstream Provider */

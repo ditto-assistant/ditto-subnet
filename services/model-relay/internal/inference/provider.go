@@ -138,6 +138,49 @@ func providerIsTransientServerError(status int, header http.Header) bool {
 	return false
 }
 
+// confirmationTransientErrorEnvelope reports whether a 2xx response is
+// OpenRouter's documented in-body failure -- an error object with no choices,
+// usage or provider -- carrying a transient error code, and returns that code.
+//
+// OpenRouter sends 200 as soon as a provider accepts a request, before any
+// token is produced, and a status is final once sent; a failure after that
+// point (including every provider failing over) arrives as a 200 whose JSON
+// body holds only {"id","error":{"code","message","metadata"}}. Measured
+// 2026-10-30 on bundle 7fa29ad3: the confirmation path, which had no such
+// check, recorded this as identity_mismatch (no model field) and ended a
+// bundle 28 of 48 cases in. The ordinary scoring lane already classifies the
+// same envelope as provider_unavailable and moves on to its next attempt.
+//
+// This is NOT a receipt-free proof. OpenRouter documents that the upstream may
+// still charge for prompt processing even when no content is generated, and the
+// envelope reports no usage to record. Re-dispatching it trades that bounded,
+// unrecorded prompt cost for completing the bundle -- the same trade the
+// ordinary lane already makes -- and is capped by the per-call attempt limit
+// and the per-grant retry budget like every other confirmation retry. A
+// permanent code (a 4xx other than 408/429) is never retried.
+func confirmationTransientErrorEnvelope(result *providerHTTPResult) (int64, bool) {
+	if result == nil || result.status < 200 || result.status > 299 || result.bodyOverLimit {
+		return 0, false
+	}
+	decoded, ok := decodeJSONNumbersRejectDuplicateKeys(result.body)
+	if !ok {
+		return 0, false
+	}
+	payload, ok := decoded.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	code, _, ok := providerErrorEnvelope(payload)
+	if !ok {
+		return 0, false
+	}
+	switch code {
+	case 408, 429, 500, 502, 503, 504:
+		return code, true
+	}
+	return code, false
+}
+
 // confirmationTransientDelay is the full-jitter backoff before attempt n+1,
 // given n attempts so far: uniform in [0, min(max, base*2^(n-1))].
 func confirmationTransientDelay(policy providerRetryPolicy, attempts int) time.Duration {
@@ -313,6 +356,13 @@ func providerRetryDelay(policy providerRetryPolicy, result *providerHTTPResult, 
 		providerIsBackpressure(result.status, result.header)
 	transient := policy.retryTransient && attempts < policy.transientMaxAttempts &&
 		providerIsTransientServerError(result.status, result.header)
+	if policy.retryTransient && attempts < policy.transientMaxAttempts {
+		// The documented 200-with-error-body failure. Deliberately outside the
+		// receipt-free proof below: see confirmationTransientErrorEnvelope.
+		if _, envelope := confirmationTransientErrorEnvelope(result); envelope {
+			return confirmationTransientDelay(policy, attempts), true
+		}
+	}
 	if !backpressure && !transient {
 		return 0, false
 	}

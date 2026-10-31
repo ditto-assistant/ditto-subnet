@@ -11703,6 +11703,9 @@ class ConfirmationInferenceRequest(Base):
     """Bounded reason (see the CHECK) the relay's provider call failed."""
     upstream_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Final upstream HTTP status, when a response arrived at all."""
+    upstream_error_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """``error.code`` from an OpenRouter in-body failure (a 200 carrying only an
+    error object); distinguishes a 502 inside a 200 from a 429 inside a 200."""
     upstream_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Upstream dispatches the relay made, including any it retried."""
     receipt_free: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
@@ -11738,7 +11741,7 @@ class ConfirmationInferenceRequest(Base):
             "'identity_mismatch', 'receipt_invalid', 'response_invalid', "
             "'response_too_large', 'settle_rejected', 'transport_error', "
             "'transport_timeout', "
-            "'upstream_backpressure', 'upstream_status')",
+            "'upstream_backpressure', 'upstream_status', 'upstream_error_envelope')",
             name="confirmation_inference_requests_failure_kind_check",
         ),
         CheckConstraint(
@@ -11746,6 +11749,10 @@ class ConfirmationInferenceRequest(Base):
             "OR upstream_http_status BETWEEN 100 AND 599) "
             "AND (upstream_attempts IS NULL OR upstream_attempts BETWEEN 0 AND 16)",
             name="confirmation_inference_requests_failure_detail_check",
+        ),
+        CheckConstraint(
+            "upstream_error_code IS NULL OR upstream_error_code BETWEEN 400 AND 599",
+            name="confirmation_inference_requests_error_code_check",
         ),
         Index("confirmation_inference_requests_started_idx", "started_at"),
     )
