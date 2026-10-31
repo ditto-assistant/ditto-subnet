@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import contextlib
 import hashlib
 import json
@@ -6473,10 +6474,17 @@ class TestResourceConstrainedAdmission:
         )
         worker, _ = self._worker(collector=collector)
         worker._sandbox_memory_limit_mib = 8192
-        # (16000 - 4096 reserve) // 8192 = 1 of 4 configured slots.
+        # (16000 - 1024 reserve) // 8192 = 1 of 4 configured slots.
         assert len(worker._available_slots()) == 1
         worker._sandbox_memory_limit_mib = 3072
-        assert len(worker._available_slots()) == 3
+        assert len(worker._available_slots()) == 4
+        # A host that fits one cap plus 1 GiB keeps one slot whatever the
+        # reserve, so it stays in the canonical quorum.
+        worker._sandbox_memory_limit_mib = 8192
+        worker._resource_ceilings = dataclasses.replace(
+            worker._resource_ceilings, host_memory_reserve_mib=8192
+        )
+        assert len(worker._available_slots()) == 1
 
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,

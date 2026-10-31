@@ -26,7 +26,7 @@ dependencies = [
     "pydantic>=2.12",
     "cryptography>=42",
     "aioboto3>=13.0",
-    "ditto-screening-protocol==0.30.0",
+    "ditto-screening-protocol==0.30.1",
     "zstandard>=0.23",
     # Structural anti-copy fingerprint (ditto/api_server/structural_fingerprint.py).
     # tree-sitter-rust stays pinned to the grammar the scorer's Go binding

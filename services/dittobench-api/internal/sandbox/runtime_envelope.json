@@ -42,6 +42,7 @@
     "host_available_floor_mib": 1024
   },
   "host": {
-    "memory_reserve_mib": 4096
+    "memory_reserve_mib": 1024,
+    "single_slot_headroom_mib": 1024
   }
 }

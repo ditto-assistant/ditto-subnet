@@ -47,6 +47,7 @@ class RuntimeEnvelope:
     oom_peak_tolerance_mib: int
     oom_host_available_floor_mib: int
     host_memory_reserve_mib: int
+    single_slot_headroom_mib: int
 
     def memory_admitted_slots(
         self, host_memory_mib: int, sandbox_memory_limit_mib: int
@@ -56,12 +57,38 @@ class RuntimeEnvelope:
         The sum of concurrent harness caps must not exceed host memory less
         :attr:`host_memory_reserve_mib`, or two in-cap harnesses can exhaust the
         host together and the kernel kills one of them for a fault it did not
-        commit.
+        commit. A host with at least one cap plus
+        :attr:`single_slot_headroom_mib` always keeps one slot.
         """
-        if sandbox_memory_limit_mib <= 0:
-            return 0
-        allocatable = host_memory_mib - self.host_memory_reserve_mib
-        return max(0, allocatable // sandbox_memory_limit_mib)
+        return admitted_slots(
+            host_memory_mib,
+            sandbox_memory_limit_mib,
+            reserve_mib=self.host_memory_reserve_mib,
+            single_slot_headroom_mib=self.single_slot_headroom_mib,
+        )
+
+
+def admitted_slots(
+    host_memory_mib: int,
+    sandbox_memory_limit_mib: int,
+    *,
+    reserve_mib: int,
+    single_slot_headroom_mib: int,
+) -> int:
+    """``(host - reserve) // cap``, floored at 1 when ``host >= cap + headroom``.
+
+    The floor keeps every host that can physically back one harness in the
+    canonical quorum. An OOM there is still classified fairly
+    (``host_memory_pressure`` is no-fault), so one slot is always safe.
+    """
+    if sandbox_memory_limit_mib <= 0:
+        return 0
+    slots = max(0, (host_memory_mib - reserve_mib) // sandbox_memory_limit_mib)
+    if slots == 0 and (
+        host_memory_mib >= sandbox_memory_limit_mib + single_slot_headroom_mib
+    ):
+        return 1
+    return slots
 
 
 @cache
@@ -93,4 +120,5 @@ def runtime_envelope() -> RuntimeEnvelope:
         oom_peak_tolerance_mib=int(oom["peak_tolerance_mib"]),
         oom_host_available_floor_mib=int(oom["host_available_floor_mib"]),
         host_memory_reserve_mib=int(raw["host"]["memory_reserve_mib"]),
+        single_slot_headroom_mib=int(raw["host"]["single_slot_headroom_mib"]),
     )

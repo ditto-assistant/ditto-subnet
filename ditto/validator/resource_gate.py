@@ -32,7 +32,7 @@ from typing import Literal
 
 from ditto.api_models.system_health import SystemMetrics
 from ditto.validator.errors import ValidatorConfigError
-from ditto_screening_protocol.runtime_envelope import runtime_envelope
+from ditto_screening_protocol.runtime_envelope import admitted_slots, runtime_envelope
 
 ConstrainedResource = Literal["cpu", "memory", "disk"]
 
@@ -93,10 +93,14 @@ class ResourceCeilings:
         cap can exhaust the host together, and the kernel kills one for a fault
         it did not commit.
         """
-        if sandbox_memory_limit_mib <= 0:
-            return 0
-        allocatable = host_memory_mib - self.host_memory_reserve_mib
-        return max(0, allocatable // sandbox_memory_limit_mib)
+        # A host that can back one cap plus the published headroom always
+        # keeps one slot, whatever the reserve, so it stays in the quorum.
+        return admitted_slots(
+            host_memory_mib,
+            sandbox_memory_limit_mib,
+            reserve_mib=self.host_memory_reserve_mib,
+            single_slot_headroom_mib=runtime_envelope().single_slot_headroom_mib,
+        )
 
     def exceeded(
         self, metrics: SystemMetrics | None
