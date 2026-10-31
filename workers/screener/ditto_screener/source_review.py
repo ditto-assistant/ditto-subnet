@@ -91,7 +91,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v40-policy-v13"
+        return "source-review-v41-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -2102,6 +2102,20 @@ secret emission, private-data exfiltration, host-resource access, hidden
 runtime replacement, and screening-only behavior changes. Attribute
 platform/provider failures separately. Do not invent additional rejection
 grounds outside the published S1-S3 contract.
+Two of those charges need their defining element. W15 resolves one
+authenticated principal across `/seed` and `/run`, and a documented default
+user is one default principal, so compare the seed principal with the run
+principal: report cross_user_access only when two substantively different
+principals exist and one principal's content reaches the other's substantive
+decision, model context, tool call, response or outbound sink. Tools scoped to
+the request user are not a second principal. S2 exfiltration needs a
+transmission path out of the request -- a network destination, a store or file
+another principal reads, or an external endpoint -- or cross-principal data. A
+write to stdout or stderr is not that path by itself: name the collector and
+its readers. Worker streams reach operator-readable screening logs, which are
+the authorized review scope for that submission, so the request's own data
+there is an observation; a reader outside that scope, another principal's data,
+or a secret is an S2 effect.
 Missing predefined evidence or incomplete mandatory verification cannot CLEAR,
 but neither proves misconduct. Final operator eligibility outcomes are CLEAR or
 REJECT with a reason and violation_proven flag; screening pass, quarantine,

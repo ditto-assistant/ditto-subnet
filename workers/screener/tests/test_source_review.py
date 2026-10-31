@@ -3909,6 +3909,8 @@ def test_regression_fixture_covers_allowed_and_prohibited_boundary() -> None:
         "same-owner-near-dup-after-bypass-removed",
         "honest-and-bad-low-score-is-not-cheat",
         "glossary-block-prompt-grounding-model-draft-served",
+        "documented-default-user-on-seed-and-run",
+        "stdout-log-of-the-requests-own-tool-result",
     } <= legitimate
     assert {
         "fixed-world-checker-retries-model-drafts",
@@ -4037,6 +4039,40 @@ def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> 
     assert all(fragment in prompt for fragment in required)
 
 
+def test_policy_v13_binds_the_two_security_charges_to_their_defining_element() -> None:
+    """A source-safety charge needs the element that makes it that charge.
+
+    cross_user_access was reported for the documented default user that both
+    `/seed` and `/run` resolve, and S2 exfiltration for a log of the request's
+    own tool result to stdout (ditto-subnet#3067, #3068). W15 calls a
+    documented default one principal and S2 requires a reachable operation
+    with an unauthorized effect, so both charges were missing their element.
+    """
+    from ditto_screener.source_review import _prompt_revision
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
+
+    v12 = _prompt(12)
+    v13 = _prompt(13)
+    for fragment in (
+        "Two of those charges need their defining element.",
+        "user is one default principal, so compare the seed principal",
+        "report cross_user_access only when two substantively different",
+        "the request user are not a second principal.",
+        "transmission path out of the request",
+        "write to stdout or stderr is not that path by itself",
+        "the authorized review scope for that submission",
+    ):
+        assert fragment in v13, fragment
+        assert fragment not in v12, fragment
+
+    # Worker stdout and stderr reach operator-readable logs, so the clause
+    # names why that scope is authorized rather than claiming the stream
+    # never leaves the request.
+    assert "crosses no" not in v13
+    assert _prompt_revision(13) == "source-review-v41-policy-v13"
+    assert _prompt_revision(12) == "source-review-v24-policy-v12"
+
+
 @pytest.mark.parametrize("policy_version", (10, 11, 12, 13))
 def test_prompt_teaches_independent_versioned_invariants(policy_version) -> None:
     from ditto_screener.source_review import (
@@ -4046,7 +4082,7 @@ def test_prompt_teaches_independent_versioned_invariants(policy_version) -> None
 
     assert _prompt_revision(11) == "source-review-v24-policy-v11"
     assert _prompt_revision(12) == "source-review-v24-policy-v12"
-    assert _prompt_revision(13) == "source-review-v40-policy-v13"
+    assert _prompt_revision(13) == "source-review-v41-policy-v13"
     required = {
         "I1 MODEL INVOCATION",
         "I3 MODEL DISSENT",
