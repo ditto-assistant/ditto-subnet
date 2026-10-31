@@ -387,7 +387,7 @@ services:
       # of harness caps never exceeds what the host can back and an in-cap
       # harness is never OOM-killed by its neighbours. The default is the
       # published runtime envelope's (docs/RUNTIME-ENVELOPE.md).
-      VALIDATOR_HOST_MEMORY_RESERVE_MIB: ${VALIDATOR_HOST_MEMORY_RESERVE_MIB:-4096}
+      VALIDATOR_HOST_MEMORY_RESERVE_MIB: ${VALIDATOR_HOST_MEMORY_RESERVE_MIB:-1024}
       # A pinned CPU is a working benchmark host, not a failing one.
       VALIDATOR_CPU_PERCENT_CEILING: ${VALIDATOR_CPU_PERCENT_CEILING:-0}
       VALIDATOR_INFERENCE_PROXY_REQUIRED: "true"

@@ -187,21 +187,32 @@ def reserved_round_slots(
     validator_hotkey: str | None,
     allowed_slots: int,
     rounds_active: bool,
+    healthy_slots: int | None = None,
 ) -> int:
     """Slots on this validator held back for generator-competition round work.
 
-    ``min(R, allowed - 1)`` while rounds are enabled, where ``R`` is the
-    validator's override or the global default, and 0 otherwise. Callers fold
-    the validator's own round capability into ``rounds_active``: a validator
-    that can never take a round lease must not hold a slot for one. The ``- 1``
-    keeps at least one slot for canonical and retest work, so a one-slot
-    validator reserves nothing and rounds can never starve the quorum lane.
+    ``min(R, usable - 1)`` while rounds are enabled, where ``R`` is the
+    validator's override or the global default, ``usable`` is
+    ``min(allowed, healthy)``, and 0 otherwise. Callers fold the validator's own
+    round capability into ``rounds_active``: a validator that can never take a
+    round lease must not hold a slot for one. The ``- 1`` keeps at least one
+    slot for canonical and retest work, so a one-slot validator reserves
+    nothing and rounds can never starve the quorum lane.
+
+    ``healthy_slots`` is the count the validator actually offers. Host-memory
+    admission narrows it below ``allowed`` (a 16 GiB host fits one 8 GiB
+    harness), and the reservation must be sized against slots that exist, or a
+    host's only real slot goes to rounds and the canonical quorum loses a
+    distinct validator. ``None`` (no heartbeat capacity) keeps ``allowed``.
     """
-    if not rounds_active or allowed_slots <= 1:
+    usable = (
+        allowed_slots if healthy_slots is None else min(allowed_slots, healthy_slots)
+    )
+    if not rounds_active or usable <= 1:
         return 0
     return min(
         configured_reserved_round_slots(settings, validator_hotkey=validator_hotkey),
-        allowed_slots - 1,
+        usable - 1,
     )
 
 

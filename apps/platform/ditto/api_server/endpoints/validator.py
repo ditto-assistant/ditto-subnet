@@ -1723,6 +1723,9 @@ async def _idle_retest_slot(
             rounds_active=(
                 round_reservation_active and validator_advertises_rounds(heartbeat)
             ),
+            healthy_slots=(
+                len(capacity.healthy_slots) if capacity is not None else None
+            ),
         )
         if len(leases.non_round_slots) >= allowed - reserved:
             return None
@@ -3953,6 +3956,7 @@ async def request_job(
                     rounds_active=(
                         rounds_reserved_now and validator_advertises_rounds(heartbeat)
                     ),
+                    healthy_slots=len(capacity.healthy_slots),
                 ),
                 non_round_slots=live_leases.non_round_slots,
             ):

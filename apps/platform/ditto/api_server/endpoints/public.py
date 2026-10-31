@@ -5221,6 +5221,7 @@ def _validator_heartbeats_response(
                     rounds_active=(
                         round_reservation_active and validator_advertises_rounds(row)
                     ),
+                    healthy_slots=(len(capacity.healthy_slots) if capacity else None),
                 ),
                 healthy_slots=(capacity.healthy_slots if capacity else ["slot-0"]),
                 admission=(capacity.admission if capacity else "accepting"),

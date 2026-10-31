@@ -49,7 +49,7 @@ stamp is absent.
 | Per request | `max_tokens` clamped to 32,768; 4 MiB body; 90 s upstream | |
 
 The scorer applies the envelope's 64 MiB peak tolerance and 1024 MiB host
-floor when it judges an OOM kill. Validators hold back a 4096 MiB host
+floor when it judges an OOM kill. Validators hold back a 1024 MiB host
 reserve (`VALIDATOR_HOST_MEMORY_RESERVE_MIB`) from harness caps.
 
 ## Who pays for a resource failure
@@ -80,9 +80,15 @@ A validator offers at most this many benchmark slots:
 (host RAM − VALIDATOR_HOST_MEMORY_RESERVE_MIB) // live harness memory cap
 ```
 
-The sum of caps therefore always fits the host, and a harness inside its own
-cap cannot be killed by its neighbours. With the 8192 MiB cap and the
-4096 MiB reserve:
+A host with at least the cap plus 1024 MiB (`single_slot_headroom_mib`) always
+keeps one slot, whatever the reserve. That slot is safe because a kill there
+that the harness did not cause is classified `host_memory_pressure`, which is
+no-fault. Platform also never lets the generator-round reservation take a
+host's only healthy slot: the reservation is sized against
+`min(allowed, healthy) − 1`, so a one-slot host serves ordinary work and keeps
+the canonical quorum at three distinct validators.
+
+With the 8192 MiB cap and the 1024 MiB reserve:
 
 | Host RAM | Slots |
 |---|---|
@@ -91,8 +97,8 @@ cap cannot be killed by its neighbours. With the 8192 MiB cap and the
 | 32 GiB | 3 |
 | 64 GiB | 7 |
 
-The worker logs the narrowing, and the heartbeat's `healthy_slots` shows it in
-Backroom `get_validator_capacity`.
+The worker logs the narrowing. The heartbeat's `healthy_slots`, and with it
+`serviceable_slots` in Backroom `get_validator_capacity`, reflect it.
 
 ## Practising against the envelope
 

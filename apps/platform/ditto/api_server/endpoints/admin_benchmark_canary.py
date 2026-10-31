@@ -309,6 +309,7 @@ async def issue_benchmark_canary(
                 validator_advertises_rounds(heartbeat)
                 and await round_reservation_active(request.app.state, session)
             ),
+            healthy_slots=len(capacity.healthy_slots),
         )
         if (
             validator_issuance_paused(slots, validator_hotkey=payload.validator_hotkey)
