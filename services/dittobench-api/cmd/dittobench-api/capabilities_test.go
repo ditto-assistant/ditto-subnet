@@ -52,7 +52,8 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 	if got.MemoryPhaseCapacity != maxConcurrentMemoryPhases {
 		t.Fatalf("memory-phase capacity = %d, want %d", got.MemoryPhaseCapacity, maxConcurrentMemoryPhases)
 	}
-	if len(got.Features) != 2 || got.Features[0] != "git_subdir" || got.Features[1] != "v13-deterministic-enterprise-v1" {
+	if len(got.Features) != 3 || got.Features[0] != "git_subdir" || got.Features[1] != "v13-deterministic-enterprise-v1" ||
+		got.Features[2] != sourceFreeScreenedImageFeature {
 		t.Fatalf("wrong feature set: %v", got.Features)
 	}
 	want := []int{}

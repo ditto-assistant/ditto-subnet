@@ -164,6 +164,7 @@ export const WRITE_TOOL_NAMES = new Set([
 
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ['get_agent_source_release_evidence', BACKROOM_READ_SCOPE],
+  ['get_artifact_fetch_audit', BACKROOM_READ_SCOPE],
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   // A closed round's dataset is every column's generated cases: private

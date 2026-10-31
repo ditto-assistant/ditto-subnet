@@ -256,6 +256,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/artifact-fetch-audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Artifact Fetch Audit
+         * @description List who was served an artifact's source or image before ``before``.
+         *
+         *     Exactly one of ``agent_id`` or ``artifact_sha256`` selects the artifact; a
+         *     SHA covers every agent row that uploaded those exact bytes. Network
+         *     addresses are returned only as a truncated hash, and the forwarding claim
+         *     is reduced to a presence flag.
+         */
+        get: operations["get_artifact_fetch_audit_api_v1_admin_artifact_fetch_audit_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/artifact-release-settings": {
         parameters: {
             query?: never;
@@ -16287,6 +16312,93 @@ export interface components {
             /** Upload Endpoint */
             upload_endpoint: string;
         };
+        /** ArtifactFetchAudit */
+        ArtifactFetchAudit: {
+            /**
+             * Absence Proves No Fetch
+             * @default false
+             * @constant
+             */
+            absence_proves_no_fetch: false;
+            /** Agent Ids */
+            agent_ids: string[];
+            /** Artifact Sha256 */
+            artifact_sha256: string | null;
+            /**
+             * Before
+             * Format: date-time
+             */
+            before: string;
+            /**
+             * Limitations
+             * @default The fetch audit is fail-open: a dropped audit write leaves no row, so absence never proves an artifact was not served. A row records a served presigned URL, not a completed download. Screener node jobs share fleet identities; requester_id names the node or provider.
+             */
+            limitations: string;
+            /** Requesters */
+            requesters: components["schemas"]["ArtifactFetchRequesterSummary"][];
+            /** Rows */
+            rows: components["schemas"]["ArtifactFetchAuditRow"][];
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** ArtifactFetchAuditRow */
+        ArtifactFetchAuditRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string | null;
+            /** Bench Version */
+            bench_version: number | null;
+            /** Endpoint */
+            endpoint: string;
+            /**
+             * Fetched At
+             * Format: date-time
+             */
+            fetched_at: string;
+            /** Forwarded Claim Present */
+            forwarded_claim_present: boolean;
+            /** Lease Id */
+            lease_id: string | null;
+            /** Requester Id */
+            requester_id: string | null;
+            /** Requester Instance Id */
+            requester_instance_id: string | null;
+            /** Requester Kind */
+            requester_kind: string;
+            /** Served Screened Image */
+            served_screened_image: boolean | null;
+            /** Served Source */
+            served_source: boolean;
+            /** Source Ip Hash */
+            source_ip_hash: string | null;
+        };
+        /** ArtifactFetchRequesterSummary */
+        ArtifactFetchRequesterSummary: {
+            /** Fetch Count */
+            fetch_count: number;
+            /**
+             * First Fetched At
+             * Format: date-time
+             */
+            first_fetched_at: string;
+            /**
+             * Last Fetched At
+             * Format: date-time
+             */
+            last_fetched_at: string;
+            /** Requester Id */
+            requester_id: string | null;
+            /** Requester Kind */
+            requester_kind: string;
+            /** Source Fetch Count */
+            source_fetch_count: number;
+        };
         /**
          * ArtifactLimit
          * @description One upload-time limit on the artifact, with where it comes from.
@@ -16332,9 +16444,9 @@ export interface components {
          * ArtifactResponse
          * @description Returned by ``GET /validator/agent/{agent_id}/artifact``.
          *
-         *     ``download_url`` is a short-lived pre-signed object-store URL the
-         *     daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
-         *     the bytes it pulls against what the miner registered.
+         *     ``download_url`` is a short-lived pre-signed object-store URL to the
+         *     source tarball. It is ``None`` for a validator whose scorer runs the
+         *     screened image without source; ``sha256`` still names the artifact.
          * @example {
          *       "agent_id": "550e8400-e29b-41d4-a716-446655440000",
          *       "download_url": "https://minio.local/ditto-agents/550e8400-e29b-41d4-a716-446655440000.tar.gz?X-Amz-...",
@@ -16353,9 +16465,9 @@ export interface components {
             bench_version?: number | null;
             /**
              * Download Url
-             * @description Pre-signed URL to GET the tarball bytes.
+             * @description Pre-signed source tarball URL; null when the validator scores the screened image without source.
              */
-            download_url: string;
+            download_url?: string | null;
             /**
              * Expires At
              * Format: date-time
@@ -35030,6 +35142,11 @@ export interface components {
             scored_runtime_env?: components["schemas"]["ScoredRuntimeEnvEvidence"] | null;
             /** Software Version */
             software_version?: string | null;
+            /**
+             * Source Free Screened Images
+             * @default false
+             */
+            source_free_screened_images: boolean;
             /** Source Revision */
             source_revision?: string | null;
             /**
@@ -42696,6 +42813,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SourceReleaseEvidence"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_artifact_fetch_audit_api_v1_admin_artifact_fetch_audit_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                artifact_sha256?: string | null;
+                before?: string | null;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ArtifactFetchAudit"];
                 };
             };
             /** @description Validation Error */

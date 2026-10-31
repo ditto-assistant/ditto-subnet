@@ -38,20 +38,20 @@ func TestPrivateDatasetAdmission(t *testing.T) {
 		t.Fatal("disabled private path admitted")
 	}
 	s := &server{}
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1"}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", sourceFreeScreenedImageFeature}) {
 		t.Fatal("disabled capability advertised")
 	}
 	// Every validator stack runs in screened-image mode, so it serves rounds
 	// without opening the private V13 transport.
 	s.allowGeneratorRounds = true
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", generatorRoundMode, generatorRoundMaxCasesFeature(), "generator-round-bench-13", "generator-round-bench-14"}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", sourceFreeScreenedImageFeature, generatorRoundMode, generatorRoundMaxCasesFeature(), "generator-round-bench-13", "generator-round-bench-14"}) {
 		t.Fatal("round capability not independent of private datasets")
 	}
 	if s.privateBodyBytes() != challenge.MaxRoundDatasetBytes {
 		t.Fatal("round-only scorer must admit a full round dataset body")
 	}
 	s.allowPrivateDatasets = true
-	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", privateDatasetMode, generatorRoundMode, generatorRoundMaxCasesFeature(), "generator-round-bench-13", "generator-round-bench-14"}) {
+	if !reflect.DeepEqual(s.datasetFeatures(), []string{"git_subdir", "v13-deterministic-enterprise-v1", sourceFreeScreenedImageFeature, privateDatasetMode, generatorRoundMode, generatorRoundMaxCasesFeature(), "generator-round-bench-13", "generator-round-bench-14"}) {
 		t.Fatal("enabled capability missing")
 	}
 }

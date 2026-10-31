@@ -600,13 +600,6 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 			message: "confirmation execution profile is missing",
 		},
 		{
-			name: "missing artifact URL",
-			mutate: func(request *confirmationExecutionRequest) {
-				request.ArtifactURL = " "
-			},
-			message: "confirmation artifact URL is missing",
-		},
-		{
 			name: "missing screened image URL",
 			mutate: func(request *confirmationExecutionRequest) {
 				request.ScreenedImageURL = ""

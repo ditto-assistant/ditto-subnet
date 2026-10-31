@@ -235,6 +235,7 @@ from ditto.api_server.scoring_gate import (
 )
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
 from ditto.api_server.v13_scorer_cohort import (
     pinned_validator_allowed,
     pinned_validator_may_submit,
@@ -439,6 +440,29 @@ def _assert_private_dataset_capability(heartbeat: ValidatorHeartbeat | None) -> 
         or scorer.get("status") != "fresh_verified"
     ):
         raise HTTPException(503, "validator cannot execute private datasets")
+
+
+async def _validator_scores_source_free(
+    session: AsyncSession, *, validator_hotkey: str
+) -> bool:
+    """Whether this validator's scorer runs a screened image without source.
+
+    Read from the signed heartbeat capability. Validators that do not
+    advertise it still receive the source URL so the existing fleet keeps
+    scoring until it updates.
+    """
+    heartbeat = await session.get(ValidatorHeartbeat, validator_hotkey)
+    capabilities = heartbeat.capabilities if heartbeat is not None else None
+    scorer = (
+        capabilities.get("scorer_benchmarks")
+        if isinstance(capabilities, dict)
+        else None
+    )
+    return (
+        isinstance(scorer, dict)
+        and scorer.get("source_free_screened_images") is True
+        and scorer.get("status") == "fresh_verified"
+    )
 
 
 def _inference_grant_offer(
@@ -2190,6 +2214,38 @@ def _artifact_key(agent_id: UUID) -> str:
 def _screened_image_key(agent_id: UUID, image_upload_id: UUID) -> str:
     """Return the immutable accepted screener image object key."""
     return f"{agent_id}/screened-images/{image_upload_id}.tar"
+
+
+# Uploads are capped at 20 MiB; the backfill read refuses anything larger.
+_STRUCTURAL_BACKFILL_MAX_BYTES = 20 * 1024 * 1024
+
+
+async def _backfill_structural_fingerprint(
+    session: AsyncSession, storage: S3StorageClient, *, agent_id: UUID
+) -> dict | None:
+    """Compute a missing structural sketch from the stored upload, best-effort.
+
+    Uploads compute it on arrival; this covers agents that predate that and are
+    scored by validators that no longer receive (or fingerprint) the source.
+    Runs outside the score transaction so no row lock waits on object storage.
+    """
+    stored = await session.scalar(
+        select(Agent.structural_fingerprint).where(Agent.agent_id == agent_id)
+    )
+    if session.in_transaction():
+        await session.rollback()
+    if stored is not None:
+        return None
+    try:
+        tar_bytes = await storage.get_object(
+            key=_artifact_key(agent_id), max_bytes=_STRUCTURAL_BACKFILL_MAX_BYTES
+        )
+    except Exception:  # noqa: BLE001 - a moderation signal never fails a score
+        logger.warning(
+            "structural fingerprint backfill read failed agent_id=%s", agent_id
+        )
+        return None
+    return await asyncio.to_thread(compute_structural_fingerprint, tar_bytes)
 
 
 # Agents the validator may pull as work. The partial index covers exactly
@@ -7000,10 +7056,9 @@ async def agent_artifact(
                 or agent.screened_image_sha256 != canary.screened_image_sha256
             ):
                 raise HTTPException(409, "canary artifact identity changed")
-    url = await storage.presigned_get_url(
-        key=_artifact_key(agent_id),
-        expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
-    )
+        source_free = await _validator_scores_source_free(
+            session, validator_hotkey=x_validator_hotkey
+        )
     image_url = None
     if (
         agent.screened_image_sha256 is not None
@@ -7013,11 +7068,23 @@ async def agent_artifact(
             key=_screened_image_key(agent_id, agent.screened_image_upload_id),
             expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
         )
+    # The screened image is what runs, and Platform computes the structural
+    # fingerprint itself, so a validator whose scorer can run the image alone
+    # never receives miner source.
+    url = (
+        None
+        if source_free and image_url is not None
+        else await storage.presigned_get_url(
+            key=_artifact_key(agent_id),
+            expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
+        )
+    )
     logger.info(
-        "validator=%s fetched artifact url for agent_id=%s bench_version=%s",
+        "validator=%s fetched artifact for agent_id=%s bench_version=%s source=%s",
         x_validator_hotkey,
         agent_id,
         ticket.bench_version,
+        url is not None,
     )
     # Durable counterpart to the log line above. The ticket is keyed by
     # (agent_id, validator_hotkey), so those two columns plus bench_version
@@ -7033,6 +7100,7 @@ async def agent_artifact(
         source_ip=client_ip(request),
         detail=request_detail(
             request,
+            served_source=url is not None,
             served_screened_image=image_url is not None,
             # The ticket row is UPSERTed on reissue, so attempt_count is the
             # only thing tying this fetch to which lease attempt it served.
@@ -7130,6 +7198,11 @@ async def submit_score(
         )
 
     queue_policy = await _resolve_queue_policy(request)
+    backfilled_structural = (
+        await _backfill_structural_fingerprint(session, storage, agent_id=agent_id)
+        if report.structural_fingerprint is None
+        else None
+    )
 
     # 4. Atomic: record the score + advance status together. The row lock
     #    serializes concurrent scorers so the status guard + transition below
@@ -7554,12 +7627,16 @@ async def submit_score(
                 dataset=replacement_dataset,
                 mirror_transcripts=await transcript_mirror_enabled(session),
             )
-        # Persist the crate's structural (AST) fingerprint from the report, so it
-        # is available for the gate here and for future cross-miner comparison.
-        # Advisory + unsigned: only overwrite when the report actually carries one,
-        # so a re-score by a scorer that omits it never wipes a stored sketch.
-        if report.structural_fingerprint is not None:
-            agent.structural_fingerprint = report.structural_fingerprint.model_dump()
+        # Platform computes the structural (AST) sketch at upload. A report's
+        # sketch is advisory and unsigned, so it only fills a gap left by an
+        # agent that predates that; it never replaces a stored sketch.
+        if agent.structural_fingerprint is None:
+            if report.structural_fingerprint is not None:
+                agent.structural_fingerprint = (
+                    report.structural_fingerprint.model_dump()
+                )
+            elif backfilled_structural is not None:
+                agent.structural_fingerprint = backfilled_structural
         # Finalize at quorum (k=3): an agent stays provisional (``evaluating``)
         # until :data:`SCORING_QUORUM` validators have scored it; only the
         # quorum-th score moves it ``evaluating -> scored``, unless the anti-copy

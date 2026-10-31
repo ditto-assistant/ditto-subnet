@@ -130,9 +130,9 @@ ValidatorRuntimeState = Literal[
 class ArtifactResponse(BaseModel):
     """Returned by ``GET /validator/agent/{agent_id}/artifact``.
 
-    ``download_url`` is a short-lived pre-signed object-store URL the
-    daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
-    the bytes it pulls against what the miner registered.
+    ``download_url`` is a short-lived pre-signed object-store URL to the
+    source tarball. It is ``None`` for a validator whose scorer runs the
+    screened image without source; ``sha256`` still names the artifact.
     """
 
     agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
@@ -140,8 +140,14 @@ class ArtifactResponse(BaseModel):
         str, Field(description="Expected SHA-256 of the tarball, lowercase hex.")
     ]
     download_url: Annotated[
-        str, Field(description="Pre-signed URL to GET the tarball bytes.")
-    ]
+        str | None,
+        Field(
+            description=(
+                "Pre-signed source tarball URL; null when the validator scores "
+                "the screened image without source."
+            )
+        ),
+    ] = None
     expires_at: Annotated[
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]

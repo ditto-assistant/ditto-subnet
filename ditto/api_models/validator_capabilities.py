@@ -240,6 +240,13 @@ class ScorerBenchmarkCapability(BaseModel):
     generator_round_bench_versions: SupportedBenchVersions | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # The scorer runs a screened image without the source tarball (its
+    # ``screened-image-source-free-v1`` feature). Platform then withholds the
+    # source URL from this validator. Absent unless true, so validators without
+    # it sign exactly the bytes they always did.
+    source_free_screened_images: bool = Field(
+        default=False, exclude_if=lambda value: not value
+    )
     # Additive and optional so a validator that predates heartbeat protocol v15
     # produces the exact same signing bytes it always did. Absent means "this
     # validator cannot report probe evidence", never "the probe succeeded".
@@ -280,6 +287,8 @@ class ScorerBenchmarkCapability(BaseModel):
             self.status != "fresh_verified" or 13 not in versions
         ):
             raise ValueError("private datasets require verified v13 scorer support")
+        if self.source_free_screened_images and self.status != "fresh_verified":
+            raise ValueError("source-free screened images require a verified scorer")
         if tuple(sorted(set(versions))) != versions:
             raise ValueError("supported benchmark versions must be unique and sorted")
         if self.status == "fresh_verified":

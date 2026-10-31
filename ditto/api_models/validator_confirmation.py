@@ -88,7 +88,8 @@ class V9ConfirmationScorerRequest(BaseModel):
     agent_id: UUID
     slot_id: LongMemSlotId
     inference_session_id: Annotated[str, Field(min_length=16, max_length=128)]
-    artifact_url: Annotated[str, Field(min_length=1)]
+    # Absent for a source-free scorer; confirmation never fetches source.
+    artifact_url: Annotated[str | None, Field(min_length=1)] = None
     artifact_sha256: Sha256
     screened_image_url: Annotated[str, Field(min_length=1)]
     screened_image_sha256: Sha256
