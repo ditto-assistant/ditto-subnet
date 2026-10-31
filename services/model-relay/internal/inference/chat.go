@@ -280,6 +280,27 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, r, herr)
 		return
 	}
+	// In the opt-in account-required mode, resolve the trusted pairing before
+	// reserving inference capacity. Missing/revoked links and lookup failures
+	// must never silently turn into Platform-sponsored OpenRouter calls.
+	var requiredDittoUser string
+	if d.Cfg != nil && d.Cfg.DittoRouter.RequireCompetitionAccount {
+		if !d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
+			relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "Ditto billing is unavailable", nil)
+			return
+		}
+		link, linkErr := q.GetActiveMinerDittoLinkForAgent(ctx, grantSnapshot.AgentID)
+		if errors.Is(linkErr, pgx.ErrNoRows) || (linkErr == nil && link.DittoUserID == "") {
+			relayhttp.WriteHTTPError(w, r, http.StatusPaymentRequired, "Sign in with Ditto and link your miner account before requesting inference", nil)
+			return
+		}
+		if linkErr != nil {
+			d.Logger.Error("chat: required Ditto account lookup", slog.String("error", linkErr.Error()))
+			relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "Ditto billing is unavailable", nil)
+			return
+		}
+		requiredDittoUser = link.DittoUserID
+	}
 	result, decline, err := beginInferenceRequest(ctx, tx, q, beginParams{
 		grantID:             headers.grant,
 		nonce:               headers.nonce,
@@ -374,13 +395,22 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	var recovered *chatCompletionResult
 	var exhausted *chatProviderExhausted
+	dittoAttribution := &dittoRouterAttribution{
+		GrantID: headers.grant.String(),
+		Nonce:   headers.nonce.String(),
+		AgentID: pgUUIDString(reservedGrant.AgentID),
+		Stage:   "competition-chat",
+	}
 	// Ditto Router dogfood: only when the competition lane is explicitly on
 	// and this agent's miner linked a consenting Ditto account. Everyone else
 	// keeps the centralized OpenRouter path below, byte for byte.
-	if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
+	if requiredDittoUser != "" {
+		recovered, exhausted = completeChatViaDittoRouter(ctx, d.Upstream, cfg, d.Cfg.DittoRouter,
+			upstreamPayload, model, requiredDittoUser, dittoAttribution, d.sleep())
+	} else if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
 		if onBehalfOf, linked := d.dittoRouterOnBehalfOf(ctx, reservedGrant.AgentID); linked {
 			recovered, exhausted = completeChatViaDittoRouter(ctx, d.Upstream, cfg, d.Cfg.DittoRouter,
-				upstreamPayload, model, onBehalfOf, d.sleep())
+				upstreamPayload, model, onBehalfOf, dittoAttribution, d.sleep())
 		} else {
 			recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
 				reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
@@ -448,6 +478,9 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 }
 
 func chatProviderFailure(exhausted *chatProviderExhausted) *httpError {
+	if exhausted.terminalErrorCode == "ditto_router_payment_required" {
+		return httpErrorf(http.StatusPaymentRequired, "Authorize DittoBench to spend credits and add credit to your linked Ditto account")
+	}
 	if exhausted.timedOut {
 		return httpErrorf(504, "inference provider timed out")
 	}

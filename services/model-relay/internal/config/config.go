@@ -111,11 +111,12 @@ type Config struct {
 // miners and change what the benchmark measures. Screener-side inference
 // (memories ON) is a different endpoint and a different lane.
 type DittoRouterConfig struct {
-	Enabled          bool     // DITTO_ROUTER_UPSTREAM_ENABLED, default false
-	URL              string   // DITTO_ROUTER_UPSTREAM_URL, default https://inference.heyditto.ai/v1/chat/completions
-	APIKey           string   // DITTO_ROUTER_API_KEY; REQUIRED when Enabled (an owner-minted app endpoint key)
-	OnBehalfOfHeader string   // DITTO_ROUTER_ON_BEHALF_OF_HEADER, default X-Ditto-On-Behalf-Of
-	Lanes            []string // DITTO_ROUTER_LANES csv of {screener, competition}; default empty (nothing routed)
+	Enabled                   bool     // DITTO_ROUTER_UPSTREAM_ENABLED, default false
+	RequireCompetitionAccount bool     // DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT, default false; competition chat cannot fall back to sponsor inference
+	URL                       string   // DITTO_ROUTER_UPSTREAM_URL, default https://inference.heyditto.ai/v1/chat/completions
+	APIKey                    string   // DITTO_ROUTER_API_KEY; REQUIRED when Enabled (an owner-minted app endpoint key)
+	OnBehalfOfHeader          string   // DITTO_ROUTER_ON_BEHALF_OF_HEADER, default X-Ditto-On-Behalf-Of
+	Lanes                     []string // DITTO_ROUTER_LANES csv of {screener, competition}; default empty (nothing routed)
 	// CompetitionAck is DITTO_ROUTER_COMPETITION_ACK and must equal
 	// CompetitionAckValue before "competition" may appear in Lanes.
 	CompetitionAck string
@@ -532,14 +533,18 @@ func loadDittoRouter(r *envReader) DittoRouterConfig {
 		}
 	}
 	cfg := DittoRouterConfig{
-		Enabled:          r.boolval("DITTO_ROUTER_UPSTREAM_ENABLED", false),
-		URL:              r.str("DITTO_ROUTER_UPSTREAM_URL", "https://inference.heyditto.ai/v1/chat/completions"),
-		APIKey:           r.str("DITTO_ROUTER_API_KEY", ""),
-		OnBehalfOfHeader: r.str("DITTO_ROUTER_ON_BEHALF_OF_HEADER", "X-Ditto-On-Behalf-Of"),
-		Lanes:            lanes,
-		CompetitionAck:   r.str("DITTO_ROUTER_COMPETITION_ACK", ""),
+		Enabled:                   r.boolval("DITTO_ROUTER_UPSTREAM_ENABLED", false),
+		RequireCompetitionAccount: r.boolval("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT", false),
+		URL:                       r.str("DITTO_ROUTER_UPSTREAM_URL", "https://inference.heyditto.ai/v1/chat/completions"),
+		APIKey:                    r.str("DITTO_ROUTER_API_KEY", ""),
+		OnBehalfOfHeader:          r.str("DITTO_ROUTER_ON_BEHALF_OF_HEADER", "X-Ditto-On-Behalf-Of"),
+		Lanes:                     lanes,
+		CompetitionAck:            r.str("DITTO_ROUTER_COMPETITION_ACK", ""),
 	}
 	if !cfg.Enabled {
+		if cfg.RequireCompetitionAccount {
+			r.fail("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT requires DITTO_ROUTER_UPSTREAM_ENABLED and the competition lane")
+		}
 		return cfg
 	}
 	if cfg.APIKey == "" {
@@ -565,6 +570,15 @@ func loadDittoRouter(r *envReader) DittoRouterConfig {
 	}
 	if strings.TrimSpace(cfg.OnBehalfOfHeader) == "" {
 		r.fail("DITTO_ROUTER_ON_BEHALF_OF_HEADER must not be empty")
+	}
+	if strings.EqualFold(cfg.OnBehalfOfHeader, "X-Ditto-Require-User-Billing") {
+		r.fail("DITTO_ROUTER_ON_BEHALF_OF_HEADER cannot use the reserved user-billing requirement header")
+	}
+	if cfg.RequireCompetitionAccount && !cfg.RoutesLane(DittoRouterLaneCompetition) {
+		r.fail("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT requires the competition lane")
+	}
+	if cfg.RequireCompetitionAccount && !strings.EqualFold(cfg.OnBehalfOfHeader, "X-Ditto-On-Behalf-Of") {
+		r.fail("DITTO_ROUTER_REQUIRE_COMPETITION_ACCOUNT requires the X-Ditto-On-Behalf-Of identity header")
 	}
 	return cfg
 }

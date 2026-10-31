@@ -26,6 +26,16 @@ import (
 
 const dittoRouterRoute = "ditto-router"
 
+// dittoRouterAttribution comes from the verified grant and signed request,
+// never caller-supplied headers. The grant identifies this evaluation attempt;
+// the nonce identifies one operation within it.
+type dittoRouterAttribution struct {
+	GrantID string
+	Nonce   string
+	AgentID string
+	Stage   string
+}
+
 // dittoRouterOnBehalfOf resolves the consenting Ditto account for an agent.
 // A missing link, a revoked link, or a lookup error all mean "not routed" —
 // attribution can fail closed without failing the request.
@@ -49,11 +59,28 @@ func (d *Deps) dittoRouterOnBehalfOf(ctx context.Context, agentID pgtype.UUID) (
 // dittoRouterHeaders builds the outbound headers. No inbound client header is
 // ever forwarded; the only identity is the link's verified user id.
 func dittoRouterHeaders(cfg config.DittoRouterConfig, onBehalfOf string) map[string]string {
-	return map[string]string{
+	headers := map[string]string{
 		"Authorization":      "Bearer " + cfg.APIKey,
 		"Content-Type":       "application/json",
 		cfg.OnBehalfOfHeader: onBehalfOf,
 	}
+	if cfg.RequireCompetitionAccount {
+		// This is a server billing requirement, never a forwarded miner header.
+		// The gateway must reject a sponsor-billed endpoint before paid work.
+		headers["X-Ditto-Require-User-Billing"] = "true"
+	}
+	return headers
+}
+
+func dittoRouterAttributedHeaders(cfg config.DittoRouterConfig, onBehalfOf string, attribution *dittoRouterAttribution) map[string]string {
+	headers := dittoRouterHeaders(cfg, onBehalfOf)
+	if attribution != nil {
+		headers["X-Ditto-Evaluation-Grant"] = attribution.GrantID
+		headers["X-Ditto-Evaluation-Request"] = attribution.Nonce
+		headers["X-Ditto-Evaluation-Agent"] = attribution.AgentID
+		headers["X-Ditto-Evaluation-Stage"] = attribution.Stage
+	}
+	return headers
 }
 
 // completeChatViaDittoRouter performs one Router call and shapes the result
@@ -63,6 +90,7 @@ func dittoRouterHeaders(cfg config.DittoRouterConfig, onBehalfOf string) map[str
 // (the endpoint's locked model on the competition lane).
 func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg config.InferenceProxyConfig,
 	router config.DittoRouterConfig, payload map[string]any, model, onBehalfOf string,
+	attribution *dittoRouterAttribution,
 	sleep sleepFunc) (*chatCompletionResult, *chatProviderExhausted) {
 
 	sent, _ := json.Marshal(payload)
@@ -78,7 +106,7 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 			phases:            []phaseTrace{trace},
 		}
 	}
-	result, callErr := postProviderWithRetry(ctx, client, router.URL, payload, dittoRouterHeaders(router, onBehalfOf),
+	result, callErr := postProviderWithRetry(ctx, client, router.URL, payload, dittoRouterAttributedHeaders(router, onBehalfOf, attribution),
 		cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
 	if callErr != nil {
 		code := "provider_transport"
@@ -110,7 +138,7 @@ func completeChatViaDittoRouter(ctx context.Context, client *http.Client, cfg co
 	if _, _, providerError := providerErrorEnvelope(decodedMap); providerError {
 		return nil, exhausted("provider_unavailable", result.attempts, false)
 	}
-	if m, isString := decodedMap["model"].(string); !isString || m == "" {
+	if m, isString := decodedMap["model"].(string); !isString || m != model {
 		return nil, exhausted("provider_identity_mismatch", result.attempts, false)
 	}
 	prompt, completion, usageOk := boundedUsage(decodedMap)
