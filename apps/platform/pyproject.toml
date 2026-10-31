@@ -28,6 +28,12 @@ dependencies = [
     "aioboto3>=13.0",
     "ditto-screening-protocol==0.30.0",
     "zstandard>=0.23",
+    # Structural anti-copy fingerprint (ditto/api_server/structural_fingerprint.py).
+    # tree-sitter-rust stays pinned to the grammar the scorer's Go binding
+    # vendors (v0.21.2): another grammar emits different node types and
+    # silently splits the comparison pool.
+    "tree-sitter>=0.25,<0.27",
+    "tree-sitter-rust==0.21.2",
 ]
 
 [tool.uv.sources]

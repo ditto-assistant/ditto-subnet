@@ -216,7 +216,10 @@ from ditto.db.models import (
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_SCREENER_ARTIFACT,
+    ENDPOINT_SCREENER_FANOUT_SHADOW,
     ENDPOINT_SCREENER_REVIEW_LINEAGE,
+    ENDPOINT_SCREENER_RUNTIME_SMOKE,
+    ENDPOINT_SCREENER_SOURCE_REVIEW,
     record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
@@ -1859,9 +1862,28 @@ async def claim_node_submission_runtime_smoke(
         output_size_bytes = cast(int, row.output_size_bytes)
         output_key = row.output_key
         build_id = row.build_id
+        agent_id = row.agent_id
+        attempt_id = row.attempt_id
+        node_id = node.node_id
     url = await storage.presigned_get_url(
         key=output_key,
         expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_SCREENER_RUNTIME_SMOKE,
+        requester_kind="screener",
+        requester_id=node_id,
+        lease_id=attempt_id,
+        source_ip=client_ip(request),
+        detail=request_detail(
+            request,
+            served_source=False,
+            served_screened_image=True,
+            build_id=str(build_id),
+            image_sha256=output_sha256,
+        ),
     )
     return SubmissionRuntimeArtifactClaimResponse(
         artifact=SubmissionRuntimeArtifactResponse(
@@ -2128,6 +2150,7 @@ async def get_node_submission_source_review(
 )
 async def get_submission_source_review_source(
     review_id: UUID,
+    request: Request,
     session: SessionDep,
     storage: StorageDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -2144,6 +2167,9 @@ async def get_submission_source_review_source(
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
         policy_version = attempt.policy_version
+        requester_id = row.node_id or row.provider or "source-review-job"
+        requester_instance_id = row.provider_resource_id
+        attempt_id = row.attempt_id
         agent = await session.get(Agent, agent_id)
         if agent is None:
             raise HTTPException(
@@ -2160,6 +2186,19 @@ async def get_submission_source_review_source(
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_SCREENER_SOURCE_REVIEW,
+        requester_kind="screener",
+        requester_id=requester_id,
+        requester_instance_id=requester_instance_id,
+        lease_id=attempt_id,
+        bench_version=bench_version,
+        artifact_sha256=artifact_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(request, served_source=True, review_id=str(review_id)),
     )
     return SubmissionSourceReviewSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),
@@ -2775,6 +2814,7 @@ async def submit_review_usage(
 )
 async def get_fanout_shadow_source(
     shadow_id: UUID,
+    request: Request,
     session: SessionDep,
     storage: StorageDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -2790,9 +2830,24 @@ async def get_fanout_shadow_source(
         policy_manifest_profile = row.policy_manifest_profile
         policy_manifest_rotation_id = row.policy_manifest_rotation_id
         policy_manifest_digest_value = row.policy_manifest_digest
+        requester_id = row.provider or "fanout-shadow-job"
+        requester_instance_id = row.provider_resource_id
+        attempt_id = row.attempt_id
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_SCREENER_FANOUT_SHADOW,
+        requester_kind="screener",
+        requester_id=requester_id,
+        requester_instance_id=requester_instance_id,
+        lease_id=attempt_id,
+        artifact_sha256=artifact_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(request, served_source=True, shadow_id=str(shadow_id)),
     )
     return FanoutShadowSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),

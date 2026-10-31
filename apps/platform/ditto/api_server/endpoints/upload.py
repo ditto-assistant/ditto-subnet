@@ -76,6 +76,7 @@ from ditto.api_server.source_inspect import (
     validate_upload_archive,
 )
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
 from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
 from ditto.db.models import AgentClaBinding, AgentStatus
@@ -857,6 +858,12 @@ async def upload_agent(
     # calibration/retroactive analysis; not yet a hold trigger. Same offload +
     # best-effort None contract.
     prompt_fingerprint = await asyncio.to_thread(compute_prompt_fingerprint, tar_bytes)
+    # 7d'. structural (AST-shape) sketch for the anti-copy gate. Platform owns
+    # this so validators never need the source tarball; same offload +
+    # best-effort None contract.
+    structural_fingerprint = await asyncio.to_thread(
+        compute_structural_fingerprint, tar_bytes
+    )
     # 7e. code embedding (shadow mode): build the canonical input (CPU-bound,
     # offloaded) then embed via the self-hosted service. Disabled by default
     # (null embedder -> None) and best-effort: a slow/unreachable embedder yields a
@@ -911,6 +918,7 @@ async def upload_agent(
                 content_fingerprint=content_fingerprint,
                 normalized_source_hash=normalized_source_hash,
                 prompt_fingerprint=prompt_fingerprint,
+                structural_fingerprint=structural_fingerprint,
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
             )

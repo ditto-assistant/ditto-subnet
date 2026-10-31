@@ -729,9 +729,9 @@ type submitRequest struct {
 	// ScreenedImageURL is a short-lived URL for a `docker save` archive
 	// produced by the trusted screener from this exact tarball. The stored
 	// object may be a plain tar or gzip of that tar; sha256 and size pin the
-	// stored bytes. It is accepted only together with TarballURL: the source
-	// is still materialized for structural anti-copy fingerprinting, but the
-	// Rust crate is not rebuilt.
+	// stored bytes. With TarballURL (legacy validators) the source is also
+	// materialized for a structural fingerprint; without it the image runs
+	// alone and Platform owns the fingerprint. The crate is never rebuilt.
 	ScreenedImageURL string `json:"screened_image_url,omitempty"`
 	// ScreenedImageSHA256 pins the archive bytes. ScreenedImageID pins
 	// the Docker image loaded from those bytes, preventing an archive/tag swap.
@@ -884,8 +884,8 @@ func validateScreenedImage(req submitRequest) string {
 	if !fieldsSet {
 		return ""
 	}
-	if req.TarballURL == "" {
-		return "screened image requires tarball_url for source fingerprinting"
+	if req.GitURL != "" {
+		return "screened image cannot be combined with git_url"
 	}
 	if req.ScreenedImageURL == "" || req.ScreenedImageSHA256 == "" ||
 		req.ScreenedImageID == "" || req.ScreenedImageRef == "" || req.ScreenedImageSize <= 0 {
@@ -1082,7 +1082,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// a presigned platform tarball (mode B). git_url + tarball_url both build in
 	// the Docker sandbox.
 	sources := 0
-	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != ""} {
+	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != "" || req.ScreenedImageURL != ""} {
 		if set {
 			sources++
 		}
@@ -1214,7 +1214,7 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	// Exactly one harness source; SSRF-guard any caller-supplied URL (same rules
 	// as /v1/submit).
 	sources := 0
-	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != ""} {
+	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != "" || req.ScreenedImageURL != ""} {
 		if set {
 			sources++
 		}
@@ -1333,7 +1333,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" {
+	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" && req.ScreenedImageURL == "" {
 		writeError(w, http.StatusBadRequest, "run_size requires git_url / tarball_url (build in Docker) or harness_url (point at an already-running harness, for local dev)")
 		return
 	}
@@ -1345,7 +1345,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 	// Sandbox is only needed when we build the crate ourselves. The local
 	// harness_url path runs the full generate→seed→run→score pipeline against an
 	// already-running harness, so it does not require Docker.
-	if req.GitURL != "" || req.TarballURL != "" {
+	if req.GitURL != "" || req.TarballURL != "" || req.ScreenedImageURL != "" {
 		if s.sandbox == nil {
 			writeError(w, http.StatusNotImplemented, "git_url (Docker build) is not available on this server; submit a reachable harness_url instead")
 			return
@@ -1522,7 +1522,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	//    harness_url path (the miner is already running their harness).
 	var image string
 	var structuralFP *protocol.CodeFingerprint
-	if req.GitURL != "" || req.TarballURL != "" {
+	if req.GitURL != "" || req.TarballURL != "" || req.ScreenedImageURL != "" {
 		s.store.SetStage(runID, store.StatusBuilding, 0, total)
 		img, buildLog, fp, err := s.sandbox.Build(ctx, sourceFromReq(req))
 		if err != nil {

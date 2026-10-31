@@ -3586,9 +3586,45 @@ class TestArtifact:
         assert body["screened_image_id"] == "sha256:" + "34" * 32
         assert body["screened_image_ref"] == f"ditto-screen/{agent_id}:latest"
         assert body["bench_version"] == _BENCH_VERSION
-        assert storage.presigned_get_url.await_args_list[1].kwargs["key"] == (
-            f"{agent_id}/screened-images/{upload_id}.tar"
+        image_key = f"{agent_id}/screened-images/{upload_id}.tar"
+        # A validator without the source-free capability still gets source.
+        assert body["download_url"] is not None
+        assert {
+            call.kwargs["key"] for call in storage.presigned_get_url.await_args_list
+        } == {image_key, f"{agent_id}/agent.tar.gz"}
+
+        await _seed_validator_heartbeat(
+            session_maker,
+            protocol_version=15,
+            capabilities={
+                "scorer_benchmarks": {
+                    "status": "fresh_verified",
+                    "source_free_screened_images": True,
+                }
+            },
         )
+        storage.presigned_get_url.reset_mock()
+        response = await client.get(
+            f"/api/v1/validator/agent/{agent_id}/artifact",
+            headers=_artifact_headers(agent_id),
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["download_url"] is None
+        assert body["screened_image_url"].startswith("https://")
+        assert body["sha256"]
+        assert [
+            call.kwargs["key"] for call in storage.presigned_get_url.await_args_list
+        ] == [image_key]
+        async with session_maker() as s:
+            served = [
+                (row.detail or {}).get("served_source")
+                for row in await s.scalars(
+                    select(ArtifactFetchAudit).order_by(ArtifactFetchAudit.seq)
+                )
+            ]
+        assert served == [True, False]
 
     async def test_without_open_ticket_returns_409(
         self,

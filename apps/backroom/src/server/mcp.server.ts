@@ -5,6 +5,7 @@ import {
   githubRevocationReadInputSchema, githubRevocationWriteInputSchema,
 } from '../lib/contributor.schemas'
 import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
+import { fetchArtifactFetchAudit } from './artifact-fetch-audit.service'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -904,6 +905,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read disclosure gate and receipts; history default 0.',
   get_agent_source_release_evidence:
     'Exact-SHA public handoffs versus candidate upload; derived eligibility is not publication proof. Missing audit is unknown, not private. See tool help.',
+  get_artifact_fetch_audit:
+    'Who got source/image URLs before a time; agentId or sha. IPs hashed. See help.',
   set_burn_settings:
     'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
   get_burn_settings:
@@ -2424,6 +2427,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: { agentId: sourceAgentId(), candidateAgentId: sourceAgentId().optional() },
     annotations: toolAnnotations('read'),
   }, async (input) => result(await fetchAgentSourceReleaseEvidence(input)))
+
+  registerTool('get_artifact_fetch_audit', {
+    title: 'Get artifact fetch audit',
+    description: 'List who was handed one artifact\'s source tarball URL or screened image URL before a reference time. Supply exactly one of agentId or sha (a SHA covers every agent row with those exact bytes); before defaults to now; limit defaults to 200 (max 1000), oldest first, with truncated and total. Each row gives the time, route, requester kind and identity (validator hotkey, screener node or provider, admin actor, null for public), lease, bench version, whether source and/or the screened image was served, and a truncated hash of the peer address for correlation. Raw addresses, forwarded-for values, URLs and source bytes are never returned. The audit is fail-open: missing rows never prove an artifact was not served, and a row records a served URL, not a completed download. Requires backroom:read and changes nothing.',
+    inputSchema: {
+      agentId: sourceAgentId().optional(),
+      sha: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+      before: z.string().optional(),
+      limit: z.number().int().min(1).max(1000).optional(),
+    },
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await fetchArtifactFetchAudit(input)))
 
   registerTool(
     'set_source_release_policy',

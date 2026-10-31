@@ -87,6 +87,9 @@ logger = logging.getLogger(__name__)
 # Dataset modes /v2/score accepts with private bytes: the Platform-private
 # benchmark artifact and a generator-competition round dataset.
 _PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
+# The scorer runs a screened image without the source tarball. Advertised
+# upward so Platform stops handing this validator miner source.
+SOURCE_FREE_SCREENED_IMAGE_FEATURE = "screened-image-source-free-v1"
 
 _ROUND_MAX_CASES_FEATURE = re.compile(
     re.escape(GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
@@ -1313,6 +1316,10 @@ class DittobenchClient:
                 and isinstance(payload.get("features"), list)
                 and "generator-round-v1" in payload["features"]
             )
+            source_free_screened_images = (
+                isinstance(payload.get("features"), list)
+                and SOURCE_FREE_SCREENED_IMAGE_FEATURE in payload["features"]
+            )
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
                 deterministic_v13_datasets=(
@@ -1326,6 +1333,7 @@ class DittobenchClient:
                     and "platform-private-v1" in payload["features"]
                 ),
                 generator_rounds=generator_rounds,
+                source_free_screened_images=source_free_screened_images,
                 generator_round_max_cases=(
                     scorer_generator_round_max_cases(payload.get("features"))
                     if generator_rounds
@@ -1448,7 +1456,7 @@ class DittobenchClient:
     async def score_tarball(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
@@ -1532,7 +1540,7 @@ class DittobenchClient:
     async def run_generator_round(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str,
         dataset_bytes: bytes,
         dataset_sha256: str,
@@ -1617,7 +1625,7 @@ class DittobenchClient:
     async def _submit(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
@@ -1641,10 +1649,11 @@ class DittobenchClient:
         del ticket_deadline  # Manual retry policy forbids admission replay.
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
-        body: dict[str, object] = {
-            "tarball_url": tarball_url,
-            "run_size": run_size or self._config.run_size,
-        }
+        body: dict[str, object] = {"run_size": run_size or self._config.run_size}
+        # Platform withholds source from a source-free scorer; the screened
+        # image is then the only artifact the scorer fetches.
+        if tarball_url is not None:
+            body["tarball_url"] = tarball_url
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256
         screened_image_fields = (

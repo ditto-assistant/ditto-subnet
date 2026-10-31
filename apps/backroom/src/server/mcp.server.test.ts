@@ -671,6 +671,7 @@ describe('Backroom MCP tools', () => {
         'get_screening_submission',
         'get_source_release_policy',
         'get_agent_source_release_evidence',
+        'get_artifact_fetch_audit',
         'get_miner_github_link',
         'get_github_contributor_status',
         'get_github_link_revocation_preflight',
@@ -939,7 +940,9 @@ describe('Backroom MCP tools', () => {
     // about 0.5 KB headroom.
     // The per-attempt review budget read (one uuid input, one-line summary,
     // detail in tool help) measures 215,494 bytes; keep about 0.5 KB headroom.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(216_000)
+    // The artifact fetch audit read (agentId-or-sha, before, limit; one-line
+    // summary, detail in tool help) measures 216,078 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(216_600)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

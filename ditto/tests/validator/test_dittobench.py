@@ -423,6 +423,7 @@ async def test_v044_rolling_upgrade_negotiates_v8_and_preserves_capacity() -> No
         (["platform-fact-world-v1"], False, False),
         (["platform-private-v1", "platform-fact-world-v1"], True, False),
         (["v13-deterministic-enterprise-v1"], False, True),
+        (["screened-image-source-free-v1"], False, False),
     ],
 )
 async def test_current_scorer_preserves_versions_and_run_capacity(
@@ -452,6 +453,10 @@ async def test_current_scorer_preserves_versions_and_run_capacity(
     assert observed.status == "fresh_verified"
     assert observed.private_datasets is private
     assert observed.deterministic_v13_datasets is deterministic
+    # Only a scorer that runs images without source lets Platform withhold it.
+    assert observed.source_free_screened_images is (
+        "screened-image-source-free-v1" in features
+    )
     # The validator keeps the scorer's advertised set in the intersection: a
     # current scorer advertising v12 must reach the signed heartbeat, or the
     # Platform counts zero v12-capable validators (regression when
@@ -1425,6 +1430,21 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        source_free_run = await client._submit(
+            tarball_url=None,
+            bench_version=8,
+            dataset_sha256="12" * 32,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+        )
+        assert source_free_run == "run-1"
+        assert "tarball_url" not in request_body
+        request_body.clear()
         run_id = await client._submit(
             tarball_url="https://example.test/agent.tgz",
             bench_version=8,

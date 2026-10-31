@@ -517,8 +517,18 @@ func (d *LocalDocker) V8IsolationReady(ctx context.Context) error {
 // A private source repository may use host-side askpass authentication, but no
 // credential enters the build context, image, Dockerfile, or command line.
 func (d *LocalDocker) Build(ctx context.Context, src Source) (string, string, *protocol.CodeFingerprint, error) {
+	if src.GitURL == "" && src.TarballURL == "" && src.ScreenedImageURL == "" {
+		return "", "", nil, fmt.Errorf("sandbox: one of git_url, tarball_url, or screened_image_url is required")
+	}
 	if src.GitURL == "" && src.TarballURL == "" {
-		return "", "", nil, fmt.Errorf("sandbox: one of git_url or tarball_url is required")
+		// Source-free validator path: only the screened image is fetched.
+		// Platform computes the structural fingerprint from the trusted upload.
+		image, loadLog, err := d.LoadScreenedImage(ctx, Source{
+			ScreenedImageURL: src.ScreenedImageURL, ScreenedImageSHA256: src.ScreenedImageSHA256,
+			ScreenedImageID: src.ScreenedImageID, ScreenedImageRef: src.ScreenedImageRef,
+			ScreenedImageSize: src.ScreenedImageSize,
+		})
+		return image, loadLog, nil, err
 	}
 	if src.GitURL != "" && !ValidGitCommitSHA(src.GitRef) {
 		return "", "", nil, errors.New("git_ref must be a full 40-character lowercase commit SHA")
