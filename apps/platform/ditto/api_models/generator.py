@@ -139,8 +139,9 @@ class GeneratorCompetitionSettings(BaseModel):
     """A hotkey's ledger score is its latest round column score within this
     window."""
     epochs_per_round: Annotated[int, Field(ge=1, le=48)] = 4
-    """Chain epochs (``SubnetEpochIndex``) per round:
-    ``round = SubnetEpochIndex // epochs_per_round``."""
+    """Chain epochs (``SubnetEpochIndex``) per round. A change applies to
+    rounds committed after it; round indexes keep increasing from the latest
+    round (``generator_rounds.round_clock``)."""
     counted_columns: Annotated[int, Field(ge=1, le=6)] = 5
     """Generator columns every agent is compared on: the best qualified
     generators by latest round score, filled by the public default generator
@@ -154,8 +155,11 @@ class GeneratorCompetitionSettings(BaseModel):
     """Subnet-run baseline agents added to every round panel. Each counts as
     its own independent solver owner."""
     privacy_window_rounds: Annotated[int, Field(ge=1, le=180)] = 6
-    """Rounds after a round opens before its secret, seed, and dataset are
-    revealed publicly."""
+    """Subnet epochs (one-epoch round lengths, about 72 minutes each) after a
+    round opens before its secret, seed, and dataset are revealed publicly,
+    once the round is scored or void. Counted in epochs, not in rounds of the
+    current ``epochs_per_round``, so the window keeps its wall-clock length
+    across a cadence change."""
     onchain_commitment: bool = True
     """Also publish each round's seed commitment on-chain: Platform elects up
     to three fresh validators per round to write ``dgr1:{round}:{commitment}``

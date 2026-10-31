@@ -58,8 +58,9 @@ async def _clear(engine: AsyncEngine) -> None:
 async def test_generator_rounds_enforce_their_invariants(engine: AsyncEngine) -> None:
     round_sql = (
         "INSERT INTO generator_rounds (round_index, status, epochs_per_round, "
-        "secret, commitment, committed_at, committed_epoch_index, "
-        "commitment_publication, seed, void_reason) VALUES (:idx, :status, 4, "
+        "first_epoch_index, secret, commitment, committed_at, "
+        "committed_epoch_index, commitment_publication, seed, void_reason) "
+        "VALUES (:idx, :status, 4, 4, "
         "decode(repeat('ab', 32), 'hex'), repeat('c', 64), now(), 1, :pub, "
         ":seed, :void)"
     )

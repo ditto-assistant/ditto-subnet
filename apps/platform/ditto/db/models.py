@@ -14045,7 +14045,10 @@ class GeneratorCaseVerdict(Base):
 class GeneratorRound(Base):
     """One round of the agent x generator matrix, keyed on the chain epoch.
 
-    ``round_index = SubnetEpochIndex // epochs_per_round``. A round is
+    ``first_epoch_index`` is the subnet epoch the round opens at; it spans
+    ``epochs_per_round`` epochs from there. Indexes continue from the latest
+    round whatever the cadence, so they stay monotonic in time across an
+    ``epochs_per_round`` change (``generator_rounds.round_clock``). A round is
     ``committed`` (its secret drawn and ``commitment`` published) at least one
     round before it opens; at the epoch boundary it ``generating`` (columns
     and panel frozen, ``seed`` derived from the secret and the open block),
@@ -14060,6 +14063,7 @@ class GeneratorRound(Base):
     round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     epochs_per_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
     secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     commitment: Mapped[str] = mapped_column(Text, nullable=False)
     committed_at: Mapped[datetime] = mapped_column(
@@ -14141,6 +14145,7 @@ class GeneratorRound(Base):
             "dataset_sha256",
             postgresql_where=text("dataset_sha256 IS NOT NULL"),
         ),
+        Index("generator_rounds_first_epoch_idx", "first_epoch_index"),
     )
 
 

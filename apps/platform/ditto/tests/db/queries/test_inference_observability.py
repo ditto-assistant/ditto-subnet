@@ -559,6 +559,7 @@ async def test_round_cost_classification_is_version_scoped(
             round_index=1,
             status="void",
             epochs_per_round=1,
+            first_epoch_index=1,
             secret=b"a" * 32,
             commitment="a" * 64,
             committed_at=now,

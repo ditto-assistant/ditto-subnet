@@ -142,10 +142,13 @@ async def get_settings(
 async def _retire_rounds_for_interval_change(
     session: AsyncSession, *, old: int, new: int, actor: str, reason: str
 ) -> None:
-    """A round's index is its first epoch divided by the interval, so a new
-    interval would remap rounds already in flight. A round that has opened
-    (seeded, generating or running) blocks the change; a committed round that
-    never opened holds no seed and is voided in this same transaction."""
+    """Rounds freeze their span when committed, and indexes continue from the
+    latest round (``generator_rounds.round_clock``), so a new interval only
+    sets the length of rounds committed after it. A round that has opened
+    (seeded, generating or running) still blocks the change, so no round runs
+    beside a policy it did not open under; a committed round that never
+    opened holds no seed and is voided in this same transaction, so the new
+    interval starts with the round after it."""
     open_rows = list(
         await session.scalars(
             select(GeneratorRound)
