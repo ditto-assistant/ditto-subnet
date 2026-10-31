@@ -31,6 +31,12 @@ LongMemEval is an end-to-end memory-system benchmark. A score therefore measures
 the submitted memory harness plus the pinned answer model, not memory storage in
 isolation.
 
+The private-backend full-memory Luna retest is a separate research condition;
+see [its protocol](../../docs/longmemeval-benchmark/ditto-full-memory-retest.md).
+`audit_backend_run.py` validates its exact-500 evidence offline and can export
+private hypotheses for the existing official evaluator. It changes neither
+this public harness adapter nor production scoring.
+
 ## Run
 
 Use the cleaned dataset revision and digest recorded in the evidence manifest:

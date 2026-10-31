@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "scope": "corrected_input_fixture_only",
+  "status": "input_fixture_verified",
+  "audited_at": "2026-09-12T20:17:18.511581+00:00",
+  "source_report_sha256": "7bf31756b0e1d40453e2d08aeb0ca6ef8048663aa107bc964345ed7e2d311c7a",
+  "audit_script_sha256": "b13777e243160c66104becf3d0533bed2902dfae07c7d75364991674129575f4",
+  "dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "dataset_revision": "98d7416c24c778c2fee6e6f3006e7a073259d48f",
+  "manifest_sha256": "f3cdb6dead1fd18926c20d2483315f17c65b48d6f02e70477f9ee24905df1670",
+  "backend_implementation_pr": "https://github.com/ditto-assistant/backend/pull/2679",
+  "pass": true,
+  "transaction": "REPEATABLE READ READ ONLY",
+  "require_sequence": true,
+  "sequence_order": "manifest",
+  "manifest_metadata_matches": true,
+  "manifest_unchanged_during_audit": true,
+  "manifest_declared_question_count": 500,
+  "manifest_declared_total_pairs": 124366,
+  "counts": {
+    "dataset_cases": 500,
+    "manifest_cases": 500,
+    "session_occurrences": 23867,
+    "distinct_source_session_ids": 19195,
+    "database_pairs": 124366,
+    "mapped_pair_references": 124366,
+    "original_nonempty_turns": 246738,
+    "represented_nonempty_turns": 246738,
+    "missing_whole_session_occurrences": 0,
+    "missing_turns_in_whole_sessions": 0,
+    "present_sessions_with_missing_turns": 0,
+    "missing_turns_inside_present_sessions": 0,
+    "extra_turns": 0,
+    "missing_manifest_pair_ids": 0,
+    "wrong_scope_pairs": 0,
+    "out_of_range_timestamp_pairs": 0,
+    "exact_multiset_but_sequence_differs": 0,
+    "unmapped_database_pairs": 0,
+    "duplicate_manifest_pair_references": 0,
+    "duplicate_database_pair_ids": 0,
+    "reported_problems": 0
+  },
+  "timestamp_delta_seconds_counts": {
+    "0.0": 124366
+  },
+  "verified": [
+    "Exact role and text for all original non-empty turns; whitespace-only turns excluded.",
+    "Original source sequence represented by the explicitly ordered manifest.",
+    "Every pair has its question-specific session occurrence timestamp.",
+    "Question-specific user and knowledge graph scope; no unmapped or duplicated pair identities."
+  ],
+  "not_verified_by_this_artifact": [
+    "Subject generation, dreaming, refinement, subject links, or graph completion.",
+    "Reader execution, answer quality, judge correctness, or any benchmark score.",
+    "Production deployment or activation."
+  ],
+  "publication_boundary": "Sanitized aggregate only: no conversation text, answers, per-case IDs, credentials, database identifiers, container names, or local paths."
+}
