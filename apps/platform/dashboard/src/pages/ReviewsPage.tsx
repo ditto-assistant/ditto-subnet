@@ -5,6 +5,7 @@ import type { JSX } from "solid-js";
 import { HandleBadge } from "../components/ui/HandleBadge";
 import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
+import { EvaluationBudgets } from "../components/account/EvaluationBudgets";
 import { SubmissionDownload } from "../components/account/SubmissionDownload";
 import { authJSON, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
@@ -844,6 +845,7 @@ function AccountPanel(): JSX.Element {
           </button>
         </div>
       </header>
+      <EvaluationBudgets />
       <nav class="account-tabs">
         <For each={["profile", "submissions", "reviews", "mcp"] as const}>
           {(item) => (

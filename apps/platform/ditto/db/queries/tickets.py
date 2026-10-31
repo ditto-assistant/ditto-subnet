@@ -669,6 +669,15 @@ async def issue_ticket(
         .limit(1)
         .with_for_update()
     )
+    from ditto.api_server.paid_evaluation_plans import ready_predicate
+    from ditto.api_server.paid_evaluation_plans import required as paid_required
+
+    if paid_required(session):
+        existing_statement = existing_statement.where(
+            ready_predicate(
+                bench_version=bench_version, now=now, agent_column=Agent.agent_id
+            )
+        )
     if requires_screened:
         existing_statement = existing_statement.where(eligible_screened_image)
     if rollout_admitted is not None:
@@ -807,6 +816,12 @@ async def issue_ticket(
                 ),
             )
         )
+        if paid_required(session):
+            statement = statement.where(
+                ready_predicate(
+                    bench_version=bench_version, now=now, agent_column=Agent.agent_id
+                )
+            )
         if not completion_first:
             statement = statement.where(Agent.agent_id.not_in(already_mine))
         if only_agent_ids is not None:
@@ -1171,6 +1186,17 @@ async def issue_confirmation_ticket(
     matters is per-slot, and it is enforced below: one live lease per
     ``(validator, slot)``, which is also the durable unique partial index.
     """
+    from ditto.api_server.paid_evaluation_plans import ready_predicate
+    from ditto.api_server.paid_evaluation_plans import required as paid_required
+
+    if paid_required(session) and not await session.scalar(
+        select(
+            ready_predicate(
+                bench_version=bench_version, now=now, agent_column=agent_id, unused=True
+            )
+        )
+    ):
+        return None
     await lock_validator_slot(
         session, validator_hotkey=validator_hotkey, slot_id=slot_id
     )

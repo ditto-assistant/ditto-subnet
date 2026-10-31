@@ -4563,6 +4563,21 @@ async def request_job(
                     status_code=503,
                     detail="ticket inference capability is unavailable",
                 )
+            from ditto.api_server.paid_evaluation_plans import bind_grant, ready_plan
+            from ditto.api_server.paid_evaluation_plans import required as paid_required
+
+            if paid_required(session) and inference_grant is not None:
+                plan = await ready_plan(
+                    session,
+                    agent_id=agent.agent_id,
+                    bench_version=ticket.bench_version,
+                    phase="competition",
+                )
+                if plan is None:
+                    raise HTTPException(
+                        402, "This evaluation needs an approved spending budget"
+                    )
+                await bind_grant(session, inference_grant.grant_id, plan)
             job = JobResponse(
                 agent_id=agent.agent_id,
                 private_dataset_mode=await _private_dataset_mode(
@@ -6320,6 +6335,21 @@ async def request_top5_confirmation_job(
                 status_code=503,
                 detail="ticket inference capability is unavailable",
             )
+        from ditto.api_server.paid_evaluation_plans import bind_grant, ready_plan
+        from ditto.api_server.paid_evaluation_plans import required as paid_required
+
+        if paid_required(session) and inference_grant is not None:
+            plan = await ready_plan(
+                session,
+                agent_id=agent.agent_id,
+                bench_version=ticket.bench_version,
+                phase="competition",
+            )
+            if plan is None:
+                raise HTTPException(
+                    402, "This evaluation needs an approved spending budget"
+                )
+            await bind_grant(session, inference_grant.grant_id, plan)
         job = JobResponse(
             agent_id=agent.agent_id,
             slot_id=ticket.slot_id,

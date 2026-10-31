@@ -355,6 +355,23 @@ async def _job_response(
         raise ConfirmationBundlePersistenceError(
             "confirmation bundle has no attached base subject"
         )
+    from ditto.api_server.paid_evaluation_plans import bind_grant, ready_plan
+    from ditto.api_server.paid_evaluation_plans import required as paid_required
+
+    plan = None
+    if paid_required(session):
+        plan = await ready_plan(
+            session,
+            agent_id=None,
+            bench_version=bundle.bench_version,
+            phase="confirmation",
+            bundle_id=bundle.bundle_id,
+        )
+        if plan is None:
+            raise HTTPException(
+                402, "Confirmation requires an explicitly approved payer budget"
+            )
+        agent_id = plan.agent_id
     grants = await ensure_confirmation_inference_grants(
         session,
         ticket=ticket,
@@ -366,6 +383,9 @@ async def _job_response(
         raise ConfirmationBundlePersistenceError(
             "confirmation ticket inference grants are not resumable"
         )
+    if plan is not None:
+        for grant, _bearer in grants:
+            await bind_grant(session, grant.grant_id, plan)
     offers = [
         ConfirmationInferenceGrantOffer(
             lane=grant.lane,
@@ -662,8 +682,23 @@ async def request_v9_confirmation_job(
                     .with_for_update(skip_locked=True)
                 )
             )
+            from ditto.api_server.paid_evaluation_plans import ready_plan
+            from ditto.api_server.paid_evaluation_plans import required as paid_required
+
             selected_bundle = None
             for candidate in bundles:
+                if (
+                    paid_required(session)
+                    and await ready_plan(
+                        session,
+                        agent_id=None,
+                        bench_version=candidate.bench_version,
+                        phase="confirmation",
+                        bundle_id=candidate.bundle_id,
+                    )
+                    is None
+                ):
+                    continue
                 if (
                     await _subject_agent_id(session, bundle_id=candidate.bundle_id)
                     is not None

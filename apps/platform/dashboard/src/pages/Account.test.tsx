@@ -235,7 +235,11 @@ describe("miner sign-in page", () => {
     expect(submissionsTab).toBeTruthy();
     fireEvent.click(submissionsTab as HTMLButtonElement);
     await waitFor(() => {
-      expect(document.body.textContent).toContain("alpha");
+      expect(
+        Array.from(document.querySelectorAll(".account-list a")).some(
+          (link) => link.textContent?.trim() === "alpha",
+        ),
+      ).toBe(true);
     });
     const logs = Array.from(document.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Logs",
@@ -354,7 +358,11 @@ describe("gate notes (#1852)", () => {
     );
     fireEvent.click(submissionsTab as HTMLButtonElement);
     await waitFor(() => {
-      expect(document.body.textContent).toContain("alpha");
+      expect(
+        Array.from(document.querySelectorAll(".account-list a")).some(
+          (link) => link.textContent?.trim() === "alpha",
+        ),
+      ).toBe(true);
     });
     const gateButton = Array.from(document.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Gate notes",
@@ -445,7 +453,11 @@ describe("screening review outcome (#1249)", () => {
     );
     fireEvent.click(submissionsTab as HTMLButtonElement);
     await waitFor(() => {
-      expect(document.body.textContent).toContain("alpha");
+      expect(
+        Array.from(document.querySelectorAll(".account-list a")).some(
+          (link) => link.textContent?.trim() === "alpha",
+        ),
+      ).toBe(true);
     });
     const button = Array.from(document.querySelectorAll("button")).find(
       (item) => item.textContent?.trim() === "Screening feedback",

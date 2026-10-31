@@ -424,6 +424,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             stack.push_async_callback(inference_client.aclose)
             app.state.inference_client = inference_client
+            from ditto.api_server.paid_evaluation_plans import EvaluationPlanLoop
+
+            evaluation_plans = EvaluationPlanLoop(app.state)
+            stack.push_async_callback(evaluation_plans.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await evaluation_plans.start()
+            app.state.evaluation_plans = evaluation_plans
             provider_routes = ProviderRouteRefresher(
                 config=config.inference_proxy,
                 session_maker=app.state.session_maker,

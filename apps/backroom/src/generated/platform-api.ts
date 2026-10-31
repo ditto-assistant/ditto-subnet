@@ -6215,6 +6215,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/evaluation-budget": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Evaluation Budget
+         * @description An owning miner may explicitly fund a whole comparison or a fresh retest.
+         *
+         *     This only proposes a budget; actual credit authority is approved by the
+         *     signed-in Ditto account on Ditto's own consent surface.
+         */
+        post: operations["evaluation_budget_api_v1_me_evaluation_budget_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/evaluation-budgets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Evaluation Budgets
+         * @description Private miner status, including comparisons awaiting an explicit payer.
+         */
+        get: operations["evaluation_budgets_api_v1_me_evaluation_budgets_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/feedback-track": {
         parameters: {
             query?: never;
@@ -26728,6 +26771,95 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** MinerEvaluationBudgetRequest */
+        MinerEvaluationBudgetRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bundle Id */
+            bundle_id?: string | null;
+            /**
+             * Phase
+             * @default competition
+             * @enum {string}
+             */
+            phase: "competition" | "confirmation";
+        };
+        /** MinerEvaluationBudgetResponse */
+        MinerEvaluationBudgetResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Approval Url */
+            approval_url: string;
+            /** Cap Microusd */
+            cap_microusd: number;
+            /** Cycle */
+            cycle: number;
+            /** Estimate Microusd */
+            estimate_microusd: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /**
+             * Phase
+             * @enum {string}
+             */
+            phase: "competition" | "confirmation";
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** State */
+            state: string;
+        };
+        /** MinerEvaluationBudgetsResponse */
+        MinerEvaluationBudgetsResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Payer Candidates */
+            payer_candidates: components["schemas"]["MinerEvaluationPayerCandidate"][];
+            /** Runs */
+            runs: components["schemas"]["MinerEvaluationBudgetResponse"][];
+        };
+        /** MinerEvaluationPayerCandidate */
+        MinerEvaluationPayerCandidate: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /**
+             * Phase
+             * @default confirmation
+             * @constant
+             */
+            phase: "confirmation";
+            /**
+             * Scope
+             * @default whole_comparison
+             * @constant
+             */
+            scope: "whole_comparison";
+            /**
+             * State
+             * @default payer_binding_required
+             * @constant
+             */
+            state: "payer_binding_required";
         };
         /** MinerFeeDay */
         MinerFeeDay: {
@@ -55166,6 +55298,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_budget_api_v1_me_evaluation_budget_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MinerEvaluationBudgetRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerEvaluationBudgetResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_budgets_api_v1_me_evaluation_budgets_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerEvaluationBudgetsResponse"];
                 };
             };
         };

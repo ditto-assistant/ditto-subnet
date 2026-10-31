@@ -178,6 +178,86 @@ class PrivateBenchmarkPreparation(Base):
     )
 
 
+class PaidEvaluationPlan(Base):
+    """A miner-approved aggregate budget before any scarce work is leased.
+
+    Every explicit new cycle gets a new run identity. Confirmation payer
+    ownership is fixed here; adding another bundle subject cannot redirect it.
+    """
+
+    __tablename__ = "paid_evaluation_plans"
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    phase: Mapped[str] = mapped_column(Text, nullable=False)
+    cycle: Mapped[int] = mapped_column(Integer, nullable=False)
+    bundle_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    payer_uid: Mapped[str] = mapped_column(Text, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False, default="proposed")
+    estimate_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cap_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    refreshed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(["bundle_id"], ["confirmation_bundles.bundle_id"]),
+        CheckConstraint(
+            "phase IN ('competition','confirmation')", name="paid_eval_phase"
+        ),
+        CheckConstraint(
+            "state IN ('proposed','approved','closing','closed')",
+            name="paid_eval_state",
+        ),
+        CheckConstraint(
+            "cycle>0 AND estimate_microusd>0 AND cap_microusd>=estimate_microusd",
+            name="paid_eval_bounds",
+        ),
+        CheckConstraint(
+            "(phase='competition' AND bundle_id IS NULL) OR "
+            "(phase='confirmation' AND bundle_id IS NOT NULL)",
+            name="paid_eval_phase_bundle",
+        ),
+        UniqueConstraint("agent_id", "bench_version", "phase", "cycle"),
+        Index(
+            "paid_eval_active_agent",
+            "agent_id",
+            "bench_version",
+            "phase",
+            unique=True,
+            postgresql_where=text("state<>'closed'"),
+            sqlite_where=text("state<>'closed'"),
+        ),
+        Index(
+            "paid_eval_active_bundle",
+            "bundle_id",
+            unique=True,
+            postgresql_where=text("state<>'closed' AND bundle_id IS NOT NULL"),
+            sqlite_where=text("state<>'closed' AND bundle_id IS NOT NULL"),
+        ),
+    )
+
+
+class PaidEvaluationGrantBinding(Base):
+    """Immutable assignment: an old grant can never spend a later cycle."""
+
+    __tablename__ = "paid_evaluation_grant_bindings"
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["run_id"], ["paid_evaluation_plans.run_id"]),
+    )
+
+
 class Agent(Base):
     """One row of the ``agents`` table.
 

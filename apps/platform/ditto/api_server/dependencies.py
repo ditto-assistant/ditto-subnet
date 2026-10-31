@@ -24,6 +24,11 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
     """Yield an :class:`AsyncSession` from the lifespan's session maker."""
     session_maker = request.app.state.session_maker
     async with session_maker() as session:
+        session.info["paid_evaluation_required"] = getattr(
+            getattr(request.app.state.config, "evaluation_billing", None),
+            "enabled",
+            False,
+        )
         bind_inference_activation_requirements(
             session,
             inference_activation_requirements(

@@ -189,6 +189,13 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		upstreamProvider:  textValue(cfg.EmbeddingProvider),
 		recordObservation: false, // NEVER observe routes on the embedding lane
 	}
+	var evaluationRaw []byte
+	paid, billingErr := d.reserveEvaluation(ctx, result.grant.AgentID, headers, "competition-embedding", cfg.EmbeddingModel, cfg.EmbeddingProvider, body)
+	if billingErr != nil {
+		_, _ = d.settleRequest(ctx, headers, outcome)
+		writeHTTPError(w, r, billingErr)
+		return
+	}
 	started := time.Now()
 	settled := false
 	var deliverable bool
@@ -205,6 +212,10 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		outcome.completionTokens = 0
 		outcome.costMicrousd = int64(math.RoundToEven(float64(outcome.promptTokens) * 0.004))
 		outcome.usageAvailable = outcome.status == "completed"
+		if billingErr := paid.finish(ctx, outcome, evaluationRaw); billingErr != nil {
+			settleErr = billingErr
+			return
+		}
 		deliverable, settleErr = d.settleRequest(ctx, headers, outcome)
 		if settleErr != nil {
 			d.Logger.Error("embeddings: settle", slog.String("error", settleErr.Error()))
@@ -278,6 +289,7 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}()
 	}
+	evaluationRaw = raw
 	settle()
 	d.traceEmbeddingSettled(embeddingTrace{
 		r: r, headers: headers, body: body, receivedAt: now, grant: &result.grant, model: cfg.EmbeddingModel,

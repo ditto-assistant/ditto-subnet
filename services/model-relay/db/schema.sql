@@ -5079,6 +5079,42 @@ CREATE TABLE public.owner_attestations (
 
 
 --
+-- Name: paid_evaluation_grant_bindings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.paid_evaluation_grant_bindings (
+    grant_id uuid NOT NULL,
+    run_id uuid NOT NULL
+);
+
+
+--
+-- Name: paid_evaluation_plans; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.paid_evaluation_plans (
+    run_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    phase text NOT NULL,
+    cycle integer NOT NULL,
+    bundle_id uuid,
+    payer_uid text NOT NULL,
+    state text NOT NULL,
+    estimate_microusd bigint NOT NULL,
+    cap_microusd bigint NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    refreshed_at timestamp with time zone NOT NULL,
+    started_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_paid_evaluation_plans_paid_eval_bounds CHECK (((cycle > 0) AND (estimate_microusd > 0) AND (cap_microusd >= estimate_microusd))),
+    CONSTRAINT ck_paid_evaluation_plans_paid_eval_phase CHECK ((phase = ANY (ARRAY['competition'::text, 'confirmation'::text]))),
+    CONSTRAINT ck_paid_evaluation_plans_paid_eval_phase_bundle CHECK ((((phase = 'competition'::text) AND (bundle_id IS NULL)) OR ((phase = 'confirmation'::text) AND (bundle_id IS NOT NULL)))),
+    CONSTRAINT ck_paid_evaluation_plans_paid_eval_state CHECK ((state = ANY (ARRAY['proposed'::text, 'approved'::text, 'closing'::text, 'closed'::text])))
+);
+
+
+--
 -- Name: private_benchmark_datasets; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9735,6 +9771,22 @@ ALTER TABLE ONLY public.miner_github_operator_revocations
 
 
 --
+-- Name: paid_evaluation_grant_bindings pk_paid_evaluation_grant_bindings; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.paid_evaluation_grant_bindings
+    ADD CONSTRAINT pk_paid_evaluation_grant_bindings PRIMARY KEY (grant_id);
+
+
+--
+-- Name: paid_evaluation_plans pk_paid_evaluation_plans; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.paid_evaluation_plans
+    ADD CONSTRAINT pk_paid_evaluation_plans PRIMARY KEY (run_id);
+
+
+--
 -- Name: private_benchmark_datasets pk_private_benchmark_datasets; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10959,6 +11011,14 @@ ALTER TABLE ONLY public.miner_github_links
 
 
 --
+-- Name: paid_evaluation_plans uq_paid_evaluation_plans_agent_id; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.paid_evaluation_plans
+    ADD CONSTRAINT uq_paid_evaluation_plans_agent_id UNIQUE (agent_id, bench_version, phase, cycle);
+
+
+--
 -- Name: private_benchmark_datasets uq_private_benchmark_datasets_identity_sha256; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -12039,6 +12099,20 @@ CREATE INDEX owner_attestations_hi_idx ON public.owner_attestations USING btree 
 --
 
 CREATE INDEX owner_attestations_lo_idx ON public.owner_attestations USING btree (netuid, hotkey_lo);
+
+
+--
+-- Name: paid_eval_active_agent; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX paid_eval_active_agent ON public.paid_evaluation_plans USING btree (agent_id, bench_version, phase) WHERE (state <> 'closed'::text);
+
+
+--
+-- Name: paid_eval_active_bundle; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX paid_eval_active_bundle ON public.paid_evaluation_plans USING btree (bundle_id) WHERE ((state <> 'closed'::text) AND (bundle_id IS NOT NULL));
 
 
 --
@@ -14730,6 +14804,30 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_operator_revocations
     ADD CONSTRAINT fk_miner_github_operator_revocations_link_id_miner_github_links FOREIGN KEY (link_id) REFERENCES public.miner_github_links(link_id);
+
+
+--
+-- Name: paid_evaluation_grant_bindings fk_paid_evaluation_grant_bindings_run_id_paid_evaluation_plans; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.paid_evaluation_grant_bindings
+    ADD CONSTRAINT fk_paid_evaluation_grant_bindings_run_id_paid_evaluation_plans FOREIGN KEY (run_id) REFERENCES public.paid_evaluation_plans(run_id);
+
+
+--
+-- Name: paid_evaluation_plans fk_paid_evaluation_plans_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.paid_evaluation_plans
+    ADD CONSTRAINT fk_paid_evaluation_plans_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: paid_evaluation_plans fk_paid_evaluation_plans_bundle_id_confirmation_bundles; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.paid_evaluation_plans
+    ADD CONSTRAINT fk_paid_evaluation_plans_bundle_id_confirmation_bundles FOREIGN KEY (bundle_id) REFERENCES public.confirmation_bundles(bundle_id);
 
 
 --
