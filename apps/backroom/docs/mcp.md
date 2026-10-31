@@ -149,8 +149,9 @@ The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:
 it builds the source, checks that every pack on fresh secret seeds is valid,
 re-runs to check determinism, and runs the probe copy check. Qualified
-generators then compete in rounds keyed on the chain epoch counter
-(`round = SubnetEpochIndex // epochs_per_round`).
+generators then compete in rounds keyed on the chain epoch counter: each
+round opens at a recorded subnet epoch and spans `epochs_per_round` epochs,
+and indexes keep increasing across a cadence change.
 
 Each round runs these steps:
 
@@ -164,7 +165,8 @@ Each round runs these steps:
 6. The scorer scores the matrix: generators get column scores, agents get
    pairwise-neutral standings.
 
-Each round's secret is revealed after `privacy_window_rounds`.
+Each round's secret is revealed `privacy_window_rounds` subnet epochs after it
+opens, once it is scored or void.
 
 - **Reads (`backroom:read`):**
   - `get_generator_competition_settings` returns the policy, including the

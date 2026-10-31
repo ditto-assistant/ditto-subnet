@@ -56,7 +56,9 @@ from ditto.api_server.generator_rounds import (
     ROUND_LEASE_CUTOFF,
     ChainPosition,
     GeneratorRoundLoop,
+    RoundClock,
     advance_rounds,
+    derive_round_clock,
     get_round,
     round_column_seed,
     round_commitment,
@@ -921,7 +923,7 @@ class TestRoundLifecycle:
                 str(miner_b),
             ]
 
-        # Reveal after the privacy window (6 rounds).
+        # Reveal after the privacy window (6 subnet epochs from its first).
         await _advance(session_maker, 36)
         public = (await client.get("/api/v1/generator/rounds/3")).json()
         assert public["summary"]["secret_hex"] == secret.hex()
@@ -1342,16 +1344,108 @@ class TestRoundLifecycle:
             assert row is not None and row.status == "void"
             assert row.void_reason == "round interval changed from 4 to 5"
 
-        # The voided index is never reused: under 5 epochs the next round is
-        # round 2 (epochs 10..14), and once it opens it blocks the change.
-        await _advance(session_maker, 9)  # commits round 2
-        await _advance(session_maker, 10)  # opens it
+        # The voided index keeps its span and is never reused: the next round
+        # is round 2, opening where round 1 ends (epochs 8..12 under 5), and
+        # once it opens it blocks the change.
+        assert "round 2: committed" in await _advance(session_maker, 4)
+        await _advance(session_maker, 8)  # opens it
         async with session_maker() as session:
             opened = await get_round(session, 2)
             assert opened is not None
             assert opened.status in ("generating", "running")
+            assert (opened.first_epoch_index, opened.epochs_per_round) == (8, 5)
+            nxt = await get_round(session, 3)
+            assert nxt is not None and nxt.first_epoch_index == 13
         refused = await _apply_settings(client, status=409, epochs_per_round=4)
         assert "are open" in refused.text
+
+    async def test_a_longer_interval_keeps_indexes_and_reveals_on_schedule(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """1 -> 4 epochs per round, the way production moves at epoch ~26k.
+
+        ``epoch // 4`` would put the current round far below rounds that
+        already ran; they would never close or reveal, and the next round
+        would land on an index below them. Indexes must keep increasing and
+        every earlier round must reveal ``privacy_window_rounds`` epochs after
+        its own first epoch, exactly as it would have without the change."""
+        _install(app, session_maker)
+        await _apply_settings(client, epochs_per_round=1, privacy_window_rounds=6)
+        agents = [await _seed_agent(session_maker, rank) for rank in range(3)]
+        _patch_panel(monkeypatch, agents)
+        await _register_default(client)
+        await _qualify_all(session_maker)
+        base = 26_040
+        await _advance(session_maker, base - 1)  # commits round base
+        for epoch in range(base, base + 3):
+            await _advance(session_maker, epoch)
+        # Every earlier round is finished and none is open, as the
+        # settings write requires: void the opened ones directly.
+        async with session_maker() as session, session.begin():
+            for index in range(base, base + 3):
+                row = await get_round(session, index, for_update=True)
+                assert row is not None and row.first_epoch_index == index
+                if row.status != "void":
+                    row.status = "void"
+                    row.void_reason = "test: finished"
+                    row.closed_at = datetime.now(UTC)
+                    row.lease_id = None
+                    row.lease_expires_at = None
+
+        await _apply_settings(client, epochs_per_round=4, privacy_window_rounds=6)
+        async with session_maker() as session:
+            ahead = await get_round(session, base + 3)
+            assert ahead is not None and ahead.status == "void"
+            assert (ahead.first_epoch_index, ahead.epochs_per_round) == (base + 3, 1)
+
+        # Still inside round base+2's epoch: nothing renumbers and no round
+        # below base+2 is created.
+        await _advance(session_maker, base + 2)
+        async with session_maker() as session:
+            assert await get_round(session, (base + 2) // 4) is None
+        # The voided round's epoch: the first 4-epoch round is committed
+        # right after it, one index later.
+        assert f"round {base + 4}: committed" in await _advance(session_maker, base + 3)
+        async with session_maker() as session:
+            first_long = await get_round(session, base + 4)
+            assert first_long is not None
+            assert (first_long.first_epoch_index, first_long.epochs_per_round) == (
+                base + 4,
+                4,
+            )
+        # It opens on its first epoch and spans four; the next follows it.
+        actions = await _advance(session_maker, base + 4)
+        assert f"round {base + 4}: void (opening epoch missed)" not in actions
+        assert f"round {base + 5}: committed" in actions
+        async with session_maker() as session:
+            opened = await get_round(session, base + 4)
+            assert opened is not None and opened.open_epoch_index == base + 4
+            nxt = await get_round(session, base + 5)
+            assert nxt is not None and nxt.first_epoch_index == base + 8
+        for epoch in range(base + 5, base + 8):
+            assert f"round {base + 5}" not in " ".join(
+                await _advance(session_maker, epoch)
+            )
+
+        # Reveals stay on each round's original schedule: round r at epoch
+        # r + 6, whatever the cadence is now.
+        async with session_maker() as session:
+            revealed = {
+                row.round_index: row.revealed_at is not None
+                for row in await session.scalars(
+                    select(GeneratorRound).where(GeneratorRound.round_index >= base)
+                )
+            }
+        assert revealed[base] and revealed[base + 1]
+        assert not revealed[base + 2] and not revealed[base + 3]
+        await _advance(session_maker, base + 8)
+        async with session_maker() as session:
+            row = await get_round(session, base + 2)
+            assert row is not None and row.revealed_at is not None
 
     async def test_mode_off_and_missing_generators(
         self,
@@ -2125,8 +2219,32 @@ def _head(
     )
 
 
+def test_round_clock_continues_indexes_across_a_cadence_change() -> None:
+    # No round yet: the original keying.
+    assert derive_round_clock(26_046, 4, None) == RoundClock(6_511, 26_044, 4)
+    # Inside the anchor round's span the epoch belongs to it, at its span.
+    assert derive_round_clock(26_046, 4, (26_046, 26_046, 1)) == RoundClock(
+        26_046, 26_046, 1
+    )
+    assert derive_round_clock(29, 1, (7, 28, 4)) == RoundClock(7, 28, 4)
+    # Past it, rounds of the current cadence follow back to back.
+    clock = derive_round_clock(26_047, 4, (26_046, 26_046, 1))
+    assert clock == RoundClock(26_047, 26_047, 4) and clock.next_round_epoch == 26_051
+    assert derive_round_clock(26_055, 4, (26_046, 26_046, 1)) == RoundClock(
+        26_049, 26_055, 4
+    )
+    assert derive_round_clock(26_058, 4, (26_046, 26_046, 1)) == RoundClock(
+        26_049, 26_055, 4
+    )
+    # Shortening works the same way.
+    assert derive_round_clock(40, 1, (9, 36, 4)) == RoundClock(10, 40, 1)
+    assert derive_round_clock(42, 1, (9, 36, 4)) == RoundClock(12, 42, 1)
+
+
 def test_round_seconds_left_tracks_the_closing_boundary() -> None:
-    row = GeneratorRound(round_index=7, epochs_per_round=1, open_block=9_000)
+    row = GeneratorRound(
+        round_index=7, epochs_per_round=1, first_epoch_index=7, open_block=9_000
+    )
     cutoff = ROUND_LEASE_CUTOFF.total_seconds()
     closing = round_seconds_left(
         row, _head(epoch=7, last_epoch_block=9_000, block=9_300)
@@ -2141,7 +2259,9 @@ def test_round_seconds_left_tracks_the_closing_boundary() -> None:
     early = _head(epoch=7, last_epoch_block=9_000, block=9_005, next_epoch=9_050)
     assert round_seconds_left(row, early) == 45 * 12
     # A multi-epoch round adds a tempo per epoch still to run after the next.
-    row = GeneratorRound(round_index=7, epochs_per_round=4, open_block=9_000)
+    row = GeneratorRound(
+        round_index=7, epochs_per_round=4, first_epoch_index=28, open_block=9_000
+    )
     mid = round_seconds_left(row, _head(epoch=29, last_epoch_block=9_360, block=9_400))
     assert mid == ((9_360 + 360 + 2 * 360) - 9_400) * 12
     # Past the closing epoch no time is left; before the round, no estimate.

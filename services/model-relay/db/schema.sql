@@ -4272,6 +4272,7 @@ CREATE TABLE public.generator_rounds (
     void_reason text,
     revealed_at timestamp with time zone,
     bench_version integer,
+    first_epoch_index bigint NOT NULL,
     CONSTRAINT ck_generator_rounds_generator_rounds_bench_version_check CHECK (((bench_version IS NULL) OR (bench_version >= 13))),
     CONSTRAINT ck_generator_rounds_generator_rounds_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
     CONSTRAINT ck_generator_rounds_generator_rounds_dataset_check CHECK ((((dataset_sha256 IS NULL) = (dataset_bytes IS NULL)) AND ((dataset_sha256 IS NULL) OR (dataset_sha256 = encode(sha256(dataset_bytes), 'hex'::text))))),
@@ -11765,6 +11766,13 @@ CREATE INDEX generator_round_case_verdicts_submission_idx ON public.generator_ro
 --
 
 CREATE INDEX generator_rounds_dataset_idx ON public.generator_rounds USING btree (dataset_sha256) WHERE (dataset_sha256 IS NOT NULL);
+
+
+--
+-- Name: generator_rounds_first_epoch_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX generator_rounds_first_epoch_idx ON public.generator_rounds USING btree (first_epoch_index);
 
 
 --

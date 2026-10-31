@@ -212,11 +212,18 @@ A generator that passes is **qualified**.
 ## Rounds: the agent × generator matrix
 
 Generators are scored against agents in **rounds**. A round is keyed on the
-chain's own epoch counter:
+chain's own epoch counter: each round opens at a recorded first
+`SubnetEpochIndex` and spans `epochs_per_round` epochs (4 by default). The
+next round opens where the previous one ends, one index later:
 
 ```
-round_index = SubnetEpochIndex // epochs_per_round      (4 by default)
+first_epoch(r + 1) = first_epoch(r) + epochs_per_round(r)
 ```
+
+Before any round existed the index was `SubnetEpochIndex // epochs_per_round`.
+A cadence change sets the length of rounds committed after it and never
+renumbers: indexes keep increasing, so rounds that already ran stay earlier
+for closing, revealing and the ledger.
 
 `SubnetEpochIndex` counts every subnet epoch the chain fires. It survives tempo
 changes and deferred or owner-triggered epochs, and it is the same counter the
@@ -245,8 +252,10 @@ unpredictable to Platform, which must not be able to grind it.
 2. **Open.** At round `r`'s epoch boundary, Platform derives
    `seed = RoundSeed(r, secret, open_block_hash)`, using the hash of the block
    the epoch fired at. That block did not exist when the secret was committed.
-3. **Reveal.** `privacy_window_rounds` (6) after the round opens, its secret,
-   seed, and dataset digest become public. Anyone can check the secret
+3. **Reveal.** `privacy_window_rounds` (6) subnet epochs after the round
+   opens, once it is scored or void, its secret, seed, and dataset digest
+   become public. The window counts epochs, not rounds of the current cadence,
+   so its wall-clock length survives an `epochs_per_round` change. Anyone can check the secret
    against the commitment and recompute every case.
 
 A round that was not committed before its first epoch never opens; it is void.

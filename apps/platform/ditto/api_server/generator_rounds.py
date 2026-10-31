@@ -1,9 +1,11 @@
 """Generator-competition rounds: the chain-epoch agent x generator matrix.
 
-A round is keyed on the chain's own epoch counter,
-``round_index = SubnetEpochIndex // epochs_per_round``, so every round opens
-and closes on a Yuma epoch boundary and lands in the same epoch-pinned ledger
-validators fold. The lifecycle (:func:`advance_rounds`, driven by
+A round is keyed on the chain's own epoch counter: it opens at a recorded
+``first_epoch_index`` and spans ``epochs_per_round`` subnet epochs, so every
+round opens and closes on a Yuma epoch boundary and lands in the same
+epoch-pinned ledger validators fold. Round indexes continue from the latest
+round (:func:`round_clock`), so a cadence change never moves the index space
+below rounds that already ran. The lifecycle (:func:`advance_rounds`, driven by
 :class:`GeneratorRoundLoop` and safe to re-run):
 
 1. **Commit.** While round ``r`` runs, Platform draws round ``r + 1``'s 32-byte
@@ -38,8 +40,11 @@ validators fold. The lifecycle (:func:`advance_rounds`, driven by
    matrix: column scores for generators and pairwise-neutral standings for
    agents. A round with fewer than ``min_panel`` results that answered at
    least one case is void instead (see :class:`PanelTally`).
-6. **Reveal.** ``privacy_window_rounds`` after a round opens, its secret,
-   seed, and dataset become public so anyone can re-derive every case.
+6. **Reveal.** ``privacy_window_rounds`` subnet epochs after a round opens
+   (and once it is scored or void), its secret, seed, and dataset become
+   public so anyone can re-derive every case. The window is counted in
+   epochs, not in rounds of the current cadence, so it keeps the same
+   wall-clock length when ``epochs_per_round`` changes.
 
 Derivations mirror ``research/dittobench-datagen/challenge/round.go`` and are
 pinned by ``challenge/testdata/round_vectors.json``.
@@ -176,12 +181,71 @@ OPEN_DEFERRED_KEY = "open_deferred"
 # --- derivations ------------------------------------------------------------
 
 
-def round_index_for(subnet_epoch_index: int, epochs_per_round: int) -> int:
-    return subnet_epoch_index // epochs_per_round
+@dataclass(frozen=True)
+class RoundClock:
+    """The round a subnet epoch falls in: its index, the epoch it opens at,
+    and how many epochs it spans."""
+
+    current: int
+    first_epoch: int
+    epochs_per_round: int
+
+    @property
+    def next_round_epoch(self) -> int:
+        return self.first_epoch + self.epochs_per_round
 
 
-def round_first_epoch(round_index: int, epochs_per_round: int) -> int:
-    return round_index * epochs_per_round
+def derive_round_clock(
+    subnet_epoch_index: int,
+    epochs_per_round: int,
+    anchor: tuple[int, int, int] | None,
+) -> RoundClock:
+    """Place ``subnet_epoch_index`` on the round schedule.
+
+    ``anchor`` is ``(round_index, first_epoch_index, epochs_per_round)`` of
+    the latest round that opens at or before the epoch. Inside that round's
+    span the epoch belongs to it; past it, rounds of the current
+    ``epochs_per_round`` follow back to back from where it ended, one index
+    each. Without any round yet, the index is ``epoch // epochs_per_round``
+    (the original keying, which every round before ``first_epoch_index``
+    followed). Changing the cadence therefore only changes how long the next
+    rounds are: indexes keep increasing, so rounds that already ran stay
+    "earlier" for closing, revealing and newest-first reads.
+    """
+    if anchor is None:
+        current = subnet_epoch_index // epochs_per_round
+        return RoundClock(current, current * epochs_per_round, epochs_per_round)
+    index, first, span = anchor
+    end = first + span
+    if subnet_epoch_index < end:
+        return RoundClock(index, first, span)
+    skipped = (subnet_epoch_index - end) // epochs_per_round
+    return RoundClock(
+        index + 1 + skipped, end + skipped * epochs_per_round, epochs_per_round
+    )
+
+
+async def round_clock(
+    session: AsyncSession, subnet_epoch_index: int, epochs_per_round: int
+) -> RoundClock:
+    """:func:`derive_round_clock` anchored on the stored rounds."""
+    anchor = (
+        await session.execute(
+            select(
+                GeneratorRound.round_index,
+                GeneratorRound.first_epoch_index,
+                GeneratorRound.epochs_per_round,
+            )
+            .where(GeneratorRound.first_epoch_index <= subnet_epoch_index)
+            .order_by(GeneratorRound.round_index.desc())
+            .limit(1)
+        )
+    ).first()
+    return derive_round_clock(
+        subnet_epoch_index,
+        epochs_per_round,
+        None if anchor is None else (int(anchor[0]), int(anchor[1]), int(anchor[2])),
+    )
 
 
 def round_commitment(round_index: int, secret: bytes) -> str:
@@ -480,6 +544,8 @@ def _commit_row(
     round_index: int,
     *,
     settings: GeneratorCompetitionSettings,
+    first_epoch: int,
+    epochs_per_round: int,
     epoch_index: int,
     now: datetime,
 ) -> GeneratorRound:
@@ -487,7 +553,8 @@ def _commit_row(
     return GeneratorRound(
         round_index=round_index,
         status="committed",
-        epochs_per_round=settings.epochs_per_round,
+        epochs_per_round=epochs_per_round,
+        first_epoch_index=first_epoch,
         secret=secret,
         commitment=round_commitment(round_index, secret),
         committed_at=now,
@@ -770,7 +837,8 @@ async def advance_rounds(
     if settings.mode == "off":
         return out
     per = settings.epochs_per_round
-    current = round_index_for(position.subnet_epoch_index, per)
+    clock = await round_clock(session, position.subnet_epoch_index, per)
+    current = clock.current
 
     # 1. Close every earlier round still in flight. Every multi-round lock in
     # this module is taken in ascending round_index order (see
@@ -813,12 +881,15 @@ async def advance_rounds(
         for note in await drop_ineligible_panel_agents(session, row, now=now):
             out.note(note)
 
-    # 2. Commit the next round ahead of time.
+    # 2. Commit the next round ahead of time. It opens where the current
+    # round ends and spans the current setting's epochs.
     if await get_round(session, current + 1) is None:
         session.add(
             _commit_row(
                 current + 1,
                 settings=settings,
+                first_epoch=clock.next_round_epoch,
+                epochs_per_round=per,
                 epoch_index=position.subnet_epoch_index,
                 now=now,
             )
@@ -827,10 +898,15 @@ async def advance_rounds(
 
     # 3. Open the current round.
     opening = await get_round(session, current, for_update=True)
-    first_epoch = round_first_epoch(current, per)
+    first_epoch = clock.first_epoch if opening is None else opening.first_epoch_index
     if opening is None:
         late = _commit_row(
-            current, settings=settings, epoch_index=position.subnet_epoch_index, now=now
+            current,
+            settings=settings,
+            first_epoch=clock.first_epoch,
+            epochs_per_round=clock.epochs_per_round,
+            epoch_index=position.subnet_epoch_index,
+            now=now,
         )
         late.commitment_publication = "disabled"
         void_round(late, "not committed before the round opened", now=now)
@@ -865,11 +941,15 @@ async def advance_rounds(
     for settled in await settle_commitment_publications(session):
         out.note(settled)
 
-    # 5. Reveal rounds past the privacy window.
+    # 5. Reveal rounds past the privacy window: ``privacy_window_rounds``
+    # subnet epochs after each round's own first epoch. Counting epochs, not
+    # round indexes of the current cadence, keeps every round's reveal on its
+    # original wall-clock schedule across an ``epochs_per_round`` change.
     reveal = await session.scalars(
         select(GeneratorRound)
         .where(
-            GeneratorRound.round_index <= current - settings.privacy_window_rounds,
+            GeneratorRound.first_epoch_index
+            <= position.subnet_epoch_index - settings.privacy_window_rounds,
             GeneratorRound.status.in_(("scored", "void")),
             GeneratorRound.revealed_at.is_(None),
         )
@@ -1738,9 +1818,9 @@ def round_seconds_left(row: GeneratorRound, head: EpochSchedule) -> float | None
     so nothing is extrapolated from a stale snapshot. Zero once the head has
     reached the closing epoch; None when the head predates the round.
     """
-    closing_epoch = (row.round_index + 1) * row.epochs_per_round
+    closing_epoch = row.first_epoch_index + row.epochs_per_round
     epochs_after_next = closing_epoch - head.subnet_epoch_index - 1
-    if head.subnet_epoch_index < row.round_index * row.epochs_per_round:
+    if head.subnet_epoch_index < row.first_epoch_index:
         return None
     if epochs_after_next < 0:
         # The chain is already past the round's closing boundary.
@@ -2483,13 +2563,14 @@ class GeneratorRoundLoop:
                 )
                 return actions
             position = await self.read_position()
-            current = round_index_for(position.subnet_epoch_index, per)
+            async with self._session_maker() as session:
+                clock = await round_clock(session, position.subnet_epoch_index, per)
             self.schedule = GeneratorRoundSchedule(
                 mode=resolved.settings.mode,
                 epochs_per_round=per,
                 subnet_epoch_index=position.subnet_epoch_index,
-                current_round=current,
-                next_round_epoch=round_first_epoch(current + 1, per),
+                current_round=clock.current,
+                next_round_epoch=clock.next_round_epoch,
                 tempo=position.tempo,
                 block=position.block,
                 observed_at=now,
