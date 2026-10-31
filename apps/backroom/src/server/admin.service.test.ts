@@ -4570,6 +4570,44 @@ describe('production score reads', () => {
     })
   })
 
+  // #2981: a score-ceiling joint crown failed every leaderboard read, and an
+  // unpaid provisional incumbent read as paid.
+  it('relays a joint crown and an unpaid recipient', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const [crowned] = emissions.recipients
+    const joint = {
+      ...leaderboard,
+      emissions: {
+        ...emissions,
+        allocation_mode: 'score_ceiling_pool',
+        score_ceiling_pool_size: 2,
+        recipients: [
+          { ...crowned, role: 'joint_champion', share_of_miner_pool: 0.3, paid: false },
+          {
+            ...crowned,
+            role: 'joint_champion',
+            agent_id: provisionalAgentId,
+            miner_hotkey: '5NewMiner',
+            raw_rank: 2,
+            share_of_miner_pool: 0.3,
+          },
+        ],
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(joint)))
+
+    const page = await fetchScoreLeaderboard({ status: 'finalized', limit: 1, offset: 0 })
+
+    expect(page.emissions).toMatchObject({
+      allocation_mode: 'score_ceiling_pool',
+      score_ceiling_pool_size: 2,
+      recipients: [
+        { role: 'joint_champion', agent_id: topAgentId, paid: false },
+        { role: 'joint_champion', agent_id: provisionalAgentId, paid: true },
+      ],
+    })
+  })
+
   // #2079 follow-up: #2098 named the board's scoring and emission versions.
   // An operator asked why the newer one is not paying needs both, plus
   // Platform's own sentence for the gates still holding emissions.
