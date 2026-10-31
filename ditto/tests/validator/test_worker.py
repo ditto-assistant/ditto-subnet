@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
