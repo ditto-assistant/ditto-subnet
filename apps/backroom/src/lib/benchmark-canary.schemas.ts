@@ -48,3 +48,26 @@ export const benchmarkCanarySchema = z.object({
     n: z.number().int(), generated_at: z.string(),
   }).nullable(),
 })
+
+export const OPERATOR_DIAGNOSTIC_ISOLATE_CONFIRMATION = 'ISOLATE OPERATOR DIAGNOSTIC AGENT'
+export const getOperatorDiagnosticInputSchema = z.object({ agentId: z.uuid() })
+export const isolateOperatorDiagnosticInputSchema = getOperatorDiagnosticInputSchema.extend({
+  expectedArtifactSha256: digest,
+  reason: z.string().trim().min(8),
+  confirmation: z.literal(OPERATOR_DIAGNOSTIC_ISOLATE_CONFIRMATION),
+})
+export const operatorDiagnosticSchema = z.object({
+  agent_id: z.uuid(),
+  miner_hotkey: z.string(),
+  operator_owned: z.boolean(),
+  shadow: z.boolean(),
+  status: z.string(),
+  withdrawals: z.array(z.object({
+    bench_version: z.number().int(), created_at: z.string(), in_force: z.boolean(),
+  })),
+  ordinary_lease_count: z.number().int(),
+  diagnostic_lease_count: z.number().int(),
+  score_count: z.number().int(),
+  isolation_refusal: z.string().nullable(),
+  diagnostic_refusal_by_version: z.record(z.string(), z.string().nullable()),
+})

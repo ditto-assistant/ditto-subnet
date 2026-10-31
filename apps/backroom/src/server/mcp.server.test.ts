@@ -767,6 +767,8 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_canary',
         'issue_benchmark_canary',
         'cancel_benchmark_canary',
+        'get_operator_diagnostic',
+        'isolate_operator_diagnostic',
         'resolve_screening_quarantine',
         'release_verified_v13_court_clear',
         'resolve_screening_dispute',
@@ -942,7 +944,10 @@ describe('Backroom MCP tools', () => {
     // detail in tool help) measures 215,494 bytes; keep about 0.5 KB headroom.
     // The artifact fetch audit read (agentId-or-sha, before, limit; one-line
     // summary, detail in tool help) measures 216,078 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(216_600)
+    // The operator-diagnostic read and isolate pair (uuid / uuid+digest+reason
+    // inputs, one-line summaries, detail in tool help) measures 217,781 bytes;
+    // keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(218_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

@@ -108,9 +108,10 @@ import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.sche
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
-  cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
+  cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+  getOperatorDiagnosticInputSchema, isolateOperatorDiagnosticInputSchema } from '../lib/benchmark-canary.schemas'
 import { issueBenchmarkCanary, getBenchmarkCanary, listBenchmarkCanaries,
-  cancelBenchmarkCanary } from './admin.service'
+  cancelBenchmarkCanary, getOperatorDiagnostic, isolateOperatorDiagnostic } from './admin.service'
 
 import {
   McpServer,
@@ -969,6 +970,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_benchmark_canary: 'Read one diagnostic lease/non-authoritative result.',
   issue_benchmark_canary: 'Issue bounded diagnostic lease for explicit bench version/agent/validator. Never activates.',
   cancel_benchmark_canary: 'Cancel exact canary and its inference; canonical scores unchanged.',
+  get_operator_diagnostic: 'Read operator diagnostic eligibility.',
+  isolate_operator_diagnostic: 'Isolate an operator-owned new agent.',
   authorize_confirmation_bundle_retest:
     'Authorize one manual retest for a completed or failed bundle. Requires current generation, request UUID, reason, and exact phrase. Automatic retries stay disabled.',
   remove_failed_submission_from_queue:
@@ -4142,6 +4145,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: cancelBenchmarkCanaryInputSchema,
     annotations: toolAnnotations('write', true),
   }, async (input) => write(() => cancelBenchmarkCanary(props.session.email, input)))
+  registerTool('get_operator_diagnostic', {
+    title: 'Get operator diagnostic eligibility',
+    description: 'Read whether one agent is an operator diagnostic target: owned by a configured operator hotkey, shadow, its queue withdrawals, ordinary vs diagnostic lease counts, score count, and the exact refusal (if any) for isolation and for a diagnostic lease per benchmark version. Requires backroom:read and changes nothing.',
+    inputSchema: getOperatorDiagnosticInputSchema,
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await getOperatorDiagnostic(input)))
+  registerTool('isolate_operator_diagnostic', {
+    title: 'Isolate operator diagnostic agent',
+    description: 'Mark one agent shadow and withhold it from every queueable benchmark version, so issue_benchmark_canary may later lease it to exactly one validator. Only for an agent uploaded by a configured operator hotkey, still before screening completes, with no lease and no score; every other agent is refused. Writes queue withdrawals and an audit entry. Requires expectedArtifactSha256, a reason, and exact confirmation ISOLATE OPERATOR DIAGNOSTIC AGENT. Requires backroom:write.',
+    inputSchema: isolateOperatorDiagnosticInputSchema,
+    annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => isolateOperatorDiagnostic(props.session.email, input)))
 
   registerTool(
     'start_benchmark_rollout',

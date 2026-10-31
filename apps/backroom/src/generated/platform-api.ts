@@ -2535,6 +2535,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/operator-diagnostic/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Operator Diagnostic
+         * @description Read one agent's operator-diagnostic eligibility (read-only).
+         */
+        get: operations["get_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/operator-diagnostic/{agent_id}/isolate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Isolate Operator Diagnostic
+         * @description Mark an operator-owned agent shadow and withhold it from validator queues.
+         *
+         *     Allowed only before screening completes and while the agent has never been
+         *     leased or scored, so the withdrawal is in force before ordinary dispatch can
+         *     reach it. Writes one withdrawal per queueable benchmark version plus one
+         *     hash-chained audit entry. Every other agent is refused.
+         */
+        post: operations["isolate_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__isolate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/outlier-escalation": {
         parameters: {
             query?: never;
@@ -27398,6 +27443,62 @@ export interface components {
             /** Verified At */
             verified_at: string | null;
         };
+        /** OperatorDiagnosticIsolate */
+        OperatorDiagnosticIsolate: {
+            /** Actor */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Artifact Sha256 */
+            expected_artifact_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /**
+         * OperatorDiagnosticView
+         * @description Read-back of one agent's diagnostic-target eligibility.
+         */
+        OperatorDiagnosticView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Diagnostic Lease Count */
+            diagnostic_lease_count: number;
+            /** Diagnostic Refusal By Version */
+            diagnostic_refusal_by_version: {
+                [key: string]: string | null;
+            };
+            /** Isolation Refusal */
+            isolation_refusal: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Operator Owned */
+            operator_owned: boolean;
+            /** Ordinary Lease Count */
+            ordinary_lease_count: number;
+            /** Score Count */
+            score_count: number;
+            /** Shadow */
+            shadow: boolean;
+            /** Status */
+            status: string;
+            /** Withdrawals */
+            withdrawals: components["schemas"]["OperatorDiagnosticWithdrawal"][];
+        };
+        /** OperatorDiagnosticWithdrawal */
+        OperatorDiagnosticWithdrawal: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** In Force */
+            in_force: boolean;
+        };
         /** OutlierEscalationActivityView */
         OutlierEscalationActivityView: {
             /**
@@ -48053,6 +48154,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOwnerFootprint"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorDiagnosticView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    isolate_operator_diagnostic_api_v1_admin_operator_diagnostic__agent_id__isolate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OperatorDiagnosticIsolate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperatorDiagnosticView"];
                 };
             };
             /** @description Validation Error */
