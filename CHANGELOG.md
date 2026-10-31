@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.416.2 (2026-10-31)
+
+### Bug Fixes
+
+- **platform**: Keep generator round indexes monotonic across cadence changes
+  ([#3294](https://github.com/ditto-assistant/ditto-subnet/pull/3294),
+  [`3d65ab0`](https://github.com/ditto-assistant/ditto-subnet/commit/3d65ab0e1db4f4d4db55131f01104819dd0fdf3a))
+
+
 ## v0.416.1 (2026-10-31)
 
 ### Bug Fixes
