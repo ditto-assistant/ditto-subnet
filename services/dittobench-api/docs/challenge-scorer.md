@@ -211,3 +211,115 @@ screener, and validator hosts never build a generator.
 The unit sets `TMPDIR` under `/var/lib/ditto-generator-scorer`, because the
 sandbox bind-mounts its build directories. `PrivateTmp` would hide them from
 dockerd.
+
+## AWS deployment
+
+The same host can run on EC2 instead. Nothing about the scorer changes: the
+Ansible role, the systemd unit, the sandbox images, and the Platform bearer are
+the same. Only placement and how the host reaches its bearer differ.
+
+| | GCE (today) | AWS |
+|---|---|---|
+| Terraform | `gcp-platform/generator-scorer.tf` | `infra/terraform/stacks/aws-generator-scorer` |
+| Compute | `modules/compute/gcp`, `app-standard` (e2-standard-4) | `modules/compute/aws`, `app-small` (t3.medium, unlimited credits) |
+| Access | IAP + OS Login SSH | SSM Session Manager; no ingress at all |
+| Inventory | `inventory/gcp.yml` | `inventory/aws.yml` (`amazon.aws.aws_ec2` + `aws_ssm`) |
+| Bearer source | `gcloud` (attached service account) | `aws-wif` (instance role federated into GCP) |
+
+Both providers share the logical sizes in
+`infra/terraform/modules/compute/interface.md`. A third place (for example a
+Hetzner node) converges with `generator_scorer_token_source=file` and a
+root-only `/etc/ditto-generator-scorer/platform-token`.
+
+Why these choices:
+
+- **t3.medium, x86.** One sandboxed build is capped at 2 GiB, a generator run
+  at 1 GiB, plus Docker, so 2 GiB (t3.small) is too small. Graviton is out:
+  Go fuses FMA on arm64, which can change generator output bytes against
+  miners' x86 machines and break the determinism check and the fingerprints.
+  `unlimited` credits keep a long build from being throttled to baseline and
+  timing out as if the generator were at fault.
+- **Debian 13**, as on GCE. Its AMI has no SSM agent, so first-boot user data
+  installs one pinned, checksum-verified `amazon-ssm-agent` release.
+- **Dedicated VPC, public IPv4, no NAT.** The account's default VPC is shared
+  and editable out of band; a NAT gateway costs more than the host. The
+  security group has no ingress rules and allows only TCP 80/443 out.
+  IMDSv2 is required with hop limit 1, so sandbox containers cannot reach the
+  instance credentials. The root volume is encrypted gp3.
+- **The bearer stays in GCP Secret Manager**, because Platform reads it there.
+  The `generator-scorer-aws` Workload Identity pool trusts one AWS account and
+  accepts only sessions of the `ditto-generator-scorer` instance role. That
+  principal set can read `generator-scorer-token-prod` and nothing else. There
+  is no copied secret and no key: gcloud signs an STS `GetCallerIdentity`
+  request with the instance credentials and exchanges it for a federated
+  token. A copy in AWS Secrets Manager would need its own rotation and could
+  drift from Platform's value.
+
+### One-time AWS bootstrap
+
+An account administrator runs the commands in
+[`infra/docs/ci-bootstrap.md`](../../../infra/docs/ci-bootstrap.md#aws-roots)
+once. They create the S3 state bucket, the GitHub OIDC provider, and the plan
+and apply roles that `infra-plan-apply.yml` assumes. Nothing else is created
+out of band.
+
+### Cutover runbook
+
+Merging the Terraform creates nothing. `enable_generator_scorer` (AWS root) and
+`generator_scorer_aws_account_id` (gcp-platform) default to off. The GCE VM
+keeps scoring until step 6.
+
+1. **Enable both sides in one PR.** In
+   `infra/terraform/stacks/gcp-platform/prod.auto.tfvars` set
+   `generator_scorer_aws_account_id = "339713011188"`. Add
+   `infra/terraform/stacks/aws-generator-scorer/prod.auto.tfvars` with
+   `enable_generator_scorer = true`.
+2. **Protected plan/apply, `root=gcp-platform`.** The saved plan should create
+   exactly the pool, its `aws-ec2` provider, and one secret IAM member. The pool
+   admin grant already exists while X.509 federation is on. Reject any other
+   change.
+3. **Protected plan/apply, `root=aws-generator-scorer`.** Expect only creates:
+   the VPC and its subnet, gateway, routes and groups, the role, the instance
+   profile and SSM attachment, the transfer bucket and its settings, and one
+   `t3.medium`. Wait for the instance to appear as an SSM managed node
+   (`aws ssm describe-instance-information`).
+4. **Converge.** From a controller with an AWS session for the account,
+   `boto3`/`botocore`, the `session-manager-plugin`, and
+   `ansible-galaxy collection install -r infra/ansible/requirements.yml`:
+
+   ```bash
+   ansible-inventory -i infra/ansible/inventory/aws.yml --graph   # role_generator_scorer has the host
+   ansible-playbook -i infra/ansible/inventory/aws.yml \
+     infra/ansible/playbooks/aws-generator-scorer.yml \
+     -e generator_scorer_revision=<released commit running on GCE>
+   ```
+
+   Use the commit the GCE host runs, so both hosts score identically. The
+   converge fails closed if the federated read returns no usable bearer.
+5. **Verify a qualification run on AWS.** Both scorers now poll with the same
+   bearer. Platform leases each item to one of them, so running both is safe.
+   On the AWS host (`aws ssm start-session --target <instance-id>`), watch
+   `journalctl -u ditto-generator-scorer -f` until it leases and posts a
+   qualification run. If none arrives, re-qualify an active generator through
+   Backroom (`rescore_generator_submission`). Confirm the run with
+   `get_generator_run`: finished, determinism check passed, and the same
+   qualified/rejected outcome as the GCE host's last run of that source (a
+   re-qualification draws fresh seeds, so compare outcomes, not bytes).
+6. **Stop the GCE unit.** On `ditto-generator-scorer-prod`, run
+   `sudo systemctl disable --now ditto-generator-scorer`. Watch the AWS journal
+   through at least one more qualification and, if one is open, one round
+   lease.
+7. **Retire the GCE VM in two protected phases.** The compute module keeps
+   `prevent_destroy`, so a flag flip alone cannot delete it.
+   1. Set `generator_scorer_gce_deletion_protection = false`. The saved plan
+      must contain only that in-place update.
+   2. In a separate change, remove the `generator_scorer_vm` module, the
+      `generator_scorer` service account, and its secret grant from
+      `generator-scorer.tf`. Keep the secret and Platform's grant. Plan with
+      `targets` naming those addresses and confirm the plan contains only
+      their deletion.
+
+Rollback before step 7: `sudo systemctl enable --now ditto-generator-scorer`
+on the GCE VM, then stop the AWS unit or set `enable_generator_scorer = false`.
+Disabling the AWS root destroys the instance only after its
+`deletion_protection` is set false in a reviewed plan.

@@ -32,7 +32,9 @@ def test_terraform_binds_one_exact_x509_subject_to_one_secret() -> None:
     assert project_grants == [
         (
             "screener_fleet_x509_pool_admin",
-            "\n  count   = local.screener_fleet_x509_count\n"
+            # Shared with the AWS generator-scorer pool (generator-scorer.tf).
+            "\n  count   = (var.enable_screener_fleet_x509_identity || "
+            'var.generator_scorer_aws_account_id != "") ? 1 : 0\n'
             "  project = var.project\n"
             '  role    = "roles/iam.workloadIdentityPoolAdmin"\n'
             '  member  = "serviceAccount:github-actions-terraform-apply@'

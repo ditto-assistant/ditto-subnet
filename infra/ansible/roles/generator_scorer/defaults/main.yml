@@ -15,6 +15,26 @@ generator_scorer_platform_url: https://platform-api.heyditto.ai
 generator_scorer_interval: 30s
 generator_scorer_token_secret: generator-scorer-token-prod
 
+# Where the Platform bearer comes from. The secret itself always lives in GCP
+# Secret Manager (Platform reads it there); only the way this host reaches it
+# changes when the scorer moves:
+#   gcloud   the attached GCE service account (ditto-generator-scorer-prod)
+#   aws-wif  the EC2 instance role, federated through the generator-scorer-aws
+#            Workload Identity pool (gcp-platform/generator-scorer.tf)
+#   file     a root-only file already on the host (generator_scorer_token_file)
+generator_scorer_token_source: gcloud
+generator_scorer_token_file: "{{ generator_scorer_config_dir }}/platform-token"
+
+# aws-wif audience. The project number is not secret; it is
+# data.google_project.this.number in gcp-platform.
+generator_scorer_gcp_project_number: "22790208601"
+generator_scorer_gcp_wif_pool: generator-scorer-aws
+generator_scorer_gcp_wif_provider: aws-ec2
+generator_scorer_gcp_wif_dir: "{{ generator_scorer_config_dir }}/gcp"
+# Pinned packages.cloud.google.com/apt/doc/apt-key.gpg. A rotated key fails
+# closed here; re-pin only after checking the new key's fingerprint.
+generator_scorer_google_cloud_apt_key_sha256: "3ecc63922b7795eb23fdc449ff9396f9114cb3cf186d6f5b53ad4cc3ebfbb11f"
+
 # Pinned Docker apt key (download.docker.com/linux/debian/gpg).
 docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"
 generator_scorer_docker_apt_arch: amd64
