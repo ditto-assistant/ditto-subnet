@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import copy
 import fnmatch
+import functools
 import hashlib
 import json
 import logging
 import math
+import os
 import posixpath
 import re
 import tarfile
@@ -878,6 +880,79 @@ def _is_generator_runtime_source(path: str) -> bool:
 
 
 logger = logging.getLogger(__name__)
+
+
+# --- Configurable source-marker scan ------------------------------------------
+#
+# A deployment may pin a small set of operator-defined *provenance markers* --
+# distinctive, naturally-rare identifiers, constants, or phrases -- and have
+# every screened submission's source scanned for them. This is a neutral
+# provenance signal: it reports where a configured marker occurs (path + line +
+# marker id) into the ``review_leads`` pre-analysis and emits one structured log
+# record per hit. It never assigns a policy category, never changes a
+# submission's outcome, and is a complete no-op unless markers are configured.
+#
+# Markers are supplied out-of-band through the environment, not committed to the
+# repository, so the pinned values never appear in source control:
+#
+#   SCREENER_SOURCE_MARKER_PATTERNS='[{"id":"m1","pattern":"RARE_TOKEN_[0-9a-f]{8}"}]'
+#
+# Each entry is ``{"id": <short label>, "pattern": <python regex>}``. Patterns
+# are matched case-sensitively, line by line, against decoded UTF-8 source. An
+# invalid regex or malformed entry is dropped with a warning rather than
+# failing the screen.
+_SOURCE_MARKER_ENV = "SCREENER_SOURCE_MARKER_PATTERNS"
+_MAX_SOURCE_MARKERS = 64
+_MAX_SOURCE_MARKER_LOCATIONS = 32
+_MAX_SOURCE_MARKER_PATTERN_LEN = 512
+
+
+@dataclass(frozen=True)
+class _SourceMarker:
+    marker_id: str
+    pattern: re.Pattern[str]
+
+
+@functools.lru_cache(maxsize=1)
+def _configured_source_markers_cached(raw: str) -> tuple[_SourceMarker, ...]:
+    """Parse and compile the configured marker set (cached per raw value)."""
+    if not raw.strip():
+        return ()
+    try:
+        entries = json.loads(raw)
+    except ValueError:
+        logger.warning("source marker config is not valid JSON; scan disabled")
+        return ()
+    if not isinstance(entries, list):
+        logger.warning("source marker config must be a JSON list; scan disabled")
+        return ()
+    markers: list[_SourceMarker] = []
+    seen: set[str] = set()
+    for entry in entries[:_MAX_SOURCE_MARKERS]:
+        if not isinstance(entry, dict):
+            continue
+        marker_id = entry.get("id")
+        pattern = entry.get("pattern")
+        if not isinstance(marker_id, str) or not isinstance(pattern, str):
+            continue
+        marker_id = marker_id.strip()[:64]
+        if not marker_id or marker_id in seen:
+            continue
+        if not pattern or len(pattern) > _MAX_SOURCE_MARKER_PATTERN_LEN:
+            continue
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            logger.warning("source marker %s has an invalid regex; dropped", marker_id)
+            continue
+        seen.add(marker_id)
+        markers.append(_SourceMarker(marker_id=marker_id, pattern=compiled))
+    return tuple(markers)
+
+
+def _configured_source_markers() -> tuple[_SourceMarker, ...]:
+    return _configured_source_markers_cached(os.environ.get(_SOURCE_MARKER_ENV, ""))
+
 
 _SYSTEM_PROMPT_HEAD = """\
 You are a defensive source reviewer for an adversarial benchmark submission.
@@ -2933,6 +3008,7 @@ class TarSourceRepository:
                 )
             ),
             "generator_mirroring": self._generator_mirroring_analysis(readable),
+            "source_markers": self._source_marker_analysis(readable),
             "review_adaptive_model_routing": (
                 self._review_adaptive_model_routing_analysis(readable)
             ),
@@ -3321,6 +3397,60 @@ class TarSourceRepository:
             categories=tuple(categories),
             finding=payload,
         )
+
+    def _source_marker_analysis(
+        self, readable: list[tuple[str, str]]
+    ) -> dict[str, object]:
+        """Scan decoded source for operator-configured provenance markers.
+
+        A neutral provenance signal, not a policy decision. It reports where a
+        configured marker occurs so an operator can see the match in the
+        screening pre-analysis, and emits one structured log record per marker
+        hit for out-of-band alerting. With no markers configured it is a no-op
+        and returns an empty, inexpensive result. It never changes a
+        submission's screening outcome.
+        """
+        markers = _configured_source_markers()
+        if not markers:
+            return {"configured": 0, "matched_markers": [], "locations": []}
+        locations: list[dict[str, object]] = []
+        matched: set[str] = set()
+        truncated = False
+        for path, text in readable:
+            for line_number, line in enumerate(text.splitlines(), 1):
+                for marker in markers:
+                    if marker.pattern.search(line) is None:
+                        continue
+                    matched.add(marker.marker_id)
+                    if len(locations) < _MAX_SOURCE_MARKER_LOCATIONS:
+                        locations.append(
+                            {
+                                "marker_id": marker.marker_id,
+                                "path": path,
+                                "line": line_number,
+                            }
+                        )
+                    else:
+                        truncated = True
+        if matched:
+            # One structured record per reported location: path/line detail
+            # stays in the pre-analysis; the log is the operator alert.
+            # ``identity`` is the archive sha256, and the record timestamp
+            # supplies the "when". No marker *value* or source text is logged.
+            for location in locations:
+                logger.warning(
+                    "source marker hit marker_id=%s path=%s line=%s identity=%s",
+                    location["marker_id"],
+                    location["path"],
+                    location["line"],
+                    self._archive_identity,
+                )
+        return {
+            "configured": len(markers),
+            "matched_markers": sorted(matched),
+            "locations": locations,
+            "truncated": truncated,
+        }
 
     @staticmethod
     def _generator_mirroring_analysis(
