@@ -92,6 +92,7 @@ from ditto.miner_cli.errors import (
     NameClaimRejectedError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
+    PaymentReplayedError,
     PreCheckRejectedError,
     SubmissionCooldownError,
     TransientApiError,
@@ -118,6 +119,7 @@ _ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
 _ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 _ERROR_CODE_PAYMENT_AMOUNT_MISMATCH = 3203
 _ERROR_CODE_PAYMENT_RECOVERY_EXPIRED = 3208
+_ERROR_CODE_PAYMENT_REPLAYED = 3207
 # Generator fee refusals the same proof can never overcome. 3201 (extrinsic not
 # found) is left out: an archive node that has not caught up yet reports it.
 _DEFINITIVE_GENERATOR_PAYMENT_CODES = frozenset(
@@ -298,6 +300,11 @@ class ApiClient:
             raise PaymentRecoveryExpiredError(
                 _format_error(response, prefix="upload-check")
             )
+        if (
+            response.status_code == 402
+            and envelope.get("error_code") == _ERROR_CODE_PAYMENT_REPLAYED
+        ):
+            raise PaymentReplayedError(_format_error(response, prefix="upload-check"))
         if response.status_code != 200:
             raise PreCheckRejectedError(_format_error(response, prefix="upload-check"))
         return UploadCheckResponse.model_validate(response.json())

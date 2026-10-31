@@ -275,6 +275,18 @@ class PaymentRecoveryExpiredError(PreCheckRejectedError):
     """Raised when a finalized receipt is outside its recovery window."""
 
 
+class PaymentReplayedError(PreCheckRejectedError):
+    """Raised when a finalized receipt can no longer fund this upload.
+
+    The platform answers 3207 when the proof already funded an upload with
+    other bytes, name or hotkey (often an earlier upload whose response was
+    lost), when it belongs to another hotkey, or when its owner no longer
+    matches the admission reservation. An earlier upload it funded is still
+    recovered by rerunning that exact archive; nothing makes the proof fund
+    another.
+    """
+
+
 class GeneratorPaymentRejectedError(ApiResponseError):
     """Raised when Platform definitively refuses a generator fee proof.
 
