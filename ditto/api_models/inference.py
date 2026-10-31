@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -68,6 +68,11 @@ class InferenceExchangeResponse(BaseModel):
     embedding_request_budget: Annotated[int, Field(ge=1)] | None = None
     embedding_token_budget: Annotated[int, Field(ge=1)] | None = None
     max_output_tokens: Annotated[int, Field(ge=1)] | None = None
+    # Per-run dollar cost ceiling (ditto-subnet#3271), stamped on the grant at
+    # mint. Absent from an older Platform; the broker then never confirms a
+    # 4110 as the agent's.
+    cost_ceiling_microusd: Annotated[int, Field(ge=1)] | None = None
+    cost_ceiling_mode: Literal["off", "shadow", "enforce"] | None = None
 
     @field_validator("expires_at")
     @classmethod

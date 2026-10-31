@@ -164,17 +164,24 @@ type brokerSession struct {
 	chatChargeUpperBound      uint64
 	embeddingDispatches       uint64
 	embeddingChargeUpperBound uint64
-	profileRevision           string
-	preparedAt                time.Time
-	ticketAgentID             string
-	ticketSlotID              string
-	ticketDeadline            time.Time
-	boundRunID                string
-	benchVersion              int
-	confirmationSession       bool
-	confirmationGrants        map[string]brokerConfirmationGrant
-	embeddingGrant            brokerConfirmationGrant
-	inFlight                  int
+	// Cost-ceiling evidence (ditto-subnet#3271): the grant-stamped ceiling and
+	// mode from the authenticated activation, and the highest settled ledger
+	// total the Platform reported. Absent on an older Platform, which leaves
+	// every 4110 unconfirmed.
+	costCeilingMicrousd uint64
+	costCeilingMode     string
+	ledgerCostMicrousd  uint64
+	profileRevision     string
+	preparedAt          time.Time
+	ticketAgentID       string
+	ticketSlotID        string
+	ticketDeadline      time.Time
+	boundRunID          string
+	benchVersion        int
+	confirmationSession bool
+	confirmationGrants  map[string]brokerConfirmationGrant
+	embeddingGrant      brokerConfirmationGrant
+	inFlight            int
 	// chatConcurrency is the per-source in-flight chat admission for this
 	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
 	// the run's effective case concurrency so overlapping /run calls are not
@@ -301,6 +308,11 @@ type brokerSession struct {
 	// run still fails closed, but it is validator infrastructure and keeps the
 	// miner's attempt.
 	declineEvidenceMismatches uint64
+	// costCeilingAgentDeclines is the subset of grantAgentDeclines confirmed
+	// as the cost ceiling (4110), so finalize can name the wall it spent.
+	costCeilingAgentDeclines uint64
+	// agentDeclineWall is the wall of the first confirmed agent decline.
+	agentDeclineWall allowanceWall
 	// budgetEvidenceAbsences counts terminal allowance codes received while
 	// this session had no authenticated request/token budgets. Missing evidence
 	// is not proof the harness spent the grant: it is a transport or mixed-
@@ -623,7 +635,9 @@ type inferenceBroker struct {
 	delayFP               delayFingerprintConfig
 	sleep                 func(context.Context, time.Duration) error
 	relayWait             func(string, bool)
-	terminalAgentFailure  func(string)
+	// terminalAgentFailure ends a run after its first confirmed agent
+	// decline; the second argument names the allowance wall it spent.
+	terminalAgentFailure func(string, allowanceWall)
 
 	// controlAuthMode mirrors the control plane's DITTOBENCH_CONTROL_AUTH_MODE
 	// so the broker's own check and controlAuth.wrap agree on whether the
@@ -768,10 +782,10 @@ func (b *inferenceBroker) notifyTerminalAgentFailure(session *brokerSession) {
 		return
 	}
 	session.terminalAgentFailureNotified = true
-	runID := session.boundRunID
+	runID, wall := session.boundRunID, session.agentDeclineWall
 	session.mu.Unlock()
 	if runID != "" {
-		b.terminalAgentFailure(runID)
+		b.terminalAgentFailure(runID, wall)
 	}
 }
 
@@ -1000,6 +1014,7 @@ const (
 	platformDeclineModelNotPermitted    = 4107
 	platformDeclineGrantNotExchanged    = 4108
 	platformDeclineReservationTooLarge  = 4109
+	platformDeclineCostCeilingExhausted = 4110
 )
 
 // declineFault says who a decline is attributable to. It is the whole point of
@@ -1064,6 +1079,10 @@ var declineFaultFor = map[int]declineFault{
 	// Admission no longer emits 4109; leftover codes cannot be confirmed
 	// from a byte ceiling and stay platform-fault via the evidence guard.
 	platformDeclineReservationTooLarge: declineFaultAgent,
+	// The run's dollar cost ceiling, spent by the harness's own settled
+	// inference across every lane (ditto-subnet#3271). Confirmed only against
+	// the ledger total the Platform reported on an earlier settlement.
+	platformDeclineCostCeilingExhausted: declineFaultAgent,
 }
 
 // declineIsAgentFault reports whether a platform decline code is attributable
@@ -1094,16 +1113,41 @@ func attributePlatformDeclineLocked(session *brokerSession, code int, embedding 
 	if !declineIsAgentFault(code) {
 		return false, attribution
 	}
+	if code == platformDeclineCostCeilingExhausted {
+		// The ceiling spans both lanes, so its evidence is the shared ledger
+		// total, not either lane's request/token budgets.
+		if !sessionHasCostEvidenceLocked(session) {
+			session.budgetEvidenceAbsences++
+			return false, "platform fault: no authenticated enforcing cost ceiling; will not charge the miner"
+		}
+		if costCeilingSpentLocked(session) {
+			session.grantAgentDeclines++
+			session.costCeilingAgentDeclines++
+			noteAgentDeclineWallLocked(session, code)
+			return true, "AGENT fault: the harness spent its own cost ceiling"
+		}
+		session.declineEvidenceMismatches++
+		return false, "platform fault: cost ceiling code contradicted the broker's settled ledger evidence"
+	}
 	if !sessionHasBudgetEvidenceLocked(session, embedding) {
 		session.budgetEvidenceAbsences++
 		return false, "platform fault: no authenticated budget evidence; will not charge the miner"
 	}
 	if declineMatchesBudgetEvidenceLocked(session, code, embedding, currentUpperBound) {
 		session.grantAgentDeclines++
+		noteAgentDeclineWallLocked(session, code)
 		return true, "AGENT fault: the harness spent its own allowance"
 	}
 	session.declineEvidenceMismatches++
 	return false, "platform fault: terminal allowance code contradicted the broker's budget evidence"
+}
+
+// noteAgentDeclineWallLocked records the wall of the run's first confirmed
+// agent decline, the one that ends it.
+func noteAgentDeclineWallLocked(session *brokerSession, code int) {
+	if session.agentDeclineWall == "" {
+		session.agentDeclineWall = allowanceWallFor(code)
+	}
 }
 
 // declineMatchesBudgetEvidenceLocked independently checks whether the typed
@@ -1169,6 +1213,11 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 // It uses the same settled-only bounds as the chat branch above, never a
 // body-byte ceiling, and requires authenticated chat budgets.
 func chatAllowanceSpentLocked(session *brokerSession) bool {
+	if costCeilingSpentLocked(session) {
+		// A spent cost ceiling exhausts the shared grant the same way, on
+		// whichever lane spent it.
+		return true
+	}
 	if !sessionHasBudgetEvidenceLocked(session, false) {
 		return false
 	}
@@ -1323,6 +1372,7 @@ var platformDeclineReasons = map[int]string{
 	platformDeclineModelNotPermitted:    "the grant does not pin this model",
 	platformDeclineGrantNotExchanged:    "the grant was never exchanged for a bearer",
 	platformDeclineReservationTooLarge:  "one request exceeded the whole token allowance",
+	platformDeclineCostCeilingExhausted: "the lease spent its cost ceiling",
 }
 
 // platformDeclineReason renders a decline code for an operator reading logs.
@@ -2397,6 +2447,8 @@ type brokerActivation struct {
 	EmbeddingRequestBudget uint64    `json:"embedding_request_budget,omitempty"`
 	EmbeddingTokenBudget   uint64    `json:"embedding_token_budget,omitempty"`
 	MaxOutputTokens        uint64    `json:"max_output_tokens,omitempty"`
+	CostCeilingMicrousd    uint64    `json:"cost_ceiling_microusd,omitempty"`
+	CostCeilingMode        string    `json:"cost_ceiling_mode,omitempty"`
 }
 
 type brokerConfirmationGrantWire struct {
@@ -2642,7 +2694,7 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 		len(activation.Bearer) > 4096 || grantErr != nil || activation.Generation < 1 ||
 		!activation.ExpiresAt.After(now) || activation.ExpiresAt.After(now.Add(brokerMaximumSessionTTL)) ||
 		b.platformProxyURL == "" || transportURL == "" || activation.ProxyURL != b.platformProxyURL ||
-		!validBudgetEvidence ||
+		!validBudgetEvidence || !validCostCeilingMode(activation.CostCeilingMode) ||
 		(hasRouteIdentity && (!validBrokerTicketIdentity(ticketIdentity, now) ||
 			activation.ExpiresAt.After(activation.TicketDeadline) || activation.Provider == "" ||
 			activation.ProfileRevision == "" || activation.Model == "")) {
@@ -2667,6 +2719,8 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 	session.embeddingRequestBudget = activation.EmbeddingRequestBudget
 	session.embeddingTokenBudget = activation.EmbeddingTokenBudget
 	session.maxOutputTokens = activation.MaxOutputTokens
+	session.costCeilingMicrousd = activation.CostCeilingMicrousd
+	session.costCeilingMode = activation.CostCeilingMode
 	session.ticketAgentID = activation.AgentID
 	session.ticketSlotID = activation.SlotID
 	session.ticketDeadline = activation.TicketDeadline
@@ -2678,6 +2732,9 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 		)
 	} else {
 		log.Printf("inference session %s: budget evidence absent; will not attribute 4102/4104/4109 to the agent", id)
+	}
+	if costCeilingArmedLocked(session) {
+		log.Printf("inference session %s: cost ceiling %s at %d microusd", id, session.costCeilingMode, session.costCeilingMicrousd)
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]bool{"active": true})
@@ -3765,6 +3822,7 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 		snapshot.EmbeddingDelivered++
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
+	setHarnessCostHeadersLocked(session, w.Header())
 	session.mu.Unlock()
 	writeJSON(w, http.StatusOK, decoded)
 }
@@ -3926,6 +3984,9 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 		return embeddingResponse{}, platformEmbeddingTransient{err: err}
 	}
 	defer response.Body.Close()
+	session.mu.Lock()
+	observeLedgerCostLocked(session, response.Header)
+	session.mu.Unlock()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, embeddingResponseLimit+1))
 	atCapacity := err == nil && platformEmbeddingIsAtCapacity(response)
 	if err != nil || len(responseBody) > embeddingResponseLimit || response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -4124,6 +4185,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
+		CostCeilingAgentDeclines:  session.costCeilingAgentDeclines,
 		AgentRequestRejections:    session.agentRequestRejections,
 		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
@@ -4392,6 +4454,11 @@ func (b *inferenceBroker) proxy(
 			session.mu.Unlock()
 		}
 		responseFailureClass = resp.Header.Get(minerRecoverableFailureHeader)
+		if legacyGateway == "" && trustedChatHandler == nil {
+			session.mu.Lock()
+			observeLedgerCostLocked(session, resp.Header)
+			session.mu.Unlock()
+		}
 		candidateBody, readErr := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 		_ = resp.Body.Close()
 		if readErr != nil || len(candidateBody) > 16<<20 {
@@ -4638,6 +4705,9 @@ func (b *inferenceBroker) proxy(
 			return
 		}
 	}
+	session.mu.Lock()
+	setHarnessCostHeadersLocked(session, w.Header())
+	session.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -4704,6 +4774,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
+		CostCeilingAgentDeclines:  session.costCeilingAgentDeclines,
 		AgentRequestRejections:    session.agentRequestRejections,
 		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,

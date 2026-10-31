@@ -2976,8 +2976,12 @@ func (s *server) unregisterRunCancel(runID string) {
 // Waiting for final relay accounting used to let every remaining case send the
 // same doomed request, producing hundreds of declines and occupying a scorer
 // slot long after the run could no longer succeed.
-func (s *server) failAgentInferenceRun(runID string) {
-	failure := relayFinalizeFailure(errAgentInferenceDeclined)
+func (s *server) failAgentInferenceRun(runID string, wall allowanceWall) {
+	err := errAgentInferenceDeclined
+	if wall != "" {
+		err = fmt.Errorf("%w: %w", errAgentInferenceDeclined, wall)
+	}
+	failure := relayFinalizeFailure(err)
 	_, _, transitioned := s.store.FailIfActive(
 		runID,
 		"harness exhausted its inference allowance: the platform refused an agent-attributable inference request",

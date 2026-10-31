@@ -4552,6 +4552,8 @@ class ValidatorWorker:
                 embedding_request_budget=exchange.embedding_request_budget,
                 embedding_token_budget=exchange.embedding_token_budget,
                 max_output_tokens=exchange.max_output_tokens,
+                cost_ceiling_microusd=exchange.cost_ceiling_microusd,
+                cost_ceiling_mode=exchange.cost_ceiling_mode,
             )
         except BaseException:
             await self._dittobench.cancel_inference_session(broker.session_id)

@@ -59,6 +59,10 @@ type relayHealthSnapshot struct {
 	// named an agent allowance code but this session had no authenticated
 	// request/token budgets. Missing evidence cannot confirm the code.
 	BudgetEvidenceAbsences uint64 `json:"budget_evidence_absences"`
+	// CostCeilingAgentDeclines is the subset of GrantAgentDeclines the broker
+	// confirmed as the run's dollar cost ceiling (4110). Omitted when zero so
+	// a relay without a ceiling reports the same bytes as before.
+	CostCeilingAgentDeclines uint64 `json:"cost_ceiling_agent_declines,omitempty"`
 	// AgentRequestRejections counts pre-reservation 4xx: the platform refusing
 	// the harness's request bytes (schema, size, model) without reserving
 	// capacity or contacting a provider. Already fails the run via
@@ -113,6 +117,7 @@ type relayExecutionSummary struct {
 	GrantAgentDeclines        uint64                     `json:"grant_agent_declines,omitempty"`
 	DeclineEvidenceMismatches uint64                     `json:"decline_evidence_mismatches,omitempty"`
 	BudgetEvidenceAbsences    uint64                     `json:"budget_evidence_absences,omitempty"`
+	CostCeilingAgentDeclines  uint64                     `json:"cost_ceiling_agent_declines,omitempty"`
 	AgentRequestRejections    uint64                     `json:"agent_request_rejections,omitempty"`
 	Admission                 map[string]admissionBucket `json:"admission,omitempty"`
 	CapacityExhaustions       uint64                     `json:"capacity_exhaustions,omitempty"`
@@ -495,6 +500,12 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 		// miner, no matter what else happened alongside it.
 		absences := end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences
 		if agentDeclines == denials {
+			if end.CostCeilingAgentDeclines > start.CostCeilingAgentDeclines {
+				return fmt.Errorf(
+					"%w: the harness spent its own cost ceiling (%w) %d time(s) during benchmark — the lease was alive and the platform healthy",
+					errAgentInferenceDeclined, allowanceWallCost, denials,
+				)
+			}
 			return fmt.Errorf(
 				"%w: the harness exhausted its own inference allowance %d time(s) during benchmark — the lease was alive and the platform healthy",
 				errAgentInferenceDeclined, denials,
@@ -580,6 +591,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.GrantAgentDeclines < start.GrantAgentDeclines ||
 		end.DeclineEvidenceMismatches < start.DeclineEvidenceMismatches ||
 		end.BudgetEvidenceAbsences < start.BudgetEvidenceAbsences ||
+		end.CostCeilingAgentDeclines < start.CostCeilingAgentDeclines ||
 		end.AgentRequestRejections < start.AgentRequestRejections ||
 		end.CapacityExhaustions < start.CapacityExhaustions ||
 		end.RecoveryWaits < start.RecoveryWaits ||
@@ -594,6 +606,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.GrantAgentDeclines-start.GrantAgentDeclines > end.GrantDenials-start.GrantDenials ||
 		end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches > end.GrantDenials-start.GrantDenials ||
 		end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences > end.GrantDenials-start.GrantDenials ||
+		end.CostCeilingAgentDeclines-start.CostCeilingAgentDeclines > end.GrantAgentDeclines-start.GrantAgentDeclines ||
 		(end.GrantAgentDeclines-start.GrantAgentDeclines)+(end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches)+(end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences) > end.GrantDenials-start.GrantDenials
 }
 
@@ -611,6 +624,7 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		GrantAgentDeclines:        end.GrantAgentDeclines - start.GrantAgentDeclines,
 		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,
 		BudgetEvidenceAbsences:    end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences,
+		CostCeilingAgentDeclines:  end.CostCeilingAgentDeclines - start.CostCeilingAgentDeclines,
 		AgentRequestRejections:    end.AgentRequestRejections - start.AgentRequestRejections,
 		Admission:                 admissionSince(start.Admission, end.Admission),
 		CapacityExhaustions:       end.CapacityExhaustions - start.CapacityExhaustions,
@@ -848,13 +862,21 @@ func relayFinalizeFailure(err error) *store.Failure {
 		// would spend the same allowance the same way on a fresh grant. This is
 		// one of two bins in this function that costs a miner an attempt, and
 		// every condition reaching it is one the agent controls outright.
+		diagnostics := map[string]any{
+			"budget_evidence_armed": true,
+		}
+		// Which wall was spent (ditto-subnet#3271), when the decline named
+		// one. The code stays inference_allowance_exhausted on purpose: every
+		// deployed validator already treats it as terminal.
+		var wall allowanceWall
+		if errors.As(err, &wall) && wall != "" {
+			diagnostics["wall"] = string(wall)
+		}
 		return &store.Failure{
-			Kind:      "sandbox_failure",
-			Code:      "inference_allowance_exhausted",
-			Retryable: false,
-			Diagnostics: map[string]any{
-				"budget_evidence_armed": true,
-			},
+			Kind:        "sandbox_failure",
+			Code:        "inference_allowance_exhausted",
+			Retryable:   false,
+			Diagnostics: diagnostics,
 		}
 	case errors.Is(err, errAgentRequestRejected):
 		// Terminal and the agent's, but not a spent grant: the platform refused

@@ -199,6 +199,9 @@ _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
     "max_output_tokens": "X-Ditto-Max-Output-Tokens",
 }
 _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
+_COST_CEILING_HEADER = "X-Ditto-Cost-Ceiling-Microusd"
+_COST_CEILING_MODE_HEADER = "X-Ditto-Cost-Ceiling-Mode"
+_COST_CEILING_MODES = frozenset({"off", "shadow", "enforce"})
 _CODING_AUTHORING_LEASE_MAX_BYTES = 2 << 20
 _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 _CODING_GRADING_LEASE_MAX_BYTES = 2 << 20
@@ -312,6 +315,26 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
             "inference exchange returned invalid budget evidence"
         )
     return evidence
+
+
+def _cost_ceiling_evidence(response: httpx.Response) -> dict[str, object]:
+    """Read the cost ceiling from exchange headers when the body omitted it.
+
+    Both headers or neither. Unlike the request/token budgets, a missing or
+    malformed ceiling is not a broken exchange: without it the broker simply
+    never confirms a 4110 as the agent's, which is the safe default.
+    """
+    raw_ceiling = response.headers.get(_COST_CEILING_HEADER)
+    mode = response.headers.get(_COST_CEILING_MODE_HEADER)
+    if raw_ceiling is None or mode not in _COST_CEILING_MODES:
+        return {}
+    try:
+        ceiling = int(raw_ceiling)
+    except ValueError:
+        return {}
+    if ceiling < 1:
+        return {}
+    return {"cost_ceiling_microusd": ceiling, "cost_ceiling_mode": mode}
 
 
 def _is_transient_platform_status(status_code: int) -> bool:
@@ -1868,6 +1891,8 @@ class PlatformClient:
             exchange = InferenceExchangeResponse.model_validate(response.json())
             # JSON is authoritative. Prefer it when complete so a Cloudflare
             # hop that drops X-Ditto-* headers cannot disarm the broker.
+            if exchange.cost_ceiling_mode is None:
+                exchange = exchange.model_copy(update=_cost_ceiling_evidence(response))
             json_evidence = _json_budget_evidence(exchange)
             if json_evidence is not None:
                 return exchange

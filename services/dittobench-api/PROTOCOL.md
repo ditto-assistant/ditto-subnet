@@ -312,6 +312,23 @@ attributed exactly; a concurrent run records the candidate set. Harnesses built
 on `ditto-harness`'s `ChatModelConfig::OpenAiCompat` can set headers fixed at model construction; a client shared across cases
 cannot dynamically re-stamp them. Prefer the per-case `inference_base_url`.
 
+**Run cost ceiling.** The platform may stamp one dollar-denominated ceiling on
+a run's inference grant that spans every lane (chat and embeddings), counted in
+ledger micro-USD: receipted units at the grant's stamped list prices, never
+the provider's own bill. While it is armed (mode `shadow` or `enforce`) every
+successful chat and embedding response the broker returns carries
+`X-Ditto-Cost-Spent-Microusd` (settled ledger cost so far) and
+`X-Ditto-Cost-Ceiling-Microusd`, so a harness can pace itself. Both are
+informational and absent when no ceiling is armed. Under `enforce`, the first
+call admitted after the settled cost reaches the ceiling is refused, and the
+harness sees the same `502` a spent token budget produces; the call that crossed
+the ceiling still completes. The run then ends as
+`sandbox_failure / inference_allowance_exhausted` (non-retryable) with
+`diagnostics.wall = "cost"`. The scorer charges this to the agent only when its
+own record of the platform's settled ledger total confirms the ceiling was
+reached; a platform refusal (`4110 COST_CEILING_EXHAUSTED`) it cannot confirm
+stays a no-fault infrastructure failure and the run is re-leased.
+
 **v13 attribution contract.** Under `bench_version >= 13` a chat completion
 made while several cases are in flight that names no case (neither the
 case-scoped `inference_base_url` nor `X-Ditto-Case-Id`) is a harness fault, not

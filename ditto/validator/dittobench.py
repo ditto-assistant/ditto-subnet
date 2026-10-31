@@ -977,6 +977,8 @@ class DittobenchClient:
         embedding_request_budget: int | None = None,
         embedding_token_budget: int | None = None,
         max_output_tokens: int | None = None,
+        cost_ceiling_microusd: int | None = None,
+        cost_ceiling_mode: str | None = None,
     ) -> None:
         """Deliver the platform capability directly to the trusted broker."""
         try:
@@ -1003,6 +1005,8 @@ class DittobenchClient:
                 ("embedding_request_budget", embedding_request_budget),
                 ("embedding_token_budget", embedding_token_budget),
                 ("max_output_tokens", max_output_tokens),
+                ("cost_ceiling_microusd", cost_ceiling_microusd),
+                ("cost_ceiling_mode", cost_ceiling_mode),
             ):
                 if value is not None:
                     activation[name] = value
