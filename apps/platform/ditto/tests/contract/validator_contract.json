@@ -18,7 +18,15 @@
         "default": null
       },
       "download_url": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "expires_at": {
         "format": "date-time",
@@ -103,7 +111,6 @@
     "required": [
       "agent_id",
       "sha256",
-      "download_url",
       "expires_at"
     ],
     "type": "object"
@@ -7940,6 +7947,10 @@
               }
             ],
             "default": null
+          },
+          "source_free_screened_images": {
+            "default": false,
+            "type": "boolean"
           },
           "source_revision": {
             "anyOf": [
