@@ -370,7 +370,18 @@ func providerRetryDelay(policy providerRetryPolicy, result *providerHTTPResult, 
 		return 0, false
 	}
 	if backpressure {
-		return confirmationBackpressureDelay(result.header), true
+		delay := confirmationBackpressureDelay(result.header)
+		if policy.retryTransient {
+			// Never sooner than the provider asked, but never in lockstep either:
+			// a short Retry-After ("1") alone rides out only about a second, which
+			// is how bundle 0fb48285 ended on 2026-10-31 -- a receipt-free 429
+			// re-sent once after ~1s, still rate-limited, case 1 of 48. Take the
+			// longer of the provider's floor and the jittered exponential backoff.
+			if jittered := confirmationTransientDelay(policy, attempts); jittered > delay {
+				delay = jittered
+			}
+		}
+		return delay, true
 	}
 	return confirmationTransientDelay(policy, attempts), true
 }
