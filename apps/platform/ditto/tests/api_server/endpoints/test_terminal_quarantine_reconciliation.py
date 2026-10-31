@@ -863,6 +863,50 @@ async def test_normal_preview_refused_when_agent_turns_terminal_before_execute(
     assert await _resolution_count(session_maker, quarantine_id) == 0
 
 
+async def test_reconciliation_executes_with_failed_release_guards_attached(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Guards carried from the batch context never contradict the preview.
+
+    Execution read the failed-release attempt and score guards before it
+    classified the reconciliation, so a ghost row the preview had just called
+    ready came back as a conflict naming a state change that never happened
+    (ditto-subnet#3069).
+    """
+    agent_id, sha256, quarantine_id = await _seed(
+        session_maker, status=AgentStatus.BANNED, ath_resolution="reject"
+    )
+    _install(app, session_maker)
+    decision = {
+        **_decision(agent_id, sha256, quarantine_id),
+        "expected_attempt_id": str(uuid4()),
+        "expected_score_count": 0,
+    }
+    preview = await client.post(
+        "/api/v1/admin/screening-quarantines/batch-preview",
+        json={"decisions": [decision]},
+        headers=_HEADERS,
+    )
+    item = preview.json()["items"][0]
+    assert (item["disposition"], item["terminal_reconciliation"]) == ("ready", True)
+
+    executed = await client.post(
+        "/api/v1/admin/screening-quarantines/batch-resolve",
+        json={
+            "decisions": [decision],
+            "preview_token": preview.json()["preview_token"],
+            "confirmed": True,
+        },
+        headers=_HEADERS,
+    )
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["items"][0]["status"] == "applied"
+    assert await _active_quarantine_count(session_maker, agent_id) == 0
+    assert await _resolution_count(session_maker, quarantine_id) == 1
+
+
 @pytest.mark.parametrize("change", ["new_ruling", "turned_terminal"])
 async def test_terminal_state_change_under_the_lock_refuses_the_item(
     app: FastAPI,

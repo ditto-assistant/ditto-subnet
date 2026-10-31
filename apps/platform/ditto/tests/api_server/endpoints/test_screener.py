@@ -13251,6 +13251,77 @@ class TestQuarantineReviewContext:
                 == 0
             )
 
+    @pytest.mark.parametrize("resolution", ["release", "rescreen"])
+    async def test_guards_on_an_active_quarantine_name_the_row_not_a_state_change(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        resolution: str,
+    ) -> None:
+        """An active row refuses the failed-release guards by naming itself.
+
+        Operators carry expected_attempt_id and expected_score_count from the
+        batch context into every decision. The refusal used to read as a
+        concurrent conflict, so the same guards were re-derived and resubmitted
+        against a row that never accepted them (ditto-subnet#3069).
+        """
+        agent_id, ctx = await self._quarantine(app, client, session_maker)
+        assert ctx["response"].status_code == 200
+        listing = await client.get(
+            "/api/v1/admin/screening-quarantines", headers=_ADMIN_HEADERS
+        )
+        row = listing.json()["items"][0]
+        unguarded = {
+            "quarantine_id": row["quarantine_id"],
+            "expected_agent_id": str(agent_id),
+            "expected_artifact_sha256": row["artifact_sha256"],
+            "resolution": resolution,
+            "reason": "Source review cleared the held submission for scoring",
+        }
+        ready = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [unguarded]},
+        )
+        assert ready.json()["ready_count"] == 1, ready.text
+
+        guarded = {
+            **unguarded,
+            "expected_attempt_id": str(uuid4()),
+            "expected_score_count": 0,
+        }
+        blocked = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [guarded]},
+        )
+        assert blocked.json()["blocked_count"] == 1, blocked.text
+        message = blocked.json()["items"][0]["message"]
+        assert "omit both guards" in message
+        assert "state changed" not in message
+        if resolution == "release":
+            assert "this active quarantine on a quarantined agent" in message
+        else:
+            assert "apply only to a release" in message
+
+        executed = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-resolve",
+            headers=_ADMIN_HEADERS,
+            json={
+                "decisions": [guarded],
+                "preview_token": blocked.json()["preview_token"],
+                "confirmed": True,
+            },
+        )
+        assert executed.status_code == 200, executed.text
+        assert executed.json()["failed_count"] == 1
+        assert executed.json()["items"][0]["message"] == message
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.QUARANTINED
+
     async def test_batch_context_and_signed_preview_reject_changed_decisions(
         self,
         app: FastAPI,
