@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.416.3 (2026-10-31)
+
+### Bug Fixes
+
+- Stop distributing source tarballs to validators
+  ([#3295](https://github.com/ditto-assistant/ditto-subnet/pull/3295),
+  [`e2bc57a`](https://github.com/ditto-assistant/ditto-subnet/commit/e2bc57a03470e268a73eaf1662f5a9ddbd08cdbe))
+
+
 ## v0.416.2 (2026-10-31)
 
 ### Bug Fixes
