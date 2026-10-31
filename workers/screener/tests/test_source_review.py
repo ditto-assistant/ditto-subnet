@@ -7769,3 +7769,72 @@ def test_parse_review_resolves_runtime_paths_only_for_test_directory_citations(
     )
 
     assert observation.risk_level == "high"
+
+
+def test_source_marker_scan_is_noop_without_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.delenv("SCREENER_SOURCE_MARKER_PATTERNS", raising=False)
+    repo = TarSourceRepository(str(_archive(tmp_path, "fn main() {}\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers == {"configured": 0, "matched_markers": [], "locations": []}
+
+
+def test_source_marker_scan_reports_hits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_MARKER_PATTERNS",
+        '[{"id":"alpha","pattern":"CANARY_[0-9a-f]{6}"},'
+        '{"id":"beta","pattern":"never-naturally-written-phrase"}]',
+    )
+    source = (
+        "fn main() {\n"
+        '    let _ = "CANARY_abc123";\n'
+        "    // never-naturally-written-phrase\n"
+        "}\n"
+    )
+    repo = TarSourceRepository(str(_archive(tmp_path, source)))
+    with caplog.at_level("WARNING"):
+        markers = repo.review_leads()["source_markers"]
+    assert markers["configured"] == 2
+    assert markers["matched_markers"] == ["alpha", "beta"]
+    hit_markers = {loc["marker_id"] for loc in markers["locations"]}
+    assert hit_markers == {"alpha", "beta"}
+    assert all(loc["path"] == "src/main.rs" for loc in markers["locations"])
+    assert any("source marker hit" in record.message for record in caplog.records)
+
+
+def test_source_marker_scan_drops_invalid_patterns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    # A malformed regex and a non-dict entry are dropped; the valid one stays.
+    monkeypatch.setenv(
+        "SCREENER_SOURCE_MARKER_PATTERNS",
+        '[{"id":"bad","pattern":"("},"notadict",{"id":"good","pattern":"ZZTOKEN"}]',
+    )
+    repo = TarSourceRepository(str(_archive(tmp_path, "let x = ZZTOKEN;\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers["configured"] == 1
+    assert markers["matched_markers"] == ["good"]
+
+
+def test_source_marker_scan_tolerates_malformed_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import ditto_screener.source_review as source_review
+
+    source_review._configured_source_markers_cached.cache_clear()
+    monkeypatch.setenv("SCREENER_SOURCE_MARKER_PATTERNS", "{not json")
+    repo = TarSourceRepository(str(_archive(tmp_path, "fn main() {}\n")))
+    markers = repo.review_leads()["source_markers"]
+    assert markers == {"configured": 0, "matched_markers": [], "locations": []}
