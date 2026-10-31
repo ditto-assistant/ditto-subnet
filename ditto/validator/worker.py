@@ -174,6 +174,7 @@ from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
     CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_approval import (
     verify_follower_policy_approval,
@@ -998,6 +999,10 @@ class ValidatorWorker:
             else DEFAULT_RESOURCE_CEILINGS
         )
         self._constrained_resources: tuple[ConstrainedResource, ...] = ()
+        # The harness memory cap host-memory admission sizes against: the
+        # published envelope until a lease stamps the live Platform value.
+        self._sandbox_memory_limit_mib = runtime_envelope().memory_limit_mib
+        self._memory_admitted_slots_logged: int | None = None
         # Opaque per-run token for the active ticket, learned from the first
         # scorer snapshot that carries a run id (None for the pre-run stages).
         # Rides every published BenchmarkProgress so the platform can tell a
@@ -1577,7 +1582,11 @@ class ValidatorWorker:
                             self._healthy_slots.discard(slot_id)
                             if any(
                                 code in str(error)
-                                for code in ("sandbox_oom", "sandbox_tmpfs_exhausted")
+                                for code in (
+                                    "sandbox_oom",
+                                    "sandbox_tmpfs_exhausted",
+                                    "host_memory_pressure",
+                                )
                             ):
                                 self._resource_blocked_until[slot_id] = (
                                     time.monotonic() + _RESOURCE_SLOT_RECOVERY_SECONDS
@@ -1669,6 +1678,9 @@ class ValidatorWorker:
         if self._admission != "accepting":
             return set()
         scorer_capacity = int(getattr(self._dittobench, "full_run_capacity", 1))
+        memory_slots = self._memory_admitted_slots()
+        if memory_slots is not None and memory_slots < scorer_capacity:
+            scorer_capacity = memory_slots
         unblocked = sorted(
             slot_id
             for slot_id in self._slots
@@ -1683,6 +1695,39 @@ class ValidatorWorker:
                 scorer_capacity,
             )
         return set(unblocked[:scorer_capacity])
+
+    def _memory_admitted_slots(self) -> int | None:
+        """Slots whose harness caps fit in host memory less the reserve.
+
+        ``None`` when the host's memory is unobserved (no collector, or a probe
+        failure): absence of evidence never stops a validator from working.
+        """
+        if self._system_metrics is None:
+            return None
+        try:
+            specs = self._system_metrics.host_specs()
+        except Exception:  # noqa: BLE001 - telemetry must never gate work
+            return None
+        if not isinstance(specs, HostSpecs):
+            return None
+        admitted = self._resource_ceilings.memory_admitted_slots(
+            specs.memory_total_mib, self._sandbox_memory_limit_mib
+        )
+        if (
+            admitted < len(self._slots)
+            and admitted != self._memory_admitted_slots_logged
+        ):
+            logger.warning(
+                "host memory admits %s of %s configured slot(s): %s MiB host, "
+                "%s MiB reserve, %s MiB harness cap",
+                admitted,
+                len(self._slots),
+                specs.memory_total_mib,
+                self._resource_ceilings.host_memory_reserve_mib,
+                self._sandbox_memory_limit_mib,
+            )
+        self._memory_admitted_slots_logged = admitted
+        return admitted
 
     async def _scoring_preflight(self) -> bool:
         """Functionally probe scorer dependencies before requesting a lease."""
@@ -3643,6 +3688,11 @@ class ValidatorWorker:
                 else None
             ),
         )
+        if lease.benchmark_runtime is not None:
+            # Host-memory admission sizes later claims against the live cap.
+            self._sandbox_memory_limit_mib = (
+                lease.benchmark_runtime.sandbox_memory_limit_mib
+            )
         slot_token = _CURRENT_SLOT.set(job.slot_id)
         slot = self._slot_state()
         slot.revoked.clear()

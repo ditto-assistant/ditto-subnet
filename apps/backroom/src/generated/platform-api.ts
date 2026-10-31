@@ -28023,7 +28023,7 @@ export interface components {
              * Hold Failure Code
              * @description The agreed machine cause behind an 'operator_hold', when every remaining slot reports the same one, drawn from the same allowlist as a validation attempt's failure_code. Null is the ordinary case and means the cause is mixed, unnamed or stale: the row is unattributed rather than proven to be a fleet failure, and must not be described as one.
              */
-            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
             /**
              * Last Scored At
              * @description When the platform most recently recorded a score (UTC).
@@ -28167,7 +28167,7 @@ export interface components {
              * Terminal Failure Code
              * @description The agreed machine cause behind a 'terminal_artifact_failure', drawn from the same allowlist as a validation attempt's failure_code. Null for every other disposition. Raw validator diagnostics are never published here.
              */
-            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
             /**
              * Validator Queue Gate
              * @description Why this submission cannot be leased on the next poll despite its rank, or null when nothing holds it. 'previous_generation' is retired-era work the fleet serves only once the current era drains; 'owner_serialized' means another submission from the same paid owner is using the owner's validator slot, so this one waits while any other owner has eligible work -- rotating hotkeys does not buy a second slot, though a validator that finds nothing else eligible anywhere may still lease it rather than idle, up to the operator's per-owner limit; 'similarity_serialized' means a near-identical submission is already using this one's share of fleet capacity, whichever key paid for it -- a queue-fairness wait and nothing more, carrying no claim that either submission is illegitimate, and it clears on its own when the other lease ends; 'not_leasable' means the allocator's candidate filter excludes it (no versioned dataset, no eligible screened image, withdrawn, not admitted to this era, or every quorum slot already occupied).
@@ -31551,7 +31551,7 @@ export interface components {
             /** Bench Version */
             bench_version: number;
             /** Hold Failure Code */
-            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
             /**
              * Miner Hotkey
              * @description Submitting miner's SS58 hotkey.
@@ -31588,7 +31588,7 @@ export interface components {
              */
             submitted_at: string;
             /** Terminal Failure Code */
-            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
             /** Version */
             version?: number | null;
         };
@@ -32879,7 +32879,7 @@ export interface components {
             /** Failed At */
             failed_at?: string | null;
             /** Failure Code */
-            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
             /** Failure Reason */
             failure_reason?: ("infrastructure" | "scoring_error" | "sandbox_oom") | null;
             /**
@@ -33115,7 +33115,7 @@ export interface components {
              * Hold Failure Code
              * @description Allowlisted machine cause behind an operator hold, when every remaining slot agrees on one. Null means the hold is unattributed, not that the fleet is at fault.
              */
-            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            hold_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
             /**
              * Retry After
              * @description Earliest UTC time an expired ticket may be re-leased.
@@ -33131,7 +33131,7 @@ export interface components {
              * Terminal Failure Code
              * @description Allowlisted machine cause behind a terminal disposition, from the same set as a validation attempt's ``failure_code``.
              */
-            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded") | null;
+            terminal_failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent" | "request_too_large" | "invalid_json" | "invalid_schema" | "stale_session" | "model_not_allowed" | "grant_not_servable" | "grant_rate_denied" | "platform_capacity" | "provider_failure" | "provider_outage_parked" | "seed_deadline_exceeded" | "harness_oom" | "host_memory_pressure" | "harness_killed_137") | null;
         };
         /**
          * PublicValidatorScore
@@ -36595,6 +36595,11 @@ export interface components {
             precheck_reason_code?: string | null;
             /** @description Immutable review posture selected only for this claimed operator canary. Null uses the worker's normal effective review settings. */
             review_settings_override?: components["schemas"]["ScreenerReviewSettingsOverride"] | null;
+            /**
+             * Sandbox Memory Limit Mib
+             * @description The live harness memory cap validators apply to scored leases, stamped at claim time so the runtime probe runs at the same cap. Null from an older Platform; the worker then uses the published runtime envelope value.
+             */
+            sandbox_memory_limit_mib?: number | null;
             scored_runtime_evidence?: components["schemas"]["ScoredRuntimeEvidenceLease"] | null;
             /**
              * Sha256

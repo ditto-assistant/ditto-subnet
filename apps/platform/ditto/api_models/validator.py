@@ -474,9 +474,12 @@ branches on it: ``infrastructure`` earns a bounded compensating grant plus an
 escalating cooldown, so a validator-side outage neither spends the agent's
 genuine attempt budget nor hammers the failing provider; ``scoring_error`` is
 the agent's own failure and consumes an attempt with an immediate reissue.
-``sandbox_oom`` is an observed sandbox memory exhaustion: it consumes the
-failed attempt, records a public-safe telemetry signal, and applies the normal
-agent-failure cooldown so another eligible harness runs next. ``infrastructure``
+``sandbox_oom`` with ``failure_detail`` ``harness_oom`` is the harness reaching
+its own published memory cap on a host with headroom (docs/RUNTIME-ENVELOPE.md):
+it consumes the failed attempt, records a public-safe telemetry signal, and
+applies the normal agent-failure cooldown so another eligible harness runs next.
+Any other ``sandbox_oom`` (a validator predating the deterministic rule) is
+parked as ``infrastructure``. ``infrastructure``
 maps to the validator's ``ValidatorInfrastructureError`` sweep-ending branch;
 ``scoring_error`` maps to other ``DittobenchError`` scoring failures. These
 values are the wire contract shared verbatim with ditto-subnet (which emits
@@ -485,6 +488,9 @@ them).
 Being low-cardinality is also what makes it useless for diagnosis, which is what
 ``FailJobRequest.failure_detail`` exists to carry.
 """
+
+HARNESS_OOM_FAILURE_DETAIL = "harness_oom"
+"""The only ``sandbox_oom`` detail Platform charges to the miner."""
 
 FAILURE_DETAIL_MAX_LENGTH = 4096
 """Cap on ``FailJobRequest.failure_detail``.

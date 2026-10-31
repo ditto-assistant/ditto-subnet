@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -61,6 +62,19 @@ LONGMEM_DATASET_URL = (
 )
 LONGMEM_CONDITION = "longmemeval-s-cleaned-native-memory-tools-v2"
 TERMINAL_STATUSES = {"done", "failed"}
+# The published runtime envelope (docs/RUNTIME-ENVELOPE.md). A standalone
+# starter-kit checkout lacks the monorepo copy and uses these fallbacks, which
+# mirror the published values.
+RUNTIME_ENVELOPE_PATH = (
+    REPO_ROOT
+    / "packages"
+    / "ditto-screening-protocol"
+    / "ditto_screening_protocol"
+    / "data"
+    / "runtime_envelope.json"
+)
+_ENVELOPE_FALLBACK = {"memory_limit_mib": 8192, "cpus": 2, "case_concurrency": 8}
+MEMORY_WARN_FRACTION = 0.85
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]+"),
     re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s]+"),
@@ -541,10 +555,111 @@ def scorer_environment(tmp: Path, broker_port: int) -> dict[str, str]:
     environment["DITTOBENCH_BROKER_PORT"] = str(broker_port)
     environment["DITTOBENCH_PRIVATE_ARTIFACT_DIR"] = str(private_dir)
     environment["DITTOBENCH_ARTIFACT_DIR"] = str(artifact_dir)
-    # One case at a time is friendlier to a laptop-sized local Ollama while
-    # preserving deterministic score semantics (latency is not scored).
-    environment.setdefault("DITTOBENCH_V8_CASE_CONCURRENCY", "1")
+    # Validators overlap this many /run calls on one harness, so practice does
+    # too: a harness that shares state across concurrent cases, or whose peak
+    # memory is the sum of eight cases, must fail here first. An explicit
+    # DITTOBENCH_V8_CASE_CONCURRENCY still wins (with a warning in run()).
+    environment.setdefault(
+        "DITTOBENCH_V8_CASE_CONCURRENCY", str(runtime_envelope()["case_concurrency"])
+    )
     return environment
+
+
+def runtime_envelope() -> dict[str, int]:
+    """Memory cap, CPUs and case concurrency from the published envelope."""
+    try:
+        raw = json.loads(RUNTIME_ENVELOPE_PATH.read_text(encoding="utf-8"))
+        return {
+            "memory_limit_mib": int(raw["harness"]["memory_limit_mib"]),
+            "cpus": int(raw["harness"]["cpus"]),
+            "case_concurrency": int(raw["concurrency"]["case_concurrency"]),
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(_ENVELOPE_FALLBACK)
+
+
+def process_group_rss_bytes(pgid: int) -> int:
+    """Resident memory of every process in ``pgid`` (portable ``ps``)."""
+    completed = subprocess.run(
+        ["ps", "-A", "-o", "pgid=,rss="], capture_output=True, text=True, check=False
+    )
+    total_kib = 0
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == str(pgid) and fields[1].isdigit():
+            total_kib += int(fields[1])
+    return total_kib * 1024
+
+
+def store_bytes(tmp: Path) -> int:
+    """The harness store size. Validators keep it in the /tmp tmpfs, whose pages
+    count against the same memory cap as the process."""
+    return sum(
+        path.stat().st_size for path in tmp.glob("rehearsal.db*") if path.is_file()
+    )
+
+
+class HarnessMemoryWatch:
+    """Sample the harness's resident memory plus its store against the cap.
+
+    Practice runs the harness as a host process, so the kernel will not OOM-kill
+    it at the validator cap. This reports the same number the validator's cgroup
+    would charge and fails the rehearsal when it crosses the published cap, so
+    an over-cap harness is found here rather than on a scored lease.
+    """
+
+    def __init__(self, pgid: int, tmp: Path, *, interval: float = 1.0) -> None:
+        self.pgid = pgid
+        self.tmp = tmp
+        self.interval = interval
+        self.peak_bytes = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def sample(self) -> None:
+        used = process_group_rss_bytes(self.pgid) + store_bytes(self.tmp)
+        self.peak_bytes = max(self.peak_bytes, used)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.sample()
+
+    def start(self) -> HarnessMemoryWatch:
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
+def enforce_memory_envelope(peak_bytes: int, cap_mib: int) -> str:
+    """Report peak usage against the cap; raise past it like a validator would."""
+    peak_mib = peak_bytes / (1024 * 1024)
+    line = (
+        f"harness memory peak {peak_mib:.0f} MiB (RSS + store) of the "
+        f"{cap_mib} MiB validator cap ({100 * peak_mib / cap_mib:.0f}%)"
+    )
+    if peak_mib >= cap_mib:
+        raise RehearsalError(
+            f"harness_oom (local): {line}. A validator kills this harness and "
+            "charges the attempt; see docs/RUNTIME-ENVELOPE.md"
+        )
+    if peak_mib >= MEMORY_WARN_FRACTION * cap_mib:
+        line += " -- WARNING: little headroom before a scored OOM"
+    return line
+
+
+def pin_harness_cpus(pid: int, cpus: int) -> str | None:
+    """Pin the harness to the validator's CPU count where the OS allows it."""
+    if not hasattr(os, "sched_setaffinity"):
+        return (
+            f"note: this OS cannot pin the harness to {cpus} CPUs; validators "
+            f"give it {cpus}, so local latency is optimistic"
+        )
+    available = sorted(os.sched_getaffinity(0))
+    os.sched_setaffinity(pid, set(available[:cpus]))
+    return None
 
 
 def longmem_judge_context() -> str:
@@ -1082,6 +1197,19 @@ def run(args: argparse.Namespace) -> int:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
+                envelope = runtime_envelope()
+                cpu_note = pin_harness_cpus(harness.pid, envelope["cpus"])
+                if cpu_note:
+                    print(cpu_note, flush=True)
+                concurrency = int(harness_env["DITTOBENCH_V8_CASE_CONCURRENCY"])
+                if concurrency < envelope["case_concurrency"]:
+                    print(
+                        f"warning: case concurrency {concurrency} is below the "
+                        f"validators' {envelope['case_concurrency']}; peak memory "
+                        "and shared-state bugs under overlap are not exercised",
+                        flush=True,
+                    )
+                memory_watch = HarnessMemoryWatch(harness.pid, tmp).start()
                 api = subprocess.Popen(
                     [str(api_binary), "-port", str(api_port)],
                     cwd=API_DIR,
@@ -1113,6 +1241,14 @@ def run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
                 completed = poll_run(api_url, run_id, timeout=args.timeout)
+                memory_watch.stop()
+                memory_watch.sample()
+                print(
+                    enforce_memory_envelope(
+                        memory_watch.peak_bytes, envelope["memory_limit_mib"]
+                    ),
+                    flush=True,
+                )
                 if completed.get("status") != "done":
                     failure = completed.get("failure") or {}
                     detail = (

@@ -3954,6 +3954,9 @@ PublicValidationFailureCode = Literal[
     "provider_failure",
     "provider_outage_parked",
     "seed_deadline_exceeded",
+    "harness_oom",
+    "host_memory_pressure",
+    "harness_killed_137",
 ]
 
 _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
@@ -3961,6 +3964,9 @@ _PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published memory cap while the host
+        # kept headroom (docs/RUNTIME-ENVELOPE.md).
+        "harness_oom",
     }
 )
 _ADMISSION_PUBLIC_CODES: frozenset[str] = frozenset(
@@ -3988,6 +3994,9 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
         # reading it learns why a run stopped without learning anything the
         # platform keeps private.
         "provider_outage_parked",
+        # An OOM kill the scorer could not pin on the harness's own cap: the
+        # host ran short, or the cgroup never reached its limit.
+        "host_memory_pressure",
     }
 )
 
@@ -3997,7 +4006,12 @@ _PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
 # overloaded validator host and by a slow harness (ditto-subnet#2921). The code
 # says only which stage stopped the run, which reveals nothing about the
 # submission, so the dashboard keeps its neutral "unattributed" hold copy.
-_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset({"seed_deadline_exceeded"})
+#
+# ``harness_killed_137`` is the same shape: a SIGKILL with no OOM flag names the
+# stage, not the sender.
+_PUBLIC_UNATTRIBUTED_CODES: frozenset[str] = frozenset(
+    {"seed_deadline_exceeded", "harness_killed_137"}
+)
 
 
 def public_validation_failure_code(

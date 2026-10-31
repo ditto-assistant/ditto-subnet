@@ -76,3 +76,9 @@ def test_cli_parses_the_dockerfile_exactly_as_the_screener() -> None:
     assert _function_body(
         Path(tar_validator.__file__).read_text(), "_dockerfile_instructions"
     ) == _function_body(SCREENER_GATE.read_text(), "_dockerfile_instructions")
+
+
+def test_published_envelope_states_the_archive_cap() -> None:
+    from ditto_screening_protocol.runtime_envelope import runtime_envelope
+
+    assert runtime_envelope().source_bytes == MAX_UNPACKED_BYTES

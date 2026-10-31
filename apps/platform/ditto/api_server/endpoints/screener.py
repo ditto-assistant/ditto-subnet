@@ -4022,6 +4022,14 @@ async def claim(
             reason="scorer_cohort_unavailable",
             required_policy=required_policy,
         )
+    # The runtime probe must run at the harness cap scored leases carry, read
+    # from the same live board, so a screening OOM and a scored OOM mean the
+    # same thing (docs/RUNTIME-ENVELOPE.md).
+    sandbox_memory_limit_mib = (
+        await request.app.state.inference_concurrency_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+    ).benchmark_runtime.sandbox_memory_limit_mib
     items = [
         ScreenerQueueItem(
             agent_id=agent.agent_id,
@@ -4076,6 +4084,7 @@ async def claim(
                 else None
             ),
             lineage_parent_agent_id=attempt.lineage_parent_agent_id,
+            sandbox_memory_limit_mib=sandbox_memory_limit_mib,
         )
         for agent, attempt, duplicate_of in claimed
     ]

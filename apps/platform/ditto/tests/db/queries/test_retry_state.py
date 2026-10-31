@@ -120,6 +120,27 @@ def test_named_agent_failures_are_withdraw_not_retry() -> None:
     assert selected == []
 
 
+def test_unflagged_137_is_retried_once_then_the_harnesses() -> None:
+    """A SIGKILL with no OOM flag is no-fault on one validator; the same kill
+    on a second validator is the harness's own crash."""
+    scores = [Score(validator_hotkey="scored-0")]
+    killed = {
+        "failure_reason": "infrastructure",
+        "failure_detail": "harness_killed_137",
+    }
+    once = [
+        _ticket(validator_hotkey="validator-0", **killed),
+        _ticket(
+            validator_hotkey="validator-1",
+            failure_reason="infrastructure",
+            failure_detail="host_memory_pressure",
+        ),
+    ]
+    assert is_agent_attributable_exhaustion(scores=scores, tickets=once) is False
+    twice = [_ticket(validator_hotkey=f"validator-{i}", **killed) for i in range(2)]
+    assert is_agent_attributable_exhaustion(scores=scores, tickets=twice) is True
+
+
 def test_missing_detail_stays_on_the_retry_path() -> None:
     tickets = [
         _ticket(validator_hotkey="validator-0", failure_detail=None, failed_at=None),

@@ -1867,6 +1867,8 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
     [
         "sandbox_oom",
         "sandbox_tmpfs_exhausted",
+        "host_memory_pressure",
+        "harness_killed_137",
         "model_relay_unavailable",
     ],
 )
@@ -1894,14 +1896,13 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        expected_error = (
-            SandboxOomError if code == "sandbox_oom" else ValidatorInfrastructureError
-        )
-        expected_message = "memory allowance" if code == "sandbox_oom" else code
-        with pytest.raises(expected_error, match=expected_message) as caught:
+        # Every OOM the scorer could not pin on the harness's own cap --
+        # including a legacy scorer's unclassified sandbox_oom -- is no-fault.
+        with pytest.raises(ValidatorInfrastructureError, match=code) as caught:
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
                 "run-1", expected_bench_version=8
             )
+    assert not isinstance(caught.value, SandboxOomError)
     assert private_marker not in str(caught.value)
     # The scorer's own classifier survives the raise. All five codes collapse
     # into one `infrastructure` hand-back, so without this the specific code
@@ -1910,6 +1911,33 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
     # wire as `failure_detail` and lands on the ticket.
     assert caught.value.code == code
     assert failure_detail(caught.value) == code
+
+
+@pytest.mark.asyncio
+async def test_harness_oom_at_own_cap_is_the_agents_sandbox_oom() -> None:
+    """The scorer's terminal harness_oom verdict is the only charged OOM."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "harness exceeded its published sandbox memory cap",
+                "failure": {
+                    "kind": "sandbox_failure",
+                    "code": "harness_oom",
+                    "retryable": False,
+                    "diagnostics": {"oom_killed": True},
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(SandboxOomError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert failure_detail(caught.value) == "harness_oom"
 
 
 @pytest.mark.asyncio

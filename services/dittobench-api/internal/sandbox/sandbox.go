@@ -157,6 +157,13 @@ type Handle struct {
 	// deliberately or accidentally. Unexported: it is redaction state, not part
 	// of the handle's contract.
 	injectedSecrets []string
+	// memoryLimitBytes is the --memory cap this container runs under, the
+	// denominator of the harness_oom rule. Zero when it could not be parsed.
+	memoryLimitBytes uint64
+	// watch samples cgroup and host memory while the container lives, so a
+	// harness the kernel kills -- taking its cgroup with it -- still leaves
+	// the evidence that decides whose fault the kill was.
+	watch *memoryWatch
 }
 
 // RuntimeDiagnostics is bounded, source-free evidence captured before teardown.
@@ -171,20 +178,74 @@ type RuntimeDiagnostics struct {
 	MemoryEvents       map[string]uint64 `json:"memory_events,omitempty"`
 	TmpfsUsedBytes     *uint64           `json:"tmpfs_used_bytes,omitempty"`
 	TmpfsCapacityBytes *uint64           `json:"tmpfs_capacity_bytes,omitempty"`
+	// MemoryLimitBytes is the harness's own --memory cap.
+	MemoryLimitBytes *uint64 `json:"memory_limit_bytes,omitempty"`
+	// HostMemAvailableMinBytes is the lowest host MemAvailable sampled in the
+	// window that ended when the container stopped (or now, if it is alive).
+	HostMemAvailableMinBytes *uint64 `json:"host_mem_available_min_bytes,omitempty"`
 }
 
-// InfrastructureCode returns a stable retry classification only for evidence
-// that the validator-owned resource envelope was exhausted. An ordinary
-// non-zero process exit remains a miner/runtime failure.
-func (d RuntimeDiagnostics) InfrastructureCode() string {
+// Stable resource failure codes. docs/RUNTIME-ENVELOPE.md publishes each rule.
+const (
+	// CodeHarnessOOM is the miner's: the harness reached its own published cap
+	// while the host still had headroom.
+	CodeHarnessOOM = "harness_oom"
+	// CodeHostMemoryPressure is the validator's: a kill the evidence cannot
+	// pin on the harness's own cap, or one taken while the host was short.
+	CodeHostMemoryPressure = "host_memory_pressure"
+	// CodeHarnessKilled137 is a SIGKILL with no OOM flag. Nothing proves who
+	// sent it, so it is infrastructure; Platform treats a repeat on a second
+	// validator as the harness's.
+	CodeHarnessKilled137 = "harness_killed_137"
+	// CodeTmpfsExhausted is unchanged: /tmp filled to its declared size.
+	CodeTmpfsExhausted = "sandbox_tmpfs_exhausted"
+)
+
+// ResourceFailure is one deterministic verdict from sandbox evidence.
+type ResourceFailure struct {
+	Code       string
+	MinerFault bool
+}
+
+// ResourceFailure classifies a failed run from physical evidence alone. An
+// OOM is the miner's only when all three hold: the kernel flagged an OOM kill,
+// the cgroup reached its own cap (memory.peak within the published tolerance
+// of the limit, or memory.events counted an oom at the limit), and host
+// MemAvailable stayed above the published floor up to the kill. Missing
+// evidence never charges the miner.
+func (d RuntimeDiagnostics) ResourceFailure() (ResourceFailure, bool) {
 	if d.OOMKilled || d.MemoryEvents["oom_kill"] > 0 {
-		return "sandbox_oom"
+		if d.capReached() && d.hostHadHeadroom() {
+			return ResourceFailure{Code: CodeHarnessOOM, MinerFault: true}, true
+		}
+		return ResourceFailure{Code: CodeHostMemoryPressure}, true
 	}
 	if d.TmpfsUsedBytes != nil && d.TmpfsCapacityBytes != nil &&
 		*d.TmpfsCapacityBytes > 0 && *d.TmpfsUsedBytes >= *d.TmpfsCapacityBytes {
-		return "sandbox_tmpfs_exhausted"
+		return ResourceFailure{Code: CodeTmpfsExhausted}, true
 	}
-	return ""
+	if d.StateKnown && !d.Running && d.ExitCode == 128+9 {
+		return ResourceFailure{Code: CodeHarnessKilled137}, true
+	}
+	return ResourceFailure{}, false
+}
+
+func (d RuntimeDiagnostics) capReached() bool {
+	if d.MemoryLimitBytes == nil || *d.MemoryLimitBytes == 0 {
+		return false
+	}
+	// memory.events "oom" counts only this cgroup reaching its own limit; a
+	// host-wide OOM kill increments "oom_kill" without it.
+	if d.MemoryEvents["oom"] > 0 {
+		return true
+	}
+	tolerance := uint64(PublishedEnvelope.OOM.PeakToleranceMiB) * mib
+	return d.MemoryPeakBytes != nil && *d.MemoryPeakBytes+tolerance >= *d.MemoryLimitBytes
+}
+
+func (d RuntimeDiagnostics) hostHadHeadroom() bool {
+	floor := uint64(PublishedEnvelope.OOM.HostAvailableFloorMiB) * mib
+	return d.HostMemAvailableMinBytes != nil && *d.HostMemAvailableMinBytes > floor
 }
 
 type memoryLimitKey struct{}
@@ -304,8 +365,13 @@ type LocalDocker struct {
 	// validator-local certificate mounted from this path. The corresponding TLS
 	// listener remains source-bound by the inference broker.
 	OpenRouterShimCABundleHostPath string
+	// MemoryWatchInterval paces the per-run cgroup/host memory sampler. Zero
+	// disables it (a directly constructed LocalDocker in tests).
+	MemoryWatchInterval time.Duration
 	// dockerCommand is injectable only for deterministic command/parse tests.
 	dockerCommand func(context.Context, ...string) ([]byte, error)
+	// hostMemAvailable is injectable only for tests; nil reads /proc/meminfo.
+	hostMemAvailable func() (uint64, bool)
 }
 
 // NewLocalDocker returns a LocalDocker with sensible defaults.
@@ -318,18 +384,22 @@ func NewLocalDocker() *LocalDocker {
 		// embedding working set) should raise these via
 		// DITTOBENCH_SANDBOX_MEMORY_LIMIT / DITTOBENCH_SANDBOX_TMPFS_LIMIT
 		// (docker --memory / tmpfs size syntax, e.g. "6g" / "2g").
-		MemoryLimit:     envStrDefault("DITTOBENCH_SANDBOX_MEMORY_LIMIT", "3g"),
-		TmpfsLimit:      envStrDefault("DITTOBENCH_SANDBOX_TMPFS_LIMIT", "512m"),
-		CPULimit:        "2",
-		BuildTimeout:    25 * time.Minute,
-		StartTimeout:    time.Duration(envIntDefault("DITTOBENCH_SANDBOX_START_TIMEOUT_SECONDS", 120)) * time.Second,
-		GitHubTokenFile: os.Getenv("GITHUB_TOKEN_FILE"),
-		AllowPrivate:    envBool("DITTOBENCH_ALLOW_PRIVATE_HARNESS"),
-		PidsLimit:       envIntDefault("DITTOBENCH_SANDBOX_PIDS_LIMIT", 512),
-		Harden:          envBoolDefault("DITTOBENCH_SANDBOX_HARDEN", true),
-		SeccompProfile:  strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_SECCOMP_PROFILE")),
-		AppArmorProfile: strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_APPARMOR_PROFILE")),
-		RequireRootless: envBool("DITTOBENCH_REQUIRE_ROOTLESS_DOCKER"),
+		MemoryLimit: envStrDefault("DITTOBENCH_SANDBOX_MEMORY_LIMIT", "3g"),
+		TmpfsLimit: envStrDefault(
+			"DITTOBENCH_SANDBOX_TMPFS_LIMIT",
+			strconv.Itoa(PublishedEnvelope.Harness.TmpfsMiB)+"m",
+		),
+		CPULimit:            strconv.Itoa(PublishedEnvelope.Harness.CPUs),
+		MemoryWatchInterval: defaultMemoryWatchInterval,
+		BuildTimeout:        25 * time.Minute,
+		StartTimeout:        time.Duration(envIntDefault("DITTOBENCH_SANDBOX_START_TIMEOUT_SECONDS", PublishedEnvelope.Timing.ContainerStartSeconds)) * time.Second,
+		GitHubTokenFile:     os.Getenv("GITHUB_TOKEN_FILE"),
+		AllowPrivate:        envBool("DITTOBENCH_ALLOW_PRIVATE_HARNESS"),
+		PidsLimit:           envIntDefault("DITTOBENCH_SANDBOX_PIDS_LIMIT", PublishedEnvelope.Harness.PidsLimit),
+		Harden:              envBoolDefault("DITTOBENCH_SANDBOX_HARDEN", true),
+		SeccompProfile:      strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_SECCOMP_PROFILE")),
+		AppArmorProfile:     strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_APPARMOR_PROFILE")),
+		RequireRootless:     envBool("DITTOBENCH_REQUIRE_ROOTLESS_DOCKER"),
 		RequireIsolatedDaemon: envBool(
 			"DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON",
 		),
@@ -703,6 +773,10 @@ func (d *LocalDocker) runArgsForNetwork(image string, env map[string]string, net
 		"--ipc", "none",
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=" + d.tmpfsLimit(),
 		"--memory", d.MemoryLimit,
+		// Published envelope: no swap. Without this a host with swap lets one
+		// validator absorb what another OOM-kills, so the same harness would
+		// score on one host and be charged on the next.
+		"--memory-swap", d.MemoryLimit,
 		"--cpus", d.CPULimit,
 		"--pids-limit", strconv.Itoa(d.pidsLimit()),
 		"--ulimit", "nofile=1024:1024",
@@ -934,23 +1008,34 @@ func (d *LocalDocker) Diagnostics(ctx context.Context, h *Handle) RuntimeDiagnos
 			diagnostics.ExitCode = state.ExitCode
 		}
 	}
-	if !diagnostics.Running {
-		return diagnostics
+	if h.memoryLimitBytes > 0 {
+		limit := h.memoryLimitBytes
+		diagnostics.MemoryLimitBytes = &limit
 	}
-
-	const script = `
+	if diagnostics.Running {
+		const script = `
 printf '%s\n' __memory_events__
 cat /sys/fs/cgroup/memory.events 2>/dev/null || true
 printf '%s\n' __memory_peak__
 cat /sys/fs/cgroup/memory.peak 2>/dev/null || true
+printf '%s\n' __memory_current__
+cat /sys/fs/cgroup/memory.current 2>/dev/null || true
 printf '%s\n' __tmpfs__
 df -Pk /tmp 2>/dev/null | tail -n 1 || true
 `
-	out, err := d.dockerOutput(ctx, "exec", h.ContainerID, "/bin/sh", "-c", script)
-	if err != nil {
-		return diagnostics
+		if out, err := d.dockerOutput(ctx, "exec", h.ContainerID, "/bin/sh", "-c", script); err == nil {
+			parseRuntimeMetrics(&diagnostics, string(out))
+		}
+		// The container is alive, so the host reading is current evidence.
+		if h.watch != nil {
+			h.watch.sampleHost(d.readHostMemAvailable)
+		} else if available, ok := d.readHostMemAvailable(); ok {
+			diagnostics.HostMemAvailableMinBytes = &available
+		}
 	}
-	parseRuntimeMetrics(&diagnostics, string(out))
+	// A container the kernel killed took its cgroup with it; the sampler's
+	// last pre-kill snapshot is the evidence that remains.
+	h.watch.mergeInto(&diagnostics)
 	return diagnostics
 }
 
@@ -1055,7 +1140,7 @@ func parseRuntimeMetrics(diagnostics *RuntimeDiagnostics, output string) {
 	for _, raw := range strings.Split(output, "\n") {
 		line := strings.TrimSpace(raw)
 		switch line {
-		case "__memory_events__", "__memory_peak__", "__tmpfs__":
+		case "__memory_events__", "__memory_peak__", "__memory_current__", "__tmpfs__":
 			section = line
 			continue
 		}
@@ -1076,9 +1161,11 @@ func parseRuntimeMetrics(diagnostics *RuntimeDiagnostics, output string) {
 				diagnostics.MemoryEvents = make(map[string]uint64)
 			}
 			diagnostics.MemoryEvents[fields[0]] = value
-		case "__memory_peak__":
+		case "__memory_peak__", "__memory_current__":
+			// memory.peak is the high-water mark; memory.current is a floor
+			// for it on kernels older than 5.19 that lack memory.peak.
 			value, err := strconv.ParseUint(line, 10, 64)
-			if err == nil {
+			if err == nil && (diagnostics.MemoryPeakBytes == nil || value > *diagnostics.MemoryPeakBytes) {
 				diagnostics.MemoryPeakBytes = &value
 			}
 		case "__tmpfs__":
@@ -1159,6 +1246,11 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 		return nil, fmt.Errorf("docker run failed: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	containerID := strings.TrimSpace(string(out))
+	memoryLimit := d.MemoryLimit
+	if limit, ok := memoryLimitFromContext(ctx); ok {
+		memoryLimit = limit
+	}
+	limitBytes, _ := parseDockerMemory(memoryLimit)
 
 	hostPort, err := d.mappedPort(runCtx, containerID)
 	if err != nil {
@@ -1177,12 +1269,14 @@ func (d *LocalDocker) run(ctx context.Context, image string, env map[string]stri
 		return nil, err
 	}
 	return &Handle{
-		ContainerID:     containerID,
-		BaseURL:         "http://127.0.0.1:" + hostPort,
-		ImageRef:        image,
-		NetworkName:     network,
-		SourceIP:        sourceIP,
-		injectedSecrets: credentialEnvValues(env),
+		ContainerID:      containerID,
+		BaseURL:          "http://127.0.0.1:" + hostPort,
+		ImageRef:         image,
+		NetworkName:      network,
+		SourceIP:         sourceIP,
+		injectedSecrets:  credentialEnvValues(env),
+		memoryLimitBytes: limitBytes,
+		watch:            d.startMemoryWatch(containerID, limitBytes),
 	}, nil
 }
 
@@ -1228,6 +1322,7 @@ func (d *LocalDocker) StopRetainingImage(ctx context.Context, h *Handle) error {
 	if h == nil || strings.TrimSpace(h.ContainerID) == "" {
 		return fmt.Errorf("sandbox container identity is unavailable")
 	}
+	h.watch.stop()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	removeOutput, removeErr := exec.CommandContext(ctx, "docker", "rm", "-f", h.ContainerID).CombinedOutput()

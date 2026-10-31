@@ -32,6 +32,7 @@ from typing import Literal
 
 from ditto.api_models.system_health import SystemMetrics
 from ditto.validator.errors import ValidatorConfigError
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 ConstrainedResource = Literal["cpu", "memory", "disk"]
 
@@ -56,7 +57,13 @@ DEFAULT_MEMORY_PERCENT_CEILING = 95
 # hosts share CPU with something else.
 DEFAULT_CPU_PERCENT_CEILING = CEILING_DISABLED
 
+# Host memory held back from harness caps: the OS, nested Docker, the scorer,
+# this worker and the relay share it. The published envelope sets the default.
+DEFAULT_HOST_MEMORY_RESERVE_MIB = runtime_envelope().host_memory_reserve_mib
+MAX_HOST_MEMORY_RESERVE_MIB = 1 << 20
+
 CPU_CEILING_ENV = "VALIDATOR_CPU_PERCENT_CEILING"
+HOST_MEMORY_RESERVE_ENV = "VALIDATOR_HOST_MEMORY_RESERVE_MIB"
 MEMORY_CEILING_ENV = "VALIDATOR_MEMORY_PERCENT_CEILING"
 DISK_CEILING_ENV = "VALIDATOR_DISK_PERCENT_CEILING"
 
@@ -74,6 +81,22 @@ class ResourceCeilings:
     cpu_percent: int = DEFAULT_CPU_PERCENT_CEILING
     memory_percent: int = DEFAULT_MEMORY_PERCENT_CEILING
     disk_percent: int = DEFAULT_DISK_PERCENT_CEILING
+    host_memory_reserve_mib: int = DEFAULT_HOST_MEMORY_RESERVE_MIB
+
+    def memory_admitted_slots(
+        self, host_memory_mib: int, sandbox_memory_limit_mib: int
+    ) -> int:
+        """Concurrent harness caps this host can hold without overcommit.
+
+        Host-memory admission: the sum of caps must not exceed host memory less
+        the reserve. Otherwise two harnesses each inside their own published
+        cap can exhaust the host together, and the kernel kills one for a fault
+        it did not commit.
+        """
+        if sandbox_memory_limit_mib <= 0:
+            return 0
+        allocatable = host_memory_mib - self.host_memory_reserve_mib
+        return max(0, allocatable // sandbox_memory_limit_mib)
 
     def exceeded(
         self, metrics: SystemMetrics | None
@@ -148,8 +171,17 @@ def parse_resource_ceilings_from_env() -> ResourceCeilings:
             MEMORY_CEILING_ENV, DEFAULT_MEMORY_PERCENT_CEILING
         ),
         disk_percent=_parse_ceiling(DISK_CEILING_ENV, DEFAULT_DISK_PERCENT_CEILING),
+        host_memory_reserve_mib=_parse_ceiling(
+            HOST_MEMORY_RESERVE_ENV, DEFAULT_HOST_MEMORY_RESERVE_MIB
+        ),
     )
     check_resource_ceilings_config(ceilings)
+    if not 0 <= ceilings.host_memory_reserve_mib <= MAX_HOST_MEMORY_RESERVE_MIB:
+        raise ValidatorConfigError(
+            f"{HOST_MEMORY_RESERVE_ENV} must be in "
+            f"[0, {MAX_HOST_MEMORY_RESERVE_MIB}], got "
+            f"{ceilings.host_memory_reserve_mib}"
+        )
     return ceilings
 
 

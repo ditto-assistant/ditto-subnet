@@ -1039,6 +1039,7 @@ class ScreenerWorker:
                             scored_runtime_evidence=item.scored_runtime_evidence,
                             scored_runtime_evidence_received_at=received_at,
                             review_lineage=review_lineage,
+                            sandbox_memory_limit_mib=item.sandbox_memory_limit_mib,
                         )
                     review_usage_snapshot = (
                         review_usage,

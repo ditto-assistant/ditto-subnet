@@ -57,7 +57,8 @@ const defaultN = 30
 
 // sandboxHealthTimeout bounds how long we wait for a freshly built container to
 // answer /health before giving up on the submission.
-const sandboxHealthTimeout = 3 * time.Minute
+// It is the published runtime envelope's healthy_within_seconds.
+var sandboxHealthTimeout = time.Duration(sandbox.PublishedEnvelope.Timing.HealthyWithinSeconds) * time.Second
 
 // Abuse guards for the public submit endpoint.
 const (
@@ -2659,9 +2660,10 @@ func validateBenchVersionResult(requested, artifactVersion int, details *protoco
 // three frames later on this path.
 //
 // Direct sandbox resource evidence (OOM, tmpfs exhaustion) still wins over a
-// prior verdict. That is not a downgrade: those codes are themselves
-// validator_infrastructure, and physical evidence from the cgroup is strictly
-// better than an inference drawn mid-run.
+// prior verdict: physical evidence from the cgroup is strictly better than an
+// inference drawn mid-run. An OOM is the agent's (harness_oom, terminal) only
+// under the published rule in docs/RUNTIME-ENVELOPE.md; every other kill is
+// validator_infrastructure.
 func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 	job, ok := s.store.Get(runID)
 	if ok && job.Status == store.StatusFailed {
@@ -2693,15 +2695,38 @@ func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 		if diagnostics.TmpfsCapacityBytes != nil {
 			failure.Diagnostics["tmpfs_capacity_bytes"] = *diagnostics.TmpfsCapacityBytes
 		}
+		if diagnostics.MemoryLimitBytes != nil {
+			failure.Diagnostics["memory_limit_bytes"] = *diagnostics.MemoryLimitBytes
+		}
+		if diagnostics.HostMemAvailableMinBytes != nil {
+			failure.Diagnostics["host_mem_available_min_bytes"] = *diagnostics.HostMemAvailableMinBytes
+		}
 		message := job.Error
-		if code := diagnostics.InfrastructureCode(); code != "" {
+		verdict, classified := diagnostics.ResourceFailure()
+		// An unflagged SIGKILL proves nothing about who sent it, so it never
+		// overrides a verdict the scored path already reached.
+		if classified && verdict.Code == sandbox.CodeHarnessKilled137 && job.Failure != nil && job.Failure.Kind != "" {
+			classified = false
+		}
+		if classified && verdict.MinerFault {
+			// The wire kind now matches the charge: a harness that reached its
+			// own published cap on a host with headroom is the agent's failure.
+			failure.Kind = "sandbox_failure"
+			failure.Code = verdict.Code
+			failure.Retryable = false
+			message = "harness exceeded its published sandbox memory cap"
+			log.Printf(
+				"run %s harness failure code=%s oom=%t exit=%d",
+				runID, verdict.Code, diagnostics.OOMKilled, diagnostics.ExitCode,
+			)
+		} else if classified {
 			failure.Kind = "validator_infrastructure"
-			failure.Code = code
+			failure.Code = verdict.Code
 			failure.Retryable = true
 			message = "validator sandbox resource envelope exhausted"
 			log.Printf(
 				"run %s validator infrastructure failure code=%s oom=%t exit=%d",
-				runID, code, diagnostics.OOMKilled, diagnostics.ExitCode,
+				runID, verdict.Code, diagnostics.OOMKilled, diagnostics.ExitCode,
 			)
 		} else if sigill, evidence := sandbox.StartupIllegalInstruction(diagnostics.ExitCode, logTail); job.Failure == nil &&
 			strings.Contains(job.Error, "harness never became healthy") && sigill {

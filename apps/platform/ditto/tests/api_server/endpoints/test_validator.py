@@ -5790,6 +5790,38 @@ class TestFailJob:
         )
         assert reissued.status_code == 204, reissued.text
 
+    async def test_unproven_sandbox_oom_is_parked_as_infrastructure(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A validator predating the deterministic OOM rule cannot prove the
+        harness reached its own cap, so its bare ``sandbox_oom`` is no-fault."""
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="sandbox_oom",
+                failure_detail="SandboxOomError: memory allowance",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == "infrastructure"
+            assert ticket.failure_detail == "SandboxOomError: memory allowance"
+
     async def test_sandbox_oom_is_recorded_and_defers_same_harness(
         self,
         app: FastAPI,
@@ -5804,7 +5836,9 @@ class TestFailJob:
         failed = await client.post(
             "/api/v1/validator/job/fail",
             headers=_AUTH_HEADER,
-            json=_job_fail_payload(agent_id, reason="sandbox_oom"),
+            json=_job_fail_payload(
+                agent_id, reason="sandbox_oom", failure_detail="harness_oom"
+            ),
         )
         assert failed.status_code == 200, failed.text
         assert failed.json()["reopened"] is True

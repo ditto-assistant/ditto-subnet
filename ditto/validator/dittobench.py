@@ -316,8 +316,18 @@ _SCORER_IMAGE_STALE = "scorer_image_stale"
 _ORIGIN_BINARY = "binary"
 
 _SANDBOX_INFRASTRUCTURE_CODES = {
+    # Legacy: a scorer before the deterministic OOM rule sent every OOM kill
+    # as this code with no cap or host evidence. It stays no-fault.
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
+    # An OOM kill the evidence cannot pin on the harness's own cap: the cgroup
+    # stayed below its limit, or host MemAvailable fell under the published
+    # floor before the kill. docs/RUNTIME-ENVELOPE.md publishes the rule.
+    "host_memory_pressure",
+    # A SIGKILL (exit 137) with no OOM flag. Nothing proves who sent it, so the
+    # attempt is no-fault; Platform counts a repeat on a second validator as
+    # the harness's own failure.
+    "harness_killed_137",
     # The scorer could not establish its validator-owned sandbox network path:
     # either the egress network was missing at container start or the observed
     # tool listener could not self-verify. This is validator infrastructure,
@@ -476,7 +486,14 @@ _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     }
 )
 
+# The one sandbox resource verdict that is the agent's: an OOM kill at the
+# harness's own published cap while the host kept headroom. The scorer sends it
+# as terminal ``sandbox_failure`` / ``retryable: false`` so the wire kind matches
+# the charge; it reaches Platform as ``sandbox_oom`` with this detail.
+_HARNESS_OOM = "harness_oom"
+
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+assert _HARNESS_OOM not in _SANDBOX_INFRASTRUCTURE_CODES
 
 
 def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | None:
@@ -564,7 +581,8 @@ def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
     code = failure.get("code")
     return (
         code
-        if isinstance(code, str) and code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES
+        if isinstance(code, str)
+        and (code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES or code == _HARNESS_OOM)
         else None
     )
 
@@ -1923,6 +1941,12 @@ class DittobenchClient:
                     # binding it to one branch would lose it on exactly the
                     # failures that are hardest to read from the outside.
                     log_tail = _container_log_tail(data)
+                    if agent_failure_code == _HARNESS_OOM:
+                        raise SandboxOomError(
+                            f"run {run_id} exceeded its published sandbox memory cap",
+                            code=_HARNESS_OOM,
+                            container_log_tail=log_tail,
+                        )
                     if agent_failure_code is not None:
                         if agent_failure_code == "model_inference_required":
                             message = f"run {run_id} made no authoritative model call"
@@ -1955,12 +1979,6 @@ class DittobenchClient:
                     # why ditto-subnet#279 could not name the ~60-minute
                     # `mnemo*` killer. It now reaches the ticket as
                     # `failure_detail`.
-                    if infrastructure_code == "sandbox_oom":
-                        raise SandboxOomError(
-                            f"run {run_id} exhausted the sandbox memory allowance",
-                            code=infrastructure_code,
-                            container_log_tail=log_tail,
-                        )
                     if infrastructure_code is not None:
                         infrastructure_detail = _sandbox_infrastructure_failure_detail(
                             data, infrastructure_code
