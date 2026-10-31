@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.416.4 (2026-10-31)
+
+### Bug Fixes
+
+- Keep every one-harness host in the canonical quorum
+  ([#3296](https://github.com/ditto-assistant/ditto-subnet/pull/3296),
+  [`fce76d5`](https://github.com/ditto-assistant/ditto-subnet/commit/fce76d527e66b4f12f52507e2a4d9806e79cfe74))
+
+
 ## v0.416.3 (2026-10-31)
 
 ### Bug Fixes
