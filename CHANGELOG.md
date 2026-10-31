@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.416.1 (2026-10-31)
+
+### Bug Fixes
+
+- Charge harness OOMs only against a published runtime envelope
+  ([#3292](https://github.com/ditto-assistant/ditto-subnet/pull/3292),
+  [`8e5b260`](https://github.com/ditto-assistant/ditto-subnet/commit/8e5b260c6354b2676a36bd95c7bb64ef870037dc))
+
+- Handle OpenRouter's 200-with-error-body failure on the confirmation lane
+  ([#3293](https://github.com/ditto-assistant/ditto-subnet/pull/3293),
+  [`b4be918`](https://github.com/ditto-assistant/ditto-subnet/commit/b4be9183f3227904ca0ac0d0b57db75dbc6ffde4))
+
+
 ## v0.416.0 (2026-10-30)
 
 ### Features
