@@ -241,6 +241,7 @@ type ConfirmationInferenceRequest struct {
 	UpstreamHttpStatus  pgtype.Int4        `json:"upstreamHttpStatus"`
 	UpstreamAttempts    pgtype.Int4        `json:"upstreamAttempts"`
 	ReceiptFree         pgtype.Bool        `json:"receiptFree"`
+	UpstreamErrorCode   pgtype.Int4        `json:"upstreamErrorCode"`
 }
 
 type InferenceConcurrencySettingsRevision struct {

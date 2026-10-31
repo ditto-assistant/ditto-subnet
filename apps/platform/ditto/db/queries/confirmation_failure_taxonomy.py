@@ -85,6 +85,7 @@ _RECENT_SQL = f"""
            r.status                                     AS status,
            r.failure_kind                               AS failure_kind,
            r.upstream_http_status                       AS upstream_http_status,
+           r.upstream_error_code                        AS upstream_error_code,
            r.upstream_attempts                          AS upstream_attempts,
            r.receipt_free                               AS receipt_free,
            r.cost_microusd                              AS cost_microusd,
@@ -136,6 +137,7 @@ grouped AS (
          r.status,
          r.failure_kind,
          r.upstream_http_status,
+         r.upstream_error_code,
          r.receipt_free,
          count(*)                                                        AS calls,
          COALESCE(max(r.upstream_attempts), 0)                           AS max_upstream_attempts,
@@ -147,7 +149,7 @@ grouped AS (
     JOIN recent r
       ON r.started_at >= now() - make_interval(secs => w.window_seconds)
    GROUP BY w.window_seconds, r.lane, r.model, r.upstream_provider, r.provider_basis, r.status,
-            r.failure_kind, r.upstream_http_status, r.receipt_free
+            r.failure_kind, r.upstream_http_status, r.upstream_error_code, r.receipt_free
 ),
 ranked AS (
   SELECT grouped.*,

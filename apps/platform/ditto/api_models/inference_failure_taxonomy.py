@@ -177,6 +177,7 @@ ConfirmationFailureKind = Literal[
     "transport_timeout",
     "upstream_backpressure",
     "upstream_status",
+    "upstream_error_envelope",
 ]
 
 
@@ -201,6 +202,7 @@ class ConfirmationFailureGroup(BaseModel):
     status: str
     failure_kind: ConfirmationFailureKind | None = None
     upstream_http_status: int | None = None
+    upstream_error_code: int | None = None
     receipt_free: bool | None = None
     max_upstream_attempts: int = 0
     calls: int

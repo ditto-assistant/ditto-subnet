@@ -123,6 +123,7 @@ SET status = sqlc.arg(status)::text,
     completed_at = sqlc.arg(completed_at)::timestamptz,
     failure_kind = sqlc.narg(failure_kind)::text,
     upstream_http_status = sqlc.narg(upstream_http_status)::integer,
+    upstream_error_code = sqlc.narg(upstream_error_code)::integer,
     upstream_attempts = sqlc.narg(upstream_attempts)::integer,
     receipt_free = sqlc.narg(receipt_free)::boolean
 WHERE grant_id = sqlc.arg(grant_id)::uuid

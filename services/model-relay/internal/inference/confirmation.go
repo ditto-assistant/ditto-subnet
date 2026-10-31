@@ -480,6 +480,7 @@ func confirmationTransientAttemptsForGrant(ctx context.Context, d *Deps, grantID
 type confirmationFailureDetail struct {
 	kind        string
 	httpStatus  int  // 0 when no response arrived
+	errorCode   int  // error.code from a 2xx error envelope; 0 otherwise
 	receiptFree bool // meaningful only when known is true
 	known       bool // receiptFree was determined for this failure
 }
@@ -494,22 +495,27 @@ const (
 	confirmationFailureTransportTimeout = "transport_timeout"
 	confirmationFailureBackpressure     = "upstream_backpressure"
 	confirmationFailureUpstreamStatus   = "upstream_status"
+	confirmationFailureErrorEnvelope    = "upstream_error_envelope"
 )
 
-func (detail confirmationFailureDetail) params() (pgtype.Text, pgtype.Int4, pgtype.Bool) {
+func (detail confirmationFailureDetail) params() (pgtype.Text, pgtype.Int4, pgtype.Int4, pgtype.Bool) {
 	if detail.kind == "" {
-		return pgtype.Text{}, pgtype.Int4{}, pgtype.Bool{}
+		return pgtype.Text{}, pgtype.Int4{}, pgtype.Int4{}, pgtype.Bool{}
 	}
 	kind := pgtype.Text{String: detail.kind, Valid: true}
 	var status pgtype.Int4
 	if detail.httpStatus >= 100 && detail.httpStatus <= 599 {
 		status = pgtype.Int4{Int32: int32(detail.httpStatus), Valid: true}
 	}
+	var errorCode pgtype.Int4
+	if detail.errorCode >= 400 && detail.errorCode <= 599 {
+		errorCode = pgtype.Int4{Int32: int32(detail.errorCode), Valid: true}
+	}
 	var receiptFree pgtype.Bool
 	if detail.known {
 		receiptFree = pgtype.Bool{Bool: detail.receiptFree, Valid: true}
 	}
-	return kind, status, receiptFree
+	return kind, status, errorCode, receiptFree
 }
 
 // attemptsParam records the upstream dispatch count on every settled call,
@@ -576,7 +582,7 @@ func finishConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries
 			failure = confirmationFailureDetail{kind: confirmationFailureSettleRejected}
 		}
 	}
-	failureKind, failureStatus, receiptFree := failure.params()
+	failureKind, failureStatus, failureErrorCode, receiptFree := failure.params()
 	failureAttempts := attemptsParam(p.upstreamAttempts)
 	if err := q.SettleConfirmationInferenceRequest(ctx, postgres.SettleConfirmationInferenceRequestParams{
 		Status:             status,
@@ -587,6 +593,7 @@ func finishConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries
 		CompletedAt:        pgTime(p.now),
 		FailureKind:        failureKind,
 		UpstreamHttpStatus: failureStatus,
+		UpstreamErrorCode:  failureErrorCode,
 		UpstreamAttempts:   failureAttempts,
 		ReceiptFree:        receiptFree,
 		GrantID:            pgUUID(p.grantID),
@@ -932,6 +939,17 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		if !isMap {
 			received(confirmationFailureResponseInvalid)
 			return httpErrorf(502, "provider identity mismatch")
+		}
+		// OpenRouter's documented in-body failure: a 200 carrying only an
+		// error object. Checked before the identity comparison, which it would
+		// otherwise fail for lack of a model field and be misrecorded as an
+		// identity mismatch. Any transient one was already retried within the
+		// grant's budget; reaching here means it persisted or was permanent.
+		if code, _, envelope := providerErrorEnvelope(decodedMap); envelope {
+			outcome.failure = confirmationFailureDetail{
+				kind: confirmationFailureErrorEnvelope, httpStatus: result.status, errorCode: int(code),
+			}
+			return httpErrorf(502, "confirmation provider unavailable")
 		}
 		if m, ok := decodedMap["model"].(string); !ok || m != expectedModel {
 			received(confirmationFailureIdentityMismatch)

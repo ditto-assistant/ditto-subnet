@@ -3434,11 +3434,13 @@ CREATE TABLE public.confirmation_inference_requests (
     upstream_http_status integer,
     upstream_attempts integer,
     receipt_free boolean,
+    upstream_error_code integer,
     CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_2e68 CHECK (((generation > 0) AND (reserved_tokens > 0) AND (max_chargeable_tokens >= reserved_tokens))),
     CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_3a48 CHECK ((status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'canceled'::text]))),
     CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_4e49 CHECK (((prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_microusd >= 0))),
+    CONSTRAINT confirmation_inference_requests_error_code_check CHECK (((upstream_error_code IS NULL) OR ((upstream_error_code >= 400) AND (upstream_error_code <= 599)))),
     CONSTRAINT confirmation_inference_requests_failure_detail_check CHECK ((((upstream_http_status IS NULL) OR ((upstream_http_status >= 100) AND (upstream_http_status <= 599))) AND ((upstream_attempts IS NULL) OR ((upstream_attempts >= 0) AND (upstream_attempts <= 16))))),
-    CONSTRAINT confirmation_inference_requests_failure_kind_check CHECK (((failure_kind IS NULL) OR (failure_kind = ANY (ARRAY['identity_mismatch'::text, 'receipt_invalid'::text, 'response_invalid'::text, 'response_too_large'::text, 'settle_rejected'::text, 'transport_error'::text, 'transport_timeout'::text, 'upstream_backpressure'::text, 'upstream_status'::text]))))
+    CONSTRAINT confirmation_inference_requests_failure_kind_check CHECK (((failure_kind IS NULL) OR (failure_kind = ANY (ARRAY['identity_mismatch'::text, 'receipt_invalid'::text, 'response_invalid'::text, 'response_too_large'::text, 'settle_rejected'::text, 'transport_error'::text, 'transport_timeout'::text, 'upstream_backpressure'::text, 'upstream_status'::text, 'upstream_error_envelope'::text]))))
 );
 
 
