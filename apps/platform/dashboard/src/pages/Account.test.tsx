@@ -616,7 +616,7 @@ describe("Ditto account link", () => {
       return found as HTMLElement;
     });
     const button = Array.from(card.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("Sign in with Ditto"),
+      b.textContent?.includes("Connect Ditto"),
     );
     expect(button).toBeTruthy();
     fireEvent.click(button!);
@@ -702,7 +702,7 @@ describe("Ditto account link", () => {
     fireEvent.click(unlink!);
     await waitFor(() => {
       expect(document.body.textContent).toContain("Ditto account unlinked.");
-      expect(document.body.textContent).toContain("Sign in with Ditto");
+      expect(document.body.textContent).toContain("Connect Ditto");
     });
   });
 

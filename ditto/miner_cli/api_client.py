@@ -698,6 +698,15 @@ class ApiClient:
             ).json()
         )
 
+    def get_github_account_link(
+        self, *, token: str, github_user_id: int
+    ) -> GithubLinkStatus:
+        return GithubLinkStatus.model_validate(
+            self._contributor_response(
+                "GET", f"/api/v1/public/github-account/{github_user_id}", token=token
+            ).json()
+        )
+
     def get_github_link_attempt(
         self, *, token: str, attempt_id: UUID
     ) -> GithubLinkAttemptStatus:

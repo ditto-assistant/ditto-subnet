@@ -30,7 +30,7 @@ from ditto.api_server.datapipeline import (
     DataPipelineConfig,
     parse_data_pipeline_config_from_env,
 )
-from ditto.api_server.ditto_link import DittoLinkConfig
+from ditto.api_server.ditto_link import DEFAULT_SCOPES, DittoLinkConfig
 from ditto.api_server.embedding import (
     EmbeddingConfig,
     parse_embedding_config_from_env,
@@ -973,8 +973,8 @@ def parse_ditto_link_config_from_env() -> DittoLinkConfig:
         return_url=os.environ.get(
             "DITTO_LINK_RETURN_URL", "https://dittobench.ai/#/reviews"
         ).strip(),
-        scopes=os.environ.get("DITTO_LINK_SCOPES", "openid email").strip()
-        or "openid email",
+        scopes=os.environ.get("DITTO_LINK_SCOPES", DEFAULT_SCOPES).strip()
+        or DEFAULT_SCOPES,
         timeout_seconds=timeout_seconds,
         callback_challenge_token=os.environ.get(
             "DITTO_CALLBACK_CHALLENGE_TOKEN", ""
