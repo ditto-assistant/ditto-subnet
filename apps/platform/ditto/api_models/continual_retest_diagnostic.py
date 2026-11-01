@@ -119,6 +119,10 @@ class RetestSampleInference(BaseModel):
     failed_requests: int = 0
     failure_codes: list[RetestFailureCode] = []
     """Failed chat calls by relay ``terminal_error_code``, most frequent first."""
+    void_generation: int = 0
+    """0 for a first result; ``n`` for the re-run after ``n`` infra voids."""
+    voided: bool = False
+    """Set aside as infrastructure; listed for audit, counts toward nothing."""
 
 
 class AdminContinualRetestDiagnostic(BaseModel):

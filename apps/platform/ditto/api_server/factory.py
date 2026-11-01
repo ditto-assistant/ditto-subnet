@@ -65,6 +65,7 @@ from ditto.api_server.endpoints import (
     admin_burn_settings_router,
     admin_claim_provenance_router,
     admin_confirmation_bundles_router,
+    admin_confirmation_score_voids_router,
     admin_confirmation_seed_anchors_router,
     admin_continual_retest_settings_router,
     admin_copy_court_router,
@@ -790,6 +791,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_owner_router, prefix="/api/v1")
     app.include_router(admin_quarantine_router, prefix="/api/v1")
     app.include_router(admin_validation_retry_router, prefix="/api/v1")
+    app.include_router(admin_confirmation_score_voids_router, prefix="/api/v1")
     app.include_router(admin_retirement_router, prefix="/api/v1")
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
     app.include_router(admin_validator_capacity_router, prefix="/api/v1")

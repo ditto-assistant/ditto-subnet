@@ -6583,6 +6583,10 @@ async def submit_top5_confirmation_score(
             ],
             bench_version=canonical_version,
             created_at=now,
+            # Only a lease pinned to one seed re-runs a voided sample.
+            rerun_seeds=(
+                frozenset({ticket.seed}) if ticket.seed is not None else frozenset()
+            ),
         )
         await mark_ticket_scored(
             session,

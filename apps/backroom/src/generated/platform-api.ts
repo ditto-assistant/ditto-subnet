@@ -1143,6 +1143,35 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/confirmation-score-voids": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Infra Confirmation Voids
+         * @description Every infrastructure void, newest first, with the re-run once it lands.
+         */
+        get: operations["list_infra_confirmation_voids_api_v1_admin_confirmation_score_voids_get"];
+        put?: never;
+        /**
+         * Void Infra Confirmation Scores
+         * @description Void continual-retest samples whose own grant shows an inference outage.
+         *
+         *     Each item is guarded on its exact run id and composite and gated on the
+         *     serving grant's outage-class failures. ``dry_run`` (the default) writes
+         *     nothing. A voided sample counts toward nothing and its seed is re-leased;
+         *     the score row itself is never changed.
+         */
+        post: operations["void_infra_confirmation_scores_api_v1_admin_confirmation_score_voids_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/confirmation-seed-anchors": {
         parameters: {
             query?: never;
@@ -25509,6 +25538,145 @@ export interface components {
             /** Parked Agents */
             parked_agents: number;
         };
+        /** InfraVoidItem */
+        InfraVoidItem: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Expected Composite */
+            expected_composite: number;
+            /** Expected Run Id */
+            expected_run_id: string;
+            /** Seed */
+            seed: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** InfraVoidList */
+        InfraVoidList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["InfraVoidRecord"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+        };
+        /** InfraVoidOutcome */
+        InfraVoidOutcome: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Disposition
+             * @enum {string}
+             */
+            disposition: "ready" | "applied" | "already_voided" | "not_found" | "stale_guard" | "insufficient_evidence";
+            /**
+             * Evidence
+             * @default {}
+             */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Evidence Digest */
+            evidence_digest?: string | null;
+            /** Seed */
+            seed: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /** Void Generation */
+            void_generation?: number | null;
+            /** Void Id */
+            void_id?: string | null;
+        };
+        /** InfraVoidRecord */
+        InfraVoidRecord: {
+            /** Actor */
+            actor: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Composite */
+            composite: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            };
+            /** Evidence Digest */
+            evidence_digest: string;
+            /** Outage Ended At */
+            outage_ended_at?: string | null;
+            /** Outage Started At */
+            outage_started_at?: string | null;
+            /** Reason */
+            reason: string;
+            /** Rerun Composite */
+            rerun_composite?: number | null;
+            /** Rerun Run Id */
+            rerun_run_id?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Sample Kind */
+            sample_kind: string;
+            /** Seed */
+            seed: string;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "operator" | "outage_sweep";
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /** Void Generation */
+            void_generation: number;
+            /**
+             * Void Id
+             * Format: uuid
+             */
+            void_id: string;
+        };
+        /** InfraVoidRequest */
+        InfraVoidRequest: {
+            /** Confirmation */
+            confirmation?: string | null;
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
+            /** Items */
+            items: components["schemas"]["InfraVoidItem"][];
+            /** Reason */
+            reason: string;
+        };
+        /** InfraVoidResponse */
+        InfraVoidResponse: {
+            /** Applied Count */
+            applied_count: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Dry Run */
+            dry_run: boolean;
+            /** Outcomes */
+            outcomes: components["schemas"]["InfraVoidOutcome"][];
+        };
         /**
          * JobRequest
          * @description Signed request to claim one validator scoring ticket.
@@ -29964,6 +30132,11 @@ export interface components {
             composite: number;
             /** Validator Hotkey */
             validator_hotkey: string;
+            /**
+             * Voided As Infrastructure
+             * @default false
+             */
+            voided_as_infrastructure: boolean;
         };
         /**
          * PublicConfirmationSubject
@@ -34284,6 +34457,16 @@ export interface components {
             seed: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+            /**
+             * Void Generation
+             * @default 0
+             */
+            void_generation: number;
+            /**
+             * Voided
+             * @default false
+             */
+            voided: boolean;
         };
         /** RevealPlanShadowMiss */
         RevealPlanShadowMiss: {
@@ -45874,6 +46057,79 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminConfirmationBundleRetestResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_infra_confirmation_voids_api_v1_admin_confirmation_score_voids_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+                source?: ("operator" | "outage_sweep") | null;
+                since?: string | null;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InfraVoidList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    void_infra_confirmation_scores_api_v1_admin_confirmation_score_voids_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InfraVoidRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InfraVoidResponse"];
                 };
             };
             /** @description Validation Error */

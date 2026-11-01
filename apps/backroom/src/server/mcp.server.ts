@@ -6,6 +6,8 @@ import {
 } from '../lib/contributor.schemas'
 import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import { fetchArtifactFetchAudit } from './artifact-fetch-audit.service'
+import { fetchInfraVoids, voidInfraScores } from './infra-voids.service'
+import { listInfraVoidsInputSchema, voidInfraScoresInputSchema } from '../lib/infra-voids.schemas'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -869,6 +871,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read retest policy, fleet/support and paged history (default 0).',
   get_agent_scores:
     'Read accepted scores/seeds/aggregates; current benchmark default.',
+  void_infra_scores:
+    'Void retest samples whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
+  list_infra_voids:
+    'List infra voids (operator and outage sweep) with evidence and re-run result.',
   get_continual_retest_diagnostic:
     'Exact agent scoring, owner-family cutoff/tie band, cohort reason, claim eligibility and per-sample grant failures. Read-only.',
   get_validator_slot_settings:
@@ -4048,6 +4054,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('write', true),
     },
     async (input) => write(() => replaceValidatorScore(input, props.session.email)),
+  )
+
+  registerTool(
+    'void_infra_scores',
+    {
+      title: 'Void infrastructure-tainted retest samples',
+      description:
+        'Set aside continual-retest samples that measured an inference outage instead of the agent. Read get_continual_retest_diagnostic first and copy each sample\'s validator_hotkey, exact seed, run_id (expectedRunId) and composite (expectedComposite) from retest_samples. Each item is guarded on that exact run and composite (a re-run that already landed reads stale_guard) and gated on the serving grant\'s outage-class failures (upstream_http_402 credit refusal, upstream_http_429/503 backpressure): at least 5, and at least 20 or 5% of chat calls, else insufficient_evidence. dryRun defaults to true and writes nothing; dryRun=false needs confirmation "VOID INFRA SCORES" and is all-or-nothing (any item not applied/already_voided rolls the batch back). A void is append-only and audited (reason, evidence + digest, actor); the score row is never changed. Every fold read (official composite, owner representative, cohort, crown, validator ledger) skips a voided sample from the next epoch pin, which reopens its seed for the agent; the re-run lands at the next void_generation and counts. Canonical quorum scores are not voided here: use replace_validator_score. Requires backroom:write.',
+      inputSchema: voidInfraScoresInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => voidInfraScores(input, props.session.email)),
+  )
+
+  registerTool(
+    'list_infra_voids',
+    {
+      title: 'List infrastructure voids',
+      description:
+        'Newest-first infrastructure voids of continual-retest samples, filtered by agentId, source (operator or outage_sweep) or since. Each row carries the voided run, composite, generation, reason, evidence and digest, actor, outage window, and once it lands the re-run composite and run_id on the same key. Requires backroom:read.',
+      inputSchema: listInfraVoidsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchInfraVoids(input)),
   )
 
   registerTool(

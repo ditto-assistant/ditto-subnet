@@ -108,6 +108,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'reinstate_evicted_submission_to_queue',
   'batch_retry_validator_evaluation',
   'replace_validator_score',
+  'void_infra_scores',
   'queue_validator_score_retests',
   'refresh_benchmark_contract',
   'rebuild_screened_image',

@@ -581,6 +581,7 @@ describe('Backroom MCP tools', () => {
         'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
         'get_continual_retest_diagnostic',
+        'list_infra_voids',
         'get_continual_retest_settings',
         'get_confirmation_bundle_settings',
         'get_confirmation_bundle',
@@ -790,6 +791,7 @@ describe('Backroom MCP tools', () => {
         'retry_validator_evaluation',
         'replace_validator_score',
         'queue_validator_score_retests',
+        'void_infra_scores',
         'set_inference_concurrency_settings',
         'start_runtime_profile',
         'set_source_release_policy',
@@ -952,7 +954,10 @@ describe('Backroom MCP tools', () => {
     // The operator-diagnostic read and isolate pair (uuid / uuid+digest+reason
     // inputs, one-line summaries, detail in tool help) measures 218,834 bytes;
     // keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(219_350)
+    // The infra-void pair (one guarded write with up to 50 items, one bounded
+    // list; one-line summaries, detail in tool help) adds about 2.5 KB;
+    // keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(221_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

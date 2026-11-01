@@ -58,7 +58,11 @@ from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.chain import ChainClient
 from ditto.db.models import Agent, ConfirmationScore, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import active_bench_version
-from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
+from ditto.db.queries.confirmation_score_voids import voided_confirmation_keys
+from ditto.db.queries.confirmation_scores import (
+    confirmation_composites_by_seed,
+    not_voided,
+)
 from ditto.db.queries.queue_order import miner_has_newer_canonical_work
 from ditto.db.queries.retest_sample_inference import retest_sample_inference
 
@@ -567,6 +571,7 @@ async def continual_retest_diagnostic(
                 .where(
                     ConfirmationScore.agent_id == agent_id,
                     ConfirmationScore.bench_version == version,
+                    not_voided(),
                 )
                 .order_by(ConfirmationScore.created_at.desc())
                 .limit(1)
@@ -577,6 +582,7 @@ async def continual_retest_diagnostic(
     samples = await retest_sample_inference(
         session, agent_id=agent_id, bench_version=version
     )
+    voided_keys = await voided_confirmation_keys(session, agent_id=agent_id)
     anchor_champion_id = wave[0].agent_id if wave else None
     anchor = (
         await read_reign_seed_anchor(
@@ -745,6 +751,15 @@ async def continual_retest_diagnostic(
                     RetestFailureCode(terminal_error_code=code, count=count)
                     for code, count in sample.failure_codes
                 ],
+                void_generation=sample.void_generation,
+                voided=(
+                    agent_id,
+                    version,
+                    sample.validator_hotkey,
+                    sample.seed,
+                    sample.void_generation,
+                )
+                in voided_keys,
             )
             for sample in samples
         ],

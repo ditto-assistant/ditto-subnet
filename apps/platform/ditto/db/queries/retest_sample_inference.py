@@ -17,6 +17,7 @@ body.
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -41,6 +42,7 @@ class RetestSampleInference:
     composite: float
     run_id: str
     accepted_at: datetime
+    void_generation: int
     grant_id: UUID | None
     chat_requests: int
     failed_requests: int
@@ -54,25 +56,32 @@ async def retest_sample_inference(
     agent_id: UUID,
     bench_version: int,
     limit: int = RETEST_SAMPLE_LIMIT,
+    run_ids: Collection[str] | None = None,
 ) -> list[RetestSampleInference]:
-    """Newest-first confirmation samples with their serving grant's failures."""
-    samples = list(
-        await session.execute(
-            select(
-                ConfirmationScore.validator_hotkey,
-                ConfirmationScore.seed,
-                ConfirmationScore.composite,
-                ConfirmationScore.run_id,
-                ConfirmationScore.created_at,
-            )
-            .where(
-                ConfirmationScore.agent_id == agent_id,
-                ConfirmationScore.bench_version == bench_version,
-            )
-            .order_by(ConfirmationScore.created_at.desc())
-            .limit(limit)
+    """Newest-first confirmation samples with their serving grant's failures.
+
+    ``run_ids`` narrows the read to exact runs (the void writer's guard), so a
+    target older than the newest ``limit`` is still found.
+    """
+    statement = (
+        select(
+            ConfirmationScore.validator_hotkey,
+            ConfirmationScore.seed,
+            ConfirmationScore.composite,
+            ConfirmationScore.run_id,
+            ConfirmationScore.created_at,
+            ConfirmationScore.void_generation,
         )
+        .where(
+            ConfirmationScore.agent_id == agent_id,
+            ConfirmationScore.bench_version == bench_version,
+        )
+        .order_by(ConfirmationScore.created_at.desc())
+        .limit(limit)
     )
+    if run_ids is not None:
+        statement = statement.where(ConfirmationScore.run_id.in_(list(run_ids)))
+    samples = list(await session.execute(statement))
     if not samples:
         return []
     grants_by_validator: dict[str, list[tuple[datetime, UUID]]] = {}
@@ -136,6 +145,7 @@ async def retest_sample_inference(
             composite=row.composite,
             run_id=row.run_id,
             accepted_at=row.created_at,
+            void_generation=row.void_generation,
             grant_id=grant_id,
             chat_requests=totals[grant_id] if grant_id else 0,
             failed_requests=failed[grant_id] if grant_id else 0,
