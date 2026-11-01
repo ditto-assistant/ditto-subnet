@@ -150,7 +150,8 @@ async def list_copy_court_recommendations(
     whose agent is still held. Set it false to page the full feed including
     recommendations for holds an operator has since resolved — the
     shadow-mode calibration record. With ``agent_id`` the response also
-    carries that agent's recorded unreleased-copy signal.
+    carries that agent's unreleased-copy signal: recorded, recomputed live
+    (read-only) and the released agents that explain its exclusions.
     """
     query = select(AthCopyCourtRecommendation).order_by(
         AthCopyCourtRecommendation.created_at.desc(),
@@ -176,7 +177,7 @@ async def list_copy_court_recommendations(
         limit=limit,
         offset=offset,
         unreleased_copy=(
-            await read_unreleased_copy_signal(session, request, agent_id, live=False)
+            await read_unreleased_copy_signal(session, request, agent_id, live=True)
             if agent_id is not None
             else None
         ),

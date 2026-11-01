@@ -1352,7 +1352,8 @@ export interface paths {
          *     whose agent is still held. Set it false to page the full feed including
          *     recommendations for holds an operator has since resolved — the
          *     shadow-mode calibration record. With ``agent_id`` the response also
-         *     carries that agent's recorded unreleased-copy signal.
+         *     carries that agent's unreleased-copy signal: recorded, recomputed live
+         *     (read-only) and the released agents that explain its exclusions.
          */
         get: operations["list_copy_court_recommendations_api_v1_admin_copy_court_recommendations_get"];
         put?: never;
@@ -15393,6 +15394,28 @@ export interface components {
             near_misses: components["schemas"]["AdminUnreleasedCopySummary"][];
             runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
         };
+        /**
+         * AdminUnreleasedCopyReleasedOverlap
+         * @description One agent released before the candidate's upload that shares its items.
+         */
+        AdminUnreleasedCopyReleasedOverlap: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /**
+             * Released At
+             * Format: date-time
+             */
+            released_at: string;
+            /** Shared */
+            shared: number;
+        };
         /** AdminUnreleasedCopyRuntime */
         AdminUnreleasedCopyRuntime: {
             /** Interval Seconds */
@@ -15478,6 +15501,11 @@ export interface components {
             /** Mode */
             mode: string | null;
             recorded: components["schemas"]["UnreleasedCopyEvaluation"] | null;
+            /**
+             * Released Overlap
+             * @default []
+             */
+            released_overlap: components["schemas"]["AdminUnreleasedCopyReleasedOverlap"][];
             runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
             /**
              * Uploaded At

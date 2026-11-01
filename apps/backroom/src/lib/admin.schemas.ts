@@ -10795,6 +10795,18 @@ export const unreleasedCopySignalSchema = z.object({
   live: unreleasedCopyEvaluationSchema.nullable(),
   live_unavailable_reason: z.string().nullable(),
   runtime: unreleasedCopyRuntimeSchema.nullable(),
+  released_overlap: z
+    .array(
+      z.object({
+        agent_id: z.string().uuid(),
+        agent_name: z.string(),
+        agent_version: z.number().int().nullable(),
+        released_at: unreleasedCopyTimestamp(),
+        shared: z.number().int().nonnegative(),
+      }),
+    )
+    .max(10)
+    .default([]),
 } satisfies PlatformResponseShape<GeneratedUnreleasedCopySignal>)
 
 const unreleasedCopySummarySchema = z.object({

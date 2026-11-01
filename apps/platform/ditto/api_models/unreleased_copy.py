@@ -87,6 +87,16 @@ class AdminUnreleasedCopyRuntime(_Model):
     last_tick_error: str | None
 
 
+class AdminUnreleasedCopyReleasedOverlap(_Model):
+    """One agent released before the candidate's upload that shares its items."""
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: int | None
+    released_at: datetime
+    shared: int
+
+
 class AdminUnreleasedCopySignal(_Model):
     agent_id: UUID
     agent_name: str
@@ -103,6 +113,9 @@ class AdminUnreleasedCopySignal(_Model):
     """Read-only recompute against the current index (``live=true`` only)."""
     live_unavailable_reason: str | None
     runtime: AdminUnreleasedCopyRuntime | None
+    released_overlap: list[AdminUnreleasedCopyReleasedOverlap] = []
+    """Live only: the released-before-upload agents that explain the most
+    candidate items (the ``released_base`` exclusion), at most 10."""
 
 
 class AdminUnreleasedCopySummary(_Model):

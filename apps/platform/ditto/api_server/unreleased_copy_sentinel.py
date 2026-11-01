@@ -166,6 +166,18 @@ class UnreleasedCopySentinel:
         self._last_counters: dict[str, int] = {}
         self._last_error: str | None = None
         self._last_settings: EffectiveSettings | None = None
+        # The scoring worker caches one candidate between refine and attach, so
+        # a tick and an operator's live read must not interleave there.
+        self._score_lock = asyncio.Lock()
+
+    async def score(
+        self, context: SignalContext, *, threshold: float
+    ) -> tuple[CopySignal, str]:
+        """:func:`score_signal` on this sentinel's worker, one candidate at a time."""
+        async with self._score_lock:
+            return await score_signal(
+                context, self._storage, threshold=threshold, call=self.call
+            )
 
     def runtime(self) -> dict[str, Any]:
         return {
@@ -344,8 +356,8 @@ class UnreleasedCopySentinel:
                 context = await load_context(session, agent, overlap=self.overlap)
             if context is None:
                 continue
-            signal, evidence_status = await score_signal(
-                context, self._storage, threshold=settings.threshold, call=self.call
+            signal, evidence_status = await self.score(
+                context, threshold=settings.threshold
             )
             async with self._session_maker() as session, session.begin():
                 await record_signal(
