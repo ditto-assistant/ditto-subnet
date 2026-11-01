@@ -26,6 +26,9 @@ from ditto.api_server.endpoints.admin_claim_provenance import (
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
 )
+from ditto.api_server.endpoints.admin_confirmation_score_voids import (
+    router as admin_confirmation_score_voids_router,
+)
 from ditto.api_server.endpoints.admin_confirmation_seed_anchors import (
     router as admin_confirmation_seed_anchors_router,
 )
@@ -263,6 +266,7 @@ __all__ = [
     "admin_v13_private_generation_router",
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",
+    "admin_confirmation_score_voids_router",
     "admin_validation_retry_router",
     "admin_validator_capacity_router",
     "admin_validator_request_outcomes_router",

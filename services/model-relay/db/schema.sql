@@ -3485,6 +3485,36 @@ CREATE TABLE public.confirmation_retest_authorizations (
 
 
 --
+-- Name: confirmation_score_voids; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_score_voids (
+    void_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    seed bigint NOT NULL,
+    void_generation integer NOT NULL,
+    sample_kind text NOT NULL,
+    run_id text NOT NULL,
+    composite double precision NOT NULL,
+    reason text NOT NULL,
+    evidence jsonb NOT NULL,
+    evidence_digest text NOT NULL,
+    actor text NOT NULL,
+    source text NOT NULL,
+    outage_started_at timestamp with time zone,
+    outage_ended_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_ev_6ab0 CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_ou_6d73 CHECK (((outage_ended_at IS NULL) OR (outage_started_at IS NOT NULL))),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_re_35e4 CHECK ((length(btrim(reason)) >= 8)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_sa_64f4 CHECK ((sample_kind = 'continual_retest'::text)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_so_097a CHECK ((source = ANY (ARRAY['operator'::text, 'outage_sweep'::text])))
+);
+
+
+--
 -- Name: confirmation_scores; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3499,10 +3529,12 @@ CREATE TABLE public.confirmation_scores (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     v9_efficiency_token_total bigint,
     v9_efficiency_cost_eligible boolean,
+    void_generation integer DEFAULT 0 NOT NULL,
     CONSTRAINT ck_confirmation_scores_confirmation_scores_bench_versio_b860 CHECK ((bench_version > 0)),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_composite_ra_71bb CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_efficiency_c_46c3 CHECK ((((v9_efficiency_cost_eligible IS NULL) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = false) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = true) AND (bench_version >= 9) AND (v9_efficiency_token_total > 0)))),
-    CONSTRAINT ck_confirmation_scores_confirmation_scores_seed_check CHECK ((seed >= 0))
+    CONSTRAINT ck_confirmation_scores_confirmation_scores_seed_check CHECK ((seed >= 0)),
+    CONSTRAINT ck_confirmation_scores_confirmation_scores_void_generat_010e CHECK ((void_generation >= 0))
 );
 
 
@@ -8529,6 +8561,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 
 --
+-- Name: confirmation_score_voids confirmation_score_voids_sample_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT confirmation_score_voids_sample_key UNIQUE (agent_id, bench_version, validator_hotkey, seed, void_generation);
+
+
+--
 -- Name: confirmation_scores confirmation_scores_bench_version_floor; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8541,7 +8581,7 @@ ALTER TABLE public.confirmation_scores
 --
 
 ALTER TABLE ONLY public.confirmation_scores
-    ADD CONSTRAINT confirmation_scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey, seed);
+    ADD CONSTRAINT confirmation_scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey, seed, void_generation);
 
 
 --
@@ -9462,6 +9502,14 @@ ALTER TABLE ONLY public.confirmation_inference_requests
 
 ALTER TABLE ONLY public.confirmation_retest_authorizations
     ADD CONSTRAINT pk_confirmation_retest_authorizations PRIMARY KEY (authorization_id);
+
+
+--
+-- Name: confirmation_score_voids pk_confirmation_score_voids; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT pk_confirmation_score_voids PRIMARY KEY (void_id);
 
 
 --
@@ -11599,6 +11647,20 @@ CREATE INDEX confirmation_reservations_day_idx ON public.confirmation_budget_res
 --
 
 CREATE UNIQUE INDEX confirmation_reservations_one_open_bundle_idx ON public.confirmation_budget_reservations USING btree (bundle_id) WHERE (state = 'reserved'::text);
+
+
+--
+-- Name: confirmation_score_voids_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_score_voids_agent_idx ON public.confirmation_score_voids USING btree (agent_id, bench_version);
+
+
+--
+-- Name: confirmation_score_voids_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_score_voids_created_idx ON public.confirmation_score_voids USING btree (created_at);
 
 
 --
@@ -13923,6 +13985,14 @@ ALTER TABLE ONLY public.confirmation_budget_reservations
 
 ALTER TABLE ONLY public.confirmation_retest_authorizations
     ADD CONSTRAINT confirmation_retest_source_bundle_fkey FOREIGN KEY (source_bundle_id) REFERENCES public.confirmation_bundles(bundle_id);
+
+
+--
+-- Name: confirmation_score_voids confirmation_score_voids_sample_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT confirmation_score_voids_sample_fkey FOREIGN KEY (agent_id, bench_version, validator_hotkey, seed, void_generation) REFERENCES public.confirmation_scores(agent_id, bench_version, validator_hotkey, seed, void_generation) ON DELETE CASCADE;
 
 
 --

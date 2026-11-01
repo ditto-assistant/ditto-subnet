@@ -9134,6 +9134,8 @@ export const continualRetestDiagnosticSchema = z.object({
       terminal_error_code: z.string(),
       count: z.number().int().nonnegative(),
     })).default([]),
+    void_generation: z.number().int().nonnegative().default(0),
+    voided: z.boolean().default(false),
   })).default([]),
 })
 

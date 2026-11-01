@@ -4110,6 +4110,10 @@ class PublicConfirmationScore(BaseModel):
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     accepted_at: datetime
+    voided_as_infrastructure: bool = False
+    """The platform set this sample aside because its run measured an
+    inference outage, not the agent. It stays listed for audit, counts toward
+    nothing, and its seed is re-run."""
 
 
 class PublicProvisionalScore(BaseModel):

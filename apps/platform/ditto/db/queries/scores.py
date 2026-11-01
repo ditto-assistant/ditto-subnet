@@ -60,6 +60,7 @@ from ditto.db.models import (
     Score,
 )
 from ditto.db.queries.agents import get_agent_by_id
+from ditto.db.queries.confirmation_scores import not_voided
 from ditto.db.queries.inference import LeaseModelUsage
 from ditto.score_order import (
     owner_family_order_terms,
@@ -2158,6 +2159,7 @@ async def list_eligible_ledger(
                         == ConfirmationScore.bench_version,
                     ),
                 )
+                .where(not_voided())
                 .subquery()
             )
             # ``statistics.median`` averages the two middle values for an even

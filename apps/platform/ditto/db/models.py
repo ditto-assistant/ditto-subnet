@@ -4977,13 +4977,27 @@ class ConfirmationScore(Base):
     )
     """When this immutable row was appended (UTC). Never updated."""
 
+    void_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    """0 for the first result on a key; ``n`` for the re-run after ``n`` voids.
+
+    Part of the primary key so an infrastructure re-run on the same
+    ``(agent, version, validator, seed)`` appends instead of being dropped.
+    See :class:`ConfirmationScoreVoid`.
+    """
+
     __table_args__ = (
         PrimaryKeyConstraint(
             "agent_id",
             "bench_version",
             "validator_hotkey",
             "seed",
+            "void_generation",
             name="confirmation_scores_pkey",
+        ),
+        CheckConstraint(
+            "void_generation >= 0", name="confirmation_scores_void_generation_check"
         ),
         ForeignKeyConstraint(
             ["agent_id"],
@@ -5015,6 +5029,99 @@ class ConfirmationScore(Base):
             name="confirmation_scores_efficiency_cost_check",
         ),
         Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),
+    )
+
+
+class ConfirmationScoreVoid(Base):
+    """Append-only record that one continual-retest sample measured infrastructure.
+
+    A void names the exact :class:`ConfirmationScore` row it sets aside
+    (key, generation, run id and composite), why, the evidence and its digest,
+    who or what applied it (``operator`` or the post-outage ``outage_sweep``),
+    and the outage window when one is known. It is never updated or deleted.
+
+    Every fold read (official composite, owner representative, retest cohort,
+    crown and the validator ledger) excludes a voided row, which reopens that
+    seed for the agent; the re-run is appended at ``void_generation + 1``. The
+    score row itself is untouched, so the original is always auditable.
+    """
+
+    __tablename__ = "confirmation_score_voids"
+
+    void_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    void_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    composite: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    evidence_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 of the canonical (sorted-key, compact) JSON of ``evidence``."""
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    outage_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    outage_ended_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            [
+                "agent_id",
+                "bench_version",
+                "validator_hotkey",
+                "seed",
+                "void_generation",
+            ],
+            [
+                "confirmation_scores.agent_id",
+                "confirmation_scores.bench_version",
+                "confirmation_scores.validator_hotkey",
+                "confirmation_scores.seed",
+                "confirmation_scores.void_generation",
+            ],
+            ondelete="CASCADE",
+            name="confirmation_score_voids_sample_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "seed",
+            "void_generation",
+            name="confirmation_score_voids_sample_key",
+        ),
+        CheckConstraint(
+            "sample_kind IN ('continual_retest')",
+            name="confirmation_score_voids_sample_kind_check",
+        ),
+        CheckConstraint(
+            "source IN ('operator', 'outage_sweep')",
+            name="confirmation_score_voids_source_check",
+        ),
+        CheckConstraint(
+            "evidence_digest ~ '^[0-9a-f]{64}$'",
+            name="confirmation_score_voids_evidence_digest_check",
+        ),
+        CheckConstraint(
+            "length(btrim(reason)) >= 8",
+            name="confirmation_score_voids_reason_check",
+        ),
+        CheckConstraint(
+            "outage_ended_at IS NULL OR outage_started_at IS NOT NULL",
+            name="confirmation_score_voids_outage_window_check",
+        ),
+        Index("confirmation_score_voids_agent_idx", "agent_id", "bench_version"),
+        Index("confirmation_score_voids_created_idx", "created_at"),
     )
 
 

@@ -370,6 +370,10 @@ from ditto.db.queries.confirmation_bundles import (
     ActiveConfirmationWork,
     list_active_confirmation_work,
 )
+from ditto.db.queries.confirmation_score_voids import (
+    confirmation_key,
+    voided_confirmation_keys,
+)
 from ditto.db.queries.confirmation_scores import (
     DEFAULT_WAVE_MEMBERSHIP,
     WaveMembership,
@@ -8228,9 +8232,12 @@ async def agent_pipeline(
     # public pipeline still has accepted retests. Keep the display's per-seed
     # medians available without publishing the reusable seed identifiers or
     # relying on the leaderboard projection.
+    voided_keys = await voided_confirmation_keys(session, agent_id=agent_id)
     confirmation_by_seed: dict[int, list[float]] = {}
     for score in confirmation_scores:
-        if score.bench_version == canonical_version:
+        if score.bench_version == canonical_version and (
+            confirmation_key(score) not in voided_keys
+        ):
             confirmation_by_seed.setdefault(score.seed, []).append(score.composite)
     confirmation_sample_composites = sorted(
         statistics.median(values) for values in confirmation_by_seed.values()
@@ -8449,6 +8456,7 @@ async def agent_pipeline(
                 validator_hotkey=score.validator_hotkey,
                 bench_version=score.bench_version,
                 accepted_at=score.created_at,
+                voided_as_infrastructure=confirmation_key(score) in voided_keys,
             )
             for score in confirmation_scores
         ],

@@ -4288,6 +4288,8 @@ describe('production score reads', () => {
       chat_requests: 3861,
       failed_requests: 2127,
       failure_codes: [{ terminal_error_code: 'upstream_http_402', count: 2127 }],
+      void_generation: 0,
+      voided: false,
     }],
   }
 

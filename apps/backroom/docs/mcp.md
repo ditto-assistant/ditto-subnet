@@ -154,6 +154,18 @@ calls (for example `upstream_http_402`, gateway credit exhaustion) measured the
 inference path rather than the agent; this is the first read for a "my retest
 looks like an infra failure" report.
 
+`void_infra_scores` (`backroom:write`) sets aside continual-retest samples
+that measured an inference outage. Each item names the exact sample from
+`retest_samples` (validator, seed, `expectedRunId`, `expectedComposite`) and is
+gated on its grant's outage-class failures (`upstream_http_402`,
+`upstream_http_429`, `upstream_http_503`: at least 5, and at least 20 or 5% of
+chat calls). `dryRun` defaults to true. A real write needs `VOID INFRA SCORES`
+and is all-or-nothing. The append-only void (`confirmation_score_voids`) keeps
+the score row unchanged. Every fold read skips the voided row from the next
+epoch pin, and the seed re-runs at the next `void_generation`. Validators fold
+the served `confirmation_history`, so no protocol change is involved.
+`list_infra_voids` reads them back with the re-run composite once it lands.
+
 The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:
 it builds the source, checks that every pack on fresh secret seeds is valid,

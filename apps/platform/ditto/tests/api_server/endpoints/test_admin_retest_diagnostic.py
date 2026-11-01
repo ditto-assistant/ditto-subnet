@@ -242,6 +242,11 @@ def _install(
         "retest_sample_inference",
         AsyncMock(return_value=list(samples)),
     )
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "voided_confirmation_keys",
+        AsyncMock(return_value=frozenset()),
+    )
 
 
 def _chain(block: int = 1_000) -> object:
@@ -456,6 +461,7 @@ async def test_diagnostic_carries_each_samples_grant_failures(
         composite=0.651813,
         run_id="fd227604",
         accepted_at=_NOW.replace(tzinfo=None),
+        void_generation=0,
         grant_id=UUID("33c2b609-0000-4000-8000-000000000000"),
         chat_requests=3861,
         failed_requests=2127,
