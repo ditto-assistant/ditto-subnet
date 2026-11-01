@@ -92,8 +92,14 @@ What changed from dc1/uc1, each from a reviewed false positive:
   hotkeys have used, including later uploads (signal ``uc3``): an operator's
   first line can predate the agent its namespace is named after.
 
-Threshold: **50** recommended (set through the audited setting). The smallest
-copy scores 114, the largest non-copy pair 39.8.
+Threshold: **100** (the switch-on revision). Locally the smallest copy scores
+114 and the largest non-copy pair 39.8. At full scale (every candidate since
+2026-10-15 against all 3,922 indexed agents), the file-reviewed negatives
+score: two ports of a banned agent's prompt, 84.25 and 75.25; a released-base
+port, 37.5; others below 37. The ruled partial copy scores 113.75. A
+threshold of 100 flags none of the listed negatives and keeps every ruled
+copy. Holds are operator-ruled, so the operator can lower the threshold
+through the audited setting if those negatives are reclassified.
 
 ## Backfill (read-only, 2026-11-01)
 
