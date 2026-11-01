@@ -169,8 +169,9 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
         storage=_Storage({source_id: SOURCE, port_id: PORT}),
         isolate_extraction=False,
     )
+    # First tick indexes the backlog; evaluation waits for a complete index.
+    assert (await sentinel.tick())["indexed"] == 1
     counters = await sentinel.tick()
-    assert counters["indexed"] == 1
     assert counters["flagged"] == 1
     async with session_maker() as session:
         port = await session.get(Agent, port_id)
@@ -286,6 +287,7 @@ async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(
         storage=_Storage(blobs),
         isolate_extraction=False,
     )
+    assert (await sentinel.tick())["indexed"] == 4
     counters = await sentinel.tick()
     assert counters["flagged"] == 3
     assert counters["held"] == 1

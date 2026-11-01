@@ -65,8 +65,9 @@ DEFAULT_INTERVAL_SECONDS = 30.0
 # Extraction runs in a separate process, so the batch bounds wall time and
 # storage reads per tick, not API latency.
 DEFAULT_INDEX_BATCH = 24
-DEFAULT_EVALUATE_BATCH = 12
+DEFAULT_EVALUATE_BATCH = 6
 BACKLOG_INTERVAL_SECONDS = 1.0
+INDEX_WORKERS = 2
 EVIDENCE_MATCHES = 3
 # Storage failures before an artifact is recorded as unreadable, so one
 # missing blob cannot stall evaluation of everything uploaded after it.
@@ -93,7 +94,9 @@ async def score_signal(
     The fuzzy released pass and evidence run when the best pair is at least half
     the threshold, since only those can flag.
     """
-    signal = await call(worker.score, context.candidate, context.others, threshold)
+    signal = await call(
+        worker.score, context.candidate, context.others, context.overlaps, threshold
+    )
     if not signal.matches or signal.top_score < threshold / 2:
         return await call(worker.truncate, signal), "not_needed"
     if storage is None:
@@ -151,6 +154,7 @@ class UnreleasedCopySentinel:
         self._read_failures: dict[UUID, int] = {}
         self._isolate_extraction = isolate_extraction
         self._executor: Executor | None = None
+        self._index_executor: Executor | None = None
         self._last_started: datetime | None = None
         self._last_finished: datetime | None = None
         self._last_counters: dict[str, int] = {}
@@ -184,9 +188,11 @@ class UnreleasedCopySentinel:
         task, self._task = self._task, None
         if task is not None:
             await task
-        if self._executor is not None:
-            self._executor.shutdown(wait=False, cancel_futures=True)
-            self._executor = None
+        for executor in (self._executor, self._index_executor):
+            if executor is not None:
+                executor.shutdown(wait=False, cancel_futures=True)
+        self._executor = None
+        self._index_executor = None
 
     async def call(self, fn: Callable[..., Any], *args: Any) -> Any:
         """Run one worker function in the worker process (or a thread)."""
@@ -194,6 +200,23 @@ class UnreleasedCopySentinel:
         if executor is None:
             return await asyncio.to_thread(fn, *args)
         return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
+
+    async def _index_call(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Stateless extraction on the indexing pool (separate from scoring).
+
+        Scoring keeps one worker because it caches released fingerprints and
+        the candidate between calls; indexing has no state, so it fans out.
+        """
+        if not self._isolate_extraction:
+            return await asyncio.to_thread(fn, *args)
+        if self._index_executor is None:
+            self._index_executor = ProcessPoolExecutor(
+                max_workers=INDEX_WORKERS,
+                mp_context=multiprocessing.get_context("spawn"),
+            )
+        return await asyncio.get_running_loop().run_in_executor(
+            self._index_executor, fn, *args
+        )
 
     def _extraction_executor(self) -> Executor | None:
         if not self._isolate_extraction:
@@ -212,9 +235,10 @@ class UnreleasedCopySentinel:
                 # A full batch means more work is waiting: run again almost at
                 # once. Extraction is in the worker process, so draining a
                 # backlog costs that process's core, not API latency.
+                # Only an index backlog runs back to back: an evaluation scans
+                # the whole index in Postgres, so it keeps the normal cadence.
                 backlog = (
                     counters["indexed"] + counters["unreadable"] >= self._index_batch
-                    or counters["evaluated"] >= self._evaluate_batch
                 )
             except Exception as error:
                 self._last_error = f"{type(error).__name__}: {error}"[:500]
@@ -251,8 +275,18 @@ class UnreleasedCopySentinel:
         if self._storage is not None:
             async with self._session_maker() as session:
                 missing = await agents_missing_items(session, limit=self._index_batch)
-            for agent in missing:
-                await self._index(agent.agent_id, counters)
+            gate = asyncio.Semaphore(INDEX_WORKERS)
+
+            async def index_one(agent_id: UUID) -> None:
+                async with gate:
+                    await self._index(agent_id, counters)
+
+            await asyncio.gather(*(index_one(a.agent_id) for a in missing))
+            if missing:
+                # Evaluation waits for the whole history before an agent to be
+                # indexed anyway, so while a backlog remains, index only.
+                self._finish(counters, started)
+                return counters
         async with self._session_maker() as session:
             candidates = await pending_candidates(
                 session, signal_version=SIGNAL_VERSION, limit=self._evaluate_batch

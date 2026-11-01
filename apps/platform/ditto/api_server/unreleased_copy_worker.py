@@ -70,9 +70,16 @@ class _Released:
 
 
 def score(
-    candidate: IndexedAgent, others: Sequence[IndexedAgent], threshold: float
+    candidate: IndexedAgent,
+    others: Sequence[IndexedAgent],
+    overlaps: dict,
+    threshold: float,
 ) -> CopySignal:
-    return evaluate(candidate, others, threshold=threshold, max_matches=MAX_MATCHES * 4)
+    """Evaluate with each other agent's overlap materialized here, not in the API."""
+    from dataclasses import replace
+
+    full = [replace(o, keys=frozenset(overlaps.get(o.agent_id, ()))) for o in others]
+    return evaluate(candidate, full, threshold=threshold, max_matches=MAX_MATCHES * 4)
 
 
 def refine(
