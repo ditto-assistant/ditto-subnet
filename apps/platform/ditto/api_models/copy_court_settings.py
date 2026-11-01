@@ -176,7 +176,7 @@ class AdminCopyCourtRecommendationList(BaseModel):
     limit: int
     offset: int
     unreleased_copy: AdminUnreleasedCopySignal | None = None
-    """With ``agent_id``: that agent's recorded unreleased-copy signal."""
+    """With ``agent_id``: that agent's unreleased-copy signal, recorded and live."""
 
 
 def copy_court_checksum(settings: CopyCourtSettings) -> str:

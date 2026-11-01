@@ -19,6 +19,7 @@ from ditto.api_models.unreleased_copy import (
     AdminUnreleasedCopyEffectiveSettings,
     AdminUnreleasedCopyIndex,
     AdminUnreleasedCopyOverview,
+    AdminUnreleasedCopyReleasedOverlap,
     AdminUnreleasedCopyRuntime,
     AdminUnreleasedCopySettingsRequest,
     AdminUnreleasedCopySettingsResponse,
@@ -90,6 +91,7 @@ async def read_signal(
     recorded = await session.get(UnreleasedCopySignal, (agent_id, SIGNAL_VERSION))
     live_payload: dict[str, Any] | None = None
     live_reason: str | None = None
+    released_overlap: list[AdminUnreleasedCopyReleasedOverlap] = []
     if live:
         state_sentinel = getattr(request.app.state, "unreleased_copy_sentinel", None)
         sentinel = (
@@ -110,13 +112,18 @@ async def read_signal(
             )
         else:
             settings = await effective_settings(session)
-            signal, evidence_status = await score_signal(
-                context,
-                getattr(request.app.state, "storage", None),
-                threshold=settings.threshold,
-                call=sentinel.call if sentinel is not None else inline_call,
+            signal, evidence_status = (
+                await sentinel.score(context, threshold=settings.threshold)
+                if sentinel is not None
+                else await score_signal(
+                    context,
+                    getattr(request.app.state, "storage", None),
+                    threshold=settings.threshold,
+                    call=inline_call,
+                )
             )
             live_payload = signal_payload(signal, evidence_status=evidence_status)
+            released_overlap = _released_overlap(context)
     return AdminUnreleasedCopySignal(
         agent_id=agent.agent_id,
         agent_name=agent.name,
@@ -148,7 +155,26 @@ async def read_signal(
         ),
         live_unavailable_reason=live_reason,
         runtime=_runtime(request),
+        released_overlap=released_overlap,
     )
+
+
+def _released_overlap(context: Any) -> list[AdminUnreleasedCopyReleasedOverlap]:
+    """Which released-before-upload agents remove the candidate's items."""
+    t = context.candidate.uploaded_at
+    rows = [
+        AdminUnreleasedCopyReleasedOverlap(
+            agent_id=other.agent_id,
+            agent_name=other.name,
+            agent_version=other.version,
+            released_at=other.released_at,
+            shared=len(context.overlaps.get(other.agent_id, ())),
+        )
+        for other in context.others
+        if other.released_at is not None and other.released_at < t
+    ]
+    rows.sort(key=lambda r: r.shared, reverse=True)
+    return rows[:10]
 
 
 async def _summaries(

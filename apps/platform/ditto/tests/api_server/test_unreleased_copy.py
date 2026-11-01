@@ -220,7 +220,9 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
         headers=_HEADERS,
     )
     assert feed.status_code == 200, feed.text
-    assert feed.json()["unreleased_copy"]["recorded"]["flagged"]
+    signal = feed.json()["unreleased_copy"]
+    assert signal["recorded"]["flagged"] and signal["live"]["flagged"]
+    assert signal["released_overlap"] == []
 
 
 async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(
