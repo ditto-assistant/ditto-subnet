@@ -4,14 +4,12 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 ISOLATE_CONFIRMATION = "ISOLATE OPERATOR DIAGNOSTIC AGENT"
 
 
 class OperatorDiagnosticIsolate(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     expected_artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     actor: Annotated[str, Field(min_length=1, max_length=120)]
     reason: Annotated[str, Field(min_length=8)]
