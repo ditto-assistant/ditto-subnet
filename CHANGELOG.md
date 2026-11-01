@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.422.0 (2026-11-01)
+
+### Features
+
+- **validator,platform**: Gate the KOTH crown on shared-seed confirmations and show the King and
+  challengers ([#3290](https://github.com/ditto-assistant/ditto-subnet/pull/3290),
+  [`0078007`](https://github.com/ditto-assistant/ditto-subnet/commit/0078007b8d4cf15e6485ec3eede85586261061b0))
+
+
 ## v0.421.0 (2026-11-01)
 
 ### Features
