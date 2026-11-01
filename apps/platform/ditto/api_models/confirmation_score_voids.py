@@ -14,7 +14,7 @@ _SEED = r"^(0|[1-9][0-9]*)$"
 
 
 class InfraVoidItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     agent_id: UUID
     validator_hotkey: Annotated[str, Field(min_length=1, max_length=64)]
@@ -25,7 +25,7 @@ class InfraVoidItem(BaseModel):
 
 
 class InfraVoidRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     items: Annotated[list[InfraVoidItem], Field(min_length=1, max_length=50)]
     reason: Annotated[str, Field(min_length=8)]
