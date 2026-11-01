@@ -7,7 +7,7 @@ candidate's upload, and the recorded shadow signals.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -51,27 +51,40 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+def index_keys_from(items: Iterable[int]) -> list[int]:
+    """Sorted item keys with the public corpus removed."""
+    public = public_item_keys()
+    return sorted(k for k in items if k not in public)
+
+
 def index_keys(extracted: ArtifactItems) -> list[int]:
     """Sorted item keys of an artifact with the public corpus removed."""
-    public = public_item_keys()
-    return sorted(k for k in extracted.items if k not in public)
+    return index_keys_from(extracted.items)
 
 
 async def store_items(
     session: AsyncSession,
     *,
     agent_id: UUID,
-    extracted: ArtifactItems | None,
+    extracted: ArtifactItems | None = None,
+    keys: list[int] | None = None,
     error: str | None = None,
 ) -> None:
-    """Insert or replace one agent's index row (``error`` when unreadable)."""
-    keys = index_keys(extracted) if extracted is not None else []
+    """Insert or replace one agent's index row (``error`` when unreadable).
+
+    Pass ``extracted`` (upload path) or precomputed ``keys`` (the sentinel's
+    worker process returns keys only).
+    """
+    if keys is None and extracted is not None:
+        keys = index_keys(extracted)
+    readable = keys is not None
+    keys = keys or []
     values = {
         "agent_id": agent_id,
         "items_version": ITEMS_VERSION,
         "item_keys": keys,
         "item_count": len(keys),
-        "error": None if extracted is not None else (error or "unreadable"),
+        "error": None if readable else (error or "unreadable"),
         "indexed_at": datetime.now(UTC),
     }
     statement = insert(AgentDistinctiveItems).values(**values)

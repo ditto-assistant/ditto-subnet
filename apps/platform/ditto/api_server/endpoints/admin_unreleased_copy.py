@@ -31,10 +31,11 @@ from ditto.api_models.unreleased_copy import (
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.unreleased_copy import SIGNAL_VERSION, evaluate
+from ditto.api_server.unreleased_copy import SIGNAL_VERSION
 from ditto.api_server.unreleased_copy_sentinel import (
     UnreleasedCopySentinel,
-    with_evidence,
+    inline_call,
+    score_signal,
 )
 from ditto.db.models import (
     Agent,
@@ -89,18 +90,14 @@ async def get_unreleased_copy_signal(
             )
         else:
             settings = await effective_settings(session)
-            signal = evaluate(
-                context.candidate,
-                context.others,
-                threshold=settings.threshold,
-                max_matches=20,
-            )
-            signal, evidence_status = await with_evidence(
-                signal,
+            sentinel = getattr(request.app.state, "unreleased_copy_sentinel", None)
+            signal, evidence_status = await score_signal(
+                context,
                 getattr(request.app.state, "storage", None),
                 threshold=settings.threshold,
-                released_before=context.released_before,
-                owner_names=context.owner_names,
+                call=sentinel.call
+                if isinstance(sentinel, UnreleasedCopySentinel)
+                else inline_call,
             )
             live_payload = signal_payload(signal, evidence_status=evidence_status)
     return AdminUnreleasedCopySignal(
