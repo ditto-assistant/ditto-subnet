@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Collection, Iterable, Mapping, Sequence
+from collections.abc import Collection, Container, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from uuid import UUID
@@ -305,7 +305,7 @@ def released_shingles(items: Iterable[Item]) -> frozenset[int]:
     return frozenset(out)
 
 
-def _covered(element: str, released: frozenset[int], public: frozenset[int]) -> bool:
+def _covered(element: str, released: Container[int], public: Container[int]) -> bool:
     """A literal element nobody needs to copy: one word, released, or public."""
     return (
         " " not in element
@@ -316,7 +316,7 @@ def _covered(element: str, released: frozenset[int], public: frozenset[int]) -> 
 
 
 def _released(
-    item: Item, released: frozenset[int], public: frozenset[int], containment: float
+    item: Item, released: Container[int], public: Container[int], containment: float
 ) -> bool:
     if item.kind == KIND_IDENT:
         return False
@@ -340,10 +340,10 @@ def _name_tokens(names: Iterable[str]) -> set[str]:
 def refine_released(
     signal: CopySignal,
     candidate_items: Mapping[int, Item],
-    released: frozenset[int],
+    released: Container[int],
     *,
     owner_names: Iterable[str] = (),
-    public: frozenset[int] | None = None,
+    public: Container[int] | None = None,
     containment: float = FUZZY_RELEASED_CONTAINMENT,
 ) -> CopySignal:
     """Second pass with the candidate's text in hand.

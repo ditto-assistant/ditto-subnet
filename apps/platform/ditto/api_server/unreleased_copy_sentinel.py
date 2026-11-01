@@ -26,32 +26,21 @@ import asyncio
 import logging
 import multiprocessing
 from concurrent.futures import Executor, ProcessPoolExecutor
-from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from ditto.api_server.distinctive_content import (
-    ITEMS_VERSION,
-    ArtifactItems,
-    Item,
-    extract_items,
-)
-from ditto.api_server.fingerprint import _excluded_from_fingerprints
+from ditto.api_server import unreleased_copy_worker as worker
 from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
 from ditto.api_server.unreleased_copy import (
     DEFAULT_THRESHOLD,
-    MAX_MATCHES,
     SIGNAL_VERSION,
     CopySignal,
-    attach_evidence,
-    evaluate,
-    refine_released,
-    released_shingles,
 )
 from ditto.db.queries.unreleased_copy import (
     EffectiveSettings,
+    SignalContext,
     agents_missing_items,
     effective_settings,
     enforce_signal,
@@ -64,6 +53,8 @@ from ditto.db.queries.unreleased_copy import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from ditto.api_server.copy_court_triage import ArtifactStore
@@ -82,124 +73,57 @@ EVIDENCE_MATCHES = 3
 MAX_READ_ATTEMPTS = 3
 
 
-def extract_for_index(raw: bytes) -> dict[int, Item] | None:
-    """Top-level (picklable) extraction used in the sentinel's worker process."""
-    extracted = extract_items(raw, excluded=_excluded_from_fingerprints)
-    return None if extracted is None else dict(extracted.items)
-
-
-def shingles_for_index(raw: bytes) -> frozenset[int]:
-    """Top-level (picklable) released-text shingles, for the worker process."""
-    items = extract_for_index(raw)
-    return released_shingles(items.values()) if items else frozenset()
-
-
-class ReleasedText:
-    """Per-process cache of released artifacts' text shingles.
-
-    Released artifacts are immutable and few (confirmed kings), so each is read
-    once; the union for one candidate is the agents released before its upload.
-    """
-
-    def __init__(self) -> None:
-        self._by_agent: dict[UUID, frozenset[int]] = {}
-        self._unions: dict[tuple[UUID, ...], frozenset[int]] = {}
-
-    async def union(
-        self,
-        storage: ArtifactStore,
-        agent_ids: list[UUID],
-        *,
-        executor: Executor | None,
-    ) -> frozenset[int]:
-        key = tuple(agent_ids)
-        if key in self._unions:
-            return self._unions[key]
-        for agent_id in agent_ids:
-            if agent_id in self._by_agent:
-                continue
-            raw = await storage.get_object(
-                key=f"{agent_id}/agent.tar.gz", max_bytes=MAX_TARBALL_BYTES
-            )
-            if executor is not None:
-                shingles = await asyncio.get_running_loop().run_in_executor(
-                    executor, shingles_for_index, raw
-                )
-            else:
-                shingles = await asyncio.to_thread(shingles_for_index, raw)
-            self._by_agent[agent_id] = shingles
-        union = frozenset().union(*(self._by_agent[a] for a in agent_ids))
-        self._unions = {key: union}
-        return union
-
-
-async def read_items(
-    storage: ArtifactStore, agent_id: UUID, *, executor: Executor | None = None
-) -> dict[int, Item] | None:
-    """Read and extract one stored artifact.
-
-    With ``executor`` (the sentinel's single-worker process pool) the CPU work
-    runs outside this interpreter, so a multi-hour backfill of multi-megabyte
-    artifacts never holds the API process's GIL. Without one it uses a thread,
-    which is right for the one-off operator read.
-    """
-    raw = await storage.get_object(
+async def _read(storage: ArtifactStore, agent_id: UUID | str) -> bytes:
+    return await storage.get_object(
         key=f"{agent_id}/agent.tar.gz", max_bytes=MAX_TARBALL_BYTES
     )
-    if executor is not None:
-        return await asyncio.get_running_loop().run_in_executor(
-            executor, extract_for_index, raw
-        )
-    return await asyncio.to_thread(extract_for_index, raw)
 
 
-async def with_evidence(
-    signal: CopySignal,
+async def score_signal(
+    context: SignalContext,
     storage: ArtifactStore | None,
     *,
     threshold: float,
-    executor: Executor | None = None,
-    released_before: list[UUID] | None = None,
-    released_text: ReleasedText | None = None,
-    owner_names: list[str] | None = None,
+    call: Callable[..., Any],
 ) -> tuple[CopySignal, str]:
-    """Refine against released text, then attach ``path:line`` evidence.
+    """Score, refine against released text, and attach evidence.
 
-    Runs only when the best pair is at least half the threshold: the fuzzy
-    released-content check and the evidence both need the artifacts, and a
-    pair below that cannot flag.
+    ``call(fn, *args)`` runs one :mod:`unreleased_copy_worker` function (in the
+    worker process for the sentinel); this coroutine only does storage reads.
+    The fuzzy released pass and evidence run when the best pair is at least half
+    the threshold, since only those can flag.
     """
+    signal = await call(worker.score, context.candidate, context.others, threshold)
     if not signal.matches or signal.top_score < threshold / 2:
-        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "not_needed"
+        return await call(worker.truncate, signal), "not_needed"
     if storage is None:
-        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "unavailable"
+        return await call(worker.truncate, signal), "unavailable"
     try:
-        candidate = await read_items(
-            storage, signal.candidate_agent_id, executor=executor
+        released = [str(a) for a in context.released_before]
+        for agent_id in await call(worker.missing_released, released):
+            await call(worker.add_released, agent_id, await _read(storage, agent_id))
+        refined = await call(
+            worker.refine,
+            signal,
+            await _read(storage, signal.candidate_agent_id),
+            released,
+            context.owner_names,
         )
-        if candidate is not None:
-            union = (
-                await (released_text or ReleasedText()).union(
-                    storage, released_before, executor=executor
-                )
-                if released_before
-                else frozenset()
-            )
-            signal = refine_released(
-                signal, candidate, union, owner_names=owner_names or ()
-            )
-        signal = replace(signal, matches=signal.matches[:MAX_MATCHES])
-        matched: dict[UUID, dict[int, Item]] = {}
-        for match in signal.matches[:EVIDENCE_MATCHES]:
-            items = await read_items(storage, match.matched_agent_id, executor=executor)
-            if items is not None:
-                matched[match.matched_agent_id] = items
+        if refined is None:
+            return await call(worker.truncate, signal), "unavailable"
+        matched = {
+            str(m.matched_agent_id): await _read(storage, m.matched_agent_id)
+            for m in refined.matches[:EVIDENCE_MATCHES]
+        }
+        return await call(worker.attach, refined, matched), "attached"
     except Exception as error:  # storage outage: keep the score, say so
         logger.warning("unreleased-copy evidence unavailable: %s", type(error).__name__)
-        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "unavailable"
-    if candidate is None:
-        return signal, "unavailable"
-    return attach_evidence(signal, candidate, matched), "attached"
+        return await call(worker.truncate, signal), "unavailable"
+
+
+async def inline_call(fn: Callable[..., Any], *args: Any) -> Any:
+    """Run a worker function on a thread (tests, one-off operator reads)."""
+    return await asyncio.to_thread(fn, *args)
 
 
 class UnreleasedCopySentinel:
@@ -226,7 +150,6 @@ class UnreleasedCopySentinel:
         self._task: asyncio.Task[None] | None = None
         self._read_failures: dict[UUID, int] = {}
         self._isolate_extraction = isolate_extraction
-        self._released_text = ReleasedText()
         self._executor: Executor | None = None
         self._last_started: datetime | None = None
         self._last_finished: datetime | None = None
@@ -264,6 +187,13 @@ class UnreleasedCopySentinel:
         if self._executor is not None:
             self._executor.shutdown(wait=False, cancel_futures=True)
             self._executor = None
+
+    async def call(self, fn: Callable[..., Any], *args: Any) -> Any:
+        """Run one worker function in the worker process (or a thread)."""
+        executor = self._extraction_executor()
+        if executor is None:
+            return await asyncio.to_thread(fn, *args)
+        return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
 
     def _extraction_executor(self) -> Executor | None:
         if not self._isolate_extraction:
@@ -332,20 +262,8 @@ class UnreleasedCopySentinel:
                 context = await load_context(session, agent)
             if context is None:
                 continue
-            signal = evaluate(
-                context.candidate,
-                context.others,
-                threshold=settings.threshold,
-                max_matches=MAX_MATCHES * 4,
-            )
-            signal, evidence_status = await with_evidence(
-                signal,
-                self._storage,
-                threshold=settings.threshold,
-                executor=self._extraction_executor(),
-                released_before=context.released_before,
-                released_text=self._released_text,
-                owner_names=context.owner_names,
+            signal, evidence_status = await score_signal(
+                context, self._storage, threshold=settings.threshold, call=self.call
             )
             async with self._session_maker() as session, session.begin():
                 await record_signal(
@@ -391,12 +309,12 @@ class UnreleasedCopySentinel:
     async def _index(self, agent_id: UUID, counters: dict[str, int]) -> None:
         assert self._storage is not None
         error: str | None = None
-        items = None
+        keys: list[int] | None = None
         try:
-            items = await read_items(
-                self._storage, agent_id, executor=self._extraction_executor()
+            keys = await self.call(
+                worker.index_keys, await _read(self._storage, agent_id)
             )
-            if items is None:
+            if keys is None:
                 error = "unreadable artifact"
         except Exception as exc:
             attempts = self._read_failures.get(agent_id, 0) + 1
@@ -404,15 +322,8 @@ class UnreleasedCopySentinel:
             if attempts < MAX_READ_ATTEMPTS:
                 counters["read_retry"] += 1
                 return
-            error = f"storage: {type(exc).__name__}"
+            error = f"{type(exc).__name__}"
         async with self._session_maker() as session, session.begin():
-            await store_items(
-                session,
-                agent_id=agent_id,
-                extracted=None
-                if items is None
-                else ArtifactItems(ITEMS_VERSION, items),
-                error=error,
-            )
+            await store_items(session, agent_id=agent_id, keys=keys, error=error)
         self._read_failures.pop(agent_id, None)
         counters["unreadable" if error else "indexed"] += 1
