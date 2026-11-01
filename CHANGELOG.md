@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.428.1 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Correct unreleased-copy overlap fallback, owner-name hint, and worker warm-up
+  ([#3317](https://github.com/ditto-assistant/ditto-subnet/pull/3317),
+  [`aec6b9c`](https://github.com/ditto-assistant/ditto-subnet/commit/aec6b9c14fb8967d225887eb7a3b885960c5e137))
+
+
 ## v0.428.0 (2026-11-01)
 
 ### Features
