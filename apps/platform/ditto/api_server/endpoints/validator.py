@@ -311,6 +311,10 @@ from ditto.db.queries.benchmark_rollout import (
     preserve_desired_authority,
     rollout_cohort_complete,
 )
+from ditto.db.queries.confirmation_score_voids import (
+    VoidRerunDebt,
+    outstanding_void_rerun_debts,
+)
 from ditto.db.queries.confirmation_scores import (
     DEFAULT_WAVE_MEMBERSHIP,
     ConfirmationSeedScore,
@@ -345,8 +349,10 @@ from ditto.db.queries.lease_liveness import (
 )
 from ditto.db.queries.payments import get_miner_coldkey_for_agent
 from ditto.db.queries.provider_outages import (
+    ProviderWorkGate,
     lock_provider_work_gate,
     park_scoring_leases,
+    provider_outage_active,
     register_provider_probe,
     scoring_probe_key,
 )
@@ -411,6 +417,12 @@ from ditto.score_order import rank_submissions
 from ditto.screener_policy_state import effective_screening_policy_version
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from ditto.api_models.inference_concurrency_settings import (
+        InferenceConcurrencySettings,
+    )
+    from ditto.api_models.validator_capabilities import V7InferenceCalibration
     from ditto.api_server.config import EfficiencyBonusConfig, InferenceProxyConfig
     from ditto.chain import ChainClient
 
@@ -5463,6 +5475,162 @@ async def _unserved_catchup_members(
     return frozenset(unserved)
 
 
+_VOID_RERUN_OWNER_GRACE = timedelta(hours=1)
+"""How long a voided seed waits for its own validator before any may take it.
+
+The voiding validator re-running its key appends at ``void_generation + 1``,
+the path the submit handler already accepts. Waiting forever for it would let
+one offline validator strand the debt, so after this grace -- or at once when
+none of the voiding validators has a fresh heartbeat -- another validator with
+no row on the seed may run it fresh at generation 0 under its own key.
+"""
+_VOID_RERUN_OWNER_HEARTBEAT_FRESHNESS = timedelta(minutes=10)
+
+
+async def _lock_top5_fairness(session: AsyncSession) -> None:
+    """Serialize retest coverage reads with issuance across the fleet.
+
+    Transaction-scoped and re-entrant, so the debt path and the cohort path may
+    both take it in one claim.
+    """
+    if session.get_bind().dialect.name == "postgresql":
+        await session.execute(
+            select(
+                func.pg_advisory_xact_lock(
+                    func.hashtextextended("top5-confirmation-fairness", 0)
+                )
+            )
+        )
+
+
+async def _void_rerun_debts(
+    session: AsyncSession,
+    *,
+    canonical_version: int,
+    ledger_agent_ids: Collection[UUID],
+    agent_ids: Iterable[UUID] | None = None,
+) -> list[VoidRerunDebt]:
+    """Outstanding void debt for generations still on the eligible ledger."""
+    return [
+        debt
+        for debt in await outstanding_void_rerun_debts(
+            session, bench_version=canonical_version, agent_ids=agent_ids
+        )
+        if debt.agent_id in ledger_agent_ids
+    ]
+
+
+async def _void_rerun_open_to_fleet(
+    session: AsyncSession, *, debt: VoidRerunDebt, now: datetime
+) -> bool:
+    """Whether a validator other than the voiding one may take this seed."""
+    oldest = debt.oldest_void_at
+    if oldest.tzinfo is None:
+        oldest = oldest.replace(tzinfo=UTC)
+    if now - oldest >= _VOID_RERUN_OWNER_GRACE:
+        return True
+    fresh_owner = await session.scalar(
+        select(ValidatorHeartbeat.validator_hotkey)
+        .where(
+            ValidatorHeartbeat.validator_hotkey.in_(sorted(debt.rerun_validators)),
+            ValidatorHeartbeat.seen_at >= now - _VOID_RERUN_OWNER_HEARTBEAT_FRESHNESS,
+        )
+        .limit(1)
+    )
+    return fresh_owner is None
+
+
+async def _validator_may_retest(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    canonical_version: int,
+    now: datetime,
+) -> bool:
+    """The per-validator holds :func:`issue_confirmation_ticket` would refuse on.
+
+    Checked before choosing a debt so a held validator falls through to the
+    rest of the lane instead of ending the poll on a refused ticket.
+    """
+    latest_retest = await get_latest_score_retest_event(
+        session, agent_id=agent_id, validator_hotkey=validator_hotkey
+    )
+    if (
+        latest_retest is not None
+        and latest_retest.event == EVENT_SCORE_RETEST_REQUESTED
+    ):
+        return False
+    ticket = await session.get(
+        ValidatorTicket, (agent_id, canonical_version, validator_hotkey)
+    )
+    if ticket is None:
+        return True
+    if ticket.status == TicketStatus.ISSUED and _aware_utc(ticket.deadline) > now:
+        # One live ticket per (agent, version, validator): a validator already
+        # running another seed of this agent cannot also take the debt.
+        return False
+    return ticket.retry_after is None or _aware_utc(ticket.retry_after) <= now
+
+
+async def _claim_void_rerun_debt(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    provider_gate: ProviderWorkGate,
+    canonical_version: int,
+    ledger_agent_ids: Collection[UUID],
+    now: datetime,
+) -> VoidRerunDebt | None:
+    """The oldest void debt this validator may re-run now, or None.
+
+    One replacement lease per voided seed: a seed with any live continual
+    retest (from this lane or the cohort lane) is skipped, and the debt itself
+    shrinks as replacements land, so the fleet can never run more seeds than
+    were voided. Beyond the lane-wide provider gate, the debt also waits out
+    the half-open probe and the recovery quiet window: re-leasing into the
+    outage that voided the sample would only void it again.
+    """
+    debts = await _void_rerun_debts(
+        session,
+        canonical_version=canonical_version,
+        ledger_agent_ids=ledger_agent_ids,
+    )
+    if not debts:
+        return None
+    if (
+        not provider_gate.admitted
+        or provider_gate.probe_required
+        or provider_outage_active(provider_gate.circuit, now=now)
+    ):
+        return None
+    leases = await _live_retest_leases(
+        session,
+        member_agent_ids=tuple(debt.agent_id for debt in debts),
+        canonical_version=canonical_version,
+        now=now,
+    )
+    for debt in debts:
+        agent_leases = leases.get(debt.agent_id, {})
+        if any(seed is None or seed == debt.seed for seed in agent_leases.values()):
+            continue
+        if validator_hotkey not in debt.rerun_validators and (
+            validator_hotkey in debt.scored_validators
+            or not await _void_rerun_open_to_fleet(session, debt=debt, now=now)
+        ):
+            continue
+        if not await _validator_may_retest(
+            session,
+            agent_id=debt.agent_id,
+            validator_hotkey=validator_hotkey,
+            canonical_version=canonical_version,
+            now=now,
+        ):
+            continue
+        return debt
+    return None
+
+
 async def _top5_member_is_least_covered(
     session: AsyncSession,
     *,
@@ -5898,6 +6066,53 @@ async def request_top5_confirmation_job(
                         "sandbox memory cap; update ditto-subnet"
                     ),
                 )
+        # Provider-outage gate, the same one ``request_job`` applies. A
+        # continual retest spends inference exactly like a canonical lease, so
+        # while the relay's circuit is open nothing new is issued from any
+        # route (champion, debt, catch-up, emission or extended). Open circuits
+        # also park every live non-probe lease without charging an attempt,
+        # and after ``retry_at`` exactly one half-open probe may run. A slot
+        # whose own lease survived parking (the probe) keeps resuming it.
+        provider_probe_key = scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey,
+            slot_id=(
+                payload.slot_id
+                if payload.slot_id is not None
+                else live_retest.slot_id
+                if live_retest is not None
+                else "slot-0"
+            ),
+        )
+        provider_gate = await lock_provider_work_gate(
+            session, now=now, kind="scoring", key=provider_probe_key
+        )
+        if provider_gate.circuit is not None and provider_gate.circuit.state == "open":
+            await park_scoring_leases(session, circuit=provider_gate.circuit, now=now)
+            if live_retest is not None and live_retest.status != TicketStatus.ISSUED:
+                live_retest = None
+        # A legacy member claim names no slot, so it cannot be the probe.
+        if not provider_gate.admitted or (
+            provider_gate.probe_required and not auto_routed
+        ):
+            logger.info(
+                "declined continual retest reason=provider_outage validator=%s slot=%s",
+                payload.validator_hotkey,
+                payload.slot_id,
+            )
+            if auto_routed:
+                note_decline_reason("provider_outage")
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            raise HTTPException(
+                status_code=409,
+                detail="continual retests are parked during a provider outage",
+            )
+        cohort_snapshot = await _current_koth_entries(
+            session,
+            canonical_version=canonical_version,
+            wave_membership=continual_settings.wave_membership,
+            efficiency_config=efficiency_config,
+            now=now,
+        )
         (
             emission_members,
             wave_members,
@@ -5909,7 +6124,71 @@ async def request_top5_confirmation_job(
             settings=continual_settings,
             efficiency_config=efficiency_config,
             now=now,
+            snapshot=cohort_snapshot,
         )
+        # Void re-run debt is owed by every ledger-eligible generation, inside
+        # the cohort or not: an outage-voided sample is a run the agent already
+        # earned, not new coverage, so neither the cohort cap nor owner
+        # suppression may strand it (Wonder v6, 2026-11-01).
+        ledger_agent_ids = frozenset(cohort_snapshot.official_scores)
+
+        async def claim_void_rerun_debt() -> VoidRerunDebt | None:
+            if not auto_routed or live_retest is not None:
+                return None
+            await _lock_top5_fairness(session)
+            return await _claim_void_rerun_debt(
+                session,
+                validator_hotkey=payload.validator_hotkey,
+                provider_gate=provider_gate,
+                canonical_version=canonical_version,
+                ledger_agent_ids=ledger_agent_ids,
+                now=now,
+            )
+
+        async def issue_selected(
+            member_id: UUID, seed: int, route: str
+        ) -> JobResponse | Response:
+            return await _issue_continual_retest_job(
+                session,
+                request=request,
+                generator=generator,
+                payload=payload,
+                heartbeat=heartbeat,
+                canonical_version=canonical_version,
+                selected_member_id=member_id,
+                selected_wave_seed=seed,
+                live_retest=live_retest,
+                auto_routed=auto_routed,
+                slot_settings=slot_settings,
+                ticket_ttl=ticket_ttl,
+                inference_config=inference_config,
+                inference_settings=inference_settings,
+                v7_calibration=v7_calibration,
+                route=route,
+                now=now,
+                provider_gate=provider_gate,
+            )
+
+        # A slot re-polling (or restarting) on a live debt lease resumes it
+        # whatever the cohort now says; expiring it as "left the cohort" would
+        # throw away the very re-run the void asked for.
+        if (
+            auto_routed
+            and live_retest is not None
+            and live_retest.seed is not None
+            and any(
+                debt.seed == live_retest.seed
+                for debt in await _void_rerun_debts(
+                    session,
+                    canonical_version=canonical_version,
+                    ledger_agent_ids=ledger_agent_ids,
+                    agent_ids=(live_retest.agent_id,),
+                )
+            )
+        ):
+            return await issue_selected(
+                live_retest.agent_id, live_retest.seed, "void_rerun"
+            )
         # These sets answer different questions and must not be conflated:
         #
         # * ``wave_member_ids`` is the public-board top five (canonical
@@ -5946,6 +6225,9 @@ async def request_top5_confirmation_job(
                         request_id=payload.nonce,
                         compensate=False,
                     )
+                debt = await claim_void_rerun_debt()
+                if debt is not None:
+                    return await issue_selected(debt.agent_id, debt.seed, "void_rerun")
                 note_decline_reason("member_left_cohort")
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
@@ -6051,14 +6333,7 @@ async def request_top5_confirmation_job(
         # Serialize the coverage read with ticket issuance. Catch-up is allowed
         # outside the reign cadence below, so two validators must not both see
         # the same unserved gap and spend separate slots on it.
-        if session.get_bind().dialect.name == "postgresql":
-            await session.execute(
-                select(
-                    func.pg_advisory_xact_lock(
-                        func.hashtextextended("top5-confirmation-fairness", 0)
-                    )
-                )
-            )
+        await _lock_top5_fairness(session)
         catchup_member_ids = await _unserved_catchup_members(
             session,
             champion_agent_id=champion_agent_id,
@@ -6102,8 +6377,22 @@ async def request_top5_confirmation_job(
 
         selected_member_id: UUID | None = None
         selected_wave_seed: int | None = None
+        selected_route = "cohort"
         legacy_decline: str | None = None
+        # Void re-run debt ranks directly behind the crown: the champion's own
+        # confirmation work keeps first claim, and every other cohort source
+        # waits on the debt. The debt is bounded by the voids themselves, so
+        # this ordering cannot widen the cohort or add a single extra seed.
+        debt_checked = requested_member_id is not None
         for candidate_member_id in candidate_member_ids:
+            if not debt_checked and candidate_member_id != champion_agent_id:
+                debt_checked = True
+                debt = await claim_void_rerun_debt()
+                if debt is not None:
+                    selected_member_id = debt.agent_id
+                    selected_wave_seed = debt.seed
+                    selected_route = "void_rerun"
+                    break
             if (
                 not scheduled_round
                 and not spare_capacity_round
@@ -6180,6 +6469,12 @@ async def request_top5_confirmation_job(
             selected_wave_seed = wave_seed
             break
 
+        if selected_member_id is None and not debt_checked:
+            debt = await claim_void_rerun_debt()
+            if debt is not None:
+                selected_member_id = debt.agent_id
+                selected_wave_seed = debt.seed
+                selected_route = "void_rerun"
         if selected_member_id is None or selected_wave_seed is None:
             if requested_member_id is not None:
                 raise HTTPException(
@@ -6189,200 +6484,227 @@ async def request_top5_confirmation_job(
             note_decline_reason("no_candidate")
             return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
-        confirmation_datasets: list[ConfirmationDatasetPin] = []
-        # The seed's finalized-block binding, so the validator can re-derive it
-        # and refuse a seed inconsistent with the pin it is told about (the
-        # validator trusts the pin as served; it reads no chain). Searched
-        # across every pinned reign of the version: a catch-up seed introduced
-        # under an earlier champion still binds to that champion's block.
-        seed_binding = bind_confirmation_seed(
-            await list_reign_seed_anchors(session, bench_version=canonical_version),
-            seed=selected_wave_seed,
-            bench_version=canonical_version,
+        return await issue_selected(
+            selected_member_id, selected_wave_seed, selected_route
         )
-        if canonical_version >= 3:
-            if canonical_version >= 13 and (
-                heartbeat is None
-                or not heartbeat_supports_version(
-                    heartbeat, now=now, version=canonical_version
-                )
-            ):
-                raise HTTPException(
-                    503,
-                    f"deterministic V{canonical_version} scorer capability "
-                    "is unavailable",
-                )
-            if generator.run_size is None:
-                raise HTTPException(
-                    status_code=503,
-                    detail="top-5 confirmation dataset generation is unavailable",
-                )
-            confirmation_datasets = [
-                ConfirmationDatasetPin(
-                    seed=selected_wave_seed,
-                    dataset_sha256=await lease_dataset_sha(
-                        request,
-                        generator,
-                        seed=selected_wave_seed,
-                        bench_version=canonical_version,
-                    ),
-                    run_size=generator.run_size,
-                    anchor_agent_id=(
-                        seed_binding.anchor_agent_id
-                        if seed_binding is not None
-                        else None
-                    ),
-                    seed_index=(
-                        seed_binding.seed_index if seed_binding is not None else None
-                    ),
-                    seed_block=(
-                        seed_binding.seed_block if seed_binding is not None else None
-                    ),
-                    seed_block_hash=(
-                        seed_binding.seed_block_hash
-                        if seed_binding is not None
-                        else None
-                    ),
-                )
-            ]
-        for pin in confirmation_datasets:
-            pin.private_dataset_mode = await _private_dataset_mode(
-                session, pin.dataset_sha256, heartbeat
+
+
+async def _issue_continual_retest_job(
+    session: AsyncSession,
+    *,
+    request: Request,
+    generator: DatasetGenerator,
+    payload: Top5ConfirmationJobRequest,
+    heartbeat: ValidatorHeartbeat | None,
+    canonical_version: int,
+    selected_member_id: UUID,
+    selected_wave_seed: int,
+    live_retest: ValidatorTicket | None,
+    auto_routed: bool,
+    slot_settings: ValidatorSlotSettings,
+    ticket_ttl: timedelta,
+    inference_config: InferenceProxyConfig,
+    inference_settings: InferenceConcurrencySettings,
+    v7_calibration: V7InferenceCalibration | None,
+    route: str,
+    now: datetime,
+    provider_gate: ProviderWorkGate,
+) -> JobResponse | Response:
+    """Lease one already-selected ``(member, seed)`` on an idle execution slot.
+
+    Every continual-retest source -- cohort waves and void re-run debt alike --
+    issues through this one path, so the dataset pin, seed binding, slot rail,
+    ticket purpose and inference grant are the same whichever lane chose the
+    seed. The caller owns the transaction.
+    """
+    confirmation_datasets: list[ConfirmationDatasetPin] = []
+    # The seed's finalized-block binding, so the validator can re-derive it
+    # and refuse a seed inconsistent with the pin it is told about (the
+    # validator trusts the pin as served; it reads no chain). Searched
+    # across every pinned reign of the version: a catch-up seed introduced
+    # under an earlier champion still binds to that champion's block.
+    seed_binding = bind_confirmation_seed(
+        await list_reign_seed_anchors(session, bench_version=canonical_version),
+        seed=selected_wave_seed,
+        bench_version=canonical_version,
+    )
+    if canonical_version >= 3:
+        if canonical_version >= 13 and (
+            heartbeat is None
+            or not heartbeat_supports_version(
+                heartbeat, now=now, version=canonical_version
             )
-        # Place this retest on a real execution slot. The lane occupies one
-        # slot exactly like a canonical lease, so it answers the same two
-        # questions the canonical lane already answers: which slots is this
-        # validator offering (healthy, not already running), and how many
-        # leases has the operator allowed it to hold at once. Neither was asked
-        # before: the ticket took the ``slot-0`` column default and the lane was
-        # invisible to the operator cap.
-        retest_slot = (
-            live_retest.slot_id
-            if live_retest is not None
-            else await _idle_retest_slot(
-                session,
-                heartbeat=heartbeat,
-                slot_settings=slot_settings,
-                validator_hotkey=payload.validator_hotkey,
-                now=now,
-                lane="non_round",
-                round_reservation_active=await round_reservation_active(
-                    request.app.state, session
-                ),
-                requested_slot_id=payload.slot_id,
-            )
-        )
-        if retest_slot is None:
-            if auto_routed:
-                note_decline_reason("slot_ceiling")
-                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        ):
             raise HTTPException(
-                status_code=409,
-                detail="validator has no idle slot for a continual retest",
+                503,
+                f"deterministic V{canonical_version} scorer capability is unavailable",
             )
-        ticket = await issue_confirmation_ticket(
-            session,
-            agent_id=selected_member_id,
-            validator_hotkey=payload.validator_hotkey,
-            now=now,
-            ttl=ticket_ttl,
-            bench_version=canonical_version,
-            seed=(selected_wave_seed if confirmation_datasets else None),
-            dataset_sha256=(
-                confirmation_datasets[0].dataset_sha256
-                if confirmation_datasets
-                else None
-            ),
-            slot_id=retest_slot,
-        )
-        if ticket is None:
-            if auto_routed:
-                note_decline_reason("no_ticket")
-                return Response(status_code=204, headers={"Cache-Control": "no-store"})
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "validator has another live assignment or this retest is deferred"
-                ),
-            )
-        if seed_binding is not None and ticket.seed == selected_wave_seed:
-            # Record the binding on the lease itself, the same columns the
-            # canonical lane pins, so the seed's provenance is auditable from
-            # the ticket without replaying reign history.
-            ticket.seed_block = seed_binding.seed_block
-            ticket.seed_block_hash = seed_binding.seed_block_hash
-        agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
-        assert agent is not None
-        dataset = await session.get(
-            BenchmarkDataset, (agent.agent_id, ticket.bench_version)
-        )
-        contract = benchmark_contract(ticket.bench_version)
-        inference_grant = await ensure_inference_grant(
-            session,
-            ticket=ticket,
-            config=inference_config,
-            supported_profiles=(
-                tuple(
-                    route.profile_revision for route in v7_calibration.supported_routes
-                )
-                if v7_calibration is not None
-                else None
-            ),
-            calibration_manifest_sha256=(
-                v7_calibration.manifest_sha256 if v7_calibration is not None else None
-            ),
-        )
-        if ticket.bench_version >= 7 and inference_grant is None:
+        if generator.run_size is None:
             raise HTTPException(
                 status_code=503,
-                detail="ticket inference capability is unavailable",
+                detail="top-5 confirmation dataset generation is unavailable",
             )
-        job = JobResponse(
-            agent_id=agent.agent_id,
-            slot_id=ticket.slot_id,
-            miner_hotkey=agent.miner_hotkey,
-            sha256=agent.sha256,
-            deadline=ticket.deadline,
-            seed=dataset.seed if dataset is not None else agent.dataset_seed,
-            dataset_sha256=(
-                dataset.sha256 if dataset is not None else agent.dataset_sha256
-            ),
-            run_size=(
-                dataset.run_size if dataset is not None else agent.dataset_run_size
-            ),
-            dataset_seed_block=(
-                dataset.seed_block if dataset is not None else agent.dataset_seed_block
-            ),
-            dataset_seed_block_hash=(
-                dataset.seed_block_hash
-                if dataset is not None
-                else agent.dataset_seed_block_hash
-            ),
-            bench_version=ticket.bench_version,
-            minimum_screening_policy_version=(
-                contract.minimum_screening_policy_version
-            ),
-            requires_screened_image=contract.requires_screened_image,
-            benchmark_runtime=(
-                inference_settings.benchmark_runtime
-                if ticket.bench_version >= 10
-                else None
-            ),
-            confirmation_datasets=confirmation_datasets,
-            inference=(
-                _inference_grant_offer(
-                    request=request,
-                    grant=inference_grant,
-                    bench_version=ticket.bench_version,
-                )
-                if inference_grant is not None
-                else None
-            ),
+        confirmation_datasets = [
+            ConfirmationDatasetPin(
+                seed=selected_wave_seed,
+                dataset_sha256=await lease_dataset_sha(
+                    request,
+                    generator,
+                    seed=selected_wave_seed,
+                    bench_version=canonical_version,
+                ),
+                run_size=generator.run_size,
+                anchor_agent_id=(
+                    seed_binding.anchor_agent_id if seed_binding is not None else None
+                ),
+                seed_index=(
+                    seed_binding.seed_index if seed_binding is not None else None
+                ),
+                seed_block=(
+                    seed_binding.seed_block if seed_binding is not None else None
+                ),
+                seed_block_hash=(
+                    seed_binding.seed_block_hash if seed_binding is not None else None
+                ),
+            )
+        ]
+    for pin in confirmation_datasets:
+        pin.private_dataset_mode = await _private_dataset_mode(
+            session, pin.dataset_sha256, heartbeat
         )
+    # Place this retest on a real execution slot. The lane occupies one
+    # slot exactly like a canonical lease, so it answers the same two
+    # questions the canonical lane already answers: which slots is this
+    # validator offering (healthy, not already running), and how many
+    # leases has the operator allowed it to hold at once. Neither was asked
+    # before: the ticket took the ``slot-0`` column default and the lane was
+    # invisible to the operator cap.
+    retest_slot = (
+        live_retest.slot_id
+        if live_retest is not None
+        else await _idle_retest_slot(
+            session,
+            heartbeat=heartbeat,
+            slot_settings=slot_settings,
+            validator_hotkey=payload.validator_hotkey,
+            now=now,
+            lane="non_round",
+            round_reservation_active=await round_reservation_active(
+                request.app.state, session
+            ),
+            requested_slot_id=payload.slot_id,
+        )
+    )
+    if retest_slot is None:
+        if auto_routed:
+            note_decline_reason("slot_ceiling")
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        raise HTTPException(
+            status_code=409,
+            detail="validator has no idle slot for a continual retest",
+        )
+    ticket = await issue_confirmation_ticket(
+        session,
+        agent_id=selected_member_id,
+        validator_hotkey=payload.validator_hotkey,
+        now=now,
+        ttl=ticket_ttl,
+        bench_version=canonical_version,
+        seed=(selected_wave_seed if confirmation_datasets else None),
+        dataset_sha256=(
+            confirmation_datasets[0].dataset_sha256 if confirmation_datasets else None
+        ),
+        slot_id=retest_slot,
+    )
+    if ticket is None:
+        if auto_routed:
+            note_decline_reason("no_ticket")
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+        raise HTTPException(
+            status_code=409,
+            detail=("validator has another live assignment or this retest is deferred"),
+        )
+    # Claim the half-open probe on the already-locked circuit, as request_job
+    # does; a no-op unless this lease is the first one after ``retry_at``.
+    register_provider_probe(
+        provider_gate,
+        now=now,
+        kind="scoring",
+        key=scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey, slot_id=ticket.slot_id
+        ),
+    )
+    if seed_binding is not None and ticket.seed == selected_wave_seed:
+        # Record the binding on the lease itself, the same columns the
+        # canonical lane pins, so the seed's provenance is auditable from
+        # the ticket without replaying reign history.
+        ticket.seed_block = seed_binding.seed_block
+        ticket.seed_block_hash = seed_binding.seed_block_hash
+    agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
+    assert agent is not None
+    dataset = await session.get(
+        BenchmarkDataset, (agent.agent_id, ticket.bench_version)
+    )
+    contract = benchmark_contract(ticket.bench_version)
+    inference_grant = await ensure_inference_grant(
+        session,
+        ticket=ticket,
+        config=inference_config,
+        supported_profiles=(
+            tuple(route.profile_revision for route in v7_calibration.supported_routes)
+            if v7_calibration is not None
+            else None
+        ),
+        calibration_manifest_sha256=(
+            v7_calibration.manifest_sha256 if v7_calibration is not None else None
+        ),
+    )
+    if ticket.bench_version >= 7 and inference_grant is None:
+        raise HTTPException(
+            status_code=503,
+            detail="ticket inference capability is unavailable",
+        )
+    job = JobResponse(
+        agent_id=agent.agent_id,
+        slot_id=ticket.slot_id,
+        miner_hotkey=agent.miner_hotkey,
+        sha256=agent.sha256,
+        deadline=ticket.deadline,
+        seed=dataset.seed if dataset is not None else agent.dataset_seed,
+        dataset_sha256=(
+            dataset.sha256 if dataset is not None else agent.dataset_sha256
+        ),
+        run_size=(dataset.run_size if dataset is not None else agent.dataset_run_size),
+        dataset_seed_block=(
+            dataset.seed_block if dataset is not None else agent.dataset_seed_block
+        ),
+        dataset_seed_block_hash=(
+            dataset.seed_block_hash
+            if dataset is not None
+            else agent.dataset_seed_block_hash
+        ),
+        bench_version=ticket.bench_version,
+        minimum_screening_policy_version=(contract.minimum_screening_policy_version),
+        requires_screened_image=contract.requires_screened_image,
+        benchmark_runtime=(
+            inference_settings.benchmark_runtime if ticket.bench_version >= 10 else None
+        ),
+        confirmation_datasets=confirmation_datasets,
+        inference=(
+            _inference_grant_offer(
+                request=request,
+                grant=inference_grant,
+                bench_version=ticket.bench_version,
+            )
+            if inference_grant is not None
+            else None
+        ),
+    )
     logger.info(
-        "issued top-5 rescore job champion=%s member=%s validator=%s",
-        champion_agent_id,
+        "issued top-5 rescore job route=%s member=%s seed_leased=%s validator=%s",
+        route,
         selected_member_id,
+        ticket.seed is not None,
         payload.validator_hotkey,
     )
     return job

@@ -11975,7 +11975,16 @@ describe('Backroom MCP tools', () => {
         in_retest_cohort: false,
         representative_selection: 'official_composite',
         cohort_cutoff: { gap: -0.23628, within_tie_band: true },
-        claim: { decision: 'not_in_cohort', route_priority: 'not_routed', pending_seed_count: 2 },
+        claim: {
+          decision: 'not_in_cohort',
+          route_priority: 'not_routed',
+          pending_seed_count: 2,
+          // A platform predating void re-run debt reads as owing nothing.
+          void_rerun_seed_count: 0,
+          void_rerun_claimable: false,
+          provider_outage_active: false,
+          provider_gate_closed: false,
+        },
         raw_confirmation_seeds: ['9223372036854775001'],
       })
       const text = readTextResult(response)

@@ -9073,17 +9073,28 @@ export const retestClaimabilitySchema = z.object({
   spare_capacity_window: z.boolean(),
   idle_retests_enabled: z.boolean(),
   in_catchup_set: z.boolean(),
-  route_priority: z.enum(['champion', 'catchup', 'emission', 'extended', 'not_routed']),
+  // `void_rerun`: owes a replacement for an infrastructure-voided sample, which
+  // the lane issues right behind the crown regardless of cohort.
+  route_priority: z.enum([
+    'champion', 'void_rerun', 'catchup', 'emission', 'extended', 'not_routed',
+  ]),
   route_position: z.number().int().positive().nullable(),
   pending_seed_count: z.number().int().nonnegative(),
   claimable_seed_available: z.boolean(),
   live_lease_count: z.number().int().nonnegative(),
   newer_canonical_work_pending: z.boolean(),
   least_covered_admitted: z.boolean().nullable(),
+  // Voided seeds still owed one replacement run: a count, never seed values.
+  void_rerun_seed_count: z.number().int().nonnegative().default(0),
+  void_rerun_claimable: z.boolean().default(false),
+  provider_outage_active: z.boolean().default(false),
+  // The provider gate admits no new lease now: the lane issues nothing on any
+  // route and the decision is `provider_outage`.
+  provider_gate_closed: z.boolean().default(false),
   decision: z.enum([
     'claimable', 'lane_disabled', 'not_in_cohort', 'chain_unavailable',
     'round_not_due', 'newer_canonical_work_pending', 'no_pending_seeds',
-    'all_pending_seeds_leased', 'another_member_less_covered',
+    'all_pending_seeds_leased', 'another_member_less_covered', 'provider_outage',
   ]),
 })
 

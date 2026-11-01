@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.confirmation_score_voids import (
@@ -33,6 +33,7 @@ from ditto.db.models import (
 from ditto.db.queries.confirmation_score_voids import (
     VoidRequest,
     outage_evidence_qualifies,
+    outstanding_void_rerun_debts,
     void_confirmation_samples,
 )
 from ditto.db.queries.confirmation_scores import (
@@ -387,3 +388,78 @@ async def test_endpoint_dry_run_then_all_or_nothing(session: AsyncSession) -> No
     assert [(v.seed, v.actor, v.source) for v in listed.items] == [
         (str(_BAD_SEED), "peyton", "operator")
     ]
+
+
+async def test_each_void_owes_one_replacement_from_either_side(
+    session: AsyncSession,
+) -> None:
+    """The debt is per voided seed and settles on one replacement.
+
+    Either the voiding validator re-runs its own key (generation 1), or a
+    validator with no row on the seed runs it fresh -- which ``append`` writes
+    at generation 0 under that validator's own key. Both settle the debt, and a
+    generation-0 row that predates the void does not.
+    """
+    agent_id = await _fixture(session)
+    async with session.begin():
+        [outcome] = await void_confirmation_samples(
+            session,
+            requests=[_request(agent_id, _HEO, _BAD_SEED, "fd227604", 0.651813)],
+            bench_version=_V,
+            reason="gateway credit exhaustion 2026-10-31",
+            actor="outage_sweep",
+            source="outage_sweep",
+            now=_NOW,
+            apply=True,
+        )
+    assert outcome.disposition == "applied"
+    await session.commit()
+
+    async with session.begin():
+        [debt] = await outstanding_void_rerun_debts(session, bench_version=_V)
+    assert (debt.agent_id, debt.seed, debt.outstanding) == (agent_id, _BAD_SEED, 1)
+    assert debt.rerun_validators == frozenset({_HEO})
+    assert debt.scored_validators == frozenset({_HEO})
+    await session.commit()
+
+    fresh = "5FreshValidatorWithNoRowOnThisSeedXXXXXXXXXXXXXXX"
+    async with session.begin():
+        # A fresh validator's single-seed run appends at generation 0 for its
+        # own key; the pinned lease's rerun_seeds does not get in its way.
+        assert (
+            await append_confirmation_scores(
+                session,
+                rows=[
+                    ConfirmationSeedScore(
+                        agent_id=agent_id,
+                        validator_hotkey=fresh,
+                        seed=_BAD_SEED,
+                        composite=0.925,
+                        run_id="fresh-1",
+                        signature=None,
+                    )
+                ],
+                bench_version=_V,
+                created_at=_NOW + timedelta(minutes=30),
+                rerun_seeds=frozenset({_BAD_SEED}),
+            )
+            == 1
+        )
+    row = await session.get(ConfirmationScore, (agent_id, _V, fresh, _BAD_SEED, 0))
+    assert row is not None
+    assert await outstanding_void_rerun_debts(session, bench_version=_V) == []
+    assert await confirmation_composites_by_seed(
+        session, agent_ids=[agent_id], bench_version=_V
+    ) == {agent_id: {_BAD_SEED: 0.925, _GOOD_SEED: 0.919667}}
+    await session.commit()
+
+    # An agent that left scored status owes nothing, whatever its voids say.
+    async with session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.REJECTED
+        await session.execute(
+            delete(ConfirmationScore).where(ConfirmationScore.validator_hotkey == fresh)
+        )
+    async with session.begin():
+        assert await outstanding_void_rerun_debts(session, bench_version=_V) == []

@@ -66,7 +66,11 @@ class RetestClaimability(BaseModel):
     idle_retests_enabled: bool
     in_catchup_set: bool
     """Whether this agent owes backlog seeds no live lease is covering."""
-    route_priority: Literal["champion", "catchup", "emission", "extended", "not_routed"]
+    route_priority: Literal[
+        "champion", "void_rerun", "catchup", "emission", "extended", "not_routed"
+    ]
+    """``void_rerun``: owes a replacement for an infrastructure-voided sample,
+    which the lane issues right behind the crown regardless of cohort."""
     route_position: int | None
     """1-based place in the auto-route candidate order, or null when absent."""
     pending_seed_count: int
@@ -77,6 +81,20 @@ class RetestClaimability(BaseModel):
     """A newer same-miner submission is still awaiting canonical quorum."""
     least_covered_admitted: bool | None
     """The fairness gate's answer, or null when no seed was claimable anyway."""
+    void_rerun_seed_count: int = 0
+    """Voided seeds still owed a replacement run (a count; seeds stay private).
+
+    Each void owes exactly one replacement for its seed; the count drops as
+    replacements land and never exceeds the number of voids."""
+    void_rerun_claimable: bool = False
+    """Whether a validator polling now could lease one of those seeds."""
+    provider_outage_active: bool = False
+    """Provider circuit open or inside its recovery quiet window; void re-run
+    debt is withheld until the provider is healthy again."""
+    provider_gate_closed: bool = False
+    """The provider-outage gate admits no new lease right now (open circuit
+    cooling down, or its one half-open probe already claimed). The lane then
+    issues nothing on any route and the decision is ``provider_outage``."""
     decision: Literal[
         "claimable",
         "lane_disabled",
@@ -87,6 +105,7 @@ class RetestClaimability(BaseModel):
         "no_pending_seeds",
         "all_pending_seeds_leased",
         "another_member_less_covered",
+        "provider_outage",
     ]
 
 
