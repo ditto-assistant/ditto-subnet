@@ -8,7 +8,14 @@ candidate's upload, and the recorded shadow signals.
 from __future__ import annotations
 
 from array import array
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterable,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -302,10 +309,30 @@ async def load_context(
             (aid for aid, at in all_released.items() if at < uploaded_at),
             key=str,
         ),
-        owner_names=sorted(
-            {a.name for a in rows if owners.get(a.agent_id) == owners[agent.agent_id]}
-        ),
+        owner_names=await _owner_names(session, agent, rows, owners, links),
     )
+
+
+async def _owner_names(
+    session: AsyncSession,
+    agent: Agent,
+    rows: Sequence[Agent],
+    owners: Mapping[UUID, str],
+    links: Sequence[tuple[str, str]],
+) -> list[str]:
+    """Every agent name the candidate's owner has used, before or after it.
+
+    Names identify the owner for the shared-namespace hint, so an owner whose
+    namespace is named after a later agent (one operator renaming a line) is
+    still recognized; content timing does not apply to a label.
+    """
+    owner = owners[agent.agent_id]
+    hotkeys = {a.miner_hotkey for a in rows if owners.get(a.agent_id) == owner}
+    hotkeys.update(h for pair in links for h in pair)
+    names = await session.scalars(
+        select(Agent.name).where(Agent.miner_hotkey.in_(sorted(hotkeys))).distinct()
+    )
+    return sorted({*names.all(), agent.name})
 
 
 def signal_payload(signal: CopySignal, *, evidence_status: str) -> dict[str, Any]:

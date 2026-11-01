@@ -88,7 +88,9 @@ What changed from dc1/uc1, each from a reviewed false positive:
   registry, Docker ``FROM``) that contains one of the candidate owner's
   agent-name tokens marks the pair ``probable_same_owner``: listed, never
   flagged. A namespace named after the source is what a copier carries over
-  with the code, so it excuses nothing.
+  with the code, so it excuses nothing. The owner's names are every name its
+  hotkeys have used, including later uploads (signal ``uc3``): an operator's
+  first line can predate the agent its namespace is named after.
 
 Threshold: **50** recommended (set through the audited setting). The smallest
 copy scores 114, the largest non-copy pair 39.8.

@@ -18,7 +18,7 @@ from ditto.api_server.distinctive_content import extract_items
 from ditto.api_server.unreleased_copy import IndexedAgent, attach_evidence, evaluate
 from ditto.api_server.unreleased_copy_sentinel import UnreleasedCopySentinel
 from ditto.db.models import Agent, AgentStatus
-from ditto.db.queries.unreleased_copy import index_keys, store_items
+from ditto.db.queries.unreleased_copy import index_keys, load_context, store_items
 
 _T0 = datetime(2026, 10, 29, 12, tzinfo=UTC)
 _TOKEN = "test-admin-token-at-least-32-characters"
@@ -176,6 +176,25 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     async with session_maker() as session:
         port = await session.get(Agent, port_id)
         assert port is not None and port.status == AgentStatus.SCORED
+    # The owner's later agent names still identify it for the namespace hint.
+    async with session_maker() as session, session.begin():
+        session.add(
+            Agent(
+                agent_id=uuid4(),
+                miner_hotkey="5Porter",
+                name="porter-renamed",
+                version=1,
+                sha256="f" * 64,
+                status=AgentStatus.SCORED,
+                created_at=_T0 + timedelta(hours=9),
+            )
+        )
+    async with session_maker() as session:
+        port = await session.get(Agent, port_id)
+        assert port is not None
+        context = await load_context(session, port)
+        assert context is not None
+        assert context.owner_names == ["port-agent", "porter-renamed"]
 
     app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
     app.state.unreleased_copy_sentinel = sentinel

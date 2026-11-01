@@ -61,7 +61,7 @@ from ditto.api_server.distinctive_content import (
     public_item_keys,
 )
 
-SIGNAL_VERSION = "uc2"
+SIGNAL_VERSION = "uc3"
 
 KIND_WEIGHTS: Mapping[str, float] = {
     KIND_TEXT: 1.0,
