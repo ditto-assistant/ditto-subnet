@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.426.3 (2026-11-01)
+
+### Performance Improvements
+
+- **platform**: Compute unreleased-copy overlaps in the worker, not Postgres
+  ([#3314](https://github.com/ditto-assistant/ditto-subnet/pull/3314),
+  [`f26320f`](https://github.com/ditto-assistant/ditto-subnet/commit/f26320f9ed7ae408d4f76565bf83cdbbe9b095fd))
+
+
 ## v0.426.2 (2026-11-01)
 
 ### Bug Fixes
