@@ -196,6 +196,9 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   // The court's dry-run triage reads both submissions' source server-side
   // (audited) and returns file paths and line locations, so it gates the same.
   ['preview_copy_court_triage', BACKROOM_ARTIFACT_SCOPE],
+  // The unreleased-copy evidence quotes normalized source text and path:line
+  // locations from two submissions, so it gates the same.
+  ['get_unreleased_copy_signal', BACKROOM_ARTIFACT_SCOPE],
   ['get_screening_review_lineage', BACKROOM_ARTIFACT_SCOPE],
   // Baseline diffs render miner source against the starter kit, so they gate on
   // the same dedicated artifact scope.

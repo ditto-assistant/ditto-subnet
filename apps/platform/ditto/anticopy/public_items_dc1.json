@@ -1,0 +1,35 @@
+{
+  "version": "dc1",
+  "items": 85172,
+  "sources": [
+    {
+      "repo": "ditto-assistant/ditto-subnet",
+      "paths": [
+        "miners",
+        "research/dittobench-datagen"
+      ],
+      "head": "03ee19ee768e990f001eb36eb1d740b679b5fc11"
+    },
+    {
+      "repo": "ditto-assistant/ditto-harness",
+      "paths": [
+        "."
+      ],
+      "head": "f63422f459df2c9e181f389ec89b0b900293b4d5"
+    },
+    {
+      "repo": "ditto-assistant/dittobench-starter-kit",
+      "paths": [
+        "."
+      ],
+      "head": "65f9e2cb761a4db4ae71493b9a483870bf48ed7b"
+    },
+    {
+      "repo": "ditto-assistant/dittobench-datagen",
+      "paths": [
+        "."
+      ],
+      "head": "36ad1b5f0d15beb252eeca222dde1660aa22dba9"
+    }
+  ]
+}

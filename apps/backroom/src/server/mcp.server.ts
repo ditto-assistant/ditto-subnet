@@ -213,6 +213,7 @@ import {
   scheduleCanonicalStarterInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
+  unreleasedCopySignalsInputSchema,
   confirmationSeedAnchorsInputSchema,
   outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
@@ -373,6 +374,8 @@ import {
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   fetchCopyCourtTriagePreview,
+  fetchUnreleasedCopySignal,
+  fetchUnreleasedCopySignals,
   fetchConfirmationSeedAnchors,
   applyCopyCourtSettings,
   applyScreenerReviewSettings,
@@ -731,6 +734,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read V13+ pinned/waiting confirmation anchors and floors.',
   list_copy_court_recommendations:
     'Page court verdicts and evidence for copy holds.',
+  get_unreleased_copy_signal:
+    'Shadow unreleased-copy evidence, path:line both sides. Artifact scope.',
+  list_unreleased_copy_signals:
+    'Page shadow unreleased-copy signals.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -2886,6 +2893,33 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       artifact(() => fetchCopyCourtTriagePreview(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_unreleased_copy_signal',
+    {
+      title: 'Get unreleased copy signal',
+      description:
+        'Read the shadow unreleased-copy signal for one agent: whether its artifact carries distinctive content (normalized string literals, prompt and constant text, cue/keyword lists, long identifiers, in any language) that another owner\'s agent held before it while that agent was still unreleased. Same-owner history (hotkey, payment coldkey, attested links), the public corpus (starter kits, ditto-harness, generator vocabulary), every agent released before the upload, and items held by four or more other owners are excluded first. Returns recorded (the sentinel\'s stored evaluation: threshold, flagged, top_score, excluded counts, evidence_status) with up to five matches, each with agent identity, status, uploaded_at, released_at and release_state, the kind-weighted score, per-kind counts, and up to 60 shared items as kind, normalized text, candidate path:line and matched path:line. live=true also recomputes read-only against the current index (Platform reads both artifacts for evidence; nothing is written). index shows the agent\'s item count or read error; runtime shows the sentinel\'s mode (shadow: never holds or rejects), threshold and last tick. A flag is a lead for copy review, not a ruling. Requires the dedicated backroom:artifact:read scope.',
+      inputSchema: {
+        agentId: sourceAgentId(),
+        live: z.boolean().default(false),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => artifact(() => fetchUnreleasedCopySignal(input)),
+  )
+
+  registerTool(
+    'list_unreleased_copy_signals',
+    {
+      title: 'List unreleased copy signals',
+      description:
+        'Page recorded shadow unreleased-copy signals, highest score first: agent identity and status, flagged, top_score, the top matched agent, mode and computed_at, plus coverage (agents, indexed, unreadable, oldest_unindexed_at, evaluated, flagged) and the sentinel runtime. flaggedOnly=true (default) is the operator review list; set it false with minScore to see near misses. Names no source text; read get_unreleased_copy_signal for the shared items. Requires backroom:read.',
+      inputSchema: unreleasedCopySignalsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchUnreleasedCopySignals(input)),
   )
 
   registerTool(

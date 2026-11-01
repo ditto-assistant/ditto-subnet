@@ -4717,6 +4717,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/unreleased-copy/agents/{agent_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Unreleased Copy Signal
+         * @description One agent's recorded signal, shared items and matched agents.
+         */
+        get: operations["get_unreleased_copy_signal_api_v1_admin_unreleased_copy_agents__agent_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/unreleased-copy/signals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Unreleased Copy Signals
+         * @description Recorded signals by score: the operator review list, never public.
+         */
+        get: operations["list_unreleased_copy_signals_api_v1_admin_unreleased_copy_signals_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/v13-official-controls": {
         parameters: {
             query?: never;
@@ -15149,6 +15189,142 @@ export interface components {
             /** Reason */
             reason: string;
             settings: components["schemas"]["TreasurySettings"];
+        };
+        /** AdminUnreleasedCopyCoverage */
+        AdminUnreleasedCopyCoverage: {
+            /** Agents */
+            agents: number;
+            /** Evaluated */
+            evaluated: number;
+            /** Flagged */
+            flagged: number;
+            /** Indexed */
+            indexed: number;
+            /** Oldest Unindexed At */
+            oldest_unindexed_at: string | null;
+            /** Unreadable */
+            unreadable: number;
+        };
+        /** AdminUnreleasedCopyIndex */
+        AdminUnreleasedCopyIndex: {
+            /** Error */
+            error: string | null;
+            /**
+             * Indexed At
+             * Format: date-time
+             */
+            indexed_at: string;
+            /** Item Count */
+            item_count: number;
+            /** Items Version */
+            items_version: string;
+        };
+        /** AdminUnreleasedCopyRuntime */
+        AdminUnreleasedCopyRuntime: {
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Last Tick Counters */
+            last_tick_counters: {
+                [key: string]: number;
+            };
+            /** Last Tick Error */
+            last_tick_error: string | null;
+            /** Last Tick Finished At */
+            last_tick_finished_at: string | null;
+            /** Last Tick Started At */
+            last_tick_started_at: string | null;
+            /** Mode */
+            mode: string;
+            /** Running */
+            running: boolean;
+            /** Signal Version */
+            signal_version: string;
+            /** Storage Configured */
+            storage_configured: boolean;
+            /** Threshold */
+            threshold: number;
+        };
+        /** AdminUnreleasedCopySignal */
+        AdminUnreleasedCopySignal: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /** Computed At */
+            computed_at: string | null;
+            index: components["schemas"]["AdminUnreleasedCopyIndex"] | null;
+            live: components["schemas"]["UnreleasedCopyEvaluation"] | null;
+            /** Live Unavailable Reason */
+            live_unavailable_reason: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Mode */
+            mode: string | null;
+            recorded: components["schemas"]["UnreleasedCopyEvaluation"] | null;
+            runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
+            /**
+             * Uploaded At
+             * Format: date-time
+             */
+            uploaded_at: string;
+        };
+        /** AdminUnreleasedCopySignalList */
+        AdminUnreleasedCopySignalList: {
+            coverage: components["schemas"]["AdminUnreleasedCopyCoverage"];
+            /** Items */
+            items: components["schemas"]["AdminUnreleasedCopySummary"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
+            /** Total */
+            total: number;
+        };
+        /** AdminUnreleasedCopySummary */
+        AdminUnreleasedCopySummary: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /**
+             * Computed At
+             * Format: date-time
+             */
+            computed_at: string;
+            /** Flagged */
+            flagged: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Mode */
+            mode: string;
+            /** Top Matched Agent Id */
+            top_matched_agent_id: string | null;
+            /** Top Matched Name */
+            top_matched_name: string | null;
+            /** Top Matched Version */
+            top_matched_version: number | null;
+            /** Top Score */
+            top_score: number;
+            /**
+             * Uploaded At
+             * Format: date-time
+             */
+            uploaded_at: string;
         };
         /**
          * AdminV13PrivatePackageReadiness
@@ -39911,6 +40087,83 @@ export interface components {
              */
             twin_groups_concordant: number;
         };
+        /** UnreleasedCopyEvaluation */
+        UnreleasedCopyEvaluation: {
+            /** Candidate Item Count */
+            candidate_item_count: number;
+            /** Compared Agent Count */
+            compared_agent_count: number;
+            /**
+             * Evidence Status
+             * @enum {string}
+             */
+            evidence_status: "attached" | "not_needed" | "unavailable";
+            /** Excluded */
+            excluded: {
+                [key: string]: number;
+            };
+            /** Flagged */
+            flagged: boolean;
+            /** Items Version */
+            items_version: string;
+            /** Matches */
+            matches: components["schemas"]["UnreleasedCopyMatch"][];
+            /** Signal Version */
+            signal_version: string;
+            /** Threshold */
+            threshold: number;
+            /** Top Score */
+            top_score: number;
+        };
+        /** UnreleasedCopyItem */
+        UnreleasedCopyItem: {
+            /** Candidate */
+            candidate: string;
+            /** Kind */
+            kind: string;
+            /** Matched */
+            matched: string;
+            /** Text */
+            text: string;
+        };
+        /** UnreleasedCopyMatch */
+        UnreleasedCopyMatch: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /** Items */
+            items: components["schemas"]["UnreleasedCopyItem"][];
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Release State
+             * @enum {string}
+             */
+            release_state: "unreleased" | "released_after_upload";
+            /** Released At */
+            released_at: string | null;
+            /** Score */
+            score: number;
+            /** Shared By Kind */
+            shared_by_kind: {
+                [key: string]: number;
+            };
+            /** Shared Count */
+            shared_count: number;
+            /**
+             * Uploaded At
+             * Format: date-time
+             */
+            uploaded_at: string;
+        };
         /**
          * UploadAgentResponse
          * @description Returned by ``POST /upload/agent`` on a successful upload.
@@ -52415,6 +52668,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_unreleased_copy_signal_api_v1_admin_unreleased_copy_agents__agent_id__get: {
+        parameters: {
+            query?: {
+                live?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUnreleasedCopySignal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_unreleased_copy_signals_api_v1_admin_unreleased_copy_signals_get: {
+        parameters: {
+            query?: {
+                flagged_only?: boolean;
+                min_score?: number;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUnreleasedCopySignalList"];
                 };
             };
             /** @description Validation Error */

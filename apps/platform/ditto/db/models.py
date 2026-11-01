@@ -36,7 +36,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     UUID as SaUUID,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TIMESTAMP
 
@@ -14297,5 +14297,76 @@ class GeneratorRoundCaseVerdict(Base):
             "generator_round_case_verdicts_submission_idx",
             "submission_id",
             "round_index",
+        ),
+    )
+
+
+class AgentDistinctiveItems(Base):
+    """Distinctive-item index of one artifact for the unreleased-copy signal.
+
+    ``item_keys`` is the sorted set of item keys left after the packaged public
+    corpus is removed (:mod:`ditto.api_server.distinctive_content`; the low
+    three bits of each key carry its kind). Written at upload, or by the
+    sentinel's backfill for artifacts uploaded before the index existed. A row
+    with ``error`` set marks an artifact that could not be read, so it is never
+    retried forever and never blocks evaluation of later uploads. Paths and
+    text are deliberately not stored: evidence is re-extracted from the artifact
+    for the few pairs an operator reads.
+    """
+
+    __tablename__ = "agent_distinctive_items"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    items_version: Mapped[str] = mapped_column(Text, nullable=False)
+    item_keys: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    indexed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class UnreleasedCopySignal(Base):
+    """One evaluation of the unreleased-copy signal for one agent and version.
+
+    Recorded by the sentinel in ``shadow`` mode: the score, the best matches
+    with their release state, and ``path:line`` evidence on both sides. A
+    shadow row never changes agent status, a hold, or a review. ``evidence`` is
+    the operator-only payload :func:`ditto.db.queries.unreleased_copy.signal_payload`
+    builds; it names other owners' unreleased files and is never public.
+    """
+
+    __tablename__ = "unreleased_copy_signals"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    signal_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    flagged: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    top_score: Mapped[float] = mapped_column(Float, nullable=False)
+    top_matched_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    compared_agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "mode IN ('shadow', 'enforce')", name="unreleased_copy_signals_mode_check"
+        ),
+        Index(
+            "unreleased_copy_signals_flagged_idx",
+            "signal_version",
+            "flagged",
+            "top_score",
         ),
     )

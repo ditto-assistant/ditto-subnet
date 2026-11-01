@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Annotated
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import UUID4
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -58,8 +59,10 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.distinctive_content import extract_items
 from ditto.api_server.embedding import Embedder
 from ditto.api_server.fingerprint import (
+    _excluded_from_fingerprints,
     compute_content_fingerprint,
     compute_embedding_input,
     compute_normalized_source_hash,
@@ -106,6 +109,7 @@ from ditto.db.queries.submission_settings import (
     release_upload_admission_for_exact_retry,
     reserve_upload_admission,
 )
+from ditto.db.queries.unreleased_copy import store_items as store_distinctive_items
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
@@ -873,6 +877,17 @@ async def upload_agent(
     embed_input = await asyncio.to_thread(compute_embedding_input, tar_bytes)
     code_embedding = await embedder.embed(embed_input) if embed_input else None
     code_embed_model = embedder.model_tag if code_embedding is not None else None
+    # 7f. distinctive-item index for the unreleased-copy signal (shadow): the
+    # language-agnostic literal/identifier items a cross-language port keeps.
+    # Best-effort like the channels above: on failure the row is simply absent
+    # and the sentinel indexes the artifact from storage on its next tick.
+    try:
+        distinctive_items = await asyncio.to_thread(
+            extract_items, tar_bytes, excluded=_excluded_from_fingerprints
+        )
+    except Exception:
+        logger.exception("distinctive-item extraction failed")
+        distinctive_items = None
 
     if session.in_transaction():
         rollback_result = session.rollback()
@@ -922,6 +937,14 @@ async def upload_agent(
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
             )
+            if distinctive_items is not None:
+                try:
+                    async with session.begin_nested():
+                        await store_distinctive_items(
+                            session, agent_id=agent_id, extracted=distinctive_items
+                        )
+                except SQLAlchemyError:
+                    logger.exception("distinctive-item index write failed")
             if using_credit:
                 locked_credit = await get_evaluation_payment_for_proof(
                     session,

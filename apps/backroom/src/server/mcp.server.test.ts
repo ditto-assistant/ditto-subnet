@@ -721,6 +721,8 @@ describe('Backroom MCP tools', () => {
         'list_lease_revocations',
         'list_copy_court_recommendations',
         'preview_copy_court_triage',
+        'get_unreleased_copy_signal',
+        'list_unreleased_copy_signals',
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
@@ -942,7 +944,10 @@ describe('Backroom MCP tools', () => {
     // detail in tool help) measures 215,494 bytes; keep about 0.5 KB headroom.
     // The artifact fetch audit read (agentId-or-sha, before, limit; one-line
     // summary, detail in tool help) measures 216,078 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(216_600)
+    // The unreleased-copy pair (one artifact-scoped uuid read, one bounded
+    // list; one-line summaries, detail in tool help) measures 217,360 bytes;
+    // keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(217_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -988,8 +993,9 @@ describe('Backroom MCP tools', () => {
       // measures 27,441. The validator request-outcome read (job polls and
       // the weight ledger, one line) brings the measured total to 27,653.
       // The one-line decision-lane read measures 27,740; the one-line
-      // per-attempt review budget read brings it to 27,845.
-      28_000,
+      // per-attempt review budget read brings it to 27,845. The two one-line
+      // unreleased-copy reads measure 28,028; keep about 200 chars.
+      28_250,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -10048,6 +10054,150 @@ describe('Backroom MCP tools', () => {
       })
       expect(listed.isError).not.toBe(true)
       expect(String(fetchMock.mock.calls[1][0])).toContain(`agent_id=${agentId}`)
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
+  })
+
+  it('reads unreleased-copy signals: evidence on artifact scope, list on read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5'
+    const matchedId = 'b7b7b7b7-c8c8-4d9d-8e0e-f1f1f1f1f1f1'
+    const runtime = {
+      running: true,
+      mode: 'shadow',
+      signal_version: 'uc1',
+      threshold: 40,
+      interval_seconds: 30,
+      storage_configured: true,
+      last_tick_started_at: '2026-11-01T12:00:00Z',
+      last_tick_finished_at: '2026-11-01T12:00:02Z',
+      last_tick_counters: { indexed: 8, evaluated: 4, flagged: 1 },
+      last_tick_error: null,
+    }
+    const evaluation = {
+      signal_version: 'uc1',
+      items_version: 'dc1',
+      threshold: 40,
+      flagged: true,
+      top_score: 119.25,
+      candidate_item_count: 1408,
+      compared_agent_count: 21,
+      excluded: { released_base: 1500, common: 30 },
+      evidence_status: 'attached',
+      matches: [
+        {
+          agent_id: matchedId,
+          agent_name: 'source',
+          agent_version: 17,
+          miner_hotkey: '5Source',
+          agent_status: 'scored',
+          uploaded_at: '2026-10-29T15:20:43Z',
+          released_at: null,
+          release_state: 'unreleased',
+          score: 119.25,
+          shared_count: 126,
+          shared_by_kind: { text: 78, seq: 38 },
+          items: [
+            {
+              kind: 'text',
+              text: 'zephyr quandary alpha marmalade',
+              candidate: 'src/guidance/cues.rs:75',
+              matched: 'app/guide_records.py:29',
+            },
+          ],
+        },
+      ],
+    }
+    const signal = {
+      agent_id: agentId,
+      agent_name: 'candidate',
+      agent_version: 2,
+      miner_hotkey: '5Candidate',
+      agent_status: 'rejected',
+      uploaded_at: '2026-10-29T21:13:22Z',
+      index: { items_version: 'dc1', item_count: 2941, error: null, indexed_at: '2026-10-29T21:13:23Z' },
+      mode: 'shadow',
+      computed_at: '2026-10-29T21:14:00Z',
+      recorded: evaluation,
+      live: null,
+      live_unavailable_reason: null,
+      runtime,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(signal))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const denied = await readOnly.client.callTool({
+      name: 'get_unreleased_copy_signal',
+      arguments: { agentId },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            agent_id: agentId,
+            agent_name: 'candidate',
+            agent_version: 2,
+            miner_hotkey: '5Candidate',
+            agent_status: 'rejected',
+            uploaded_at: '2026-10-29T21:13:22Z',
+            mode: 'shadow',
+            flagged: true,
+            top_score: 119.25,
+            top_matched_agent_id: matchedId,
+            top_matched_name: 'source',
+            top_matched_version: 17,
+            computed_at: '2026-10-29T21:14:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        coverage: {
+          agents: 3914,
+          indexed: 3914,
+          unreadable: 2,
+          oldest_unindexed_at: null,
+          evaluated: 3912,
+          flagged: 1,
+        },
+        runtime,
+      }),
+    )
+    const listed = await readOnly.client.callTool({
+      name: 'list_unreleased_copy_signals',
+      arguments: {},
+    })
+    expect(listed.isError).not.toBe(true)
+    expect(readJsonResult(listed)).toMatchObject({ total: 1, coverage: { flagged: 1 } })
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/admin/unreleased-copy/signals?flagged_only=true&min_score=0&limit=50&offset=0',
+    )
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    fetchMock.mockResolvedValue(Response.json(signal))
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const response = await granted.client.callTool({
+        name: 'get_unreleased_copy_signal',
+        arguments: { agentId, live: true },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        mode: 'shadow',
+        recorded: {
+          flagged: true,
+          matches: [{ agent_id: matchedId, release_state: 'unreleased' }],
+        },
+      })
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(String(url)).toContain(`/api/v1/admin/unreleased-copy/agents/${agentId}?live=true`)
+      expect(init.method ?? 'GET').toBe('GET')
     } finally {
       await granted.client.close()
       await granted.server.close()

@@ -10591,3 +10591,137 @@ export const validatorRequestOutcomeSummarySchema = z.object({
   unauthenticated: z.record(z.string(), z.number().int().nonnegative()),
   validators: z.array(validatorRequestOutcomesSchema),
 } satisfies PlatformResponseShape<GeneratedValidatorRequestOutcomeSummary>)
+
+// Unreleased-copy signal (shadow). Evidence carries normalized source text
+// from two submissions, so the per-agent read is gated on the artifact scope.
+type GeneratedUnreleasedCopyItem = PlatformComponents['schemas']['UnreleasedCopyItem']
+type GeneratedUnreleasedCopyMatch = PlatformComponents['schemas']['UnreleasedCopyMatch']
+type GeneratedUnreleasedCopyEvaluation =
+  PlatformComponents['schemas']['UnreleasedCopyEvaluation']
+type GeneratedUnreleasedCopyIndex = PlatformComponents['schemas']['AdminUnreleasedCopyIndex']
+type GeneratedUnreleasedCopyRuntime =
+  PlatformComponents['schemas']['AdminUnreleasedCopyRuntime']
+type GeneratedUnreleasedCopySignal = PlatformComponents['schemas']['AdminUnreleasedCopySignal']
+type GeneratedUnreleasedCopySummary =
+  PlatformComponents['schemas']['AdminUnreleasedCopySummary']
+type GeneratedUnreleasedCopyCoverage =
+  PlatformComponents['schemas']['AdminUnreleasedCopyCoverage']
+type GeneratedUnreleasedCopySignalList =
+  PlatformComponents['schemas']['AdminUnreleasedCopySignalList']
+
+const unreleasedCopyTimestamp = () => z.string().datetime({ offset: true })
+
+export const unreleasedCopyItemSchema = z.object({
+  kind: z.string().min(1),
+  text: z.string(),
+  candidate: z.string().min(1),
+  matched: z.string().min(1),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyItem>)
+
+export const unreleasedCopyMatchSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  uploaded_at: unreleasedCopyTimestamp(),
+  released_at: unreleasedCopyTimestamp().nullable(),
+  release_state: z.enum(['unreleased', 'released_after_upload']),
+  score: z.number(),
+  shared_count: z.number().int().nonnegative(),
+  shared_by_kind: z.record(z.string(), z.number().int()),
+  items: z.array(unreleasedCopyItemSchema),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyMatch>)
+
+export const unreleasedCopyEvaluationSchema = z.object({
+  signal_version: z.string(),
+  items_version: z.string(),
+  threshold: z.number(),
+  flagged: z.boolean(),
+  top_score: z.number(),
+  candidate_item_count: z.number().int().nonnegative(),
+  compared_agent_count: z.number().int().nonnegative(),
+  excluded: z.record(z.string(), z.number().int()),
+  evidence_status: z.enum(['attached', 'not_needed', 'unavailable']),
+  matches: z.array(unreleasedCopyMatchSchema),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyEvaluation>)
+
+const unreleasedCopyIndexSchema = z.object({
+  items_version: z.string(),
+  item_count: z.number().int().nonnegative(),
+  error: z.string().nullable(),
+  indexed_at: unreleasedCopyTimestamp(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyIndex>)
+
+const unreleasedCopyRuntimeSchema = z.object({
+  running: z.boolean(),
+  mode: z.string(),
+  signal_version: z.string(),
+  threshold: z.number(),
+  interval_seconds: z.number(),
+  storage_configured: z.boolean(),
+  last_tick_started_at: unreleasedCopyTimestamp().nullable(),
+  last_tick_finished_at: unreleasedCopyTimestamp().nullable(),
+  last_tick_counters: z.record(z.string(), z.number().int()),
+  last_tick_error: z.string().nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyRuntime>)
+
+export const unreleasedCopySignalSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  uploaded_at: unreleasedCopyTimestamp(),
+  index: unreleasedCopyIndexSchema.nullable(),
+  mode: z.string().nullable(),
+  computed_at: unreleasedCopyTimestamp().nullable(),
+  recorded: unreleasedCopyEvaluationSchema.nullable(),
+  live: unreleasedCopyEvaluationSchema.nullable(),
+  live_unavailable_reason: z.string().nullable(),
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySignal>)
+
+const unreleasedCopySummarySchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable(),
+  miner_hotkey: z.string(),
+  agent_status: z.string(),
+  uploaded_at: unreleasedCopyTimestamp(),
+  mode: z.string(),
+  flagged: z.boolean(),
+  top_score: z.number(),
+  top_matched_agent_id: z.string().uuid().nullable(),
+  top_matched_name: z.string().nullable(),
+  top_matched_version: z.number().int().nullable(),
+  computed_at: unreleasedCopyTimestamp(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySummary>)
+
+export const unreleasedCopySignalListSchema = z.object({
+  items: z.array(unreleasedCopySummarySchema),
+  total: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  coverage: z.object({
+    agents: z.number().int().nonnegative(),
+    indexed: z.number().int().nonnegative(),
+    unreadable: z.number().int().nonnegative(),
+    oldest_unindexed_at: unreleasedCopyTimestamp().nullable(),
+    evaluated: z.number().int().nonnegative(),
+    flagged: z.number().int().nonnegative(),
+  } satisfies PlatformResponseShape<GeneratedUnreleasedCopyCoverage>),
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySignalList>)
+
+export const unreleasedCopySignalInputSchema = z.object({
+  agentId: z.string().uuid(),
+  live: z.boolean().default(false),
+})
+
+export const unreleasedCopySignalsInputSchema = z.object({
+  flaggedOnly: z.boolean().default(true),
+  minScore: z.number().min(0).default(0),
+  limit: z.number().int().min(1).max(200).default(50),
+  offset: z.number().int().min(0).default(0),
+})
