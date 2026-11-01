@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.419.0 (2026-11-01)
+
+### Documentation
+
+- **skills**: Add scoring-infra-triage for infra failures and retries
+  ([#3302](https://github.com/ditto-assistant/ditto-subnet/pull/3302),
+  [`f8e9c55`](https://github.com/ditto-assistant/ditto-subnet/commit/f8e9c552e0d71ec95fac7f6defc717b3ffba3193))
+
+### Features
+
+- **platform**: Flag unreleased-agent copying across languages in shadow mode
+  ([#3303](https://github.com/ditto-assistant/ditto-subnet/pull/3303),
+  [`6d8e681`](https://github.com/ditto-assistant/ditto-subnet/commit/6d8e681a31677d6dd31fc563f64a3b7c58945efb))
+
+
 ## v0.418.0 (2026-11-01)
 
 ### Features
