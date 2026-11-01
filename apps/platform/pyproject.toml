@@ -34,6 +34,7 @@ dependencies = [
     # silently splits the comparison pool.
     "tree-sitter>=0.25,<0.27",
     "tree-sitter-rust==0.21.2",
+    "numpy>=2.0",
 ]
 
 [tool.uv.sources]

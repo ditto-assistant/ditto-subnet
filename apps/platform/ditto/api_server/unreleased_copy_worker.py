@@ -15,6 +15,9 @@ from __future__ import annotations
 from array import array
 from bisect import bisect_left
 from collections.abc import Sequence
+from typing import Any
+
+import numpy as np
 
 from ditto.api_server.distinctive_content import Item, extract_items
 from ditto.api_server.fingerprint import _excluded_from_fingerprints
@@ -30,6 +33,9 @@ from ditto.api_server.unreleased_copy import (
 from ditto.db.queries.unreleased_copy import index_keys_from
 
 _RELEASED: dict[str, array] = {}
+# The whole distinctive-item index (agent id -> sorted int64 keys), streamed in
+# by the sentinel; about 8 bytes a key.
+_INDEX: dict[str, Any] = {}
 _CANDIDATE: tuple[str, dict[int, Item]] | None = None
 
 
@@ -119,3 +125,42 @@ def _truncate(signal: CopySignal) -> CopySignal:
 
 def truncate(signal: CopySignal) -> CopySignal:
     return _truncate(signal)
+
+
+def index_put(rows: Sequence[tuple[str, bytes]]) -> int:
+    """Add or replace index rows (keys as ``array('q')`` bytes, sorted)."""
+    for agent_id, raw in rows:
+        _INDEX[agent_id] = np.frombuffer(raw, dtype=np.int64).copy()
+    return len(_INDEX)
+
+
+def index_count() -> int:
+    return len(_INDEX)
+
+
+def overlap(keys: bytes, eligible: Sequence[str]) -> tuple[dict[str, array], list[str]]:
+    """Each eligible agent's overlap with ``keys``; ids missing from the cache.
+
+    One vectorized membership pass per row (``searchsorted`` against the sorted
+    candidate keys) instead of a full-index scan in Postgres.
+    """
+    candidate = np.unique(np.frombuffer(keys, dtype=np.int64))
+    out: dict[str, array] = {}
+    missing: list[str] = []
+    if not len(candidate):
+        return out, missing
+    last = len(candidate) - 1
+    for agent_id in eligible:
+        row = _INDEX.get(agent_id)
+        if row is None:
+            missing.append(agent_id)
+            continue
+        if not len(row):
+            continue
+        position = np.minimum(np.searchsorted(candidate, row), last)
+        hit = row[candidate[position] == row]
+        if len(hit):
+            values = array("q")
+            values.frombytes(hit.tobytes())
+            out[agent_id] = values
+    return out, missing

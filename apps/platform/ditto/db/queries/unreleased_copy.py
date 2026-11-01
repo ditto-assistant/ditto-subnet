@@ -8,7 +8,7 @@ candidate's upload, and the recorded shadow signals.
 from __future__ import annotations
 
 from array import array
-from collections.abc import Iterable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -184,7 +184,30 @@ class SignalContext:
     """Agent names of the candidate's owner (for the same-owner namespace hint)."""
 
 
-async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | None:
+OverlapSource = Callable[[list[int], list[UUID]], Awaitable[dict[UUID, array]]]
+
+
+async def eligible_sources(session: AsyncSession, agent: Agent) -> list[UUID]:
+    """Indexed agents uploaded at or before ``agent`` (candidate excluded)."""
+    return list(
+        (
+            await session.scalars(
+                select(AgentDistinctiveItems.agent_id)
+                .join(Agent, Agent.agent_id == AgentDistinctiveItems.agent_id)
+                .where(
+                    AgentDistinctiveItems.agent_id != agent.agent_id,
+                    AgentDistinctiveItems.items_version == ITEMS_VERSION,
+                    AgentDistinctiveItems.error.is_(None),
+                    Agent.created_at <= agent.created_at,
+                )
+            )
+        ).all()
+    )
+
+
+async def load_context(
+    session: AsyncSession, agent: Agent, *, overlap: OverlapSource | None = None
+) -> SignalContext | None:
     """Everything :func:`ditto.api_server.unreleased_copy.evaluate` needs.
 
     Each other agent carries only its overlap with the candidate (computed in
@@ -202,7 +225,11 @@ async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | N
     # int sets of that would be gigabytes in the API process. The worker
     # process builds the sets it scores with.
     shared: dict[UUID, array] = {}
-    if keys:
+    if keys and overlap is not None:
+        # The sentinel's worker holds the whole index in memory, so the overlap
+        # is a vectorized pass there instead of a full-index scan in Postgres.
+        shared = await overlap(keys, await eligible_sources(session, agent))
+    elif keys:
         stream = await session.stream(
             select(
                 AgentDistinctiveItems.agent_id,
@@ -616,3 +643,45 @@ async def record_enforcement(
             "at": datetime.now(UTC).isoformat(),
         },
     }
+
+
+async def stream_index_rows(
+    session: AsyncSession, *, since: datetime | None, batch: int
+) -> AsyncIterator[list[tuple[UUID, list[int], datetime]]]:
+    """Current-version index rows written after ``since``, in batches."""
+    statement = select(
+        AgentDistinctiveItems.agent_id,
+        AgentDistinctiveItems.item_keys,
+        AgentDistinctiveItems.indexed_at,
+    ).where(
+        AgentDistinctiveItems.items_version == ITEMS_VERSION,
+        AgentDistinctiveItems.error.is_(None),
+    )
+    if since is not None:
+        statement = statement.where(AgentDistinctiveItems.indexed_at > since)
+    result = await session.stream(statement)
+    rows: list[tuple[UUID, list[int], datetime]] = []
+    async for agent_id, item_keys, indexed_at in result:
+        rows.append((agent_id, item_keys, _utc(indexed_at)))
+        if len(rows) >= batch:
+            yield rows
+            rows = []
+    if rows:
+        yield rows
+
+
+async def index_rows_for(
+    session: AsyncSession, agent_ids: list[UUID]
+) -> list[tuple[UUID, list[int], datetime]]:
+    rows = await session.execute(
+        select(
+            AgentDistinctiveItems.agent_id,
+            AgentDistinctiveItems.item_keys,
+            AgentDistinctiveItems.indexed_at,
+        ).where(
+            AgentDistinctiveItems.agent_id.in_(agent_ids),
+            AgentDistinctiveItems.items_version == ITEMS_VERSION,
+            AgentDistinctiveItems.error.is_(None),
+        )
+    )
+    return [(a, k, _utc(t)) for a, k, t in rows.all()]

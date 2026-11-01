@@ -81,7 +81,17 @@ async def get_unreleased_copy_signal(
     live_payload: dict[str, Any] | None = None
     live_reason: str | None = None
     if live:
-        context = await load_context(session, agent)
+        state_sentinel = getattr(request.app.state, "unreleased_copy_sentinel", None)
+        sentinel = (
+            state_sentinel
+            if isinstance(state_sentinel, UnreleasedCopySentinel)
+            else None
+        )
+        if sentinel is not None:
+            await sentinel.sync_worker_index()
+        context = await load_context(
+            session, agent, overlap=sentinel.overlap if sentinel is not None else None
+        )
         if context is None:
             live_reason = (
                 "artifact is not indexed yet"
@@ -90,14 +100,11 @@ async def get_unreleased_copy_signal(
             )
         else:
             settings = await effective_settings(session)
-            sentinel = getattr(request.app.state, "unreleased_copy_sentinel", None)
             signal, evidence_status = await score_signal(
                 context,
                 getattr(request.app.state, "storage", None),
                 threshold=settings.threshold,
-                call=sentinel.call
-                if isinstance(sentinel, UnreleasedCopySentinel)
-                else inline_call,
+                call=sentinel.call if sentinel is not None else inline_call,
             )
             live_payload = signal_payload(signal, evidence_status=evidence_status)
     return AdminUnreleasedCopySignal(
