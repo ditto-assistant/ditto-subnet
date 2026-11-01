@@ -1307,6 +1307,20 @@ CREATE TABLE public.agent_cla_bindings (
 
 
 --
+-- Name: agent_distinctive_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_distinctive_items (
+    agent_id uuid NOT NULL,
+    items_version text NOT NULL,
+    item_keys bigint[] NOT NULL,
+    item_count integer NOT NULL,
+    error text,
+    indexed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -6985,6 +6999,26 @@ CREATE TABLE public.trusted_image_builds (
 
 
 --
+-- Name: unreleased_copy_signals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unreleased_copy_signals (
+    agent_id uuid NOT NULL,
+    signal_version text NOT NULL,
+    mode text NOT NULL,
+    threshold double precision NOT NULL,
+    flagged boolean NOT NULL,
+    top_score double precision NOT NULL,
+    top_matched_agent_id uuid,
+    compared_agent_count integer NOT NULL,
+    candidate_item_count integer NOT NULL,
+    evidence jsonb NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_unreleased_copy_signals_unreleased_copy_signals_mode_check CHECK ((mode = ANY (ARRAY['shadow'::text, 'enforce'::text])))
+);
+
+
+--
 -- Name: upload_admission_reservations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -8943,6 +8977,14 @@ ALTER TABLE ONLY public.agent_cla_bindings
 
 
 --
+-- Name: agent_distinctive_items pk_agent_distinctive_items; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_distinctive_items
+    ADD CONSTRAINT pk_agent_distinctive_items PRIMARY KEY (agent_id);
+
+
+--
 -- Name: agent_kingship pk_agent_kingship; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10140,6 +10182,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.trusted_image_builds
     ADD CONSTRAINT pk_trusted_image_builds PRIMARY KEY (build_id);
+
+
+--
+-- Name: unreleased_copy_signals pk_unreleased_copy_signals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_signals
+    ADD CONSTRAINT pk_unreleased_copy_signals PRIMARY KEY (agent_id, signal_version);
 
 
 --
@@ -12476,6 +12526,13 @@ CREATE INDEX trusted_image_builds_queue_idx ON public.trusted_image_builds USING
 
 
 --
+-- Name: unreleased_copy_signals_flagged_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX unreleased_copy_signals_flagged_idx ON public.unreleased_copy_signals USING btree (signal_version, flagged, top_score);
+
+
+--
 -- Name: upload_admission_expires_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13997,6 +14054,14 @@ ALTER TABLE ONLY public.agent_cla_bindings
 
 
 --
+-- Name: agent_distinctive_items fk_agent_distinctive_items_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_distinctive_items
+    ADD CONSTRAINT fk_agent_distinctive_items_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: agent_kingship fk_agent_kingship_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14986,6 +15051,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.treasury_verified_receipts
     ADD CONSTRAINT fk_treasury_verified_receipts_settings_revision_treasur_f7d8 FOREIGN KEY (settings_revision) REFERENCES public.treasury_settings_revisions(revision);
+
+
+--
+-- Name: unreleased_copy_signals fk_unreleased_copy_signals_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_signals
+    ADD CONSTRAINT fk_unreleased_copy_signals_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --

@@ -106,6 +106,7 @@ from ditto.api_server.endpoints import (
     admin_treasury_quote_router,
     admin_treasury_receipts_router,
     admin_treasury_settings_router,
+    admin_unreleased_copy_router,
     admin_v13_private_generation_router,
     admin_v13_scorer_cohort_router,
     admin_validation_retry_router,
@@ -200,6 +201,7 @@ from ditto.api_server.screener_policy_activation import (
 from ditto.api_server.source_emission_collector import SourceEmissionCollector
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.track_share_settings import TrackShareSettingsResolver
+from ditto.api_server.unreleased_copy_sentinel import UnreleasedCopySentinel
 from ditto.api_server.validator_names import create_validator_names
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
 from ditto.api_server.validator_slot_settings import ValidatorSlotSettingsResolver
@@ -486,6 +488,16 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await copy_court.start()
             app.state.copy_hold_court = copy_court
+            # Unreleased-copy signal, shadow mode: indexes artifacts and records
+            # a score per agent; never holds, rejects or changes status.
+            unreleased_copy = UnreleasedCopySentinel(
+                session_maker=app.state.session_maker,
+                storage=getattr(app.state, "storage", None),
+            )
+            stack.push_async_callback(unreleased_copy.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await unreleased_copy.start()
+            app.state.unreleased_copy_sentinel = unreleased_copy
             # The epoch pin must land at the chain boundary even when no
             # validator is reading; the request path pins on demand as well and
             # the table's unique key makes the race harmless. Singleton for the
@@ -793,6 +805,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_copy_review_router, prefix="/api/v1")
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
+    app.include_router(admin_unreleased_copy_router, prefix="/api/v1")
     app.include_router(admin_screening_review_cost_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")

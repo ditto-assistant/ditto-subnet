@@ -662,6 +662,26 @@ hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
 
+## Unreleased-copy signal (shadow)
+
+`list_unreleased_copy_signals` pages the Platform sentinel's recorded scores,
+highest first, with index coverage (`indexed`, `unreadable`,
+`oldest_unindexed_at`, `evaluated`, `flagged`) and the sentinel runtime. It
+names no source text and needs `backroom:read`.
+
+`get_unreleased_copy_signal(agentId, live?)` returns one agent's evaluation:
+the shared distinctive items (normalized literal, prompt, cue-list and long
+identifier text, in any language) as `candidate` and `matched` `path:line`
+pairs, and each matched agent's identity, status, upload time and release
+state. Same-owner history, the public corpus, every agent released before the
+upload, and items four or more other owners hold are excluded before scoring.
+`live=true` recomputes read-only. The evidence quotes source text from two
+submissions, so it needs `backroom:artifact:read`.
+
+The signal runs in shadow mode: a flag is a lead for copy review and never a
+hold, reject or status change. Design and calibration live in
+`apps/platform/docs/unreleased-copy-signal.md`.
+
 ## Diffing two submissions
 
 `get_copy_review_source_diff` pairs a held agent only with the reference its

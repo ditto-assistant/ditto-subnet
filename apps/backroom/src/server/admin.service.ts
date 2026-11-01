@@ -519,6 +519,10 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  unreleasedCopySignalInputSchema,
+  unreleasedCopySignalListSchema,
+  unreleasedCopySignalSchema,
+  unreleasedCopySignalsInputSchema,
   copyCourtTriagePreviewInputSchema,
   copyCourtTriagePreviewSchema,
   confirmationSeedAnchorListSchema,
@@ -1011,6 +1015,29 @@ export async function fetchCopyCourtRecommendations(rawInput: unknown) {
     `/api/v1/admin/copy-court/recommendations?${params.toString()}`,
   )
   return copyCourtRecommendationListSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySignal(rawInput: unknown) {
+  const input = unreleasedCopySignalInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ live: String(input.live) })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/unreleased-copy/agents/${encodeURIComponent(input.agentId)}?${params.toString()}`,
+  )
+  return unreleasedCopySignalSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySignals(rawInput: unknown) {
+  const input = unreleasedCopySignalsInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    flagged_only: String(input.flaggedOnly),
+    min_score: String(input.minScore),
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/unreleased-copy/signals?${params.toString()}`,
+  )
+  return unreleasedCopySignalListSchema.parse(payload)
 }
 
 export async function fetchCopyCourtTriagePreview(rawInput: unknown, actor: string) {
