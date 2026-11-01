@@ -3178,6 +3178,78 @@ CREATE TABLE public.coding_shadow_tickets (
 
 
 --
+-- Name: competition_improvement_daily; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_improvement_daily (
+    bench_version integer NOT NULL,
+    day date NOT NULL,
+    metrics_version text NOT NULL,
+    frontier_composite double precision,
+    frontier_agent_id uuid,
+    champion_agent_id uuid,
+    champion_composite double precision,
+    top_n_mean double precision,
+    top_n_min double precision,
+    finalized_agent_count integer NOT NULL,
+    new_high_count integer NOT NULL,
+    releases_on_day integer NOT NULL,
+    releases_to_date integer NOT NULL,
+    forks_on_day integer NOT NULL,
+    forks_to_date integer NOT NULL,
+    thin_forks_to_date integer NOT NULL,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    detail jsonb NOT NULL,
+    closed boolean NOT NULL,
+    backfilled boolean NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: competition_release_forks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_release_forks (
+    base_agent_id uuid NOT NULL,
+    fork_agent_id uuid NOT NULL,
+    metrics_version text NOT NULL,
+    bench_version integer,
+    released_at timestamp with time zone NOT NULL,
+    fork_uploaded_at timestamp with time zone NOT NULL,
+    lag_hours double precision NOT NULL,
+    containment double precision,
+    novel_fraction double precision,
+    declared boolean NOT NULL,
+    thin boolean NOT NULL,
+    base_composite double precision,
+    fork_composite double precision,
+    delta double precision,
+    shared_seed_count integer NOT NULL,
+    shared_seed_delta double precision,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: competition_source_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_source_releases (
+    agent_id uuid NOT NULL,
+    metrics_version text NOT NULL,
+    bench_version integer,
+    released_at timestamp with time zone NOT NULL,
+    uploaded_at timestamp with time zone NOT NULL,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    base_composite double precision,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: confirmation_budget_days; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9466,6 +9538,30 @@ ALTER TABLE ONLY public.coding_hosted_terminal_reservations
 
 
 --
+-- Name: competition_improvement_daily pk_competition_improvement_daily; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_improvement_daily
+    ADD CONSTRAINT pk_competition_improvement_daily PRIMARY KEY (bench_version, day);
+
+
+--
+-- Name: competition_release_forks pk_competition_release_forks; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT pk_competition_release_forks PRIMARY KEY (base_agent_id, fork_agent_id);
+
+
+--
+-- Name: competition_source_releases pk_competition_source_releases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_source_releases
+    ADD CONSTRAINT pk_competition_source_releases PRIMARY KEY (agent_id);
+
+
+--
 -- Name: confirmation_budget_days pk_confirmation_budget_days; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11645,6 +11741,13 @@ CREATE UNIQUE INDEX coding_shadow_tickets_claim_instance_key ON public.coding_sh
 --
 
 CREATE INDEX coding_shadow_tickets_validator_deadline_idx ON public.coding_shadow_tickets USING btree (validator_hotkey, deadline);
+
+
+--
+-- Name: competition_release_forks_fork_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX competition_release_forks_fork_idx ON public.competition_release_forks USING btree (fork_agent_id);
 
 
 --
@@ -14767,6 +14870,30 @@ ALTER TABLE ONLY public.coding_hosted_terminal_finalizations
 
 ALTER TABLE ONLY public.coding_hosted_terminal_reservations
     ADD CONSTRAINT fk_coding_hosted_terminal_reservations_evaluation_id_co_0de3 FOREIGN KEY (evaluation_id) REFERENCES public.coding_hosted_grading_claims(evaluation_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: competition_release_forks fk_competition_release_forks_base_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT fk_competition_release_forks_base_agent_id_agents FOREIGN KEY (base_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: competition_release_forks fk_competition_release_forks_fork_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT fk_competition_release_forks_fork_agent_id_agents FOREIGN KEY (fork_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: competition_source_releases fk_competition_source_releases_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_source_releases
+    ADD CONSTRAINT fk_competition_source_releases_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --

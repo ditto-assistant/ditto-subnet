@@ -711,6 +711,19 @@ The signal runs in shadow mode: a flag is a lead for copy review and never a
 hold, reject or status change. Design and calibration live in
 `apps/platform/docs/unreleased-copy-signal.md`.
 
+## Competition improvement metrics
+
+`get_competition_improvement_metrics(benchVersion?, since?)` reads the hourly
+Platform job's measurement tables (bench v13 onward): one row per UTC day with
+the frontier, epoch-pinned champion and owner-deduplicated top 5; every new
+high with its delta, gap and driver (`released_fork`, `same_owner_iteration`
+or `original`); each exact-SHA source release with its detected forks (lag,
+containment, novel fraction, thin flag, delta and shared-seed delta); the same
+facts grouped by release-policy window; and a live noise floor for each
+bench's top 10. Closed days are frozen as recorded. It changes nothing and
+needs `backroom:read`. Definitions and thresholds come back in the payload;
+the design lives in `apps/platform/docs/competition-improvement-metrics.md`.
+
 ## Diffing two submissions
 
 `get_copy_review_source_diff` pairs a held agent only with the reference its

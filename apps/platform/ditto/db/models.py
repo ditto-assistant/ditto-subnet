@@ -14546,3 +14546,113 @@ class UnreleasedCopySignal(Base):
             "top_score",
         ),
     )
+
+
+class CompetitionImprovementDaily(Base):
+    """One UTC day of one bench version's competition frontier (measurement only).
+
+    Written by :mod:`ditto.api_server.competition_improvement_job`. A day is
+    ``closed`` once it is at least two days old; a closed row is never
+    rewritten under the same ``metrics_version``, so it records what the
+    frontier was rather than what a later re-score made it. ``backfilled``
+    marks a row first written after its day had already closed. ``detail``
+    holds the owner-deduplicated top-N, the day's new highs with their
+    driver, and the release and fork agent ids that landed that day.
+    """
+
+    __tablename__ = "competition_improvement_daily"
+
+    bench_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    frontier_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    frontier_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_n_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_n_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    finalized_agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_high_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    releases_on_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    releases_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    forks_on_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    forks_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    thin_forks_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    backfilled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CompetitionSourceRelease(Base):
+    """One exact-SHA public source handoff, as the improvement job last saw it."""
+
+    __tablename__ = "competition_source_releases"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    released_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    base_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class CompetitionReleaseFork(Base):
+    """One detected fork of one source release: lag, size of change and delta."""
+
+    __tablename__ = "competition_release_forks"
+
+    base_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    fork_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    released_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    fork_uploaded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lag_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    containment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    novel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    declared: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    thin: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    base_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fork_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shared_seed_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    shared_seed_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["base_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["fork_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        Index("competition_release_forks_fork_idx", "fork_agent_id"),
+    )

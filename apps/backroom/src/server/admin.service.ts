@@ -616,6 +616,10 @@ import {
   submissionTermsReadSchema,
   submissionTermsSchema,
 } from '../lib/submission-terms.schemas'
+import {
+  competitionImprovementMetricsInputSchema,
+  competitionImprovementMetricsSchema,
+} from '../lib/competition-improvement.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -1043,6 +1047,18 @@ export async function fetchUnreleasedCopySignal(rawInput: unknown) {
     `/api/v1/admin/unreleased-copy/agents/${encodeURIComponent(input.agentId)}?${params.toString()}`,
   )
   return unreleasedCopySignalSchema.parse(payload)
+}
+
+export async function fetchCompetitionImprovementMetrics(rawInput: unknown) {
+  const input = competitionImprovementMetricsInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) params.set('bench_version', String(input.benchVersion))
+  if (input.since !== undefined) params.set('since', input.since)
+  const query = params.toString()
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/competition-improvement/metrics${query ? `?${query}` : ''}`,
+  )
+  return competitionImprovementMetricsSchema.parse(payload)
 }
 
 export async function fetchUnreleasedCopySignals(rawInput: unknown) {

@@ -250,6 +250,7 @@ import {
   hasScreeningSubmissionFilters,
   screeningSubmissionFiltersSchema,
 } from '../lib/admin.schemas'
+import { competitionImprovementMetricsInputSchema } from '../lib/competition-improvement.schemas'
 import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
@@ -381,6 +382,7 @@ import {
   fetchCopyCourtTriagePreview,
   fetchUnreleasedCopySignal,
   fetchUnreleasedCopySignals,
+  fetchCompetitionImprovementMetrics,
   fetchConfirmationSeedAnchors,
   applyCopyCourtSettings,
   applyScreenerReviewSettings,
@@ -743,6 +745,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Shadow unreleased-copy evidence, path:line both sides. Artifact scope.',
   list_unreleased_copy_signals:
     'Page shadow unreleased-copy signals.',
+  get_competition_improvement_metrics:
+    'Frontier, new-high drivers, release forks, embargo windows, noise floor.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -2933,6 +2937,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchUnreleasedCopySignals(input)),
+  )
+
+  registerTool(
+    'get_competition_improvement_metrics',
+    {
+      title: 'Get competition improvement metrics',
+      description:
+        'Measure how fast the competition improves, per bench version (v13 onward). daily: one row per UTC day with the frontier (highest canonical k=3 median among scored/live agents finalized by day end), the epoch-pinned champion, the owner-deduplicated top 5, releases and forks to date and the embargo in force; closed days (two or more days old) are frozen as recorded and backfilled marks rows written after their day closed. new_highs: every strict frontier improvement with its delta, days since the previous high and driver (released_fork, same_owner_iteration or original, base_agent_id for a fork). releases: each exact-SHA public handoff with the policy that timed it and its detected forks (other-owner later uploads holding at least half of its distinctive items, or declaring it as released_base): lag_hours, containment, novel_fraction, thin (novel under 0.10), delta vs base and the paired shared-seed delta. embargo_windows: releases, forks per release, thin share, fork lag and delta, new highs by driver and frontier gain per day for each release-policy revision. noise: seed-to-seed SD and quorum SEM of each bench\'s top 10 and the beyond-noise step (2 x sqrt(2) x median seed SD). benchVersion narrows to one bench; since (YYYY-MM-DD) drops earlier days and releases. coverage and runtime show the hourly job and the distinctive-item index coverage. Measurement only: changes no score, status, hold, policy or weight. Requires backroom:read.',
+      inputSchema: competitionImprovementMetricsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCompetitionImprovementMetrics(input)),
   )
 
   registerTool(
