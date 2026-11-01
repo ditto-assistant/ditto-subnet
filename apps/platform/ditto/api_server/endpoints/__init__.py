@@ -23,6 +23,9 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_claim_provenance import (
     router as admin_claim_provenance_router,
 )
+from ditto.api_server.endpoints.admin_competition_improvement import (
+    router as admin_competition_improvement_router,
+)
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
 )
@@ -248,6 +251,7 @@ __all__ = [
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
     "admin_unreleased_copy_router",
+    "admin_competition_improvement_router",
     "admin_screening_review_cost_router",
     "admin_copy_review_router",
     "admin_claim_provenance_router",

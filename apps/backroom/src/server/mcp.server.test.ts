@@ -725,6 +725,7 @@ describe('Backroom MCP tools', () => {
         'preview_copy_court_triage',
         'get_unreleased_copy_signal',
         'list_unreleased_copy_signals',
+        'get_competition_improvement_metrics',
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
@@ -960,7 +961,9 @@ describe('Backroom MCP tools', () => {
     // keep about 0.5 KB.
     // The provider-outage read (three bounded paging inputs, one-line
     // summary, detail in tool help) measures 221,908 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(222_400)
+    // The competition improvement read (two optional filters, one-line
+    // summary, detail in tool help) measures 222,758 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(223_300)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -10217,6 +10220,217 @@ describe('Backroom MCP tools', () => {
     } finally {
       await granted.client.close()
       await granted.server.close()
+    }
+  })
+
+  it('reads competition improvement metrics with read scope and forwards filters', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5'
+    const forkId = 'b7b7b7b7-c8c8-4d9d-8e0e-f1f1f1f1f1f1'
+    const high = {
+      agent_id: forkId,
+      name: 'fork',
+      version: 2,
+      bench_version: 14,
+      finalized_at: '2026-10-23T01:02:00Z',
+      composite: 0.94,
+      previous_frontier: 0.91,
+      delta: 0.03,
+      days_since_previous_high: 2.5,
+      driver: 'released_fork',
+      base_agent_id: agentId,
+    }
+    const payload = {
+      metrics_version: 'cim1',
+      generated_at: '2026-11-01T12:00:00Z',
+      bench_version: 14,
+      since: '2026-10-20',
+      definitions: { frontier: 'highest canonical composite' },
+      thresholds: {
+        first_bench_version: 13,
+        fork_containment: 0.5,
+        thin_fork_novel_fraction: 0.1,
+        top_n: 5,
+        noise_agents: 10,
+        min_noise_seeds: 3,
+        noise_sigmas: 2,
+        close_after_days: 2,
+      },
+      coverage: {
+        stored_days: 1,
+        closed_days: 1,
+        backfilled_days: 1,
+        last_computed_at: '2026-11-01T11:00:00Z',
+        agents: 4000,
+        indexed_agents: 3990,
+      },
+      runtime: {
+        running: true,
+        metrics_version: 'cim1',
+        interval_seconds: 3600,
+        last_tick_started_at: '2026-11-01T11:00:00Z',
+        last_tick_finished_at: '2026-11-01T11:00:09Z',
+        last_tick_counters: { days_computed: 14, releases: 1, forks: 1 },
+        last_tick_error: null,
+      },
+      benches: [
+        {
+          summary: {
+            bench_version: 14,
+            first_day: '2026-10-20',
+            last_day: '2026-10-23',
+            days: 4,
+            frontier_start: 0.91,
+            frontier_end: 0.94,
+            frontier_gain: 0.03,
+            gain_per_day: 0.01,
+            new_high_count: 1,
+            beyond_noise_high_count: 0,
+            median_days_between_highs: 2.5,
+            max_days_between_highs: 2.5,
+            days_since_last_high: 9.4,
+            champion_changes: 1,
+            drivers: { original: 0, same_owner_iteration: 0, released_fork: 1 },
+            gain_by_driver: { original: 0, same_owner_iteration: 0, released_fork: 0.03 },
+            largest_steps: [high],
+          },
+          noise: {
+            bench_version: 14,
+            agents_measured: 1,
+            median_seed_sd: 0.015,
+            max_seed_sd: 0.015,
+            median_quorum_sem: 0.006,
+            single_seed_delta_sd: 0.021,
+            beyond_noise_step: 0.042,
+            agents: [
+              {
+                agent_id: forkId,
+                name: 'fork',
+                version: 2,
+                composite: 0.94,
+                seed_count: 4,
+                seed_sd: 0.015,
+                quorum_sem: 0.006,
+              },
+            ],
+          },
+          new_highs: [high],
+          daily: [
+            {
+              bench_version: 14,
+              day: '2026-10-23',
+              frontier_composite: 0.94,
+              frontier_agent_id: forkId,
+              champion_agent_id: agentId,
+              champion_composite: 0.91,
+              top_n_mean: 0.925,
+              top_n_min: 0.91,
+              finalized_agent_count: 2,
+              new_high_count: 1,
+              releases_on_day: 0,
+              releases_to_date: 1,
+              forks_on_day: 0,
+              forks_to_date: 1,
+              thin_forks_to_date: 1,
+              embargo_hours: 24,
+              disclosure: 'public',
+              top: [{ agent_id: forkId, name: 'fork', version: 2, composite: 0.94 }],
+            },
+          ],
+        },
+      ],
+      releases: [
+        {
+          agent_id: agentId,
+          name: 'base',
+          version: 1,
+          bench_version: 14,
+          uploaded_at: '2026-10-20T12:00:00Z',
+          released_at: '2026-10-22T12:00:00Z',
+          embargo_hours: 24,
+          disclosure: 'public',
+          base_composite: 0.91,
+          fork_count: 1,
+          thin_fork_count: 1,
+          first_fork_lag_hours: 12,
+          median_fork_lag_hours: 12,
+          median_novel_fraction: 0.02,
+          median_delta: 0.03,
+          best_delta: 0.03,
+          forks_beating_base: 1,
+          forks: [
+            {
+              fork_agent_id: forkId,
+              fork_name: 'fork',
+              fork_version: 2,
+              fork_status: 'scored',
+              bench_version: 14,
+              fork_uploaded_at: '2026-10-23T00:00:00Z',
+              lag_hours: 12,
+              containment: 1,
+              novel_fraction: 0.02,
+              declared: false,
+              thin: true,
+              fork_composite: 0.94,
+              delta: 0.03,
+              shared_seed_count: 0,
+              shared_seed_delta: null,
+            },
+          ],
+        },
+      ],
+      embargo_windows: [
+        {
+          revision: 3,
+          embargo_hours: 24,
+          disclosure: 'public',
+          starts_at: '2026-10-19T12:00:00Z',
+          ends_at: null,
+          days: 13,
+          releases: 1,
+          forks: 1,
+          forks_per_release: 1,
+          thin_forks: 1,
+          thin_fork_share: 1,
+          median_fork_lag_hours: 12,
+          median_fork_delta: 0.03,
+          new_highs: 1,
+          new_highs_by_driver: { original: 0, same_owner_iteration: 0, released_fork: 1 },
+          frontier_gain_by_bench: { '14': 0.03 },
+          gain_per_day_by_bench: { '14': 0.01 },
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await readOnly.client.callTool({
+        name: 'get_competition_improvement_metrics',
+        arguments: { benchVersion: 14, since: '2026-10-20' },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        metrics_version: 'cim1',
+        releases: [{ fork_count: 1, forks: [{ thin: true }] }],
+        benches: [{ summary: { drivers: { released_fork: 1 } } }],
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toContain(
+        '/api/v1/admin/competition-improvement/metrics?bench_version=14&since=2026-10-20',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+      const unfiltered = await readOnly.client.callTool({
+        name: 'get_competition_improvement_metrics',
+        arguments: {},
+      })
+      expect(unfiltered.isError).not.toBe(true)
+      expect(String(fetchMock.mock.calls[1][0])).toMatch(
+        /\/api\/v1\/admin\/competition-improvement\/metrics$/,
+      )
+    } finally {
+      await readOnly.client.close()
+      await readOnly.server.close()
     }
   })
 

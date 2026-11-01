@@ -24,6 +24,7 @@ from ditto.api_server.bounty_claims import SimulatedBountyFeeVerifier
 from ditto.api_server.bounty_deadlines import BountyDeadlineSweeper
 from ditto.api_server.bounty_settlement import SimulatedTransferExecutor
 from ditto.api_server.burn_settings import BurnSettingsResolver
+from ditto.api_server.competition_improvement_job import CompetitionImprovementJob
 from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
@@ -64,6 +65,7 @@ from ditto.api_server.endpoints import (
     admin_benchmark_rollout_router,
     admin_burn_settings_router,
     admin_claim_provenance_router,
+    admin_competition_improvement_router,
     admin_confirmation_bundles_router,
     admin_confirmation_score_voids_router,
     admin_confirmation_seed_anchors_router,
@@ -516,6 +518,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await unreleased_copy.start()
             app.state.unreleased_copy_sentinel = unreleased_copy
+            # Competition improvement metrics: measurement only. Reads every
+            # source table and writes only its own competition_* tables.
+            improvement = CompetitionImprovementJob(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(improvement.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await improvement.start()
+            app.state.competition_improvement_job = improvement
             # The epoch pin must land at the chain boundary even when no
             # validator is reading; the request path pins on demand as well and
             # the table's unique key makes the race harmless. Singleton for the
@@ -827,6 +838,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_ath_rulings_router, prefix="/api/v1")
     app.include_router(admin_copy_court_router, prefix="/api/v1")
     app.include_router(admin_unreleased_copy_router, prefix="/api/v1")
+    app.include_router(admin_competition_improvement_router, prefix="/api/v1")
     app.include_router(admin_screening_review_cost_router, prefix="/api/v1")
     app.include_router(admin_confirmation_seed_anchors_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")

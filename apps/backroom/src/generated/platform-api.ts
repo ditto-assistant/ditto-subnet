@@ -1066,6 +1066,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/competition-improvement/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Competition Improvement Metrics
+         * @description Frontier, drivers, release forks, embargo windows and noise floor.
+         */
+        get: operations["get_competition_improvement_metrics_api_v1_admin_competition_improvement_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/confirmation-bundle-settings": {
         parameters: {
             query?: never;
@@ -19618,6 +19638,156 @@ export interface components {
              */
             v: number;
         };
+        /** CompetitionBench */
+        CompetitionBench: {
+            /** Daily */
+            daily: components["schemas"]["CompetitionDailyRow"][];
+            /** New Highs */
+            new_highs: components["schemas"]["CompetitionNewHigh"][];
+            noise: components["schemas"]["CompetitionNoiseFloor"];
+            summary: components["schemas"]["CompetitionBenchSummary"];
+        };
+        /** CompetitionBenchSummary */
+        CompetitionBenchSummary: {
+            /** Bench Version */
+            bench_version: number;
+            /** Beyond Noise High Count */
+            beyond_noise_high_count: number | null;
+            /** Champion Changes */
+            champion_changes: number;
+            /** Days */
+            days: number;
+            /** Days Since Last High */
+            days_since_last_high: number | null;
+            /** Drivers */
+            drivers: {
+                [key: string]: number;
+            };
+            /** First Day */
+            first_day: string | null;
+            /** Frontier End */
+            frontier_end: number | null;
+            /** Frontier Gain */
+            frontier_gain: number | null;
+            /** Frontier Start */
+            frontier_start: number | null;
+            /** Gain By Driver */
+            gain_by_driver: {
+                [key: string]: number;
+            };
+            /** Gain Per Day */
+            gain_per_day: number | null;
+            /** Largest Steps */
+            largest_steps: components["schemas"]["CompetitionNewHigh"][];
+            /** Last Day */
+            last_day: string | null;
+            /** Max Days Between Highs */
+            max_days_between_highs: number | null;
+            /** Median Days Between Highs */
+            median_days_between_highs: number | null;
+            /** New High Count */
+            new_high_count: number;
+        };
+        /** CompetitionCoverage */
+        CompetitionCoverage: {
+            /** Agents */
+            agents: number;
+            /** Backfilled Days */
+            backfilled_days: number;
+            /** Closed Days */
+            closed_days: number;
+            /** Indexed Agents */
+            indexed_agents: number;
+            /** Last Computed At */
+            last_computed_at: string | null;
+            /** Stored Days */
+            stored_days: number;
+        };
+        /** CompetitionDailyRow */
+        CompetitionDailyRow: {
+            /** Bench Version */
+            bench_version: number;
+            /** Champion Agent Id */
+            champion_agent_id: string | null;
+            /** Champion Composite */
+            champion_composite: number | null;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Disclosure */
+            disclosure: string;
+            /** Embargo Hours */
+            embargo_hours: number;
+            /** Finalized Agent Count */
+            finalized_agent_count: number;
+            /** Forks On Day */
+            forks_on_day: number;
+            /** Forks To Date */
+            forks_to_date: number;
+            /** Frontier Agent Id */
+            frontier_agent_id: string | null;
+            /** Frontier Composite */
+            frontier_composite: number | null;
+            /** New High Count */
+            new_high_count: number;
+            /** Releases On Day */
+            releases_on_day: number;
+            /** Releases To Date */
+            releases_to_date: number;
+            /** Thin Forks To Date */
+            thin_forks_to_date: number;
+            /** Top */
+            top: components["schemas"]["CompetitionTopEntry"][];
+            /** Top N Mean */
+            top_n_mean: number | null;
+            /** Top N Min */
+            top_n_min: number | null;
+        };
+        /** CompetitionEmbargoWindow */
+        CompetitionEmbargoWindow: {
+            /** Days */
+            days: number | null;
+            /** Disclosure */
+            disclosure: string;
+            /** Embargo Hours */
+            embargo_hours: number;
+            /** Ends At */
+            ends_at: string | null;
+            /** Forks */
+            forks: number;
+            /** Forks Per Release */
+            forks_per_release: number | null;
+            /** Frontier Gain By Bench */
+            frontier_gain_by_bench: {
+                [key: string]: number;
+            };
+            /** Gain Per Day By Bench */
+            gain_per_day_by_bench: {
+                [key: string]: number;
+            };
+            /** Median Fork Delta */
+            median_fork_delta: number | null;
+            /** Median Fork Lag Hours */
+            median_fork_lag_hours: number | null;
+            /** New Highs */
+            new_highs: number;
+            /** New Highs By Driver */
+            new_highs_by_driver: {
+                [key: string]: number;
+            };
+            /** Releases */
+            releases: number;
+            /** Revision */
+            revision: number;
+            /** Starts At */
+            starts_at: string | null;
+            /** Thin Fork Share */
+            thin_fork_share: number | null;
+            /** Thin Forks */
+            thin_forks: number;
+        };
         /**
          * CompetitionFeePolicy
          * @description One competition's override. ``null`` inherits.
@@ -19633,6 +19803,212 @@ export interface components {
             /** Fee Required */
             fee_required?: boolean | null;
         };
+        /** CompetitionFork */
+        CompetitionFork: {
+            /** Bench Version */
+            bench_version: number | null;
+            /** Containment */
+            containment: number | null;
+            /** Declared */
+            declared: boolean;
+            /** Delta */
+            delta: number | null;
+            /**
+             * Fork Agent Id
+             * Format: uuid
+             */
+            fork_agent_id: string;
+            /** Fork Composite */
+            fork_composite: number | null;
+            /** Fork Name */
+            fork_name: string;
+            /** Fork Status */
+            fork_status: string;
+            /**
+             * Fork Uploaded At
+             * Format: date-time
+             */
+            fork_uploaded_at: string;
+            /** Fork Version */
+            fork_version: number | null;
+            /** Lag Hours */
+            lag_hours: number;
+            /** Novel Fraction */
+            novel_fraction: number | null;
+            /** Shared Seed Count */
+            shared_seed_count: number;
+            /** Shared Seed Delta */
+            shared_seed_delta: number | null;
+            /** Thin */
+            thin: boolean;
+        };
+        /** CompetitionImprovementMetrics */
+        CompetitionImprovementMetrics: {
+            /** Bench Version */
+            bench_version: number | null;
+            /** Benches */
+            benches: components["schemas"]["CompetitionBench"][];
+            coverage: components["schemas"]["CompetitionCoverage"];
+            /** Definitions */
+            definitions: {
+                [key: string]: string;
+            };
+            /** Embargo Windows */
+            embargo_windows: components["schemas"]["CompetitionEmbargoWindow"][];
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Metrics Version */
+            metrics_version: string;
+            /** Releases */
+            releases: components["schemas"]["CompetitionRelease"][];
+            runtime: components["schemas"]["CompetitionJobRuntime"] | null;
+            /** Since */
+            since: string | null;
+            thresholds: components["schemas"]["CompetitionThresholds"];
+        };
+        /** CompetitionJobRuntime */
+        CompetitionJobRuntime: {
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Last Tick Counters */
+            last_tick_counters: {
+                [key: string]: number;
+            };
+            /** Last Tick Error */
+            last_tick_error: string | null;
+            /** Last Tick Finished At */
+            last_tick_finished_at: string | null;
+            /** Last Tick Started At */
+            last_tick_started_at: string | null;
+            /** Metrics Version */
+            metrics_version: string;
+            /** Running */
+            running: boolean;
+        };
+        /** CompetitionNewHigh */
+        CompetitionNewHigh: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Base Agent Id */
+            base_agent_id: string | null;
+            /** Bench Version */
+            bench_version: number;
+            /** Composite */
+            composite: number;
+            /** Days Since Previous High */
+            days_since_previous_high: number | null;
+            /** Delta */
+            delta: number;
+            /**
+             * Driver
+             * @enum {string}
+             */
+            driver: "original" | "same_owner_iteration" | "released_fork";
+            /**
+             * Finalized At
+             * Format: date-time
+             */
+            finalized_at: string;
+            /** Name */
+            name: string;
+            /** Previous Frontier */
+            previous_frontier: number;
+            /** Version */
+            version: number | null;
+        };
+        /** CompetitionNoiseAgent */
+        CompetitionNoiseAgent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Composite */
+            composite: number;
+            /** Name */
+            name: string;
+            /** Quorum Sem */
+            quorum_sem: number | null;
+            /** Seed Count */
+            seed_count: number;
+            /** Seed Sd */
+            seed_sd: number | null;
+            /** Version */
+            version: number | null;
+        };
+        /** CompetitionNoiseFloor */
+        CompetitionNoiseFloor: {
+            /** Agents */
+            agents: components["schemas"]["CompetitionNoiseAgent"][];
+            /** Agents Measured */
+            agents_measured: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Beyond Noise Step */
+            beyond_noise_step: number | null;
+            /** Max Seed Sd */
+            max_seed_sd: number | null;
+            /** Median Quorum Sem */
+            median_quorum_sem: number | null;
+            /** Median Seed Sd */
+            median_seed_sd: number | null;
+            /** Single Seed Delta Sd */
+            single_seed_delta_sd: number | null;
+        };
+        /** CompetitionRelease */
+        CompetitionRelease: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Base Composite */
+            base_composite: number | null;
+            /** Bench Version */
+            bench_version: number | null;
+            /** Best Delta */
+            best_delta: number | null;
+            /** Disclosure */
+            disclosure: string;
+            /** Embargo Hours */
+            embargo_hours: number;
+            /** First Fork Lag Hours */
+            first_fork_lag_hours: number | null;
+            /** Fork Count */
+            fork_count: number;
+            /** Forks */
+            forks: components["schemas"]["CompetitionFork"][];
+            /** Forks Beating Base */
+            forks_beating_base: number;
+            /** Median Delta */
+            median_delta: number | null;
+            /** Median Fork Lag Hours */
+            median_fork_lag_hours: number | null;
+            /** Median Novel Fraction */
+            median_novel_fraction: number | null;
+            /** Name */
+            name: string;
+            /**
+             * Released At
+             * Format: date-time
+             */
+            released_at: string;
+            /** Thin Fork Count */
+            thin_fork_count: number;
+            /**
+             * Uploaded At
+             * Format: date-time
+             */
+            uploaded_at: string;
+            /** Version */
+            version: number | null;
+        };
         /** CompetitionSubmissionTerms */
         CompetitionSubmissionTerms: {
             /** Accepting */
@@ -19647,6 +20023,39 @@ export interface components {
             fee: components["schemas"]["SubmissionFeeTerms"];
             /** Terms Endpoint */
             terms_endpoint?: string | null;
+        };
+        /** CompetitionThresholds */
+        CompetitionThresholds: {
+            /** Close After Days */
+            close_after_days: number;
+            /** First Bench Version */
+            first_bench_version: number;
+            /** Fork Containment */
+            fork_containment: number;
+            /** Min Noise Seeds */
+            min_noise_seeds: number;
+            /** Noise Agents */
+            noise_agents: number;
+            /** Noise Sigmas */
+            noise_sigmas: number;
+            /** Thin Fork Novel Fraction */
+            thin_fork_novel_fraction: number;
+            /** Top N */
+            top_n: number;
+        };
+        /** CompetitionTopEntry */
+        CompetitionTopEntry: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Composite */
+            composite: number;
+            /** Name */
+            name: string;
+            /** Version */
+            version: number | null;
         };
         /** ConfirmationAblationCoordinatorProfile */
         ConfirmationAblationCoordinatorProfile: {
@@ -46350,6 +46759,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HttpErrorEnvelope"];
+                };
+            };
+        };
+    };
+    get_competition_improvement_metrics_api_v1_admin_competition_improvement_metrics_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+                since?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CompetitionImprovementMetrics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
