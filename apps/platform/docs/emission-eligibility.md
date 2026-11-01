@@ -182,3 +182,43 @@ Every direction is the same one: an error never withholds.
 * `emission_eligibility_shadow_records` — append-only rehearsal, unique on
   `(agent_id, bench_version, policy_revision, window_start)` so a 30-second
   validator poll cannot grow it.
+
+## Fork must beat its base (SN-302)
+
+Approved by Peyton on 2026-11-01. A fork of **another owner's** publicly
+released agent earns nothing until it beats that base on at least
+`fork_min_shared_seeds` (default 3) shared confirmation seeds, through the
+crown gate's paired test (`koth._dethrone_decision` with a `CrownGate`). This
+covers tail slots as well as the crown. Same-owner successors are exempt.
+Owners are the unreleased-copy signal's canonical owners: hotkey, payment
+coldkey and attested hotkey links.
+
+* **Detection** (`api_server/fork_gate.py`, recorded in `agent_fork_bases` by
+  the unreleased-copy sentinel). The base is the other-owner agent, publicly
+  released before the upload, with the most shared distinctive content (#3303
+  index). Public corpus items, common idioms and the owner's own earlier items
+  are removed first, and the score must reach the copy signal's calibrated 40.
+  A copy-court released-base clear (`matched_agent_public`,
+  `released_base_explains_overlap`, `unmodified_fork_of_released_base`) also
+  names a base. A missing row means the agent is not classified yet, which is
+  not a fork verdict.
+* **Duel.** Both sides read every confirmation score at the active benchmark
+  version. With fewer than the required shared seeds, or no paired lead past
+  the band, the state is `fork_unproven`.
+* **Posture.** `fork_must_beat_base` is `off` / `shadow` / `enforce`. It is
+  independent of the review `enforcement` and lives on the same audited
+  revision. It ships `shadow`: forks are published as `fork_unproven` and
+  rehearsed in `emission_eligibility_shadow_records`, and nothing is withheld.
+  Under `enforce` an unproven fork leaves the payable pool before owner dedupe,
+  exactly like a withheld review. Validators fold the served pool, so no
+  heartbeat protocol bump is needed. `enforce` rehearses as `shadow` until the
+  protocol-28 fleet gate is met.
+* **Reads.** Backroom `get_fork_gate` (`GET /admin/emission-eligibility/forks`)
+  lists every ledger fork, its base, N of 3 seeds, the lead, and
+  `would_lose_emissions`. `set_emission_eligibility_policy` writes the
+  posture. The public board shows "fork of X — must beat base: N/3
+  confirmations, lead ±Δ" on the King and the challengers.
+* **Before enforcing.** A base that left the retest cohort gains no new seeds,
+  so its fork can share them only on families it was scored on. Check
+  `get_fork_gate` for forks stuck at 0 shared seeds against an out-of-cohort
+  base before moving to `enforce`.

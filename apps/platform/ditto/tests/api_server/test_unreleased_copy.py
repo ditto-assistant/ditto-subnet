@@ -172,6 +172,9 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     counters = await sentinel.tick()
     assert counters["indexed"] == 1
     assert counters["flagged"] == 1
+    # The same tick classifies forks for the SN-302 gate. The source was never
+    # released, so the port is the copy signal's case, not a released-base fork.
+    assert (counters["fork_classified"], counters["forks"]) == (2, 0)
     async with session_maker() as session:
         port = await session.get(Agent, port_id)
         assert port is not None and port.status == AgentStatus.SCORED

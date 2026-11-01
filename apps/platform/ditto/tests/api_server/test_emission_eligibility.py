@@ -91,7 +91,10 @@ def _classify(
 class TestDefaultPosture:
     def test_shipping_default_is_enforcement_off(self) -> None:
         assert DEFAULT_SETTINGS.enforcement == "off"
-        assert DEFAULT_POLICY.evaluating is False
+        assert DEFAULT_POLICY.review_evaluating is False
+        # SN-302 ships the fork gate in shadow: classified, published, never
+        # withheld, so no default can move emissions.
+        assert DEFAULT_SETTINGS.fork_must_beat_base == "shadow"
         assert DEFAULT_POLICY.enforcing is False
 
     def test_off_evaluates_nothing_even_for_an_open_hold(self) -> None:

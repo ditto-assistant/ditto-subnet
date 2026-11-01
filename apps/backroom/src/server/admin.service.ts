@@ -468,6 +468,8 @@ import {
   emissionAllocationRevisionSchema,
   setEmissionAllocationInputSchema,
   emissionEligibilityControlSchema,
+  forkGateSchema,
+  setEmissionEligibilityInputSchema,
   burnSettingsRevisionSchema,
   setBurnSettingsInputSchema,
   continualRetestSettingsForPlatform,
@@ -1526,6 +1528,44 @@ const EMISSION_ELIGIBILITY_PATH = '/api/v1/admin/emission-eligibility'
 export async function fetchEmissionEligibility() {
   const payload = await platformAdminRequest(EMISSION_ELIGIBILITY_PATH)
   return emissionEligibilityControlSchema.parse(payload)
+}
+
+/**
+ * Apply one append-only emission eligibility revision (review gate and the
+ * SN-302 fork gate). A revision stores the whole policy, so every field is
+ * required; Platform refuses a stale expectedRevision.
+ */
+export async function setEmissionEligibility(rawInput: unknown, actor: string) {
+  const input = setEmissionEligibilityInputSchema.parse(rawInput)
+  try {
+    await platformAdminRequest(EMISSION_ELIGIBILITY_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: '*',
+        expected_revision: input.expectedRevision,
+        settings: input.settings,
+        reason: input.reason,
+        actor,
+        confirmation: input.confirmation,
+      },
+    })
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : String(cause)
+    if (/emission eligibility settings changed/i.test(message)) {
+      throw new Error(
+        `${message}. Nothing was applied: re-read get_emission_eligibility_policy and resubmit with the revision it reports.`,
+      )
+    }
+    throw cause
+  }
+  return fetchEmissionEligibility()
+}
+
+/** Every ledger agent forking another owner's released agent (SN-302). */
+export async function fetchForkGate() {
+  const payload = await platformAdminRequest(`${EMISSION_ELIGIBILITY_PATH}/forks`)
+  return forkGateSchema.parse(payload)
 }
 
 /** One exact artifact's eligibility record, plus whether the fold can see it. */

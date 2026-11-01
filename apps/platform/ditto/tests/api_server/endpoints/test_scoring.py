@@ -455,6 +455,7 @@ async def test_pin_passes_registration_into_the_withheld_pool(
     monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _ledger)
     monkeypatch.setattr(scoring_mod, "v9_confirmation_enforcement_active", _false)
     monkeypatch.setattr(scoring_mod, "load_review_postures", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_fork_duels", _empty)
     monkeypatch.setattr(scoring_mod, "evaluate_ledger", _evaluate)
     monkeypatch.setattr(scoring_mod, "list_reign_seed_anchors", _none)
     monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)

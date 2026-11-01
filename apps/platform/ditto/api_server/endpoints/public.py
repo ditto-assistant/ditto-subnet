@@ -188,6 +188,7 @@ from ditto.api_models.public import (
     PublicCrownKing,
     PublicCrownRules,
     PublicDeferredReviewTrigger,
+    PublicForkStatus,
     PublicReviewConclusion,
     PublicScreeningInvariantAssessment,
     PublicScreeningReviewNote,
@@ -271,6 +272,7 @@ from ditto.api_server.endpoints.scoring import (
 from ditto.api_server.endpoints.screener import GeneratorDep
 from ditto.api_server.endpoints.upload import _verify_signature
 from ditto.api_server.endpoints.validator import SessionDep, StorageDep
+from ditto.api_server.fork_gate import ForkDuel
 from ditto.api_server.gate_evidence import (
     GATE_NOTE_DISPUTE_STATUSES,
     gate_note_ids_for,
@@ -396,6 +398,7 @@ from ditto.db.queries.emission_eligibility import (
     AgentReviewPosture,
     load_review_postures,
 )
+from ditto.db.queries.fork_bases import resolve_fork_duels
 from ditto.db.queries.heartbeats import (
     ActiveValidatorAssignment,
     ActiveValidatorWork,
@@ -2419,7 +2422,13 @@ def _public_reward_eligibility(
     """
     if record is None:
         return None
-    if record.enforcement == "off" and record.posture_satisfied:
+    if (
+        record.enforcement == "off"
+        and getattr(record, "fork_base_agent_id", None) is None
+        and record.posture_satisfied
+    ):
+        # Nothing to say: review gate off and not a fork (the shadow fork gate
+        # annotates forks only, so an untouched board keeps its payload).
         return None
     return PublicRewardEligibility(
         state=record.state,
@@ -2430,6 +2439,35 @@ def _public_reward_eligibility(
         policy_revision=record.policy_revision,
         window_start=record.window_start,
         activates_at=record.activates_at,
+        fork_enforcement=getattr(record, "fork_enforcement", "off"),
+        fork_base_agent_id=getattr(record, "fork_base_agent_id", None),
+        fork_state=getattr(record, "fork_state", None),
+        fork_shared_seeds=getattr(record, "fork_shared_seeds", None),
+        fork_required_seeds=getattr(record, "fork_required_seeds", None),
+        fork_paired_lead=getattr(record, "fork_paired_lead", None),
+    )
+
+
+async def _fork_duels_for(
+    session: AsyncSession,
+    policy: ResolvedEligibilityPolicy,
+    rows: Sequence[tuple[UUID, str, int | None]],
+) -> dict[UUID, ForkDuel]:
+    """The fork gate's duels for board rows, or ``{}`` while it is off.
+
+    Board rows share one benchmark version. Live-mode reads use the uncapped
+    band; epoch mode replays the pin's own records instead.
+    """
+    if not policy.fork_evaluating or not rows:
+        return {}
+    version = next((v for _, _, v in rows if v), None)
+    if version is None:
+        return {}
+    return await resolve_fork_duels(
+        session,
+        [(agent_id, hotkey) for agent_id, hotkey, _ in rows],
+        bench_version=version,
+        min_shared_seeds=policy.settings.fork_min_shared_seeds,
     )
 
 
@@ -2489,7 +2527,17 @@ async def _agent_reward_eligibility(
         policy = await _effective_eligibility_policy(request, session, now=now)
         if not policy.evaluating:
             return None
-        postures = await load_review_postures(session, [agent_id])
+        postures = (
+            await load_review_postures(session, [agent_id])
+            if policy.review_evaluating
+            else {}
+        )
+        agent_hotkey = await session.scalar(
+            select(Agent.miner_hotkey).where(Agent.agent_id == agent_id)
+        )
+        duels = await _fork_duels_for(
+            session, policy, [(agent_id, agent_hotkey or "", bench_version)]
+        )
     except SQLAlchemyError:
         logger.warning(
             "could not resolve reward eligibility for agent %s", agent_id, exc_info=True
@@ -2502,6 +2550,7 @@ async def _agent_reward_eligibility(
         posture=postures.get(agent_id) or AgentReviewPosture(agent_id=agent_id),
         policy=policy,
         now=now,
+        fork=duels.get(agent_id),
     )
 
 
@@ -2530,13 +2579,24 @@ async def _resolve_reward_eligibility(
         policy = await _effective_eligibility_policy(request, session, now=now)
         if not policy.evaluating:
             return {}
-        postures = await load_review_postures(session, [row.agent_id for row in rows])
+        postures = (
+            await load_review_postures(session, [row.agent_id for row in rows])
+            if policy.review_evaluating
+            else {}
+        )
+        duels = await _fork_duels_for(
+            session,
+            policy,
+            [(row.agent_id, row.miner_hotkey, row.bench_version) for row in rows],
+        )
     except SQLAlchemyError:
         logger.warning(
             "could not resolve reward eligibility for the public board", exc_info=True
         )
         return {}
-    return evaluate_ledger(rows, postures, policy=policy, now=now).records
+    return evaluate_ledger(
+        rows, postures, policy=policy, now=now, fork_duels=duels
+    ).records
 
 
 def _public_entry(
@@ -2882,8 +2942,26 @@ def _public_leaderboard_family(
     return PublicLeaderboardFamily(members=children) if children else None
 
 
+def _public_fork(record: Any | None) -> PublicForkStatus | None:
+    """The fork-gate duel carried on an eligibility record, if it is a fork."""
+    base = getattr(record, "fork_base_agent_id", None)
+    enforcement = getattr(record, "fork_enforcement", "off")
+    if record is None or base is None or enforcement == "off":
+        return None
+    return PublicForkStatus(
+        base_agent_id=base,
+        shared_seed_confirmations=record.fork_shared_seeds or 0,
+        required_confirmations=record.fork_required_seeds or 3,
+        paired_lead=record.fork_paired_lead,
+        beats_base=record.fork_state == "beats_base",
+        enforcement=enforcement,
+    )
+
+
 def _public_challenger(
-    standing: ChallengerStanding, rules: CrownGate
+    standing: ChallengerStanding,
+    rules: CrownGate,
+    eligibility: Mapping[UUID, Any] | None = None,
 ) -> PublicCrownChallenger:
     """One challenger's duel with the King, in the board's words."""
     decision = standing.decision
@@ -2914,6 +2992,7 @@ def _public_challenger(
             else None
         ),
         status=status,
+        fork=_public_fork((eligibility or {}).get(standing.entry.agent_id)),
     )
 
 
@@ -3142,7 +3221,7 @@ def _public_koth_emissions(
         reward_eligibility_mode=(
             "enforce"
             if any(
-                record.enforcement == "enforce"
+                "enforce" in (record.enforcement, record.fork_enforcement)
                 for record in (reward_eligibility or {}).values()
             )
             else None
@@ -3199,12 +3278,15 @@ def _public_koth_emissions(
                 official_rank=standings.king_official_rank,
                 official_score=standings.king_official_score,
                 shared_seed_confirmations=depths.get(projection.champion.agent_id, 0),
+                fork=_public_fork(
+                    (reward_eligibility or {}).get(projection.champion.agent_id)
+                ),
             )
             if standings is not None
             else None
         ),
         challengers=[
-            _public_challenger(standing, rules)
+            _public_challenger(standing, rules, reward_eligibility)
             for standing in (standings.challengers if standings is not None else ())
         ],
         ledger_pin=ledger_pin,
@@ -4194,7 +4276,7 @@ async def build_public_leaderboard(
         else reward_eligibility
     )
     enforcing_eligibility = any(
-        record.enforcement == "enforce"
+        "enforce" in (record.enforcement, record.fork_enforcement)
         for record in projected_reward_eligibility.values()
     )
     emission_incumbent_id: UUID | None = None
@@ -4205,7 +4287,7 @@ async def build_public_leaderboard(
         # public champion and the folded champion stay the same hotkey.
         def withheld(agent_id: UUID) -> bool:
             record = projected_reward_eligibility.get(agent_id)
-            return record is not None and not record.posture_satisfied
+            return record is not None and not record.reward_eligible
 
         emission_rows = dedupe_owner_rows(
             [row for row in finalized_generations if not withheld(row.agent_id)],
@@ -4480,37 +4562,70 @@ async def build_public_leaderboard(
         emissions=(
             None
             if bench_version is not None
-            else _public_koth_emissions(
-                emission_rows,
-                stderrs=fold_stderrs,
-                quorum_by_agent=quorum,
-                confirmation_by_seed=(
-                    confirmation_by_seed if continual_mean_active else {}
+            else await _name_fork_bases(
+                session,
+                _public_koth_emissions(
+                    emission_rows,
+                    stderrs=fold_stderrs,
+                    quorum_by_agent=quorum,
+                    confirmation_by_seed=(
+                        confirmation_by_seed if continual_mean_active else {}
+                    ),
+                    confirmation_depth=(
+                        confirmation_depth if continual_mean_active else {}
+                    ),
+                    include_continual_scores=continual_mean_active,
+                    wave_membership=continual_settings.wave_membership,
+                    anchor_version=active_version,
+                    efficiency_bonuses=efficiency_bonuses,
+                    efficiency_factors=efficiency_factors,
+                    efficiency_curve_versions=board_curve_versions,
+                    tie_weighting_active=tie_weighting_active,
+                    ceiling_band_clamp=ceiling_band_clamp_active,
+                    statistical_band_cap=statistical_band_cap_active,
+                    ledger_pin=ledger_pin,
+                    crown_incumbent_active=crown_incumbent_active,
+                    reward_eligibility=projected_reward_eligibility,
+                    incumbent_agent_id=emission_incumbent_id,
+                    provisional_incumbent=provisional_incumbent,
+                    rank_shares=board_rank_shares,
+                    crown_gate=crown_gate_active_rules,
+                    crown_rules=crown_rules,
                 ),
-                confirmation_depth=(
-                    confirmation_depth if continual_mean_active else {}
-                ),
-                include_continual_scores=continual_mean_active,
-                wave_membership=continual_settings.wave_membership,
-                anchor_version=active_version,
-                efficiency_bonuses=efficiency_bonuses,
-                efficiency_factors=efficiency_factors,
-                efficiency_curve_versions=board_curve_versions,
-                tie_weighting_active=tie_weighting_active,
-                ceiling_band_clamp=ceiling_band_clamp_active,
-                statistical_band_cap=statistical_band_cap_active,
-                ledger_pin=ledger_pin,
-                crown_incumbent_active=crown_incumbent_active,
-                reward_eligibility=projected_reward_eligibility,
-                incumbent_agent_id=emission_incumbent_id,
-                provisional_incumbent=provisional_incumbent,
-                rank_shares=board_rank_shares,
-                crown_gate=crown_gate_active_rules,
-                crown_rules=crown_rules,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
     )
+
+
+async def _name_fork_bases(
+    session: AsyncSession, emissions: PublicKothEmissions | None
+) -> PublicKothEmissions | None:
+    """Fill each fork's base name and version; the base is often off the board."""
+    if emissions is None:
+        return None
+    forks = [
+        holder.fork
+        for holder in (emissions.king, *emissions.challengers)
+        if holder is not None and holder.fork is not None
+    ]
+    if not forks:
+        return emissions
+    names = {
+        agent_id: (name, version)
+        for agent_id, name, version in (
+            await session.execute(
+                select(Agent.agent_id, Agent.name, Agent.version).where(
+                    Agent.agent_id.in_({fork.base_agent_id for fork in forks})
+                )
+            )
+        ).tuples()
+    }
+    for fork in forks:
+        fork.base_agent_name, fork.base_agent_version = names.get(
+            fork.base_agent_id, (None, None)
+        )
+    return emissions
 
 
 def _ledger_pin_model(

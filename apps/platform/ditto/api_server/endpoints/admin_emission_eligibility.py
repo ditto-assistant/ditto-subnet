@@ -27,7 +27,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -40,6 +40,8 @@ from ditto.api_models.emission_eligibility import (
     AdminEmissionEligibilitySettingsRequest,
     AdminEmissionEligibilitySettingsResponse,
     AdminEmissionEligibilityShadowRecord,
+    AdminForkGateResponse,
+    AdminForkGateRow,
     EffectiveEmissionEligibilitySettings,
     EmissionEligibilitySettings,
     EmissionEligibilitySettingsRevision,
@@ -58,7 +60,9 @@ from ditto.api_server.emission_eligibility import (
     records_from_pin_context,
 )
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import Agent, LedgerEpochSnapshot, Score
+from ditto.api_server.fork_gate import FORK_DETECTOR_VERSION
+from ditto.api_server.ledger_pin import pin_expected_shares
+from ditto.db.models import Agent, AgentForkBase, LedgerEpochSnapshot, Score
 from ditto.db.models import (
     EmissionEligibilitySettingsRevision as RevisionRow,
 )
@@ -75,6 +79,7 @@ from ditto.db.queries.emission_eligibility import (
     list_shadow_records,
     load_review_postures,
 )
+from ditto.db.queries.fork_bases import fork_bases_for, resolve_fork_duels
 from ditto.db.queries.heartbeats import (
     count_live_validators,
     live_weight_setter_fleet_supports_protocol,
@@ -385,4 +390,131 @@ async def get_agent_eligibility(
             pin=pin,
         ),
         shadow_records=[_shadow_record(row) for row in shadow],
+    )
+
+
+@router.get("/emission-eligibility/forks", response_model=AdminForkGateResponse)
+async def get_fork_gate(
+    request: Request, _admin: AdminDep, session: SessionDep
+) -> AdminForkGateResponse:
+    """Every ledger agent that forks another owner's released agent (SN-302).
+
+    For each: its base, the detection evidence, the paired duel on shared
+    seeds, and whether it is earning under the current pin. Read
+    ``would_lose_emissions`` before moving ``fork_must_beat_base`` to
+    ``enforce``: those agents are paid now and would be withheld.
+    """
+    now = datetime.now(UTC)
+    latest = await latest_eligibility_settings_revision(session)
+    policy = policy_from_row(latest)
+    fleet_ready = await _fleet_protocol_ready(session, now=now)
+    effective = effective_policy(policy, fleet_ready=fleet_ready)
+    rows = await list_eligible_ledger(
+        session, include_fingerprints=False, include_details=False
+    )
+    ids = [row.agent_id for row in rows]
+    version = next((row.bench_version for row in rows if row.bench_version), None)
+    bases = await fork_bases_for(session, ids)
+    duels = (
+        await resolve_fork_duels(
+            session,
+            [(row.agent_id, row.miner_hotkey) for row in rows],
+            bench_version=version,
+            min_shared_seeds=policy.settings.fork_min_shared_seeds,
+        )
+        if version is not None
+        else {}
+    )
+    classified = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(AgentForkBase)
+            .where(
+                AgentForkBase.agent_id.in_(ids),
+                AgentForkBase.detector_version == FORK_DETECTOR_VERSION,
+            )
+        )
+        or 0
+    )
+    pin = await _active_pin(request, session)
+    shares = (pin_expected_shares(pin) or {}) if pin is not None else {}
+    pin_ids = (
+        {str(item.get("agent_id")) for item in pin.entries or []}
+        if pin is not None
+        else set()
+    )
+    names = {
+        agent_id: (name, version_, hotkey)
+        for agent_id, name, version_, hotkey in (
+            await session.execute(
+                select(
+                    Agent.agent_id, Agent.name, Agent.version, Agent.miner_hotkey
+                ).where(
+                    Agent.agent_id.in_(
+                        {
+                            *ids,
+                            *(
+                                b.base_agent_id
+                                for b in bases.values()
+                                if b.base_agent_id
+                            ),
+                        }
+                    )
+                )
+            )
+        ).tuples()
+    }
+    hotkeys = {row.agent_id: row.miner_hotkey for row in rows}
+    forks: list[AdminForkGateRow] = []
+    for agent_id, base in bases.items():
+        duel = duels.get(agent_id)
+        if duel is None or base.base_agent_id is None:
+            continue
+        in_pool = str(agent_id) in pin_ids if pin is not None else True
+        share = shares.get(hotkeys[agent_id], 0.0) if in_pool else 0.0
+        earning = share > 0.0
+        beats = duel.state == "beats_base"
+        name, version_, _ = names.get(agent_id, (None, None, None))
+        base_name, base_version, base_hotkey = names.get(
+            base.base_agent_id, (None, None, None)
+        )
+        forks.append(
+            AdminForkGateRow(
+                agent_id=agent_id,
+                agent_name=name,
+                agent_version=version_,
+                miner_hotkey=hotkeys[agent_id],
+                base_agent_id=base.base_agent_id,
+                base_agent_name=base_name,
+                base_agent_version=base_version,
+                base_miner_hotkey=base_hotkey,
+                detection_score=base.score,
+                shared_item_count=base.shared_count,
+                basis=base.basis,
+                shared_seeds=duel.shared_seeds,
+                required_seeds=duel.required_seeds,
+                paired_lead=duel.paired_lead,
+                required_lead=duel.required_lead,
+                lead_needed=duel.lead_needed,
+                beats_base=beats,
+                in_pinned_pool=in_pool,
+                pinned_share_of_miner_pool=share,
+                currently_earning=earning,
+                would_lose_emissions=earning and not beats,
+            )
+        )
+    forks.sort(key=lambda row: (-row.pinned_share_of_miner_pool, -row.detection_score))
+    return AdminForkGateResponse(
+        fork_must_beat_base=policy.settings.fork_must_beat_base,
+        effective_fork_must_beat_base=effective.settings.fork_must_beat_base,
+        fork_min_shared_seeds=policy.settings.fork_min_shared_seeds,
+        policy_revision=policy.revision,
+        bench_version=version,
+        ledger_agent_count=len(rows),
+        classified_agent_count=classified,
+        pin_epoch_index=pin.epoch_index if pin is not None else None,
+        forks=forks,
+        would_lose_emissions=[
+            row.agent_id for row in forks if row.would_lose_emissions
+        ],
     )

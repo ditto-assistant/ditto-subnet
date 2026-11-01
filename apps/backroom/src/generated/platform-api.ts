@@ -1701,6 +1701,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/emission-eligibility/forks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Fork Gate
+         * @description Every ledger agent that forks another owner's released agent (SN-302).
+         *
+         *     For each: its base, the detection evidence, the paired duel on shared
+         *     seeds, and whether it is earning under the current pin. Read
+         *     ``would_lose_emissions`` before moving ``fork_must_beat_base`` to
+         *     ``enforce``: those agents are paid now and would be withheld.
+         */
+        get: operations["get_fork_gate_api_v1_admin_emission_eligibility_forks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/generator-competition/default-generator": {
         parameters: {
             query?: never;
@@ -11909,7 +11934,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window" | "not_scored";
+            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window" | "fork_unproven" | "not_scored";
             /**
              * Window Start
              * Format: date-time
@@ -12106,6 +12131,92 @@ export interface components {
             status: "queued" | "leased" | "running" | "succeeded" | "incomplete" | "skipped";
             /** Unmetered */
             unmetered: boolean;
+        };
+        /**
+         * AdminForkGateResponse
+         * @description The fork-must-beat-base gate's ledger-wide shadow list (SN-302).
+         */
+        AdminForkGateResponse: {
+            /** Bench Version */
+            bench_version?: number | null;
+            /** Classified Agent Count */
+            classified_agent_count: number;
+            /**
+             * Effective Fork Must Beat Base
+             * @enum {string}
+             */
+            effective_fork_must_beat_base: "off" | "shadow" | "enforce";
+            /** Fork Min Shared Seeds */
+            fork_min_shared_seeds: number;
+            /**
+             * Fork Must Beat Base
+             * @enum {string}
+             */
+            fork_must_beat_base: "off" | "shadow" | "enforce";
+            /** Forks */
+            forks: components["schemas"]["AdminForkGateRow"][];
+            /** Ledger Agent Count */
+            ledger_agent_count: number;
+            /** Pin Epoch Index */
+            pin_epoch_index?: number | null;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Would Lose Emissions */
+            would_lose_emissions: string[];
+        };
+        /**
+         * AdminForkGateRow
+         * @description One ledger agent detected as a fork of another owner's released agent.
+         */
+        AdminForkGateRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name?: string | null;
+            /** Agent Version */
+            agent_version?: number | null;
+            /**
+             * Base Agent Id
+             * Format: uuid
+             */
+            base_agent_id: string;
+            /** Base Agent Name */
+            base_agent_name?: string | null;
+            /** Base Agent Version */
+            base_agent_version?: number | null;
+            /** Base Miner Hotkey */
+            base_miner_hotkey?: string | null;
+            /** Basis */
+            basis?: string | null;
+            /** Beats Base */
+            beats_base: boolean;
+            /** Currently Earning */
+            currently_earning: boolean;
+            /** Detection Score */
+            detection_score: number;
+            /** In Pinned Pool */
+            in_pinned_pool: boolean;
+            /** Lead Needed */
+            lead_needed?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Paired Lead */
+            paired_lead?: number | null;
+            /** Pinned Share Of Miner Pool */
+            pinned_share_of_miner_pool: number;
+            /** Required Lead */
+            required_lead?: number | null;
+            /** Required Seeds */
+            required_seeds: number;
+            /** Shared Item Count */
+            shared_item_count: number;
+            /** Shared Seeds */
+            shared_seeds: number;
+            /** Would Lose Emissions */
+            would_lose_emissions: boolean;
         };
         /** AdminGeneratorProbeResponse */
         AdminGeneratorProbeResponse: {
@@ -16347,6 +16458,24 @@ export interface components {
              * @enum {string}
              */
             enforcement: "off" | "shadow" | "enforce";
+            /** Fork Base Agent Id */
+            fork_base_agent_id?: string | null;
+            /**
+             * Fork Enforcement
+             * @default off
+             * @enum {string}
+             */
+            fork_enforcement: "off" | "shadow" | "enforce";
+            /** Fork Paired Lead */
+            fork_paired_lead?: number | null;
+            /** Fork Required Lead */
+            fork_required_lead?: number | null;
+            /** Fork Required Seeds */
+            fork_required_seeds?: number | null;
+            /** Fork Shared Seeds */
+            fork_shared_seeds?: number | null;
+            /** Fork State */
+            fork_state?: ("beats_base" | "unproven") | null;
             /** Policy Checksum */
             policy_checksum: string;
             /** Policy Revision */
@@ -16371,7 +16500,7 @@ export interface components {
              * State
              * @enum {string}
              */
-            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window" | "not_scored";
+            state: "eligible" | "unresolved_review" | "review_inconclusive" | "review_escalated" | "review_infrastructure_failed" | "review_missing" | "review_rejected" | "awaiting_next_window" | "fork_unproven" | "not_scored";
             /**
              * Window Start
              * Format: date-time
@@ -22132,6 +22261,8 @@ export interface components {
              *       "exclude_escalated": true,
              *       "exclude_inconclusive": true,
              *       "exclude_infrastructure_failed": true,
+             *       "fork_min_shared_seeds": 3,
+             *       "fork_must_beat_base": "shadow",
              *       "require_completed_review": false,
              *       "require_terminal_review": true
              *     }
@@ -22660,6 +22791,17 @@ export interface components {
              * @default true
              */
             exclude_infrastructure_failed: boolean;
+            /**
+             * Fork Min Shared Seeds
+             * @default 3
+             */
+            fork_min_shared_seeds: number;
+            /**
+             * Fork Must Beat Base
+             * @default shadow
+             * @enum {string}
+             */
+            fork_must_beat_base: "off" | "shadow" | "enforce";
             /**
              * Require Completed Review
              * @default false
@@ -30912,6 +31054,8 @@ export interface components {
              * Format: uuid
              */
             agent_id: string;
+            /** @description Set when this challenger is a fork of another owner's released agent: it must beat that base on shared seeds before it earns. */
+            fork?: components["schemas"]["PublicForkStatus"] | null;
             /**
              * Lead Needed
              * @description How much more paired lead it needs (zero once it is ahead enough). Null until they share two seeds.
@@ -30962,6 +31106,7 @@ export interface components {
              * Format: uuid
              */
             agent_id: string;
+            fork?: components["schemas"]["PublicForkStatus"] | null;
             /** Miner Hotkey */
             miner_hotkey: string;
             /**
@@ -31407,6 +31552,47 @@ export interface components {
             miner_hotkey: string;
             /** Total */
             total: number;
+        };
+        /**
+         * PublicForkStatus
+         * @description A fork's duel with the released other-owner base it must beat (SN-302).
+         */
+        PublicForkStatus: {
+            /**
+             * Base Agent Id
+             * Format: uuid
+             */
+            base_agent_id: string;
+            /** Base Agent Name */
+            base_agent_name?: string | null;
+            /** Base Agent Version */
+            base_agent_version?: number | null;
+            /**
+             * Beats Base
+             * @default false
+             */
+            beats_base: boolean;
+            /**
+             * Enforcement
+             * @description ``shadow``: published, not withheld. ``enforce``: the fork earns nothing until ``beats_base``.
+             * @default shadow
+             */
+            enforcement: string;
+            /**
+             * Paired Lead
+             * @description Mean per-seed lead over the base on shared seeds (negative is a deficit). Null until they share two seeds.
+             */
+            paired_lead?: number | null;
+            /**
+             * Required Confirmations
+             * @default 3
+             */
+            required_confirmations: number;
+            /**
+             * Shared Seed Confirmations
+             * @default 0
+             */
+            shared_seed_confirmations: number;
         };
         /**
          * PublicGateEvidence
@@ -32938,6 +33124,31 @@ export interface components {
              */
             enforcement: string;
             /**
+             * Fork Base Agent Id
+             * @description The publicly released other-owner agent this artifact forks. A fork earns only after beating it on shared seeds.
+             */
+            fork_base_agent_id?: string | null;
+            /**
+             * Fork Enforcement
+             * @description Posture of the fork-must-beat-base gate (SN-302): ``off``/``shadow``/``enforce``.
+             * @default off
+             */
+            fork_enforcement: string;
+            /**
+             * Fork Paired Lead
+             * @description Mean per-seed lead over the base on shared seeds (negative is a deficit). Null until they share two seeds.
+             */
+            fork_paired_lead?: number | null;
+            /** Fork Required Seeds */
+            fork_required_seeds?: number | null;
+            /** Fork Shared Seeds */
+            fork_shared_seeds?: number | null;
+            /**
+             * Fork State
+             * @description Whether the fork has beaten its base.
+             */
+            fork_state?: ("beats_base" | "unproven") | null;
+            /**
              * Policy Revision
              * @description Eligibility posture revision this verdict was reached under. ``0`` means no revision is stored and the documented default (enforcement off) is in force.
              */
@@ -32959,7 +33170,7 @@ export interface components {
             reward_eligible: boolean;
             /**
              * State
-             * @description ``eligible`` or one of the withheld classes: ``unresolved_review``, ``review_inconclusive``, ``review_escalated``, ``review_infrastructure_failed``, ``review_missing``, ``review_rejected``, ``awaiting_next_window``.
+             * @description ``eligible`` or one of the withheld classes: ``unresolved_review``, ``review_inconclusive``, ``review_escalated``, ``review_infrastructure_failed``, ``review_missing``, ``review_rejected``, ``awaiting_next_window``, ``fork_unproven``.
              */
             state: string;
             /**
@@ -48079,6 +48290,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EmissionEligibilitySettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_fork_gate_api_v1_admin_emission_eligibility_forks_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminForkGateResponse"];
                 };
             };
             /** @description Validation Error */
