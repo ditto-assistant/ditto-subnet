@@ -43,6 +43,15 @@ def provider_outage_active(
     return _aware(circuit.last_failure_at) > now - PROVIDER_RECOVERY_QUIET_WINDOW
 
 
+async def read_provider_circuit(
+    session: AsyncSession, *, provider: str = OPENROUTER_PROVIDER
+) -> ProviderOutageCircuit | None:
+    """The circuit row without a lock, for read-only projections."""
+    return await session.scalar(
+        select(ProviderOutageCircuit).where(ProviderOutageCircuit.provider == provider)
+    )
+
+
 def scoring_probe_key(*, validator_hotkey: str, slot_id: str) -> str:
     return f"{validator_hotkey}:{slot_id}"
 
@@ -189,6 +198,7 @@ __all__ = [
     "lock_provider_work_gate",
     "park_scoring_leases",
     "provider_outage_active",
+    "read_provider_circuit",
     "register_provider_probe",
     "scoring_probe_key",
 ]

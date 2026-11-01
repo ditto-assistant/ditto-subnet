@@ -4281,6 +4281,9 @@ describe('production score reads', () => {
       live_lease_count: 0,
       newer_canonical_work_pending: false,
       least_covered_admitted: true,
+      void_rerun_seed_count: 0,
+      void_rerun_claimable: false,
+      provider_outage_active: false,
       decision: 'claimable',
     },
     latest_ticket_status: 'issued',
@@ -4323,6 +4326,32 @@ describe('production score reads', () => {
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
       expect.anything(),
     )
+  })
+
+  it('reads void re-run debt on an agent outside the cohort', async () => {
+    const payload = {
+      ...retestDiagnosticPayload,
+      in_retest_cohort: false,
+      admission_reason: 'outside_cohort',
+      claim: {
+        ...retestDiagnosticPayload.claim,
+        in_catchup_set: false,
+        route_priority: 'void_rerun',
+        void_rerun_seed_count: 2,
+        void_rerun_claimable: false,
+        provider_outage_active: true,
+        decision: 'provider_outage',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(payload)))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.claim).toMatchObject({
+      route_priority: 'void_rerun',
+      void_rerun_seed_count: 2,
+      provider_outage_active: true,
+      decision: 'provider_outage',
+    })
   })
 
   it('still reads a retest diagnostic from a platform without the newer fields', async () => {

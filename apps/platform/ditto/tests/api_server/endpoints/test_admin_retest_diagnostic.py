@@ -26,6 +26,7 @@ from ditto.api_server.endpoints import admin_leaderboard
 from ditto.api_server.endpoints.validator import _KothLaneSnapshot
 from ditto.api_server.koth import KothEntry, continual_composite
 from ditto.chain import ChainClient
+from ditto.db.queries.confirmation_score_voids import VoidRerunDebt
 from ditto.db.queries.retest_sample_inference import RetestSampleInference
 
 pytestmark = pytest.mark.asyncio
@@ -189,6 +190,8 @@ def _install(
     leases: dict[str, int | None] | None = None,
     least_covered: bool = True,
     samples: tuple[RetestSampleInference, ...] = (),
+    debts: tuple[VoidRerunDebt, ...] = (),
+    circuit: object | None = None,
 ) -> None:
     """Stub only the database and chain edges; the fold logic stays real."""
     monkeypatch.setattr(
@@ -246,6 +249,17 @@ def _install(
         admin_leaderboard,
         "voided_confirmation_keys",
         AsyncMock(return_value=frozenset()),
+    )
+
+    async def _debts(
+        _session: object, *, ledger_agent_ids: frozenset[UUID], **_: object
+    ) -> list[VoidRerunDebt]:
+        # The lane's own ledger filter, applied to the stubbed debt rows.
+        return [debt for debt in debts if debt.agent_id in ledger_agent_ids]
+
+    monkeypatch.setattr(admin_leaderboard, "_void_rerun_debts", _debts)
+    monkeypatch.setattr(
+        admin_leaderboard, "read_provider_circuit", AsyncMock(return_value=circuit)
     )
 
 
@@ -489,3 +503,82 @@ async def test_diagnostic_carries_each_samples_grant_failures(
     assert [(code.terminal_error_code, code.count) for code in wire.failure_codes] == [
         ("upstream_http_402", 2127)
     ]
+
+
+def _debt(agent_id: UUID, seed: int) -> VoidRerunDebt:
+    return VoidRerunDebt(
+        agent_id=agent_id,
+        bench_version=_BENCH_VERSION,
+        seed=seed,
+        outstanding=1,
+        rerun_validators=frozenset({"5HEouuDa"}),
+        scored_validators=frozenset({"5HEouuDa"}),
+        oldest_void_at=_NOW,
+        newest_void_at=_NOW,
+    )
+
+
+async def test_void_rerun_debt_makes_an_outside_cohort_agent_claimable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wonder v6 shape: outside the cohort, owed two outage-voided seeds.
+
+    The cohort answer alone is ``not_in_cohort``; the void debt routes it
+    right behind the crown, as a count with no seed value in the projection.
+    """
+    debts = (_debt(_SUCCESSOR, _SEEDS[3]), _debt(_SUCCESSOR, _SEEDS[4]))
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=False),
+        catchup=frozenset(),
+        debts=debts,
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    assert not result.in_retest_cohort
+    assert result.admission_reason == "owner_suppressed"
+    claim = result.claim
+    assert claim is not None
+    assert claim.route_priority == "void_rerun"
+    assert claim.route_position == 2
+    assert claim.void_rerun_seed_count == 2
+    assert claim.void_rerun_claimable
+    assert not claim.provider_outage_active
+    assert claim.decision == "claimable"
+    assert all(
+        str(seed) not in claim.model_dump_json() for seed in (_SEEDS[3], _SEEDS[4])
+    )
+
+
+async def test_void_rerun_debt_waits_out_an_open_provider_circuit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=False),
+        catchup=frozenset(),
+        debts=(_debt(_SUCCESSOR, _SEEDS[3]),),
+        circuit=SimpleNamespace(state="open", last_failure_at=_NOW),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    claim = result.claim
+    assert claim is not None
+    assert claim.void_rerun_seed_count == 1
+    assert not claim.void_rerun_claimable
+    assert claim.provider_outage_active
+    assert claim.decision == "provider_outage"

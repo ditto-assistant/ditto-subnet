@@ -109,6 +109,28 @@ Catch-up is scoped to emission-set members. The extended retest cohort is
 spare-capacity work whose depth gates nothing, and it keeps one-seed-per-round
 pacing.
 
+### Void re-run debt
+
+An infrastructure void (operator or the post-outage sweep) sets one sample
+aside, and that seed then owes exactly one replacement run. The debt is the set
+of `confirmation_score_voids` rows on the active version with no
+`ConfirmationScore` at `void_generation + 1` on the same key, less any fresh
+generation-0 rows other validators recorded on that seed after the void, for
+agents still `scored`/`live` and on the eligible ledger.
+
+Auto-routed claims issue the debt right behind the champion's own work and ahead
+of catch-up, emission and extended members, regardless of cohort membership or
+owner suppression. A seed is offered only while it has no live continual-retest
+lease. The voiding validator is preferred, because its re-run appends at
+`generation + 1`. After one hour, or straight away when none of the voiding
+validators has a heartbeat from the last ten minutes, any validator with no row
+on the seed may run it. That run appends at generation 0 under its own key. No
+debt is issued while the provider circuit is open or inside its recovery quiet
+window. A slot that re-polls on a live debt lease resumes it. The diagnostic
+reports the debt as `claim.void_rerun_seed_count`, with
+`route_priority: void_rerun` (or `decision: provider_outage` while withheld).
+The debt can never exceed the voids, so it does not widen the cohort.
+
 ## UI
 
 The public leaderboard shows confirmation depth for top-five agents. This is

@@ -32,11 +32,14 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
-from ditto.db.models import ConfirmationScore, ConfirmationScoreVoid
+from ditto.api_models.agent_status import AgentStatus
+from ditto.db.models import Agent, ConfirmationScore, ConfirmationScoreVoid
 from ditto.db.queries.confirmation_scores import not_voided
 from ditto.db.queries.retest_sample_inference import retest_sample_inference
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 OUTAGE_FAILURE_CODES: frozenset[str] = frozenset(
@@ -314,6 +317,150 @@ async def list_confirmation_score_voids(
     return list(await session.scalars(statement.limit(limit).offset(offset)))
 
 
+@dataclass(frozen=True)
+class VoidRerunDebt:
+    """Replacement samples one ``(agent, version, seed)`` is still owed.
+
+    A void sets one sample aside; it is not finished until a replacement for
+    that exact seed lands. The debt is per seed, not per key, because the
+    replacement may come from either side:
+
+    * the voiding validator re-runs its own key, which appends at
+      ``void_generation + 1`` and is the path :func:`append_confirmation_scores`
+      already accepts for a single-seed lease; or
+    * another validator with no row on the seed at all runs it fresh, which
+      appends at generation 0 under that validator's own key.
+
+    ``outstanding`` is the number of voided keys with no ``generation + 1`` row,
+    less the fresh generation-0 rows other validators recorded on this seed
+    after the oldest such void. It never exceeds the number of voids, so the
+    lane cannot spend more runs than were set aside.
+    """
+
+    agent_id: UUID
+    bench_version: int
+    seed: int
+    outstanding: int
+    rerun_validators: frozenset[str]
+    """Validators whose own voided key still lacks its ``generation + 1`` row."""
+    scored_validators: frozenset[str]
+    """Validators holding any row on this seed; a fresh run there would no-op."""
+    oldest_void_at: datetime
+    newest_void_at: datetime
+
+
+async def outstanding_void_rerun_debts(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    agent_ids: Iterable[UUID] | None = None,
+) -> list[VoidRerunDebt]:
+    """Every voided seed whose replacement has not landed yet, oldest first.
+
+    Only agents still ``scored`` or ``live`` owe anything: a rejected, banned or
+    superseded generation's voids stay on the audit trail and issue nothing.
+    The caller still applies ledger eligibility, which needs the fold.
+    """
+    statement = (
+        select(
+            ConfirmationScoreVoid.agent_id,
+            ConfirmationScoreVoid.validator_hotkey,
+            ConfirmationScoreVoid.seed,
+            ConfirmationScoreVoid.void_generation,
+            ConfirmationScoreVoid.created_at,
+        )
+        .join(Agent, Agent.agent_id == ConfirmationScoreVoid.agent_id)
+        .where(
+            ConfirmationScoreVoid.bench_version == bench_version,
+            Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+        )
+    )
+    if agent_ids is not None:
+        ids = list(dict.fromkeys(agent_ids))
+        if not ids:
+            return []
+        statement = statement.where(ConfirmationScoreVoid.agent_id.in_(ids))
+    voids: dict[tuple[UUID, int], list[tuple[str, int, datetime]]] = {}
+    for (
+        agent_id,
+        validator_hotkey,
+        seed,
+        generation,
+        created_at,
+    ) in await session.execute(statement):
+        voids.setdefault((agent_id, int(seed)), []).append(
+            (validator_hotkey, int(generation), created_at)
+        )
+    if not voids:
+        return []
+    rows: dict[tuple[UUID, int], list[tuple[str, int, datetime]]] = {}
+    for (
+        agent_id,
+        validator_hotkey,
+        seed,
+        generation,
+        created_at,
+    ) in await session.execute(
+        select(
+            ConfirmationScore.agent_id,
+            ConfirmationScore.validator_hotkey,
+            ConfirmationScore.seed,
+            ConfirmationScore.void_generation,
+            ConfirmationScore.created_at,
+        ).where(
+            ConfirmationScore.bench_version == bench_version,
+            ConfirmationScore.agent_id.in_(
+                sorted({agent_id for agent_id, _seed in voids})
+            ),
+            ConfirmationScore.seed.in_(sorted({seed for _agent, seed in voids})),
+        )
+    ):
+        key = (agent_id, int(seed))
+        if key in voids:
+            rows.setdefault(key, []).append(
+                (validator_hotkey, int(generation), created_at)
+            )
+    debts: list[VoidRerunDebt] = []
+    for (agent_id, seed), group in voids.items():
+        seed_rows = rows.get((agent_id, seed), [])
+        row_keys = {(validator, generation) for validator, generation, _ in seed_rows}
+        unpaid = [
+            (validator, created_at)
+            for validator, generation, created_at in group
+            if (validator, generation + 1) not in row_keys
+        ]
+        if not unpaid:
+            continue
+        oldest = min(created_at for _validator, created_at in unpaid)
+        voiding_validators = {validator for validator, _generation, _ in group}
+        fresh_replacements = sum(
+            1
+            for validator, generation, created_at in seed_rows
+            if validator not in voiding_validators
+            and generation == 0
+            and created_at >= oldest
+        )
+        outstanding = len(unpaid) - fresh_replacements
+        if outstanding <= 0:
+            continue
+        debts.append(
+            VoidRerunDebt(
+                agent_id=agent_id,
+                bench_version=bench_version,
+                seed=seed,
+                outstanding=outstanding,
+                rerun_validators=frozenset(validator for validator, _ in unpaid),
+                scored_validators=frozenset(
+                    validator for validator, _generation, _ in seed_rows
+                ),
+                oldest_void_at=oldest,
+                newest_void_at=max(created_at for _validator, created_at in unpaid),
+            )
+        )
+    debts.sort(key=lambda debt: (debt.oldest_void_at, str(debt.agent_id), debt.seed))
+    return debts
+
+
 __all__ = [
     "MIN_OUTAGE_FAILED_CALLS",
     "OUTAGE_FAILED_CALLS",
@@ -322,10 +469,12 @@ __all__ = [
     "ConfirmationKey",
     "VoidOutcome",
     "VoidRequest",
+    "VoidRerunDebt",
     "confirmation_key",
     "evidence_digest",
     "list_confirmation_score_voids",
     "outage_evidence_qualifies",
+    "outstanding_void_rerun_debts",
     "void_confirmation_samples",
     "voided_confirmation_keys",
 ]

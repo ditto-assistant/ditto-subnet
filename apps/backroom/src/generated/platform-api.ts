@@ -35291,7 +35291,7 @@ export interface components {
              * Decision
              * @enum {string}
              */
-            decision: "claimable" | "lane_disabled" | "not_in_cohort" | "chain_unavailable" | "round_not_due" | "newer_canonical_work_pending" | "no_pending_seeds" | "all_pending_seeds_leased" | "another_member_less_covered";
+            decision: "claimable" | "lane_disabled" | "not_in_cohort" | "chain_unavailable" | "round_not_due" | "newer_canonical_work_pending" | "no_pending_seeds" | "all_pending_seeds_leased" | "another_member_less_covered" | "provider_outage";
             /** Idle Retests Enabled */
             idle_retests_enabled: boolean;
             /** In Catchup Set */
@@ -35308,17 +35308,32 @@ export interface components {
             newer_canonical_work_pending: boolean;
             /** Pending Seed Count */
             pending_seed_count: number;
+            /**
+             * Provider Outage Active
+             * @default false
+             */
+            provider_outage_active: boolean;
             /** Route Position */
             route_position: number | null;
             /**
              * Route Priority
              * @enum {string}
              */
-            route_priority: "champion" | "catchup" | "emission" | "extended" | "not_routed";
+            route_priority: "champion" | "void_rerun" | "catchup" | "emission" | "extended" | "not_routed";
             /** Scheduled Round */
             scheduled_round: boolean | null;
             /** Spare Capacity Window */
             spare_capacity_window: boolean;
+            /**
+             * Void Rerun Claimable
+             * @default false
+             */
+            void_rerun_claimable: boolean;
+            /**
+             * Void Rerun Seed Count
+             * @default 0
+             */
+            void_rerun_seed_count: number;
         };
         /**
          * RetestCutoffComparison
