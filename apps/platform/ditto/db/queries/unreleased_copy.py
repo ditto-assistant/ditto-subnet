@@ -7,6 +7,7 @@ candidate's upload, and the recorded shadow signals.
 
 from __future__ import annotations
 
+from array import array
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -118,6 +119,13 @@ async def agents_missing_items(session: AsyncSession, *, limit: int) -> list[Age
     return list((await session.scalars(missing)).all())
 
 
+# Candidates are agents uploaded since the v14 era (the backfill's scope) and
+# every new upload; all indexed agents stay sources. Older candidates belong
+# to ecosystems that share most of their content, which makes each evaluation
+# disproportionately expensive for no current enforcement value.
+EVALUATE_SINCE = datetime(2026, 10, 15, tzinfo=UTC)
+
+
 async def pending_candidates(
     session: AsyncSession, *, signal_version: str, limit: int
 ) -> list[Agent]:
@@ -151,6 +159,7 @@ async def pending_candidates(
             AgentDistinctiveItems.items_version == ITEMS_VERSION,
             AgentDistinctiveItems.error.is_(None),
             UnreleasedCopySignal.agent_id.is_(None),
+            Agent.created_at >= EVALUATE_SINCE,
         )
         .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
         .limit(limit)
@@ -164,6 +173,10 @@ async def pending_candidates(
 class SignalContext:
     candidate: IndexedAgent
     others: list[IndexedAgent]
+    """Identity, owner and release time of each overlapping agent; their keys
+    travel separately in :attr:`overlaps`."""
+    overlaps: dict[UUID, array]
+    """Each other agent's overlap with the candidate, as ``array('q')``."""
     released_before: list[UUID]
     """Every agent publicly released before the candidate's upload (for the
     fuzzy released-content check), whether or not it shares an exact item."""
@@ -184,29 +197,32 @@ async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | N
         return None
     keys = list(row.item_keys)
     uploaded_at = _utc(agent.created_at)
+    # Streamed and kept as compact ``array('q')`` (8 bytes a key): a candidate
+    # from a heavily shared ecosystem overlaps every earlier member, and Python
+    # int sets of that would be gigabytes in the API process. The worker
+    # process builds the sets it scores with.
+    shared: dict[UUID, array] = {}
     if keys:
-        overlap = (
-            await session.execute(
-                select(
-                    AgentDistinctiveItems.agent_id,
-                    func.array(
-                        select(func.unnest(AgentDistinctiveItems.item_keys))
-                        .intersect(select(func.unnest(cast(keys, ARRAY(BigInteger)))))
-                        .scalar_subquery()
-                    ),
-                )
-                .join(Agent, Agent.agent_id == AgentDistinctiveItems.agent_id)
-                .where(
-                    AgentDistinctiveItems.agent_id != agent.agent_id,
-                    AgentDistinctiveItems.items_version == ITEMS_VERSION,
-                    AgentDistinctiveItems.error.is_(None),
-                    Agent.created_at <= agent.created_at,
-                )
+        stream = await session.stream(
+            select(
+                AgentDistinctiveItems.agent_id,
+                func.array(
+                    select(func.unnest(AgentDistinctiveItems.item_keys))
+                    .intersect(select(func.unnest(cast(keys, ARRAY(BigInteger)))))
+                    .scalar_subquery()
+                ),
             )
-        ).all()
-    else:
-        overlap = []
-    shared = {aid: frozenset(ks) for aid, ks in overlap if ks}
+            .join(Agent, Agent.agent_id == AgentDistinctiveItems.agent_id)
+            .where(
+                AgentDistinctiveItems.agent_id != agent.agent_id,
+                AgentDistinctiveItems.items_version == ITEMS_VERSION,
+                AgentDistinctiveItems.error.is_(None),
+                Agent.created_at <= agent.created_at,
+            )
+        )
+        async for aid, overlap_keys in stream:
+            if overlap_keys:
+                shared[aid] = array("q", overlap_keys)
     rows = (
         (
             await session.scalars(
@@ -234,7 +250,7 @@ async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | N
         session, agent_ids=list(shared), quorum=SCORING_QUORUM, policy=policy
     )
 
-    def indexed(a: Agent, item_keys: frozenset[int]) -> IndexedAgent:
+    def indexed(a: Agent, item_keys: frozenset[int] = frozenset()) -> IndexedAgent:
         return IndexedAgent(
             agent_id=a.agent_id,
             owner=owners[a.agent_id],
@@ -253,7 +269,8 @@ async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | N
     )
     return SignalContext(
         candidate=indexed(agent, frozenset(keys)),
-        others=[indexed(by_id[aid], ks) for aid, ks in shared.items() if aid in by_id],
+        others=[indexed(by_id[aid]) for aid in shared if aid in by_id],
+        overlaps={aid: ks for aid, ks in shared.items() if aid in by_id},
         released_before=sorted(
             (aid for aid, at in all_released.items() if at < uploaded_at),
             key=str,

@@ -94,7 +94,9 @@ async def score_signal(
     The fuzzy released pass and evidence run when the best pair is at least half
     the threshold, since only those can flag.
     """
-    signal = await call(worker.score, context.candidate, context.others, threshold)
+    signal = await call(
+        worker.score, context.candidate, context.others, context.overlaps, threshold
+    )
     if not signal.matches or signal.top_score < threshold / 2:
         return await call(worker.truncate, signal), "not_needed"
     if storage is None:
