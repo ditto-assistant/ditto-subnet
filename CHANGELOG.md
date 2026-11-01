@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.424.0 (2026-11-01)
+
+### Features
+
+- **platform**: Measure competition improvement rate for embargo decisions
+  ([#3308](https://github.com/ditto-assistant/ditto-subnet/pull/3308),
+  [`91ba2bc`](https://github.com/ditto-assistant/ditto-subnet/commit/91ba2bca61d8d3edfb4e5c5598a65942669e1d24))
+
+
 ## v0.423.0 (2026-11-01)
 
 ### Features
