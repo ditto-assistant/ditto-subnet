@@ -9118,6 +9118,23 @@ export const continualRetestDiagnosticSchema = z.object({
   terminal_ticket_count: z.number().int().nonnegative().default(0),
   latest_confirmation_composite: z.number().min(0).max(1).nullable().default(null),
   latest_confirmation_recorded_at: z.string().nullable().default(null),
+  // Newest confirmation samples paired with the inference grant that served
+  // them. Counts only; a low sample whose grant failed many chat calls measured
+  // the inference path, not the agent.
+  retest_samples: z.array(z.object({
+    validator_hotkey: z.string(),
+    seed: z.string().regex(/^(0|[1-9][0-9]*)$/),
+    composite: z.number().min(0).max(1),
+    run_id: z.string(),
+    accepted_at: z.string(),
+    grant_id: z.string().uuid().nullable().default(null),
+    chat_requests: z.number().int().nonnegative().default(0),
+    failed_requests: z.number().int().nonnegative().default(0),
+    failure_codes: z.array(z.object({
+      terminal_error_code: z.string(),
+      count: z.number().int().nonnegative(),
+    })).default([]),
+  })).default([]),
 })
 
 export const scoreLeaderboardInputSchema = z.object({

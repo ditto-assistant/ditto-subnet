@@ -10929,6 +10929,11 @@ export interface components {
              * @enum {string}
              */
             representative_selection: "self" | "official_composite" | "efficiency_tiebreak" | "newest_generation" | "agent_id_tiebreak" | "none";
+            /**
+             * Retest Samples
+             * @default []
+             */
+            retest_samples: components["schemas"]["RetestSampleInference"][];
             /** Seed Anchor Block */
             seed_anchor_block: number | null;
             /** Seed Anchor Champion Id */
@@ -33928,6 +33933,13 @@ export interface components {
             /** Within Tie Band */
             within_tie_band?: boolean | null;
         };
+        /** RetestFailureCode */
+        RetestFailureCode: {
+            /** Count */
+            count: number;
+            /** Terminal Error Code */
+            terminal_error_code: string;
+        };
         /** RetestFamilyMember */
         RetestFamilyMember: {
             /**
@@ -33955,6 +33967,46 @@ export interface components {
             official_composite: number;
             /** Representative */
             representative: boolean;
+        };
+        /**
+         * RetestSampleInference
+         * @description One accepted confirmation sample and the inference grant that served it.
+         *
+         *     Counts only. A sample whose grant shows many failed chat calls measured the
+         *     inference path as much as the agent; read ``failure_codes`` before treating
+         *     a low sample as the agent's own behaviour.
+         */
+        RetestSampleInference: {
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string;
+            /**
+             * Chat Requests
+             * @default 0
+             */
+            chat_requests: number;
+            /** Composite */
+            composite: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Failure Codes
+             * @default []
+             */
+            failure_codes: components["schemas"]["RetestFailureCode"][];
+            /** Grant Id */
+            grant_id?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Seed */
+            seed: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
         };
         /** RevealPlanShadowMiss */
         RevealPlanShadowMiss: {

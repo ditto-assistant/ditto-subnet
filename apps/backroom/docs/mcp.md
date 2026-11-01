@@ -145,6 +145,15 @@ unknown upstream fields are stripped. The raw and folded seed IDs it returns
 are already-scored confirmation seeds, as exact decimal strings. The snapshot
 grants no work and changes nothing.
 
+`retest_samples` pairs each of the newest (at most 30) accepted confirmation
+samples with the inference grant that served it (the newest grant for that
+validator created at or before acceptance) and counts its chat requests:
+`chat_requests`, `failed_requests` and `failure_codes` by relay
+`terminal_error_code`. It is counts only. A low sample whose grant failed many
+calls (for example `upstream_http_402`, gateway credit exhaustion) measured the
+inference path rather than the agent; this is the first read for a "my retest
+looks like an infra failure" report.
+
 The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:
 it builds the source, checks that every pack on fresh secret seeds is valid,

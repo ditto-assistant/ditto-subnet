@@ -90,6 +90,37 @@ class RetestClaimability(BaseModel):
     ]
 
 
+class RetestFailureCode(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    terminal_error_code: str
+    count: int
+
+
+class RetestSampleInference(BaseModel):
+    """One accepted confirmation sample and the inference grant that served it.
+
+    Counts only. A sample whose grant shows many failed chat calls measured the
+    inference path as much as the agent; read ``failure_codes`` before treating
+    a low sample as the agent's own behaviour.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    validator_hotkey: str
+    seed: str
+    """Exact decimal seed; int63 does not survive a JavaScript number."""
+    composite: Annotated[float, Field(ge=0, le=1)]
+    run_id: str
+    accepted_at: datetime
+    grant_id: UUID | None = None
+    """Newest grant for this validator created at or before acceptance."""
+    chat_requests: int = 0
+    failed_requests: int = 0
+    failure_codes: list[RetestFailureCode] = []
+    """Failed chat calls by relay ``terminal_error_code``, most frequent first."""
+
+
 class AdminContinualRetestDiagnostic(BaseModel):
     """A snapshot, not a ticket or permission to force a retest."""
 
@@ -162,3 +193,5 @@ class AdminContinualRetestDiagnostic(BaseModel):
     terminal_ticket_count: int = 0
     latest_confirmation_composite: float | None = None
     latest_confirmation_recorded_at: datetime | None = None
+    retest_samples: list[RetestSampleInference] = []
+    """Newest confirmation samples (at most 30) with serving-grant failures."""

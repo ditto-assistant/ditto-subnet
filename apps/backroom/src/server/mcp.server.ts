@@ -862,7 +862,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_agent_scores:
     'Read accepted scores/seeds/aggregates; current benchmark default.',
   get_continual_retest_diagnostic:
-    'Exact agent scoring, owner-family cutoff/tie band, cohort reason and claim eligibility. Read-only.',
+    'Exact agent scoring, owner-family cutoff/tie band, cohort reason, claim eligibility and per-sample grant failures. Read-only.',
   get_validator_slot_settings:
     'Read slot/disk policy, per-validator overrides, round reservation, per-validator fleet sizing and history (default 0). A validator advertising above cap is not an underutilized host.',
   get_validator_fleet:
@@ -2311,7 +2311,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Explain exact agent continual retest admission',
       description:
-        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
+        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. `retest_samples` lists the newest accepted confirmation samples (at most 30, newest first) with validator, exact seed, composite, run_id, accepted_at and the inference grant that served each one: chat_requests, failed_requests and failure_codes (failed chat calls by relay terminal_error_code, e.g. upstream_http_402 for gateway credit exhaustion). A low sample with many failed calls measured the inference path, not the agent; check it before ruling a drop agent behaviour. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
       inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
