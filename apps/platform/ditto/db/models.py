@@ -5029,6 +5029,9 @@ class ConfirmationScore(Base):
             name="confirmation_scores_efficiency_cost_check",
         ),
         Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),
+        # The post-outage sweep reads one version in acceptance order from a
+        # keyset watermark (see OutageSweepRun).
+        Index("confirmation_scores_version_created_idx", "bench_version", "created_at"),
     )
 
 
@@ -5122,6 +5125,72 @@ class ConfirmationScoreVoid(Base):
         ),
         Index("confirmation_score_voids_agent_idx", "agent_id", "bench_version"),
         Index("confirmation_score_voids_created_idx", "created_at"),
+    )
+
+
+class OutageSweepRun(Base):
+    """Append-only record of one post-outage automatic void sweep.
+
+    Each run examines the active version's un-voided continual-retest samples
+    accepted after the previous run's watermark, voids those whose serving
+    grant meets the outage evidence gate (source ``outage_sweep``), and flags
+    canonical ``scores`` rows accepted in the same range whose grant shows the
+    same evidence. Canonical scores are only flagged, never replaced.
+
+    The watermark is a keyset cursor: ``watermark_to`` plus, when the batch
+    was full, the last examined row's key in ``watermark_to_key``. The next run
+    resumes strictly after it. The JSON lists carry counts, ids and timestamps
+    only: no prompt, answer or provider body.
+    """
+
+    __tablename__ = "outage_sweep_runs"
+
+    sweep_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_from: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_to: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_to_key: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Last examined sample's key when the batch was full; null once drained."""
+    examined_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    voided_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    voids: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """One entry per void written: void id, sample key, run, grant, counts."""
+    outage_windows: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Per qualifying grant: first and last outage-class failure."""
+    canonical_flagged: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Canonical scores in range whose grant meets the evidence gate."""
+    errors: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Samples skipped because examining them raised (key + error type)."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "examined_count >= 0 AND voided_count >= 0 AND error_count >= 0 "
+            "AND voided_count + error_count <= examined_count",
+            name="outage_sweep_runs_counts_check",
+        ),
+        CheckConstraint(
+            "watermark_to >= watermark_from",
+            name="outage_sweep_runs_watermark_check",
+        ),
+        CheckConstraint(
+            "finished_at >= started_at",
+            name="outage_sweep_runs_finished_check",
+        ),
+        Index("outage_sweep_runs_version_started_idx", "bench_version", "started_at"),
+        Index("outage_sweep_runs_started_idx", "started_at"),
     )
 
 

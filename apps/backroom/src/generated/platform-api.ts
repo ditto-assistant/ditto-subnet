@@ -2723,6 +2723,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/provider-outages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Provider Outages
+         * @description Current circuit rows plus newest-first post-outage sweep runs.
+         *
+         *     ``with_findings`` keeps only runs that voided, flagged or errored. Every
+         *     list carries ids, counts and timestamps only.
+         */
+        get: operations["get_provider_outages_api_v1_admin_provider_outages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/queue-policy-settings": {
         parameters: {
             query?: never;
@@ -27897,6 +27920,213 @@ export interface components {
             /** In Force */
             in_force: boolean;
         };
+        /** OutageSweepCanonicalFlag */
+        OutageSweepCanonicalFlag: {
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Chat Requests */
+            chat_requests: number;
+            /** Composite */
+            composite: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /**
+             * Failure Codes
+             * @default {}
+             */
+            failure_codes: {
+                [key: string]: number;
+            };
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Outage Ended At */
+            outage_ended_at?: string | null;
+            /** Outage Failed Requests */
+            outage_failed_requests: number;
+            /** Outage Started At */
+            outage_started_at?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** OutageSweepError */
+        OutageSweepError: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /**
+             * Canonical Scores
+             * @default false
+             */
+            canonical_scores: boolean;
+            /** Error */
+            error: string;
+            /** Seed */
+            seed?: string | null;
+            /** Validator Hotkey */
+            validator_hotkey?: string | null;
+            /** Void Generation */
+            void_generation?: number | null;
+        };
+        /** OutageSweepPolicy */
+        OutageSweepPolicy: {
+            /** Batch Limit */
+            batch_limit: number;
+            /** First Lookback Seconds */
+            first_lookback_seconds: number;
+            /** Interval Seconds */
+            interval_seconds: number;
+            /** Min Outage Failed Calls */
+            min_outage_failed_calls: number;
+            /** Outage Failed Calls */
+            outage_failed_calls: number;
+            /** Outage Failed Share */
+            outage_failed_share: number;
+            /** Outage Failure Codes */
+            outage_failure_codes: string[];
+            /** Settle Lag Seconds */
+            settle_lag_seconds: number;
+        };
+        /** OutageSweepRunView */
+        OutageSweepRunView: {
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Canonical Flagged
+             * @default []
+             */
+            canonical_flagged: components["schemas"]["OutageSweepCanonicalFlag"][];
+            /** Error Count */
+            error_count: number;
+            /**
+             * Errors
+             * @default []
+             */
+            errors: components["schemas"]["OutageSweepError"][];
+            /** Examined Count */
+            examined_count: number;
+            /**
+             * Finished At
+             * Format: date-time
+             */
+            finished_at: string;
+            /**
+             * Outage Windows
+             * @default []
+             */
+            outage_windows: components["schemas"]["OutageSweepWindow"][];
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * Sweep Id
+             * Format: uuid
+             */
+            sweep_id: string;
+            /** Voided Count */
+            voided_count: number;
+            /**
+             * Voids
+             * @default []
+             */
+            voids: components["schemas"]["OutageSweepVoid"][];
+            /**
+             * Watermark From
+             * Format: date-time
+             */
+            watermark_from: string;
+            /**
+             * Watermark To
+             * Format: date-time
+             */
+            watermark_to: string;
+        };
+        /** OutageSweepVoid */
+        OutageSweepVoid: {
+            /**
+             * Accepted At
+             * Format: date-time
+             */
+            accepted_at: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Chat Requests */
+            chat_requests: number;
+            /** Composite */
+            composite: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Outage Ended At */
+            outage_ended_at?: string | null;
+            /** Outage Failed Requests */
+            outage_failed_requests: number;
+            /** Outage Started At */
+            outage_started_at?: string | null;
+            /** Run Id */
+            run_id: string;
+            /** Seed */
+            seed: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /** Void Generation */
+            void_generation: number;
+            /**
+             * Void Id
+             * Format: uuid
+             */
+            void_id: string;
+        };
+        /** OutageSweepWindow */
+        OutageSweepWindow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /**
+             * Ended At
+             * Format: date-time
+             */
+            ended_at: string;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Outage Failed Requests */
+            outage_failed_requests: number;
+            /**
+             * Sample
+             * @enum {string}
+             */
+            sample: "confirmation" | "canonical";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
         /** OutlierEscalationActivityView */
         OutlierEscalationActivityView: {
             /**
@@ -28540,6 +28770,69 @@ export interface components {
              * @enum {string}
              */
             state: "open" | "closed";
+        };
+        /** ProviderOutageCircuitView */
+        ProviderOutageCircuitView: {
+            /** Closed At */
+            closed_at?: string | null;
+            /**
+             * Epoch
+             * Format: uuid
+             */
+            epoch: string;
+            /** Failure Count */
+            failure_count: number;
+            /** Last Error Code */
+            last_error_code: string;
+            /**
+             * Last Failure At
+             * Format: date-time
+             */
+            last_failure_at: string;
+            /** Last Status */
+            last_status?: number | null;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Outage Active */
+            outage_active: boolean;
+            /** Probe Expires At */
+            probe_expires_at?: string | null;
+            /** Probe Kind */
+            probe_kind?: string | null;
+            /** Provider */
+            provider: string;
+            /**
+             * Retry At
+             * Format: date-time
+             */
+            retry_at: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "open" | "closed";
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** ProviderOutagesResponse */
+        ProviderOutagesResponse: {
+            /** Circuits */
+            circuits: components["schemas"]["ProviderOutageCircuitView"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Runs */
+            runs: components["schemas"]["OutageSweepRunView"][];
+            /** Runs Total */
+            runs_total: number;
+            sweep_policy: components["schemas"]["OutageSweepPolicy"];
         };
         /**
          * ProviderTelemetryView
@@ -49092,6 +49385,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminOwnerAttestationsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_provider_outages_api_v1_admin_provider_outages_get: {
+        parameters: {
+            query?: {
+                with_findings?: boolean;
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderOutagesResponse"];
                 };
             };
             /** @description Validation Error */

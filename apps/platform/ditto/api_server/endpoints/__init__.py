@@ -89,6 +89,9 @@ from ditto.api_server.endpoints.admin_outlier_escalation import (
 from ditto.api_server.endpoints.admin_owner import (
     router as admin_owner_router,
 )
+from ditto.api_server.endpoints.admin_provider_outages import (
+    router as admin_provider_outages_router,
+)
 from ditto.api_server.endpoints.admin_quarantine import (
     router as admin_quarantine_router,
 )
@@ -267,6 +270,7 @@ __all__ = [
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",
     "admin_confirmation_score_voids_router",
+    "admin_provider_outages_router",
     "admin_validation_retry_router",
     "admin_validator_capacity_router",
     "admin_validator_request_outcomes_router",

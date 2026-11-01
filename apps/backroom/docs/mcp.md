@@ -166,6 +166,23 @@ epoch pin, and the seed re-runs at the next `void_generation`. Validators fold
 the served `confirmation_history`, so no protocol change is involved.
 `list_infra_voids` reads them back with the re-run composite once it lands.
 
+`get_provider_outages` (`backroom:read`) reads the relay-owned
+`provider_outage_circuits` rows and the post-outage sweep. The circuit closes
+on any successful call, so in a low-balance flap a retest can still finish with
+many refused calls. Every 5 minutes the platform role examines up to 200
+un-voided continual-retest samples of the active version accepted after the
+last run's watermark (the first run reads the active bench version's whole
+confirmation history as a backfill, or 6 hours when it has none; rows from the last
+2 minutes wait for the next run). It voids each sample whose grant meets the
+same evidence gate as `void_infra_scores`, with source `outage_sweep` and the
+grant's first and last outage-class failure as the outage window. Each
+append-only run (`outage_sweep_runs`) records its watermark range, counts,
+voids, outage windows, per-row errors, and `canonical_flagged`. Those are
+canonical scores accepted in the same range whose grant shows the same
+evidence. The sweep never replaces them; review each with
+`replace_validator_score`. A row that errors is listed and skipped, not
+retried. `withFindings` keeps only runs that voided, flagged or errored.
+
 The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:
 it builds the source, checks that every pack on fresh secret seeds is valid,
