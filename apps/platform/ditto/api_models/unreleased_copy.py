@@ -10,11 +10,11 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 class _Model(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """Additive fields stay forward compatible (no ``extra="forbid"``)."""
 
 
 class UnreleasedCopyItem(_Model):
