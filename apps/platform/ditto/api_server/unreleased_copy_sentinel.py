@@ -75,6 +75,7 @@ DEFAULT_INTERVAL_SECONDS = 30.0
 # storage reads per tick, not API latency.
 DEFAULT_INDEX_BATCH = 24
 DEFAULT_EVALUATE_BATCH = 12
+BACKLOG_INTERVAL_SECONDS = 1.0
 EVIDENCE_MATCHES = 3
 # Storage failures before an artifact is recorded as unreadable, so one
 # missing blob cannot stall evaluation of everything uploaded after it.
@@ -275,15 +276,26 @@ class UnreleasedCopySentinel:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
+            backlog = False
             try:
-                await self.tick()
+                counters = await self.tick()
+                # A full batch means more work is waiting: run again almost at
+                # once. Extraction is in the worker process, so draining a
+                # backlog costs that process's core, not API latency.
+                backlog = (
+                    counters["indexed"] + counters["unreadable"] >= self._index_batch
+                    or counters["evaluated"] >= self._evaluate_batch
+                )
             except Exception as error:
                 self._last_error = f"{type(error).__name__}: {error}"[:500]
                 self._last_finished = datetime.now(UTC)
                 logger.exception("unreleased-copy sentinel tick failed")
             try:
                 await asyncio.wait_for(
-                    self._stop.wait(), timeout=self._interval_seconds
+                    self._stop.wait(),
+                    timeout=BACKLOG_INTERVAL_SECONDS
+                    if backlog
+                    else self._interval_seconds,
                 )
             except TimeoutError:
                 continue
