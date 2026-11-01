@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.420.0 (2026-11-01)
+
+### Features
+
+- **platform**: Add operator diagnostic leases for operator-owned shadow agents
+  ([#3299](https://github.com/ditto-assistant/ditto-subnet/pull/3299),
+  [`ff7e3ab`](https://github.com/ditto-assistant/ditto-subnet/commit/ff7e3ab7356e76f7785ce1f32933a3cf7cf88cf7))
+
+
 ## v0.419.0 (2026-11-01)
 
 ### Documentation
