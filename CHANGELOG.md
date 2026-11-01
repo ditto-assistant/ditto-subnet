@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.417.1 (2026-11-01)
+
+### Bug Fixes
+
+- **relay**: Open the provider circuit on gateway credit exhaustion
+  ([#3300](https://github.com/ditto-assistant/ditto-subnet/pull/3300),
+  [`03a0831`](https://github.com/ditto-assistant/ditto-subnet/commit/03a0831f3d024f1af1f962eb125a6e9189d77229))
+
+
 ## v0.417.0 (2026-11-01)
 
 ### Features
