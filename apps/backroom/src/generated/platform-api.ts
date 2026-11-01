@@ -1351,7 +1351,8 @@ export interface paths {
          *     operator sees only recommendations whose review is still unresolved and
          *     whose agent is still held. Set it false to page the full feed including
          *     recommendations for holds an operator has since resolved — the
-         *     shadow-mode calibration record.
+         *     shadow-mode calibration record. With ``agent_id`` the response also
+         *     carries that agent's recorded unreleased-copy signal.
          */
         get: operations["list_copy_court_recommendations_api_v1_admin_copy_court_recommendations_get"];
         put?: never;
@@ -11219,6 +11220,7 @@ export interface components {
             limit: number;
             /** Offset */
             offset: number;
+            unreleased_copy?: components["schemas"]["AdminUnreleasedCopySignal"] | null;
         };
         /**
          * AdminCopyCourtRuntime
@@ -15384,6 +15386,11 @@ export interface components {
             effective: components["schemas"]["AdminUnreleasedCopyEffectiveSettings"];
             /** Flagged */
             flagged: components["schemas"]["AdminUnreleasedCopySummary"][];
+            /**
+             * Near Misses
+             * @default []
+             */
+            near_misses: components["schemas"]["AdminUnreleasedCopySummary"][];
             runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
         };
         /** AdminUnreleasedCopyRuntime */
@@ -15504,6 +15511,10 @@ export interface components {
             agent_status: string;
             /** Agent Version */
             agent_version: number | null;
+            /** Candidate Item Count */
+            candidate_item_count?: number | null;
+            /** Compared Agent Count */
+            compared_agent_count?: number | null;
             /**
              * Computed At
              * Format: date-time
@@ -15511,6 +15522,10 @@ export interface components {
             computed_at: string;
             /** Enforcement Outcome */
             enforcement_outcome?: string | null;
+            /** Excluded */
+            excluded?: {
+                [key: string]: number;
+            } | null;
             /** Flagged */
             flagged: boolean;
             /** Miner Hotkey */

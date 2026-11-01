@@ -120,6 +120,11 @@ class AdminUnreleasedCopySummary(_Model):
     top_matched_version: int | None
     computed_at: datetime
     enforcement_outcome: str | None = None
+    excluded: dict[str, int] | None = None
+    """Candidate items each filter removed (released_base, common,
+    released_fuzzy): why a score is what it is."""
+    candidate_item_count: int | None = None
+    compared_agent_count: int | None = None
 
 
 class AdminUnreleasedCopyCoverage(_Model):
@@ -189,3 +194,5 @@ class AdminUnreleasedCopyOverview(_Model):
     runtime: AdminUnreleasedCopyRuntime | None
     flagged: list[AdminUnreleasedCopySummary]
     """Highest-scoring flagged agents (operator review list), at most 50."""
+    near_misses: list[AdminUnreleasedCopySummary] = []
+    """Highest-scoring unflagged agents, at most 25: calibration headroom."""

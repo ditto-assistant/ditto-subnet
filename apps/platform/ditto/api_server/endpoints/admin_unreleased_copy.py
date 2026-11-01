@@ -73,9 +73,19 @@ async def get_unreleased_copy_signal(
     live: Annotated[bool, Query()] = False,
 ) -> AdminUnreleasedCopySignal:
     """One agent's recorded signal, shared items and matched agents."""
+    signal = await read_signal(session, request, agent_id, live=live)
+    if signal is None:
+        raise HTTPException(status_code=404, detail="agent not found")
+    return signal
+
+
+async def read_signal(
+    session: AsyncSession, request: Request, agent_id: UUID, *, live: bool
+) -> AdminUnreleasedCopySignal | None:
+    """The per-agent read, shared with the copy-court recommendation feed."""
     agent = await session.get(Agent, agent_id)
     if agent is None:
-        raise HTTPException(status_code=404, detail="agent not found")
+        return None
     index = await session.get(AgentDistinctiveItems, agent_id)
     recorded = await session.get(UnreleasedCopySignal, (agent_id, SIGNAL_VERSION))
     live_payload: dict[str, Any] | None = None
@@ -181,6 +191,9 @@ async def _summaries(
                 top_matched_version=top.version if top is not None else None,
                 computed_at=signal.computed_at,
                 enforcement_outcome=enforcement.get("outcome"),
+                excluded=(signal.evidence or {}).get("excluded"),
+                candidate_item_count=signal.candidate_item_count,
+                compared_agent_count=signal.compared_agent_count,
             )
         )
     return items
@@ -207,6 +220,19 @@ async def unreleased_copy_overview(
         limit=50,
         offset=0,
     )
+    near = (
+        await session.execute(
+            select(UnreleasedCopySignal, Agent)
+            .join(Agent, Agent.agent_id == UnreleasedCopySignal.agent_id)
+            .where(
+                UnreleasedCopySignal.signal_version == SIGNAL_VERSION,
+                UnreleasedCopySignal.flagged.is_(False),
+                UnreleasedCopySignal.top_score > 0,
+            )
+            .order_by(UnreleasedCopySignal.top_score.desc())
+            .limit(25)
+        )
+    ).tuples()
     return AdminUnreleasedCopyOverview(
         effective=_effective(await effective_settings(session)),
         coverage=AdminUnreleasedCopyCoverage.model_validate(
@@ -214,6 +240,7 @@ async def unreleased_copy_overview(
         ),
         runtime=_runtime(request),
         flagged=await _summaries(session, list(rows)),
+        near_misses=await _summaries(session, list(near.all())),
     )
 
 
