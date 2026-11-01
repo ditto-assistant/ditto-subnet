@@ -4278,6 +4278,17 @@ describe('production score reads', () => {
     terminal_ticket_count: 2,
     latest_confirmation_composite: 0.5412,
     latest_confirmation_recorded_at: '2026-09-22T23:45:00Z',
+    retest_samples: [{
+      validator_hotkey: '5HEouuDaDASnWdqDwYtwQATS5z916W9DyDAtK6WyB2jPRReb',
+      seed: '9223372036854775000',
+      composite: 0.651813,
+      run_id: 'fd227604',
+      accepted_at: '2026-09-22T23:45:00Z',
+      grant_id: '33c2b609-0000-4000-8000-000000000000',
+      chat_requests: 3861,
+      failed_requests: 2127,
+      failure_codes: [{ terminal_error_code: 'upstream_http_402', count: 2127 }],
+    }],
   }
 
   it('reads exact retest admission and preserves int63 seed strings', async () => {

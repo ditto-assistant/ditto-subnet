@@ -20,7 +20,9 @@ from ditto.api_models.continual_retest_diagnostic import (
     AdminContinualRetestDiagnostic,
     RetestClaimability,
     RetestCutoffComparison,
+    RetestFailureCode,
     RetestFamilyMember,
+    RetestSampleInference,
 )
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.public import PublicLeaderboardResponse
@@ -58,6 +60,7 @@ from ditto.db.models import Agent, ConfirmationScore, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
 from ditto.db.queries.queue_order import miner_has_newer_canonical_work
+from ditto.db.queries.retest_sample_inference import retest_sample_inference
 
 logger = logging.getLogger(__name__)
 
@@ -571,6 +574,9 @@ async def continual_retest_diagnostic(
         ),
         None,
     )
+    samples = await retest_sample_inference(
+        session, agent_id=agent_id, bench_version=version
+    )
     anchor_champion_id = wave[0].agent_id if wave else None
     anchor = (
         await read_reign_seed_anchor(
@@ -725,4 +731,21 @@ async def continual_retest_diagnostic(
         latest_confirmation_recorded_at=(
             _as_utc(latest_confirmation[1]) if latest_confirmation is not None else None
         ),
+        retest_samples=[
+            RetestSampleInference(
+                validator_hotkey=sample.validator_hotkey,
+                seed=str(sample.seed),
+                composite=sample.composite,
+                run_id=sample.run_id,
+                accepted_at=_as_utc(sample.accepted_at) or sample.accepted_at,
+                grant_id=sample.grant_id,
+                chat_requests=sample.chat_requests,
+                failed_requests=sample.failed_requests,
+                failure_codes=[
+                    RetestFailureCode(terminal_error_code=code, count=count)
+                    for code, count in sample.failure_codes
+                ],
+            )
+            for sample in samples
+        ],
     )

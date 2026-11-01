@@ -26,6 +26,7 @@ from ditto.api_server.endpoints import admin_leaderboard
 from ditto.api_server.endpoints.validator import _KothLaneSnapshot
 from ditto.api_server.koth import KothEntry, continual_composite
 from ditto.chain import ChainClient
+from ditto.db.queries.retest_sample_inference import RetestSampleInference
 
 pytestmark = pytest.mark.asyncio
 
@@ -187,6 +188,7 @@ def _install(
     pending_seeds: tuple[int, ...] = (_SEEDS[0], _SEEDS[1]),
     leases: dict[str, int | None] | None = None,
     least_covered: bool = True,
+    samples: tuple[RetestSampleInference, ...] = (),
 ) -> None:
     """Stub only the database and chain edges; the fold logic stays real."""
     monkeypatch.setattr(
@@ -234,6 +236,11 @@ def _install(
         admin_leaderboard,
         "miner_has_newer_canonical_work",
         AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        admin_leaderboard,
+        "retest_sample_inference",
+        AsyncMock(return_value=list(samples)),
     )
 
 
@@ -437,3 +444,42 @@ async def test_claim_decision_follows_the_lane_gate_order() -> None:
         )
         == "claimable"
     )
+
+
+async def test_diagnostic_carries_each_samples_grant_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A low sample shows the relay failures behind it, seed kept exact."""
+    sample = RetestSampleInference(
+        validator_hotkey="5HEouuDa",
+        seed=_SEEDS[0],
+        composite=0.651813,
+        run_id="fd227604",
+        accepted_at=_NOW.replace(tzinfo=None),
+        grant_id=UUID("33c2b609-0000-4000-8000-000000000000"),
+        chat_requests=3861,
+        failed_requests=2127,
+        failure_codes=(("upstream_http_402", 2127),),
+    )
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=True),
+        catchup=frozenset({_SUCCESSOR}),
+        samples=(sample,),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    [wire] = result.retest_samples
+    assert wire.seed == str(_SEEDS[0])
+    assert wire.accepted_at.tzinfo is not None
+    assert (wire.chat_requests, wire.failed_requests) == (3861, 2127)
+    assert [(code.terminal_error_code, code.count) for code in wire.failure_codes] == [
+        ("upstream_http_402", 2127)
+    ]
