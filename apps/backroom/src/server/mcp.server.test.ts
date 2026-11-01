@@ -1005,7 +1005,8 @@ describe('Backroom MCP tools', () => {
       // The one-line decision-lane read measures 27,740; the one-line
       // per-attempt review budget read brings it to 27,845. The two one-line
       // unreleased-copy reads measure 28,028; keep about 200 chars.
-      28_250,
+      // The two one-line infra-void summaries bring it to 28,306.
+      28_450,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
