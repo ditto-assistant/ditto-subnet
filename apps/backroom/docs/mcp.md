@@ -171,7 +171,8 @@ the served `confirmation_history`, so no protocol change is involved.
 on any successful call, so in a low-balance flap a retest can still finish with
 many refused calls. Every 5 minutes the platform role examines up to 200
 un-voided continual-retest samples of the active version accepted after the
-last run's watermark (the first run looks back 6 hours; rows from the last
+last run's watermark (the first run reads the active bench version's whole
+confirmation history as a backfill, or 6 hours when it has none; rows from the last
 2 minutes wait for the next run). It voids each sample whose grant meets the
 same evidence gate as `void_infra_scores`, with source `outage_sweep` and the
 grant's first and last outage-class failure as the outage window. Each

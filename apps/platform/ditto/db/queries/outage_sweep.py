@@ -10,7 +10,9 @@ fact and voids them through :func:`void_confirmation_samples` with source
 One run:
 
 1. resumes from the previous run's keyset watermark for the active version
-   (the first run looks back :data:`SWEEP_FIRST_LOOKBACK`);
+   (the first run reads the active version's whole confirmation history, so
+   every sample since that version activated is examined once; with no
+   samples it falls back to :data:`SWEEP_FIRST_LOOKBACK`);
 2. reads at most :data:`SWEEP_BATCH_LIMIT` un-voided samples accepted at or
    before ``now - SWEEP_SETTLE_LAG`` (rows still committing are left for the
    next run);
@@ -224,6 +226,7 @@ async def sweep_outage_voids(
     batch_limit: int = SWEEP_BATCH_LIMIT,
     first_lookback: timedelta = SWEEP_FIRST_LOOKBACK,
     settle_lag: timedelta = SWEEP_SETTLE_LAG,
+    first_run_full_history: bool = True,
 ) -> OutageSweepRun | None:
     """Run one sweep inside the caller's transaction.
 
@@ -239,6 +242,18 @@ async def sweep_outage_voids(
     horizon = now - settle_lag
     if previous is None:
         watermark_from = now - first_lookback
+        if first_run_full_history:
+            # Backfill: the 2026-10-31 credit outage predates this sweep, so
+            # the first run walks every sample the active version has.
+            earliest = await session.scalar(
+                select(func.min(ConfirmationScore.created_at)).where(
+                    ConfirmationScore.bench_version == bench_version
+                )
+            )
+            if earliest is not None:
+                watermark_from = min(
+                    watermark_from, earliest - timedelta(microseconds=1)
+                )
         from_key: dict | None = None
     else:
         watermark_from = previous.watermark_to

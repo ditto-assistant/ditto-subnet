@@ -237,7 +237,17 @@ async def test_sweep_voids_the_tainted_retest_with_its_window_and_is_idempotent(
 
     first = await _sweep(session_maker, SWEEP_AT)
 
-    assert first.watermark_from == SWEEP_AT - SWEEP_FIRST_LOOKBACK
+    # The first run walks the active version's whole history (backfill).
+    async with session_maker() as read:
+        earliest = await read.scalar(
+            select(func.min(ConfirmationScore.created_at)).where(
+                ConfirmationScore.bench_version == V
+            )
+        )
+    assert earliest is not None
+    assert first.watermark_from == min(
+        SWEEP_AT - SWEEP_FIRST_LOOKBACK, earliest - timedelta(microseconds=1)
+    )
     assert first.watermark_to == SWEEP_AT - SWEEP_SETTLE_LAG
     assert first.watermark_to_key is None
     assert (first.examined_count, first.voided_count, first.error_count) == (2, 1, 0)
@@ -362,3 +372,20 @@ async def test_one_rows_error_is_recorded_and_does_not_abort_the_sweep(
     assert len(run.canonical_flagged) == 1
     async with session_maker() as read:
         assert await read.scalar(select(func.count(ConfirmationScoreVoid.void_id))) == 0
+
+
+async def test_first_sweep_backfills_the_active_versions_history(
+    session_maker: async_sessionmaker[AsyncSession], session: AsyncSession
+) -> None:
+    """The 2026-10-31 outage predates the sweep: a first run days later still
+    voids it, where a six-hour lookback would have missed it."""
+    await seed_outage_fixture(session)
+
+    late = await _sweep(session_maker, SWEEP_AT + timedelta(days=3))
+
+    assert (late.examined_count, late.voided_count) == (2, 1)
+    async with session_maker() as read:
+        assert len(list(await read.scalars(select(ConfirmationScoreVoid)))) == 1
+
+    narrow = await _sweep(session_maker, SWEEP_AT + timedelta(days=3, minutes=5))
+    assert (narrow.examined_count, narrow.voided_count) == (0, 0)
