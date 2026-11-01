@@ -65,7 +65,7 @@ DEFAULT_INTERVAL_SECONDS = 30.0
 # Extraction runs in a separate process, so the batch bounds wall time and
 # storage reads per tick, not API latency.
 DEFAULT_INDEX_BATCH = 24
-DEFAULT_EVALUATE_BATCH = 12
+DEFAULT_EVALUATE_BATCH = 6
 BACKLOG_INTERVAL_SECONDS = 1.0
 INDEX_WORKERS = 2
 EVIDENCE_MATCHES = 3
@@ -233,9 +233,10 @@ class UnreleasedCopySentinel:
                 # A full batch means more work is waiting: run again almost at
                 # once. Extraction is in the worker process, so draining a
                 # backlog costs that process's core, not API latency.
+                # Only an index backlog runs back to back: an evaluation scans
+                # the whole index in Postgres, so it keeps the normal cadence.
                 backlog = (
                     counters["indexed"] + counters["unreadable"] >= self._index_batch
-                    or counters["evaluated"] >= self._evaluate_batch
                 )
             except Exception as error:
                 self._last_error = f"{type(error).__name__}: {error}"[:500]
