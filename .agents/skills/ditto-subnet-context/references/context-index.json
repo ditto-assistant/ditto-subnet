@@ -236,6 +236,19 @@
       "related": ["backroom-review"]
     },
     {
+      "id": "scoring-infra-triage",
+      "title": "Scoring infra-failure triage, fix-before-retry, and retry tool choice",
+      "keywords": ["infra failure", "infrastructure failure", "retest looks like", "low retest", "score drop", "retry_validator_evaluation", "replace_validator_score", "queue_validator_score_retests", "harness_oom", "host_memory_pressure", "harness_killed_137", "provider_outage_parked", "upstream_http_402", "insufficient credits", "cannot retry"],
+      "summary": "Pin every low sample, read Backroom then traces, DB, logs and W&B, decide systemic vs agent-unique, fix our bug before any retry, choose the retry tool per score class, and reply to the miner.",
+      "skills": ["scoring-infra-triage", "backroom-review", "gcloud-ditto-readonly", "wandb-ops", "ditto-subnet-benchmark", "miner-comms"],
+      "owns": [".agents/skills/scoring-infra-triage"],
+      "read": [".agents/skills/scoring-infra-triage/SKILL.md", ".agents/skills/gcloud-ditto-readonly/SKILL.md", ".agents/skills/wandb-ops/SKILL.md", "apps/backroom/docs/mcp.md"],
+      "search": ["rg -n 'gatewayCreditExhausted|receiptFreeOverload|openProviderCircuit' services/model-relay/internal/inference", "rg -n 'park_scoring_leases|provider_outage_active' apps/platform/ditto/db/queries/provider_outages.py", "rg -n 'CodeHarnessOOM|CodeHostMemoryPressure|CodeHarnessKilled137' services/dittobench-api/internal/sandbox/sandbox.go"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/scoring-infra-triage", "uv run pytest ditto/tests/test_agent_skills.py -q"],
+      "invariants": ["Find and fix the failure before scheduling a retry; a retry on an unfixed bug spends another sample on the same fault.", "Continual-retest confirmation_scores rows are immutable; no Backroom tool repairs one, so escalate instead of improvising.", "When a diagnosis needs traces or SSH for something Backroom should show, add the read before deciding."],
+      "related": ["backroom-board-sweep", "backroom-review", "miner-comms", "dittobench-scoring"]
+    },
+    {
       "id": "miner-comms",
       "title": "Miner Discord and DM replies",
       "keywords": ["miner comms", "discord", "dm", "reply for this miner", "owner-link", "copy hold", "champion", "confirmation seeds", "gimme a reply"],
