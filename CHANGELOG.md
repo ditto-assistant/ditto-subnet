@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.426.2 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Bound unreleased-copy work in the API process and speed the backfill
+  ([#3313](https://github.com/ditto-assistant/ditto-subnet/pull/3313),
+  [`b8c3eba`](https://github.com/ditto-assistant/ditto-subnet/commit/b8c3eba5eff59507c9bdc8a7291aa1e0c61cbe37))
+
+
 ## v0.426.1 (2026-11-01)
 
 ### Bug Fixes
