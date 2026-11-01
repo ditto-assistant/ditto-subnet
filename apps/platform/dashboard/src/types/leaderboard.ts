@@ -139,6 +139,20 @@ export interface CrownRules {
   champion_standing_rank: number;
 }
 
+/** SN-302: a fork of another owner's released agent must beat that base on
+ * shared seeds before it earns. Present only while the gate is shadow/enforce. */
+export interface ForkStatus {
+  base_agent_id: string;
+  base_agent_name?: string | null;
+  base_agent_version?: number | null;
+  shared_seed_confirmations: number;
+  required_confirmations: number;
+  paired_lead?: number | null;
+  beats_base: boolean;
+  /** "shadow" (published, still paid) or "enforce" (unpaid until it wins). */
+  enforcement: string;
+}
+
 export interface CrownKing {
   agent_id: string;
   miner_hotkey: string;
@@ -147,6 +161,7 @@ export interface CrownKing {
   /** The board's official_composite: quorum plus completed retest waves. */
   official_score: number;
   shared_seed_confirmations?: number;
+  fork?: ForkStatus | null;
 }
 
 /** "outside_standing" | "needs_confirmations" | "dueling" | "would_dethrone";
@@ -172,6 +187,7 @@ export interface CrownChallenger {
   required_lead?: number | null;
   lead_needed?: number | null;
   status: CrownChallengerStatus;
+  fork?: ForkStatus | null;
 }
 
 /** `emissions.ledger_pin`: identity of the frozen ledger the fleet folds this

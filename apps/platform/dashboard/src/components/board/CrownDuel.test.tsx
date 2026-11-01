@@ -87,7 +87,21 @@ const emissions: EmissionsFold = {
       lead_needed: 0.02,
       status: "dueling",
     }),
-    challenger(3, { official_rank: 4, within_standing: false, status: "outside_standing" }),
+    challenger(3, {
+      official_rank: 4,
+      within_standing: false,
+      status: "outside_standing",
+      fork: {
+        base_agent_id: "c0a0d917-8a53-4972-8fc8-1546abd6eab4",
+        base_agent_name: "dan0l",
+        base_agent_version: 29,
+        shared_seed_confirmations: 2,
+        required_confirmations: 3,
+        paired_lead: -0.004,
+        beats_base: false,
+        enforcement: "shadow",
+      },
+    }),
   ],
 };
 
@@ -109,6 +123,9 @@ describe("CrownDuel", () => {
     expect(rows[1]).toContain("−0.013");
     expect(rows[1]).toContain("needs +0.020 more paired lead");
     expect(rows[2]).toContain("must reach the top 3 first");
+    // SN-302: a fork of another owner's released agent duels its base too.
+    expect(rows[2]).toContain("fork of dan0l v29 — must beat base: 2/3 confirmations, lead −0.004");
+    expect(rows[0]).not.toContain("fork of");
 
     // Configured but not yet folded by the fleet: said once, quietly.
     expect(document.getElementById("crown-duel-rollout")?.textContent).toContain("protocol 34");
