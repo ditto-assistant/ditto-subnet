@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.428.0 (2026-11-01)
+
+### Features
+
+- **platform**: Show which released agents explain an unreleased-copy exclusion
+  ([#3316](https://github.com/ditto-assistant/ditto-subnet/pull/3316),
+  [`be27d68`](https://github.com/ditto-assistant/ditto-subnet/commit/be27d682775fd12c53c10195cd9a18e59cd7cd62))
+
+
 ## v0.427.0 (2026-11-01)
 
 ### Features
