@@ -36,6 +36,10 @@ from ditto.api_server.generator_round_reservation import (
 )
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.operator_diagnostic import (
+    diagnostic_target_refusal,
+    operator_diagnostic_hotkeys,
+)
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.validator_slot_settings import (
@@ -370,9 +374,24 @@ async def issue_benchmark_canary(
                 "validator already holds a live lease on this agent; "
                 "choose another validator or wait for it to finish",
             )
+        # Finalized agents are the ordinary canary target. The one exception is
+        # an isolated operator diagnostic agent (see operator_diagnostic): an
+        # operator-owned shadow agent withheld from this queue before dispatch
+        # and never ordinarily leased or scored.
+        diagnostic_refusal = (
+            None
+            if agent is not None
+            and agent.status in {AgentStatus.SCORED, AgentStatus.LIVE}
+            else await diagnostic_target_refusal(
+                session,
+                agent,
+                bench_version=payload.bench_version,
+                operator_hotkeys=operator_diagnostic_hotkeys(),
+            )
+        )
         if (
             agent is None
-            or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+            or diagnostic_refusal is not None
             or agent.sha256 != payload.expected_artifact_sha256
             or agent.screened_image_sha256 != payload.expected_screened_image_sha256
             or not agent.screened_image_verified_at

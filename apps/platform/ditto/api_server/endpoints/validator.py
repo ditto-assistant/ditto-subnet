@@ -210,6 +210,10 @@ from ditto.api_server.koth import (
 )
 from ditto.api_server.model_use import evaluate_model_use, model_use_policy
 from ditto.api_server.onchain_seed import derive_seed, derive_validator_seed
+from ditto.api_server.operator_diagnostic import (
+    diagnostic_target_refusal,
+    operator_diagnostic_hotkeys,
+)
 from ditto.api_server.outlier_escalation import (
     OUTLIER_ALGORITHM_VERSION,
     OUTLIER_AXIS_EVIDENCE_KIND,
@@ -4021,7 +4025,16 @@ async def request_job(
                 or agent is None
                 or agent.sha256 != canary.artifact_sha256
                 or agent.screened_image_sha256 != canary.screened_image_sha256
-                or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                or (
+                    agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+                    and await diagnostic_target_refusal(
+                        session,
+                        agent,
+                        bench_version=canary_ticket.bench_version,
+                        operator_hotkeys=operator_diagnostic_hotkeys(),
+                    )
+                    is not None
+                )
                 or heartbeat is None
                 or not heartbeat_supports_version(
                     heartbeat, now=now, version=canary_ticket.bench_version

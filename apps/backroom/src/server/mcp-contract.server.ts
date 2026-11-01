@@ -117,6 +117,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'start_benchmark_rollout',
   'issue_benchmark_canary',
   'cancel_benchmark_canary',
+  'isolate_operator_diagnostic',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_queue_policy_settings',

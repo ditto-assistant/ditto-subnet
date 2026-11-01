@@ -246,7 +246,26 @@ import {
 
 import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
   getBenchmarkCanaryInputSchema, cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+  getOperatorDiagnosticInputSchema, isolateOperatorDiagnosticInputSchema, operatorDiagnosticSchema,
 } from '../lib/benchmark-canary.schemas'
+
+export async function getOperatorDiagnostic(rawInput: unknown) {
+  const input = getOperatorDiagnosticInputSchema.parse(rawInput)
+  return operatorDiagnosticSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/operator-diagnostic/${input.agentId}`,
+  ))
+}
+
+export async function isolateOperatorDiagnostic(actor: string, rawInput: unknown) {
+  const input = isolateOperatorDiagnosticInputSchema.parse(rawInput)
+  return operatorDiagnosticSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/operator-diagnostic/${input.agentId}/isolate`, {
+      method: 'POST', actor,
+      body: { actor, expected_artifact_sha256: input.expectedArtifactSha256,
+        reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
 
 export async function listBenchmarkCanaries(rawInput: unknown) {
   const input = listBenchmarkCanariesInputSchema.parse(rawInput)

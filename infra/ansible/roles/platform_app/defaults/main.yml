@@ -282,6 +282,12 @@ secret_screener_api_token: ""
 # Accept that shared bearer on /screener/*. Rotating per-node tokens are
 # unaffected; stays true until the GCE overflow fleet stops booting with it.
 platform_screener_legacy_bearer_enabled: true
+
+# Comma-separated SS58 hotkeys whose own shadow agents may be isolated and
+# leased to one chosen validator as operator diagnostics (never scored, ranked,
+# or paid). Empty disables isolate_operator_diagnostic and the diagnostic
+# canary path; Platform fails closed. Per-env value lives in host_vars.
+platform_operator_diagnostic_hotkeys: ""
 secret_platform_perplexity_key: "PERPLEXITY_API_KEY"
 
 # Docker apt repo (Debian).
