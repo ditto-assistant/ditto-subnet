@@ -1,7 +1,9 @@
 import '@tanstack/react-start/server-only'
 import {
+  getProviderOutagesInputSchema,
   infraVoidListSchema,
   listInfraVoidsInputSchema,
+  providerOutagesSchema,
   voidInfraScoresInputSchema,
   voidInfraScoresResponseSchema,
 } from '../lib/infra-voids.schemas'
@@ -41,5 +43,16 @@ export async function fetchInfraVoids(raw: unknown) {
   query.set('offset', String(input.offset))
   return infraVoidListSchema.parse(
     await platformAdminRequest(`/api/v1/admin/confirmation-score-voids?${query}`),
+  )
+}
+
+export async function fetchProviderOutages(raw: unknown) {
+  const input = getProviderOutagesInputSchema.parse(raw)
+  const query = new URLSearchParams()
+  if (input.withFindings) query.set('with_findings', 'true')
+  query.set('limit', String(input.limit))
+  query.set('offset', String(input.offset))
+  return providerOutagesSchema.parse(
+    await platformAdminRequest(`/api/v1/admin/provider-outages?${query}`),
   )
 }

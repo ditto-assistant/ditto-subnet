@@ -87,6 +87,7 @@ from ditto.api_server.endpoints import (
     admin_miner_fees_router,
     admin_outlier_escalation_router,
     admin_owner_router,
+    admin_provider_outages_router,
     admin_quarantine_router,
     admin_queue_policy_settings_router,
     admin_retirement_router,
@@ -191,6 +192,7 @@ from ditto.api_server.middleware import (
 from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.miner_avatar import MAX_AVATAR_BYTES
 from ditto.api_server.no_store import NoStoreMiddleware
+from ditto.api_server.outage_sweep import OutageVoidSweeper
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
@@ -470,6 +472,18 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             if _process_role() == PLATFORM_ROLE:
                 await bounty_deadlines.start()
             app.state.bounty_deadline_sweeper = bounty_deadlines
+
+            # Voids continual-retest samples whose serving grant shows a
+            # provider outage (credit refusal, backpressure) after the circuit
+            # has already closed. Singleton: one sweep per deployment, with an
+            # advisory lock underneath.
+            outage_void_sweeper = OutageVoidSweeper(
+                session_maker=app.state.session_maker
+            )
+            stack.push_async_callback(outage_void_sweeper.aclose)
+            if _process_role() == PLATFORM_ROLE:
+                await outage_void_sweeper.start()
+            app.state.outage_void_sweeper = outage_void_sweeper
 
             capacity_event_janitor = ScreenerCapacityEventJanitor(
                 session_maker=app.state.session_maker,
@@ -792,6 +806,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_quarantine_router, prefix="/api/v1")
     app.include_router(admin_validation_retry_router, prefix="/api/v1")
     app.include_router(admin_confirmation_score_voids_router, prefix="/api/v1")
+    app.include_router(admin_provider_outages_router, prefix="/api/v1")
     app.include_router(admin_retirement_router, prefix="/api/v1")
     app.include_router(admin_validator_slot_settings_router, prefix="/api/v1")
     app.include_router(admin_validator_capacity_router, prefix="/api/v1")

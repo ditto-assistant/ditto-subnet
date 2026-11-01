@@ -102,7 +102,8 @@ and cannot recur during the retry.
 | Slots exhausted by infra before quorum | `get_validation_retry` → `retry_validator_evaluation` (`targetValidatorHotkey` for one slot; `batch_retry_validator_evaluation` for many). An open circuit needs `acknowledgeProviderOutage`. |
 | v9 contract mismatch on an accepted score | `list_v9_contract_retests` → `queue_validator_score_retests`. |
 | LongMem confirmation bundle | `get_confirmation_bundle` → `authorize_confirmation_bundle_retest`. |
-| Continual-retest `confirmation_scores` sample | `get_continual_retest_diagnostic` (copy `retest_samples` run_id and composite) → `void_infra_scores` with `dryRun` first, then `VOID INFRA SCORES`. It is gated on the grant's outage-class failures. The seed re-runs at the next `void_generation`; read it back with `list_infra_voids`. |
+| Continual-retest `confirmation_scores` sample | `get_continual_retest_diagnostic` (copy `retest_samples` run_id and composite) → `void_infra_scores` with `dryRun` first, then `VOID INFRA SCORES`. It is gated on the grant's outage-class failures. The seed re-runs at the next `void_generation`; read it back with `list_infra_voids`. Check `get_provider_outages` first: the post-outage sweep may already have voided it (source `outage_sweep`). |
+| Canonical score in a sweep's `canonical_flagged` | `get_provider_outages` lists it with the grant's outage counts and window; review with `replace_validator_score`. The sweep never replaces canonical scores. |
 | Parked by `provider_outage_parked` | Nothing to do; the resume is automatic after the quiet window. |
 
 Read the result back (`get_agent_scores`, `get_continual_retest_diagnostic`,

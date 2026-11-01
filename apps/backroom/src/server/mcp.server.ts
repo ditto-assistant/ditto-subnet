@@ -6,8 +6,10 @@ import {
 } from '../lib/contributor.schemas'
 import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import { fetchArtifactFetchAudit } from './artifact-fetch-audit.service'
-import { fetchInfraVoids, voidInfraScores } from './infra-voids.service'
-import { listInfraVoidsInputSchema, voidInfraScoresInputSchema } from '../lib/infra-voids.schemas'
+import { fetchInfraVoids, fetchProviderOutages, voidInfraScores } from './infra-voids.service'
+import {
+  getProviderOutagesInputSchema, listInfraVoidsInputSchema, voidInfraScoresInputSchema,
+} from '../lib/infra-voids.schemas'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -875,6 +877,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Void retest samples whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
   list_infra_voids:
     'List infra voids (operator and outage sweep) with evidence and re-run result.',
+  get_provider_outages:
+    'Read provider-outage circuits and post-outage sweep runs (voids, windows, flagged canonicals).',
   get_continual_retest_diagnostic:
     'Exact agent scoring, owner-family cutoff/tie band, cohort reason, claim eligibility and per-sample grant failures. Read-only.',
   get_validator_slot_settings:
@@ -4078,6 +4082,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchInfraVoids(input)),
+  )
+
+  registerTool(
+    'get_provider_outages',
+    {
+      title: 'Get provider outages',
+      description:
+        'Current provider_outage_circuits rows (state, epoch, opened/retry/last-failure times, failure_count, last_status, last_error_code, outage_active including the recovery quiet window), the post-outage sweep policy (interval, batch, first lookback, evidence gate), and newest-first sweep runs. Each run lists its watermark range, examined/voided/error counts, the voids it wrote (source outage_sweep), the per-grant outage windows observed, and canonical scores whose grant shows the same outage evidence (canonical_flagged: review with replace_validator_score; never replaced automatically). withFindings keeps runs that voided, flagged or errored. Requires backroom:read.',
+      inputSchema: getProviderOutagesInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchProviderOutages(input)),
   )
 
   registerTool(

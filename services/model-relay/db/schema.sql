@@ -5095,6 +5095,31 @@ CREATE TABLE public.name_claims (
 
 
 --
+-- Name: outage_sweep_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.outage_sweep_runs (
+    sweep_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone NOT NULL,
+    watermark_from timestamp with time zone NOT NULL,
+    watermark_to timestamp with time zone NOT NULL,
+    watermark_to_key jsonb,
+    examined_count integer NOT NULL,
+    voided_count integer NOT NULL,
+    error_count integer NOT NULL,
+    voids jsonb NOT NULL,
+    outage_windows jsonb NOT NULL,
+    canonical_flagged jsonb NOT NULL,
+    errors jsonb NOT NULL,
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_counts_check CHECK (((examined_count >= 0) AND (voided_count >= 0) AND (error_count >= 0) AND ((voided_count + error_count) <= examined_count))),
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_finished_check CHECK ((finished_at >= started_at)),
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_watermark_check CHECK ((watermark_to >= watermark_from))
+);
+
+
+--
 -- Name: owner_attestations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9825,6 +9850,14 @@ ALTER TABLE ONLY public.miner_github_operator_revocations
 
 
 --
+-- Name: outage_sweep_runs pk_outage_sweep_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outage_sweep_runs
+    ADD CONSTRAINT pk_outage_sweep_runs PRIMARY KEY (sweep_id);
+
+
+--
 -- Name: private_benchmark_datasets pk_private_benchmark_datasets; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11671,6 +11704,13 @@ CREATE INDEX confirmation_scores_agent_version_idx ON public.confirmation_scores
 
 
 --
+-- Name: confirmation_scores_version_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_scores_version_created_idx ON public.confirmation_scores USING btree (bench_version, created_at);
+
+
+--
 -- Name: confirmation_seed_anchors_version_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12130,6 +12170,20 @@ CREATE INDEX name_claims_claimant_idx ON public.name_claims USING btree (netuid,
 --
 
 CREATE INDEX name_claims_status_idx ON public.name_claims USING btree (netuid, status);
+
+
+--
+-- Name: outage_sweep_runs_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outage_sweep_runs_started_idx ON public.outage_sweep_runs USING btree (started_at);
+
+
+--
+-- Name: outage_sweep_runs_version_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outage_sweep_runs_version_started_idx ON public.outage_sweep_runs USING btree (bench_version, started_at);
 
 
 --
