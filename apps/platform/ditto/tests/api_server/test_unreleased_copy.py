@@ -176,25 +176,38 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     async with session_maker() as session:
         port = await session.get(Agent, port_id)
         assert port is not None and port.status == AgentStatus.SCORED
-    # The owner's later agent names still identify it for the namespace hint.
+    # The owner's later agent names still identify it for the namespace hint,
+    # and each agent's overlap is its own (an unrelated agent shares nothing).
+    unrelated = uuid4()
     async with session_maker() as session, session.begin():
-        session.add(
-            Agent(
-                agent_id=uuid4(),
-                miner_hotkey="5Porter",
-                name="porter-renamed",
-                version=1,
-                sha256="f" * 64,
-                status=AgentStatus.SCORED,
-                created_at=_T0 + timedelta(hours=9),
+        for agent_id, hotkey, name, hours in (
+            (uuid4(), "5Porter", "porter-renamed", 9),
+            (unrelated, "5Other", "unrelated", 1),
+        ):
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=hotkey,
+                    name=name,
+                    version=1,
+                    sha256=agent_id.hex * 2,
+                    status=AgentStatus.SCORED,
+                    created_at=_T0 + timedelta(hours=hours),
+                )
             )
-        )
+    async with session_maker() as session, session.begin():
+        await store_items(session, agent_id=unrelated, extracted=extract_items(BASE))
     async with session_maker() as session:
         port = await session.get(Agent, port_id)
         assert port is not None
         context = await load_context(session, port)
         assert context is not None
         assert context.owner_names == ["port-agent", "porter-renamed"]
+        assert unrelated not in context.overlaps
+        port_keys = set(index_keys(extract_items(PORT)))
+        assert set(context.overlaps[source_id]) == port_keys & set(
+            index_keys(extract_items(SOURCE))
+        )
 
     app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
     app.state.unreleased_copy_sentinel = sentinel
@@ -228,7 +241,7 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     rows = listing.json()
     assert [r["agent_id"] for r in rows["items"]] == [str(port_id)]
     assert rows["items"][0]["top_matched_name"] == "source-agent"
-    assert rows["coverage"]["indexed"] == 2
+    assert rows["coverage"]["indexed"] == 3
     assert rows["coverage"]["flagged"] == 1
     assert rows["items"][0]["excluded"] is not None
 

@@ -50,6 +50,7 @@ from ditto.db.queries.unreleased_copy import (
     pending_candidates,
     record_enforcement,
     record_signal,
+    released_agent_ids,
     signal_payload,
     store_items,
     stream_index_rows,
@@ -72,6 +73,8 @@ DEFAULT_EVALUATE_BATCH = 6
 BACKLOG_INTERVAL_SECONDS = 1.0
 INDEX_WORKERS = 2
 EVIDENCE_MATCHES = 3
+# Released artifacts read into the worker's fuzzy cache per idle tick.
+WARM_RELEASED_BATCH = 8
 # Storage failures before an artifact is recorded as unreadable, so one
 # missing blob cannot stall evaluation of everything uploaded after it.
 MAX_READ_ATTEMPTS = 3
@@ -243,6 +246,19 @@ class UnreleasedCopySentinel:
                 if self._worker_watermark is None or newest > self._worker_watermark:
                     self._worker_watermark = newest
 
+    async def warm(self, *, limit: int = WARM_RELEASED_BATCH) -> int:
+        """Sync the worker index and cache a few more released fingerprints."""
+        await self.sync_worker_index()
+        if self._storage is None:
+            return 0
+        async with self._session_maker() as session:
+            released = await released_agent_ids(session, at=datetime.now(UTC))
+        missing = await self.call(worker.missing_released, [str(a) for a in released])
+        for agent_id in missing[:limit]:
+            raw = await _read(self._storage, agent_id)
+            await self.call(worker.add_released, agent_id, raw)
+        return min(len(missing), limit)
+
     async def overlap(self, keys: list[int], eligible: list[UUID]) -> dict[UUID, array]:
         """Overlap source for :func:`load_context`, served by the scoring worker."""
         packed = array("q", keys).tobytes()
@@ -351,6 +367,13 @@ class UnreleasedCopySentinel:
             )
         if candidates:
             await self.sync_worker_index()
+        else:
+            # Idle: keep the worker warm so the first upload (or an operator's
+            # live read) after a restart does not pay for loading everything.
+            try:
+                await self.warm()
+            except Exception as error:  # a cache, never a tick failure
+                logger.warning("unreleased-copy warm-up: %s", type(error).__name__)
         for agent in candidates:
             async with self._session_maker() as session:
                 context = await load_context(session, agent, overlap=self.overlap)

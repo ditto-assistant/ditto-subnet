@@ -21,8 +21,9 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, and_, cast, func, select, text
-from sqlalchemy.dialects.postgresql import ARRAY, insert
+import numpy as np
+from sqlalchemy import and_, func, select, text
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_server.distinctive_content import (
@@ -217,8 +218,9 @@ async def load_context(
 ) -> SignalContext | None:
     """Everything :func:`ditto.api_server.unreleased_copy.evaluate` needs.
 
-    Each other agent carries only its overlap with the candidate (computed in
-    Postgres), which is all the signal reads. Owners include payment coldkeys
+    Each other agent carries only its overlap with the candidate (computed by
+    ``overlap`` in the sentinel's worker, else in process), which is all the
+    signal reads. Owners include payment coldkeys
     and the candidate's attested hotkey links; release times are publication
     evidence under the policy in force when the candidate was uploaded.
     """
@@ -237,15 +239,11 @@ async def load_context(
         # is a vectorized pass there instead of a full-index scan in Postgres.
         shared = await overlap(keys, await eligible_sources(session, agent))
     elif keys:
+        # No worker (tests, one-off reads): the same vectorized membership pass
+        # in process, over the eligible rows streamed from Postgres.
+        candidate_keys = np.unique(np.asarray(keys, dtype=np.int64))
         stream = await session.stream(
-            select(
-                AgentDistinctiveItems.agent_id,
-                func.array(
-                    select(func.unnest(AgentDistinctiveItems.item_keys))
-                    .intersect(select(func.unnest(cast(keys, ARRAY(BigInteger)))))
-                    .scalar_subquery()
-                ),
-            )
+            select(AgentDistinctiveItems.agent_id, AgentDistinctiveItems.item_keys)
             .join(Agent, Agent.agent_id == AgentDistinctiveItems.agent_id)
             .where(
                 AgentDistinctiveItems.agent_id != agent.agent_id,
@@ -254,9 +252,12 @@ async def load_context(
                 Agent.created_at <= agent.created_at,
             )
         )
-        async for aid, overlap_keys in stream:
-            if overlap_keys:
-                shared[aid] = array("q", overlap_keys)
+        async for aid, item_keys in stream:
+            hit = np.intersect1d(np.asarray(item_keys, dtype=np.int64), candidate_keys)
+            if len(hit):
+                values = array("q")
+                values.frombytes(hit.tobytes())
+                shared[aid] = values
     rows = (
         (
             await session.scalars(
@@ -297,20 +298,23 @@ async def load_context(
             status=a.status.value,
         )
 
-    kings = list((await session.scalars(select(AgentKingship.agent_id))).all())
-    all_released = await list_public_source_releases(
-        session, agent_ids=kings, quorum=SCORING_QUORUM, policy=policy
-    )
     return SignalContext(
         candidate=indexed(agent, frozenset(keys)),
         others=[indexed(by_id[aid]) for aid in shared if aid in by_id],
         overlaps={aid: ks for aid, ks in shared.items() if aid in by_id},
-        released_before=sorted(
-            (aid for aid, at in all_released.items() if at < uploaded_at),
-            key=str,
-        ),
+        released_before=await released_agent_ids(session, at=uploaded_at),
         owner_names=await _owner_names(session, agent, rows, owners, links),
     )
+
+
+async def released_agent_ids(session: AsyncSession, *, at: datetime) -> list[UUID]:
+    """Released kings (the fuzzy-pass corpus) as of ``at``, under that policy."""
+    policy = await artifact_release_policy_as_of(session, at=at)
+    kings = list((await session.scalars(select(AgentKingship.agent_id))).all())
+    released = await list_public_source_releases(
+        session, agent_ids=kings, quorum=SCORING_QUORUM, policy=policy
+    )
+    return sorted((a for a, t in released.items() if t < at), key=str)
 
 
 async def _owner_names(
