@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.423.0 (2026-11-01)
+
+### Features
+
+- **platform**: Void outage-tainted retests automatically after an outage
+  ([#3307](https://github.com/ditto-assistant/ditto-subnet/pull/3307),
+  [`686f3fa`](https://github.com/ditto-assistant/ditto-subnet/commit/686f3fa2bf0d477f0268f79af090121040b479c7))
+
+
 ## v0.422.0 (2026-11-01)
 
 ### Features
