@@ -211,6 +211,16 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     assert rows["items"][0]["top_matched_name"] == "source-agent"
     assert rows["coverage"]["indexed"] == 2
     assert rows["coverage"]["flagged"] == 1
+    assert rows["items"][0]["excluded"] is not None
+
+    # The copy-court feed carries the agent's recorded signal for operators.
+    feed = await client.get(
+        "/api/v1/admin/copy-court/recommendations",
+        params={"agent_id": str(port_id), "pending_only": "false"},
+        headers=_HEADERS,
+    )
+    assert feed.status_code == 200, feed.text
+    assert feed.json()["unreleased_copy"]["recorded"]["flagged"]
 
 
 async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(

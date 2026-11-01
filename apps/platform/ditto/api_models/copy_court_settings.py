@@ -9,7 +9,10 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto.api_models.unreleased_copy import AdminUnreleasedCopyOverview
+from ditto.api_models.unreleased_copy import (
+    AdminUnreleasedCopyOverview,
+    AdminUnreleasedCopySignal,
+)
 
 CourtMode = Literal["off", "shadow", "enforce"]
 
@@ -172,6 +175,8 @@ class AdminCopyCourtRecommendationList(BaseModel):
     count: int
     limit: int
     offset: int
+    unreleased_copy: AdminUnreleasedCopySignal | None = None
+    """With ``agent_id``: that agent's recorded unreleased-copy signal."""
 
 
 def copy_court_checksum(settings: CopyCourtSettings) -> str:

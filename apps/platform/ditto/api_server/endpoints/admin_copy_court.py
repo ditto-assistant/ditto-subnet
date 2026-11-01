@@ -25,6 +25,9 @@ from ditto.api_server.copy_hold_court import CopyHoldCourt
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.endpoints.admin_unreleased_copy import (
+    read_signal as read_unreleased_copy_signal,
+)
+from ditto.api_server.endpoints.admin_unreleased_copy import (
     unreleased_copy_overview,
 )
 from ditto.db.models import (
@@ -132,6 +135,7 @@ async def create_copy_court_settings_revision(
 
 @router.get("/recommendations", response_model=AdminCopyCourtRecommendationList)
 async def list_copy_court_recommendations(
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
     pending_only: bool = True,
@@ -145,7 +149,8 @@ async def list_copy_court_recommendations(
     operator sees only recommendations whose review is still unresolved and
     whose agent is still held. Set it false to page the full feed including
     recommendations for holds an operator has since resolved — the
-    shadow-mode calibration record.
+    shadow-mode calibration record. With ``agent_id`` the response also
+    carries that agent's recorded unreleased-copy signal.
     """
     query = select(AthCopyCourtRecommendation).order_by(
         AthCopyCourtRecommendation.created_at.desc(),
@@ -170,6 +175,11 @@ async def list_copy_court_recommendations(
         count=len(rows),
         limit=limit,
         offset=offset,
+        unreleased_copy=(
+            await read_unreleased_copy_signal(session, request, agent_id, live=False)
+            if agent_id is not None
+            else None
+        ),
     )
 
 

@@ -10115,6 +10115,7 @@ export const copyCourtRecommendationListSchema: z.ZodType<GeneratedCopyCourtReco
     count: z.number().int().nonnegative(),
     limit: z.number().int().positive(),
     offset: z.number().int().nonnegative(),
+    unreleased_copy: z.lazy(() => unreleasedCopySignalSchema).nullish(),
   })
 
 export const copyCourtRecommendationsInputSchema = z.object({
@@ -10811,6 +10812,9 @@ const unreleasedCopySummarySchema = z.object({
   top_matched_version: z.number().int().nullable(),
   computed_at: unreleasedCopyTimestamp(),
   enforcement_outcome: z.string().nullish(),
+  excluded: z.record(z.string(), z.number().int()).nullish(),
+  candidate_item_count: z.number().int().nullish(),
+  compared_agent_count: z.number().int().nullish(),
 } satisfies PlatformResponseShape<GeneratedUnreleasedCopySummary>)
 
 export const unreleasedCopySignalListSchema = z.object({
@@ -10863,6 +10867,7 @@ export const unreleasedCopyOverviewSchema = z.object({
   coverage: unreleasedCopyCoverageSchema,
   runtime: unreleasedCopyRuntimeSchema.nullable(),
   flagged: z.array(unreleasedCopySummarySchema).max(50),
+  near_misses: z.array(unreleasedCopySummarySchema).max(25).default([]),
 } satisfies PlatformResponseShape<GeneratedUnreleasedCopyOverview>)
 
 export const applyUnreleasedCopySettingsInputSchema = z.object({
