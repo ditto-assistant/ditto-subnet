@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.426.0 (2026-11-01)
+
+### Chores
+
+- **infra**: Let the Hetzner screener take private source-marker patterns
+  ([#3304](https://github.com/ditto-assistant/ditto-subnet/pull/3304),
+  [`74fc8c6`](https://github.com/ditto-assistant/ditto-subnet/commit/74fc8c66e32e2d1e5ca678c37c19fdc80e35716e))
+
+### Features
+
+- **platform**: Re-run every voided retest seed regardless of cohort
+  ([#3311](https://github.com/ditto-assistant/ditto-subnet/pull/3311),
+  [`f5a8f4d`](https://github.com/ditto-assistant/ditto-subnet/commit/f5a8f4d41c3e28dc50b4adcc474d2701408c33f2))
+
+
 ## v0.425.0 (2026-11-01)
 
 ### Features
