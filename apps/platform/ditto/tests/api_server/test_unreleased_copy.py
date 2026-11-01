@@ -129,6 +129,16 @@ def test_cross_language_port_of_unreleased_agent_is_flagged_with_evidence() -> N
     assert not evaluate(port, [base, released_source, fork, port]).flagged
 
 
+async def _reset_settings(session_maker: async_sessionmaker[AsyncSession]) -> None:
+    """Start from no revision (shadow), whatever data migrations seeded."""
+    from sqlalchemy import delete
+
+    from ditto.db.models import UnreleasedCopySettingsRevision
+
+    async with session_maker() as session, session.begin():
+        await session.execute(delete(UnreleasedCopySettingsRevision))
+
+
 class _Storage:
     def __init__(self, blobs: dict[UUID, bytes]) -> None:
         self.blobs = blobs
@@ -143,6 +153,7 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
+    await _reset_settings(session_maker)
     source_id, port_id = uuid4(), uuid4()
     async with session_maker() as session, session.begin():
         for agent_id, hotkey, name, hours in (
@@ -280,6 +291,7 @@ async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(
             yield session
 
     app.dependency_overrides[get_session] = _session
+    await _reset_settings(session_maker)
     refused = await client.post(
         "/api/v1/admin/unreleased-copy/settings",
         headers=_HEADERS,
@@ -304,7 +316,7 @@ async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(
         },
     )
     assert applied.status_code == 200, applied.text
-    assert applied.json()["revision"] == 1
+    assert applied.json()["parent_revision"] == 0
 
     now = datetime.now(UTC)
     source_id, old_port, new_port, unscored = uuid4(), uuid4(), uuid4(), uuid4()
