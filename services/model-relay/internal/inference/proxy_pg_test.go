@@ -651,6 +651,57 @@ func TestChatUpstreamFailureDoesNotChargeReservation(t *testing.T) {
 	if routeStatus != "degraded" || !cooldownSet {
 		t.Fatalf("route must degrade on failure: %s cooldown=%v", routeStatus, cooldownSet)
 	}
+	var circuits int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM provider_outage_circuits WHERE provider = 'openrouter'`,
+	).Scan(&circuits); err != nil {
+		t.Fatalf("read provider circuit: %v", err)
+	}
+	if circuits != 0 {
+		t.Fatalf("an ordinary provider 500 opened the fleet circuit: count=%d", circuits)
+	}
+}
+
+func TestChatGatewayCreditExhaustionOpensProviderCircuit(t *testing.T) {
+	broke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(gatewayCreditBody))
+	}))
+	defer broke.Close()
+	f := newPGFixture(t, chatTestConfig(t, broke.URL))
+	f.seedRoute(t)
+
+	nonce := uuid.New()
+	body := []byte(chatBody)
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, nonce, body)))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("credit refusal status=%d: %s", w.Code, w.Body.String())
+	}
+
+	ctx := t.Context()
+	var status, terminal string
+	var prompt int64
+	if err := f.pool.QueryRow(ctx,
+		`SELECT status, terminal_error_code, prompt_tokens FROM inference_requests
+		 WHERE grant_id = $1 AND nonce = $2`, f.grantID, nonce).Scan(&status, &terminal, &prompt); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if status != "failed" || terminal != "upstream_http_402" || prompt != 0 {
+		t.Fatalf("credit refusal settle: %s %s %d", status, terminal, prompt)
+	}
+	// Platform parks every scoring lease off this row, so a scored run can no
+	// longer complete against an empty balance and be accepted as the agent's.
+	var state, lastCode string
+	var lastStatus int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT state, last_status, last_error_code FROM provider_outage_circuits WHERE provider = 'openrouter'`,
+	).Scan(&state, &lastStatus, &lastCode); err != nil {
+		t.Fatalf("read provider circuit: %v", err)
+	}
+	if state != "open" || lastStatus != http.StatusPaymentRequired || lastCode != "upstream_http_402" {
+		t.Fatalf("credit refusal circuit = %s/%d/%s, want open/402/upstream_http_402", state, lastStatus, lastCode)
+	}
 }
 
 func TestExchangeFullFlowAndNonceReplay(t *testing.T) {

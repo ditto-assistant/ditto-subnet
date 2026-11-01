@@ -392,6 +392,8 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if exhausted != nil {
 		if status, overloaded := receiptFreeOverload(exhausted.phases, model); overloaded {
 			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
+		} else if status, broke := gatewayCreditExhausted(exhausted.phases); broke {
+			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
 		}
 	} else {
 		_ = d.closeProviderCircuit(ctx, now)
