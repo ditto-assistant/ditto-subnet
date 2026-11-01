@@ -11,33 +11,43 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.unreleased_copy import (
     AdminUnreleasedCopyCoverage,
+    AdminUnreleasedCopyEffectiveSettings,
     AdminUnreleasedCopyIndex,
+    AdminUnreleasedCopyOverview,
     AdminUnreleasedCopyRuntime,
+    AdminUnreleasedCopySettingsRequest,
+    AdminUnreleasedCopySettingsResponse,
+    AdminUnreleasedCopySettingsRevision,
     AdminUnreleasedCopySignal,
     AdminUnreleasedCopySignalList,
     AdminUnreleasedCopySummary,
     UnreleasedCopyEvaluation,
+    UnreleasedCopySettings,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.unreleased_copy import (
-    DEFAULT_THRESHOLD,
-    SIGNAL_VERSION,
-    evaluate,
-)
+from ditto.api_server.unreleased_copy import SIGNAL_VERSION, evaluate
 from ditto.api_server.unreleased_copy_sentinel import (
     UnreleasedCopySentinel,
     with_evidence,
 )
-from ditto.db.models import Agent, AgentDistinctiveItems, UnreleasedCopySignal
+from ditto.db.models import (
+    Agent,
+    AgentDistinctiveItems,
+    UnreleasedCopySettingsRevision,
+    UnreleasedCopySignal,
+)
 from ditto.db.queries.unreleased_copy import (
+    effective_settings,
     index_coverage,
     list_signals,
     load_context,
+    settings_history,
     signal_payload,
 )
 
@@ -78,11 +88,19 @@ async def get_unreleased_copy_signal(
                 else "artifact could not be read"
             )
         else:
-            signal = evaluate(context.candidate, context.others)
+            settings = await effective_settings(session)
+            signal = evaluate(
+                context.candidate,
+                context.others,
+                threshold=settings.threshold,
+                max_matches=20,
+            )
             signal, evidence_status = await with_evidence(
                 signal,
                 getattr(request.app.state, "storage", None),
-                threshold=DEFAULT_THRESHOLD,
+                threshold=settings.threshold,
+                released_before=context.released_before,
+                owner_names=context.owner_names,
             )
             live_payload = signal_payload(signal, evidence_status=evidence_status)
     return AdminUnreleasedCopySignal(
@@ -119,25 +137,9 @@ async def get_unreleased_copy_signal(
     )
 
 
-@router.get("/signals", response_model=AdminUnreleasedCopySignalList)
-async def list_unreleased_copy_signals(
-    request: Request,
-    _admin: AdminDep,
-    session: SessionDep,
-    flagged_only: Annotated[bool, Query()] = True,
-    min_score: Annotated[float, Query(ge=0)] = 0.0,
-    limit: Annotated[int, Query(ge=1, le=200)] = 50,
-    offset: Annotated[int, Query(ge=0)] = 0,
-) -> AdminUnreleasedCopySignalList:
-    """Recorded signals by score: the operator review list, never public."""
-    total, rows = await list_signals(
-        session,
-        signal_version=SIGNAL_VERSION,
-        flagged_only=flagged_only,
-        min_score=min_score,
-        limit=limit,
-        offset=offset,
-    )
+async def _summaries(
+    session: AsyncSession, rows: list[tuple[UnreleasedCopySignal, Agent]]
+) -> list[AdminUnreleasedCopySummary]:
     matched_ids = {s.top_matched_agent_id for s, _ in rows if s.top_matched_agent_id}
     matched = (
         {
@@ -158,6 +160,7 @@ async def list_unreleased_copy_signals(
             if signal.top_matched_agent_id
             else None
         )
+        enforcement = (signal.evidence or {}).get("enforcement") or {}
         items.append(
             AdminUnreleasedCopySummary(
                 agent_id=agent.agent_id,
@@ -173,14 +176,139 @@ async def list_unreleased_copy_signals(
                 top_matched_name=top.name if top is not None else None,
                 top_matched_version=top.version if top is not None else None,
                 computed_at=signal.computed_at,
+                enforcement_outcome=enforcement.get("outcome"),
             )
         )
+    return items
+
+
+def _effective(settings: Any) -> AdminUnreleasedCopyEffectiveSettings:
+    return AdminUnreleasedCopyEffectiveSettings(
+        mode=settings.mode,
+        threshold=settings.threshold,
+        revision=settings.revision,
+        enforce_since=settings.enforce_since,
+    )
+
+
+async def unreleased_copy_overview(
+    session: AsyncSession, request: Request
+) -> AdminUnreleasedCopyOverview:
+    """Posture + coverage + top flags, embedded in the copy-court settings read."""
+    _, rows = await list_signals(
+        session,
+        signal_version=SIGNAL_VERSION,
+        flagged_only=True,
+        min_score=0.0,
+        limit=50,
+        offset=0,
+    )
+    return AdminUnreleasedCopyOverview(
+        effective=_effective(await effective_settings(session)),
+        coverage=AdminUnreleasedCopyCoverage.model_validate(
+            await index_coverage(session, signal_version=SIGNAL_VERSION)
+        ),
+        runtime=_runtime(request),
+        flagged=await _summaries(session, list(rows)),
+    )
+
+
+@router.get("/signals", response_model=AdminUnreleasedCopySignalList)
+async def list_unreleased_copy_signals(
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    flagged_only: Annotated[bool, Query()] = True,
+    min_score: Annotated[float, Query(ge=0)] = 0.0,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> AdminUnreleasedCopySignalList:
+    """Recorded signals by score: the operator review list, never public."""
+    total, rows = await list_signals(
+        session,
+        signal_version=SIGNAL_VERSION,
+        flagged_only=flagged_only,
+        min_score=min_score,
+        limit=limit,
+        offset=offset,
+    )
     coverage = await index_coverage(session, signal_version=SIGNAL_VERSION)
     return AdminUnreleasedCopySignalList(
-        items=items,
+        items=await _summaries(session, list(rows)),
         total=total,
         limit=limit,
         offset=offset,
         coverage=AdminUnreleasedCopyCoverage.model_validate(coverage),
         runtime=_runtime(request),
     )
+
+
+def _revision(
+    row: UnreleasedCopySettingsRevision,
+) -> AdminUnreleasedCopySettingsRevision:
+    return AdminUnreleasedCopySettingsRevision(
+        revision=row.revision,
+        parent_revision=row.parent_revision,
+        settings=UnreleasedCopySettings(mode=row.mode, threshold=row.threshold),  # type: ignore[arg-type]
+        reason=row.reason,
+        actor=row.actor,
+        created_at=row.created_at,
+    )
+
+
+@router.get("/settings", response_model=AdminUnreleasedCopySettingsResponse)
+async def get_unreleased_copy_settings(
+    request: Request,
+    _admin: AdminDep,
+    session: SessionDep,
+    history_limit: Annotated[int, Query(ge=0, le=200)] = 20,
+) -> AdminUnreleasedCopySettingsResponse:
+    """Effective mode/threshold, append-only history (newest first), runtime."""
+    rows = await settings_history(session, limit=max(history_limit, 1))
+    return AdminUnreleasedCopySettingsResponse(
+        effective=_effective(await effective_settings(session)),
+        history=[_revision(row) for row in rows[:history_limit]],
+        runtime=_runtime(request),
+    )
+
+
+@router.post("/settings", response_model=AdminUnreleasedCopySettingsRevision)
+async def apply_unreleased_copy_settings(
+    payload: AdminUnreleasedCopySettingsRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> AdminUnreleasedCopySettingsRevision:
+    """Append one optimistic settings revision under an exact confirmation."""
+    confirmation = f"APPLY UNRELEASED COPY {payload.settings.mode.upper()}"
+    if payload.confirmation != confirmation:
+        raise HTTPException(
+            status_code=409, detail=f"confirmation must be exactly {confirmation}"
+        )
+    history = await settings_history(session, limit=1)
+    current = history[0].revision if history else 0
+    if payload.expected_revision != current:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "unreleased-copy settings changed; refresh before applying "
+                f"(expected {payload.expected_revision}, current {current})"
+            ),
+        )
+    row = UnreleasedCopySettingsRevision(
+        parent_revision=current,
+        mode=payload.settings.mode,
+        threshold=payload.settings.threshold,
+        reason=payload.reason.strip(),
+        actor=payload.actor.strip(),
+    )
+    session.add(row)
+    try:
+        await session.commit()
+    except IntegrityError as error:
+        await session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="unreleased-copy settings changed concurrently; refresh",
+        ) from error
+    await session.refresh(row)
+    return _revision(row)

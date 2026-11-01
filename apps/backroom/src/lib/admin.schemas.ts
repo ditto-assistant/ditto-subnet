@@ -10068,6 +10068,9 @@ export const copyCourtControlSchema: z.ZodType<GeneratedCopyCourtSettingsRespons
     current: copyCourtRevisionSchema.nullable(),
     history: z.array(copyCourtRevisionSchema),
     runtime: copyCourtRuntimeSchema.nullish(),
+    // Defined with the unreleased-copy schemas below; lazy avoids the
+    // declaration-order dependency.
+    unreleased_copy: z.lazy(() => unreleasedCopyOverviewSchema).nullish(),
   })
 
 export const copyCourtRecommendationSchema: z.ZodType<GeneratedCopyCourtRecommendation> =
@@ -10690,6 +10693,16 @@ type GeneratedUnreleasedCopyCoverage =
   PlatformComponents['schemas']['AdminUnreleasedCopyCoverage']
 type GeneratedUnreleasedCopySignalList =
   PlatformComponents['schemas']['AdminUnreleasedCopySignalList']
+type GeneratedUnreleasedCopyEnforcement =
+  PlatformComponents['schemas']['UnreleasedCopyEnforcement']
+type GeneratedUnreleasedCopyEffectiveSettings =
+  PlatformComponents['schemas']['AdminUnreleasedCopyEffectiveSettings']
+type GeneratedUnreleasedCopySettingsRevision =
+  PlatformComponents['schemas']['AdminUnreleasedCopySettingsRevision']
+type GeneratedUnreleasedCopySettingsResponse =
+  PlatformComponents['schemas']['AdminUnreleasedCopySettingsResponse']
+type GeneratedUnreleasedCopyOverview =
+  PlatformComponents['schemas']['AdminUnreleasedCopyOverview']
 
 const unreleasedCopyTimestamp = () => z.string().datetime({ offset: true })
 
@@ -10710,6 +10723,7 @@ export const unreleasedCopyMatchSchema = z.object({
   released_at: unreleasedCopyTimestamp().nullable(),
   release_state: z.enum(['unreleased', 'released_after_upload']),
   score: z.number(),
+  probable_same_owner: z.boolean().default(false),
   shared_count: z.number().int().nonnegative(),
   shared_by_kind: z.record(z.string(), z.number().int()),
   items: z.array(unreleasedCopyItemSchema),
@@ -10726,6 +10740,13 @@ export const unreleasedCopyEvaluationSchema = z.object({
   excluded: z.record(z.string(), z.number().int()),
   evidence_status: z.enum(['attached', 'not_needed', 'unavailable']),
   matches: z.array(unreleasedCopyMatchSchema),
+  enforcement: z
+    .object({
+      outcome: z.string(),
+      settings_revision: z.number().int().nonnegative(),
+      at: unreleasedCopyTimestamp(),
+    } satisfies PlatformResponseShape<GeneratedUnreleasedCopyEnforcement>)
+    .nullish(),
 } satisfies PlatformResponseShape<GeneratedUnreleasedCopyEvaluation>)
 
 const unreleasedCopyIndexSchema = z.object({
@@ -10778,6 +10799,7 @@ const unreleasedCopySummarySchema = z.object({
   top_matched_name: z.string().nullable(),
   top_matched_version: z.number().int().nullable(),
   computed_at: unreleasedCopyTimestamp(),
+  enforcement_outcome: z.string().nullish(),
 } satisfies PlatformResponseShape<GeneratedUnreleasedCopySummary>)
 
 export const unreleasedCopySignalListSchema = z.object({
@@ -10785,16 +10807,60 @@ export const unreleasedCopySignalListSchema = z.object({
   total: z.number().int().nonnegative(),
   limit: z.number().int().positive(),
   offset: z.number().int().nonnegative(),
-  coverage: z.object({
-    agents: z.number().int().nonnegative(),
-    indexed: z.number().int().nonnegative(),
-    unreadable: z.number().int().nonnegative(),
-    oldest_unindexed_at: unreleasedCopyTimestamp().nullable(),
-    evaluated: z.number().int().nonnegative(),
-    flagged: z.number().int().nonnegative(),
-  } satisfies PlatformResponseShape<GeneratedUnreleasedCopyCoverage>),
+  coverage: z.lazy(() => unreleasedCopyCoverageSchema),
   runtime: unreleasedCopyRuntimeSchema.nullable(),
 } satisfies PlatformResponseShape<GeneratedUnreleasedCopySignalList>)
+
+const unreleasedCopyCoverageSchema = z.object({
+  agents: z.number().int().nonnegative(),
+  indexed: z.number().int().nonnegative(),
+  unreadable: z.number().int().nonnegative(),
+  oldest_unindexed_at: unreleasedCopyTimestamp().nullable(),
+  evaluated: z.number().int().nonnegative(),
+  flagged: z.number().int().nonnegative(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyCoverage>)
+
+const unreleasedCopyModeSchema = z.enum(['off', 'shadow', 'enforce'])
+
+const unreleasedCopyEffectiveSettingsSchema = z.object({
+  mode: unreleasedCopyModeSchema,
+  threshold: z.number().positive(),
+  revision: z.number().int().nonnegative(),
+  enforce_since: unreleasedCopyTimestamp().nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyEffectiveSettings>)
+
+const unreleasedCopySettingsRevisionSchema = z.object({
+  revision: z.number().int().positive(),
+  parent_revision: z.number().int().nonnegative(),
+  settings: z.object({ mode: unreleasedCopyModeSchema, threshold: z.number().positive() }),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: unreleasedCopyTimestamp(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySettingsRevision>)
+
+export const unreleasedCopySettingsSchema = z.object({
+  effective: unreleasedCopyEffectiveSettingsSchema,
+  history: z.array(unreleasedCopySettingsRevisionSchema),
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopySettingsResponse>)
+
+export const unreleasedCopySettingsRevisionResponseSchema =
+  unreleasedCopySettingsRevisionSchema
+
+export const unreleasedCopyOverviewSchema = z.object({
+  effective: unreleasedCopyEffectiveSettingsSchema,
+  coverage: unreleasedCopyCoverageSchema,
+  runtime: unreleasedCopyRuntimeSchema.nullable(),
+  flagged: z.array(unreleasedCopySummarySchema).max(50),
+} satisfies PlatformResponseShape<GeneratedUnreleasedCopyOverview>)
+
+export const applyUnreleasedCopySettingsInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  mode: unreleasedCopyModeSchema,
+  threshold: z.number().positive().max(100000).default(40),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
 
 export const unreleasedCopySignalInputSchema = z.object({
   agentId: z.string().uuid(),

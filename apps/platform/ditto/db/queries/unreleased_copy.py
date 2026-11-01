@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import BigInteger, and_, cast, func, select, text
 from sqlalchemy.dialects.postgresql import ARRAY, insert
@@ -23,6 +23,8 @@ from ditto.api_server.distinctive_content import (
     public_item_keys,
 )
 from ditto.api_server.unreleased_copy import (
+    DEFAULT_THRESHOLD,
+    SIGNAL_VERSION,
     CopySignal,
     IndexedAgent,
     canonical_owners,
@@ -30,11 +32,17 @@ from ditto.api_server.unreleased_copy import (
 from ditto.db.models import (
     Agent,
     AgentDistinctiveItems,
+    AgentKingship,
+    AgentStatus,
+    AthReview,
+    Score,
+    UnreleasedCopySettingsRevision,
     UnreleasedCopySignal,
 )
 from ditto.db.queries.artifact_release import list_public_source_releases
 from ditto.db.queries.artifact_release_settings import artifact_release_policy_as_of
 from ditto.db.queries.attestation import list_linked_hotkeys
+from ditto.db.queries.benchmark_rollout import preserve_desired_authority
 from ditto.db.queries.payments import get_miner_coldkeys_for_agents
 from ditto.db.queries.scores import SCORING_QUORUM
 
@@ -143,6 +151,11 @@ async def pending_candidates(
 class SignalContext:
     candidate: IndexedAgent
     others: list[IndexedAgent]
+    released_before: list[UUID]
+    """Every agent publicly released before the candidate's upload (for the
+    fuzzy released-content check), whether or not it shares an exact item."""
+    owner_names: list[str]
+    """Agent names of the candidate's owner (for the same-owner namespace hint)."""
 
 
 async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | None:
@@ -221,9 +234,20 @@ async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | N
             status=a.status.value,
         )
 
+    kings = list((await session.scalars(select(AgentKingship.agent_id))).all())
+    all_released = await list_public_source_releases(
+        session, agent_ids=kings, quorum=SCORING_QUORUM, policy=policy
+    )
     return SignalContext(
         candidate=indexed(agent, frozenset(keys)),
         others=[indexed(by_id[aid], ks) for aid, ks in shared.items() if aid in by_id],
+        released_before=sorted(
+            (aid for aid, at in all_released.items() if at < uploaded_at),
+            key=str,
+        ),
+        owner_names=sorted(
+            {a.name for a in rows if owners.get(a.agent_id) == owners[agent.agent_id]}
+        ),
     )
 
 
@@ -256,6 +280,7 @@ def signal_payload(signal: CopySignal, *, evidence_status: str) -> dict[str, Any
                     else "unreleased"
                 ),
                 "score": m.score,
+                "probable_same_owner": m.probable_same_owner,
                 "shared_count": m.shared_count,
                 "shared_by_kind": m.shared_by_kind,
                 "items": [
@@ -366,3 +391,198 @@ async def index_coverage(
         )
     ).one()
     return dict(row._mapping)
+
+
+# --- audited mode -------------------------------------------------------------
+
+DEFAULT_MODE = "shadow"
+HOLD_REASON_MAX_LOCATIONS = 8
+
+
+@dataclass(frozen=True)
+class EffectiveSettings:
+    mode: str
+    threshold: float
+    revision: int
+    enforce_since: datetime | None
+    """Start of the current unbroken run of ``enforce`` revisions. Only agents
+    uploaded at or after it can be held: enforcement is not retroactive."""
+
+
+async def settings_history(
+    session: AsyncSession, *, limit: int
+) -> list[UnreleasedCopySettingsRevision]:
+    return list(
+        (
+            await session.scalars(
+                select(UnreleasedCopySettingsRevision)
+                .order_by(UnreleasedCopySettingsRevision.revision.desc())
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
+async def effective_settings(session: AsyncSession) -> EffectiveSettings:
+    """Current mode and threshold; no revision means shadow at the default."""
+    rows = await settings_history(session, limit=500)
+    if not rows:
+        return EffectiveSettings(DEFAULT_MODE, DEFAULT_THRESHOLD, 0, None)
+    current = rows[0]
+    since: datetime | None = None
+    if current.mode == "enforce":
+        for row in rows:
+            if row.mode != "enforce":
+                break
+            since = _utc(row.created_at)
+    return EffectiveSettings(current.mode, current.threshold, current.revision, since)
+
+
+def hold_reason(evidence: dict[str, Any], *, top_score: float, threshold: float) -> str:
+    """Miner-visible hold reason citing only the candidate's own locations.
+
+    Deliberately free of the near-duplicate hint, so the copy court classes the
+    hold as one it must escalate to an operator rather than resolve itself.
+    """
+    locations: list[str] = []
+    matches = evidence.get("matches") or []
+    for item in (matches[0].get("items") or []) if matches else []:
+        location = item.get("candidate")
+        if location and location not in locations:
+            locations.append(location)
+        if len(locations) >= HOLD_REASON_MAX_LOCATIONS:
+            break
+    cited = f" Locations in this artifact: {', '.join(locations)}." if locations else ""
+    return (
+        "Held for operator copy review by the unreleased-copy signal "
+        f"(score {top_score:.0f}, threshold {threshold:.0f}): this artifact carries "
+        "distinctive content that another owner's agent held before this upload "
+        f"while it was still unreleased.{cited} This is a hold, not a rejection; "
+        "an operator rules on it."
+    )
+
+
+def _eligible(agent: Agent, settings: EffectiveSettings) -> bool:
+    return (
+        settings.mode == "enforce"
+        and settings.enforce_since is not None
+        and _utc(agent.created_at) >= settings.enforce_since
+    )
+
+
+async def finalization_hold(
+    session: AsyncSession, agent: Agent
+) -> tuple[UUID, str] | None:
+    """``(duplicate_of, reason)`` when score finalization must hold ``agent``."""
+    settings = await effective_settings(session)
+    if not _eligible(agent, settings):
+        return None
+    row = await session.get(UnreleasedCopySignal, (agent.agent_id, SIGNAL_VERSION))
+    if (
+        row is None
+        or row.top_matched_agent_id is None
+        or row.top_score < settings.threshold
+    ):
+        return None
+    return row.top_matched_agent_id, hold_reason(
+        row.evidence, top_score=row.top_score, threshold=settings.threshold
+    )
+
+
+_FINALIZING = frozenset(
+    {
+        AgentStatus.UPLOADED,
+        AgentStatus.SCREENING,
+        AgentStatus.SCREENING_PASSED,
+        AgentStatus.QUARANTINED,
+        AgentStatus.EVALUATING,
+    }
+)
+
+
+async def enforce_signal(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    settings: EffectiveSettings,
+    now: datetime,
+) -> str:
+    """Route one flagged signal: hold a scored agent, defer an unscored one.
+
+    Returns the outcome recorded on the signal. Never rejects: a hold is a
+    copy-kind ATH review an operator resolves, and the copy court escalates it.
+    """
+    agent = await session.scalar(
+        select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+    )
+    row = await session.get(UnreleasedCopySignal, (agent_id, SIGNAL_VERSION))
+    if agent is None or row is None or row.top_matched_agent_id is None:
+        return "not_held:no_signal"
+    if row.top_score < settings.threshold:
+        return "not_held:below_threshold"
+    if not _eligible(agent, settings):
+        return "not_held:uploaded_before_enforcement"
+    if agent.status in _FINALIZING:
+        return "deferred:held_at_score_finalization"
+    if agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE):
+        return f"not_held:status_{agent.status.value}"
+    if await session.scalar(
+        select(AthReview.review_id).where(AthReview.agent_id == agent_id)
+    ):
+        return "not_held:review_exists"
+    score_count = int(
+        await session.scalar(
+            select(func.count()).select_from(Score).where(Score.agent_id == agent_id)
+        )
+        or 0
+    )
+    reason = hold_reason(
+        row.evidence, top_score=row.top_score, threshold=settings.threshold
+    )
+    await preserve_desired_authority(session, now=now)
+    session.add(
+        AthReview(
+            review_id=uuid4(),
+            agent_id=agent_id,
+            status="pending",
+            opened_at=now,
+            original_duplicate_of=row.top_matched_agent_id,
+            original_reason=reason,
+            original_policy_version=agent.screening_policy_version,
+            original_evidence={
+                "sha256": agent.sha256,
+                "score_count": score_count,
+                "previous_status": agent.status.value,
+                "unreleased_copy_score": row.top_score,
+            },
+            algorithm_provenance={
+                "snapshot": "unreleased-copy-sentinel",
+                "review_kind": "copy",
+                "trigger": "unreleased_copy",
+                "algorithm_version": SIGNAL_VERSION,
+                "settings_revision": settings.revision,
+                "backfilled": False,
+                "opened_at_source": "unreleased_copy_sentinel",
+            },
+        )
+    )
+    agent.status = AgentStatus.ATH_PENDING_REVIEW
+    agent.duplicate_of = row.top_matched_agent_id
+    agent.review_reason = reason
+    return "held"
+
+
+async def record_enforcement(
+    session: AsyncSession, *, agent_id: UUID, outcome: str, settings: EffectiveSettings
+) -> None:
+    row = await session.get(UnreleasedCopySignal, (agent_id, SIGNAL_VERSION))
+    if row is None:
+        return
+    row.evidence = {
+        **row.evidence,
+        "enforcement": {
+            "outcome": outcome,
+            "settings_revision": settings.revision,
+            "at": datetime.now(UTC).isoformat(),
+        },
+    }

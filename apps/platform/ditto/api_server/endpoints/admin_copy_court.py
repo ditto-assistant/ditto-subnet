@@ -24,6 +24,9 @@ from ditto.api_server.copy_court_triage import TriageUnavailableError
 from ditto.api_server.copy_hold_court import CopyHoldCourt
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.endpoints.admin_unreleased_copy import (
+    unreleased_copy_overview,
+)
 from ditto.db.models import (
     Agent,
     AgentStatus,
@@ -74,6 +77,7 @@ async def get_copy_court_settings(
         current=_revision(current) if current is not None else None,
         history=[_revision(row) for row in rows[:history_limit]],
         runtime=court.runtime() if isinstance(court, CopyHoldCourt) else None,
+        unreleased_copy=await unreleased_copy_overview(session, request),
     )
 
 

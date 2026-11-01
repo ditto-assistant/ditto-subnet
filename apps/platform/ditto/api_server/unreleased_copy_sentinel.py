@@ -9,8 +9,12 @@ Each tick does two bounded things:
    earlier agent, newest first, but only once the whole history before them is
    indexed, so a missing source can never read as a clean result.
 
-Every evaluation is recorded in ``unreleased_copy_signals`` with ``mode =
-"shadow"``: it never changes agent status, opens a hold, or touches a review.
+The audited mode (:func:`ditto.db.queries.unreleased_copy.effective_settings`)
+decides what happens next. ``off`` does nothing; ``shadow`` records each
+evaluation in ``unreleased_copy_signals``; ``enforce`` also routes a flag on an
+agent uploaded after enforcement began into a copy-kind ATH hold (now if it is
+scored, at score finalization otherwise) for an operator ruling. Nothing here
+ever rejects.
 Pairs at or above half the threshold get ``path:line`` evidence on both sides,
 re-extracted from the two artifacts, so an operator can confirm a match
 without downloading anything. Enforcement is a separate, later change.
@@ -22,6 +26,7 @@ import asyncio
 import logging
 import multiprocessing
 from concurrent.futures import Executor, ProcessPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -37,15 +42,22 @@ from ditto.api_server.fingerprint import _excluded_from_fingerprints
 from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
 from ditto.api_server.unreleased_copy import (
     DEFAULT_THRESHOLD,
+    MAX_MATCHES,
     SIGNAL_VERSION,
     CopySignal,
     attach_evidence,
     evaluate,
+    refine_released,
+    released_shingles,
 )
 from ditto.db.queries.unreleased_copy import (
+    EffectiveSettings,
     agents_missing_items,
+    effective_settings,
+    enforce_signal,
     load_context,
     pending_candidates,
+    record_enforcement,
     record_signal,
     signal_payload,
     store_items,
@@ -59,10 +71,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = 30.0
-DEFAULT_INDEX_BATCH = 8
-DEFAULT_EVALUATE_BATCH = 4
+# Extraction runs in a separate process, so the batch bounds wall time and
+# storage reads per tick, not API latency.
+DEFAULT_INDEX_BATCH = 24
+DEFAULT_EVALUATE_BATCH = 12
+BACKLOG_INTERVAL_SECONDS = 1.0
 EVIDENCE_MATCHES = 3
-MODE = "shadow"
 # Storage failures before an artifact is recorded as unreadable, so one
 # missing blob cannot stall evaluation of everything uploaded after it.
 MAX_READ_ATTEMPTS = 3
@@ -72,6 +86,51 @@ def extract_for_index(raw: bytes) -> dict[int, Item] | None:
     """Top-level (picklable) extraction used in the sentinel's worker process."""
     extracted = extract_items(raw, excluded=_excluded_from_fingerprints)
     return None if extracted is None else dict(extracted.items)
+
+
+def shingles_for_index(raw: bytes) -> frozenset[int]:
+    """Top-level (picklable) released-text shingles, for the worker process."""
+    items = extract_for_index(raw)
+    return released_shingles(items.values()) if items else frozenset()
+
+
+class ReleasedText:
+    """Per-process cache of released artifacts' text shingles.
+
+    Released artifacts are immutable and few (confirmed kings), so each is read
+    once; the union for one candidate is the agents released before its upload.
+    """
+
+    def __init__(self) -> None:
+        self._by_agent: dict[UUID, frozenset[int]] = {}
+        self._unions: dict[tuple[UUID, ...], frozenset[int]] = {}
+
+    async def union(
+        self,
+        storage: ArtifactStore,
+        agent_ids: list[UUID],
+        *,
+        executor: Executor | None,
+    ) -> frozenset[int]:
+        key = tuple(agent_ids)
+        if key in self._unions:
+            return self._unions[key]
+        for agent_id in agent_ids:
+            if agent_id in self._by_agent:
+                continue
+            raw = await storage.get_object(
+                key=f"{agent_id}/agent.tar.gz", max_bytes=MAX_TARBALL_BYTES
+            )
+            if executor is not None:
+                shingles = await asyncio.get_running_loop().run_in_executor(
+                    executor, shingles_for_index, raw
+                )
+            else:
+                shingles = await asyncio.to_thread(shingles_for_index, raw)
+            self._by_agent[agent_id] = shingles
+        union = frozenset().union(*(self._by_agent[a] for a in agent_ids))
+        self._unions = {key: union}
+        return union
 
 
 async def read_items(
@@ -100,16 +159,36 @@ async def with_evidence(
     *,
     threshold: float,
     executor: Executor | None = None,
+    released_before: list[UUID] | None = None,
+    released_text: ReleasedText | None = None,
+    owner_names: list[str] | None = None,
 ) -> tuple[CopySignal, str]:
-    """Attach ``path:line`` evidence when the best pair is worth reading."""
+    """Refine against released text, then attach ``path:line`` evidence.
+
+    Runs only when the best pair is at least half the threshold: the fuzzy
+    released-content check and the evidence both need the artifacts, and a
+    pair below that cannot flag.
+    """
     if not signal.matches or signal.top_score < threshold / 2:
-        return signal, "not_needed"
+        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "not_needed"
     if storage is None:
-        return signal, "unavailable"
+        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "unavailable"
     try:
         candidate = await read_items(
             storage, signal.candidate_agent_id, executor=executor
         )
+        if candidate is not None:
+            union = (
+                await (released_text or ReleasedText()).union(
+                    storage, released_before, executor=executor
+                )
+                if released_before
+                else frozenset()
+            )
+            signal = refine_released(
+                signal, candidate, union, owner_names=owner_names or ()
+            )
+        signal = replace(signal, matches=signal.matches[:MAX_MATCHES])
         matched: dict[UUID, dict[int, Item]] = {}
         for match in signal.matches[:EVIDENCE_MATCHES]:
             items = await read_items(storage, match.matched_agent_id, executor=executor)
@@ -117,7 +196,7 @@ async def with_evidence(
                 matched[match.matched_agent_id] = items
     except Exception as error:  # storage outage: keep the score, say so
         logger.warning("unreleased-copy evidence unavailable: %s", type(error).__name__)
-        return signal, "unavailable"
+        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "unavailable"
     if candidate is None:
         return signal, "unavailable"
     return attach_evidence(signal, candidate, matched), "attached"
@@ -147,18 +226,22 @@ class UnreleasedCopySentinel:
         self._task: asyncio.Task[None] | None = None
         self._read_failures: dict[UUID, int] = {}
         self._isolate_extraction = isolate_extraction
+        self._released_text = ReleasedText()
         self._executor: Executor | None = None
         self._last_started: datetime | None = None
         self._last_finished: datetime | None = None
         self._last_counters: dict[str, int] = {}
         self._last_error: str | None = None
+        self._last_settings: EffectiveSettings | None = None
 
     def runtime(self) -> dict[str, Any]:
         return {
             "running": self._task is not None and not self._task.done(),
-            "mode": MODE,
+            "mode": self._last_settings.mode if self._last_settings else "shadow",
             "signal_version": SIGNAL_VERSION,
-            "threshold": self.threshold,
+            "threshold": (
+                self._last_settings.threshold if self._last_settings else self.threshold
+            ),
             "interval_seconds": self._interval_seconds,
             "storage_configured": self._storage is not None,
             "last_tick_started_at": self._last_started,
@@ -193,15 +276,26 @@ class UnreleasedCopySentinel:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
+            backlog = False
             try:
-                await self.tick()
+                counters = await self.tick()
+                # A full batch means more work is waiting: run again almost at
+                # once. Extraction is in the worker process, so draining a
+                # backlog costs that process's core, not API latency.
+                backlog = (
+                    counters["indexed"] + counters["unreadable"] >= self._index_batch
+                    or counters["evaluated"] >= self._evaluate_batch
+                )
             except Exception as error:
                 self._last_error = f"{type(error).__name__}: {error}"[:500]
                 self._last_finished = datetime.now(UTC)
                 logger.exception("unreleased-copy sentinel tick failed")
             try:
                 await asyncio.wait_for(
-                    self._stop.wait(), timeout=self._interval_seconds
+                    self._stop.wait(),
+                    timeout=BACKLOG_INTERVAL_SECONDS
+                    if backlog
+                    else self._interval_seconds,
                 )
             except TimeoutError:
                 continue
@@ -216,7 +310,14 @@ class UnreleasedCopySentinel:
             "read_retry": 0,
             "evaluated": 0,
             "flagged": 0,
+            "held": 0,
         }
+        async with self._session_maker() as session:
+            settings = await effective_settings(session)
+        self._last_settings = settings
+        if settings.mode == "off":
+            self._finish(counters, started)
+            return counters
         if self._storage is not None:
             async with self._session_maker() as session:
                 missing = await agents_missing_items(session, limit=self._index_batch)
@@ -232,36 +333,60 @@ class UnreleasedCopySentinel:
             if context is None:
                 continue
             signal = evaluate(
-                context.candidate, context.others, threshold=self.threshold
+                context.candidate,
+                context.others,
+                threshold=settings.threshold,
+                max_matches=MAX_MATCHES * 4,
             )
             signal, evidence_status = await with_evidence(
                 signal,
                 self._storage,
-                threshold=self.threshold,
+                threshold=settings.threshold,
                 executor=self._extraction_executor(),
+                released_before=context.released_before,
+                released_text=self._released_text,
+                owner_names=context.owner_names,
             )
             async with self._session_maker() as session, session.begin():
                 await record_signal(
                     session,
                     signal=signal,
-                    mode=MODE,
+                    mode=settings.mode,
                     payload=signal_payload(signal, evidence_status=evidence_status),
                 )
+                if signal.flagged and settings.mode == "enforce":
+                    outcome = await enforce_signal(
+                        session,
+                        agent_id=agent.agent_id,
+                        settings=settings,
+                        now=datetime.now(UTC),
+                    )
+                    await record_enforcement(
+                        session,
+                        agent_id=agent.agent_id,
+                        outcome=outcome,
+                        settings=settings,
+                    )
+                    counters["held"] += int(outcome == "held")
             counters["evaluated"] += 1
             counters["flagged"] += int(signal.flagged)
             if signal.flagged:
                 logger.info(
-                    "unreleased-copy shadow flag agent=%s top=%.2f matched=%s",
+                    "unreleased-copy flag mode=%s agent=%s top=%.2f matched=%s",
+                    settings.mode,
                     agent.agent_id,
                     signal.top_score,
                     signal.matches[0].matched_agent_id,
                 )
+        self._finish(counters, started)
+        return counters
+
+    def _finish(self, counters: dict[str, int], started: float) -> None:
         self._last_counters = {
             **counters,
             "elapsed_ms": int((monotonic() - started) * 1000),
         }
         self._last_finished = datetime.now(UTC)
-        return counters
 
     async def _index(self, agent_id: UUID, counters: dict[str, int]) -> None:
         assert self._storage is not None

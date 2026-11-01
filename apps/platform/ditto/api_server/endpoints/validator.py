@@ -234,6 +234,7 @@ from ditto.api_server.queue_policy_settings import (
 )
 from ditto.api_server.scoring_gate import (
     PublicSourceRelease,
+    ReviewDecision,
     evaluate_duplicate_signals,
     evaluate_rejected_resubmission,
 )
@@ -388,6 +389,9 @@ from ditto.db.queries.tickets import (
     mark_ticket_scored,
 )
 from ditto.db.queries.transcript_mirror_settings import transcript_mirror_enabled
+from ditto.db.queries.unreleased_copy import (
+    finalization_hold as unreleased_copy_finalization_hold,
+)
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
@@ -7776,6 +7780,18 @@ async def submit_score(
                     # with a bare not-held would silently drop that record.
                     if resubmission.held:
                         decision = resubmission
+                unreleased_copy_hold = False
+                if not decision.held:
+                    # Unreleased-copy signal in enforce mode: an agent uploaded
+                    # after enforcement began whose recorded signal is at or
+                    # above the audited threshold is held for an operator. It
+                    # replaces only a not-held verdict and never rejects.
+                    held_for = await unreleased_copy_finalization_hold(session, agent)
+                    if held_for is not None:
+                        decision = ReviewDecision(
+                            held=True, duplicate_of=held_for[0], reason=held_for[1]
+                        )
+                        unreleased_copy_hold = True
                 if decision.held:
                     await preserve_desired_authority(session, now=audit_now)
                     reference_provenance = reference_corpus_provenance()
@@ -7821,6 +7837,11 @@ async def submit_score(
                                 ],
                                 "backfilled": False,
                                 "opened_at_source": "agent_finalized_audit",
+                                **(
+                                    {"trigger": "unreleased_copy"}
+                                    if unreleased_copy_hold
+                                    else {}
+                                ),
                             },
                         )
                     )

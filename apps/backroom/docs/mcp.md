@@ -707,8 +707,13 @@ upload, and items four or more other owners hold are excluded before scoring.
 `live=true` recomputes read-only. The evidence quotes source text from two
 submissions, so it needs `backroom:artifact:read`.
 
-The signal runs in shadow mode: a flag is a lead for copy review and never a
-hold, reject or status change. Design and calibration live in
+`get_unreleased_copy_settings` and `apply_unreleased_copy_settings` read and
+write the audited mode (`off` | `shadow` | `enforce`) and threshold
+(confirmation `APPLY UNRELEASED COPY {MODE}`). In enforce mode a flag on an
+agent uploaded after enforcement began opens a copy-kind ATH hold that the
+copy court always escalates to an operator; nothing rejects automatically,
+and earlier flags stay on the review list. `get_copy_court_settings` also
+returns the posture, coverage and top flags under `unreleased_copy`. Design and calibration live in
 `apps/platform/docs/unreleased-copy-signal.md`.
 
 ## Competition improvement metrics

@@ -133,6 +133,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'activate_v13_scorer_cohort',
   'rotate_v13_scorer_cohort',
   'apply_copy_court_settings',
+  'apply_unreleased_copy_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',

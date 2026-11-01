@@ -4854,6 +4854,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/unreleased-copy/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Unreleased Copy Settings
+         * @description Effective mode/threshold, append-only history (newest first), runtime.
+         */
+        get: operations["get_unreleased_copy_settings_api_v1_admin_unreleased_copy_settings_get"];
+        put?: never;
+        /**
+         * Apply Unreleased Copy Settings
+         * @description Append one optimistic settings revision under an exact confirmation.
+         */
+        post: operations["apply_unreleased_copy_settings_api_v1_admin_unreleased_copy_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/unreleased-copy/signals": {
         parameters: {
             query?: never;
@@ -11241,6 +11265,7 @@ export interface components {
             /** History */
             history: components["schemas"]["CopyCourtSettingsRevision"][];
             runtime?: components["schemas"]["AdminCopyCourtRuntime"] | null;
+            unreleased_copy?: components["schemas"]["AdminUnreleasedCopyOverview"] | null;
         };
         /**
          * AdminCopyCourtTriagePreview
@@ -15322,6 +15347,20 @@ export interface components {
             /** Unreadable */
             unreadable: number;
         };
+        /** AdminUnreleasedCopyEffectiveSettings */
+        AdminUnreleasedCopyEffectiveSettings: {
+            /** Enforce Since */
+            enforce_since: string | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /** Revision */
+            revision: number;
+            /** Threshold */
+            threshold: number;
+        };
         /** AdminUnreleasedCopyIndex */
         AdminUnreleasedCopyIndex: {
             /** Error */
@@ -15335,6 +15374,17 @@ export interface components {
             item_count: number;
             /** Items Version */
             items_version: string;
+        };
+        /**
+         * AdminUnreleasedCopyOverview
+         * @description The signal's posture beside the copy court that rules on its holds.
+         */
+        AdminUnreleasedCopyOverview: {
+            coverage: components["schemas"]["AdminUnreleasedCopyCoverage"];
+            effective: components["schemas"]["AdminUnreleasedCopyEffectiveSettings"];
+            /** Flagged */
+            flagged: components["schemas"]["AdminUnreleasedCopySummary"][];
+            runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
         };
         /** AdminUnreleasedCopyRuntime */
         AdminUnreleasedCopyRuntime: {
@@ -15360,6 +15410,42 @@ export interface components {
             storage_configured: boolean;
             /** Threshold */
             threshold: number;
+        };
+        /** AdminUnreleasedCopySettingsRequest */
+        AdminUnreleasedCopySettingsRequest: {
+            /** Actor */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["UnreleasedCopySettings"];
+        };
+        /** AdminUnreleasedCopySettingsResponse */
+        AdminUnreleasedCopySettingsResponse: {
+            effective: components["schemas"]["AdminUnreleasedCopyEffectiveSettings"];
+            /** History */
+            history: components["schemas"]["AdminUnreleasedCopySettingsRevision"][];
+            runtime: components["schemas"]["AdminUnreleasedCopyRuntime"] | null;
+        };
+        /** AdminUnreleasedCopySettingsRevision */
+        AdminUnreleasedCopySettingsRevision: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["UnreleasedCopySettings"];
         };
         /** AdminUnreleasedCopySignal */
         AdminUnreleasedCopySignal: {
@@ -15423,6 +15509,8 @@ export interface components {
              * Format: date-time
              */
             computed_at: string;
+            /** Enforcement Outcome */
+            enforcement_outcome?: string | null;
             /** Flagged */
             flagged: boolean;
             /** Miner Hotkey */
@@ -41236,12 +41324,25 @@ export interface components {
              */
             twin_groups_concordant: number;
         };
+        /** UnreleasedCopyEnforcement */
+        UnreleasedCopyEnforcement: {
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
+            /** Outcome */
+            outcome: string;
+            /** Settings Revision */
+            settings_revision: number;
+        };
         /** UnreleasedCopyEvaluation */
         UnreleasedCopyEvaluation: {
             /** Candidate Item Count */
             candidate_item_count: number;
             /** Compared Agent Count */
             compared_agent_count: number;
+            enforcement?: components["schemas"]["UnreleasedCopyEnforcement"] | null;
             /**
              * Evidence Status
              * @enum {string}
@@ -41293,6 +41394,11 @@ export interface components {
             /** Miner Hotkey */
             miner_hotkey: string;
             /**
+             * Probable Same Owner
+             * @default false
+             */
+            probable_same_owner: boolean;
+            /**
              * Release State
              * @enum {string}
              */
@@ -41312,6 +41418,19 @@ export interface components {
              * Format: date-time
              */
             uploaded_at: string;
+        };
+        /** UnreleasedCopySettings */
+        UnreleasedCopySettings: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "off" | "shadow" | "enforce";
+            /**
+             * Threshold
+             * @default 40
+             */
+            threshold: number;
         };
         /**
          * UploadAgentResponse
@@ -54065,6 +54184,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminUnreleasedCopySignal"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_unreleased_copy_settings_api_v1_admin_unreleased_copy_settings_get: {
+        parameters: {
+            query?: {
+                history_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUnreleasedCopySettingsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    apply_unreleased_copy_settings_api_v1_admin_unreleased_copy_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminUnreleasedCopySettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUnreleasedCopySettingsRevision"];
                 };
             };
             /** @description Validation Error */

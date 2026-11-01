@@ -1,7 +1,8 @@
 # Unreleased-copy signal
 
-Status: **shadow**. Records a score per agent; never holds, rejects, or changes
-status. Code: `ditto/api_server/distinctive_content.py` (extraction),
+Status: audited mode (`off` | `shadow` | `enforce`, threshold default 40) in
+`unreleased_copy_settings_revisions`; no revision means shadow. It never
+rejects. Code: `ditto/api_server/distinctive_content.py` (extraction),
 `ditto/api_server/unreleased_copy.py` (pure signal),
 `ditto/db/queries/unreleased_copy.py` (storage),
 `ditto/api_server/unreleased_copy_sentinel.py` (loop),
@@ -53,28 +54,44 @@ released before `t`, in the candidate owner's own agents uploaded before `S`,
 or held by at least four other owners uploaded before `t`. The pair score is
 the weighted count; the candidate is flagged at **40**.
 
-## Calibration (2026-11-01)
+## Calibration (2026-11-01, items dc2 / signal uc2)
 
-41 operator-labeled artifacts across Python, Rust and Go (ruled copies, the
-sources they were ruled against, released bases and the forks cleared on them),
-scored with the production code:
+84 operator-labeled artifacts across Python, Rust and Go, scored with the
+production code (exact released-base exclusion, then the fuzzy pass):
 
 | set | rows | flagged | scores |
 |---|---|---|---|
-| ruled copies vs ruled source | 9 agents | 9 | 119 to 7,696 (source pair) |
-| cleared released-base forks and other cleared rows | 16 | 0 | 0 to 3.25 |
-| released bases | 7 | 0 | 0.35 to 11.7 |
-| unlabeled pre-October rows | 9 | 8 | 1,418 to 6,380 |
+| ruled copies vs ruled source | 9 | 9 | 114 to 6,558 |
+| cleared released-base forks and other cleared rows | 16 | 0 | 0 to 3.5 |
+| released bases | 7 | 0 | 0.35 to 2.95 |
+| file-reviewed ports of released Python (pair vs the reviewed source) | 4 | 0 | 20.5 to 39.8 |
+| one owner under two unlinked keys (namespace hint) | 3 | 0 | suppressed (raw 1,169 to 1,432) |
 
-The smallest copy (a cross-language port of an agent's unreleased delta)
-scores 119 against its ruled source; the largest negative scores 11.7 (a
-released base, before its release). 40 leaves ~3x and ~3.4x margins.
-Markdown is not extracted: lineage declarations copy their base's prose
-verbatim, and in the read-only backfill that prose alone pushed two
-released-base forks over the bar. The unlabeled pre-October rows share large
-unreleased code with each other and no publication record; most were later
-banned. They are review leads, not calibration negatives. The operator-private table with names lives in the
-review notes, not here.
+What changed from dc1/uc1, each from a reviewed false positive:
+
+- **Constants resolved.** ``{NAME}`` / ``${NAME}`` interpolations of module-level
+  string and number constants are expanded before normalizing, as a port
+  inlines them.
+- **Newline-agnostic chunks.** Real and escaped newlines are whitespace;
+  chunks break only at blank lines and sentence ends.
+- **Fuzzy released exclusion** (``refine_released``, evidence stage): an item
+  whose word 5-shingles are >= 90% contained in agents released before the
+  upload, or a literal window or short literal whose every element is a single
+  word, released, or public, is released content in another surface form.
+- **Public runtime messages.** The public corpus adds CPython (stdlib, Rust
+  ``core``/``alloc``/``std``, common Python and Rust libraries), strings of
+  ``libpython`` and ``pydantic-core``, and messages CPython and pydantic-core
+  format at runtime (argument-clinic errors, parser errors, the pydantic-core
+  error table).
+- **Manifests skipped**; identifier weight 0.25.
+- **Owner hint.** A shared external namespace (Hugging Face, GitHub, container
+  registry, Docker ``FROM``) that contains one of the candidate owner's
+  agent-name tokens marks the pair ``probable_same_owner``: listed, never
+  flagged. A namespace named after the source is what a copier carries over
+  with the code, so it excuses nothing.
+
+Threshold: **50** recommended (set through the audited setting). The smallest
+copy scores 114, the largest non-copy pair 39.8.
 
 ## Backfill (read-only, 2026-11-01)
 
@@ -92,11 +109,26 @@ but only agents whose whole upload history is indexed. New uploads are indexed
 in the upload transaction. Reads: Backroom `get_unreleased_copy_signal`
 (artifact scope) and `list_unreleased_copy_signals`.
 
-## Enforce (not enabled)
+## Enforce
 
-Turning a flag into a copy hold needs, in order: a complete shadow backfill
-with every flagged row reviewed; zero cleared rows among the flags (or a
-recalibrated bar); a settings revision with an audited mode switch rather than
-a code constant; the hold routed through the existing copy court so the
-operator rules on it; and a miner-facing reason that cites only the candidate's
-own `path:line` evidence, never the other owner's source.
+Set with Backroom `apply_unreleased_copy_settings` (confirmation
+`APPLY UNRELEASED COPY {MODE}`, optimistic `expectedRevision`, reason, operator
+as actor); read with `get_unreleased_copy_settings`, and in
+`get_copy_court_settings` under `unreleased_copy`.
+
+- **Not retroactive.** `enforce_since` is the start of the current unbroken run
+  of enforce revisions. Only agents uploaded at or after it can be held;
+  earlier flags stay on the review list with outcome
+  `not_held:uploaded_before_enforcement`.
+- **Holds, never rejects.** A flag at or above the threshold on an eligible
+  agent opens a copy-kind ATH hold (`ath_pending_review`, `duplicate_of` the
+  matched agent, provenance `trigger: unreleased_copy`): at score
+  finalization when the sentinel evaluated first (the usual order), or by the
+  sentinel itself when the agent is already scored or live. The outcome is
+  recorded on the signal (`held`, `deferred:held_at_score_finalization`,
+  `not_held:<why>`).
+- **Operator rules.** The hold reason carries no near-duplicate hint, so the
+  copy court classes it `unknown` and always escalates; it is never applied
+  automatically.
+- **Miner-visible reason** cites only the candidate's own `path:line`
+  locations, never the other owner's source.

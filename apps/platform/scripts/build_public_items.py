@@ -111,10 +111,195 @@ def collect(repo: Path, paths: tuple[str, ...], dc: ModuleType) -> set[int]:
     return keys
 
 
+def _public_label(path: Path) -> str:
+    """A machine-independent label: the last three path segments."""
+    return "/".join(path.resolve().parts[-3:])
+
+
+def collect_tree(root: Path, dc: ModuleType) -> set[int]:
+    """Items of every source file under an installed library tree."""
+    keys: set[int] = set()
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.stat().st_size > dc._MAX_ITEM_FILE_BYTES:
+            continue
+        rel = path.relative_to(root).as_posix()
+        if dc._skipped_path(rel):
+            continue
+        raw = path.read_bytes()
+        keys.update(
+            item.key for item in dc.file_items(rel, raw, dc.file_constants(rel, raw))
+        )
+    return keys
+
+
+def collect_binary_strings(binary: Path, dc: ModuleType) -> set[int]:
+    """Printable strings of a compiled library, read as prose (one per line)."""
+    out = subprocess.check_output(["strings", "-n", "12", str(binary)])
+    return {item.key for item in dc.file_items("strings.txt", out)}
+
+
+def runtime_messages() -> list[str]:
+    """Messages CPython and pydantic-core format at runtime.
+
+    Ports of a Python agent's calculator, parser or validator reproduce these
+    verbatim, and no source file spells them out: CPython builds them from
+    argument-clinic templates, pydantic-core from its error table.
+    """
+    import builtins
+    import math
+    import sys
+
+    sys.set_int_max_str_digits(4300)
+
+    messages: list[str] = []
+    try:
+        from pydantic_core._pydantic_core import list_all_errors
+
+        for error in list_all_errors():
+            messages += [
+                error["message_template_python"],
+                error["example_message_python"],
+            ]
+    except ImportError:  # pragma: no cover - pydantic-core is a Platform dependency
+        pass
+
+    def capture(call) -> None:
+        try:
+            call()
+        except Exception as error:  # noqa: BLE001 - every message is wanted
+            messages.append(str(error))
+
+    # Pure functions only: nothing that reads input, opens files, or debugs.
+    pure = [
+        getattr(builtins, name)
+        for name in (
+            "abs",
+            "all",
+            "any",
+            "ascii",
+            "bin",
+            "bool",
+            "chr",
+            "complex",
+            "dict",
+            "divmod",
+            "enumerate",
+            "filter",
+            "float",
+            "format",
+            "frozenset",
+            "hash",
+            "hex",
+            "int",
+            "isinstance",
+            "issubclass",
+            "iter",
+            "len",
+            "list",
+            "map",
+            "max",
+            "min",
+            "next",
+            "oct",
+            "ord",
+            "pow",
+            "range",
+            "repr",
+            "reversed",
+            "round",
+            "set",
+            "slice",
+            "sorted",
+            "str",
+            "sum",
+            "tuple",
+            "zip",
+        )
+    ] + [
+        getattr(math, name)
+        for name in sorted(dir(math))
+        if not name.startswith("_") and callable(getattr(math, name))
+    ]
+    for fn in pure:
+        for args in ((), (1, 2, 3, 4), ("x",), (None,), (-1,), (1j,), (10**400,)):
+            capture(lambda fn=fn, args=args: fn(*args))
+    for expression in (
+        "01",
+        "0o",
+        "1 if 2",
+        "(" * 210 + ")" * 210,
+        "a = (]",
+        "\\ x",
+        "*a",
+        "1 +",
+        "lambda: (yield)",
+        "f'{'",
+        "x = 1 = 2",
+        "def f(:",
+        "1__0",
+        "0b2",
+        "1/0",
+        "1//0",
+        "1%0",
+        "float('inf') // 1",
+        "int('x')",
+        "float('x')",
+        "complex('x')",
+        "round(1j)",
+        "abs()",
+        "0.0 ** -1",
+        "(-8) ** 0.5 > 1",
+        "divmod(1j, 1)",
+        "math.sqrt(-1)",
+        "math.log(0)",
+        "math.factorial(-1)",
+        "math.factorial(1.5)",
+        "int(10**5000)",
+        "float(10**400)",
+        "1 < 1j",
+        "[] < 1",
+        "iter(1)",
+        "len(1)",
+        "'a' + 1",
+        "1 + 'a'",
+        "'a' * 'b'",
+        "None()",
+        "{}[0]",
+        "[][0]",
+        "().x",
+        "int('9' * 5000)",
+        "str(10**5000)",
+        "chr(-1)",
+        "ord('ab')",
+    ):
+        capture(lambda e=expression: eval(compile(e, "<calc>", "eval"), {"math": math}))
+        capture(lambda e=expression: exec(compile(e, "<calc>", "exec"), {"math": math}))
+    return sorted(set(messages))
+
+
+def collect_runtime_messages(dc: ModuleType) -> set[int]:
+    text = "\n\n".join(runtime_messages()).encode()
+    return {item.key for item in dc.file_items("messages.txt", text)}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
     parser.add_argument("--extra-repo", type=Path, action="append", default=[])
+    parser.add_argument(
+        "--extra-tree",
+        type=Path,
+        action="append",
+        default=[],
+        help="installed library source (stdlib, site-packages, cargo crates)",
+    )
+    parser.add_argument(
+        "--binary-strings",
+        type=Path,
+        action="append",
+        default=[],
+        help="compiled library whose printable strings are public messages",
+    )
     args = parser.parse_args()
     dc = _load()
     keys = collect(args.repo, REPO_PATHS, dc)
@@ -135,6 +320,14 @@ def main() -> None:
                 "head": _git(extra, "rev-parse", "HEAD").strip(),
             }
         )
+    for tree in args.extra_tree:
+        keys |= collect_tree(tree, dc)
+        sources.append({"tree": _public_label(tree)})
+    keys |= collect_runtime_messages(dc)
+    sources.append({"runtime_messages": "cpython builtins/math/parser + pydantic-core"})
+    for binary in args.binary_strings:
+        keys |= collect_binary_strings(binary, dc)
+        sources.append({"binary": _public_label(binary)})
     payload = b"".join(k.to_bytes(8, "big", signed=True) for k in sorted(keys))
     (OUTPUT / dc.PUBLIC_CORPUS_BUNDLE).write_bytes(gzip.compress(payload, mtime=0))
     manifest = {"version": dc.ITEMS_VERSION, "items": len(keys), "sources": sources}
