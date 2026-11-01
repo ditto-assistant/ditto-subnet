@@ -204,9 +204,10 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
         assert context is not None
         assert context.owner_names == ["port-agent", "porter-renamed"]
         assert unrelated not in context.overlaps
-        port_keys = set(index_keys(extract_items(PORT)))
-        assert set(context.overlaps[source_id]) == port_keys & set(
-            index_keys(extract_items(SOURCE))
+        port_items, source_items = extract_items(PORT), extract_items(SOURCE)
+        assert port_items is not None and source_items is not None
+        assert set(context.overlaps[source_id]) == set(index_keys(port_items)) & set(
+            index_keys(source_items)
         )
 
     app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
