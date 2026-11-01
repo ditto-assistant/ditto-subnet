@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.418.0 (2026-11-01)
+
+### Features
+
+- **platform**: Show each retest sample's grant failures in the diagnostic
+  ([#3301](https://github.com/ditto-assistant/ditto-subnet/pull/3301),
+  [`5948707`](https://github.com/ditto-assistant/ditto-subnet/commit/59487070f83407beffd949e5847bd5eca63f97d4))
+
+
 ## v0.417.1 (2026-11-01)
 
 ### Bug Fixes
