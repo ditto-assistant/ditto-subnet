@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.417.0 (2026-11-01)
+
+### Features
+
+- **screener**: Add a configurable source-marker scan to screening
+  ([#3297](https://github.com/ditto-assistant/ditto-subnet/pull/3297),
+  [`775a18c`](https://github.com/ditto-assistant/ditto-subnet/commit/775a18cf5ee930c0b679600e97aade1345b127c3))
+
+
 ## v0.416.4 (2026-10-31)
 
 ### Bug Fixes
