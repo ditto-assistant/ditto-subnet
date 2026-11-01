@@ -58,7 +58,7 @@ from pathlib import PurePosixPath
 
 # Bump when extraction or normalization changes. Items from different
 # versions are never compared (the index stores the version per agent).
-ITEMS_VERSION = "dc1"
+ITEMS_VERSION = "dc2"
 
 KIND_TEXT = "text"
 KIND_SHORT = "short"
@@ -68,7 +68,11 @@ KIND_IDENT = "ident"
 # usually schema or protocol vocabulary, not authored content: kept, but as a
 # separate, low-weight kind.
 KIND_WORD_SEQ = "wordseq"
-KINDS = (KIND_TEXT, KIND_SHORT, KIND_SEQ, KIND_WORD_SEQ, KIND_IDENT)
+# A personal external namespace (a Hugging Face or GitHub account, a container
+# registry user) referenced anywhere in the artifact. Never scored: two owners
+# sharing one is a same-owner hint, not copy evidence.
+KIND_RESOURCE = "resource"
+KINDS = (KIND_TEXT, KIND_SHORT, KIND_SEQ, KIND_WORD_SEQ, KIND_IDENT, KIND_RESOURCE)
 
 _MIN_TEXT_WORDS = 4
 _MIN_TEXT_CHARS = 20
@@ -169,7 +173,6 @@ _PLACEHOLDER_RE = re.compile(
     r"\$\{[^{}]*\}|\{[^{}\s]*\}|%[-+ #0]*\d*(?:\.\d+)?[sdifgxXvqrcoeEbtTpuw]"
 )
 _WORD_RE = re.compile(r"[^\W_]+")
-_SENTENCE_SPLIT_RE = re.compile(r"\n+|(?<=[.!?;:])\s+")
 _IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _CAMEL_RE = re.compile(r"[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+|[A-Z]+|\d+")
 _JOIN_GAP_RE = re.compile(r"[\s+\\]*")
@@ -187,6 +190,8 @@ class Item:
     line: int
     preview: str
     """The normalized text, truncated: what the operator reads beside path:line."""
+    text: str = ""
+    """The full normalized text (never stored; used for fuzzy release checks)."""
 
 
 _KIND_CODES = {kind: code for code, kind in enumerate(KINDS)}
@@ -238,9 +243,28 @@ _TEST_FILE_RE = re.compile(
 )
 
 
+# Package manifests are templates: names, paths, feature flags and dependency
+# lists that every port of the same base declares the same way.
+_MANIFESTS = frozenset(
+    {
+        "Cargo.toml",
+        "pyproject.toml",
+        "package.json",
+        "go.mod",
+        "go.sum",
+        "setup.cfg",
+        "setup.py",
+        "requirements.txt",
+        "requirements-dev.txt",
+    }
+)
+
+
 def _skipped_path(path: str) -> bool:
-    """Vendored, generated, fixture and test trees carry no served content."""
+    """Vendored, generated, fixture, test and manifest files carry no served content."""
     parts = PurePosixPath(path.removeprefix("./")).parts
+    if parts and parts[-1] in _MANIFESTS:
+        return True
     if any(part in _SKIP_DIRS or part in {"tests", "test"} for part in parts[:-1]):
         return True
     return bool(parts) and bool(_TEST_FILE_RE.match(parts[-1]))
@@ -324,7 +348,7 @@ def _scan(text: str, suffix: str) -> Iterator[tuple[str, str, int, int, int]]:
             line += value.count("\n")
             i = min(n, j + len(quote))
             continue
-        if c.isalpha() or c == "_":
+        if (c.isascii() and c.isalpha()) or c == "_":
             m = _IDENT_RE.match(text, i)
             assert m is not None
             word = m.group(0)
@@ -349,10 +373,11 @@ def _scan(text: str, suffix: str) -> Iterator[tuple[str, str, int, int, int]]:
         i += 1
 
 
-def _literals(text: str, suffix: str) -> Iterator[tuple[str, str, int]]:
-    """Yield ``(kind, raw, line)``: joined string literals and identifiers."""
+def _literals(text: str, suffix: str) -> Iterator[tuple[str, str, int, int, int]]:
+    """Yield ``(kind, raw, line, start, end)``: joined literals and identifiers."""
     pending: list[str] = []
     pending_line = 0
+    pending_start = -1
     pending_end = -1
     for kind, value, line, start, end in _scan(text, suffix):
         if kind == "str":
@@ -361,48 +386,185 @@ def _literals(text: str, suffix: str) -> Iterator[tuple[str, str, int]]:
                 pending.append(value)
             else:
                 if pending:
-                    yield ("str", "".join(pending), pending_line)
+                    yield (
+                        "str",
+                        "".join(pending),
+                        pending_line,
+                        pending_start,
+                        pending_end,
+                    )
                 pending = [value]
                 pending_line = line
+                pending_start = start
             pending_end = end
             continue
         if pending:
-            yield ("str", "".join(pending), pending_line)
+            yield ("str", "".join(pending), pending_line, pending_start, pending_end)
             pending = []
-        yield ("ident", value, line)
+        yield ("ident", value, line, start, end)
     if pending:
-        yield ("str", "".join(pending), pending_line)
+        yield ("str", "".join(pending), pending_line, pending_start, pending_end)
+
+
+# --- module-level constants ---------------------------------------------------
+# A Python port interpolates its prompt constants (``f"... {BLOCKED} ..."``)
+# where a Rust or Go port inlines them, so constants are resolved into
+# ``{NAME}`` / ``${NAME}`` interpolations before normalizing.
+_CONST_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,}$")
+_CONST_GAP_RE = re.compile(
+    r"\s*(?::[^=\n;{}()]*)?=\s*(?:[rbuRBUfF]{0,2}|r#*|b|br#*)?\s*", re.S
+)
+_NUM_CONST_RE = re.compile(
+    r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+|static\s+)?"
+    r"([A-Z][A-Z0-9_]{2,})\s*(?::\s*[\w&'<>\[\]; ]+?)?\s*=\s*"
+    r"(-?\d[\d_]*(?:\.\d+)?)\s*[;,]?\s*(?:#.*|//.*)?$"
+)
+_INTERP_RE = re.compile(r"\$?\{([A-Z][A-Z0-9_]{2,})(?:[!:][^{}]*)?\}")
+
+
+def file_constants(path: str, raw: bytes) -> dict[str, str]:
+    """String and number constants a file defines (``NAME = "..."``, ``const``)."""
+    suffix = _suffix(path)
+    if suffix not in _HASH_COMMENT and suffix not in _C_COMMENT:
+        return {}
+    text = raw.decode("utf-8", errors="replace")
+    out: dict[str, str] = {}
+    previous: tuple[str, int] | None = None
+    for kind, value, _line, start, end in _literals(text, suffix):
+        if kind == "ident":
+            previous = (value, end) if _CONST_NAME_RE.match(value) else None
+            continue
+        if previous is not None and _CONST_GAP_RE.fullmatch(text[previous[1] : start]):
+            out.setdefault(previous[0], value)
+        previous = None
+    for name, number in _NUM_CONST_RE.findall(text):
+        out.setdefault(name, number.replace("_", ""))
+    return out
+
+
+def _resolve(value: str, constants: dict[str, str]) -> str:
+    if not constants or "{" not in value:
+        return value
+    for _ in range(3):
+        resolved = _INTERP_RE.sub(
+            lambda m: constants.get(m.group(1), m.group(0)), value
+        )
+        if resolved == value:
+            break
+        value = resolved
+    return value
+
+
+# --- chunking -------------------------------------------------------------------
+# Real and escaped newlines are the same thing to a port: a Python triple-quoted
+# prompt hard-wraps where a Rust literal writes ``\n`` or one long line. Chunks
+# break at blank lines and sentence ends only; a single newline is a space.
+_PARAGRAPH_RE = re.compile(r"\n[ \t]*\n+")
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?;:])\s+")
+
+
+def _chunks(value: str) -> Iterator[tuple[str, int]]:
+    """``(chunk, newline offset)`` sentences of one literal or prose text."""
+    unescaped = value.replace("\\r\\n", "\n").replace("\\n", "\n")
+    offset = 0
+    for paragraph in _PARAGRAPH_RE.split(unescaped):
+        flat = re.sub(r"\s*\n\s*", " ", paragraph)
+        for sentence in _SENTENCE_END_RE.split(flat):
+            yield sentence, offset
+        offset += paragraph.count("\n") + 2
+
+
+# --- external namespaces --------------------------------------------------------
+_RESOURCE_PATTERNS = (
+    (
+        "hf",
+        re.compile(
+            r"(?:huggingface\.co|hf\.co)/(?:(?:datasets|spaces|models)/)?"
+            r"([A-Za-z0-9][\w.-]{1,95})/[\w.-]+",
+            re.I,
+        ),
+    ),
+    (
+        "gh",
+        re.compile(
+            r"(?:github\.com|raw\.githubusercontent\.com)/([A-Za-z0-9][A-Za-z0-9-]{0,38})/",
+            re.I,
+        ),
+    ),
+    (
+        "oci",
+        re.compile(
+            r"(?:ghcr\.io|quay\.io|docker\.io|registry\.gitlab\.com)/([a-z0-9][a-z0-9._-]*)/",
+            re.I,
+        ),
+    ),
+)
+_FROM_RE = re.compile(r"(?im)^\s*FROM\s+(?:--\S+\s+)*(\S+)")
+
+
+def _resource_items(path: str, text: str) -> Iterator[Item]:
+    seen: set[str] = set()
+    for site, pattern in _RESOURCE_PATTERNS:
+        for match in pattern.finditer(text):
+            seen.add(f"{site}:{match.group(1).lower()}")
+    if PurePosixPath(path).name.startswith("Dockerfile"):
+        for image in _FROM_RE.findall(text):
+            parts = image.split("@", 1)[0].split(":", 1)[0].split("/")
+            if len(parts) >= 3 or (
+                len(parts) == 2 and ("." in parts[0] or ":" in parts[0])
+            ):
+                namespace = parts[1] if len(parts) >= 3 else ""
+            elif len(parts) == 2:
+                namespace = parts[0]
+            else:
+                namespace = ""
+            if namespace and namespace != "library":
+                seen.add(f"oci:{namespace.lower()}")
+    for name in sorted(seen):
+        yield Item(KIND_RESOURCE, item_key(KIND_RESOURCE, name), path, 1, name, name)
+
+
+def _text_items(path: str, value: str, line: int) -> Iterator[Item]:
+    for chunk, newline_offset in _chunks(value):
+        norm = normalize_text(chunk)
+        if len(norm) >= _MIN_TEXT_CHARS and norm.count(" ") + 1 >= _MIN_TEXT_WORDS:
+            yield Item(
+                KIND_TEXT,
+                item_key(KIND_TEXT, norm),
+                path,
+                line + newline_offset,
+                norm[:_PREVIEW_CHARS],
+                norm,
+            )
 
 
 def _prose_items(path: str, text: str) -> Iterator[Item]:
-    for line_no, line in enumerate(text.splitlines(), start=1):
-        for chunk in _SENTENCE_SPLIT_RE.split(line):
-            norm = normalize_text(chunk)
-            if len(norm) >= _MIN_TEXT_CHARS and norm.count(" ") + 1 >= _MIN_TEXT_WORDS:
-                yield Item(
-                    KIND_TEXT,
-                    item_key(KIND_TEXT, norm),
-                    path,
-                    line_no,
-                    norm[:_PREVIEW_CHARS],
-                )
+    yield from _text_items(path, text, 1)
 
 
-def file_items(path: str, raw: bytes) -> list[Item]:
-    """Every distinctive item of one source file, in source order."""
+def file_items(
+    path: str, raw: bytes, constants: dict[str, str] | None = None
+) -> list[Item]:
+    """Every distinctive item of one source file, in source order.
+
+    ``constants`` (from :func:`file_constants` over the whole artifact) are
+    resolved into interpolations before normalizing.
+    """
     suffix = _suffix(path)
+    text = raw.decode("utf-8", errors="replace")
+    resources = list(_resource_items(path, text))
     if (
         suffix not in _HASH_COMMENT
         and suffix not in _C_COMMENT
         and suffix not in _PROSE
     ):
-        return []
-    text = raw.decode("utf-8", errors="replace")
+        return resources
     if suffix in _PROSE:
-        return list(_prose_items(path, text))
-    out: list[Item] = []
+        return resources + list(_prose_items(path, text))
+    constants = constants or {}
+    out: list[Item] = resources
     window: list[tuple[str, int]] = []
-    for kind, value, line in _literals(text, suffix):
+    for kind, value, line, _start, _end in _literals(text, suffix):
         if kind == "ident":
             parts = identifier_words(value)
             joined = " ".join(parts)
@@ -414,9 +576,11 @@ def file_items(path: str, raw: bytes) -> list[Item]:
                         path,
                         line,
                         joined[:_PREVIEW_CHARS],
+                        joined,
                     )
                 )
             continue
+        value = _resolve(value, constants)
         whole = normalize_text(value)
         if not whole:
             continue
@@ -436,6 +600,7 @@ def file_items(path: str, raw: bytes) -> list[Item]:
                         path,
                         window[0][1],
                         seq[:_PREVIEW_CHARS],
+                        seq,
                     )
                 )
         words = whole.count(" ") + 1
@@ -447,24 +612,11 @@ def file_items(path: str, raw: bytes) -> list[Item]:
                     path,
                     line,
                     whole[:_PREVIEW_CHARS],
+                    whole,
                 )
             )
             continue
-        offset = 0
-        for chunk in _SENTENCE_SPLIT_RE.split(value):
-            norm = normalize_text(chunk)
-            chunk_line = line + value.count("\n", 0, offset)
-            offset += len(chunk) + 1
-            if len(norm) >= _MIN_TEXT_CHARS and norm.count(" ") + 1 >= _MIN_TEXT_WORDS:
-                out.append(
-                    Item(
-                        KIND_TEXT,
-                        item_key(KIND_TEXT, norm),
-                        path,
-                        chunk_line,
-                        norm[:_PREVIEW_CHARS],
-                    )
-                )
+        out.extend(_text_items(path, value, line))
     return out
 
 
@@ -515,8 +667,12 @@ def extract_items(
                 entries.append((path, raw))
     except (tarfile.TarError, gzip.BadGzipFile, EOFError, OSError, ValueError):
         return None
+    constants: dict[str, str] = {}
     for path, raw in sorted(entries, key=lambda e: e[0]):
-        for item in file_items(path, raw):
+        for name, value in file_constants(path, raw).items():
+            constants.setdefault(name, value)
+    for path, raw in sorted(entries, key=lambda e: e[0]):
+        for item in file_items(path, raw, constants):
             if item.key not in found:
                 found[item.key] = item
                 if len(found) > _MAX_ITEMS:

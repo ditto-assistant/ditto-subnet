@@ -41394,6 +41394,11 @@ export interface components {
             /** Miner Hotkey */
             miner_hotkey: string;
             /**
+             * Probable Same Owner
+             * @default false
+             */
+            probable_same_owner: boolean;
+            /**
              * Release State
              * @enum {string}
              */

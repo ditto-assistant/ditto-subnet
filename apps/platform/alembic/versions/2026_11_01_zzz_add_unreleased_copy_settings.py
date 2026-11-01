@@ -1,7 +1,7 @@
 """add audited unreleased-copy settings revisions
 
 Revision ID: 7a3e5c1d9f02
-Revises: 7e2b9c4d1a60
+Revises: 3f6a8d2c9e14
 Create Date: 2026-11-01
 
 Append-only mode (off | shadow | enforce) and threshold for the unreleased-copy
@@ -17,7 +17,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "7a3e5c1d9f02"
-down_revision: str | Sequence[str] | None = "7e2b9c4d1a60"
+down_revision: str | Sequence[str] | None = "3f6a8d2c9e14"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

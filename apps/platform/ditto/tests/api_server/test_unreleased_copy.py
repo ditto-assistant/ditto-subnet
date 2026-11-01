@@ -329,3 +329,70 @@ async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(
     assert outcomes[str(new_port)] == "held"
     assert outcomes[str(old_port)] == "not_held:uploaded_before_enforcement"
     assert outcomes[str(unscored)] == "deferred:held_at_score_finalization"
+
+
+def test_ports_of_released_python_and_same_owner_namespaces_do_not_flag() -> None:
+    from ditto.api_server.unreleased_copy import refine_released, released_shingles
+
+    prompts = [
+        f"Record {w} of the ledger is {{BLOCKED}} until the owner signs it off."
+        for w in ("alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf")
+    ] * 1
+    released_py = _tar(
+        {
+            "app/notes.py": 'BLOCKED = "blocked before execution"\n'
+            + "NOTES = (\n"
+            + "".join(f'    f"{p}"\n    "\\n"\n' for p in prompts)
+            + ")\n"
+            + _py_list("CUES", _CUES),
+        }
+    )
+    inlined = [p.replace("{BLOCKED}", "blocked before execution") for p in prompts]
+    port_a = _tar(
+        {"src/notes.rs": _rs_list("NOTES", inlined) + _rs_list("CUES", _CUES)}
+    )
+    port_b = _tar(
+        {
+            "src/text.rs": _rs_list("NOTES", inlined) + _rs_list("CUES", _CUES),
+            "Dockerfile": "FROM python:3.12\nRUN curl -L https://huggingface.co/acmelabs/m/resolve/x\n",
+        }
+    )
+    base, base_items = _agent(released_py, "owner-base", 0, released=1)
+    first, _ = _agent(port_a, "owner-first", 2)
+    second, second_items = _agent(port_b, "owner-second", 3)
+    # Two independent ports of the released base: nothing unreleased is shared.
+    signal = evaluate(second, [base, first, second])
+    signal = refine_released(
+        signal, second_items, released_shingles(base_items.values())
+    )
+    assert not signal.flagged
+
+    # An earlier unreleased agent sharing an Acme-named namespace is the same
+    # operator under another key: listed, never flagged.
+    src = _tar(
+        {
+            "app/request_kinds.py": _py_list("STORY_CUES", _CUES)
+            + _py_list("FILED_ORDER_NOTES", _PROMPT),
+            "Dockerfile": "FROM acmelabs/base:1\n",
+        }
+    )
+    alt, _ = _agent(src, "owner-alt", 4)
+    acme, acme_items = _agent(
+        _tar(
+            {
+                "src/guidance/cues.rs": _rs_list("STORY_CUES", _CUES)
+                + _rs_list("FILED_ORDER_NOTES", _PROMPT),
+                "Dockerfile": "FROM acmelabs/base:1\n",
+            }
+        ),
+        "owner-acme",
+        5,
+    )
+    acme = replace(acme, name="acme")
+    raw = evaluate(acme, [alt, acme])
+    assert raw.flagged
+    refined = refine_released(raw, acme_items, frozenset(), owner_names=["acme"])
+    assert not refined.flagged
+    assert refined.matches[0].probable_same_owner
+    # The same namespace named after the *source* excuses nothing.
+    assert refine_released(raw, acme_items, frozenset(), owner_names=["porter"]).flagged

@@ -10723,6 +10723,7 @@ export const unreleasedCopyMatchSchema = z.object({
   released_at: unreleasedCopyTimestamp().nullable(),
   release_state: z.enum(['unreleased', 'released_after_upload']),
   score: z.number(),
+  probable_same_owner: z.boolean().default(false),
   shared_count: z.number().int().nonnegative(),
   shared_by_kind: z.record(z.string(), z.number().int()),
   items: z.array(unreleasedCopyItemSchema),

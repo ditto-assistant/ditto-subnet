@@ -26,6 +26,7 @@ import asyncio
 import logging
 import multiprocessing
 from concurrent.futures import Executor, ProcessPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime
 from time import monotonic
 from typing import TYPE_CHECKING, Any
@@ -41,10 +42,13 @@ from ditto.api_server.fingerprint import _excluded_from_fingerprints
 from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
 from ditto.api_server.unreleased_copy import (
     DEFAULT_THRESHOLD,
+    MAX_MATCHES,
     SIGNAL_VERSION,
     CopySignal,
     attach_evidence,
     evaluate,
+    refine_released,
+    released_shingles,
 )
 from ditto.db.queries.unreleased_copy import (
     EffectiveSettings,
@@ -83,6 +87,51 @@ def extract_for_index(raw: bytes) -> dict[int, Item] | None:
     return None if extracted is None else dict(extracted.items)
 
 
+def shingles_for_index(raw: bytes) -> frozenset[int]:
+    """Top-level (picklable) released-text shingles, for the worker process."""
+    items = extract_for_index(raw)
+    return released_shingles(items.values()) if items else frozenset()
+
+
+class ReleasedText:
+    """Per-process cache of released artifacts' text shingles.
+
+    Released artifacts are immutable and few (confirmed kings), so each is read
+    once; the union for one candidate is the agents released before its upload.
+    """
+
+    def __init__(self) -> None:
+        self._by_agent: dict[UUID, frozenset[int]] = {}
+        self._unions: dict[tuple[UUID, ...], frozenset[int]] = {}
+
+    async def union(
+        self,
+        storage: ArtifactStore,
+        agent_ids: list[UUID],
+        *,
+        executor: Executor | None,
+    ) -> frozenset[int]:
+        key = tuple(agent_ids)
+        if key in self._unions:
+            return self._unions[key]
+        for agent_id in agent_ids:
+            if agent_id in self._by_agent:
+                continue
+            raw = await storage.get_object(
+                key=f"{agent_id}/agent.tar.gz", max_bytes=MAX_TARBALL_BYTES
+            )
+            if executor is not None:
+                shingles = await asyncio.get_running_loop().run_in_executor(
+                    executor, shingles_for_index, raw
+                )
+            else:
+                shingles = await asyncio.to_thread(shingles_for_index, raw)
+            self._by_agent[agent_id] = shingles
+        union = frozenset().union(*(self._by_agent[a] for a in agent_ids))
+        self._unions = {key: union}
+        return union
+
+
 async def read_items(
     storage: ArtifactStore, agent_id: UUID, *, executor: Executor | None = None
 ) -> dict[int, Item] | None:
@@ -109,16 +158,36 @@ async def with_evidence(
     *,
     threshold: float,
     executor: Executor | None = None,
+    released_before: list[UUID] | None = None,
+    released_text: ReleasedText | None = None,
+    owner_names: list[str] | None = None,
 ) -> tuple[CopySignal, str]:
-    """Attach ``path:line`` evidence when the best pair is worth reading."""
+    """Refine against released text, then attach ``path:line`` evidence.
+
+    Runs only when the best pair is at least half the threshold: the fuzzy
+    released-content check and the evidence both need the artifacts, and a
+    pair below that cannot flag.
+    """
     if not signal.matches or signal.top_score < threshold / 2:
-        return signal, "not_needed"
+        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "not_needed"
     if storage is None:
-        return signal, "unavailable"
+        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "unavailable"
     try:
         candidate = await read_items(
             storage, signal.candidate_agent_id, executor=executor
         )
+        if candidate is not None:
+            union = (
+                await (released_text or ReleasedText()).union(
+                    storage, released_before, executor=executor
+                )
+                if released_before
+                else frozenset()
+            )
+            signal = refine_released(
+                signal, candidate, union, owner_names=owner_names or ()
+            )
+        signal = replace(signal, matches=signal.matches[:MAX_MATCHES])
         matched: dict[UUID, dict[int, Item]] = {}
         for match in signal.matches[:EVIDENCE_MATCHES]:
             items = await read_items(storage, match.matched_agent_id, executor=executor)
@@ -126,7 +195,7 @@ async def with_evidence(
                 matched[match.matched_agent_id] = items
     except Exception as error:  # storage outage: keep the score, say so
         logger.warning("unreleased-copy evidence unavailable: %s", type(error).__name__)
-        return signal, "unavailable"
+        return replace(signal, matches=signal.matches[:MAX_MATCHES]), "unavailable"
     if candidate is None:
         return signal, "unavailable"
     return attach_evidence(signal, candidate, matched), "attached"
@@ -156,6 +225,7 @@ class UnreleasedCopySentinel:
         self._task: asyncio.Task[None] | None = None
         self._read_failures: dict[UUID, int] = {}
         self._isolate_extraction = isolate_extraction
+        self._released_text = ReleasedText()
         self._executor: Executor | None = None
         self._last_started: datetime | None = None
         self._last_finished: datetime | None = None
@@ -251,13 +321,19 @@ class UnreleasedCopySentinel:
             if context is None:
                 continue
             signal = evaluate(
-                context.candidate, context.others, threshold=settings.threshold
+                context.candidate,
+                context.others,
+                threshold=settings.threshold,
+                max_matches=MAX_MATCHES * 4,
             )
             signal, evidence_status = await with_evidence(
                 signal,
                 self._storage,
                 threshold=settings.threshold,
                 executor=self._extraction_executor(),
+                released_before=context.released_before,
+                released_text=self._released_text,
+                owner_names=context.owner_names,
             )
             async with self._session_maker() as session, session.begin():
                 await record_signal(

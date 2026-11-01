@@ -32,6 +32,7 @@ from ditto.api_server.unreleased_copy import (
 from ditto.db.models import (
     Agent,
     AgentDistinctiveItems,
+    AgentKingship,
     AgentStatus,
     AthReview,
     Score,
@@ -150,6 +151,11 @@ async def pending_candidates(
 class SignalContext:
     candidate: IndexedAgent
     others: list[IndexedAgent]
+    released_before: list[UUID]
+    """Every agent publicly released before the candidate's upload (for the
+    fuzzy released-content check), whether or not it shares an exact item."""
+    owner_names: list[str]
+    """Agent names of the candidate's owner (for the same-owner namespace hint)."""
 
 
 async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | None:
@@ -228,9 +234,20 @@ async def load_context(session: AsyncSession, agent: Agent) -> SignalContext | N
             status=a.status.value,
         )
 
+    kings = list((await session.scalars(select(AgentKingship.agent_id))).all())
+    all_released = await list_public_source_releases(
+        session, agent_ids=kings, quorum=SCORING_QUORUM, policy=policy
+    )
     return SignalContext(
         candidate=indexed(agent, frozenset(keys)),
         others=[indexed(by_id[aid], ks) for aid, ks in shared.items() if aid in by_id],
+        released_before=sorted(
+            (aid for aid, at in all_released.items() if at < uploaded_at),
+            key=str,
+        ),
+        owner_names=sorted(
+            {a.name for a in rows if owners.get(a.agent_id) == owners[agent.agent_id]}
+        ),
     )
 
 
@@ -263,6 +280,7 @@ def signal_payload(signal: CopySignal, *, evidence_status: str) -> dict[str, Any
                     else "unreleased"
                 ),
                 "score": m.score,
+                "probable_same_owner": m.probable_same_owner,
                 "shared_count": m.shared_count,
                 "shared_by_kind": m.shared_by_kind,
                 "items": [

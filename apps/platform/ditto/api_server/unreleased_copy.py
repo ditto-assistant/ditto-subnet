@@ -17,20 +17,23 @@ For a candidate ``C`` uploaded at ``t`` and every other indexed agent ``S``:
 * A shared item counts only if it is not
   - in the packaged public corpus (removed when the index is built),
   - in **any** agent publicly released before ``t`` (a released base explains
-    the overlap, whoever else also has it),
+    the overlap, whoever else also has it), exactly or, for text, fuzzily
+    (:func:`refine_released`: a port re-wraps and re-interpolates prompts),
   - in any of ``C``'s owner's own agents uploaded before ``S`` (the owner held
     it first, so ``S`` cannot be where it came from),
   - common: held by at least :data:`COMMON_OWNER_FLOOR` distinct other owners
     among agents uploaded before ``t`` (shared idiom, not a secret).
+* A pair that also shares a rare external namespace (a Hugging Face or GitHub
+  account, a registry user) *named after the candidate's owner* (a namespace
+  containing one of that owner's agent-name tokens) is marked
+  ``probable_same_owner`` and is never flagged: one operator under two
+  unlinked keys is not a copier. A namespace named after the source is what a
+  copier carries over with the code, so it excuses nothing.
 * The pair score is the kind-weighted count of surviving items
   (:data:`KIND_WEIGHTS`); the candidate is flagged when its best pair reaches
-  :data:`DEFAULT_THRESHOLD`.
+  the audited threshold (:data:`DEFAULT_THRESHOLD` by default).
 
-Calibration (2026-11-01, 41 labeled artifacts, operator-private): every ruled
-copy scored >= 119 against its ruled source and every cleared released-base
-fork scored <= 3.25 (released bases <= 11.7), so 40 sits ~3x under the
-smallest copy and ~3.4x over the largest negative. See
-``apps/platform/docs/unreleased-copy-signal.md``.
+Calibration lives in ``apps/platform/docs/unreleased-copy-signal.md``.
 
 Everything here is pure. Storage lives in :mod:`ditto.db.queries.unreleased_copy`
 and the shadow loop in :mod:`ditto.api_server.unreleased_copy_sentinel`.
@@ -38,6 +41,8 @@ and the shadow loop in :mod:`ditto.api_server.unreleased_copy_sentinel`.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -45,27 +50,36 @@ from uuid import UUID
 
 from ditto.api_server.distinctive_content import (
     KIND_IDENT,
+    KIND_RESOURCE,
     KIND_SEQ,
     KIND_SHORT,
     KIND_TEXT,
     KIND_WORD_SEQ,
     Item,
+    item_key,
     key_kind,
+    public_item_keys,
 )
 
-SIGNAL_VERSION = "uc1"
+SIGNAL_VERSION = "uc2"
 
 KIND_WEIGHTS: Mapping[str, float] = {
     KIND_TEXT: 1.0,
     KIND_SEQ: 1.0,
-    KIND_IDENT: 0.5,
+    # A port names its constants after the messages it ports, public or not.
+    KIND_IDENT: 0.25,
     KIND_SHORT: 0.25,
     KIND_WORD_SEQ: 0.1,
+    KIND_RESOURCE: 0.0,
 }
 DEFAULT_THRESHOLD = 40.0
 COMMON_OWNER_FLOOR = 4
 MAX_EVIDENCE_ITEMS = 60
 MAX_MATCHES = 5
+# An item whose word 5-shingles are at least this contained in agents released
+# before the upload is released content in a different surface form.
+FUZZY_SHINGLE_WORDS = 5
+FUZZY_RELEASED_CONTAINMENT = 0.9
 
 
 @dataclass(frozen=True)
@@ -110,6 +124,10 @@ class PairMatch:
     shared_by_kind: dict[str, int]
     shared_keys: frozenset[int] = field(repr=False)
     items: tuple[SharedItem, ...] = ()
+    probable_same_owner: bool = False
+    """Both artifacts reference a rare external namespace named after the
+    candidate's owner. A match carrying it is listed but never flagged."""
+    shared_resource_keys: frozenset[int] = field(default=frozenset(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -133,6 +151,44 @@ def pair_score(keys: Iterable[int]) -> float:
 def _before(a: IndexedAgent, b: IndexedAgent) -> bool:
     """Upload chronology with the UUID as the deterministic tie-break."""
     return (a.uploaded_at, a.agent_id.int) < (b.uploaded_at, b.agent_id.int)
+
+
+def _with_keys(match: PairMatch, shared: frozenset[int]) -> PairMatch:
+    scored = frozenset(k for k in shared if key_kind(k) != KIND_RESOURCE)
+    by_kind: dict[str, int] = {}
+    for key in scored:
+        kind = key_kind(key)
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    return replace(
+        match,
+        score=pair_score(scored),
+        shared_count=len(scored),
+        shared_by_kind=dict(sorted(by_kind.items())),
+        shared_keys=scored,
+        items=(),
+    )
+
+
+def _finish(
+    signal: CopySignal, matches: Iterable[PairMatch], excluded: dict[str, int]
+) -> CopySignal:
+    kept = [m for m in matches if m.shared_keys]
+    kept.sort(
+        key=lambda m: (
+            m.probable_same_owner,
+            -m.score,
+            m.matched_uploaded_at,
+            str(m.matched_agent_id),
+        )
+    )
+    top = max((m.score for m in kept if not m.probable_same_owner), default=0.0)
+    return replace(
+        signal,
+        flagged=top >= signal.threshold,
+        top_score=top,
+        excluded=excluded,
+        matches=tuple(kept),
+    )
 
 
 def evaluate(
@@ -176,43 +232,152 @@ def evaluate(
                 shared = shared - own.keys
         if not shared:
             continue
-        by_kind: dict[str, int] = {}
-        for key in shared:
-            kind = key_kind(key)
-            by_kind[kind] = by_kind.get(kind, 0) + 1
-        matches.append(
-            PairMatch(
-                matched_agent_id=source.agent_id,
-                matched_name=source.name,
-                matched_version=source.version,
-                matched_hotkey=source.hotkey,
-                matched_status=source.status,
-                matched_uploaded_at=source.uploaded_at,
-                matched_released_at=source.released_at,
-                score=pair_score(shared),
-                shared_count=len(shared),
-                shared_by_kind=dict(sorted(by_kind.items())),
-                shared_keys=frozenset(shared),
-            )
+        resources = frozenset(k for k in shared if key_kind(k) == KIND_RESOURCE)
+        template = PairMatch(
+            matched_agent_id=source.agent_id,
+            matched_name=source.name,
+            matched_version=source.version,
+            matched_hotkey=source.hotkey,
+            matched_status=source.status,
+            matched_uploaded_at=source.uploaded_at,
+            matched_released_at=source.released_at,
+            score=0.0,
+            shared_count=0,
+            shared_by_kind={},
+            shared_keys=frozenset(),
+            shared_resource_keys=resources,
         )
-    matches.sort(
-        key=lambda m: (-m.score, m.matched_uploaded_at, str(m.matched_agent_id))
-    )
-    top = matches[0].score if matches else 0.0
-    return CopySignal(
+        matches.append(_with_keys(template, frozenset(shared)))
+    scored_base = [k for k in base if key_kind(k) != KIND_RESOURCE]
+    signal = CopySignal(
         version=SIGNAL_VERSION,
         candidate_agent_id=candidate.agent_id,
         threshold=threshold,
-        flagged=top >= threshold,
-        top_score=top,
-        candidate_item_count=len(base),
+        flagged=False,
+        top_score=0.0,
+        candidate_item_count=len(scored_base),
         compared_agent_count=compared,
-        excluded={
+        excluded={},
+        matches=(),
+    )
+    finished = _finish(
+        signal,
+        matches,
+        {
             "released_base": len(candidate.keys & released),
             "common": len((candidate.keys - released) & common),
         },
-        matches=tuple(matches[:max_matches]),
     )
+    return replace(finished, matches=finished.matches[:max_matches])
+
+
+def _hash(text: str) -> int:
+    return int.from_bytes(hashlib.blake2b(text.encode(), digest_size=8).digest(), "big")
+
+
+def _shingles(text: str) -> list[int]:
+    words = text.replace("|", " ").split()
+    n = FUZZY_SHINGLE_WORDS
+    return [_hash(" ".join(words[i : i + n])) for i in range(len(words) - n + 1)]
+
+
+def _elements(item: Item) -> list[str]:
+    text = item.text or item.preview
+    if item.kind in (KIND_SEQ, KIND_WORD_SEQ):
+        return [e.strip() for e in text.split(" | ") if e.strip()]
+    return [text]
+
+
+def released_shingles(items: Iterable[Item]) -> frozenset[int]:
+    """Fuzzy fingerprint of one released artifact's literal text.
+
+    Word 5-shingles of every text-bearing item, plus a hash of every whole
+    literal (each element of a literal window, each short literal and each
+    sentence). A port re-orders and re-wraps released literals; their elements
+    and word runs survive.
+    """
+    out: set[int] = set()
+    for item in items:
+        if item.kind in (KIND_RESOURCE, KIND_IDENT):
+            continue
+        out.update(_shingles(item.text or item.preview))
+        out.update(_hash("e:" + element) for element in _elements(item))
+    return frozenset(out)
+
+
+def _covered(element: str, released: frozenset[int], public: frozenset[int]) -> bool:
+    """A literal element nobody needs to copy: one word, released, or public."""
+    return (
+        " " not in element
+        or _hash("e:" + element) in released
+        or item_key(KIND_SHORT, element) in public
+        or item_key(KIND_TEXT, element) in public
+    )
+
+
+def _released(
+    item: Item, released: frozenset[int], public: frozenset[int], containment: float
+) -> bool:
+    if item.kind == KIND_IDENT:
+        return False
+    if all(_covered(element, released, public) for element in _elements(item)):
+        return True
+    shingles = _shingles(item.text or item.preview)
+    return bool(shingles) and sum(s in released for s in shingles) >= containment * len(
+        shingles
+    )
+
+
+def _name_tokens(names: Iterable[str]) -> set[str]:
+    return {
+        token
+        for name in names
+        for token in re.findall(r"[a-z]+", name.lower())
+        if len(token) >= 4
+    }
+
+
+def refine_released(
+    signal: CopySignal,
+    candidate_items: Mapping[int, Item],
+    released: frozenset[int],
+    *,
+    owner_names: Iterable[str] = (),
+    public: frozenset[int] | None = None,
+    containment: float = FUZZY_RELEASED_CONTAINMENT,
+) -> CopySignal:
+    """Second pass with the candidate's text in hand.
+
+    Drops shared items that are released content in another surface form
+    (fuzzy), and marks a match ``probable_same_owner`` when the two share an
+    external namespace named after the candidate's owner.
+    """
+    tokens = _name_tokens(owner_names)
+    public = public_item_keys() if public is None else public
+    dropped: set[int] = set()
+    matches: list[PairMatch] = []
+    for match in signal.matches:
+        keep: set[int] = set()
+        for key in match.shared_keys:
+            item = candidate_items.get(key)
+            if item is not None and _released(item, released, public, containment):
+                dropped.add(key)
+            else:
+                keep.add(key)
+        namespaces = [
+            candidate_items[k].text.split(":", 1)[-1].lower()
+            for k in match.shared_resource_keys
+            if k in candidate_items
+        ]
+        same_owner = any(
+            token in re.sub(r"[^a-z0-9]", "", ns)
+            for ns in namespaces
+            for token in tokens
+        )
+        matches.append(
+            replace(_with_keys(match, frozenset(keep)), probable_same_owner=same_owner)
+        )
+    return _finish(signal, matches, {**signal.excluded, "released_fuzzy": len(dropped)})
 
 
 def attach_evidence(

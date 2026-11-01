@@ -38,6 +38,9 @@ class UnreleasedCopyMatch(_Model):
     release_state: Literal["unreleased", "released_after_upload"]
     """Release state as of the candidate's upload: never released before it."""
     score: float
+    probable_same_owner: bool = False
+    """Both reference a rare personal external namespace (Hugging Face or
+    GitHub account, registry user): listed, never flagged."""
     shared_count: int
     shared_by_kind: dict[str, int]
     items: list[UnreleasedCopyItem]

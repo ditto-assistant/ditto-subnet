@@ -1019,7 +1019,9 @@ describe('Backroom MCP tools', () => {
       // The two one-line infra-void summaries bring it to 28,306.
       // The one-line provider-outage read brings the measured total to
       // 28,400; keep about 200 chars.
-      28_600,
+      // The unreleased-copy settings pair adds two one-line summaries; measured
+      // 28,613 after the competition-improvement read.
+      28_800,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -10436,6 +10438,9 @@ describe('Backroom MCP tools', () => {
     } finally {
       await readOnly.client.close()
       await readOnly.server.close()
+    }
+  })
+
   it('reads and writes the audited unreleased-copy mode with write scope only', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const revision = {

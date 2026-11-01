@@ -90,12 +90,17 @@ async def get_unreleased_copy_signal(
         else:
             settings = await effective_settings(session)
             signal = evaluate(
-                context.candidate, context.others, threshold=settings.threshold
+                context.candidate,
+                context.others,
+                threshold=settings.threshold,
+                max_matches=20,
             )
             signal, evidence_status = await with_evidence(
                 signal,
                 getattr(request.app.state, "storage", None),
                 threshold=settings.threshold,
+                released_before=context.released_before,
+                owner_names=context.owner_names,
             )
             live_payload = signal_payload(signal, evidence_status=evidence_status)
     return AdminUnreleasedCopySignal(
