@@ -65,6 +65,7 @@ from ditto.db.queries.confirmation_scores import (
     not_voided,
 )
 from ditto.db.queries.provider_outages import (
+    provider_gate_closed,
     provider_outage_active,
     read_provider_circuit,
 )
@@ -157,6 +158,7 @@ def _claim_decision(
     void_rerun_seed_count: int = 0,
     void_rerun_claimable: bool = False,
     provider_outage: bool = False,
+    provider_gate_closed: bool = False,
 ) -> _ClaimDecision:
     """The first reason the issuance lane would decline this exact agent.
 
@@ -165,6 +167,9 @@ def _claim_decision(
     happens to be false. ``scheduled_round`` is ``None`` only when the chain
     read failed, which leaves every cadence gate below it unresolved.
 
+    The provider-outage gate comes first after the lane switch: while it admits
+    nothing, the lane issues nothing on any route.
+
     Void re-run debt is checked ahead of the cohort: the lane issues it to any
     ledger-eligible generation, so an agent outside the cohort with an unleased
     voided seed is claimable. A cohort member whose debt is blocked still falls
@@ -172,6 +177,8 @@ def _claim_decision(
     """
     if not lane_enabled:
         return "lane_disabled"
+    if provider_gate_closed:
+        return "provider_outage"
     if void_rerun_claimable:
         return "claimable"
     if not in_cohort and void_rerun_seed_count > 0:
@@ -407,9 +414,9 @@ async def _claimability(
         for debt in own_debts
         if not any(seed is None or seed == debt.seed for seed in leases.values())
     ]
-    provider_outage = provider_outage_active(
-        await read_provider_circuit(session), now=now
-    )
+    circuit = await read_provider_circuit(session)
+    provider_outage = provider_outage_active(circuit, now=now)
+    gate_closed = provider_gate_closed(circuit, now=now)
     void_rerun_claimable = lane_enabled and bool(unleased_debts) and not provider_outage
     candidate_ids: tuple[UUID, ...] = ()
     if champion_agent_id is not None:
@@ -473,6 +480,7 @@ async def _claimability(
         void_rerun_seed_count=len(own_debts),
         void_rerun_claimable=void_rerun_claimable,
         provider_outage_active=provider_outage,
+        provider_gate_closed=gate_closed,
         decision=_claim_decision(
             lane_enabled=lane_enabled,
             in_cohort=in_cohort,
@@ -487,6 +495,7 @@ async def _claimability(
             void_rerun_seed_count=len(own_debts),
             void_rerun_claimable=void_rerun_claimable,
             provider_outage=provider_outage,
+            provider_gate_closed=gate_closed,
         ),
     )
 

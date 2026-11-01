@@ -91,6 +91,10 @@ class RetestClaimability(BaseModel):
     provider_outage_active: bool = False
     """Provider circuit open or inside its recovery quiet window; void re-run
     debt is withheld until the provider is healthy again."""
+    provider_gate_closed: bool = False
+    """The provider-outage gate admits no new lease right now (open circuit
+    cooling down, or its one half-open probe already claimed). The lane then
+    issues nothing on any route and the decision is ``provider_outage``."""
     decision: Literal[
         "claimable",
         "lane_disabled",

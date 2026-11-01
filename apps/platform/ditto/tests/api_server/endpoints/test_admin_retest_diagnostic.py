@@ -427,6 +427,7 @@ def _decide(
     claimable_seed_available: bool = True,
     newer_canonical_work_pending: bool = False,
     least_covered_admitted: bool | None = True,
+    provider_gate_closed: bool = False,
 ) -> str:
     """Call the lane-order decision with one gate flipped at a time."""
     return admin_leaderboard._claim_decision(
@@ -440,6 +441,7 @@ def _decide(
         claimable_seed_available=claimable_seed_available,
         newer_canonical_work_pending=newer_canonical_work_pending,
         least_covered_admitted=least_covered_admitted,
+        provider_gate_closed=provider_gate_closed,
     )
 
 
@@ -565,7 +567,13 @@ async def test_void_rerun_debt_waits_out_an_open_provider_circuit(
         snapshot=_snapshot(challenger=False),
         catchup=frozenset(),
         debts=(_debt(_SUCCESSOR, _SEEDS[3]),),
-        circuit=SimpleNamespace(state="open", last_failure_at=_NOW),
+        circuit=SimpleNamespace(
+            state="open",
+            last_failure_at=_NOW,
+            retry_at=datetime.now(UTC) + timedelta(minutes=2),
+            probe_kind=None,
+            probe_expires_at=None,
+        ),
     )
     result = await admin_leaderboard.continual_retest_diagnostic(
         _request(),
@@ -581,4 +589,41 @@ async def test_void_rerun_debt_waits_out_an_open_provider_circuit(
     assert claim.void_rerun_seed_count == 1
     assert not claim.void_rerun_claimable
     assert claim.provider_outage_active
+    assert claim.provider_gate_closed
     assert claim.decision == "provider_outage"
+
+
+async def test_closed_provider_gate_blocks_every_route_in_the_projection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An in-cohort catch-up member is no more claimable than the debt."""
+    _install(
+        monkeypatch,
+        snapshot=_snapshot(challenger=True),
+        catchup=frozenset({_SUCCESSOR}),
+        circuit=SimpleNamespace(
+            state="open",
+            last_failure_at=_NOW,
+            retry_at=datetime.now(UTC) + timedelta(minutes=2),
+            probe_kind=None,
+            probe_expires_at=None,
+        ),
+    )
+    result = await admin_leaderboard.continual_retest_diagnostic(
+        _request(),
+        Response(),
+        _session(ticket_rows=[]),
+        cast(ChainClient, _chain()),
+        None,
+        _SUCCESSOR,
+    )
+
+    claim = result.claim
+    assert claim is not None
+    assert result.in_retest_cohort
+    assert claim.route_priority == "catchup"
+    assert claim.claimable_seed_available
+    assert claim.provider_gate_closed
+    assert claim.decision == "provider_outage"
+    assert _decide(provider_gate_closed=True) == "provider_outage"
+    assert _decide(lane_enabled=False, provider_gate_closed=True) == "lane_disabled"

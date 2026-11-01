@@ -303,3 +303,115 @@ class TestVoidRerunDebt:
         [lease] = await _retest_leases(session_maker, outsider)
         assert lease.validator_hotkey == _KEYPAIRS[1].ss58_address
         assert lease.seed == _VOIDED_SEED
+
+
+def _circuit(*, retry_at: datetime, now: datetime) -> ProviderOutageCircuit:
+    return ProviderOutageCircuit(
+        provider="openrouter",
+        state="open",
+        epoch=uuid4(),
+        opened_at=now - timedelta(minutes=5),
+        retry_at=retry_at,
+        last_failure_at=now,
+        failure_count=3,
+        last_status=429,
+        last_error_code="upstream_http_429",
+        updated_at=now,
+    )
+
+
+class TestContinualRetestProviderGate:
+    """The whole lane honours the provider-outage gate, not only the debt.
+
+    Cadence is left real here: the cohort lane has ordinary work to issue, so
+    every 204 below is the gate's.
+    """
+
+    @pytest.fixture(autouse=True)
+    async def _lane(
+        self, app: FastAPI, session_maker: async_sessionmaker[AsyncSession]
+    ) -> None:
+        _install_dataset_generator(app)
+        await _install_ticket_inference(app, session_maker)
+
+    async def _board(
+        self, app: FastAPI, maker: async_sessionmaker[AsyncSession]
+    ) -> list[UUID]:
+        members = await _seed_top5_emission_set(maker)
+        _install_db(app, maker)
+        _install_chain_with_block(app, block_number=1)
+        return members
+
+    async def test_open_circuit_issues_no_cohort_retest_until_recovery(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        members = await self._board(app, session_maker)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(_circuit(retry_at=now + timedelta(minutes=2), now=now))
+
+        for keypair_index in range(len(_KEYPAIRS)):
+            response = await _poll(client, keypair_index=keypair_index)
+            assert response.status_code == 204, response.text
+        async with session_maker() as session:
+            issued = (
+                await session.scalars(
+                    select(ValidatorTicket).where(
+                        ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST
+                    )
+                )
+            ).all()
+        assert issued == []
+
+        # Closed, and past the recovery quiet window: issuance resumes.
+        async with session_maker() as session, session.begin():
+            circuit = await session.get(ProviderOutageCircuit, "openrouter")
+            assert circuit is not None
+            circuit.state = "closed"
+            circuit.closed_at = now - timedelta(hours=1)
+            circuit.last_failure_at = now - timedelta(hours=1)
+        resumed = await _poll(client)
+        assert resumed.status_code == 200, resumed.text
+        assert UUID(resumed.json()["agent_id"]) in set(members)
+
+    async def test_open_circuit_parks_live_retests_and_admits_one_probe(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await self._board(app, session_maker)
+        first = await _poll(client)
+        assert first.status_code == 200, first.text
+        parked_agent = UUID(first.json()["agent_id"])
+
+        # Cooled down with no probe yet: the next poll parks the live lease
+        # and becomes the single half-open probe.
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(_circuit(retry_at=now - timedelta(seconds=1), now=now))
+        probe = await _poll(client, keypair_index=1)
+        assert probe.status_code == 200, probe.text
+
+        async with session_maker() as session:
+            parked = await session.get(
+                ValidatorTicket, (parked_agent, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            circuit = await session.get(ProviderOutageCircuit, "openrouter")
+        assert parked is not None
+        assert parked.status == TicketStatus.EXPIRED
+        assert parked.failure_detail == "provider_outage_parked"
+        assert circuit is not None
+        assert circuit.probe_kind == "scoring"
+        assert circuit.probe_key == f"{_KEYPAIRS[1].ss58_address}:slot-0"
+
+        # Every other slot waits on the probe, including the parked one.
+        sibling = await _poll(client)
+        assert sibling.status_code == 204, sibling.text
+        # The probe's own slot keeps resuming its live lease.
+        again = await _poll(client, keypair_index=1)
+        assert again.status_code == 200, again.text
+        assert again.json()["agent_id"] == probe.json()["agent_id"]

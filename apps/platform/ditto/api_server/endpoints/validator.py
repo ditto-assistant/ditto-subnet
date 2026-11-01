@@ -349,6 +349,7 @@ from ditto.db.queries.lease_liveness import (
 )
 from ditto.db.queries.payments import get_miner_coldkey_for_agent
 from ditto.db.queries.provider_outages import (
+    ProviderWorkGate,
     lock_provider_work_gate,
     park_scoring_leases,
     provider_outage_active,
@@ -5576,7 +5577,7 @@ async def _claim_void_rerun_debt(
     session: AsyncSession,
     *,
     validator_hotkey: str,
-    slot_id: str,
+    provider_gate: ProviderWorkGate,
     canonical_version: int,
     ledger_agent_ids: Collection[UUID],
     now: datetime,
@@ -5586,9 +5587,9 @@ async def _claim_void_rerun_debt(
     One replacement lease per voided seed: a seed with any live continual
     retest (from this lane or the cohort lane) is skipped, and the debt itself
     shrinks as replacements land, so the fleet can never run more seeds than
-    were voided. The provider-outage gate is honoured with the recovery quiet
-    window: re-leasing into the outage that voided the sample would only void
-    it again.
+    were voided. Beyond the lane-wide provider gate, the debt also waits out
+    the half-open probe and the recovery quiet window: re-leasing into the
+    outage that voided the sample would only void it again.
     """
     debts = await _void_rerun_debts(
         session,
@@ -5597,16 +5598,10 @@ async def _claim_void_rerun_debt(
     )
     if not debts:
         return None
-    gate = await lock_provider_work_gate(
-        session,
-        now=now,
-        kind="scoring",
-        key=scoring_probe_key(validator_hotkey=validator_hotkey, slot_id=slot_id),
-    )
     if (
-        not gate.admitted
-        or gate.probe_required
-        or provider_outage_active(gate.circuit, now=now)
+        not provider_gate.admitted
+        or provider_gate.probe_required
+        or provider_outage_active(provider_gate.circuit, now=now)
     ):
         return None
     leases = await _live_retest_leases(
@@ -6071,6 +6066,46 @@ async def request_top5_confirmation_job(
                         "sandbox memory cap; update ditto-subnet"
                     ),
                 )
+        # Provider-outage gate, the same one ``request_job`` applies. A
+        # continual retest spends inference exactly like a canonical lease, so
+        # while the relay's circuit is open nothing new is issued from any
+        # route (champion, debt, catch-up, emission or extended). Open circuits
+        # also park every live non-probe lease without charging an attempt,
+        # and after ``retry_at`` exactly one half-open probe may run. A slot
+        # whose own lease survived parking (the probe) keeps resuming it.
+        provider_probe_key = scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey,
+            slot_id=(
+                payload.slot_id
+                if payload.slot_id is not None
+                else live_retest.slot_id
+                if live_retest is not None
+                else "slot-0"
+            ),
+        )
+        provider_gate = await lock_provider_work_gate(
+            session, now=now, kind="scoring", key=provider_probe_key
+        )
+        if provider_gate.circuit is not None and provider_gate.circuit.state == "open":
+            await park_scoring_leases(session, circuit=provider_gate.circuit, now=now)
+            if live_retest is not None and live_retest.status != TicketStatus.ISSUED:
+                live_retest = None
+        # A legacy member claim names no slot, so it cannot be the probe.
+        if not provider_gate.admitted or (
+            provider_gate.probe_required and not auto_routed
+        ):
+            logger.info(
+                "declined continual retest reason=provider_outage validator=%s slot=%s",
+                payload.validator_hotkey,
+                payload.slot_id,
+            )
+            if auto_routed:
+                note_decline_reason("provider_outage")
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            raise HTTPException(
+                status_code=409,
+                detail="continual retests are parked during a provider outage",
+            )
         cohort_snapshot = await _current_koth_entries(
             session,
             canonical_version=canonical_version,
@@ -6104,7 +6139,7 @@ async def request_top5_confirmation_job(
             return await _claim_void_rerun_debt(
                 session,
                 validator_hotkey=payload.validator_hotkey,
-                slot_id=payload.slot_id or "slot-0",
+                provider_gate=provider_gate,
                 canonical_version=canonical_version,
                 ledger_agent_ids=ledger_agent_ids,
                 now=now,
@@ -6131,6 +6166,7 @@ async def request_top5_confirmation_job(
                 v7_calibration=v7_calibration,
                 route=route,
                 now=now,
+                provider_gate=provider_gate,
             )
 
         # A slot re-polling (or restarting) on a live debt lease resumes it
@@ -6472,6 +6508,7 @@ async def _issue_continual_retest_job(
     v7_calibration: V7InferenceCalibration | None,
     route: str,
     now: datetime,
+    provider_gate: ProviderWorkGate,
 ) -> JobResponse | Response:
     """Lease one already-selected ``(member, seed)`` on an idle execution slot.
 
@@ -6587,6 +6624,16 @@ async def _issue_continual_retest_job(
             status_code=409,
             detail=("validator has another live assignment or this retest is deferred"),
         )
+    # Claim the half-open probe on the already-locked circuit, as request_job
+    # does; a no-op unless this lease is the first one after ``retry_at``.
+    register_provider_probe(
+        provider_gate,
+        now=now,
+        kind="scoring",
+        key=scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey, slot_id=ticket.slot_id
+        ),
+    )
     if seed_binding is not None and ticket.seed == selected_wave_seed:
         # Record the binding on the lease itself, the same columns the
         # canonical lane pins, so the seed's provenance is auditable from

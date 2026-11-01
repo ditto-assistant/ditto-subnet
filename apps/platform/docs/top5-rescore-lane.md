@@ -131,6 +131,17 @@ reports the debt as `claim.void_rerun_seed_count`, with
 `route_priority: void_rerun` (or `decision: provider_outage` while withheld).
 The debt can never exceed the voids, so it does not widen the cohort.
 
+### Provider outages
+
+The whole claim path applies the same provider-outage gate as `request_job`.
+While the relay circuit is open and cooling down, no continual retest is issued
+on any route (champion, debt, catch-up, emission or extended), and an
+auto-routed poll gets a 204 with decline reason `provider_outage`. An open
+circuit also parks every live non-probe lease without charging an attempt.
+After `retry_at`, one slot's lease becomes the single half-open probe, and that
+slot keeps resuming it. The diagnostic shows the state as
+`claim.provider_gate_closed` with `decision: provider_outage`.
+
 ## UI
 
 The public leaderboard shows confirmation depth for top-five agents. This is

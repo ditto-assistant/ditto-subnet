@@ -11983,6 +11983,7 @@ describe('Backroom MCP tools', () => {
           void_rerun_seed_count: 0,
           void_rerun_claimable: false,
           provider_outage_active: false,
+          provider_gate_closed: false,
         },
         raw_confirmation_seeds: ['9223372036854775001'],
       })

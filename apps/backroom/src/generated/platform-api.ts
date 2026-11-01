@@ -35309,6 +35309,11 @@ export interface components {
             /** Pending Seed Count */
             pending_seed_count: number;
             /**
+             * Provider Gate Closed
+             * @default false
+             */
+            provider_gate_closed: boolean;
+            /**
              * Provider Outage Active
              * @default false
              */

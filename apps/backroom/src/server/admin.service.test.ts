@@ -4284,6 +4284,7 @@ describe('production score reads', () => {
       void_rerun_seed_count: 0,
       void_rerun_claimable: false,
       provider_outage_active: false,
+      provider_gate_closed: false,
       decision: 'claimable',
     },
     latest_ticket_status: 'issued',
@@ -4340,6 +4341,7 @@ describe('production score reads', () => {
         void_rerun_seed_count: 2,
         void_rerun_claimable: false,
         provider_outage_active: true,
+        provider_gate_closed: true,
         decision: 'provider_outage',
       },
     }

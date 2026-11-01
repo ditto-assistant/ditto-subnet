@@ -9088,6 +9088,9 @@ export const retestClaimabilitySchema = z.object({
   void_rerun_seed_count: z.number().int().nonnegative().default(0),
   void_rerun_claimable: z.boolean().default(false),
   provider_outage_active: z.boolean().default(false),
+  // The provider gate admits no new lease now: the lane issues nothing on any
+  // route and the decision is `provider_outage`.
+  provider_gate_closed: z.boolean().default(false),
   decision: z.enum([
     'claimable', 'lane_disabled', 'not_in_cohort', 'chain_unavailable',
     'round_not_due', 'newer_canonical_work_pending', 'no_pending_seeds',
