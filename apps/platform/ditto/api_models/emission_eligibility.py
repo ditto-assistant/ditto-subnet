@@ -75,6 +75,7 @@ EligibilityState = Literal[
     "review_missing",
     "review_rejected",
     "awaiting_next_window",
+    "fork_unproven",
     "not_scored",
 ]
 """Why one exact artifact is or is not earning.
@@ -103,6 +104,7 @@ WITHHELD_STATES: frozenset[str] = frozenset(
         "review_missing",
         "review_rejected",
         "awaiting_next_window",
+        "fork_unproven",
     }
 )
 
@@ -141,6 +143,12 @@ STATE_REASONS: dict[str, str] = {
         "Source review cleared this exact artifact. Emissions start at the next "
         "emission window -- a clear is never applied backwards, so no reward is "
         "granted for the period under review."
+    ),
+    "fork_unproven": (
+        "This agent is a fork of another owner's publicly released agent. "
+        "Building on released source is allowed, but a fork earns emissions only "
+        "once it beats that base head-to-head on the shared confirmation seeds "
+        "the crown uses. The score and its rank stand."
     ),
     "not_scored": (
         "This artifact has no accepted score in a scored or live status, so it "
@@ -206,6 +214,19 @@ class EmissionEligibilitySettings(BaseModel):
     :mod:`ditto.api_server.ledger_pin` exists to remove), and a rule that
     reached backwards would be a retroactive grant, which #2041 forbids.
     """
+
+    fork_must_beat_base: EligibilityEnforcement = "shadow"
+    """SN-302: a fork of another owner's publicly released agent earns nothing
+    until it beats that base on ``fork_min_shared_seeds`` shared seeds under the
+    crown gate's paired test. Same-owner successors are exempt.
+
+    Its own ``off`` / ``shadow`` / ``enforce`` ladder, independent of the
+    review ``enforcement`` above. Ships ``shadow``: every fork is classified
+    and published as ``fork_unproven`` without withholding anything, so the
+    operator can read who would lose emissions before enforcing."""
+
+    fork_min_shared_seeds: Annotated[int, Field(ge=2, le=15)] = 3
+    """Shared confirmation seeds the fork's paired duel with its base needs."""
 
     activation_window_seconds: Annotated[
         int,
@@ -303,6 +324,17 @@ class AgentEmissionEligibility(BaseModel):
     screening_reason_code: str | None = None
     """Existing vocabulary, echoed unchanged so an operator can join back to
     ``ath_reviews`` / ``screening_attempts`` without a translation table."""
+    fork_enforcement: EligibilityEnforcement = "off"
+    """The ``fork_must_beat_base`` posture this record was evaluated under."""
+    fork_base_agent_id: UUID | None = None
+    """The released other-owner agent this artifact forks, when it is one."""
+    fork_state: Literal["beats_base", "unproven"] | None = None
+    fork_shared_seeds: int | None = None
+    fork_required_seeds: int | None = None
+    fork_paired_lead: float | None = None
+    """Mean per-seed lead over the base (negative is a deficit); null until
+    the two share two seeds."""
+    fork_required_lead: float | None = None
 
 
 class EmissionEligibilitySettingsRevision(BaseModel):
@@ -422,3 +454,54 @@ def eligibility_checksum(settings: EmissionEligibilitySettings) -> str:
         settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
     ).encode()
     return hashlib.sha256(encoded).hexdigest()
+
+
+class AdminForkGateRow(BaseModel):
+    """One ledger agent detected as a fork of another owner's released agent."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    agent_name: str | None = None
+    agent_version: int | None = None
+    miner_hotkey: str
+    base_agent_id: UUID
+    base_agent_name: str | None = None
+    base_agent_version: int | None = None
+    base_miner_hotkey: str | None = None
+    detection_score: float
+    """Kind-weighted shared distinctive items with the base."""
+    shared_item_count: int
+    basis: str | None = None
+    """``distinctive``, ``court`` or ``distinctive+court``."""
+    shared_seeds: int
+    required_seeds: int
+    paired_lead: float | None = None
+    required_lead: float | None = None
+    lead_needed: float | None = None
+    beats_base: bool
+    in_pinned_pool: bool
+    """Whether the current epoch pin folds this agent at all."""
+    pinned_share_of_miner_pool: float
+    """Its share of the miner pool under the current pin (0 when unpaid)."""
+    currently_earning: bool
+    would_lose_emissions: bool
+    """Earning now and would be withheld under ``enforce``."""
+
+
+class AdminForkGateResponse(BaseModel):
+    """The fork-must-beat-base gate's ledger-wide shadow list (SN-302)."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    fork_must_beat_base: EligibilityEnforcement
+    effective_fork_must_beat_base: EligibilityEnforcement
+    fork_min_shared_seeds: int
+    policy_revision: int
+    bench_version: int | None = None
+    ledger_agent_count: int
+    classified_agent_count: int
+    """Ledger agents the detector has classified; the rest are pending."""
+    pin_epoch_index: int | None = None
+    forks: list[AdminForkGateRow]
+    would_lose_emissions: list[UUID]

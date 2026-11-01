@@ -1321,6 +1321,21 @@ CREATE TABLE public.agent_distinctive_items (
 
 
 --
+-- Name: agent_fork_bases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_fork_bases (
+    agent_id uuid NOT NULL,
+    detector_version text NOT NULL,
+    base_agent_id uuid,
+    score double precision NOT NULL,
+    shared_count integer NOT NULL,
+    basis text,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -9122,6 +9137,14 @@ ALTER TABLE ONLY public.agent_distinctive_items
 
 
 --
+-- Name: agent_fork_bases pk_agent_fork_bases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_fork_bases
+    ADD CONSTRAINT pk_agent_fork_bases PRIMARY KEY (agent_id, detector_version);
+
+
+--
 -- Name: agent_kingship pk_agent_kingship; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -11342,6 +11365,13 @@ ALTER TABLE ONLY public.validator_tickets
 --
 
 CREATE INDEX admin_activity_recorded_idx ON public.admin_activity USING btree (recorded_at, id);
+
+
+--
+-- Name: agent_fork_bases_base_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX agent_fork_bases_base_idx ON public.agent_fork_bases USING btree (base_agent_id);
 
 
 --
@@ -14286,6 +14316,22 @@ ALTER TABLE ONLY public.agent_cla_bindings
 
 ALTER TABLE ONLY public.agent_distinctive_items
     ADD CONSTRAINT fk_agent_distinctive_items_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_fork_bases fk_agent_fork_bases_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_fork_bases
+    ADD CONSTRAINT fk_agent_fork_bases_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: agent_fork_bases fk_agent_fork_bases_base_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_fork_bases
+    ADD CONSTRAINT fk_agent_fork_bases_base_agent_id_agents FOREIGN KEY (base_agent_id) REFERENCES public.agents(agent_id) ON DELETE SET NULL;
 
 
 --

@@ -22,6 +22,7 @@ from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.copy_court_settings import CopyCourtSettings
 from ditto.api_models.efficiency_settings import EfficiencyBonusSettings
 from ditto.api_models.emission_allocation import EmissionAllocation
+from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
 from ditto.api_models.generator import GeneratorCompetitionSettings
 from ditto.api_models.inference_concurrency_settings import InferenceConcurrencySettings
 from ditto.api_models.queue_policy_settings import QueuePolicySettings
@@ -125,6 +126,21 @@ _SETTINGS: dict[str, tuple[type[BaseModel], frozenset[str]]] = {
         ),
     ),
     "burn-settings": (BurnSettings, frozenset(("burn_share",))),
+    # Emission posture is public policy: who is withheld and why is published
+    # on the board anyway. No field names a wallet, account or credential.
+    "emission-eligibility": (
+        EmissionEligibilitySettings,
+        frozenset(
+            (
+                "enforcement",
+                "fork_must_beat_base",
+                "fork_min_shared_seeds",
+                "require_terminal_review",
+                "require_completed_review",
+                "activation_window_seconds",
+            )
+        ),
+    ),
     "track-share-settings": (
         TrackShareSettings,
         frozenset(("track_shares_bps",)),

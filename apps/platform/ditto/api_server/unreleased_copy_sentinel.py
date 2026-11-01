@@ -34,6 +34,7 @@ from ditto.api_server.distinctive_content import (
     extract_items,
 )
 from ditto.api_server.fingerprint import _excluded_from_fingerprints
+from ditto.api_server.fork_gate import detect_released_base
 from ditto.api_server.source_inspect import MAX_TARBALL_BYTES
 from ditto.api_server.unreleased_copy import (
     DEFAULT_THRESHOLD,
@@ -41,6 +42,11 @@ from ditto.api_server.unreleased_copy import (
     CopySignal,
     attach_evidence,
     evaluate,
+)
+from ditto.db.queries.fork_bases import (
+    court_fork_bases,
+    pending_fork_candidates,
+    store_fork_base,
 )
 from ditto.db.queries.unreleased_copy import (
     agents_missing_items,
@@ -216,6 +222,8 @@ class UnreleasedCopySentinel:
             "read_retry": 0,
             "evaluated": 0,
             "flagged": 0,
+            "fork_classified": 0,
+            "forks": 0,
         }
         if self._storage is not None:
             async with self._session_maker() as session:
@@ -256,12 +264,46 @@ class UnreleasedCopySentinel:
                     signal.top_score,
                     signal.matches[0].matched_agent_id,
                 )
+        await self._classify_forks(counters)
         self._last_counters = {
             **counters,
             "elapsed_ms": int((monotonic() - started) * 1000),
         }
         self._last_finished = datetime.now(UTC)
         return counters
+
+    async def _classify_forks(self, counters: dict[str, int]) -> None:
+        """Record each indexed agent's released other-owner base, if any.
+
+        Same history rule as the copy signal, so a base that is not yet
+        indexed can never read as "not a fork". Feeds the
+        ``fork_must_beat_base`` emission gate; it never changes status.
+        """
+        async with self._session_maker() as session:
+            candidates = await pending_fork_candidates(
+                session, limit=self._evaluate_batch
+            )
+        for agent in candidates:
+            async with self._session_maker() as session:
+                context = await load_context(session, agent)
+                court = await court_fork_bases(session, agent.agent_id)
+            if context is None:
+                continue
+            found = detect_released_base(
+                context.candidate, context.others, court_bases=court
+            )
+            async with self._session_maker() as session, session.begin():
+                await store_fork_base(session, agent_id=agent.agent_id, found=found)
+            counters["fork_classified"] += 1
+            if found is not None:
+                counters["forks"] += 1
+                logger.info(
+                    "fork-gate base agent=%s base=%s score=%.2f basis=%s",
+                    agent.agent_id,
+                    found.base_agent_id,
+                    found.score,
+                    found.basis,
+                )
 
     async def _index(self, agent_id: UUID, counters: dict[str, int]) -> None:
         assert self._storage is not None

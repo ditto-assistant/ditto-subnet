@@ -589,6 +589,7 @@ describe('Backroom MCP tools', () => {
         'get_confirmation_lane_diagnosis',
         'get_efficiency_bonus_settings',
         'get_emission_eligibility_policy',
+        'get_fork_gate',
         'get_inference_concurrency_settings',
         'get_decision_lane',
         'get_inference_runtime_metrics',
@@ -639,6 +640,7 @@ describe('Backroom MCP tools', () => {
         'set_burn_settings',
         'set_track_share_settings',
         'set_emission_allocation',
+        'set_emission_eligibility_policy',
         'set_continual_retest_settings',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
@@ -963,7 +965,10 @@ describe('Backroom MCP tools', () => {
     // summary, detail in tool help) measures 221,908 bytes; keep about 0.5 KB.
     // The competition improvement read (two optional filters, one-line
     // summary, detail in tool help) measures 222,758 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(223_300)
+    // The SN-302 fork-gate pair (no-input read, one guarded whole-policy write;
+    // one-line summaries, detail in tool help) adds about 1.7 KB; keep
+    // about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(225_400)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1014,7 +1019,8 @@ describe('Backroom MCP tools', () => {
       // The two one-line infra-void summaries bring it to 28,306.
       // The one-line provider-outage read brings the measured total to
       // 28,400; keep about 200 chars.
-      28_600,
+      // The SN-302 fork-gate read and eligibility write add about 210 chars.
+      28_850,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

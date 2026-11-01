@@ -78,6 +78,7 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
+    from ditto.api_server.fork_gate import ForkDuel
     from ditto.db.models import (
         EmissionEligibilitySettingsRevision as EligibilityRevisionRow,
     )
@@ -147,13 +148,30 @@ class ResolvedEligibilityPolicy:
     source: str = "default"
 
     @property
-    def enforcing(self) -> bool:
+    def review_enforcing(self) -> bool:
         return self.settings.enforcement == "enforce"
 
     @property
-    def evaluating(self) -> bool:
-        """Whether the gate runs at all. ``off`` skips every read below."""
+    def review_evaluating(self) -> bool:
         return self.settings.enforcement in ("shadow", "enforce")
+
+    @property
+    def fork_enforcing(self) -> bool:
+        return self.settings.fork_must_beat_base == "enforce"
+
+    @property
+    def fork_evaluating(self) -> bool:
+        return self.settings.fork_must_beat_base in ("shadow", "enforce")
+
+    @property
+    def enforcing(self) -> bool:
+        """Whether any gate withholds, so the pool can differ from the board."""
+        return self.review_enforcing or self.fork_enforcing
+
+    @property
+    def evaluating(self) -> bool:
+        """Whether any gate runs at all. ``off`` everywhere skips every read."""
+        return self.review_evaluating or self.fork_evaluating
 
 
 DEFAULT_POLICY = ResolvedEligibilityPolicy()
@@ -173,9 +191,12 @@ def effective_policy(
     """
     if not policy.enforcing or fleet_ready:
         return policy
-    return replace(
-        policy, settings=policy.settings.model_copy(update={"enforcement": "shadow"})
-    )
+    update: dict[str, str] = {}
+    if policy.review_enforcing:
+        update["enforcement"] = "shadow"
+    if policy.fork_enforcing:
+        update["fork_must_beat_base"] = "shadow"
+    return replace(policy, settings=policy.settings.model_copy(update=update))
 
 
 def _state_for(
@@ -249,16 +270,36 @@ def classify(
     posture: AgentReviewPosture,
     policy: ResolvedEligibilityPolicy,
     now: datetime,
+    fork: ForkDuel | None = None,
 ) -> AgentEmissionEligibility:
-    """The shared eligibility record for one exact artifact. Pure."""
+    """The shared eligibility record for one exact artifact. Pure.
+
+    ``fork`` is this artifact's duel with its released other-owner base, when
+    it is a fork (:mod:`ditto.api_server.fork_gate`). A review state is
+    reported first; ``fork_unproven`` only when the review posture is met.
+    """
     settings = policy.settings
     window = window_start(now, window_seconds=settings.activation_window_seconds)
-    state: EligibilityState = (
+    review_state: EligibilityState = (
         "eligible"
-        if not policy.evaluating
+        if not policy.review_evaluating
         else _state_for(posture, settings, window=window)
     )
+    fork_unproven = (
+        policy.fork_evaluating and fork is not None and fork.state != "beats_base"
+    )
+    state: EligibilityState = (
+        review_state
+        if review_state != "eligible"
+        else "fork_unproven"
+        if fork_unproven
+        else "eligible"
+    )
     posture_satisfied = state == "eligible"
+    fork_shown = fork if policy.fork_evaluating else None
+    withheld = (policy.review_enforcing and review_state != "eligible") or (
+        policy.fork_enforcing and fork_unproven
+    )
     return AgentEmissionEligibility(
         agent_id=agent_id,
         artifact_sha256=artifact_sha256,
@@ -268,9 +309,10 @@ def classify(
         enforcement=settings.enforcement,
         state=state,
         reason=STATE_REASONS[state],
-        # Only ``enforce`` withholds. Under ``off``/``shadow`` the row is paid
-        # exactly as before, which is what makes shipping this a no-op.
-        reward_eligible=posture_satisfied or not policy.enforcing,
+        # Only an ``enforce`` ladder withholds, and only for its own verdict.
+        # Under ``off``/``shadow`` the row is paid exactly as before, which is
+        # what makes shipping either gate a no-op.
+        reward_eligible=not withheld,
         posture_satisfied=posture_satisfied,
         window_start=window,
         activates_at=(
@@ -285,6 +327,13 @@ def classify(
         screening_reason_code=(
             posture.active_quarantine_reason_code or posture.latest_attempt_reason_code
         ),
+        fork_enforcement=settings.fork_must_beat_base,
+        fork_base_agent_id=fork_shown.base_agent_id if fork_shown else None,
+        fork_state=fork_shown.state if fork_shown else None,
+        fork_shared_seeds=fork_shown.shared_seeds if fork_shown else None,
+        fork_required_seeds=fork_shown.required_seeds if fork_shown else None,
+        fork_paired_lead=fork_shown.paired_lead if fork_shown else None,
+        fork_required_lead=fork_shown.required_lead if fork_shown else None,
     )
 
 
@@ -329,9 +378,7 @@ class LedgerEligibility:
         """
         record = self.records.get(agent_id)
         return (
-            self.policy.enforcing
-            and record is not None
-            and not record.posture_satisfied
+            self.policy.enforcing and record is not None and not record.reward_eligible
         )
 
 
@@ -341,8 +388,10 @@ def evaluate_ledger(
     *,
     policy: ResolvedEligibilityPolicy,
     now: datetime,
+    fork_duels: Mapping[UUID, ForkDuel] | None = None,
 ) -> LedgerEligibility:
     """Classify every ledger row. Pure; the caller decides what to apply."""
+    duels = fork_duels or {}
     window = window_start(now, window_seconds=policy.settings.activation_window_seconds)
     records = {
         row.agent_id: classify(
@@ -353,6 +402,7 @@ def evaluate_ledger(
             or AgentReviewPosture(agent_id=row.agent_id),
             policy=policy,
             now=now,
+            fork=duels.get(row.agent_id),
         )
         for row in rows
     }

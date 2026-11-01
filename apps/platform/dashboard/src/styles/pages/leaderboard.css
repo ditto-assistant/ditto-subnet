@@ -1920,6 +1920,21 @@ tbody tr.champion:focus-visible .miner-avatar {
 .crown-duel-row[data-status="would_dethrone"] .crown-duel-status {
   color: var(--rank-one-text);
 }
+/* SN-302: a fork's duel with its released base, on its own line under the
+   need. Quiet text, warn-toned until it beats the base. */
+.crown-duel-fork {
+  grid-column: 2 / -1;
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.crown-duel-fork.cleared {
+  color: var(--text-dim);
+}
+.crown-duel-king .crown-duel-fork {
+  display: block;
+  margin-top: 4px;
+}
 .crown-duel-fold {
   margin: 8px 0 6px;
 }

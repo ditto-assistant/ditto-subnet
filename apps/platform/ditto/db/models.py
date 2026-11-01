@@ -14506,6 +14506,40 @@ class AgentDistinctiveItems(Base):
     )
 
 
+class AgentForkBase(Base):
+    """Which publicly released other-owner agent this artifact forks, if any.
+
+    One row per artifact and detector version, written by the unreleased-copy
+    sentinel once the artifact's whole upload history is indexed
+    (:mod:`ditto.api_server.fork_gate`). ``base_agent_id`` null records "not a
+    fork" so the detector never re-reads the same history. The emission
+    eligibility gate (``fork_must_beat_base``) reads this table; it never
+    re-derives the base on the validator ledger path.
+    """
+
+    __tablename__ = "agent_fork_bases"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    detector_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    base_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    score: Mapped[float] = mapped_column(Float, nullable=False)
+    shared_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    basis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        ForeignKeyConstraint(
+            ["base_agent_id"], ["agents.agent_id"], ondelete="SET NULL"
+        ),
+        Index("agent_fork_bases_base_idx", "base_agent_id"),
+    )
+
+
 class UnreleasedCopySignal(Base):
     """One evaluation of the unreleased-copy signal for one agent and version.
 

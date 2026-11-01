@@ -160,6 +160,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_burn_settings',
   'set_track_share_settings',
   'set_emission_allocation',
+  'set_emission_eligibility_policy',
   'set_confirmation_bundle_settings',
   'authorize_confirmation_bundle_retest',
 ])

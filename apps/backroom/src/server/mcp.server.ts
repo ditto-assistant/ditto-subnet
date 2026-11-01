@@ -196,6 +196,7 @@ import {
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
   agentEmissionEligibilityInputSchema,
+  setEmissionEligibilityInputSchema,
   setBurnSettingsInputSchema,
   setTrackShareSettingsInputSchema,
   setEmissionAllocationInputSchema,
@@ -403,6 +404,8 @@ import {
   setValidatorIssuancePause,
   fetchBurnSettings,
   fetchEmissionEligibility,
+  fetchForkGate,
+  setEmissionEligibility,
   setBurnSettings,
   fetchTrackShareSettings,
   setTrackShareSettings,
@@ -931,6 +934,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Who got source/image URLs before a time; agentId or sha. IPs hashed. See help.',
   set_burn_settings:
     'Set burn/payout curve; an allocation owns burn once set. MOVES TAO. See tool help.',
+  get_fork_gate:
+    'Fork-must-beat-base shadow list: each ledger fork, its base, N/3 seeds, lead, who would lose emissions.',
+  set_emission_eligibility_policy:
+    'Set review gate + fork_must_beat_base (off/shadow/enforce) with CAS. MOVES TAO under enforce. See tool help.',
   get_burn_settings:
     'Read burn, miner remainder, revision and fleet fold. Optional history, default 0.',
   get_track_share_settings:
@@ -3822,6 +3829,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_fork_gate',
+    {
+      title: 'Get fork-must-beat-base shadow list',
+      description:
+        'SN-302: a fork of another owner\'s publicly released agent earns nothing until it beats that base on fork_min_shared_seeds (default 3) shared confirmation seeds, through the crown gate\'s paired test. Same-owner successors are exempt. Lists every agent in the current ledger the detector classified as a fork: its base (largest shared distinctive content among other-owner agents released before the upload, or a copy-court released-base clear), detection_score and basis, the paired duel (shared_seeds of required_seeds, paired_lead, required_lead, lead_needed, beats_base), whether the current epoch pin pays it (pinned_share_of_miner_pool, currently_earning), and would_lose_emissions: agents paid now that enforce would withhold. Read this before moving fork_must_beat_base from shadow to enforce. classified_agent_count below ledger_agent_count means the sentinel is still classifying. Requires backroom:read and changes nothing.',
+      inputSchema: z.object({}),
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchForkGate()),
+  )
+
+  registerTool(
+    'set_emission_eligibility_policy',
+    {
+      title: 'Set emission eligibility policy',
+      description:
+        'Apply one append-only revision of the SN118 emission eligibility policy: the terminal-review gate (enforcement off/shadow/enforce plus its per-class switches and activation window) and the SN-302 fork gate (fork_must_beat_base off/shadow/enforce and fork_min_shared_seeds 2-15). A revision stores the WHOLE policy: resend every current value from get_emission_eligibility_policy and change only what you mean to. shadow publishes and records what would be withheld without changing any weight; enforce removes withheld artifacts from the pool validators fold at the next window and pin, and rehearses as shadow until every live weight setter reports protocol 28. Read get_fork_gate would_lose_emissions before enforcing the fork gate. Supply expectedRevision exactly as get_emission_eligibility_policy reports it (0 when none), an operator reason, and the confirmation "APPLY EMISSION ELIGIBILITY". Requires backroom:write.',
+      inputSchema: setEmissionEligibilityInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => setEmissionEligibility(input, props.session.email)),
   )
 
   registerTool(

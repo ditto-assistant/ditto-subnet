@@ -10,7 +10,7 @@ import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { fx, publicDisplayName, shortKey } from "../../lib/format";
-import { challengerNeeds, confirmationProgress, pairedLeadText } from "../../lib/crown";
+import { challengerNeeds, confirmationProgress, forkLine, pairedLeadText } from "../../lib/crown";
 import type { CrownChallenger, CrownRules } from "../../types/leaderboard";
 import { EntityButton } from "../ui/EntityButton";
 import { leaderboardVersionView } from "./board-state";
@@ -75,6 +75,13 @@ export function CrownDuel(props: { store: LeaderboardStore; showKing?: boolean }
                   <b>{current().shared_seed_confirmations ?? 0}</b> shared-seed confirmations
                 </span>
               </span>
+              <Show when={current().fork}>
+                {(fork) => (
+                  <span class="crown-duel-fork" classList={{ cleared: fork().beats_base }}>
+                    {forkLine(fork())}
+                  </span>
+                )}
+              </Show>
             </div>
           )}
         </Show>
@@ -143,6 +150,17 @@ export function CrownDuel(props: { store: LeaderboardStore; showKing?: boolean }
                       </span>
                       {" · " + challengerNeeds(challenger, rules())}
                     </span>
+                    <Show when={challenger.fork}>
+                      {(fork) => (
+                        <span
+                          class="crown-duel-fork"
+                          classList={{ cleared: fork().beats_base }}
+                          title="A fork of another owner's released agent earns only after beating that base on shared seeds"
+                        >
+                          {forkLine(fork())}
+                        </span>
+                      )}
+                    </Show>
                   </li>
                 );
               }}

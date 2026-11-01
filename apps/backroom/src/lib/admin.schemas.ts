@@ -2228,6 +2228,10 @@ const emissionEligibilitySettingsSchema = z.object({
   require_completed_review: z.boolean(),
   clearance_activation: z.string(),
   activation_window_seconds: z.number().int().positive(),
+  // SN-302 fork-must-beat-base. Defaulted on read so an older Platform still
+  // parses; there the gate does not exist, which is `off`.
+  fork_must_beat_base: z.enum(EMISSION_ELIGIBILITY_ENFORCEMENTS).default('off'),
+  fork_min_shared_seeds: z.number().int().min(2).max(15).default(3),
 })
 
 const emissionEligibilityRevisionSchema = z.object({
@@ -2305,6 +2309,13 @@ const emissionEligibilityRecordSchema = z.object({
   review_kind: z.string().nullable().default(null),
   review_resolved_at: z.string().nullable().default(null),
   screening_reason_code: z.string().nullable().default(null),
+  fork_enforcement: z.string().default('off'),
+  fork_base_agent_id: z.string().nullable().default(null),
+  fork_state: z.string().nullable().default(null),
+  fork_shared_seeds: z.number().int().nullable().default(null),
+  fork_required_seeds: z.number().int().nullable().default(null),
+  fork_paired_lead: z.number().nullable().default(null),
+  fork_required_lead: z.number().nullable().default(null),
 })
 
 export const agentEmissionEligibilityInputSchema = z.object({
@@ -10807,3 +10818,64 @@ export const unreleasedCopySignalsInputSchema = z.object({
   limit: z.number().int().min(1).max(200).default(50),
   offset: z.number().int().min(0).default(0),
 })
+
+// ─── Emission eligibility writes (review gate + SN-302 fork gate) ───────────
+export const EMISSION_ELIGIBILITY_CONFIRMATION = 'APPLY EMISSION ELIGIBILITY'
+
+export const emissionEligibilitySettingsWriteSchema = z.object({
+  enforcement: z.enum(EMISSION_ELIGIBILITY_ENFORCEMENTS),
+  require_terminal_review: z.boolean(),
+  exclude_inconclusive: z.boolean(),
+  exclude_infrastructure_failed: z.boolean(),
+  exclude_escalated: z.boolean(),
+  require_completed_review: z.boolean(),
+  clearance_activation: z.literal('next_window').default('next_window'),
+  activation_window_seconds: z.number().int().min(60).max(86_400),
+  fork_must_beat_base: z.enum(EMISSION_ELIGIBILITY_ENFORCEMENTS),
+  fork_min_shared_seeds: z.number().int().min(2).max(15),
+})
+
+export const setEmissionEligibilityInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  settings: emissionEligibilitySettingsWriteSchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.literal(EMISSION_ELIGIBILITY_CONFIRMATION),
+})
+
+export const forkGateRowSchema = z.object({
+  agent_id: z.string(),
+  agent_name: z.string().nullable().default(null),
+  agent_version: z.number().int().nullable().default(null),
+  miner_hotkey: z.string(),
+  base_agent_id: z.string(),
+  base_agent_name: z.string().nullable().default(null),
+  base_agent_version: z.number().int().nullable().default(null),
+  base_miner_hotkey: z.string().nullable().default(null),
+  detection_score: z.number(),
+  shared_item_count: z.number().int(),
+  basis: z.string().nullable().default(null),
+  shared_seeds: z.number().int(),
+  required_seeds: z.number().int(),
+  paired_lead: z.number().nullable().default(null),
+  required_lead: z.number().nullable().default(null),
+  lead_needed: z.number().nullable().default(null),
+  beats_base: z.boolean(),
+  in_pinned_pool: z.boolean(),
+  pinned_share_of_miner_pool: z.number(),
+  currently_earning: z.boolean(),
+  would_lose_emissions: z.boolean(),
+})
+
+export const forkGateSchema = z.object({
+  fork_must_beat_base: z.enum(EMISSION_ELIGIBILITY_ENFORCEMENTS),
+  effective_fork_must_beat_base: z.enum(EMISSION_ELIGIBILITY_ENFORCEMENTS),
+  fork_min_shared_seeds: z.number().int(),
+  policy_revision: z.number().int().nonnegative(),
+  bench_version: z.number().int().nullable().default(null),
+  ledger_agent_count: z.number().int().nonnegative(),
+  classified_agent_count: z.number().int().nonnegative(),
+  pin_epoch_index: z.number().int().nullable().default(null),
+  forks: z.array(forkGateRowSchema),
+  would_lose_emissions: z.array(z.string()),
+})
+

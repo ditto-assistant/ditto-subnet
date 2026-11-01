@@ -686,7 +686,7 @@ class PublicRewardEligibility(BaseModel):
                 "``unresolved_review``, ``review_inconclusive``, "
                 "``review_escalated``, ``review_infrastructure_failed``, "
                 "``review_missing``, ``review_rejected``, "
-                "``awaiting_next_window``."
+                "``awaiting_next_window``, ``fork_unproven``."
             )
         ),
     ]
@@ -749,6 +749,42 @@ class PublicRewardEligibility(BaseModel):
                 "``awaiting_next_window``: a clear takes effect at the next "
                 "window boundary and is never applied backwards, so no reward is "
                 "granted for the period spent under review."
+            ),
+        ),
+    ] = None
+    fork_enforcement: Annotated[
+        str,
+        Field(
+            default="off",
+            description=(
+                "Posture of the fork-must-beat-base gate (SN-302): "
+                "``off``/``shadow``/``enforce``."
+            ),
+        ),
+    ] = "off"
+    fork_base_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description=(
+                "The publicly released other-owner agent this artifact forks. "
+                "A fork earns only after beating it on shared seeds."
+            ),
+        ),
+    ] = None
+    fork_state: Annotated[
+        Literal["beats_base", "unproven"] | None,
+        Field(default=None, description="Whether the fork has beaten its base."),
+    ] = None
+    fork_shared_seeds: Annotated[int | None, Field(default=None, ge=0)] = None
+    fork_required_seeds: Annotated[int | None, Field(default=None, ge=2)] = None
+    fork_paired_lead: Annotated[
+        float | None,
+        Field(
+            default=None,
+            description=(
+                "Mean per-seed lead over the base on shared seeds (negative is "
+                "a deficit). Null until they share two seeds."
             ),
         ),
     ] = None
@@ -1687,6 +1723,38 @@ class PublicCrownRules(BaseModel):
     ]
 
 
+class PublicForkStatus(BaseModel):
+    """A fork's duel with the released other-owner base it must beat (SN-302)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    base_agent_id: UUID
+    base_agent_name: str | None = None
+    base_agent_version: int | None = None
+    shared_seed_confirmations: Annotated[int, Field(ge=0)] = 0
+    required_confirmations: Annotated[int, Field(ge=2)] = 3
+    paired_lead: Annotated[
+        float | None,
+        Field(
+            default=None,
+            description=(
+                "Mean per-seed lead over the base on shared seeds (negative is "
+                "a deficit). Null until they share two seeds."
+            ),
+        ),
+    ] = None
+    beats_base: bool = False
+    enforcement: Annotated[
+        str,
+        Field(
+            description=(
+                "``shadow``: published, not withheld. ``enforce``: the fork earns "
+                "nothing until ``beats_base``."
+            ),
+        ),
+    ] = "shadow"
+
+
 class PublicCrownKing(BaseModel):
     """The single reigning King of the emission fold."""
 
@@ -1711,6 +1779,7 @@ class PublicCrownKing(BaseModel):
         int,
         Field(ge=0, description="Champion-anchored confirmation seeds it holds."),
     ] = 0
+    fork: PublicForkStatus | None = None
 
 
 class PublicCrownChallenger(BaseModel):
@@ -1783,6 +1852,16 @@ class PublicCrownChallenger(BaseModel):
             ),
         ),
     ]
+    fork: Annotated[
+        PublicForkStatus | None,
+        Field(
+            default=None,
+            description=(
+                "Set when this challenger is a fork of another owner's released "
+                "agent: it must beat that base on shared seeds before it earns."
+            ),
+        ),
+    ] = None
 
 
 class PublicKothEmissions(BaseModel):

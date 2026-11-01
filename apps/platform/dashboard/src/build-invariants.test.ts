@@ -181,7 +181,10 @@ describe("no reference baseline stat (row 40)", () => {
     }
     expect(distText).not.toContain("Reference Baseline");
     expect(distText.toLowerCase()).not.toContain("reference baseline");
-    expect(distText).not.toContain("must beat");
+    // "must beat" framed agents against a reference baseline. SN-302's fork
+    // line ("fork of X — must beat base") names a real released agent, so only
+    // the baseline framing stays banned.
+    expect(distText).not.toMatch(/must beat (?:the |a )?(?:reference |random )?baseline/i);
   });
 });
 

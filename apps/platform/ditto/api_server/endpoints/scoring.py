@@ -114,6 +114,7 @@ from ditto.db.queries.emission_eligibility import (
     load_review_postures,
     record_shadow_exclusions,
 )
+from ditto.db.queries.fork_bases import resolve_fork_duels
 from ditto.db.queries.heartbeats import (
     live_validator_fleet_supports_protocol,
     live_weight_setter_fleet_supports_protocol,
@@ -1108,10 +1109,27 @@ async def materialize_ledger_snapshot(
     eligibility = evaluate_ledger(
         rows,
         await load_review_postures(session, [r.agent_id for r in rows])
-        if eligibility_policy.evaluating
+        if eligibility_policy.review_evaluating
         else {},
         policy=eligibility_policy,
         now=now,
+        # SN-302: a fork of another owner's released agent must beat that base
+        # on shared seeds, through the crown gate's paired test, to be paid.
+        fork_duels=(
+            await resolve_fork_duels(
+                session,
+                [(r.agent_id, r.miner_hotkey) for r in rows],
+                bench_version=ledger_context.active_bench_version,
+                min_shared_seeds=eligibility_policy.settings.fork_min_shared_seeds,
+                ceiling_band_clamp=ledger_context.dethrone_band_clamp_fleet_ready,
+                statistical_band_cap=statistical_band_cap_is_active(
+                    ledger_context.policy.continual_retest,
+                    fleet_protocol_ready=ledger_context.statistical_band_cap_fleet_ready,
+                ),
+            )
+            if eligibility_policy.fork_evaluating
+            else {}
+        ),
     )
     reward_eligibility_mode: Literal["enforce"] | None = (
         "enforce" if eligibility_policy.enforcing else None
