@@ -56,6 +56,15 @@ CROWN_INCUMBENT_PROTOCOL = 27
 # an older validator would crown and pay the runner-up instead.
 PROVISIONAL_INCUMBENT_PROTOCOL = 28
 
+# The first validator heartbeat protocol whose fold reads ``crown_gate``: the
+# minimum shared-seed confirmations a challenger needs before the paired
+# comparison may move the crown, and the official standing the crown must keep.
+CROWN_GATE_PROTOCOL = 34
+DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
+DEFAULT_CHAMPION_STANDING_RANK = 3
+# A challenger cannot hold more shared seeds than the continual lane retains.
+MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+
 
 class LedgerPinStatus(BaseModel):
     """Identity of the epoch-pinned ledger currently served to validators."""
@@ -94,6 +103,31 @@ class ContinualRetestSettings(BaseModel):
     """Activate the protocol-29 statistical cap only after operator selection
     and every recently-live weight setter reports support. The default keeps
     the historical fold throughout a rolling upgrade."""
+
+    crown_gate_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether the KOTH fold gates the crown on shared-seed evidence (protocol 34).
+
+    ``disabled`` is the pre-34 walk and the exact rollback: any challenger that
+    clears the indifference band takes the crown, including on an unpaired
+    comparison of a newcomer's three-seed canonical against the incumbent's
+    retest-folded score. ``fleet_ready`` serves ``crown_gate`` once every
+    recently-live weight setter reports protocol 34: the crown then moves only
+    on the paired statistic over at least :attr:`min_dethrone_confirmations`
+    shared seeds, and only within the top :attr:`champion_standing_rank`
+    official places. There is deliberately no unconditional override.
+    """
+
+    min_dethrone_confirmations: Annotated[
+        int, Field(ge=2, le=MAX_MIN_DETHRONE_CONFIRMATIONS)
+    ] = DEFAULT_MIN_DETHRONE_CONFIRMATIONS
+    """Shared-seed confirmations a challenger must hold against the champion
+    before it may dethrone. Two is the paired statistic's own floor."""
+
+    champion_standing_rank: Annotated[int, Field(ge=1, le=EMISSION_SET_SIZE)] = (
+        DEFAULT_CHAMPION_STANDING_RANK
+    )
+    """Official places the crown must stay within. A champion that falls below
+    it hands the crown to the best-qualified standing challenger."""
 
     ledger_pin_mode: Literal["live", "epoch"] = "epoch"
     """Whether ``GET /scoring/scores`` serves one pinned ledger per chain epoch.
@@ -294,6 +328,9 @@ class EffectiveContinualRetestSettings(BaseModel):
     crown_incumbent_fleet_ready: bool = False
     crown_incumbent_active: bool = False
     crown_incumbent_required_protocol: int = CROWN_INCUMBENT_PROTOCOL
+    crown_gate_fleet_ready: bool = False
+    crown_gate_active: bool = False
+    crown_gate_required_protocol: int = CROWN_GATE_PROTOCOL
     ledger_pin: LedgerPinStatus | None = None
     """The pin validators are folding right now, or ``None`` when no pin has
     ever been taken (bootstrap) or the mode is ``live``."""
