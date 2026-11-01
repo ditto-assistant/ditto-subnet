@@ -25,8 +25,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import multiprocessing
+from array import array
 from concurrent.futures import Executor, ProcessPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from time import monotonic
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -44,12 +45,14 @@ from ditto.db.queries.unreleased_copy import (
     agents_missing_items,
     effective_settings,
     enforce_signal,
+    index_rows_for,
     load_context,
     pending_candidates,
     record_enforcement,
     record_signal,
     signal_payload,
     store_items,
+    stream_index_rows,
 )
 
 if TYPE_CHECKING:
@@ -155,6 +158,9 @@ class UnreleasedCopySentinel:
         self._isolate_extraction = isolate_extraction
         self._executor: Executor | None = None
         self._index_executor: Executor | None = None
+        # Rows the scoring worker holds, by ``indexed_at`` watermark.
+        self._worker_watermark: datetime | None = None
+        self._worker_rows = 0
         self._last_started: datetime | None = None
         self._last_finished: datetime | None = None
         self._last_counters: dict[str, int] = {}
@@ -200,6 +206,46 @@ class UnreleasedCopySentinel:
         if executor is None:
             return await asyncio.to_thread(fn, *args)
         return await asyncio.get_running_loop().run_in_executor(executor, fn, *args)
+
+    async def sync_worker_index(self) -> None:
+        """Stream index rows the scoring worker lacks (all of them after a restart)."""
+        if (
+            await self.call(worker.index_count) < self._worker_rows
+            or not self._worker_rows
+        ):
+            self._worker_watermark = None  # fresh or restarted worker: full load
+        # A small overlap with the previous watermark absorbs clock skew between
+        # writers; re-sending a row is idempotent.
+        since = (
+            self._worker_watermark - timedelta(minutes=5)
+            if self._worker_watermark is not None
+            else None
+        )
+        async with self._session_maker() as session:
+            async for rows in stream_index_rows(session, since=since, batch=100):
+                self._worker_rows = await self.call(
+                    worker.index_put,
+                    [(str(a), array("q", keys).tobytes()) for a, keys, _ in rows],
+                )
+                newest = max(t for _, _, t in rows)
+                if self._worker_watermark is None or newest > self._worker_watermark:
+                    self._worker_watermark = newest
+
+    async def overlap(self, keys: list[int], eligible: list[UUID]) -> dict[UUID, array]:
+        """Overlap source for :func:`load_context`, served by the scoring worker."""
+        packed = array("q", keys).tobytes()
+        ids = [str(e) for e in eligible]
+        found, missing = await self.call(worker.overlap, packed, ids)
+        if missing:
+            async with self._session_maker() as session:
+                rows = await index_rows_for(session, [UUID(m) for m in missing])
+            self._worker_rows = await self.call(
+                worker.index_put,
+                [(str(a), array("q", k).tobytes()) for a, k, _ in rows],
+            )
+            more, _ = await self.call(worker.overlap, packed, missing)
+            found.update(more)
+        return {UUID(a): v for a, v in found.items()}
 
     async def _index_call(self, fn: Callable[..., Any], *args: Any) -> Any:
         """Stateless extraction on the indexing pool (separate from scoring).
@@ -291,9 +337,11 @@ class UnreleasedCopySentinel:
             candidates = await pending_candidates(
                 session, signal_version=SIGNAL_VERSION, limit=self._evaluate_batch
             )
+        if candidates:
+            await self.sync_worker_index()
         for agent in candidates:
             async with self._session_maker() as session:
-                context = await load_context(session, agent)
+                context = await load_context(session, agent, overlap=self.overlap)
             if context is None:
                 continue
             signal, evidence_status = await score_signal(
