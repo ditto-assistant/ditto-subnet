@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.421.0 (2026-11-01)
+
+### Features
+
+- **platform**: Void infrastructure-tainted retest samples and re-run them
+  ([#3305](https://github.com/ditto-assistant/ditto-subnet/pull/3305),
+  [`84a80f9`](https://github.com/ditto-assistant/ditto-subnet/commit/84a80f902a11a24e60aa631061d23052b2f265f6))
+
+
 ## v0.420.0 (2026-11-01)
 
 ### Features
