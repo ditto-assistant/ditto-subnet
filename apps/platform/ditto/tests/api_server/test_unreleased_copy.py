@@ -18,7 +18,7 @@ from ditto.api_server.distinctive_content import extract_items
 from ditto.api_server.unreleased_copy import IndexedAgent, attach_evidence, evaluate
 from ditto.api_server.unreleased_copy_sentinel import UnreleasedCopySentinel
 from ditto.db.models import Agent, AgentStatus
-from ditto.db.queries.unreleased_copy import index_keys, store_items
+from ditto.db.queries.unreleased_copy import index_keys, load_context, store_items
 
 _T0 = datetime(2026, 10, 29, 12, tzinfo=UTC)
 _TOKEN = "test-admin-token-at-least-32-characters"
@@ -176,6 +176,39 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     async with session_maker() as session:
         port = await session.get(Agent, port_id)
         assert port is not None and port.status == AgentStatus.SCORED
+    # The owner's later agent names still identify it for the namespace hint,
+    # and each agent's overlap is its own (an unrelated agent shares nothing).
+    unrelated = uuid4()
+    async with session_maker() as session, session.begin():
+        for agent_id, hotkey, name, hours in (
+            (uuid4(), "5Porter", "porter-renamed", 9),
+            (unrelated, "5Other", "unrelated", 1),
+        ):
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=hotkey,
+                    name=name,
+                    version=1,
+                    sha256=agent_id.hex * 2,
+                    status=AgentStatus.SCORED,
+                    created_at=_T0 + timedelta(hours=hours),
+                )
+            )
+    async with session_maker() as session, session.begin():
+        await store_items(session, agent_id=unrelated, extracted=extract_items(BASE))
+    async with session_maker() as session:
+        port = await session.get(Agent, port_id)
+        assert port is not None
+        context = await load_context(session, port)
+        assert context is not None
+        assert context.owner_names == ["port-agent", "porter-renamed"]
+        assert unrelated not in context.overlaps
+        port_items, source_items = extract_items(PORT), extract_items(SOURCE)
+        assert port_items is not None and source_items is not None
+        assert set(context.overlaps[source_id]) == set(index_keys(port_items)) & set(
+            index_keys(source_items)
+        )
 
     app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
     app.state.unreleased_copy_sentinel = sentinel
@@ -209,7 +242,7 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     rows = listing.json()
     assert [r["agent_id"] for r in rows["items"]] == [str(port_id)]
     assert rows["items"][0]["top_matched_name"] == "source-agent"
-    assert rows["coverage"]["indexed"] == 2
+    assert rows["coverage"]["indexed"] == 3
     assert rows["coverage"]["flagged"] == 1
     assert rows["items"][0]["excluded"] is not None
 
