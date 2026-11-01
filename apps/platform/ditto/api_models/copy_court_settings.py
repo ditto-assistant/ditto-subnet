@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.api_models.unreleased_copy import AdminUnreleasedCopyOverview
+
 CourtMode = Literal["off", "shadow", "enforce"]
 
 
@@ -117,6 +119,9 @@ class AdminCopyCourtSettingsResponse(BaseModel):
     current: CopyCourtSettingsRevision | None
     history: list[CopyCourtSettingsRevision]
     runtime: AdminCopyCourtRuntime | None = None
+    unreleased_copy: AdminUnreleasedCopyOverview | None = None
+    """Posture, coverage and flag list of the unreleased-copy signal, whose
+    enforce-mode holds this court escalates to an operator."""
 
 
 class AdminCopyCourtTriagePreview(BaseModel):

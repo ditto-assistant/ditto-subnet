@@ -210,3 +210,122 @@ async def test_shadow_sentinel_records_signal_and_backroom_reads_it(
     assert rows["items"][0]["top_matched_name"] == "source-agent"
     assert rows["coverage"]["indexed"] == 2
     assert rows["coverage"]["flagged"] == 1
+
+
+async def test_enforce_holds_only_new_uploads_for_an_operator_ruling(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from sqlalchemy import select
+
+    from ditto.api_server.copy_court_rules import (
+        HOLD_CLASS_UNKNOWN,
+        CandidateIdentity,
+        classify_hold,
+    )
+    from ditto.db.models import AthReview
+    from ditto.db.queries.unreleased_copy import finalization_hold
+
+    app.state.config = replace(app.state.config, admin_api_token=_TOKEN)
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+    refused = await client.post(
+        "/api/v1/admin/unreleased-copy/settings",
+        headers=_HEADERS,
+        json={
+            "expected_revision": 0,
+            "settings": {"mode": "enforce", "threshold": 40},
+            "reason": "Peyton approved 2026-11-01",
+            "actor": "operator@example.com",
+            "confirmation": "APPLY UNRELEASED COPY SHADOW",
+        },
+    )
+    assert refused.status_code == 409
+    applied = await client.post(
+        "/api/v1/admin/unreleased-copy/settings",
+        headers=_HEADERS,
+        json={
+            "expected_revision": 0,
+            "settings": {"mode": "enforce", "threshold": 40},
+            "reason": "Peyton approved 2026-11-01",
+            "actor": "operator@example.com",
+            "confirmation": "APPLY UNRELEASED COPY ENFORCE",
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["revision"] == 1
+
+    now = datetime.now(UTC)
+    source_id, old_port, new_port, unscored = uuid4(), uuid4(), uuid4(), uuid4()
+    async with session_maker() as session, session.begin():
+        for agent_id, hotkey, status, created in (
+            (source_id, "5Source", AgentStatus.SCORED, now - timedelta(days=2)),
+            (old_port, "5OldPorter", AgentStatus.SCORED, now - timedelta(days=1)),
+            (new_port, "5NewPorter", AgentStatus.SCORED, now + timedelta(seconds=5)),
+            (unscored, "5Pending", AgentStatus.EVALUATING, now + timedelta(seconds=6)),
+        ):
+            session.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=hotkey,
+                    name=hotkey.lower(),
+                    version=1,
+                    sha256=agent_id.hex * 2,
+                    status=status,
+                    created_at=created,
+                )
+            )
+    blobs = {source_id: SOURCE, old_port: PORT, new_port: PORT, unscored: PORT}
+    sentinel = UnreleasedCopySentinel(
+        session_maker=session_maker,
+        storage=_Storage(blobs),
+        isolate_extraction=False,
+    )
+    counters = await sentinel.tick()
+    assert counters["flagged"] == 3
+    assert counters["held"] == 1
+
+    async with session_maker() as session:
+        held = await session.get(Agent, new_port)
+        assert held is not None and held.status == AgentStatus.ATH_PENDING_REVIEW
+        # The earlier unreleased port is an equally valid source.
+        assert held.duplicate_of in {source_id, old_port}
+        reason = held.review_reason or ""
+        assert "src/guidance/cues.rs:" in reason
+        assert "app/request_kinds.py" not in reason
+        candidate = CandidateIdentity(
+            agent_id=str(held.agent_id),
+            miner_hotkey=held.miner_hotkey,
+            sha256=held.sha256,
+            normalized_source_hash=None,
+        )
+        assert classify_hold(reason, candidate, None) == HOLD_CLASS_UNKNOWN
+        review = await session.scalar(
+            select(AthReview).where(AthReview.agent_id == new_port)
+        )
+        assert review is not None and review.status == "pending"
+        assert review.algorithm_provenance["trigger"] == "unreleased_copy"
+        # Uploaded before enforcement: listed, never held.
+        old = await session.get(Agent, old_port)
+        assert old is not None and old.status == AgentStatus.SCORED
+        # Not yet scored: the finalization gate holds it.
+        pending = await session.get(Agent, unscored)
+        assert pending is not None
+        assert (await finalization_hold(session, pending)) is not None
+        assert (await finalization_hold(session, old)) is None
+
+    overview = await client.get("/api/v1/admin/copy-court/settings", headers=_HEADERS)
+    assert overview.status_code == 200, overview.text
+    posture = overview.json()["unreleased_copy"]
+    assert posture["effective"]["mode"] == "enforce"
+    outcomes = {
+        row["agent_id"]: row["enforcement_outcome"] for row in posture["flagged"]
+    }
+    assert outcomes[str(new_port)] == "held"
+    assert outcomes[str(old_port)] == "not_held:uploaded_before_enforcement"
+    assert outcomes[str(unscored)] == "deferred:held_at_score_finalization"

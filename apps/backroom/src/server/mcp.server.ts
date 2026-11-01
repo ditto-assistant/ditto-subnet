@@ -218,6 +218,7 @@ import {
   scheduleCanonicalStarterInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
+  applyUnreleasedCopySettingsInputSchema,
   unreleasedCopySignalsInputSchema,
   confirmationSeedAnchorsInputSchema,
   outlierEscalationDryRunInputSchema,
@@ -380,6 +381,8 @@ import {
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   fetchCopyCourtTriagePreview,
+  applyUnreleasedCopySettings,
+  fetchUnreleasedCopySettings,
   fetchUnreleasedCopySignal,
   fetchUnreleasedCopySignals,
   fetchCompetitionImprovementMetrics,
@@ -747,6 +750,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Page shadow unreleased-copy signals.',
   get_competition_improvement_metrics:
     'Frontier, new-high drivers, release forks, embargo windows, noise floor.',
+  get_unreleased_copy_settings:
+    'Read unreleased-copy mode, threshold, history and last tick.',
+  apply_unreleased_copy_settings:
+    'Write unreleased-copy mode/threshold. Confirmation: APPLY UNRELEASED COPY {MODE}.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -2864,7 +2871,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get copy court settings',
       description:
-        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, the append-only revision history (newest first), and runtime: this Platform process\'s last tick (started/finished, counters recommended/unavailable/errors/applied/apply_skipped, last_tick_error, and up to ten per-hold errors). Whenever the master mode is not off, every pending copy hold gets a recommendation; a class mode only gates what the court may apply. near_duplicate_mode=enforce is the only accepted enforce: it auto-applies the narrow deterministic family CLEAR (overlap fully explained by a proven-public base, zero distinctive lines of the unreleased matched agent present, exact artifact passed screening under its current policy, no open quarantine, ATH ruling preview ready with would_change_crown=false). The court never applies a reject or an escalation. Requires backroom:read.',
+        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, the append-only revision history (newest first), unreleased_copy (the unreleased-copy signal\'s effective mode/threshold/enforce_since, index coverage, sentinel runtime and up to 50 flagged agents with their enforcement outcome; its enforce-mode holds come to this court and are always escalated), and runtime: this Platform process\'s last tick (started/finished, counters recommended/unavailable/errors/applied/apply_skipped, last_tick_error, and up to ten per-hold errors). Whenever the master mode is not off, every pending copy hold gets a recommendation; a class mode only gates what the court may apply. near_duplicate_mode=enforce is the only accepted enforce: it auto-applies the narrow deterministic family CLEAR (overlap fully explained by a proven-public base, zero distinctive lines of the unreleased matched agent present, exact artifact passed screening under its current policy, no open quarantine, ATH ruling preview ready with would_change_crown=false). The court never applies a reject or an escalation. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchCopyCourtControl()),
@@ -2949,6 +2956,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchCompetitionImprovementMetrics(input)),
+  )
+
+  registerTool(
+    'get_unreleased_copy_settings',
+    {
+      title: 'Get unreleased copy settings',
+      description:
+        'Read the unreleased-copy signal\'s audited posture: effective mode (off | shadow | enforce; no revision means shadow), threshold (default 40), revision, enforce_since (only agents uploaded at or after it are held; enforcement is not retroactive), the append-only revision history (newest first, with reason and actor), and the sentinel runtime. In enforce mode a flag at or above the threshold on an eligible agent opens a copy-kind ATH hold for an operator ruling: immediately when the agent is scored or live, at score finalization otherwise. It never rejects, and the copy court escalates these holds. The miner-visible reason cites only the candidate\'s own path:line. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchUnreleasedCopySettings()),
+  )
+
+  registerTool(
+    'apply_unreleased_copy_settings',
+    {
+      title: 'Apply unreleased copy settings',
+      description:
+        'Append one unreleased-copy settings revision: expectedRevision (from get_unreleased_copy_settings; 0 when none), mode (off | shadow | enforce), threshold (default 40), a reason of at least 8 characters, and confirmation APPLY UNRELEASED COPY {MODE}. Switching to enforce starts enforce_since now: agents uploaded earlier are listed, never held. Enforce opens copy holds for operator ruling and never rejects. The signed-in operator is the audit actor. Requires backroom:write.',
+      inputSchema: applyUnreleasedCopySettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => applyUnreleasedCopySettings(props.session.email, input)),
   )
 
   registerTool(

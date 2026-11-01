@@ -7128,6 +7128,45 @@ CREATE TABLE public.trusted_image_builds (
 
 
 --
+-- Name: unreleased_copy_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unreleased_copy_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    mode text NOT NULL,
+    threshold double precision NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_78b4 CHECK (((threshold > (0)::double precision) AND (threshold <= (100000)::double precision))),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_7c07 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_b508 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_e19e CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
+-- Name: unreleased_copy_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.unreleased_copy_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: unreleased_copy_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.unreleased_copy_settings_revisions_revision_seq OWNED BY public.unreleased_copy_settings_revisions.revision;
+
+
+--
 -- Name: unreleased_copy_signals; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7961,6 +8000,13 @@ ALTER TABLE ONLY public.treasury_runtime_revisions ALTER COLUMN revision SET DEF
 --
 
 ALTER TABLE ONLY public.treasury_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.treasury_settings_revisions_revision_seq'::regclass);
+
+
+--
+-- Name: unreleased_copy_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.unreleased_copy_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -10362,6 +10408,14 @@ ALTER TABLE ONLY public.trusted_image_builds
 
 
 --
+-- Name: unreleased_copy_settings_revisions pk_unreleased_copy_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions
+    ADD CONSTRAINT pk_unreleased_copy_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: unreleased_copy_signals pk_unreleased_copy_signals; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -10871,6 +10925,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.trusted_image_builds
     ADD CONSTRAINT trusted_image_builds_source_key UNIQUE (environment, component, source_sha);
+
+
+--
+-- Name: unreleased_copy_settings_revisions unreleased_copy_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions
+    ADD CONSTRAINT unreleased_copy_settings_parent_key UNIQUE (parent_revision);
 
 
 --

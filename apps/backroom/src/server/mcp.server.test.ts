@@ -726,6 +726,8 @@ describe('Backroom MCP tools', () => {
         'get_unreleased_copy_signal',
         'list_unreleased_copy_signals',
         'get_competition_improvement_metrics',
+        'get_unreleased_copy_settings',
+        'apply_unreleased_copy_settings',
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
@@ -963,7 +965,10 @@ describe('Backroom MCP tools', () => {
     // summary, detail in tool help) measures 221,908 bytes; keep about 0.5 KB.
     // The competition improvement read (two optional filters, one-line
     // summary, detail in tool help) measures 222,758 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(223_300)
+    // The unreleased-copy settings pair (no-input read; mode, threshold,
+    // revision, reason and confirmation write) adds about 0.6 KB; keep
+    // about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(223_900)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -10431,6 +10436,74 @@ describe('Backroom MCP tools', () => {
     } finally {
       await readOnly.client.close()
       await readOnly.server.close()
+  it('reads and writes the audited unreleased-copy mode with write scope only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      settings: { mode: 'enforce', threshold: 40 },
+      reason: 'Approved enforcement after the shadow backfill',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-11-01T18:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        effective: {
+          mode: 'shadow',
+          threshold: 40,
+          revision: 0,
+          enforce_since: null,
+        },
+        history: [],
+        runtime: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const read = await readOnly.client.callTool({ name: 'get_unreleased_copy_settings', arguments: {} })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ effective: { mode: 'shadow', revision: 0 } })
+    const denied = await readOnly.client.callTool({
+      name: 'apply_unreleased_copy_settings',
+      arguments: {
+        expectedRevision: 0,
+        mode: 'enforce',
+        reason: revision.reason,
+        confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+      },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    fetchMock.mockResolvedValue(Response.json(revision))
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const applied = await writer.client.callTool({
+        name: 'apply_unreleased_copy_settings',
+        arguments: {
+          expectedRevision: 0,
+          mode: 'enforce',
+          reason: revision.reason,
+          confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+        },
+      })
+      expect(applied.isError).not.toBe(true)
+      expect(readJsonResult(applied)).toMatchObject({ revision: 1, settings: { mode: 'enforce' } })
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(String(url)).toContain('/api/v1/admin/unreleased-copy/settings')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        expected_revision: 0,
+        settings: { mode: 'enforce', threshold: 40 },
+        reason: revision.reason,
+        actor: 'peyton@omniaura.ai',
+        confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+      })
+    } finally {
+      await writer.client.close()
+      await writer.server.close()
     }
   })
 

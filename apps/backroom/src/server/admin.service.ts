@@ -538,6 +538,9 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  applyUnreleasedCopySettingsInputSchema,
+  unreleasedCopySettingsRevisionResponseSchema,
+  unreleasedCopySettingsSchema,
   unreleasedCopySignalInputSchema,
   unreleasedCopySignalListSchema,
   unreleasedCopySignalSchema,
@@ -1073,6 +1076,27 @@ export async function fetchUnreleasedCopySignals(rawInput: unknown) {
     `/api/v1/admin/unreleased-copy/signals?${params.toString()}`,
   )
   return unreleasedCopySignalListSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySettings() {
+  const payload = await platformAdminRequest('/api/v1/admin/unreleased-copy/settings')
+  return unreleasedCopySettingsSchema.parse(payload)
+}
+
+export async function applyUnreleasedCopySettings(actor: string, rawInput: unknown) {
+  const input = applyUnreleasedCopySettingsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/unreleased-copy/settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: { mode: input.mode, threshold: input.threshold },
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return unreleasedCopySettingsRevisionResponseSchema.parse(payload)
 }
 
 export async function fetchCopyCourtTriagePreview(rawInput: unknown, actor: string) {

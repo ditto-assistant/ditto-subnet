@@ -14656,3 +14656,43 @@ class CompetitionReleaseFork(Base):
         ),
         Index("competition_release_forks_fork_idx", "fork_agent_id"),
     )
+
+
+class UnreleasedCopySettingsRevision(Base):
+    """Append-only, operator-audited mode and threshold of the unreleased-copy signal.
+
+    No revision means ``shadow`` at the default threshold. ``enforce`` routes a
+    flag on an agent uploaded after enforcement took effect into a copy-kind
+    ATH hold for an operator ruling; it never rejects.
+    """
+
+    __tablename__ = "unreleased_copy_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('off', 'shadow', 'enforce')",
+            name="unreleased_copy_settings_mode_check",
+        ),
+        CheckConstraint(
+            "threshold > 0 AND threshold <= 100000",
+            name="unreleased_copy_settings_threshold_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="unreleased_copy_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="unreleased_copy_settings_actor_check",
+        ),
+        UniqueConstraint("parent_revision", name="unreleased_copy_settings_parent_key"),
+    )

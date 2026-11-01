@@ -9,8 +9,12 @@ Each tick does two bounded things:
    earlier agent, newest first, but only once the whole history before them is
    indexed, so a missing source can never read as a clean result.
 
-Every evaluation is recorded in ``unreleased_copy_signals`` with ``mode =
-"shadow"``: it never changes agent status, opens a hold, or touches a review.
+The audited mode (:func:`ditto.db.queries.unreleased_copy.effective_settings`)
+decides what happens next. ``off`` does nothing; ``shadow`` records each
+evaluation in ``unreleased_copy_signals``; ``enforce`` also routes a flag on an
+agent uploaded after enforcement began into a copy-kind ATH hold (now if it is
+scored, at score finalization otherwise) for an operator ruling. Nothing here
+ever rejects.
 Pairs at or above half the threshold get ``path:line`` evidence on both sides,
 re-extracted from the two artifacts, so an operator can confirm a match
 without downloading anything. Enforcement is a separate, later change.
@@ -43,9 +47,13 @@ from ditto.api_server.unreleased_copy import (
     evaluate,
 )
 from ditto.db.queries.unreleased_copy import (
+    EffectiveSettings,
     agents_missing_items,
+    effective_settings,
+    enforce_signal,
     load_context,
     pending_candidates,
+    record_enforcement,
     record_signal,
     signal_payload,
     store_items,
@@ -59,10 +67,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 DEFAULT_INTERVAL_SECONDS = 30.0
-DEFAULT_INDEX_BATCH = 8
-DEFAULT_EVALUATE_BATCH = 4
+# Extraction runs in a separate process, so the batch bounds wall time and
+# storage reads per tick, not API latency.
+DEFAULT_INDEX_BATCH = 24
+DEFAULT_EVALUATE_BATCH = 12
 EVIDENCE_MATCHES = 3
-MODE = "shadow"
 # Storage failures before an artifact is recorded as unreadable, so one
 # missing blob cannot stall evaluation of everything uploaded after it.
 MAX_READ_ATTEMPTS = 3
@@ -152,13 +161,16 @@ class UnreleasedCopySentinel:
         self._last_finished: datetime | None = None
         self._last_counters: dict[str, int] = {}
         self._last_error: str | None = None
+        self._last_settings: EffectiveSettings | None = None
 
     def runtime(self) -> dict[str, Any]:
         return {
             "running": self._task is not None and not self._task.done(),
-            "mode": MODE,
+            "mode": self._last_settings.mode if self._last_settings else "shadow",
             "signal_version": SIGNAL_VERSION,
-            "threshold": self.threshold,
+            "threshold": (
+                self._last_settings.threshold if self._last_settings else self.threshold
+            ),
             "interval_seconds": self._interval_seconds,
             "storage_configured": self._storage is not None,
             "last_tick_started_at": self._last_started,
@@ -216,7 +228,14 @@ class UnreleasedCopySentinel:
             "read_retry": 0,
             "evaluated": 0,
             "flagged": 0,
+            "held": 0,
         }
+        async with self._session_maker() as session:
+            settings = await effective_settings(session)
+        self._last_settings = settings
+        if settings.mode == "off":
+            self._finish(counters, started)
+            return counters
         if self._storage is not None:
             async with self._session_maker() as session:
                 missing = await agents_missing_items(session, limit=self._index_batch)
@@ -232,36 +251,54 @@ class UnreleasedCopySentinel:
             if context is None:
                 continue
             signal = evaluate(
-                context.candidate, context.others, threshold=self.threshold
+                context.candidate, context.others, threshold=settings.threshold
             )
             signal, evidence_status = await with_evidence(
                 signal,
                 self._storage,
-                threshold=self.threshold,
+                threshold=settings.threshold,
                 executor=self._extraction_executor(),
             )
             async with self._session_maker() as session, session.begin():
                 await record_signal(
                     session,
                     signal=signal,
-                    mode=MODE,
+                    mode=settings.mode,
                     payload=signal_payload(signal, evidence_status=evidence_status),
                 )
+                if signal.flagged and settings.mode == "enforce":
+                    outcome = await enforce_signal(
+                        session,
+                        agent_id=agent.agent_id,
+                        settings=settings,
+                        now=datetime.now(UTC),
+                    )
+                    await record_enforcement(
+                        session,
+                        agent_id=agent.agent_id,
+                        outcome=outcome,
+                        settings=settings,
+                    )
+                    counters["held"] += int(outcome == "held")
             counters["evaluated"] += 1
             counters["flagged"] += int(signal.flagged)
             if signal.flagged:
                 logger.info(
-                    "unreleased-copy shadow flag agent=%s top=%.2f matched=%s",
+                    "unreleased-copy flag mode=%s agent=%s top=%.2f matched=%s",
+                    settings.mode,
                     agent.agent_id,
                     signal.top_score,
                     signal.matches[0].matched_agent_id,
                 )
+        self._finish(counters, started)
+        return counters
+
+    def _finish(self, counters: dict[str, int], started: float) -> None:
         self._last_counters = {
             **counters,
             "elapsed_ms": int((monotonic() - started) * 1000),
         }
         self._last_finished = datetime.now(UTC)
-        return counters
 
     async def _index(self, agent_id: UUID, counters: dict[str, int]) -> None:
         assert self._storage is not None

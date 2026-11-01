@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class _Model(BaseModel):
@@ -43,6 +43,13 @@ class UnreleasedCopyMatch(_Model):
     items: list[UnreleasedCopyItem]
 
 
+class UnreleasedCopyEnforcement(_Model):
+    outcome: str
+    """``held``, ``deferred:held_at_score_finalization`` or ``not_held:<why>``."""
+    settings_revision: int
+    at: datetime
+
+
 class UnreleasedCopyEvaluation(_Model):
     signal_version: str
     items_version: str
@@ -54,6 +61,7 @@ class UnreleasedCopyEvaluation(_Model):
     excluded: dict[str, int]
     evidence_status: Literal["attached", "not_needed", "unavailable"]
     matches: list[UnreleasedCopyMatch]
+    enforcement: UnreleasedCopyEnforcement | None = None
 
 
 class AdminUnreleasedCopyIndex(_Model):
@@ -108,6 +116,7 @@ class AdminUnreleasedCopySummary(_Model):
     top_matched_name: str | None
     top_matched_version: int | None
     computed_at: datetime
+    enforcement_outcome: str | None = None
 
 
 class AdminUnreleasedCopyCoverage(_Model):
@@ -126,3 +135,54 @@ class AdminUnreleasedCopySignalList(_Model):
     offset: int
     coverage: AdminUnreleasedCopyCoverage
     runtime: AdminUnreleasedCopyRuntime | None
+
+
+UnreleasedCopyMode = Literal["off", "shadow", "enforce"]
+
+
+class UnreleasedCopySettings(_Model):
+    mode: UnreleasedCopyMode
+    threshold: float = Field(default=40.0, gt=0, le=100000)
+
+
+class AdminUnreleasedCopySettingsRevision(_Model):
+    revision: int
+    parent_revision: int
+    settings: UnreleasedCopySettings
+    reason: str
+    actor: str
+    created_at: datetime
+
+
+class AdminUnreleasedCopyEffectiveSettings(_Model):
+    mode: UnreleasedCopyMode
+    threshold: float
+    revision: int
+    """0 when no revision exists (shadow at the default threshold)."""
+    enforce_since: datetime | None
+    """Only agents uploaded at or after this are held; enforcement is not
+    retroactive."""
+
+
+class AdminUnreleasedCopySettingsResponse(_Model):
+    effective: AdminUnreleasedCopyEffectiveSettings
+    history: list[AdminUnreleasedCopySettingsRevision]
+    runtime: AdminUnreleasedCopyRuntime | None
+
+
+class AdminUnreleasedCopySettingsRequest(_Model):
+    expected_revision: int = Field(ge=0)
+    settings: UnreleasedCopySettings
+    reason: str = Field(min_length=8)
+    actor: str = Field(min_length=1, max_length=120)
+    confirmation: str
+
+
+class AdminUnreleasedCopyOverview(_Model):
+    """The signal's posture beside the copy court that rules on its holds."""
+
+    effective: AdminUnreleasedCopyEffectiveSettings
+    coverage: AdminUnreleasedCopyCoverage
+    runtime: AdminUnreleasedCopyRuntime | None
+    flagged: list[AdminUnreleasedCopySummary]
+    """Highest-scoring flagged agents (operator review list), at most 50."""

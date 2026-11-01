@@ -1,7 +1,8 @@
 # Unreleased-copy signal
 
-Status: **shadow**. Records a score per agent; never holds, rejects, or changes
-status. Code: `ditto/api_server/distinctive_content.py` (extraction),
+Status: audited mode (`off` | `shadow` | `enforce`, threshold default 40) in
+`unreleased_copy_settings_revisions`; no revision means shadow. It never
+rejects. Code: `ditto/api_server/distinctive_content.py` (extraction),
 `ditto/api_server/unreleased_copy.py` (pure signal),
 `ditto/db/queries/unreleased_copy.py` (storage),
 `ditto/api_server/unreleased_copy_sentinel.py` (loop),
@@ -92,11 +93,26 @@ but only agents whose whole upload history is indexed. New uploads are indexed
 in the upload transaction. Reads: Backroom `get_unreleased_copy_signal`
 (artifact scope) and `list_unreleased_copy_signals`.
 
-## Enforce (not enabled)
+## Enforce
 
-Turning a flag into a copy hold needs, in order: a complete shadow backfill
-with every flagged row reviewed; zero cleared rows among the flags (or a
-recalibrated bar); a settings revision with an audited mode switch rather than
-a code constant; the hold routed through the existing copy court so the
-operator rules on it; and a miner-facing reason that cites only the candidate's
-own `path:line` evidence, never the other owner's source.
+Set with Backroom `apply_unreleased_copy_settings` (confirmation
+`APPLY UNRELEASED COPY {MODE}`, optimistic `expectedRevision`, reason, operator
+as actor); read with `get_unreleased_copy_settings`, and in
+`get_copy_court_settings` under `unreleased_copy`.
+
+- **Not retroactive.** `enforce_since` is the start of the current unbroken run
+  of enforce revisions. Only agents uploaded at or after it can be held;
+  earlier flags stay on the review list with outcome
+  `not_held:uploaded_before_enforcement`.
+- **Holds, never rejects.** A flag at or above the threshold on an eligible
+  agent opens a copy-kind ATH hold (`ath_pending_review`, `duplicate_of` the
+  matched agent, provenance `trigger: unreleased_copy`): at score
+  finalization when the sentinel evaluated first (the usual order), or by the
+  sentinel itself when the agent is already scored or live. The outcome is
+  recorded on the signal (`held`, `deferred:held_at_score_finalization`,
+  `not_held:<why>`).
+- **Operator rules.** The hold reason carries no near-duplicate hint, so the
+  copy court classes it `unknown` and always escalates; it is never applied
+  automatically.
+- **Miner-visible reason** cites only the candidate's own `path:line`
+  locations, never the other owner's source.
