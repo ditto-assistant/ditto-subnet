@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.429.0 (2026-11-01)
+
+### Features
+
+- **platform**: Switch the unreleased-copy signal to enforce at threshold 100
+  ([#3310](https://github.com/ditto-assistant/ditto-subnet/pull/3310),
+  [`73b737d`](https://github.com/ditto-assistant/ditto-subnet/commit/73b737dc50c26e6790f4a3b63098cd0487c7b3f5))
+
+
 ## v0.428.1 (2026-11-01)
 
 ### Bug Fixes
