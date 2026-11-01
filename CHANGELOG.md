@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.427.0 (2026-11-01)
+
+### Features
+
+- **platform**: Expose unreleased-copy near misses and per-agent signal in copy-court reads
+  ([#3315](https://github.com/ditto-assistant/ditto-subnet/pull/3315),
+  [`266e8b5`](https://github.com/ditto-assistant/ditto-subnet/commit/266e8b5e4d1d036a499f4d72a57273f18500c29e))
+
+
 ## v0.426.3 (2026-11-01)
 
 ### Performance Improvements
