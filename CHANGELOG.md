@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.426.1 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Keep unreleased-copy scoring off the API event loop
+  ([#3312](https://github.com/ditto-assistant/ditto-subnet/pull/3312),
+  [`72d93ca`](https://github.com/ditto-assistant/ditto-subnet/commit/72d93ca6cf0405608fa236ab30f9c28a92083d04))
+
+
 ## v0.426.0 (2026-11-01)
 
 ### Chores
