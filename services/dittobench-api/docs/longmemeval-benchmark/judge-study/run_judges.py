@@ -75,6 +75,8 @@ def select_probes(probes, limit, stratify):
         return probes[:limit]
     by = collections.defaultdict(list)
     for p in probes: by[p["probe"]].append(p)
+    if not by:
+        return []
     per = max(1, limit // len(by)); sel = []
     for k in sorted(by): sel.extend(by[k][:per])
     return sel[:limit]

@@ -30,6 +30,7 @@ def test_stratified_limit_is_a_cap():
     # Unchanged when the limit covers every category.
     assert len(rj.select_probes(probes, 10, True)) == 10
     assert rj.select_probes(probes, 0, True) == probes
+    assert rj.select_probes([], 2, True) == []
 
 
 def test_error_records_are_retried_on_resume(tmp_path):
