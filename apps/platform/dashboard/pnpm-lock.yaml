@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  seroval: 1.6.10
+
 importers:
 
   .:
@@ -1014,8 +1017,8 @@ packages:
     peerDependencies:
       seroval: ^1.0
 
-  seroval@1.5.6:
-    resolution: {integrity: sha512-rVQVWjjSvlINzaQPZH5JFqsqEsIWdTxY3iJZCnTL/5gQbXIRooVZKI60tVCkOVfzcRPejboxO2t0P89dg5mQaA==}
+  seroval@1.6.10:
+    resolution: {integrity: sha512-GKZbsOHLV6GToR1rNQc9CZ+s8HZTS5X5N9D++z/xUh4SV9UwepLzqc60pKJTEEfEHzGdtWTXHpp+GhLoGLT1UA==}
     engines: {node: '>=10'}
 
   siginfo@2.0.0:
@@ -2006,19 +2009,19 @@ snapshots:
 
   semver@6.3.1: {}
 
-  seroval-plugins@1.5.6(seroval@1.5.6):
+  seroval-plugins@1.5.6(seroval@1.6.10):
     dependencies:
-      seroval: 1.5.6
+      seroval: 1.6.10
 
-  seroval@1.5.6: {}
+  seroval@1.6.10: {}
 
   siginfo@2.0.0: {}
 
   solid-js@1.9.15:
     dependencies:
       csstype: 3.2.3
-      seroval: 1.5.6
-      seroval-plugins: 1.5.6(seroval@1.5.6)
+      seroval: 1.6.10
+      seroval-plugins: 1.5.6(seroval@1.6.10)
 
   solid-refresh@0.6.3(solid-js@1.9.15):
     dependencies:
