@@ -23,6 +23,7 @@ const (
 	BenchVersionV12 = 12
 	BenchVersionV13 = 13
 	BenchVersionV14 = 14
+	BenchVersionV15 = 15
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
@@ -40,7 +41,7 @@ const (
 // contract this scorer has reviewed: a stale bound here silently rejects a new
 // version's evidence, which is the failure mode every bump so far has hit.
 func SupportedBenchVersion(benchVersion int) bool {
-	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV14
+	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV15
 }
 
 var (

@@ -1442,6 +1442,10 @@ def verified_scorer_for_version(
     # historical v13 packet stays immutable and cannot qualify a v14 rollout.
     if version == 14 and scorer.v14_scored_runtime_env is None:
         return None
+    # v15 adds the decision-lane key to the sandbox environment, so it needs
+    # its own packet; a v14 packet cannot qualify a v15 rollout.
+    if version == 15 and scorer.v15_scored_runtime_env is None:
+        return None
     if version >= 9 and not _scorer_meets_version_floor(
         heartbeat,
         scorer=scorer,

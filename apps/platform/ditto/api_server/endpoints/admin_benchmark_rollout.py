@@ -26,6 +26,7 @@ from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import get_dataset_generator, get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
     AGGREGATE_PROVIDER,
@@ -58,6 +59,9 @@ from ditto.db.queries.benchmark_rollout import (
     rollout_state,
     select_active_bench_version,
     supersede_open_rollout,
+)
+from ditto.db.queries.inference_concurrency_settings import (
+    latest_inference_concurrency_settings_revision,
 )
 from ditto.db.queries.retry_state import classify_agent_retry_states
 
@@ -339,6 +343,38 @@ def _inference_proxy_start_blocker(
     return None
 
 
+DECISION_LANE_MIN_BENCH_VERSION = 15
+"""The first bench version whose scored runs carry the locked decision lane."""
+
+
+async def _decision_lane_start_blocker(
+    session: AsyncSession,
+    desired_version: int,
+    inference_config: InferenceProxyConfig | None,
+) -> str | None:
+    """A v15+ rollout needs the operator's decision lane on with a pinned model.
+
+    v15 scored grants carry the lane (``_decision_grant_stamps``); opening a
+    rollout while the board is off would score the cohort without the lane the
+    contract promises, so the start is refused until the board pins a model.
+    Like the proxy blocker, it applies only where an inference proxy config is
+    bound (the running API), never to a config-free direct call.
+    """
+    if desired_version < DECISION_LANE_MIN_BENCH_VERSION or inference_config is None:
+        return None
+    settings = settings_from_row(
+        await latest_inference_concurrency_settings_revision(session)
+    )
+    lane = settings.decision_lane
+    if not lane.enabled or lane.model is None:
+        return (
+            f"benchmark v{desired_version} rollout requires the decision lane "
+            "enabled with a pinned model (set_inference_concurrency_settings "
+            "decision_lane)"
+        )
+    return None
+
+
 def _require_confirmation(actual: str, *, action: str, version: int) -> None:
     expected = f"{action} BENCHMARK V{version}"
     if actual != expected:
@@ -415,6 +451,10 @@ async def get_rollout_control(
                 config_blocker = _inference_proxy_start_blocker(
                     version, inference_config
                 )
+                if config_blocker is None:
+                    config_blocker = await _decision_lane_start_blocker(
+                        session, version, inference_config
+                    )
                 if config_blocker is not None:
                     blockers.append(config_blocker)
                 else:
@@ -731,6 +771,10 @@ async def start_rollout(
         request.app.state.config.inference_proxy if request is not None else None
     )
     config_blocker = _inference_proxy_start_blocker(target, inference_config)
+    if config_blocker is None:
+        config_blocker = await _decision_lane_start_blocker(
+            session, target, inference_config
+        )
     if config_blocker is not None:
         raise HTTPException(status_code=409, detail=config_blocker)
     await _require_rollout_start_capacity(

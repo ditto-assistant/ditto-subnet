@@ -45,7 +45,7 @@ MIN_BENCH_VERSION = 8
 # wire stays 9.
 # Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
 # ditto/tests/test_bench_version_pins.py diffs across every layer.
-MAX_BENCH_VERSION = 14
+MAX_BENCH_VERSION = 15
 # Environment variables the harness honours only during a local rehearsal.
 COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
 # The kit's `answer` slot is off by default (the wire stays at bench 9, so a
