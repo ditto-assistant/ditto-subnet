@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.430.1 (2026-11-02)
+
+### Bug Fixes
+
+- **screener**: Name the bound and masked outcome behind l2-late-result
+  ([#3320](https://github.com/ditto-assistant/ditto-subnet/pull/3320),
+  [`bb2a060`](https://github.com/ditto-assistant/ditto-subnet/commit/bb2a060c473aeff906681a537c7fa4f2dd736d1b))
+
+
 ## v0.430.0 (2026-11-02)
 
 ### Features
