@@ -461,20 +461,25 @@ def test_low_final_review_needs_stage_two_clearance_and_cannot_hide_support(
         "candidate_assessments": [],
         "summary": "Stage two completed.",
     }
-    malformed = {
-        **payload,
-        "final_review": {**payload["final_review"], "risk_level": []},
-    }
-    with pytest.raises(ValueError, match="final review fields are invalid"):
-        _normalize_final_adjudication(
-            malformed,
-            artifact_sha256="a" * 64,
-            policy_version=13,
-            candidates=[],
-            repository=repository,
-            opened_lines=set(),
-            clearance_certified=False,
-        )
+    # A wrong JSON type and a wrong value are both malformed final reviews,
+    # and both must say which review that was. The type case used to be the
+    # only one named, because it was the only one that arrived as a TypeError
+    # (ditto-subnet#2987).
+    for bad_risk in ([], {"risk": "low"}, "extreme"):
+        malformed = {
+            **payload,
+            "final_review": {**payload["final_review"], "risk_level": bad_risk},
+        }
+        with pytest.raises(ValueError, match="final review fields are invalid"):
+            _normalize_final_adjudication(
+                malformed,
+                artifact_sha256="a" * 64,
+                policy_version=13,
+                candidates=[],
+                repository=repository,
+                opened_lines=set(),
+                clearance_certified=False,
+            )
     with pytest.raises(ValueError, match="clearance coverage"):
         _normalize_final_adjudication(
             payload,
@@ -788,7 +793,10 @@ async def test_raw_contradictory_specialists_reach_always_run_adjudicator(
         row for row in result["passes"] if row["name"] == "benchmark_engine"
     )
     assert benchmark["raw_review"]["risk_level"] == []
-    assert "TypeError" in benchmark["validation_errors"][0]
+    # The recorded diagnostic used to be the leaked exception class; the
+    # parser now names the contract the submission broke instead
+    # (ditto-subnet#2987).
+    assert benchmark["validation_errors"][0] == "source review fields are invalid"
     assert len(stage_two_requests) == 2
     for request in specialist_requests + stage_two_requests:
         prompt = request["messages"][0]["content"]

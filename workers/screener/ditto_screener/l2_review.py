@@ -49,6 +49,7 @@ from ditto_screener.source_review import (
     TarSourceRepository,
     _body_signature,
     _http_error_signature,
+    _is_allowed,
     _retryable_model_error_type,
     l1_verdict_unsettled,
     ledger_disposition,
@@ -3620,7 +3621,16 @@ class TerraSolSourceReviewAgent:
                 usage=L2Usage(),
                 cache_hit=False,
             )
-        except (OSError, ValueError, tarfile.TarError, httpx.HTTPError) as error:
+        # TypeError joins the contract misses: an untrusted submission is
+        # shaped by the model, and a wrong JSON type there is a bad answer,
+        # not broken infrastructure (ditto-subnet#2987).
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            httpx.HTTPError,
+        ) as error:
             logger.warning(
                 "L2 review infrastructure failed: %s: %s",
                 type(error).__name__,
@@ -5256,7 +5266,7 @@ class TerraSolSourceReviewAgent:
                                 analyzed=analyzed,
                                 repository=repository,
                             )
-                    except (json.JSONDecodeError, ValueError) as error:
+                    except (json.JSONDecodeError, TypeError, ValueError) as error:
                         request_submit_correction(
                             submitted[0],
                             reason="validation",
@@ -7271,13 +7281,13 @@ def _parse_l2_review(
     generator_components = value.get("generator_components", [])
     causal_evidence_value = value.get("causal_evidence")
     submitted_summary = value["summary"]
-    if disposition not in {"safe", "violation", "inconclusive"}:
+    if not _is_allowed(disposition, {"safe", "violation", "inconclusive"}):
         raise ValueError("L2 result disposition is invalid")
     if disposition == "safe" and causal_evidence_value is not None:
         raise ValueError("L2 safe result cannot contain causal evidence")
     if disposition == "inconclusive" and causal_evidence_value is not None:
         raise ValueError("L2 inconclusive result cannot contain causal evidence")
-    if risk not in {"low", "medium", "high"}:
+    if not _is_allowed(risk, {"low", "medium", "high"}):
         raise ValueError("L2 result risk is invalid")
     if (
         not isinstance(confidence, (int, float))
@@ -7285,13 +7295,15 @@ def _parse_l2_review(
         or not 0 <= float(confidence) <= 1
     ):
         raise ValueError("L2 result confidence is invalid")
-    if resolution_basis not in _resolution_bases_for_policy(policy_version):
+    if not _is_allowed(resolution_basis, _resolution_bases_for_policy(policy_version)):
         raise ValueError("L2 result resolution basis is invalid")
     if (
         not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
         or any(
-            category not in source_review_categories_for_policy(policy_version)
+            not _is_allowed(
+                category, source_review_categories_for_policy(policy_version)
+            )
             for category in categories
         )
     ):
@@ -7335,8 +7347,8 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _ALLOWED_CATEGORIES
-            or role not in _ROLES
+            or not _is_allowed(category, _ALLOWED_CATEGORIES)
+            or not _is_allowed(role, _ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7351,7 +7363,7 @@ def _parse_l2_review(
             not isinstance(path, str)
             or not isinstance(line, int)
             or isinstance(line, bool)
-            or role not in _ROLES
+            or not _is_allowed(role, _ROLES)
             or path not in analyzed_map
             or not _valid_location(repository, path, line)
         ):
@@ -7378,7 +7390,7 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or kind not in _GENERATOR_COMPONENT_KINDS
+            or not _is_allowed(kind, _GENERATOR_COMPONENT_KINDS)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7587,9 +7599,9 @@ def _parse_causal_evidence(
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
-    if transition not in _authority_transitions_for_policy(policy_version):
+    if not _is_allowed(transition, _authority_transitions_for_policy(policy_version)):
         raise ValueError("L2 causal authority transition is invalid")
-    if scorer_visible_effect not in _SCORER_VISIBLE_EFFECTS:
+    if not _is_allowed(scorer_visible_effect, _SCORER_VISIBLE_EFFECTS):
         raise ValueError("L2 scorer-visible effect is invalid")
     if not isinstance(bindings, list) or not 1 <= len(bindings) <= 32:
         raise ValueError("L2 causal role bindings are invalid")
@@ -7618,8 +7630,8 @@ def _parse_causal_evidence(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _MULTI_LOCATION_CATEGORIES
-            or role not in _CAUSAL_EVIDENCE_ROLES
+            or not _is_allowed(category, _MULTI_LOCATION_CATEGORIES)
+            or not _is_allowed(role, _CAUSAL_EVIDENCE_ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
             or (path, line, str(category)) not in evidence_locations

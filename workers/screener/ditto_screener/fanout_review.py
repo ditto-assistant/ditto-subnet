@@ -797,7 +797,12 @@ def _normalize_final_adjudication(
             repository=repository,
             policy_version=policy_version,
         )
-    except (TypeError, KeyError) as error:
+    # This named the malformed review only when the parser leaked a wrong
+    # JSON type; a wrong value reached the caller as the parser's own
+    # message and lost which review it came from. The guards in
+    # _parse_review make every bad field a ValueError now
+    # (ditto-subnet#2987), so name the review for all of them.
+    except (TypeError, KeyError, ValueError) as error:
         raise ValueError(
             "fanout adjudicator final review fields are invalid"
         ) from error
