@@ -384,7 +384,10 @@ async def _claimability(
     )
     opened_in_window: int | None = None
     if wave_window.paced and champion_agent_id is not None:
-        first_issue = await first_retest_issue_by_seed(session, bench_version=version)
+        assert wave_window.window_start is not None  # paced implies a start
+        first_issue = await first_retest_issue_by_seed(
+            session, bench_version=version, since=wave_window.window_start
+        )
         opened_in_window = len(seeds_opened_in_window(wave_window, first_issue))
     leases = (
         await _live_retest_leases(

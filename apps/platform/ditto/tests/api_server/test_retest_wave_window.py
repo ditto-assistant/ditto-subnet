@@ -151,7 +151,10 @@ async def test_first_issue_is_lane_wide_and_survives_ticket_reuse(
     )
     await session.flush()
 
-    first = await first_retest_issue_by_seed(session, bench_version=14)
+    # Since before everything: every seed with lane activity is a candidate.
+    first = await first_retest_issue_by_seed(
+        session, bench_version=14, since=_NOW - timedelta(days=1)
+    )
 
     assert set(first) == {5, 6, 9}
     assert first[5].replace(tzinfo=UTC) == _NOW
@@ -172,3 +175,41 @@ async def test_window_is_scoped_to_the_lane_netuid(session: AsyncSession) -> Non
 
     assert window.latest_epoch == 26090 and window.window_epoch == 26088
     assert window.window_start == _NOW
+
+
+@pytest.mark.asyncio
+async def test_first_issue_reads_only_seeds_active_since_the_window(
+    session: AsyncSession,
+) -> None:
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="miner-window",
+        name="wave-window-since",
+        sha256="aa" * 32,
+        status=AgentStatus.SCORED,
+        created_at=_NOW,
+    )
+    session.add(agent)
+    await session.flush()
+    for seed, created in ((1, _NOW), (2, _NOW + timedelta(hours=5))):
+        session.add(
+            ConfirmationScore(
+                agent_id=agent.agent_id,
+                validator_hotkey=f"validator-{seed}",
+                bench_version=14,
+                seed=seed,
+                composite=0.9,
+                run_id=f"run-{seed}",
+                created_at=created,
+            )
+        )
+    await session.flush()
+    since = _NOW + timedelta(hours=4)
+
+    first = await first_retest_issue_by_seed(
+        session, bench_version=14, since=since, include=(1, 3)
+    )
+
+    # Seed 1 is old but named; seed 2 is active in the window; 3 never ran.
+    assert set(first) == {1, 2}
+    assert first[1].replace(tzinfo=UTC) == _NOW

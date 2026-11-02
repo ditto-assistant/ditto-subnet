@@ -36,6 +36,8 @@ from ditto.api_models.ticket_status import TicketPurpose
 from ditto.db.models import ConfirmationScore, LedgerEpochSnapshot, ValidatorTicket
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -90,25 +92,55 @@ async def current_wave_window(
 
 
 async def first_retest_issue_by_seed(
-    session: AsyncSession, *, bench_version: int
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    since: datetime,
+    include: Iterable[int] = (),
 ) -> dict[int, datetime]:
-    """When each continual-retest seed first entered the lane at this version.
+    """When each candidate seed first entered the continual lane at this version.
 
-    Lane-wide, never scoped to the current cohort: a seed opened for a member
-    that later left the emission set still spent its window's budget.
+    Candidates are the seeds with lane activity at or after ``since`` (the
+    window start) plus ``include`` (the seed about to be opened), so the read is
+    bounded by one window's activity, not the lane's whole history. For each
+    candidate the first-seen time is lane-wide and durable:
 
-    ``ValidatorTicket`` rows are reused per (agent, version, validator), so a
-    ticket's ``seed`` and ``issued_at`` describe only its latest lease. The
-    durable record is the append-only ``ConfirmationScore`` row (voided rows
-    included: a void does not un-open a seed). A seed is first seen at the
-    earlier of its first accepted score and any live lease of it. A seed whose
-    only lease was overwritten before any score landed reads as unopened,
-    which can only let pacing open one more seed, never strand a wave.
+    * lane-wide, never scoped to the current cohort, because a seed opened for
+      a member that later left the emission set still spent its window budget;
+    * durable, because ``ValidatorTicket`` rows are reused per (agent, version,
+      validator) and keep only their latest lease. The append-only
+      ``ConfirmationScore`` row (voided rows included: a void does not un-open
+      a seed) is the record, and a live lease covers a seed not yet scored.
+
+    A seed whose only lease was overwritten before any score landed reads as
+    unopened, which can only let pacing open one more seed, never strand a wave.
     """
+    score_scope = (ConfirmationScore.bench_version == bench_version,)
+    lease_scope = (
+        ValidatorTicket.bench_version == bench_version,
+        ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
+        ValidatorTicket.seed.is_not(None),
+    )
+    candidates = {int(seed) for seed in include}
+    recent_scores = await session.scalars(
+        select(ConfirmationScore.seed)
+        .where(*score_scope, ConfirmationScore.created_at >= since)
+        .distinct()
+    )
+    candidates.update(int(seed) for seed in recent_scores if seed is not None)
+    recent_leases = await session.scalars(
+        select(ValidatorTicket.seed)
+        .where(*lease_scope, ValidatorTicket.issued_at >= since)
+        .distinct()
+    )
+    candidates.update(int(seed) for seed in recent_leases if seed is not None)
+    if not candidates:
+        return {}
+    wanted = sorted(candidates)
     first: dict[int, datetime] = {}
     scored = await session.execute(
         select(ConfirmationScore.seed, func.min(ConfirmationScore.created_at))
-        .where(ConfirmationScore.bench_version == bench_version)
+        .where(*score_scope, ConfirmationScore.seed.in_(wanted))
         .group_by(ConfirmationScore.seed)
     )
     for seed, created in scored:
@@ -116,11 +148,7 @@ async def first_retest_issue_by_seed(
             first[int(seed)] = created
     leased = await session.execute(
         select(ValidatorTicket.seed, func.min(ValidatorTicket.issued_at))
-        .where(
-            ValidatorTicket.bench_version == bench_version,
-            ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
-            ValidatorTicket.seed.is_not(None),
-        )
+        .where(*lease_scope, ValidatorTicket.seed.in_(wanted))
         .group_by(ValidatorTicket.seed)
     )
     for seed, issued in leased:

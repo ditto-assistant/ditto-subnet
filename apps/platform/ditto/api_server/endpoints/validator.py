@@ -5356,8 +5356,12 @@ async def _top5_confirmation_seed_plan(
     ):
         return catchup
     if wave_window is not None and wave_window.paced:
+        assert wave_window.window_start is not None  # paced implies a start
         first_issue = await first_retest_issue_by_seed(
-            session, bench_version=canonical_version
+            session,
+            bench_version=canonical_version,
+            since=wave_window.window_start,
+            include=(next_seed,),
         )
         if not growth_open(wave_window, next_seed=next_seed, first_issue=first_issue):
             return catchup
