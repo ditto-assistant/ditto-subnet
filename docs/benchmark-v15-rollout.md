@@ -1,6 +1,6 @@
 # Bench v15 qualification and rollout
 
-Status: **contract shipped, not activated.** Supporting v15 does not change
+Status: **contract shipped and deployed (v0.430.0), decision lane on, canary passed; not activated.** Supporting v15 does not change
 Platform's active version (14). Activation is a separate, guarded operator
 rollout (`start_benchmark_rollout` desired 15) after the steps below.
 
@@ -58,3 +58,24 @@ packs declaring 14 or 15; v13 packs keep working in v14 rounds.
 
 Rollback before activation is cancelling the rollout; v14 stays active
 throughout.
+
+## Activation record (in progress)
+
+- **Contract.** #3318 merged as `a131ed26`, released and deployed in v0.430.0
+  (2026-11-02). Backroom `get_benchmark_rollout_control` lists v15 as the only
+  available target. Tempo-aligned wave pacing (#3319) shipped in the next
+  release with `wave_cadence_tempos` 0 (off).
+- **Fleet.** By 03:15 UTC four of five online validators ran scorer 0.430.0
+  advertising 8–15. One host advertises v15 but has zero serviceable slots
+  (memory below the 8 GiB sandbox limit).
+- **Decision lane.** Inference board revision 38 (2026-11-02 02:4x UTC)
+  enabled `decision_lane` with `typesafe/jev-1.14` at the default price and
+  walls. The v15 start blocker cleared.
+- **Canary.** `6f15c0de-7a15-4e15-8a15-000000000001`: a released-era DrPresident
+  build (`872028c6`, accepted v14 scores 0.919 / 0.947 / 0.910) on one
+  0.430.0 validator, full profile, seed `5125359883995889733`, dataset
+  `a5455429…`. It completed at 03:18 UTC: composite **0.9476** (tool 0.9467,
+  memory 0.962), within its v14 band. The harness predates v15, so the
+  connector menu was present and the decision lane went unused.
+- **Next.** 24-hour #118 notice, then `start_benchmark_rollout` desired 15;
+  set `wave_cadence_tempos: 4`, `wave_seeds_per_window: 3` with the notice.
