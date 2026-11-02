@@ -23,8 +23,14 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_claim_provenance import (
     router as admin_claim_provenance_router,
 )
+from ditto.api_server.endpoints.admin_competition_improvement import (
+    router as admin_competition_improvement_router,
+)
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
+)
+from ditto.api_server.endpoints.admin_confirmation_score_voids import (
+    router as admin_confirmation_score_voids_router,
 )
 from ditto.api_server.endpoints.admin_confirmation_seed_anchors import (
     router as admin_confirmation_seed_anchors_router,
@@ -86,6 +92,9 @@ from ditto.api_server.endpoints.admin_outlier_escalation import (
 from ditto.api_server.endpoints.admin_owner import (
     router as admin_owner_router,
 )
+from ditto.api_server.endpoints.admin_provider_outages import (
+    router as admin_provider_outages_router,
+)
 from ditto.api_server.endpoints.admin_quarantine import (
     router as admin_quarantine_router,
 )
@@ -145,6 +154,9 @@ from ditto.api_server.endpoints.admin_treasury_receipts import (
 )
 from ditto.api_server.endpoints.admin_treasury_settings import (
     router as admin_treasury_settings_router,
+)
+from ditto.api_server.endpoints.admin_unreleased_copy import (
+    router as admin_unreleased_copy_router,
 )
 from ditto.api_server.endpoints.admin_v13_private_generation import (
     router as admin_v13_private_generation_router,
@@ -238,6 +250,8 @@ __all__ = [
     "admin_lease_revocations_router",
     "admin_confirmation_seed_anchors_router",
     "admin_copy_court_router",
+    "admin_unreleased_copy_router",
+    "admin_competition_improvement_router",
     "admin_screening_review_cost_router",
     "admin_copy_review_router",
     "admin_claim_provenance_router",
@@ -259,6 +273,8 @@ __all__ = [
     "admin_v13_private_generation_router",
     "admin_submission_settings_router",
     "admin_submission_deposit_address_router",
+    "admin_confirmation_score_voids_router",
+    "admin_provider_outages_router",
     "admin_validation_retry_router",
     "admin_validator_capacity_router",
     "admin_validator_request_outcomes_router",

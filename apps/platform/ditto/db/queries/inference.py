@@ -49,12 +49,13 @@ def _decision_grant_stamps(
 ) -> dict[str, object]:
     """Decision-lane columns for a new grant.
 
-    Only hosted-era (v7+) leases get the lane, and only while the operator's
+    Only bench v15+ leases get the lane (v15 is the first contract whose
+    scored harness may call it), and only while the operator's
     ``decision_lane`` board pins a model. Otherwise the grant keeps the column
     defaults (no model, zero walls), identical to a grant minted before the
-    lane existed. Carries no score: no scorer reads these in Phase 1.
+    lane existed, so every v14-and-earlier lease is byte-identical to before.
     """
-    if ticket.bench_version < 7 or not config.decision_model:
+    if ticket.bench_version < 15 or not config.decision_model:
         return {}
     return {
         "decision_model": config.decision_model,

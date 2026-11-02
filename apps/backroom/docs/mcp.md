@@ -136,7 +136,15 @@ cohort is owner suppression, not a score it failed to reach;
 emission slot. `claim` runs the issuance lane's own gates for an empty validator
 hotkey, so no lease, event or slot is attributed. It gives the scheduled round,
 catch-up set, spare-capacity window, idle-retest gate, route priority and
-`decision`, the first gate a polling validator would hit now. A
+`decision`, the first gate a polling validator would hit now. With
+tempo-aligned waves on (`wave_cadence_tempos` > 0 on the continual retest
+settings) it also gives the pacing window: `wave_window_epoch`,
+`wave_next_window_epoch`, `wave_window_start`, the fresh seeds already opened
+in it (`wave_window_opened_seed_count`, a count) and `wave_growth_paused`, true
+when the window's `wave_seeds_per_window` budget is spent. A paused window
+withholds only fresh shared seeds; catch-up and open waves still lease. Null
+window fields at a positive cadence mean no ledger pin anchors a window, and
+pacing fails open. A
 `chain_unavailable` decision means the block read failed, not that the lane is
 idle. The tool also returns ticket counts and the latest ticket and accepted
 result. Outstanding work is only a count, `pending_seed_count`. Pending seed
@@ -144,6 +152,44 @@ values, confirmation datasets, prompts and answer keys never leave Platform, and
 unknown upstream fields are stripped. The raw and folded seed IDs it returns
 are already-scored confirmation seeds, as exact decimal strings. The snapshot
 grants no work and changes nothing.
+
+`retest_samples` pairs each of the newest (at most 30) accepted confirmation
+samples with the inference grant that served it (the newest grant for that
+validator created at or before acceptance) and counts its chat requests:
+`chat_requests`, `failed_requests` and `failure_codes` by relay
+`terminal_error_code`. It is counts only. A low sample whose grant failed many
+calls (for example `upstream_http_402`, gateway credit exhaustion) measured the
+inference path rather than the agent; this is the first read for a "my retest
+looks like an infra failure" report.
+
+`void_infra_scores` (`backroom:write`) sets aside continual-retest samples
+that measured an inference outage. Each item names the exact sample from
+`retest_samples` (validator, seed, `expectedRunId`, `expectedComposite`) and is
+gated on its grant's outage-class failures (`upstream_http_402`,
+`upstream_http_429`, `upstream_http_503`: at least 5, and at least 20 or 5% of
+chat calls). `dryRun` defaults to true. A real write needs `VOID INFRA SCORES`
+and is all-or-nothing. The append-only void (`confirmation_score_voids`) keeps
+the score row unchanged. Every fold read skips the voided row from the next
+epoch pin, and the seed re-runs at the next `void_generation`. Validators fold
+the served `confirmation_history`, so no protocol change is involved.
+`list_infra_voids` reads them back with the re-run composite once it lands.
+
+`get_provider_outages` (`backroom:read`) reads the relay-owned
+`provider_outage_circuits` rows and the post-outage sweep. The circuit closes
+on any successful call, so in a low-balance flap a retest can still finish with
+many refused calls. Every 5 minutes the platform role examines up to 200
+un-voided continual-retest samples of the active version accepted after the
+last run's watermark (the first run reads the active bench version's whole
+confirmation history as a backfill, or 6 hours when it has none; rows from the last
+2 minutes wait for the next run). It voids each sample whose grant meets the
+same evidence gate as `void_infra_scores`, with source `outage_sweep` and the
+grant's first and last outage-class failure as the outage window. Each
+append-only run (`outage_sweep_runs`) records its watermark range, counts,
+voids, outage windows, per-row errors, and `canonical_flagged`. Those are
+canonical scores accepted in the same range whose grant shows the same
+evidence. The sweep never replaces them; review each with
+`replace_validator_score`. A row that errors is listed and skipped, not
+retried. `withFindings` keeps only runs that voided, flagged or errored.
 
 The shadow DittoBench generator competition has its own operator surface.
 Miners submit CPU-only Go generator source. The scorer qualifies each upload:
@@ -652,6 +698,44 @@ hitting its own match cap, and the manifest returns whole by default so no path
 hides behind an offset. `opaque_skipped` counts the members no search can
 reach — a `.onnx` or `.bin` weights file is never searched, and a search that
 never opened one cannot clear it.
+
+## Unreleased-copy signal (shadow)
+
+`list_unreleased_copy_signals` pages the Platform sentinel's recorded scores,
+highest first, with index coverage (`indexed`, `unreadable`,
+`oldest_unindexed_at`, `evaluated`, `flagged`) and the sentinel runtime. It
+names no source text and needs `backroom:read`.
+
+`get_unreleased_copy_signal(agentId, live?)` returns one agent's evaluation:
+the shared distinctive items (normalized literal, prompt, cue-list and long
+identifier text, in any language) as `candidate` and `matched` `path:line`
+pairs, and each matched agent's identity, status, upload time and release
+state. Same-owner history, the public corpus, every agent released before the
+upload, and items four or more other owners hold are excluded before scoring.
+`live=true` recomputes read-only. The evidence quotes source text from two
+submissions, so it needs `backroom:artifact:read`.
+
+`get_unreleased_copy_settings` and `apply_unreleased_copy_settings` read and
+write the audited mode (`off` | `shadow` | `enforce`) and threshold
+(confirmation `APPLY UNRELEASED COPY {MODE}`). In enforce mode a flag on an
+agent uploaded after enforcement began opens a copy-kind ATH hold that the
+copy court always escalates to an operator; nothing rejects automatically,
+and earlier flags stay on the review list. `get_copy_court_settings` also
+returns the posture, coverage and top flags under `unreleased_copy`. Design and calibration live in
+`apps/platform/docs/unreleased-copy-signal.md`.
+
+## Competition improvement metrics
+
+`get_competition_improvement_metrics(benchVersion?, since?)` reads the hourly
+Platform job's measurement tables (bench v13 onward): one row per UTC day with
+the frontier, epoch-pinned champion and owner-deduplicated top 5; every new
+high with its delta, gap and driver (`released_fork`, `same_owner_iteration`
+or `original`); each exact-SHA source release with its detected forks (lag,
+containment, novel fraction, thin flag, delta and shared-seed delta); the same
+facts grouped by release-policy window; and a live noise floor for each
+bench's top 10. Closed days are frozen as recorded. It changes nothing and
+needs `backroom:read`. Definitions and thresholds come back in the payload;
+the design lives in `apps/platform/docs/competition-improvement-metrics.md`.
 
 ## Diffing two submissions
 

@@ -205,6 +205,16 @@ class V14ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
     bench_version: Literal[14]
 
 
+class V15ScoredRuntimeEnvEvidence(_ScoredRuntimeEnvEvidenceBase):
+    """Keys reported by a descriptor-verified scorer for its v15 sandbox.
+
+    v15 adds the decision-lane URL key, so its packet has its own slot and
+    digest; a v14 packet can never qualify a v15 rollout.
+    """
+
+    bench_version: Literal[15]
+
+
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
@@ -219,6 +229,9 @@ class ScorerBenchmarkCapability(BaseModel):
         default=None, exclude_if=lambda value: value is None
     )
     v14_scored_runtime_env: V14ScoredRuntimeEnvEvidence | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    v15_scored_runtime_env: V15ScoredRuntimeEnvEvidence | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
     v7_calibration: V7InferenceCalibration | None = None
@@ -282,6 +295,12 @@ class ScorerBenchmarkCapability(BaseModel):
             or self.source_revision != self.v14_scored_runtime_env.source_revision
         ):
             raise ValueError("v14 runtime environment requires verified v14 identity")
+        if self.v15_scored_runtime_env is not None and (
+            self.status != "fresh_verified"
+            or 15 not in versions
+            or self.source_revision != self.v15_scored_runtime_env.source_revision
+        ):
+            raise ValueError("v15 runtime environment requires verified v15 identity")
         if self.deterministic_v13_datasets and (
             self.status != "fresh_verified" or 13 not in versions
         ):

@@ -36,7 +36,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     UUID as SaUUID,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TIMESTAMP
 
@@ -4977,13 +4977,27 @@ class ConfirmationScore(Base):
     )
     """When this immutable row was appended (UTC). Never updated."""
 
+    void_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    """0 for the first result on a key; ``n`` for the re-run after ``n`` voids.
+
+    Part of the primary key so an infrastructure re-run on the same
+    ``(agent, version, validator, seed)`` appends instead of being dropped.
+    See :class:`ConfirmationScoreVoid`.
+    """
+
     __table_args__ = (
         PrimaryKeyConstraint(
             "agent_id",
             "bench_version",
             "validator_hotkey",
             "seed",
+            "void_generation",
             name="confirmation_scores_pkey",
+        ),
+        CheckConstraint(
+            "void_generation >= 0", name="confirmation_scores_void_generation_check"
         ),
         ForeignKeyConstraint(
             ["agent_id"],
@@ -5015,6 +5029,168 @@ class ConfirmationScore(Base):
             name="confirmation_scores_efficiency_cost_check",
         ),
         Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),
+        # The post-outage sweep reads one version in acceptance order from a
+        # keyset watermark (see OutageSweepRun).
+        Index("confirmation_scores_version_created_idx", "bench_version", "created_at"),
+    )
+
+
+class ConfirmationScoreVoid(Base):
+    """Append-only record that one continual-retest sample measured infrastructure.
+
+    A void names the exact :class:`ConfirmationScore` row it sets aside
+    (key, generation, run id and composite), why, the evidence and its digest,
+    who or what applied it (``operator`` or the post-outage ``outage_sweep``),
+    and the outage window when one is known. It is never updated or deleted.
+
+    Every fold read (official composite, owner representative, retest cohort,
+    crown and the validator ledger) excludes a voided row, which reopens that
+    seed for the agent; the re-run is appended at ``void_generation + 1``. The
+    score row itself is untouched, so the original is always auditable.
+    """
+
+    __tablename__ = "confirmation_score_voids"
+
+    void_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    void_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    composite: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    evidence_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 of the canonical (sorted-key, compact) JSON of ``evidence``."""
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    outage_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    outage_ended_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            [
+                "agent_id",
+                "bench_version",
+                "validator_hotkey",
+                "seed",
+                "void_generation",
+            ],
+            [
+                "confirmation_scores.agent_id",
+                "confirmation_scores.bench_version",
+                "confirmation_scores.validator_hotkey",
+                "confirmation_scores.seed",
+                "confirmation_scores.void_generation",
+            ],
+            ondelete="CASCADE",
+            name="confirmation_score_voids_sample_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "seed",
+            "void_generation",
+            name="confirmation_score_voids_sample_key",
+        ),
+        CheckConstraint(
+            "sample_kind IN ('continual_retest')",
+            name="confirmation_score_voids_sample_kind_check",
+        ),
+        CheckConstraint(
+            "source IN ('operator', 'outage_sweep')",
+            name="confirmation_score_voids_source_check",
+        ),
+        CheckConstraint(
+            "evidence_digest ~ '^[0-9a-f]{64}$'",
+            name="confirmation_score_voids_evidence_digest_check",
+        ),
+        CheckConstraint(
+            "length(btrim(reason)) >= 8",
+            name="confirmation_score_voids_reason_check",
+        ),
+        CheckConstraint(
+            "outage_ended_at IS NULL OR outage_started_at IS NOT NULL",
+            name="confirmation_score_voids_outage_window_check",
+        ),
+        Index("confirmation_score_voids_agent_idx", "agent_id", "bench_version"),
+        Index("confirmation_score_voids_created_idx", "created_at"),
+    )
+
+
+class OutageSweepRun(Base):
+    """Append-only record of one post-outage automatic void sweep.
+
+    Each run examines the active version's un-voided continual-retest samples
+    accepted after the previous run's watermark, voids those whose serving
+    grant meets the outage evidence gate (source ``outage_sweep``), and flags
+    canonical ``scores`` rows accepted in the same range whose grant shows the
+    same evidence. Canonical scores are only flagged, never replaced.
+
+    The watermark is a keyset cursor: ``watermark_to`` plus, when the batch
+    was full, the last examined row's key in ``watermark_to_key``. The next run
+    resumes strictly after it. The JSON lists carry counts, ids and timestamps
+    only: no prompt, answer or provider body.
+    """
+
+    __tablename__ = "outage_sweep_runs"
+
+    sweep_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_from: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_to: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_to_key: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Last examined sample's key when the batch was full; null once drained."""
+    examined_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    voided_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    voids: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """One entry per void written: void id, sample key, run, grant, counts."""
+    outage_windows: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Per qualifying grant: first and last outage-class failure."""
+    canonical_flagged: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Canonical scores in range whose grant meets the evidence gate."""
+    errors: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Samples skipped because examining them raised (key + error type)."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "examined_count >= 0 AND voided_count >= 0 AND error_count >= 0 "
+            "AND voided_count + error_count <= examined_count",
+            name="outage_sweep_runs_counts_check",
+        ),
+        CheckConstraint(
+            "watermark_to >= watermark_from",
+            name="outage_sweep_runs_watermark_check",
+        ),
+        CheckConstraint(
+            "finished_at >= started_at",
+            name="outage_sweep_runs_finished_check",
+        ),
+        Index("outage_sweep_runs_version_started_idx", "bench_version", "started_at"),
+        Index("outage_sweep_runs_started_idx", "started_at"),
     )
 
 
@@ -14298,4 +14474,225 @@ class GeneratorRoundCaseVerdict(Base):
             "submission_id",
             "round_index",
         ),
+    )
+
+
+class AgentDistinctiveItems(Base):
+    """Distinctive-item index of one artifact for the unreleased-copy signal.
+
+    ``item_keys`` is the sorted set of item keys left after the packaged public
+    corpus is removed (:mod:`ditto.api_server.distinctive_content`; the low
+    three bits of each key carry its kind). Written at upload, or by the
+    sentinel's backfill for artifacts uploaded before the index existed. A row
+    with ``error`` set marks an artifact that could not be read, so it is never
+    retried forever and never blocks evaluation of later uploads. Paths and
+    text are deliberately not stored: evidence is re-extracted from the artifact
+    for the few pairs an operator reads.
+    """
+
+    __tablename__ = "agent_distinctive_items"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    items_version: Mapped[str] = mapped_column(Text, nullable=False)
+    item_keys: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    indexed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class UnreleasedCopySignal(Base):
+    """One evaluation of the unreleased-copy signal for one agent and version.
+
+    Recorded by the sentinel in ``shadow`` mode: the score, the best matches
+    with their release state, and ``path:line`` evidence on both sides. A
+    shadow row never changes agent status, a hold, or a review. ``evidence`` is
+    the operator-only payload :func:`ditto.db.queries.unreleased_copy.signal_payload`
+    builds; it names other owners' unreleased files and is never public.
+    """
+
+    __tablename__ = "unreleased_copy_signals"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    signal_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    flagged: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    top_score: Mapped[float] = mapped_column(Float, nullable=False)
+    top_matched_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    compared_agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "mode IN ('shadow', 'enforce')", name="unreleased_copy_signals_mode_check"
+        ),
+        Index(
+            "unreleased_copy_signals_flagged_idx",
+            "signal_version",
+            "flagged",
+            "top_score",
+        ),
+    )
+
+
+class CompetitionImprovementDaily(Base):
+    """One UTC day of one bench version's competition frontier (measurement only).
+
+    Written by :mod:`ditto.api_server.competition_improvement_job`. A day is
+    ``closed`` once it is at least two days old; a closed row is never
+    rewritten under the same ``metrics_version``, so it records what the
+    frontier was rather than what a later re-score made it. ``backfilled``
+    marks a row first written after its day had already closed. ``detail``
+    holds the owner-deduplicated top-N, the day's new highs with their
+    driver, and the release and fork agent ids that landed that day.
+    """
+
+    __tablename__ = "competition_improvement_daily"
+
+    bench_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    frontier_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    frontier_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_n_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_n_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    finalized_agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_high_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    releases_on_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    releases_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    forks_on_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    forks_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    thin_forks_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    backfilled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CompetitionSourceRelease(Base):
+    """One exact-SHA public source handoff, as the improvement job last saw it."""
+
+    __tablename__ = "competition_source_releases"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    released_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    base_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class CompetitionReleaseFork(Base):
+    """One detected fork of one source release: lag, size of change and delta."""
+
+    __tablename__ = "competition_release_forks"
+
+    base_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    fork_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    released_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    fork_uploaded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lag_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    containment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    novel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    declared: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    thin: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    base_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fork_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shared_seed_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    shared_seed_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["base_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["fork_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        Index("competition_release_forks_fork_idx", "fork_agent_id"),
+    )
+
+
+class UnreleasedCopySettingsRevision(Base):
+    """Append-only, operator-audited mode and threshold of the unreleased-copy signal.
+
+    No revision means ``shadow`` at the default threshold. ``enforce`` routes a
+    flag on an agent uploaded after enforcement took effect into a copy-kind
+    ATH hold for an operator ruling; it never rejects.
+    """
+
+    __tablename__ = "unreleased_copy_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('off', 'shadow', 'enforce')",
+            name="unreleased_copy_settings_mode_check",
+        ),
+        CheckConstraint(
+            "threshold > 0 AND threshold <= 100000",
+            name="unreleased_copy_settings_threshold_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="unreleased_copy_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="unreleased_copy_settings_actor_check",
+        ),
+        UniqueConstraint("parent_revision", name="unreleased_copy_settings_parent_key"),
     )

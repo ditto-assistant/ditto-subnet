@@ -43,7 +43,7 @@ env:
   OLLAMA_IMAGE: docker.io/ollama/ollama@sha256:a5409cb903d30f9cd67e9f430dd336ddc9274e16fd78f75b675c42065991b4fd
   COMPATIBILITY_EPOCH: "2"
   UPDATE_PROTOCOL: "1"
-  HEARTBEAT_PROTOCOL: "33"
+  HEARTBEAT_PROTOCOL: "34"
   COMPOSE_SCHEMA: "1"
   SCREENER_FLEET_UPDATE_PROTOCOL: "1"
 
@@ -2293,7 +2293,7 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14])
+              (.supported_bench_versions | sort == [8, 9, 10, 11, 12, 13, 14, 15])
             ' >/dev/null
           for bench_version in 8 9; do
             headers_file="$(mktemp)"

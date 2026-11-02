@@ -2,6 +2,207 @@
 
 <!-- version list -->
 
+## v0.431.0 (2026-11-02)
+
+### Features
+
+- **platform,backroom**: Align continual retest waves to chain tempos
+  ([#3319](https://github.com/ditto-assistant/ditto-subnet/pull/3319),
+  [`5a8daab`](https://github.com/ditto-assistant/ditto-subnet/commit/5a8daab780c5d22f3638b1ff3be81c408c6724ed))
+
+
+## v0.430.1 (2026-11-02)
+
+### Bug Fixes
+
+- **screener**: Name the bound and masked outcome behind l2-late-result
+  ([#3320](https://github.com/ditto-assistant/ditto-subnet/pull/3320),
+  [`bb2a060`](https://github.com/ditto-assistant/ditto-subnet/commit/bb2a060c473aeff906681a537c7fa4f2dd736d1b))
+
+
+## v0.430.0 (2026-11-02)
+
+### Features
+
+- **bench**: Add the bench v15 contract with a production-scale tool catalog and the scored decision
+  lane ([#3318](https://github.com/ditto-assistant/ditto-subnet/pull/3318),
+  [`a131ed2`](https://github.com/ditto-assistant/ditto-subnet/commit/a131ed260b551d515fc71dd72d7f33fac53c2bf2))
+
+
+## v0.429.0 (2026-11-01)
+
+### Features
+
+- **platform**: Switch the unreleased-copy signal to enforce at threshold 100
+  ([#3310](https://github.com/ditto-assistant/ditto-subnet/pull/3310),
+  [`73b737d`](https://github.com/ditto-assistant/ditto-subnet/commit/73b737dc50c26e6790f4a3b63098cd0487c7b3f5))
+
+
+## v0.428.1 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Correct unreleased-copy overlap fallback, owner-name hint, and worker warm-up
+  ([#3317](https://github.com/ditto-assistant/ditto-subnet/pull/3317),
+  [`aec6b9c`](https://github.com/ditto-assistant/ditto-subnet/commit/aec6b9c14fb8967d225887eb7a3b885960c5e137))
+
+
+## v0.428.0 (2026-11-01)
+
+### Features
+
+- **platform**: Show which released agents explain an unreleased-copy exclusion
+  ([#3316](https://github.com/ditto-assistant/ditto-subnet/pull/3316),
+  [`be27d68`](https://github.com/ditto-assistant/ditto-subnet/commit/be27d682775fd12c53c10195cd9a18e59cd7cd62))
+
+
+## v0.427.0 (2026-11-01)
+
+### Features
+
+- **platform**: Expose unreleased-copy near misses and per-agent signal in copy-court reads
+  ([#3315](https://github.com/ditto-assistant/ditto-subnet/pull/3315),
+  [`266e8b5`](https://github.com/ditto-assistant/ditto-subnet/commit/266e8b5e4d1d036a499f4d72a57273f18500c29e))
+
+
+## v0.426.3 (2026-11-01)
+
+### Performance Improvements
+
+- **platform**: Compute unreleased-copy overlaps in the worker, not Postgres
+  ([#3314](https://github.com/ditto-assistant/ditto-subnet/pull/3314),
+  [`f26320f`](https://github.com/ditto-assistant/ditto-subnet/commit/f26320f9ed7ae408d4f76565bf83cdbbe9b095fd))
+
+
+## v0.426.2 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Bound unreleased-copy work in the API process and speed the backfill
+  ([#3313](https://github.com/ditto-assistant/ditto-subnet/pull/3313),
+  [`b8c3eba`](https://github.com/ditto-assistant/ditto-subnet/commit/b8c3eba5eff59507c9bdc8a7291aa1e0c61cbe37))
+
+
+## v0.426.1 (2026-11-01)
+
+### Bug Fixes
+
+- **platform**: Keep unreleased-copy scoring off the API event loop
+  ([#3312](https://github.com/ditto-assistant/ditto-subnet/pull/3312),
+  [`72d93ca`](https://github.com/ditto-assistant/ditto-subnet/commit/72d93ca6cf0405608fa236ab30f9c28a92083d04))
+
+
+## v0.426.0 (2026-11-01)
+
+### Chores
+
+- **infra**: Let the Hetzner screener take private source-marker patterns
+  ([#3304](https://github.com/ditto-assistant/ditto-subnet/pull/3304),
+  [`74fc8c6`](https://github.com/ditto-assistant/ditto-subnet/commit/74fc8c66e32e2d1e5ca678c37c19fdc80e35716e))
+
+### Features
+
+- **platform**: Re-run every voided retest seed regardless of cohort
+  ([#3311](https://github.com/ditto-assistant/ditto-subnet/pull/3311),
+  [`f5a8f4d`](https://github.com/ditto-assistant/ditto-subnet/commit/f5a8f4d41c3e28dc50b4adcc474d2701408c33f2))
+
+
+## v0.425.0 (2026-11-01)
+
+### Features
+
+- **platform**: Route unreleased-copy flags to operator copy holds behind an audited mode
+  ([#3306](https://github.com/ditto-assistant/ditto-subnet/pull/3306),
+  [`68275e9`](https://github.com/ditto-assistant/ditto-subnet/commit/68275e9862f9f914c2c257c24156357e406bceac))
+
+
+## v0.424.0 (2026-11-01)
+
+### Features
+
+- **platform**: Measure competition improvement rate for embargo decisions
+  ([#3308](https://github.com/ditto-assistant/ditto-subnet/pull/3308),
+  [`91ba2bc`](https://github.com/ditto-assistant/ditto-subnet/commit/91ba2bca61d8d3edfb4e5c5598a65942669e1d24))
+
+
+## v0.423.0 (2026-11-01)
+
+### Features
+
+- **platform**: Void outage-tainted retests automatically after an outage
+  ([#3307](https://github.com/ditto-assistant/ditto-subnet/pull/3307),
+  [`686f3fa`](https://github.com/ditto-assistant/ditto-subnet/commit/686f3fa2bf0d477f0268f79af090121040b479c7))
+
+
+## v0.422.0 (2026-11-01)
+
+### Features
+
+- **validator,platform**: Gate the KOTH crown on shared-seed confirmations and show the King and
+  challengers ([#3290](https://github.com/ditto-assistant/ditto-subnet/pull/3290),
+  [`0078007`](https://github.com/ditto-assistant/ditto-subnet/commit/0078007b8d4cf15e6485ec3eede85586261061b0))
+
+
+## v0.421.0 (2026-11-01)
+
+### Features
+
+- **platform**: Void infrastructure-tainted retest samples and re-run them
+  ([#3305](https://github.com/ditto-assistant/ditto-subnet/pull/3305),
+  [`84a80f9`](https://github.com/ditto-assistant/ditto-subnet/commit/84a80f902a11a24e60aa631061d23052b2f265f6))
+
+
+## v0.420.0 (2026-11-01)
+
+### Features
+
+- **platform**: Add operator diagnostic leases for operator-owned shadow agents
+  ([#3299](https://github.com/ditto-assistant/ditto-subnet/pull/3299),
+  [`ff7e3ab`](https://github.com/ditto-assistant/ditto-subnet/commit/ff7e3ab7356e76f7785ce1f32933a3cf7cf88cf7))
+
+
+## v0.419.0 (2026-11-01)
+
+### Documentation
+
+- **skills**: Add scoring-infra-triage for infra failures and retries
+  ([#3302](https://github.com/ditto-assistant/ditto-subnet/pull/3302),
+  [`f8e9c55`](https://github.com/ditto-assistant/ditto-subnet/commit/f8e9c552e0d71ec95fac7f6defc717b3ffba3193))
+
+### Features
+
+- **platform**: Flag unreleased-agent copying across languages in shadow mode
+  ([#3303](https://github.com/ditto-assistant/ditto-subnet/pull/3303),
+  [`6d8e681`](https://github.com/ditto-assistant/ditto-subnet/commit/6d8e681a31677d6dd31fc563f64a3b7c58945efb))
+
+
+## v0.418.0 (2026-11-01)
+
+### Features
+
+- **platform**: Show each retest sample's grant failures in the diagnostic
+  ([#3301](https://github.com/ditto-assistant/ditto-subnet/pull/3301),
+  [`5948707`](https://github.com/ditto-assistant/ditto-subnet/commit/59487070f83407beffd949e5847bd5eca63f97d4))
+
+
+## v0.417.1 (2026-11-01)
+
+### Bug Fixes
+
+- **relay**: Open the provider circuit on gateway credit exhaustion
+  ([#3300](https://github.com/ditto-assistant/ditto-subnet/pull/3300),
+  [`03a0831`](https://github.com/ditto-assistant/ditto-subnet/commit/03a0831f3d024f1af1f962eb125a6e9189d77229))
+
+
+## v0.417.0 (2026-11-01)
+
+### Features
+
+- **screener**: Add a configurable source-marker scan to screening
+  ([#3297](https://github.com/ditto-assistant/ditto-subnet/pull/3297),
+  [`775a18c`](https://github.com/ditto-assistant/ditto-subnet/commit/775a18cf5ee930c0b679600e97aade1345b127c3))
+
+
 ## v0.416.4 (2026-10-31)
 
 ### Bug Fixes

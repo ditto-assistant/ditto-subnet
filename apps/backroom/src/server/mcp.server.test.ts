@@ -581,6 +581,8 @@ describe('Backroom MCP tools', () => {
         'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
         'get_continual_retest_diagnostic',
+        'list_infra_voids',
+        'get_provider_outages',
         'get_continual_retest_settings',
         'get_confirmation_bundle_settings',
         'get_confirmation_bundle',
@@ -721,6 +723,11 @@ describe('Backroom MCP tools', () => {
         'list_lease_revocations',
         'list_copy_court_recommendations',
         'preview_copy_court_triage',
+        'get_unreleased_copy_signal',
+        'list_unreleased_copy_signals',
+        'get_competition_improvement_metrics',
+        'get_unreleased_copy_settings',
+        'apply_unreleased_copy_settings',
         'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
@@ -767,6 +774,8 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_canary',
         'issue_benchmark_canary',
         'cancel_benchmark_canary',
+        'get_operator_diagnostic',
+        'isolate_operator_diagnostic',
         'resolve_screening_quarantine',
         'release_verified_v13_court_clear',
         'resolve_screening_dispute',
@@ -786,6 +795,7 @@ describe('Backroom MCP tools', () => {
         'retry_validator_evaluation',
         'replace_validator_score',
         'queue_validator_score_retests',
+        'void_infra_scores',
         'set_inference_concurrency_settings',
         'start_runtime_profile',
         'set_source_release_policy',
@@ -942,7 +952,25 @@ describe('Backroom MCP tools', () => {
     // detail in tool help) measures 215,494 bytes; keep about 0.5 KB headroom.
     // The artifact fetch audit read (agentId-or-sha, before, limit; one-line
     // summary, detail in tool help) measures 216,078 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(216_600)
+    // The unreleased-copy pair (one artifact-scoped uuid read, one bounded
+    // list; one-line summaries, detail in tool help) measures 217,360 bytes;
+    // keep about 0.5 KB.
+    // The operator-diagnostic read and isolate pair (uuid / uuid+digest+reason
+    // inputs, one-line summaries, detail in tool help) measures 218,834 bytes;
+    // keep about 0.5 KB.
+    // The infra-void pair (one guarded write with up to 50 items, one bounded
+    // list; one-line summaries, detail in tool help) adds about 2.5 KB;
+    // keep about 0.5 KB.
+    // The provider-outage read (three bounded paging inputs, one-line
+    // summary, detail in tool help) measures 221,908 bytes; keep about 0.5 KB.
+    // The competition improvement read (two optional filters, one-line
+    // summary, detail in tool help) measures 222,758 bytes; keep about 0.5 KB.
+    // The unreleased-copy settings pair (no-input read; mode, threshold,
+    // revision, reason and confirmation write) adds about 0.6 KB; keep
+    // about 0.5 KB.
+    // Tempo-aligned wave pacing (two bounded integers on the continual retest
+    // write) measures 224,063 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(224_550)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -988,8 +1016,14 @@ describe('Backroom MCP tools', () => {
       // measures 27,441. The validator request-outcome read (job polls and
       // the weight ledger, one line) brings the measured total to 27,653.
       // The one-line decision-lane read measures 27,740; the one-line
-      // per-attempt review budget read brings it to 27,845.
-      28_000,
+      // per-attempt review budget read brings it to 27,845. The two one-line
+      // unreleased-copy reads measure 28,028; keep about 200 chars.
+      // The two one-line infra-void summaries bring it to 28,306.
+      // The one-line provider-outage read brings the measured total to
+      // 28,400; keep about 200 chars.
+      // The unreleased-copy settings pair adds two one-line summaries; measured
+      // 28,613 after the competition-improvement read.
+      28_800,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -10054,6 +10088,432 @@ describe('Backroom MCP tools', () => {
     }
   })
 
+  it('reads unreleased-copy signals: evidence on artifact scope, list on read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5'
+    const matchedId = 'b7b7b7b7-c8c8-4d9d-8e0e-f1f1f1f1f1f1'
+    const runtime = {
+      running: true,
+      mode: 'shadow',
+      signal_version: 'uc1',
+      threshold: 40,
+      interval_seconds: 30,
+      storage_configured: true,
+      last_tick_started_at: '2026-11-01T12:00:00Z',
+      last_tick_finished_at: '2026-11-01T12:00:02Z',
+      last_tick_counters: { indexed: 8, evaluated: 4, flagged: 1 },
+      last_tick_error: null,
+    }
+    const evaluation = {
+      signal_version: 'uc1',
+      items_version: 'dc1',
+      threshold: 40,
+      flagged: true,
+      top_score: 119.25,
+      candidate_item_count: 1408,
+      compared_agent_count: 21,
+      excluded: { released_base: 1500, common: 30 },
+      evidence_status: 'attached',
+      matches: [
+        {
+          agent_id: matchedId,
+          agent_name: 'source',
+          agent_version: 17,
+          miner_hotkey: '5Source',
+          agent_status: 'scored',
+          uploaded_at: '2026-10-29T15:20:43Z',
+          released_at: null,
+          release_state: 'unreleased',
+          score: 119.25,
+          shared_count: 126,
+          shared_by_kind: { text: 78, seq: 38 },
+          items: [
+            {
+              kind: 'text',
+              text: 'zephyr quandary alpha marmalade',
+              candidate: 'src/guidance/cues.rs:75',
+              matched: 'app/guide_records.py:29',
+            },
+          ],
+        },
+      ],
+    }
+    const signal = {
+      agent_id: agentId,
+      agent_name: 'candidate',
+      agent_version: 2,
+      miner_hotkey: '5Candidate',
+      agent_status: 'rejected',
+      uploaded_at: '2026-10-29T21:13:22Z',
+      index: { items_version: 'dc1', item_count: 2941, error: null, indexed_at: '2026-10-29T21:13:23Z' },
+      mode: 'shadow',
+      computed_at: '2026-10-29T21:14:00Z',
+      recorded: evaluation,
+      live: null,
+      live_unavailable_reason: null,
+      runtime,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(signal))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const denied = await readOnly.client.callTool({
+      name: 'get_unreleased_copy_signal',
+      arguments: { agentId },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            agent_id: agentId,
+            agent_name: 'candidate',
+            agent_version: 2,
+            miner_hotkey: '5Candidate',
+            agent_status: 'rejected',
+            uploaded_at: '2026-10-29T21:13:22Z',
+            mode: 'shadow',
+            flagged: true,
+            top_score: 119.25,
+            top_matched_agent_id: matchedId,
+            top_matched_name: 'source',
+            top_matched_version: 17,
+            computed_at: '2026-10-29T21:14:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        coverage: {
+          agents: 3914,
+          indexed: 3914,
+          unreadable: 2,
+          oldest_unindexed_at: null,
+          evaluated: 3912,
+          flagged: 1,
+        },
+        runtime,
+      }),
+    )
+    const listed = await readOnly.client.callTool({
+      name: 'list_unreleased_copy_signals',
+      arguments: {},
+    })
+    expect(listed.isError).not.toBe(true)
+    expect(readJsonResult(listed)).toMatchObject({ total: 1, coverage: { flagged: 1 } })
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/admin/unreleased-copy/signals?flagged_only=true&min_score=0&limit=50&offset=0',
+    )
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    fetchMock.mockResolvedValue(Response.json(signal))
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const response = await granted.client.callTool({
+        name: 'get_unreleased_copy_signal',
+        arguments: { agentId, live: true },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        mode: 'shadow',
+        recorded: {
+          flagged: true,
+          matches: [{ agent_id: matchedId, release_state: 'unreleased' }],
+        },
+      })
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(String(url)).toContain(`/api/v1/admin/unreleased-copy/agents/${agentId}?live=true`)
+      expect(init.method ?? 'GET').toBe('GET')
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
+  })
+
+  it('reads competition improvement metrics with read scope and forwards filters', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5'
+    const forkId = 'b7b7b7b7-c8c8-4d9d-8e0e-f1f1f1f1f1f1'
+    const high = {
+      agent_id: forkId,
+      name: 'fork',
+      version: 2,
+      bench_version: 14,
+      finalized_at: '2026-10-23T01:02:00Z',
+      composite: 0.94,
+      previous_frontier: 0.91,
+      delta: 0.03,
+      days_since_previous_high: 2.5,
+      driver: 'released_fork',
+      base_agent_id: agentId,
+    }
+    const payload = {
+      metrics_version: 'cim1',
+      generated_at: '2026-11-01T12:00:00Z',
+      bench_version: 14,
+      since: '2026-10-20',
+      definitions: { frontier: 'highest canonical composite' },
+      thresholds: {
+        first_bench_version: 13,
+        fork_containment: 0.5,
+        thin_fork_novel_fraction: 0.1,
+        top_n: 5,
+        noise_agents: 10,
+        min_noise_seeds: 3,
+        noise_sigmas: 2,
+        close_after_days: 2,
+      },
+      coverage: {
+        stored_days: 1,
+        closed_days: 1,
+        backfilled_days: 1,
+        last_computed_at: '2026-11-01T11:00:00Z',
+        agents: 4000,
+        indexed_agents: 3990,
+      },
+      runtime: {
+        running: true,
+        metrics_version: 'cim1',
+        interval_seconds: 3600,
+        last_tick_started_at: '2026-11-01T11:00:00Z',
+        last_tick_finished_at: '2026-11-01T11:00:09Z',
+        last_tick_counters: { days_computed: 14, releases: 1, forks: 1 },
+        last_tick_error: null,
+      },
+      benches: [
+        {
+          summary: {
+            bench_version: 14,
+            first_day: '2026-10-20',
+            last_day: '2026-10-23',
+            days: 4,
+            frontier_start: 0.91,
+            frontier_end: 0.94,
+            frontier_gain: 0.03,
+            gain_per_day: 0.01,
+            new_high_count: 1,
+            beyond_noise_high_count: 0,
+            median_days_between_highs: 2.5,
+            max_days_between_highs: 2.5,
+            days_since_last_high: 9.4,
+            champion_changes: 1,
+            drivers: { original: 0, same_owner_iteration: 0, released_fork: 1 },
+            gain_by_driver: { original: 0, same_owner_iteration: 0, released_fork: 0.03 },
+            largest_steps: [high],
+          },
+          noise: {
+            bench_version: 14,
+            agents_measured: 1,
+            median_seed_sd: 0.015,
+            max_seed_sd: 0.015,
+            median_quorum_sem: 0.006,
+            single_seed_delta_sd: 0.021,
+            beyond_noise_step: 0.042,
+            agents: [
+              {
+                agent_id: forkId,
+                name: 'fork',
+                version: 2,
+                composite: 0.94,
+                seed_count: 4,
+                seed_sd: 0.015,
+                quorum_sem: 0.006,
+              },
+            ],
+          },
+          new_highs: [high],
+          daily: [
+            {
+              bench_version: 14,
+              day: '2026-10-23',
+              frontier_composite: 0.94,
+              frontier_agent_id: forkId,
+              champion_agent_id: agentId,
+              champion_composite: 0.91,
+              top_n_mean: 0.925,
+              top_n_min: 0.91,
+              finalized_agent_count: 2,
+              new_high_count: 1,
+              releases_on_day: 0,
+              releases_to_date: 1,
+              forks_on_day: 0,
+              forks_to_date: 1,
+              thin_forks_to_date: 1,
+              embargo_hours: 24,
+              disclosure: 'public',
+              top: [{ agent_id: forkId, name: 'fork', version: 2, composite: 0.94 }],
+            },
+          ],
+        },
+      ],
+      releases: [
+        {
+          agent_id: agentId,
+          name: 'base',
+          version: 1,
+          bench_version: 14,
+          uploaded_at: '2026-10-20T12:00:00Z',
+          released_at: '2026-10-22T12:00:00Z',
+          embargo_hours: 24,
+          disclosure: 'public',
+          base_composite: 0.91,
+          fork_count: 1,
+          thin_fork_count: 1,
+          first_fork_lag_hours: 12,
+          median_fork_lag_hours: 12,
+          median_novel_fraction: 0.02,
+          median_delta: 0.03,
+          best_delta: 0.03,
+          forks_beating_base: 1,
+          forks: [
+            {
+              fork_agent_id: forkId,
+              fork_name: 'fork',
+              fork_version: 2,
+              fork_status: 'scored',
+              bench_version: 14,
+              fork_uploaded_at: '2026-10-23T00:00:00Z',
+              lag_hours: 12,
+              containment: 1,
+              novel_fraction: 0.02,
+              declared: false,
+              thin: true,
+              fork_composite: 0.94,
+              delta: 0.03,
+              shared_seed_count: 0,
+              shared_seed_delta: null,
+            },
+          ],
+        },
+      ],
+      embargo_windows: [
+        {
+          revision: 3,
+          embargo_hours: 24,
+          disclosure: 'public',
+          starts_at: '2026-10-19T12:00:00Z',
+          ends_at: null,
+          days: 13,
+          releases: 1,
+          forks: 1,
+          forks_per_release: 1,
+          thin_forks: 1,
+          thin_fork_share: 1,
+          median_fork_lag_hours: 12,
+          median_fork_delta: 0.03,
+          new_highs: 1,
+          new_highs_by_driver: { original: 0, same_owner_iteration: 0, released_fork: 1 },
+          frontier_gain_by_bench: { '14': 0.03 },
+          gain_per_day_by_bench: { '14': 0.01 },
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await readOnly.client.callTool({
+        name: 'get_competition_improvement_metrics',
+        arguments: { benchVersion: 14, since: '2026-10-20' },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        metrics_version: 'cim1',
+        releases: [{ fork_count: 1, forks: [{ thin: true }] }],
+        benches: [{ summary: { drivers: { released_fork: 1 } } }],
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toContain(
+        '/api/v1/admin/competition-improvement/metrics?bench_version=14&since=2026-10-20',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+      const unfiltered = await readOnly.client.callTool({
+        name: 'get_competition_improvement_metrics',
+        arguments: {},
+      })
+      expect(unfiltered.isError).not.toBe(true)
+      expect(String(fetchMock.mock.calls[1][0])).toMatch(
+        /\/api\/v1\/admin\/competition-improvement\/metrics$/,
+      )
+    } finally {
+      await readOnly.client.close()
+      await readOnly.server.close()
+    }
+  })
+
+  it('reads and writes the audited unreleased-copy mode with write scope only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      settings: { mode: 'enforce', threshold: 40 },
+      reason: 'Approved enforcement after the shadow backfill',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-11-01T18:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        effective: {
+          mode: 'shadow',
+          threshold: 40,
+          revision: 0,
+          enforce_since: null,
+        },
+        history: [],
+        runtime: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const read = await readOnly.client.callTool({ name: 'get_unreleased_copy_settings', arguments: {} })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ effective: { mode: 'shadow', revision: 0 } })
+    const denied = await readOnly.client.callTool({
+      name: 'apply_unreleased_copy_settings',
+      arguments: {
+        expectedRevision: 0,
+        mode: 'enforce',
+        reason: revision.reason,
+        confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+      },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    fetchMock.mockResolvedValue(Response.json(revision))
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const applied = await writer.client.callTool({
+        name: 'apply_unreleased_copy_settings',
+        arguments: {
+          expectedRevision: 0,
+          mode: 'enforce',
+          reason: revision.reason,
+          confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+        },
+      })
+      expect(applied.isError).not.toBe(true)
+      expect(readJsonResult(applied)).toMatchObject({ revision: 1, settings: { mode: 'enforce' } })
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(String(url)).toContain('/api/v1/admin/unreleased-copy/settings')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        expected_revision: 0,
+        settings: { mode: 'enforce', threshold: 40 },
+        reason: revision.reason,
+        actor: 'peyton@omniaura.ai',
+        confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+      })
+    } finally {
+      await writer.client.close()
+      await writer.server.close()
+    }
+  })
+
   it('reads screening review cost by lineage scope with read scope', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
     const payload = {
@@ -11517,7 +11977,16 @@ describe('Backroom MCP tools', () => {
         in_retest_cohort: false,
         representative_selection: 'official_composite',
         cohort_cutoff: { gap: -0.23628, within_tie_band: true },
-        claim: { decision: 'not_in_cohort', route_priority: 'not_routed', pending_seed_count: 2 },
+        claim: {
+          decision: 'not_in_cohort',
+          route_priority: 'not_routed',
+          pending_seed_count: 2,
+          // A platform predating void re-run debt reads as owing nothing.
+          void_rerun_seed_count: 0,
+          void_rerun_claimable: false,
+          provider_outage_active: false,
+          provider_gate_closed: false,
+        },
         raw_confirmation_seeds: ['9223372036854775001'],
       })
       const text = readTextResult(response)

@@ -1307,6 +1307,20 @@ CREATE TABLE public.agent_cla_bindings (
 
 
 --
+-- Name: agent_distinctive_items; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.agent_distinctive_items (
+    agent_id uuid NOT NULL,
+    items_version text NOT NULL,
+    item_keys bigint[] NOT NULL,
+    item_count integer NOT NULL,
+    error text,
+    indexed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: agent_kingship; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3164,6 +3178,78 @@ CREATE TABLE public.coding_shadow_tickets (
 
 
 --
+-- Name: competition_improvement_daily; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_improvement_daily (
+    bench_version integer NOT NULL,
+    day date NOT NULL,
+    metrics_version text NOT NULL,
+    frontier_composite double precision,
+    frontier_agent_id uuid,
+    champion_agent_id uuid,
+    champion_composite double precision,
+    top_n_mean double precision,
+    top_n_min double precision,
+    finalized_agent_count integer NOT NULL,
+    new_high_count integer NOT NULL,
+    releases_on_day integer NOT NULL,
+    releases_to_date integer NOT NULL,
+    forks_on_day integer NOT NULL,
+    forks_to_date integer NOT NULL,
+    thin_forks_to_date integer NOT NULL,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    detail jsonb NOT NULL,
+    closed boolean NOT NULL,
+    backfilled boolean NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: competition_release_forks; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_release_forks (
+    base_agent_id uuid NOT NULL,
+    fork_agent_id uuid NOT NULL,
+    metrics_version text NOT NULL,
+    bench_version integer,
+    released_at timestamp with time zone NOT NULL,
+    fork_uploaded_at timestamp with time zone NOT NULL,
+    lag_hours double precision NOT NULL,
+    containment double precision,
+    novel_fraction double precision,
+    declared boolean NOT NULL,
+    thin boolean NOT NULL,
+    base_composite double precision,
+    fork_composite double precision,
+    delta double precision,
+    shared_seed_count integer NOT NULL,
+    shared_seed_delta double precision,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: competition_source_releases; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.competition_source_releases (
+    agent_id uuid NOT NULL,
+    metrics_version text NOT NULL,
+    bench_version integer,
+    released_at timestamp with time zone NOT NULL,
+    uploaded_at timestamp with time zone NOT NULL,
+    embargo_hours integer NOT NULL,
+    disclosure text NOT NULL,
+    base_composite double precision,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
 -- Name: confirmation_budget_days; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3471,6 +3557,36 @@ CREATE TABLE public.confirmation_retest_authorizations (
 
 
 --
+-- Name: confirmation_score_voids; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_score_voids (
+    void_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    validator_hotkey text NOT NULL,
+    seed bigint NOT NULL,
+    void_generation integer NOT NULL,
+    sample_kind text NOT NULL,
+    run_id text NOT NULL,
+    composite double precision NOT NULL,
+    reason text NOT NULL,
+    evidence jsonb NOT NULL,
+    evidence_digest text NOT NULL,
+    actor text NOT NULL,
+    source text NOT NULL,
+    outage_started_at timestamp with time zone,
+    outage_ended_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_ev_6ab0 CHECK ((evidence_digest ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_ou_6d73 CHECK (((outage_ended_at IS NULL) OR (outage_started_at IS NOT NULL))),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_re_35e4 CHECK ((length(btrim(reason)) >= 8)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_sa_64f4 CHECK ((sample_kind = 'continual_retest'::text)),
+    CONSTRAINT ck_confirmation_score_voids_confirmation_score_voids_so_097a CHECK ((source = ANY (ARRAY['operator'::text, 'outage_sweep'::text])))
+);
+
+
+--
 -- Name: confirmation_scores; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3485,10 +3601,12 @@ CREATE TABLE public.confirmation_scores (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     v9_efficiency_token_total bigint,
     v9_efficiency_cost_eligible boolean,
+    void_generation integer DEFAULT 0 NOT NULL,
     CONSTRAINT ck_confirmation_scores_confirmation_scores_bench_versio_b860 CHECK ((bench_version > 0)),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_composite_ra_71bb CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_efficiency_c_46c3 CHECK ((((v9_efficiency_cost_eligible IS NULL) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = false) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = true) AND (bench_version >= 9) AND (v9_efficiency_token_total > 0)))),
-    CONSTRAINT ck_confirmation_scores_confirmation_scores_seed_check CHECK ((seed >= 0))
+    CONSTRAINT ck_confirmation_scores_confirmation_scores_seed_check CHECK ((seed >= 0)),
+    CONSTRAINT ck_confirmation_scores_confirmation_scores_void_generat_010e CHECK ((void_generation >= 0))
 );
 
 
@@ -5045,6 +5163,31 @@ CREATE TABLE public.name_claims (
     CONSTRAINT ck_name_claims_name_claims_stem_length_check CHECK (((length(name_stem) >= 3) AND (length(name_stem) <= 64))),
     CONSTRAINT ck_name_claims_name_claims_upheld_pair CHECK (((status = 'upheld'::text) = (upheld_at IS NOT NULL))),
     CONSTRAINT ck_name_claims_name_claims_withdrawn_pair CHECK (((status = 'withdrawn'::text) = (withdrawn_at IS NOT NULL)))
+);
+
+
+--
+-- Name: outage_sweep_runs; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.outage_sweep_runs (
+    sweep_id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    started_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone NOT NULL,
+    watermark_from timestamp with time zone NOT NULL,
+    watermark_to timestamp with time zone NOT NULL,
+    watermark_to_key jsonb,
+    examined_count integer NOT NULL,
+    voided_count integer NOT NULL,
+    error_count integer NOT NULL,
+    voids jsonb NOT NULL,
+    outage_windows jsonb NOT NULL,
+    canonical_flagged jsonb NOT NULL,
+    errors jsonb NOT NULL,
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_counts_check CHECK (((examined_count >= 0) AND (voided_count >= 0) AND (error_count >= 0) AND ((voided_count + error_count) <= examined_count))),
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_finished_check CHECK ((finished_at >= started_at)),
+    CONSTRAINT ck_outage_sweep_runs_outage_sweep_runs_watermark_check CHECK ((watermark_to >= watermark_from))
 );
 
 
@@ -6985,6 +7128,65 @@ CREATE TABLE public.trusted_image_builds (
 
 
 --
+-- Name: unreleased_copy_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unreleased_copy_settings_revisions (
+    revision integer NOT NULL,
+    parent_revision integer NOT NULL,
+    mode text NOT NULL,
+    threshold double precision NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_78b4 CHECK (((threshold > (0)::double precision) AND (threshold <= (100000)::double precision))),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_7c07 CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_b508 CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_unreleased_copy_settings_revisions_unreleased_copy_s_e19e CHECK ((mode = ANY (ARRAY['off'::text, 'shadow'::text, 'enforce'::text])))
+);
+
+
+--
+-- Name: unreleased_copy_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.unreleased_copy_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: unreleased_copy_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.unreleased_copy_settings_revisions_revision_seq OWNED BY public.unreleased_copy_settings_revisions.revision;
+
+
+--
+-- Name: unreleased_copy_signals; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.unreleased_copy_signals (
+    agent_id uuid NOT NULL,
+    signal_version text NOT NULL,
+    mode text NOT NULL,
+    threshold double precision NOT NULL,
+    flagged boolean NOT NULL,
+    top_score double precision NOT NULL,
+    top_matched_agent_id uuid,
+    compared_agent_count integer NOT NULL,
+    candidate_item_count integer NOT NULL,
+    evidence jsonb NOT NULL,
+    computed_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_unreleased_copy_signals_unreleased_copy_signals_mode_check CHECK ((mode = ANY (ARRAY['shadow'::text, 'enforce'::text])))
+);
+
+
+--
 -- Name: upload_admission_reservations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -7801,6 +8003,13 @@ ALTER TABLE ONLY public.treasury_settings_revisions ALTER COLUMN revision SET DE
 
 
 --
+-- Name: unreleased_copy_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.unreleased_copy_settings_revisions_revision_seq'::regclass);
+
+
+--
 -- Name: v13_scorer_cohort_pins bench_version; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -8495,6 +8704,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 
 --
+-- Name: confirmation_score_voids confirmation_score_voids_sample_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT confirmation_score_voids_sample_key UNIQUE (agent_id, bench_version, validator_hotkey, seed, void_generation);
+
+
+--
 -- Name: confirmation_scores confirmation_scores_bench_version_floor; Type: CHECK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -8507,7 +8724,7 @@ ALTER TABLE public.confirmation_scores
 --
 
 ALTER TABLE ONLY public.confirmation_scores
-    ADD CONSTRAINT confirmation_scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey, seed);
+    ADD CONSTRAINT confirmation_scores_pkey PRIMARY KEY (agent_id, bench_version, validator_hotkey, seed, void_generation);
 
 
 --
@@ -8943,6 +9160,14 @@ ALTER TABLE ONLY public.agent_cla_bindings
 
 
 --
+-- Name: agent_distinctive_items pk_agent_distinctive_items; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_distinctive_items
+    ADD CONSTRAINT pk_agent_distinctive_items PRIMARY KEY (agent_id);
+
+
+--
 -- Name: agent_kingship pk_agent_kingship; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9359,6 +9584,30 @@ ALTER TABLE ONLY public.coding_hosted_terminal_reservations
 
 
 --
+-- Name: competition_improvement_daily pk_competition_improvement_daily; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_improvement_daily
+    ADD CONSTRAINT pk_competition_improvement_daily PRIMARY KEY (bench_version, day);
+
+
+--
+-- Name: competition_release_forks pk_competition_release_forks; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT pk_competition_release_forks PRIMARY KEY (base_agent_id, fork_agent_id);
+
+
+--
+-- Name: competition_source_releases pk_competition_source_releases; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_source_releases
+    ADD CONSTRAINT pk_competition_source_releases PRIMARY KEY (agent_id);
+
+
+--
 -- Name: confirmation_budget_days pk_confirmation_budget_days; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9420,6 +9669,14 @@ ALTER TABLE ONLY public.confirmation_inference_requests
 
 ALTER TABLE ONLY public.confirmation_retest_authorizations
     ADD CONSTRAINT pk_confirmation_retest_authorizations PRIMARY KEY (authorization_id);
+
+
+--
+-- Name: confirmation_score_voids pk_confirmation_score_voids; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT pk_confirmation_score_voids PRIMARY KEY (void_id);
 
 
 --
@@ -9732,6 +9989,14 @@ ALTER TABLE ONLY public.miner_github_links
 
 ALTER TABLE ONLY public.miner_github_operator_revocations
     ADD CONSTRAINT pk_miner_github_operator_revocations PRIMARY KEY (link_id);
+
+
+--
+-- Name: outage_sweep_runs pk_outage_sweep_runs; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.outage_sweep_runs
+    ADD CONSTRAINT pk_outage_sweep_runs PRIMARY KEY (sweep_id);
 
 
 --
@@ -10140,6 +10405,22 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.trusted_image_builds
     ADD CONSTRAINT pk_trusted_image_builds PRIMARY KEY (build_id);
+
+
+--
+-- Name: unreleased_copy_settings_revisions pk_unreleased_copy_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions
+    ADD CONSTRAINT pk_unreleased_copy_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: unreleased_copy_signals pk_unreleased_copy_signals; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_signals
+    ADD CONSTRAINT pk_unreleased_copy_signals PRIMARY KEY (agent_id, signal_version);
 
 
 --
@@ -10644,6 +10925,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.trusted_image_builds
     ADD CONSTRAINT trusted_image_builds_source_key UNIQUE (environment, component, source_sha);
+
+
+--
+-- Name: unreleased_copy_settings_revisions unreleased_copy_settings_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_settings_revisions
+    ADD CONSTRAINT unreleased_copy_settings_parent_key UNIQUE (parent_revision);
 
 
 --
@@ -11517,6 +11806,13 @@ CREATE INDEX coding_shadow_tickets_validator_deadline_idx ON public.coding_shado
 
 
 --
+-- Name: competition_release_forks_fork_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX competition_release_forks_fork_idx ON public.competition_release_forks USING btree (fork_agent_id);
+
+
+--
 -- Name: confirmation_bundles_state_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -11552,10 +11848,31 @@ CREATE UNIQUE INDEX confirmation_reservations_one_open_bundle_idx ON public.conf
 
 
 --
+-- Name: confirmation_score_voids_agent_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_score_voids_agent_idx ON public.confirmation_score_voids USING btree (agent_id, bench_version);
+
+
+--
+-- Name: confirmation_score_voids_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_score_voids_created_idx ON public.confirmation_score_voids USING btree (created_at);
+
+
+--
 -- Name: confirmation_scores_agent_version_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX confirmation_scores_agent_version_idx ON public.confirmation_scores USING btree (agent_id, bench_version);
+
+
+--
+-- Name: confirmation_scores_version_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_scores_version_created_idx ON public.confirmation_scores USING btree (bench_version, created_at);
 
 
 --
@@ -12021,6 +12338,20 @@ CREATE INDEX name_claims_status_idx ON public.name_claims USING btree (netuid, s
 
 
 --
+-- Name: outage_sweep_runs_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outage_sweep_runs_started_idx ON public.outage_sweep_runs USING btree (started_at);
+
+
+--
+-- Name: outage_sweep_runs_version_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX outage_sweep_runs_version_started_idx ON public.outage_sweep_runs USING btree (bench_version, started_at);
+
+
+--
 -- Name: owner_attestations_active_pair_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12473,6 +12804,13 @@ CREATE INDEX treasury_verified_distribution_source ON public.treasury_verified_r
 --
 
 CREATE INDEX trusted_image_builds_queue_idx ON public.trusted_image_builds USING btree (environment, status, created_at);
+
+
+--
+-- Name: unreleased_copy_signals_flagged_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX unreleased_copy_signals_flagged_idx ON public.unreleased_copy_signals USING btree (signal_version, flagged, top_score);
 
 
 --
@@ -13869,6 +14207,14 @@ ALTER TABLE ONLY public.confirmation_retest_authorizations
 
 
 --
+-- Name: confirmation_score_voids confirmation_score_voids_sample_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_score_voids
+    ADD CONSTRAINT confirmation_score_voids_sample_fkey FOREIGN KEY (agent_id, bench_version, validator_hotkey, seed, void_generation) REFERENCES public.confirmation_scores(agent_id, bench_version, validator_hotkey, seed, void_generation) ON DELETE CASCADE;
+
+
+--
 -- Name: confirmation_scores confirmation_scores_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -13994,6 +14340,14 @@ ALTER TABLE ONLY public.agent_cla_bindings
 
 ALTER TABLE ONLY public.agent_cla_bindings
     ADD CONSTRAINT fk_agent_cla_bindings_signature_id_cla_signatures FOREIGN KEY (signature_id) REFERENCES public.cla_signatures(signature_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: agent_distinctive_items fk_agent_distinctive_items_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.agent_distinctive_items
+    ADD CONSTRAINT fk_agent_distinctive_items_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --
@@ -14581,6 +14935,30 @@ ALTER TABLE ONLY public.coding_hosted_terminal_reservations
 
 
 --
+-- Name: competition_release_forks fk_competition_release_forks_base_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT fk_competition_release_forks_base_agent_id_agents FOREIGN KEY (base_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: competition_release_forks fk_competition_release_forks_fork_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_release_forks
+    ADD CONSTRAINT fk_competition_release_forks_fork_agent_id_agents FOREIGN KEY (fork_agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: competition_source_releases fk_competition_source_releases_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.competition_source_releases
+    ADD CONSTRAINT fk_competition_source_releases_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
 -- Name: confirmation_inference_requests fk_confirmation_inference_requests_grant_id_confirmatio_7cd5; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -14986,6 +15364,14 @@ ALTER TABLE ONLY public.treasury_verified_receipts
 
 ALTER TABLE ONLY public.treasury_verified_receipts
     ADD CONSTRAINT fk_treasury_verified_receipts_settings_revision_treasur_f7d8 FOREIGN KEY (settings_revision) REFERENCES public.treasury_settings_revisions(revision);
+
+
+--
+-- Name: unreleased_copy_signals fk_unreleased_copy_signals_agent_id_agents; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.unreleased_copy_signals
+    ADD CONSTRAINT fk_unreleased_copy_signals_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --

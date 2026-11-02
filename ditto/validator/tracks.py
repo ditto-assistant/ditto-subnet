@@ -36,6 +36,7 @@ from uuid import UUID
 
 from ditto.validator.config import BASIS_POINT_SCALE
 from ditto.validator.weights import (
+    CrownGate,
     compute_generator_weights,
     compute_router_weights,
     compute_weights,
@@ -90,6 +91,7 @@ class MemoryFoldParams:
     statistical_band_cap: bool = False
     incumbent_agent_id: UUID | None = None
     unpaid_agent_id: UUID | None = None
+    crown_gate: CrownGate | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,7 @@ def memory_fold(inputs: TrackFoldInputs) -> dict[str, float]:
         statistical_band_cap=params.statistical_band_cap,
         incumbent_agent_id=params.incumbent_agent_id,
         unpaid_agent_id=params.unpaid_agent_id,
+        crown_gate=params.crown_gate,
     )
 
 

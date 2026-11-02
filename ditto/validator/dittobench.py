@@ -48,6 +48,7 @@ from ditto.api_models.validator_capabilities import (
     ScorerProbeOutcome,
     ScorerProbeReason,
     V14ScoredRuntimeEnvEvidence,
+    V15ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -1310,6 +1311,19 @@ class DittobenchClient:
                     v14_scored_runtime_env = v14_candidate
             except ValueError:
                 pass
+        v15_scored_runtime_env = None
+        if (
+            15 in observed_versions
+            and payload.get("v15_scored_runtime_env") is not None
+        ):
+            try:
+                v15_candidate = V15ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v15_scored_runtime_env"]
+                )
+                if v15_candidate.source_revision == source_revision:
+                    v15_scored_runtime_env = v15_candidate
+            except ValueError:
+                pass
         try:
             generator_rounds = (
                 13 in observed_versions
@@ -1352,6 +1366,7 @@ class DittobenchClient:
                 source_revision=source_revision,
                 scored_runtime_env=scored_runtime_env,
                 v14_scored_runtime_env=v14_scored_runtime_env,
+                v15_scored_runtime_env=v15_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,

@@ -6,6 +6,10 @@ import {
 } from '../lib/contributor.schemas'
 import { fetchAgentSourceReleaseEvidence } from './source-release-evidence.service'
 import { fetchArtifactFetchAudit } from './artifact-fetch-audit.service'
+import { fetchInfraVoids, fetchProviderOutages, voidInfraScores } from './infra-voids.service'
+import {
+  getProviderOutagesInputSchema, listInfraVoidsInputSchema, voidInfraScoresInputSchema,
+} from '../lib/infra-voids.schemas'
 import {
   fetchMinerGithubLink, fetchGithubContributor, fetchMinerClaStatus, fetchClaPolicy,
   updateClaPolicy, publishClaVersion,
@@ -108,9 +112,10 @@ import { runtimeInterfaceReportInputSchema } from '../lib/runtime-interface.sche
 import { recordTreasuryRuntimeInputSchema } from '../lib/treasury-ledger.schemas'
 
 import { issueBenchmarkCanaryInputSchema, getBenchmarkCanaryInputSchema,
-  cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema } from '../lib/benchmark-canary.schemas'
+  cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+  getOperatorDiagnosticInputSchema, isolateOperatorDiagnosticInputSchema } from '../lib/benchmark-canary.schemas'
 import { issueBenchmarkCanary, getBenchmarkCanary, listBenchmarkCanaries,
-  cancelBenchmarkCanary } from './admin.service'
+  cancelBenchmarkCanary, getOperatorDiagnostic, isolateOperatorDiagnostic } from './admin.service'
 
 import {
   McpServer,
@@ -213,6 +218,8 @@ import {
   scheduleCanonicalStarterInputSchema,
   applyCopyCourtSettingsInputSchema,
   copyCourtRecommendationsInputSchema,
+  applyUnreleasedCopySettingsInputSchema,
+  unreleasedCopySignalsInputSchema,
   confirmationSeedAnchorsInputSchema,
   outlierEscalationDryRunInputSchema,
   rotateScreenerPolicyManifestInputSchema,
@@ -244,6 +251,7 @@ import {
   hasScreeningSubmissionFilters,
   screeningSubmissionFiltersSchema,
 } from '../lib/admin.schemas'
+import { competitionImprovementMetricsInputSchema } from '../lib/competition-improvement.schemas'
 import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
@@ -373,6 +381,11 @@ import {
   fetchCopyCourtControl,
   fetchCopyCourtRecommendations,
   fetchCopyCourtTriagePreview,
+  applyUnreleasedCopySettings,
+  fetchUnreleasedCopySettings,
+  fetchUnreleasedCopySignal,
+  fetchUnreleasedCopySignals,
+  fetchCompetitionImprovementMetrics,
   fetchConfirmationSeedAnchors,
   applyCopyCourtSettings,
   applyScreenerReviewSettings,
@@ -731,6 +744,16 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read V13+ pinned/waiting confirmation anchors and floors.',
   list_copy_court_recommendations:
     'Page court verdicts and evidence for copy holds.',
+  get_unreleased_copy_signal:
+    'Shadow unreleased-copy evidence, path:line both sides. Artifact scope.',
+  list_unreleased_copy_signals:
+    'Page shadow unreleased-copy signals.',
+  get_competition_improvement_metrics:
+    'Frontier, new-high drivers, release forks, embargo windows, noise floor.',
+  get_unreleased_copy_settings:
+    'Read unreleased-copy mode, threshold, history and last tick.',
+  apply_unreleased_copy_settings:
+    'Write unreleased-copy mode/threshold. Confirmation: APPLY UNRELEASED COPY {MODE}.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -861,8 +884,14 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read retest policy, fleet/support and paged history (default 0).',
   get_agent_scores:
     'Read accepted scores/seeds/aggregates; current benchmark default.',
+  void_infra_scores:
+    'Void retest samples whose grant shows outage-class failures; guarded, dryRun default. See tool help.',
+  list_infra_voids:
+    'List infra voids (operator and outage sweep) with evidence and re-run result.',
+  get_provider_outages:
+    'Read provider-outage circuits and post-outage sweep runs (voids, windows, flagged canonicals).',
   get_continual_retest_diagnostic:
-    'Exact agent scoring, owner-family cutoff/tie band, cohort reason and claim eligibility. Read-only.',
+    'Exact agent scoring, owner-family cutoff/tie band, cohort reason, claim eligibility and per-sample grant failures. Read-only.',
   get_validator_slot_settings:
     'Read slot/disk policy, per-validator overrides, round reservation, per-validator fleet sizing and history (default 0). A validator advertising above cap is not an underutilized host.',
   get_validator_fleet:
@@ -969,6 +998,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_benchmark_canary: 'Read one diagnostic lease/non-authoritative result.',
   issue_benchmark_canary: 'Issue bounded diagnostic lease for explicit bench version/agent/validator. Never activates.',
   cancel_benchmark_canary: 'Cancel exact canary and its inference; canonical scores unchanged.',
+  get_operator_diagnostic: 'Read operator diagnostic eligibility.',
+  isolate_operator_diagnostic: 'Isolate an operator-owned new agent.',
   authorize_confirmation_bundle_retest:
     'Authorize one manual retest for a completed or failed bundle. Requires current generation, request UUID, reason, and exact phrase. Automatic retries stay disabled.',
   remove_failed_submission_from_queue:
@@ -2311,7 +2342,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Explain exact agent continual retest admission',
       description:
-        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
+        'Read one exact submission UUID: canonical and official composites with sample counts and completed-wave depth, the same-owner representative and the comparison that selected it, raw/folded seed IDs, membership in the raw wave, folded emission set and resolved cohort with the cutoff/tie-band comparison and exclusion reason, seed anchor, retest tickets with the latest result, and claimability (scheduled round, catch-up, spare capacity, idle gate). A negative cohort_cutoff.gap on an agent that is still out of the cohort means the exclusion is structural owner suppression, not a score it failed. Outstanding work is a count; no confirmation dataset, prompt, or answer key is returned. `retest_samples` lists the newest accepted confirmation samples (at most 30, newest first) with validator, exact seed, composite, run_id, accepted_at and the inference grant that served each one: chat_requests, failed_requests and failure_codes (failed chat calls by relay terminal_error_code, e.g. upstream_http_402 for gateway credit exhaustion). A low sample with many failed calls measured the inference path, not the agent; check it before ruling a drop agent behaviour. `claim.void_rerun_seed_count` counts infra-voided seeds still owed one replacement run; the lane issues them right behind the champion regardless of cohort or owner suppression (`route_priority: void_rerun`), and withholds them while the provider circuit is open or recovering (`claim.provider_outage_active`). While the provider gate admits nothing (`claim.provider_gate_closed`) the lane issues no retest on any route and `decision` is `provider_outage`. This snapshot does not grant work. Seed IDs are exact decimal strings. Requires backroom:read.',
       inputSchema: { agentId: sourceAgentId() },
       annotations: toolAnnotations('read'),
     },
@@ -2323,7 +2354,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get production score leaderboard',
       description:
-        'Ranked SN118 leaderboard straight from the production score ledger (what dittobench.ai renders), one best submission per miner. Each entry carries the composite with per-axis tool/memory means, quorum vs provisional state, emission eligibility, bench_version, dataset_sha256, standard error, rollout settlement state, and the composite breakdown with gate and token-efficiency multipliers, plus the current KOTH emissions fold (champion, protection margin, dethrone decision, confirmation-seed depth per recipient). Filter finalized vs provisional entries or pin a historical benchVersion; omit benchVersion for the authoritative pool that drives weights. A newer generation suppressed by its owner representative has no entry here; call get_continual_retest_diagnostic with its exact UUID for the owner comparison and retest-cohort membership. Returns `count` (the filtered total); page with limit/offset when count exceeds the page. Requires backroom:read and never influences weights or emissions.',
+        'Ranked SN118 leaderboard straight from the production score ledger (what dittobench.ai renders), one best submission per miner. Each entry carries the composite with per-axis tool/memory means, quorum vs provisional state, emission eligibility, bench_version, dataset_sha256, standard error, rollout settlement state, and the composite breakdown with gate and token-efficiency multipliers, plus the current KOTH emissions fold (champion, protection margin, dethrone decision, confirmation-seed depth per recipient) and the crown standings: `emissions.crown_rules` (min shared-seed confirmations to dethrone, official places the King must hold, and whether the fleet enforces them yet), `emissions.king` (official rank, official score, confirmations) and `emissions.challengers` (each challenger\'s shared seeds vs the King, paired lead or deficit, lead still needed, and status outside_standing | needs_confirmations | dueling | would_dethrone). Board `rank` orders by official_composite (the continual mean), not the canonical `composite`. Filter finalized vs provisional entries or pin a historical benchVersion; omit benchVersion for the authoritative pool that drives weights. A newer generation suppressed by its owner representative has no entry here; call get_continual_retest_diagnostic with its exact UUID for the owner comparison and retest-cohort membership. Returns `count` (the filtered total); page with limit/offset when count exceeds the page. Requires backroom:read and never influences weights or emissions.',
       inputSchema: scoreLeaderboardInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -2528,7 +2559,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get continual retest settings',
       description:
-        'tie_weighting_mode is a separate consensus switch: disabled preserves fixed 65/14/10/7/4 shares, while fleet_ready pools evidence-tied occupied shares and uses an uncapped equal joint crown when the dethrone threshold is outside the score range, only after every live weight setter advertises protocol 20. statistical_band_mode is disabled by default; fleet_ready serves the protocol-29 capped statistical band only after every recently-live weight setter supports it. ' +
+        'tie_weighting_mode is a separate consensus switch: disabled preserves fixed 65/14/10/7/4 shares, while fleet_ready pools evidence-tied occupied shares and uses an uncapped equal joint crown when the dethrone threshold is outside the score range, only after every live weight setter advertises protocol 20. statistical_band_mode is disabled by default; fleet_ready serves the protocol-29 capped statistical band only after every recently-live weight setter supports it. crown_gate_mode is disabled by default; fleet_ready serves the protocol-34 crown gate only after every recently-live weight setter supports it: a challenger dethrones only on the paired comparison over at least min_dethrone_confirmations (2-15, default 3) shared seeds, and only within the top champion_standing_rank (1-5, default 3) official places; effective.crown_gate_active/crown_gate_fleet_ready report whether it folds now. ' +
         'Read the platform-owned continual retest policy, its append-only revision history, whether the validator fleet satisfies the protocol readiness signal, whether completed cohort waves are folded into rankings, whether idle validators may claim bounded retest work after ordinary scoring returns no job, and whether the lane is currently standing down for an open benchmark rollout (with that rollout’s desired version). The policy also carries wave_membership (whose retests have to land before a seed counts toward the aggregate: strict, participants, or per_agent) and the cohort shape — retest_cohort_size (how many ranked agents the lane currently rescores), retest_eligibility_mode (fixed rank cut, or statistical, which also admits agents indistinguishable from the cutoff), retest_eligibility_z (the tie band in standard errors), and retest_cohort_max_size (the ceiling once that band is applied). The effective block reports the bounds those values must sit between — emission_set_size, max_retest_cohort_size, max_retest_eligibility_z — plus eligible_agent_count (the ranked agents the active benchmark can actually supply, which caps the cohort when it is smaller than the configured size) and resolved_cohort_size (how many the ranking actually admitted once ties at the cutoff were absorbed; it differs from retest_cohort_size only in statistical mode, and that difference is the whole point of the mode). Read field_support before trusting any of these: it reports per field whether the platform build behind Backroom carries it, and where it is false the value shown is this tool filling in that build’s behaviour rather than the platform reporting one, so a write asking for anything else will be refused. cohort_sizing_supported is the same signal for retest_cohort_size. Requires backroom:read and changes nothing.',
       inputSchema: MCP_SETTINGS_HISTORY_INPUT,
       annotations: toolAnnotations('read'),
@@ -2551,7 +2582,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Set continual retest settings',
       description:
-        'tie_weighting_mode=fleet_ready changes the fold only after every live weight setter advertises protocol 20: exact score ties pool occupied rank shares, while non-exact ties require paired shared-seed evidence inside the statistical band. disabled is the immediate fixed-share rollback, and there is no force override that could split consensus. statistical_band_mode=fleet_ready caps paired tie and unpaired dethrone bands only after every recently-live weight setter advertises protocol 29; disabled preserves the legacy fold. ' +
+        'tie_weighting_mode=fleet_ready changes the fold only after every live weight setter advertises protocol 20: exact score ties pool occupied rank shares, while non-exact ties require paired shared-seed evidence inside the statistical band. disabled is the immediate fixed-share rollback, and there is no force override that could split consensus. statistical_band_mode=fleet_ready caps paired tie and unpaired dethrone bands only after every recently-live weight setter advertises protocol 29; disabled preserves the legacy fold. crown_gate_mode=fleet_ready (with min_dethrone_confirmations and champion_standing_rank) gates the crown on shared-seed evidence only after every recently-live weight setter advertises protocol 34; disabled is the ungated rollback. ' +
         'Apply one append-only revision without a platform redeploy. aggregate_mode=fleet_ready preserves the compatibility gate, enabled explicitly overrides it, and disabled stops completed waves from changing rankings. idle_retests_enabled lets validators use spare capacity only after ordinary scoring returns no job; membership, coverage, authentication, one-score-per-validator, and seed-cap guards remain. rollout_standdown governs an open benchmark rollout: capable_validators (default) stops only validators that can score the incoming version, all pauses the whole lane, and off keeps retesting the previous generation and will slow the rollout down. Any stand-down applies to new leases only and lifts when the desired version takes authority or the rollout activates or is superseded. wave_membership decides whose retests have to land before a seed counts toward the aggregate, and it CHANGES WHAT VALIDATORS WEIGHT — official_composite is the continual mean over the seeds it admits, so changing it re-orders the tail and moves emission shares. participants (the shipped default) intersects over emission-set members holding at least one confirmation; strict intersects over every current member and is the pre-#489 historical fold, kept as the audited rollback path; per_agent drops the intersection entirely and is the noisiest, least comparable option. retest_cohort_size is how far down the ranking the lane reaches: 5 (the emission set, the historical behaviour) through 25. Above 5 the next ranked challengers are rescored on the same champion-anchored wave seeds, so one arrives in the top five already carrying confirmation depth; emissions, the weight fold, and wave completion stay keyed to the top five at every size, and the extra members only take a seed once every emission-set member is claimed or already scored. retest_eligibility_mode draws the bottom edge of that cohort: fixed cuts at exactly retest_cohort_size by rank, which cannot express a tie, while statistical keeps the same cutoff and also admits anyone below it whose composite is within retest_eligibility_z standard errors of the cutoff agent. retest_eligibility_z (0 through 3) is that band; it is ignored under fixed, and 0 is a real setting rather than a disabled one — it admits exact ties and nothing else. retest_cohort_max_size (5 through 25) is the hard ceiling once the band is applied and must be at least retest_cohort_size; it is a stop, not a target, and never binds when there are no ties near the cutoff. A revision stores the whole policy, so every one of these fields is required — omitting one while changing something else writes its default over the live value, which for wave_membership means silently reverting a rollback and for retest_cohort_size means collapsing a wider cohort back to 5. If get_continual_retest_settings reports a field false in field_support, that platform build has no such field: pass the value that build already behaves as (5 for retest_cohort_size, strict for wave_membership, fixed for retest_eligibility_mode, 1.64 for retest_eligibility_z, 25 for retest_cohort_max_size) to change the rest of the policy, and expect any other request to be refused rather than silently answered with a default. Supply the complete policy, expectedRevision, a reason, and exact confirmation "APPLY CONTINUAL RETEST SETTINGS". Requires backroom:write.',
       inputSchema: setContinualRetestSettingsInputSchema,
       annotations: toolAnnotations('write', true),
@@ -2840,7 +2871,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get copy court settings',
       description:
-        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, the append-only revision history (newest first), and runtime: this Platform process\'s last tick (started/finished, counters recommended/unavailable/errors/applied/apply_skipped, last_tick_error, and up to ten per-hold errors). Whenever the master mode is not off, every pending copy hold gets a recommendation; a class mode only gates what the court may apply. near_duplicate_mode=enforce is the only accepted enforce: it auto-applies the narrow deterministic family CLEAR (overlap fully explained by a proven-public base, zero distinctive lines of the unreleased matched agent present, exact artifact passed screening under its current policy, no open quarantine, ATH ruling preview ready with would_change_crown=false). The court never applies a reject or an escalation. Requires backroom:read.',
+        'Read the copy-hold triage court posture: master mode and per-class modes (off | shadow | enforce), the tick budget, the append-only revision history (newest first), unreleased_copy (the unreleased-copy signal\'s effective mode/threshold/enforce_since, index coverage, sentinel runtime and up to 50 flagged agents with their enforcement outcome; its enforce-mode holds come to this court and are always escalated), and runtime: this Platform process\'s last tick (started/finished, counters recommended/unavailable/errors/applied/apply_skipped, last_tick_error, and up to ten per-hold errors). Whenever the master mode is not off, every pending copy hold gets a recommendation; a class mode only gates what the court may apply. near_duplicate_mode=enforce is the only accepted enforce: it auto-applies the narrow deterministic family CLEAR (overlap fully explained by a proven-public base, zero distinctive lines of the unreleased matched agent present, exact artifact passed screening under its current policy, no open quarantine, ATH ruling preview ready with would_change_crown=false). The court never applies a reject or an escalation. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchCopyCourtControl()),
@@ -2886,6 +2917,69 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       artifact(() => fetchCopyCourtTriagePreview(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_unreleased_copy_signal',
+    {
+      title: 'Get unreleased copy signal',
+      description:
+        'Read the shadow unreleased-copy signal for one agent: whether its artifact carries distinctive content (normalized string literals, prompt and constant text, cue/keyword lists, long identifiers, in any language) that another owner\'s agent held before it while that agent was still unreleased. Same-owner history (hotkey, payment coldkey, attested links), the public corpus (starter kits, ditto-harness, generator vocabulary), every agent released before the upload, and items held by four or more other owners are excluded first. Returns recorded (the sentinel\'s stored evaluation: threshold, flagged, top_score, excluded counts, evidence_status) with up to five matches, each with agent identity, status, uploaded_at, released_at and release_state, the kind-weighted score, per-kind counts, and up to 60 shared items as kind, normalized text, candidate path:line and matched path:line. live=true also recomputes read-only against the current index (Platform reads both artifacts for evidence; nothing is written). index shows the agent\'s item count or read error; runtime shows the sentinel\'s mode (shadow: never holds or rejects), threshold and last tick. A flag is a lead for copy review, not a ruling. Requires the dedicated backroom:artifact:read scope.',
+      inputSchema: {
+        agentId: sourceAgentId(),
+        live: z.boolean().default(false),
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => artifact(() => fetchUnreleasedCopySignal(input)),
+  )
+
+  registerTool(
+    'list_unreleased_copy_signals',
+    {
+      title: 'List unreleased copy signals',
+      description:
+        'Page recorded shadow unreleased-copy signals, highest score first: agent identity and status, flagged, top_score, the top matched agent, mode and computed_at, plus coverage (agents, indexed, unreadable, oldest_unindexed_at, evaluated, flagged) and the sentinel runtime. flaggedOnly=true (default) is the operator review list; set it false with minScore to see near misses. Names no source text; read get_unreleased_copy_signal for the shared items. Requires backroom:read.',
+      inputSchema: unreleasedCopySignalsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchUnreleasedCopySignals(input)),
+  )
+
+  registerTool(
+    'get_competition_improvement_metrics',
+    {
+      title: 'Get competition improvement metrics',
+      description:
+        'Measure how fast the competition improves, per bench version (v13 onward). daily: one row per UTC day with the frontier (highest canonical k=3 median among scored/live agents finalized by day end), the epoch-pinned champion, the owner-deduplicated top 5, releases and forks to date and the embargo in force; closed days (two or more days old) are frozen as recorded and backfilled marks rows written after their day closed. new_highs: every strict frontier improvement with its delta, days since the previous high and driver (released_fork, same_owner_iteration or original, base_agent_id for a fork). releases: each exact-SHA public handoff with the policy that timed it and its detected forks (other-owner later uploads holding at least half of its distinctive items, or declaring it as released_base): lag_hours, containment, novel_fraction, thin (novel under 0.10), delta vs base and the paired shared-seed delta. embargo_windows: releases, forks per release, thin share, fork lag and delta, new highs by driver and frontier gain per day for each release-policy revision. noise: seed-to-seed SD and quorum SEM of each bench\'s top 10 and the beyond-noise step (2 x sqrt(2) x median seed SD). benchVersion narrows to one bench; since (YYYY-MM-DD) drops earlier days and releases. coverage and runtime show the hourly job and the distinctive-item index coverage. Measurement only: changes no score, status, hold, policy or weight. Requires backroom:read.',
+      inputSchema: competitionImprovementMetricsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCompetitionImprovementMetrics(input)),
+  )
+
+  registerTool(
+    'get_unreleased_copy_settings',
+    {
+      title: 'Get unreleased copy settings',
+      description:
+        'Read the unreleased-copy signal\'s audited posture: effective mode (off | shadow | enforce; no revision means shadow), threshold (default 40), revision, enforce_since (only agents uploaded at or after it are held; enforcement is not retroactive), the append-only revision history (newest first, with reason and actor), and the sentinel runtime. In enforce mode a flag at or above the threshold on an eligible agent opens a copy-kind ATH hold for an operator ruling: immediately when the agent is scored or live, at score finalization otherwise. It never rejects, and the copy court escalates these holds. The miner-visible reason cites only the candidate\'s own path:line. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchUnreleasedCopySettings()),
+  )
+
+  registerTool(
+    'apply_unreleased_copy_settings',
+    {
+      title: 'Apply unreleased copy settings',
+      description:
+        'Append one unreleased-copy settings revision: expectedRevision (from get_unreleased_copy_settings; 0 when none), mode (off | shadow | enforce), threshold (default 40), a reason of at least 8 characters, and confirmation APPLY UNRELEASED COPY {MODE}. Switching to enforce starts enforce_since now: agents uploaded earlier are listed, never held. Enforce opens copy holds for operator ruling and never rejects. The signed-in operator is the audit actor. Requires backroom:write.',
+      inputSchema: applyUnreleasedCopySettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => applyUnreleasedCopySettings(props.session.email, input)),
   )
 
   registerTool(
@@ -4014,6 +4108,42 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   )
 
   registerTool(
+    'void_infra_scores',
+    {
+      title: 'Void infrastructure-tainted retest samples',
+      description:
+        'Set aside continual-retest samples that measured an inference outage instead of the agent. Read get_continual_retest_diagnostic first and copy each sample\'s validator_hotkey, exact seed, run_id (expectedRunId) and composite (expectedComposite) from retest_samples. Each item is guarded on that exact run and composite (a re-run that already landed reads stale_guard) and gated on the serving grant\'s outage-class failures (upstream_http_402 credit refusal, upstream_http_429/503 backpressure): at least 5, and at least 20 or 5% of chat calls, else insufficient_evidence. dryRun defaults to true and writes nothing; dryRun=false needs confirmation "VOID INFRA SCORES" and is all-or-nothing (any item not applied/already_voided rolls the batch back). A void is append-only and audited (reason, evidence + digest, actor); the score row is never changed. Every fold read (official composite, owner representative, cohort, crown, validator ledger) skips a voided sample from the next epoch pin, which reopens its seed for the agent; the re-run lands at the next void_generation and counts. Canonical quorum scores are not voided here: use replace_validator_score. Requires backroom:write.',
+      inputSchema: voidInfraScoresInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => voidInfraScores(input, props.session.email)),
+  )
+
+  registerTool(
+    'list_infra_voids',
+    {
+      title: 'List infrastructure voids',
+      description:
+        'Newest-first infrastructure voids of continual-retest samples, filtered by agentId, source (operator or outage_sweep) or since. Each row carries the voided run, composite, generation, reason, evidence and digest, actor, outage window, and once it lands the re-run composite and run_id on the same key. Requires backroom:read.',
+      inputSchema: listInfraVoidsInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchInfraVoids(input)),
+  )
+
+  registerTool(
+    'get_provider_outages',
+    {
+      title: 'Get provider outages',
+      description:
+        'Current provider_outage_circuits rows (state, epoch, opened/retry/last-failure times, failure_count, last_status, last_error_code, outage_active including the recovery quiet window), the post-outage sweep policy (interval, batch, first lookback, evidence gate), and newest-first sweep runs. Each run lists its watermark range, examined/voided/error counts, the voids it wrote (source outage_sweep), the per-grant outage windows observed, and canonical scores whose grant shows the same outage evidence (canonical_flagged: review with replace_validator_score; never replaced automatically). withFindings keeps runs that voided, flagged or errored. Requires backroom:read.',
+      inputSchema: getProviderOutagesInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchProviderOutages(input)),
+  )
+
+  registerTool(
     'queue_validator_score_retests',
     {
       title: 'Queue same-validator score re-tests',
@@ -4142,6 +4272,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     inputSchema: cancelBenchmarkCanaryInputSchema,
     annotations: toolAnnotations('write', true),
   }, async (input) => write(() => cancelBenchmarkCanary(props.session.email, input)))
+  registerTool('get_operator_diagnostic', {
+    title: 'Get operator diagnostic eligibility',
+    description: 'Read whether one agent is an operator diagnostic target: owned by a configured operator hotkey, shadow, its queue withdrawals, ordinary vs diagnostic lease counts, score count, and the exact refusal (if any) for isolation and for a diagnostic lease per benchmark version. Requires backroom:read and changes nothing.',
+    inputSchema: getOperatorDiagnosticInputSchema,
+    annotations: toolAnnotations('read'),
+  }, async (input) => result(await getOperatorDiagnostic(input)))
+  registerTool('isolate_operator_diagnostic', {
+    title: 'Isolate operator diagnostic agent',
+    description: 'Mark one agent shadow and withhold it from every queueable benchmark version, so issue_benchmark_canary may later lease it to exactly one validator. Only for an agent uploaded by a configured operator hotkey, still before screening completes, with no lease and no score; every other agent is refused. Writes queue withdrawals and an audit entry. Requires expectedArtifactSha256, a reason, and exact confirmation ISOLATE OPERATOR DIAGNOSTIC AGENT. Requires backroom:write.',
+    inputSchema: isolateOperatorDiagnosticInputSchema,
+    annotations: toolAnnotations('write', true),
+  }, async (input) => write(() => isolateOperatorDiagnostic(props.session.email, input)))
 
   registerTool(
     'start_benchmark_rollout',

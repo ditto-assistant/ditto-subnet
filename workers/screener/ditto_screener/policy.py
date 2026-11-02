@@ -321,7 +321,8 @@ _MODEL_FAULT_CODE_PREFIXES = (
     "source-review-inconsistent-verdict",
 )
 _ARCHIVE_UNREADABLE_CODE = "source-review-archive-invalid"
-# L2 finished, but after the attempt's lease deadline: a time outcome.
+# L2 ran past its deadline: the layer's own ``timeout_seconds`` or the attempt
+# lease, whichever is earlier. The subcode names which one fired.
 _LATE_RESULT_CODE = "l2-late-result"
 
 
@@ -332,7 +333,7 @@ def _retryable_detail(reason_code: str | None) -> str:
     if reason_code == _ARCHIVE_UNREADABLE_CODE:
         return "screener error: private source review could not read the archive"
     if reason_code == _LATE_RESULT_CODE:
-        return "screener error: private review finished after its lease deadline"
+        return "screener error: private review ran past its review deadline"
     return _INFRA_UNAVAILABLE_DETAIL
 
 

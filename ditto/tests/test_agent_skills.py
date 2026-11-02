@@ -351,6 +351,33 @@ def test_rolling_board_sweep_routes_to_sweep_then_review() -> None:
         assert "backroom-review" in topic_list(topics[0], "skills")
 
 
+def test_infra_failure_reports_route_to_scoring_infra_triage() -> None:
+    skill = ROOT / ".agents" / "skills" / "scoring-infra-triage"
+    body = (skill / "SKILL.md").read_text()
+    claude_link = ROOT / ".claude" / "skills" / "scoring-infra-triage"
+    sweep = (
+        ROOT / ".agents" / "skills" / "backroom-board-sweep" / "SKILL.md"
+    ).read_text()
+
+    assert claude_link.is_symlink()
+    assert (claude_link.parent / claude_link.readlink()).resolve() == skill.resolve()
+    assert "https://backroom.dittobench.ai/mcp" in body
+    for tool in (
+        "retry_validator_evaluation",
+        "replace_validator_score",
+        "queue_validator_score_retests",
+        "get_continual_retest_diagnostic",
+    ):
+        assert tool in body, tool
+    assert "$scoring-infra-triage" in sweep
+    assert ".agents/skills/scoring-infra-triage" in (ROOT / "CLAUDE.md").read_text()
+    for query in (
+        "my retest looks like an infra failure",
+        "decide whether to retry validator evaluation after host_memory_pressure",
+    ):
+        assert str(lookup(query, maximum=1)[0]["id"]) == "scoring-infra-triage", query
+
+
 def test_miner_pre_submit_review_query_stays_on_mine() -> None:
     topic_ids = [
         str(topic["id"])

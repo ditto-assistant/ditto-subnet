@@ -398,9 +398,9 @@ describe("overview leaderboard block (row 1 slice)", () => {
     await waitFor(() =>
       expect(el("champion-body").textContent).toContain(championEntry.agent_name as string),
     );
-    expect(el("champion-box-kicker").textContent).toContain("KOTH · reigning champion");
+    expect(el("champion-box-kicker").textContent).toContain("King");
     const body = el("champion-body");
-    expect(body.textContent).toContain("Raw rank #" + championEntry.rank);
+    expect(body.textContent).toContain("Official rank #" + championEntry.rank);
     expect(body.textContent).toContain("Miner pool " + pct(0.65));
     expect(body.textContent).toContain(fx(displayComposite(championEntry)));
   });
@@ -414,7 +414,7 @@ describe("overview leaderboard block (row 1 slice)", () => {
     await waitForBoard();
     await waitFor(() => expect(el("champion-note").textContent).toBeTruthy());
     const note = el("champion-note");
-    expect(note.textContent).toContain("Holds the crown from raw #" + championEntry.rank);
+    expect(note.textContent).toContain("Holds the crown from official #" + championEntry.rank);
     expect(note.textContent).toContain("1 agent scores higher");
     expect(note.textContent).toContain("head-to-head");
     // The shared block's held-crown callout renders on this mount too, and

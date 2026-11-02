@@ -246,7 +246,26 @@ import {
 
 import { benchmarkCanarySchema, issueBenchmarkCanaryInputSchema,
   getBenchmarkCanaryInputSchema, cancelBenchmarkCanaryInputSchema, listBenchmarkCanariesInputSchema,
+  getOperatorDiagnosticInputSchema, isolateOperatorDiagnosticInputSchema, operatorDiagnosticSchema,
 } from '../lib/benchmark-canary.schemas'
+
+export async function getOperatorDiagnostic(rawInput: unknown) {
+  const input = getOperatorDiagnosticInputSchema.parse(rawInput)
+  return operatorDiagnosticSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/operator-diagnostic/${input.agentId}`,
+  ))
+}
+
+export async function isolateOperatorDiagnostic(actor: string, rawInput: unknown) {
+  const input = isolateOperatorDiagnosticInputSchema.parse(rawInput)
+  return operatorDiagnosticSchema.parse(await platformAdminRequest(
+    `/api/v1/admin/operator-diagnostic/${input.agentId}/isolate`, {
+      method: 'POST', actor,
+      body: { actor, expected_artifact_sha256: input.expectedArtifactSha256,
+        reason: input.reason, confirmation: input.confirmation },
+    },
+  ))
+}
 
 export async function listBenchmarkCanaries(rawInput: unknown) {
   const input = listBenchmarkCanariesInputSchema.parse(rawInput)
@@ -519,6 +538,13 @@ import {
   copyCourtRevisionSchema,
   copyCourtRecommendationListSchema,
   copyCourtRecommendationsInputSchema,
+  applyUnreleasedCopySettingsInputSchema,
+  unreleasedCopySettingsRevisionResponseSchema,
+  unreleasedCopySettingsSchema,
+  unreleasedCopySignalInputSchema,
+  unreleasedCopySignalListSchema,
+  unreleasedCopySignalSchema,
+  unreleasedCopySignalsInputSchema,
   copyCourtTriagePreviewInputSchema,
   copyCourtTriagePreviewSchema,
   confirmationSeedAnchorListSchema,
@@ -593,6 +619,10 @@ import {
   submissionTermsReadSchema,
   submissionTermsSchema,
 } from '../lib/submission-terms.schemas'
+import {
+  competitionImprovementMetricsInputSchema,
+  competitionImprovementMetricsSchema,
+} from '../lib/competition-improvement.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
   submissionDepositAddressControlSchema,
@@ -1011,6 +1041,62 @@ export async function fetchCopyCourtRecommendations(rawInput: unknown) {
     `/api/v1/admin/copy-court/recommendations?${params.toString()}`,
   )
   return copyCourtRecommendationListSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySignal(rawInput: unknown) {
+  const input = unreleasedCopySignalInputSchema.parse(rawInput)
+  const params = new URLSearchParams({ live: String(input.live) })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/unreleased-copy/agents/${encodeURIComponent(input.agentId)}?${params.toString()}`,
+  )
+  return unreleasedCopySignalSchema.parse(payload)
+}
+
+export async function fetchCompetitionImprovementMetrics(rawInput: unknown) {
+  const input = competitionImprovementMetricsInputSchema.parse(rawInput)
+  const params = new URLSearchParams()
+  if (input.benchVersion !== undefined) params.set('bench_version', String(input.benchVersion))
+  if (input.since !== undefined) params.set('since', input.since)
+  const query = params.toString()
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/competition-improvement/metrics${query ? `?${query}` : ''}`,
+  )
+  return competitionImprovementMetricsSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySignals(rawInput: unknown) {
+  const input = unreleasedCopySignalsInputSchema.parse(rawInput)
+  const params = new URLSearchParams({
+    flagged_only: String(input.flaggedOnly),
+    min_score: String(input.minScore),
+    limit: String(input.limit),
+    offset: String(input.offset),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/unreleased-copy/signals?${params.toString()}`,
+  )
+  return unreleasedCopySignalListSchema.parse(payload)
+}
+
+export async function fetchUnreleasedCopySettings() {
+  const payload = await platformAdminRequest('/api/v1/admin/unreleased-copy/settings')
+  return unreleasedCopySettingsSchema.parse(payload)
+}
+
+export async function applyUnreleasedCopySettings(actor: string, rawInput: unknown) {
+  const input = applyUnreleasedCopySettingsInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/unreleased-copy/settings', {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      settings: { mode: input.mode, threshold: input.threshold },
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return unreleasedCopySettingsRevisionResponseSchema.parse(payload)
 }
 
 export async function fetchCopyCourtTriagePreview(rawInput: unknown, actor: string) {

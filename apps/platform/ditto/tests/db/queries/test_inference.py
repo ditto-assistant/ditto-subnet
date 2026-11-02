@@ -902,11 +902,18 @@ async def test_the_operator_budget_is_stamped_onto_the_new_grant(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(
+    ("enabled", "bench_version"),
+    [(False, 15), (True, 15), (True, 14), (True, _BENCH_VERSION)],
+)
 async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
-    session: AsyncSession, enabled: bool
+    session: AsyncSession, enabled: bool, bench_version: int
 ) -> None:
-    """Lane off mints the pre-lane grant exactly; lane on stamps pin and walls."""
+    """Lane off mints the pre-lane grant exactly; lane on stamps pin and walls.
+
+    Only v15+ leases carry the lane: a v14-or-earlier lease minted while the
+    board is on is byte-identical to a pre-lane grant.
+    """
     now = datetime.now(UTC)
     agent = Agent(
         agent_id=uuid4(),
@@ -923,7 +930,7 @@ async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
         status=TicketStatus.ISSUED,
         issued_at=now,
         deadline=now + timedelta(minutes=20),
-        bench_version=_BENCH_VERSION,
+        bench_version=bench_version,
         attempt_count=1,
     )
     session.add_all([agent, ticket])
@@ -949,7 +956,11 @@ async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
         grant.decision_request_budget,
         grant.decision_token_budget,
     )
-    expected = ("typesafe/jev-1.14", 42_000, 9, 9_000) if enabled else (None, 0, 0, 0)
+    expected = (
+        ("typesafe/jev-1.14", 42_000, 9, 9_000)
+        if enabled and bench_version >= 15
+        else (None, 0, 0, 0)
+    )
     assert stamps == expected
     assert (grant.decision_tokens, grant.decision_cost_microusd) == (0, 0)
 

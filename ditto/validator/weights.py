@@ -71,6 +71,28 @@ MIN_ELIGIBLE_CASES = 100
 UNPAID_SHARE_KEY = "<unpaid>"
 
 
+@dataclass(frozen=True)
+class CrownGate:
+    """Protocol-34 crown rules served as ``LedgerResponse.crown_gate``.
+
+    ``min_shared_seeds``: a challenger takes the crown only on the paired
+    shared-seed statistic, and only once it holds at least this many
+    confirmation seeds in common with the reigning champion. An unpaired or
+    shallow comparison can never move the crown.
+
+    ``standing_rank``: only an entry inside the top ``standing_rank`` of the
+    fold's ranking (quality-first, the board's official order) may hold or
+    take the crown. A champion that falls below it is replaced by the
+    highest-ranked standing entry with ``min_shared_seeds`` shared seeds
+    against it, or by the rank-1 entry when none qualifies.
+
+    ``None`` everywhere this is accepted is the exact pre-34 fold.
+    """
+
+    min_shared_seeds: int
+    standing_rank: int
+
+
 def resolve_miner_emission_share(
     ledger: LedgerResponse, *, default_share: float
 ) -> float:
@@ -664,6 +686,7 @@ def compute_weights(
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
     unpaid_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -740,6 +763,7 @@ def compute_weights(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     if len(rank_shares) != tail_size + 1:
         raise ValueError("rank_shares must contain champion plus tail_size entries")
@@ -929,6 +953,7 @@ def select_champion(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
     scored = [e for e in filter_eligible(entries) if _effective_composite(e) > 0.0]
@@ -940,6 +965,7 @@ def select_champion(
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
             incumbent_agent_id=incumbent_agent_id,
+            crown_gate=crown_gate,
         )
         if scored
         else None
@@ -1627,6 +1653,7 @@ def _beats(
     *,
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
+    crown_gate: CrownGate | None = None,
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
     **indifference band** = max(fixed composite-point margin, statistical band).
@@ -1657,7 +1684,17 @@ def _beats(
 
     Protocol-21 quality-primary compares authoritative quality, not the
     efficiency-adjusted projection, so a 0.001 official lead cannot skip
-    hysteresis merely because a factor is present."""
+    hysteresis merely because a factor is present.
+
+    Under a protocol-34 ``crown_gate`` only the paired branch can dethrone,
+    and only with ``crown_gate.min_shared_seeds`` shared seeds: an incumbent's
+    retest-folded score is never compared with a newcomer's unretested
+    three-seed canonical."""
+    if crown_gate is not None and (
+        _shared_seed_count(challenger, champion) < crown_gate.min_shared_seeds
+        or _paired_dethrone(challenger, champion, dethrone_z) is None
+    ):
+        return False
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,
@@ -1738,6 +1775,7 @@ def _champion(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
     order, dethroning only when a later entry clears the indifference band
@@ -1754,6 +1792,12 @@ def _champion(
     with efficiency as an exact-quality tiebreak; the crown still requires the
     challenger to clear the indifference band on authoritative quality. A
     0.001 official lead is not a dethrone.
+
+    A protocol-34 ``crown_gate`` (:class:`CrownGate`) first enforces champion
+    standing -- an opener outside the top ``standing_rank`` hands the crown to
+    the best-qualified standing entry -- and then walks only standing
+    challengers, each of which must win the paired comparison on at least
+    ``min_shared_seeds`` shared seeds. The result is always a standing entry.
     """
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     # Crown incumbency (``LedgerResponse.crown_mode == "incumbent"``): the
@@ -1774,6 +1818,29 @@ def _champion(
     else:
         champ = ordered[0]
         challengers = ordered[1:]
+    if crown_gate is not None:
+        quality_primary = _quality_primary_efficiency_active(entries)
+        ranked = sorted(
+            entries,
+            key=lambda e: _ranking_key(e, quality_primary=quality_primary),
+        )
+        standing = ranked[: max(1, crown_gate.standing_rank)]
+        standing_ids = {e.agent_id for e in standing}
+        if champ.agent_id not in standing_ids:
+            outgoing = champ
+            champ = next(
+                (
+                    e
+                    for e in standing
+                    if _shared_seed_count(e, outgoing) >= crown_gate.min_shared_seeds
+                ),
+                standing[0],
+            )
+        challengers = [
+            e
+            for e in ordered
+            if e.agent_id in standing_ids and e.agent_id != champ.agent_id
+        ]
     for e in challengers:
         if _beats(
             e,
@@ -1782,6 +1849,7 @@ def _champion(
             dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
+            crown_gate=crown_gate,
         ):
             champ = e
     return champ
@@ -1832,6 +1900,7 @@ def agents_needing_rescore(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
@@ -1854,6 +1923,7 @@ def agents_needing_rescore(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
@@ -1900,15 +1970,23 @@ def _entry_has_seeds(entry: LedgerEntry, seeds: Sequence[int]) -> bool:
     return set(seeds).issubset(have.keys())
 
 
-def _shares_confirmation_seeds(a: LedgerEntry, b: LedgerEntry) -> bool:
+def _shares_confirmation_seeds(
+    a: LedgerEntry, b: LedgerEntry, *, minimum: int = 2
+) -> bool:
     """Whether the paired dethrone statistic can already decide this pair:
-    both entries carry per-seed confirmation composites over at least two
-    shared CRN seeds (the :func:`_paired_dethrone` precondition)."""
+    both entries carry per-seed confirmation composites over at least
+    ``minimum`` shared CRN seeds (two is the :func:`_paired_dethrone`
+    precondition; a protocol-34 crown gate raises it)."""
+    return _shared_seed_count(a, b) >= minimum
+
+
+def _shared_seed_count(a: LedgerEntry, b: LedgerEntry) -> int:
+    """Confirmation seeds both entries carry a validated composite for."""
     a_map = _entry_seed_composites(a)
     b_map = _entry_seed_composites(b)
     if a_map is None or b_map is None:
-        return False
-    return len(set(a_map) & set(b_map)) >= 2
+        return 0
+    return len(set(a_map) & set(b_map))
 
 
 def contested_confirmation_set(
@@ -1920,6 +1998,7 @@ def contested_confirmation_set(
     ceiling_band_clamp: bool = False,
     statistical_band_cap: bool = False,
     incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
     sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
@@ -1965,6 +2044,7 @@ def contested_confirmation_set(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
         incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     if _entry_version(champion) != current_version:
         return []
@@ -1991,7 +2071,11 @@ def contested_confirmation_set(
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
         )
-        and not _shares_confirmation_seeds(e, champion)
+        and not _shares_confirmation_seeds(
+            e,
+            champion,
+            minimum=2 if crown_gate is None else crown_gate.min_shared_seeds,
+        )
     ]
     if not contested:
         return []
