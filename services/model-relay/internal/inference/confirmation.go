@@ -853,7 +853,10 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		transientMaxAttempts := providerMaxAttempts
 		var maxElapsed time.Duration
 		if cfg.ConfirmationBackpressureRetry {
-			backpressureMaxAttempts = confirmationBackpressureMaxAttempts
+			// Backpressure gets the transient cap too. Two attempts covered a
+			// single 429 blip; measured on 2026-10-31 that was not enough for a
+			// rate-limit burst, and the per-grant budget below still bounds it.
+			backpressureMaxAttempts = confirmationTransientMaxAttempts
 			maxElapsed = confirmationBackpressureMaxElapsed
 			// Transient retries ride on the same operator activation. Their
 			// per-call cap is further bounded by what this grant has left of

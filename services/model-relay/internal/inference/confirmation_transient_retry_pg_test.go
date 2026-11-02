@@ -213,3 +213,41 @@ func TestConfirmationGrantRetryBudgetMakesCallsSingleShotWhenSpent(t *testing.T)
 		t.Fatalf("upstream calls with the budget spent = %d, want 1 (single-shot)", got)
 	}
 }
+
+// The bundle 0fb48285 case: a receipt-free 429 with a one-second Retry-After
+// used to be re-sent once after ~1s and give up. It now backs off with jitter
+// over up to four attempts and recovers when the burst passes.
+func TestConfirmationRidesOutAShortRetryAfterRateLimit(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= 2 {
+			w.Header().Set("Retry-After", "1")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(receiptFreeEnvelope(429, confirmationTestModel)))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(confirmationOKBody))
+	}))
+	defer upstream.Close()
+	f, sleeps := activatedReaderFixture(t, upstream.URL)
+
+	code, nonce := serveReader(t, f)
+
+	if code != http.StatusOK || calls.Load() != 3 {
+		t.Fatalf("code=%d calls=%d; two 429s then success must recover", code, calls.Load())
+	}
+	// Each wait honours the 1s floor and stays within its jittered ceiling.
+	ceilings := []time.Duration{2 * time.Second, 4 * time.Second}
+	if len(*sleeps) != 2 {
+		t.Fatalf("waits = %v, want two", *sleeps)
+	}
+	for i, sleep := range *sleeps {
+		if sleep < time.Second || sleep > ceilings[i] {
+			t.Fatalf("wait %d = %v, want within [1s, %v]", i, sleep, ceilings[i])
+		}
+	}
+	if row := readFailureDetail(t, f, nonce); row.status != "completed" || row.attempts.Int32 != 3 {
+		t.Fatalf("settled row = %+v, want completed after 3 attempts", row)
+	}
+}
