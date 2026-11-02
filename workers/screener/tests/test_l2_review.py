@@ -54,6 +54,7 @@ from ditto_screener.l2_review import (
     _cost,
     _enforce_causal_authority,
     _extract_readonly_workspace,
+    _failure,
     _finalize_without_l3,
     _has_mixed_causal_families,
     _l1_lead_packet,
@@ -6200,6 +6201,105 @@ async def test_late_l2_result_is_not_accepted(tmp_path: Path) -> None:
     assert result.observation.error_code == "l2-late-result"
     assert result.observation.failure_disposition == "retryable_infra"
     assert not list((tmp_path / "cache").glob("*.json"))
+    # The lease, not the layer's own timeout, was the earlier bound here, and
+    # the masked trajectory outcome stays visible behind the late code.
+    assert result.failure_subcode is not None
+    assert result.failure_subcode.startswith("lease_deadline:")
+    assert result.observation.failure_subcode == result.failure_subcode
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.stage == "l2"
+    assert audit.reason_code == "l2-late-result"
+    assert audit.budget_stop_reason == "time"
+    assert audit.max_elapsed_ms is not None and audit.elapsed_ms is not None
+
+
+async def test_late_l2_result_names_the_stage_timeout_and_masked_outcome(
+    tmp_path: Path,
+) -> None:
+    """hfull-h3 v9: the L2 timeout fired with ten minutes of lease left.
+
+    The late code used to replace the trajectory outcome with nothing, so the
+    attempt read as a lease miss and Backroom showed no L2 diagnostic.
+    """
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    agent = _sol_agent(tmp_path, _FakeHarness(), lambda _r: httpx.Response(500))
+    agent._timeout_seconds = 0.05  # type: ignore[attr-defined]
+
+    async def slow_review(*_args: object, **_kwargs: object) -> L2RunResult:
+        await asyncio.sleep(0.1)
+        return L2RunResult(
+            observation=_failure("l3-critic-timeouterror", "retryable_infra"),
+            analyzed_files=(),
+            causal_path=(),
+            tools=("read", "search", "read"),
+            usage=L2Usage(input_tokens=1_000, output_tokens=200),
+            cache_hit=False,
+            critic_disposition="retryable_infra",
+            response_models=("openai/gpt-6-sol", "openai/gpt-5.6-sol"),
+            response_providers=("OpenAI", "bad provider\nname"),
+        )
+
+    agent._review_uncached = slow_review  # type: ignore[method-assign]
+    lease = asyncio.get_running_loop().time() + 600.0
+
+    result = await agent.review(
+        str(archive),
+        artifact_sha256=artifact_sha,
+        attempt_id=ATTEMPT,
+        l1_observation=_l1(),
+        deadline=lease,
+        policy_version=13,
+    )
+
+    assert result.observation.error_code == "l2-late-result"
+    assert result.observation.failure_disposition == "retryable_infra"
+    assert result.failure_subcode == "stage_timeout:l3-critic-timeouterror"
+    audit = ScreenReviewAudit.model_validate(result.observation.review_audit)
+    assert audit.final_stage == "critic"
+    assert audit.budget_stop_reason == "time"
+    assert audit.model_steps_observed == 2
+    assert audit.tool_calls_observed == 3
+    assert audit.input_tokens_used == 1_000
+    assert audit.response_provider == "OpenAI"
+    assert audit.prompt_revision.endswith("-policy-v13")
+    assert audit.elapsed_ms is not None and audit.max_elapsed_ms is not None
+    assert audit.elapsed_ms >= audit.max_elapsed_ms
+    # The audit is wire-safe: it signs and round-trips like every L2 audit.
+    assert len(audit.canonical_digest()) == 64
+
+
+async def test_late_l2_result_keeps_its_audit_when_carried_as_a_hold() -> None:
+    """An L1 lead turns the late fault into a v13 hold that ships the audit."""
+    audit = ScreenReviewAudit(
+        stage="l2",
+        reason_code="l2-late-result",
+        prompt_revision="l2-terra-source-review-v62-policy-v13",
+        max_steps=256,
+        steps_used=40,
+        budget_stop_reason="time",
+        final_stage="analyst",
+        max_elapsed_ms=1_800_000,
+        elapsed_ms=1_800_250,
+    )
+    late = replace(
+        _failure("l2-late-result", "retryable_infra"),
+        review_audit=audit.model_dump(mode="json"),
+        failure_subcode="stage_timeout:l2-timeouterror",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("medium")),
+        l2=_FakeL2(_model_result(late)),
+        mode="enforce",
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT, policy_version=13
+    )
+
+    assert result.error_code == "l2-late-result"
+    assert result.failure_disposition == "inconclusive"
+    assert result.failure_subcode == "stage_timeout:l2-timeouterror"
+    assert result.review_audit == audit.model_dump(mode="json")
 
 
 async def test_http_failure_is_single_shot_before_deadline(
