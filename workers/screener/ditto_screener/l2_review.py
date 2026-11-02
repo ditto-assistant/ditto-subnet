@@ -127,6 +127,13 @@ PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
 _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS = 45.0
 
 
+# ``l2-late-result`` subcode: ``<bound>:<masked outcome code>``. It rides the
+# private failure detail, whose renderer accepts the same character class.
+_LATE_RESULT_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
+# ``ScreenReviewAudit.response_provider``; anything else is dropped.
+_AUDIT_PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}")
+
+
 def default_completion_request_seconds(max_completion_tokens: int) -> float:
     """Wall-clock cap for one L2/L3 turn that can spend its whole budget."""
     return max(
@@ -3070,7 +3077,8 @@ class TerraSolSourceReviewAgent:
         review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
-        local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        review_started_at = asyncio.get_running_loop().time()
+        local_deadline = review_started_at + self._timeout_seconds
         effective_deadline = (
             local_deadline
             if deadline is None
@@ -3247,9 +3255,32 @@ class TerraSolSourceReviewAgent:
                     runtime_evidence=runtime_evidence,
                     review_lineage=review_lineage,
                 )
-            if asyncio.get_running_loop().time() >= effective_deadline:
+            now = asyncio.get_running_loop().time()
+            if now >= effective_deadline:
+                late_audit, late_subcode = self._late_result_diagnostic(
+                    result,
+                    stage_bound=(deadline is None or local_deadline <= float(deadline)),
+                    budget_seconds=float(effective_deadline) - review_started_at,
+                    elapsed_seconds=now - review_started_at,
+                    policy_version=policy_version,
+                )
+                logger.warning(
+                    "L2 review ran past its deadline attempt_id=%s subcode=%s "
+                    "final_stage=%s steps=%d elapsed_s=%.0f budget_s=%.0f",
+                    attempt_id,
+                    late_subcode,
+                    late_audit.final_stage,
+                    late_audit.model_steps_observed or 0,
+                    now - review_started_at,
+                    float(effective_deadline) - review_started_at,
+                )
                 result = L2RunResult(
-                    observation=_failure("l2-late-result", "retryable_infra"),
+                    observation=replace(
+                        _failure("l2-late-result", "retryable_infra"),
+                        review_audit=late_audit.model_dump(mode="json"),
+                        failure_subcode=late_subcode,
+                    ),
+                    failure_subcode=late_subcode,
                     analyzed_files=result.analyzed_files,
                     causal_path=result.causal_path,
                     tools=result.tools,
@@ -3407,6 +3438,72 @@ class TerraSolSourceReviewAgent:
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
+
+    def _late_result_diagnostic(
+        self,
+        result: L2RunResult,
+        *,
+        stage_bound: bool,
+        budget_seconds: float,
+        elapsed_seconds: float,
+        policy_version: int,
+    ) -> tuple[ScreenReviewAudit, str]:
+        """Fixed-label accounting for a review discarded at its deadline.
+
+        ``l2-late-result`` replaces whatever the trajectory returned, so the
+        masked outcome, the layer it reached and which bound fired (this
+        layer's own ``timeout_seconds`` or the renewable attempt lease) were
+        lost; the hfull-h3 v9 and crown-v197 attempts (2026-11-01/02) read as
+        lease misses although their leases had ten minutes left. The audit
+        carries only counts and fixed labels, never source or prompts.
+        """
+        bound = "stage_timeout" if stage_bound else "lease_deadline"
+        masked = (
+            result.observation.error_code
+            if not result.observation.ok
+            else f"completed-{result.observation.risk_level or 'unknown'}"
+        )
+        subcode = f"{bound}:{masked or 'unknown'}".lower()
+        if not _LATE_RESULT_SUBCODE_RE.fullmatch(subcode):
+            subcode = bound
+        usage = result.usage
+        cost = (
+            usage.reported_cost_usd
+            if usage.reported_cost_usd is not None
+            else usage.estimated_cost_usd
+        )
+        provider = next(
+            (
+                value
+                for value in reversed(result.response_providers)
+                if _AUDIT_PROVIDER_RE.fullmatch(value)
+            ),
+            None,
+        )
+        max_elapsed_ms = min(max(1, round(budget_seconds * 1000)), 3_600_000)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-late-result",
+            prompt_revision=self._analyst_prompt_revision(policy_version),
+            harness_revision=L2_HARNESS_REVISION,
+            max_steps=self._max_steps,
+            steps_used=min(len(result.response_models), self._max_steps),
+            max_input_tokens=self._max_input_tokens,
+            input_tokens_used=min(max(0, usage.input_tokens), 100_000_000),
+            max_output_tokens=self._max_output_tokens,
+            output_tokens_used=min(max(0, usage.output_tokens), 1_000_000),
+            max_cost_usd=self._max_cost_usd,
+            cost_usd_used=min(max(0.0, float(cost or 0.0)), 100.0),
+            dossier_complete=result.dossier_complete,
+            model_steps_observed=min(len(result.response_models), 10_000),
+            tool_calls_observed=min(len(result.tools), 10_000),
+            budget_stop_reason="time",
+            response_provider=provider,
+            final_stage=_inconclusive_final_stage(result),
+            max_elapsed_ms=max_elapsed_ms,
+            elapsed_ms=min(max(0, round(elapsed_seconds * 1000)), 3_600_000),
+        )
+        return audit, subcode
 
     async def _review_uncached(
         self,

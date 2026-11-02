@@ -207,7 +207,7 @@ async def test_parked_provider_fault_names_its_bounded_subcode(
         ),
         (
             "l2-late-result",
-            "screener error: private review finished after its lease deadline",
+            "screener error: private review ran past its review deadline",
         ),
         (
             "source-review-http-503",
