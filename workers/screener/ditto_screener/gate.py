@@ -73,6 +73,7 @@ from uuid import UUID
 import httpx
 
 from ditto_screener.adjudicator import build_adjudicator
+from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
 from ditto_screener.heartbeat import (
     ScreenerProgressStage,
@@ -125,7 +126,10 @@ from ditto_screening_protocol import (
     ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
 )
-from ditto_screening_protocol.reason_codes import DOCKER_BUILD_INFRASTRUCTURE
+from ditto_screening_protocol.reason_codes import (
+    DOCKER_BUILD_INFRASTRUCTURE,
+    IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+)
 from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 if TYPE_CHECKING:
@@ -2113,6 +2117,19 @@ class BuildGate:
                         detail=(
                             "screener error: lease budget exhausted during image upload"
                         ),
+                    )
+                except ScreenedImageUploadUnavailable as error:
+                    # Transport or 5xx on a submission-independent upload step
+                    # (Platform restarting, its gateway, or object storage):
+                    # Platform's bounded infra retry takes it from here.
+                    if held_source_review:
+                        logger.warning("held image upload failed: %s", error)
+                        return decision
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code=IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+                        summary="Platform was unavailable for the screened image",
+                        detail=f"screener error: image upload failed: {error}",
                     )
                 except Exception as error:  # noqa: BLE001 - publish is parked infra
                     if held_source_review:

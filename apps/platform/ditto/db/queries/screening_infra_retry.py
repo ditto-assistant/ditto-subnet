@@ -4,8 +4,10 @@ A screener that reports ``docker-build-infrastructure`` (Docker daemon, BuildKit
 or the build host failed; the miner's archive was never judged), a retryable
 ``l2-runtime-evidence-unavailable`` (no signed scorer-cohort lease was available
 at claim), ``worker-claim-not-started`` (the worker settled a durable claim
-before fetching the artifact), or ``source-review-adjudicator-key-unavailable``
-(the node's source-review court key was unusable) parks the agent as
+before fetching the artifact), ``source-review-adjudicator-key-unavailable``
+(the node's source-review court key was unusable), or
+``image-upload-platform-unavailable`` (Platform or object storage was down for
+a screened-image upload step) parks the agent as
 ``screening_failed``. Unlike the provider codes in
 ``PROVIDER_BACKOFF_REASON_CODES`` it is retried without an operator, so this
 module owns three things and nothing else:
@@ -115,6 +117,15 @@ if TYPE_CHECKING:
 # archive itself can cause) and a screen whose source reviewer never started
 # report ``source-review-unavailable`` instead, which stays on the operator
 # retry (#2449).
+# ``image-upload-platform-unavailable`` qualifies because the worker emits it
+# only after its own bounded retries, for a transport failure or a 5xx on the
+# screened-image upload's initiate, part-mint, or fixed-size part-store request.
+# Those bodies are bounded metadata or one part of a fixed size, so the
+# submission cannot choose the outcome; Platform restarting during a deploy or
+# its object store refusing writes can (2026-11-01). A 4xx (an oversized or
+# mismatched image, an expired lease) and any failure of the completion step,
+# whose cost scales with the image, report ``image-upload-failed`` instead,
+# which stays on the operator retry.
 INFRA_AUTO_RETRY_REASON_CODES: tuple[str, ...] = (
     reason_codes.INFRA_AUTO_RETRY_REASON_CODES
 )
@@ -157,6 +168,13 @@ BREAKER_HISTORY_LOOKBACK = timedelta(hours=48)
 # before any build starts.
 # A build timeout proves nothing about infrastructure health and is not recovery.
 _RECOVERY_REJECT_REASON = "docker-build"
+# Signatures whose fault was storing the screened image, not building it. Their
+# failure lane is ``screening``, which a build proof never matches, so they
+# close on the proof that names their own fault instead: a later attempt on the
+# signature's provider that finished with a verified screened-image upload.
+_IMAGE_UPLOAD_RECOVERY_CODES = frozenset(
+    {reason_codes.IMAGE_UPLOAD_PLATFORM_UNAVAILABLE}
+)
 
 # Beyond this the doubling is already clamped; it only keeps the shift small.
 _MAX_DOUBLINGS = 16
@@ -348,6 +366,17 @@ class _Row:
             signature.lane is None or lane == signature.lane
         )
 
+    def recovers(self, signature: InfraSignature) -> bool:
+        """Whether this finished attempt proves ``signature``'s fault is gone."""
+        if signature.reason_code in _IMAGE_UPLOAD_RECOVERY_CODES:
+            provider = self.provider or self.placement_provider
+            return (
+                self.finished_at is not None
+                and self.has_verified_image
+                and (signature.provider is None or provider == signature.provider)
+            )
+        return self.is_recovery and self.exercises(signature)
+
     @property
     def is_infra_failure(self) -> bool:
         return self.status == "failed" and (
@@ -380,7 +409,8 @@ def _derive_breakers(
     in the run of failures just before it, when it was placed on that
     signature's provider: see ``_Row.is_probe_of``), and a *recovery* (that probe
     demonstrably running the signature's provider and lane, and finishing with
-    proof the local build worked: see ``_Row.is_recovery``). A retry on another
+    proof the local build worked, or for an image-upload signature a verified
+    screened-image upload on that provider: see ``_Row.recovers``). A retry on another
     provider is neither: a failure there is a failure of its own signature, and a
     success there proves nothing about this one. The breaker trips when
     ``BREAKER_DISTINCT_AGENTS`` distinct agents fail inside ``BREAKER_WINDOW``,
@@ -408,7 +438,7 @@ def _derive_breakers(
                     events[signature].append(
                         (_aware(row.started_at), 1, "probe", row.agent_id)
                     )
-                    if row.is_recovery and row.exercises(signature):
+                    if row.recovers(signature):
                         events[signature].append(
                             (row.failed_at, 2, "recovery", row.agent_id)
                         )

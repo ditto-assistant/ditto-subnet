@@ -49,6 +49,7 @@ def test_current_platform_policy_is_recorded_exactly() -> None:
         "worker-claim-not-started",
         "l2-runtime-evidence-unavailable",
         "source-review-adjudicator-key-unavailable",
+        "image-upload-platform-unavailable",
     )
     assert PROVIDER_BACKOFF_REASON_CODES == (
         "targon-build-unavailable",
