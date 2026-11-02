@@ -175,6 +175,10 @@ type brokerSession struct {
 	confirmationGrants        map[string]brokerConfirmationGrant
 	embeddingGrant            brokerConfirmationGrant
 	inFlight                  int
+	// decisionInFlight and decisionDispatches count the v15 decision lane
+	// (decision_lane.go): calls in flight and signed dispatches this run.
+	decisionInFlight   int
+	decisionDispatches uint64
 	// chatConcurrency is the per-source in-flight chat admission for this
 	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
 	// the run's effective case concurrency so overlapping /run calls are not
@@ -3208,6 +3212,10 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 	}
 	if rest == "/health" && r.Method == http.MethodGet {
 		b.health(w, session)
+		return
+	}
+	if rest == "/decisions" && r.Method == http.MethodPost {
+		b.handleDecision(w, r, lease)
 		return
 	}
 	// The frozen starter-kit Chutes adapter appends /chat/completions to its

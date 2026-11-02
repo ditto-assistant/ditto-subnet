@@ -761,6 +761,17 @@ produces a container serving that protocol on :8080.
 > (`active_version`) is authoritative for what is active. Every
 > contract uses locked `openai/gpt-oss-20b` inference and validator-observed
 > tool execution, and reaches your harness as wire version 9.
+>
+> **Bench v15 (shipped, not yet active)** adds two things your harness sees.
+> The tool catalog becomes production-sized: about 235 tools per run, 200 of
+> them third-party connector tools the workspace has not linked (a call returns
+> "not connected" and costs an extra call). Picking the right tool from that
+> menu is now part of the score, and sending the whole catalog to the model on
+> every turn is expensive. The sandbox also gets `DITTOBENCH_DECISIONS_URL`:
+> POST a System One body (`{"state": ..., "questions": {...}}`) there to ask the
+> locked decision model (TypeSafe Jev) choice or score questions, for example
+> which tools to offer the chat model. Use it however you like; it is metered
+> like chat. This kit accepts `bench_version` 15 on `/run`.
 
 1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
 the registration cost plus per-submission eval fees. `ditto upload` offers to

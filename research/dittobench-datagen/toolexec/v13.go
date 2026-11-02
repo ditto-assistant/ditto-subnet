@@ -137,6 +137,14 @@ func (f Fixture) unavailable(name string, args json.RawMessage) (string, bool) {
 	if d, isDecoy := f.decoys[name]; isDecoy && !(f.has && name == f.bearer) {
 		return fmt.Sprintf("%s is not configured for this workspace. Connect %s in Settings before retrying; the request was not performed.", name, d.Brand), true
 	}
+	// v15 connector tools (catalog.ConnectorsForSeed) are never linked in the
+	// benchmark workspace: every call is refused and performs nothing, offered
+	// on this seed or not. No scored case expects one.
+	if f.benchVersion >= protocol.BenchVersionV15 {
+		if app, isConnector := catalog.IsConnectorTool(name); isConnector {
+			return fmt.Sprintf("%s is not connected for this workspace. Link %s in Settings before retrying; the request was not performed.", name, app), true
+		}
+	}
 	switch name {
 	case "set_accent_color":
 		value := stringArg(args, "color")

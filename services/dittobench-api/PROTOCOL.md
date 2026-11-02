@@ -7,6 +7,29 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v15 production-scale catalog and decision lane
+
+V15 scores exactly like v14 (plus the v15 atomic-value grading floor). Its
+dataset advertises about 235 tools per seed: the v14 surface plus 200 unlinked
+connector tools (`catalog.ConnectorsForSeed`). The tool endpoint refuses every
+connector call with a "not connected" error and performs nothing.
+
+From v15 the sandbox also carries `DITTOBENCH_DECISIONS_URL`
+(`$DITTOBENCH_INFERENCE_BASE_URL/decisions`, a locked key). `POST` a System One
+body (`{state, questions, assets?}`) there. The broker signs it with the run's
+grant (the same `X-Ditto-*` proof as chat) and forwards it to Platform's
+`/api/v1/inference/decisions`; the relay forces the operator-pinned decision
+model, meters it, and answers `{model, answers, usage}`. Relay status codes
+and `Retry-After` pass through. The broker allows 16 decision calls in flight
+per run; the relay's per-ticket rail is authoritative. Below v15, and on
+confirmation or ablation sessions, the route answers 404.
+
+Capabilities add optional `v15_scored_runtime_env`; its digest covers version
+15 and the v15 key set (which adds `DITTOBENCH_DECISIONS_URL`). Platform
+requires it for v15 fleet readiness, and a v15 rollout cannot start while the
+operator's `decision_lane` board is off. See
+[the rollout plan](../../docs/benchmark-v15-rollout.md).
+
 ## Bench v14 declarative over-call contract
 
 V14 preserves v2–v13 scoring, including v13's whole-case declarative exclusion.
@@ -192,7 +215,7 @@ validators enforce on a round job.
 
 The mode also advertises `generator-round-bench-<n>` for every bench version
 it runs a round at: the pack grading policies
-`challenge.SupportedGradingBenchVersions` (13 and 14). A round request's
+`challenge.SupportedGradingBenchVersions` (13, 14 and 15). A round request's
 `bench_version` must be one of them. The harness is seeded and run at that
 version, and each case is graded at the `grading_bench_version` its pack
 declares, which must be the round's version or the one before it (the

@@ -25,6 +25,8 @@ applied to an existing version. It ships as a new one.
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
 | 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
 | 13 (pre-activation) | `2027-05-01` | Deterministic typed worlds and compositional enterprise records; model-authored private wording deferred to V14. A published 250-case memory mix with money capped at ≤12% target / 15% hard, typed claim grading in the requested unit, and relay-evidenced tool gates (catalog-present, provenance, causal, twin/pair, cost) that ship in shadow/observe. Same seed and generator revision reproduce the dataset. Activation follows exact-candidate qualification and canary evidence. |
+| 14 | `2027-06-01` | Action-scoped declarative over-call scoring, rendered-reply grading, supersession chains, point-in-time, relative-sequence, process-step and role families. Activated 2026-10-28. |
+| 15 (pre-activation) | `2027-07-01` | The production-scale tool surface and the scored decision lane: every seed's catalog carries 200 unlinked connector tools on top of the v14 surface (~235 tools), and scored harnesses may call the locked decision model (TypeSafe Jev) through the broker. Grades with the v15 atomic-value policy floor. |
 
 ## Answer-pool collision audit
 
@@ -1318,7 +1320,43 @@ pins 1,536 historical composite replay vectors against source
 See [the separately gated rollout plan](../../../docs/benchmark-v14-rollout.md).
 Supporting v14 does not change Platform's active version or qualify a fleet.
 
-## Bench v15 grading policy (grader-only floor, no generation contract yet)
+## V15 production-scale tool surface and decision lane
+
+V15 keeps the v14 generation surface (same profiles, families and answer
+pools; `answerPoolFixBenchVersion` moves to 16) and changes two things a
+harness sees.
+
+- **Production-scale catalog** (`catalog.ConnectorsForSeed`,
+  `catalog/v15.go`). Every seed's catalog carries the v14 surface (product
+  tools plus three to five coined decoys) with `ConnectorToolsPerSeed` (200)
+  connector tools spliced in at seeded positions, drawn from a frozen pool of
+  277 tools across 136 third-party apps. Membership and description variant
+  are seeded. Every connector description ends "Needs the <App> connector to
+  be linked in Settings." None is linked: the mock endpoint refuses every
+  connector call ("<tool> is not connected for this workspace ...") and
+  performs nothing, so a call is an ordinary extra call priced by the existing
+  over-call and catalog gates. No case expects a connector, and the pool
+  excludes every capability the product tools or decoys own (email, calendar,
+  web search, images, memory, reminders, weather, maps, translation, video).
+  The v14 tools keep their bytes and relative order. The full catalog is about
+  62 KB of JSON (~16k tokens), so handing the whole menu to the model on every
+  turn is now expensive; selecting tools is the difficulty.
+- **Decision lane.** The scorer exports `DITTOBENCH_DECISIONS_URL`
+  (`$DITTOBENCH_INFERENCE_BASE_URL/decisions`) into the sandbox. A harness may
+  POST a System One body (`{state, questions, assets?}`) there; the broker
+  signs it with the run's grant and the relay forces the operator-pinned
+  decision model (TypeSafe Jev, e.g. `typesafe/jev-1.14`), meters input tokens
+  as ledger cost, and applies the lane's own walls. Use is unrestricted. Below
+  v15 the route does not exist and grants carry no decision pin.
+
+For seed `123456789`, full profile, public surface salt 0,
+`TestV15KnownVector` pins:
+`33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`, with
+epoch `2027-07-01T00:00:00Z`. Every v2–v14 generation and grading vector
+remains unchanged. Supporting v15 does not change Platform's active version;
+see [the rollout plan](../../../docs/benchmark-v15-rollout.md).
+
+## Bench v15 grading policy (shipped ahead of the generation contract)
 
 `grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It
 is not generatable, advertised or active, and it does not change any v2–v14

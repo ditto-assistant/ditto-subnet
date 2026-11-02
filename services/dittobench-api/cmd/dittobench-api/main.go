@@ -446,6 +446,7 @@ type capabilitiesResponse struct {
 	// Only keys injected by this binary into a Bench v13 sandbox are covered.
 	ScoredRuntimeEnv    *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
 	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
+	V15ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v15_scored_runtime_env,omitempty"`
 }
 
 type scoredRuntimeEnvEvidence struct {
@@ -481,7 +482,7 @@ func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeE
 // Platform's reviewed rollout and exact scorer packet govern scheduling.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV14
+	advertisedMaxBenchVersion = protocol.BenchVersionV15
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is
@@ -563,6 +564,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
 		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
 		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
+		V15ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV15),
 	})
 }
 
@@ -3181,6 +3183,7 @@ var lockedEnvKeys = map[string]bool{
 	"OPENAI_API_BASE":               true,
 	"OPENROUTER_BASE_URL":           true,
 	"DITTOBENCH_INFERENCE_BASE_URL": true,
+	"DITTOBENCH_DECISIONS_URL":      true,
 	"DITTOBENCH_DB":                 true,
 	"DITTOBENCH_MEMORY_PATH":        true,
 }
@@ -3272,6 +3275,10 @@ func harnessSandboxEnvForProvider(reqEnv map[string]string, benchVersion int, pr
 	for key, value := range sandboxPersistencePaths {
 		env[key] = value
 	}
+	// v15: the locked decision model (decision_lane.go) at the same broker.
+	if usesDecisionLane(benchVersion) {
+		env[harnessDecisionsEnvKey] = gateway + "/decisions"
+	}
 	return env
 }
 
@@ -3302,6 +3309,9 @@ func harnessSandboxEnvWithCapability(
 	env["OPENAI_API_KEY"] = capability
 	env["OPENROUTER_API_KEY"] = capability
 	env["OLLAMA_BASE_URL"] = base
+	if usesDecisionLane(benchVersion) {
+		env[harnessDecisionsEnvKey] = gateway + "/decisions"
+	}
 	return env, nil
 }
 

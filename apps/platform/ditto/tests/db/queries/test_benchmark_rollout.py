@@ -225,7 +225,7 @@ async def test_admin_status_read_does_not_start_rollout(
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 through v11 makes each discoverable as a target but
         # does not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14]
+        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
         assert [item["version"] for item in contracts] == [
@@ -242,6 +242,7 @@ async def test_admin_status_read_does_not_start_rollout(
             12,
             13,
             14,
+            15,
         ]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -265,7 +266,7 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # Model a current scorer that retains every shipped rollout
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
-            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14],
+            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             "deterministic_v13_datasets": True,
             "v14_scored_runtime_env": {
                 "bench_version": 14,
@@ -277,6 +278,24 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
                         "scored-runtime-env-v1\n14\n"
                         + revision
                         + "\nDITTOBENCH_DB\nDITTOBENCH_MODEL"
+                    ).encode()
+                ).hexdigest(),
+            },
+            "v15_scored_runtime_env": {
+                "bench_version": 15,
+                "scope": "scorer-injected-env-only",
+                "source_revision": revision,
+                "injected_keys": [
+                    "DITTOBENCH_DB",
+                    "DITTOBENCH_DECISIONS_URL",
+                    "DITTOBENCH_MODEL",
+                ],
+                "sha256": hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n15\n"
+                        + revision
+                        + "\nDITTOBENCH_DB\nDITTOBENCH_DECISIONS_URL"
+                        + "\nDITTOBENCH_MODEL"
                     ).encode()
                 ).hexdigest(),
             },
@@ -2987,6 +3006,7 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     scorer["supported_bench_versions"] = [8, 9, 10]
     scorer.pop("deterministic_v13_datasets", None)
     scorer.pop("v14_scored_runtime_env", None)
+    scorer.pop("v15_scored_runtime_env", None)
     scorer.pop("v7_calibration")
     return capabilities, stack
 
@@ -3143,6 +3163,8 @@ def _heartbeat(
     capabilities["scorer_benchmarks"]["deterministic_v13_datasets"] = 13 in versions
     if 14 not in versions:
         capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
+    if 15 not in versions:
+        capabilities["scorer_benchmarks"].pop("v15_scored_runtime_env", None)
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3393,6 +3415,7 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     scorer = capabilities["scorer_benchmarks"]
     scorer["supported_bench_versions"] = [8]
     scorer.pop("v14_scored_runtime_env", None)
+    scorer.pop("v15_scored_runtime_env", None)
     scorer.pop("v7_calibration")
 
     assert heartbeat_supports_version(heartbeat, now=now, version=8)
@@ -3865,7 +3888,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "15")
+            await get_rollout(None, session, "16")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")

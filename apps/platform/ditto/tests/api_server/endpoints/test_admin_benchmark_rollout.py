@@ -475,7 +475,7 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
     # Nothing is offered. A target must be both above the active version and at
     # or above the floor. V8 through v11 are discoverable but remain inert until
     # an authenticated operator starts one.
-    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14]
+    assert body["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15]
     # Still derived from the shipped registry, which is what "dynamic" means
     # here: the floor filters what may be STARTED, not what exists.
     assert [contract["version"] for contract in body["contracts"]] == [
@@ -492,6 +492,7 @@ async def test_control_discovery_is_authenticated_read_only_and_dynamic(
         12,
         13,
         14,
+        15,
     ]
     assert all(
         contract["capable_validator_count"] == 0 for contract in body["contracts"]
@@ -525,16 +526,16 @@ async def test_control_offers_newer_contracts_without_moving_active_v8_authority
     assert body["active_version"] == 8
     assert body["desired_version"] == 8
     assert body["status"] == "activated"
-    assert body["available_target_versions"] == [9, 10, 11, 12, 13, 14]
+    assert body["available_target_versions"] == [9, 10, 11, 12, 13, 14, 15]
     assert body["contracts"][-1] == {
-        "version": 14,
+        "version": 15,
         "minimum_screening_policy_version": 9,
         "requires_screened_image": True,
         "capable_validator_count": 0,
         "start_ready": False,
         "start_blockers": [
-            "benchmark v14 rollout requires at least 1 fresh, identity-matched "
-            "v14 scorer validators"
+            "benchmark v15 rollout requires the decision lane enabled with a "
+            "pinned model (set_inference_concurrency_settings decision_lane)"
         ],
     }
 
@@ -599,6 +600,53 @@ async def test_control_reads_the_cohort_once_and_never_writes(
     ]
     assert generator.calls == []
     assert await _rollout_count(maker) == 1
+
+
+async def test_v15_start_blocker_clears_once_the_decision_lane_pins_a_model(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """v15 is the first contract whose scored runs carry the decision lane, so
+    its start is blocked until the operator's board pins a model; once it is,
+    the next blocker is the ordinary capacity gate."""
+    from ditto.db.queries.inference_concurrency_settings import (
+        insert_inference_concurrency_settings_revision,
+    )
+
+    _install(app, session_maker)
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with session_maker() as session, session.begin():
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=13,
+                desired_version=14,
+                status="activated",
+                cohort_size=5,
+                created_at=now - timedelta(days=1),
+                activated_at=now - timedelta(days=1),
+            )
+        )
+        await insert_inference_concurrency_settings_revision(
+            session,
+            parent_revision=0,
+            scope="*",
+            settings={"decision_lane": {"enabled": True, "model": "typesafe/jev-1.14"}},
+            checksum="d" * 64,
+            reason="open the decision lane for bench v15",
+            actor="backroom:test",
+        )
+
+    response = await client.get("/api/v1/admin/benchmark-rollout", headers=_HEADERS)
+
+    assert response.status_code == 200, response.text
+    contract = response.json()["contracts"][-1]
+    assert contract["version"] == 15
+    assert contract["start_blockers"] == [
+        "benchmark v15 rollout requires at least 1 fresh, identity-matched "
+        "v15 scorer validators"
+    ]
 
 
 async def test_control_degrades_the_slow_section_instead_of_hanging(
@@ -673,6 +721,7 @@ async def test_control_degrades_the_slow_section_instead_of_hanging(
         12,
         13,
         14,
+        15,
     ]
     # Fail closed on what could not be proven: no candidate is offered for
     # activation, and the omission is named rather than mistaken for "none".
@@ -737,12 +786,12 @@ async def test_start_requires_full_guard_payload_and_exact_confirmation(
     assert "START BENCHMARK V4" in wrong.json()["message"]
 
     unsupported = await client.post(
-        "/api/v1/admin/benchmark-rollout/15",
+        "/api/v1/admin/benchmark-rollout/16",
         headers=_HEADERS,
         json={
             "reason": "attempt an unshipped contract",
             "actor": "backroom:test",
-            "confirmation": "START BENCHMARK V15",
+            "confirmation": "START BENCHMARK V16",
             "expected_active_version": 2,
         },
     )
