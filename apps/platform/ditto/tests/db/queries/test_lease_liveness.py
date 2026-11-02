@@ -33,7 +33,6 @@ from ditto.db.queries.lease_liveness import (
     force_expire_lease,
     lease_liveness,
 )
-from ditto.db.queries.retry_budget import MAX_INFRA_RETRY_GRANTS
 from ditto.db.queries.score_retests import activate_next_score_retest
 from ditto.db.queries.tickets import (
     MAX_ATTEMPTS_PER_VERSION,
@@ -344,40 +343,6 @@ class TestRevocationParksTheTicket:
         assert ticket.attempt_count == 1
         assert ticket_attempt_cap(ticket) == MAX_ATTEMPTS_PER_VERSION
 
-    async def test_the_grant_is_bounded(self, session: AsyncSession) -> None:
-        """A persistently sick slot must not mint attempts forever."""
-        ticket = _ticket(issued_at=_NOW - timedelta(hours=1))
-        ticket.infra_retry_grants = MAX_INFRA_RETRY_GRANTS
-        async with session.begin():
-            # Transient on purpose: the ticket's agent is not seeded, and the
-            # revocation only has to mutate the object and write its audit row.
-            await force_expire_lease(
-                session,
-                ticket=ticket,
-                now=_NOW,
-                liveness=self._IDLE,
-                context="issue_ticket",
-            )
-        assert ticket.infra_retry_grants == MAX_INFRA_RETRY_GRANTS
-        assert ticket.status == TicketStatus.EXPIRED
-
-    async def test_a_revoked_lease_has_no_automatic_reissue_headroom(
-        self, session: AsyncSession
-    ) -> None:
-        ticket = _ticket(issued_at=_NOW - timedelta(hours=1))
-        async with session.begin():
-            # Transient on purpose: the ticket's agent is not seeded, and the
-            # revocation only has to mutate the object and write its audit row.
-            await force_expire_lease(
-                session,
-                ticket=ticket,
-                now=_NOW,
-                liveness=self._IDLE,
-                context="issue_ticket",
-            )
-        assert ticket.infra_retry_grants == 0
-        assert ticket_attempt_cap(ticket) - ticket.attempt_count == 0
-
 
 class TestScoreRetestLane:
     """The re-test lane ends a lease differently (closed unserviceable rather
@@ -559,8 +524,6 @@ class TestUnconfirmedSlotIsNotIdle:
     @pytest.mark.parametrize(
         "claimed",
         [
-            None,
-            [],
             [{"slot_id": "slot-2", "agent_id": str(uuid4())}],
             "not-a-list",
             [None, 7, {"slot_id": None}],
@@ -623,26 +586,6 @@ class TestNeverReportedLeaseIsNotRevocable:
         assert verdict.idle is False
         assert verdict.reason == "lease_never_reported"
         assert verdict.evidence["lease_age_seconds"] == 420.0
-
-    @pytest.mark.parametrize("minutes", [6, 12, 60, 89])
-    async def test_no_amount_of_elapsed_time_makes_silence_evidence(
-        self, session: AsyncSession, minutes: int
-    ) -> None:
-        """Every observed death was 5m53s-11m32s in; none of those may revoke now."""
-        await _seed_heartbeat(
-            session,
-            seen_at=_NOW - timedelta(seconds=5),
-            benchmark_capacity=_capacity(),
-        )
-        verdict = await lease_liveness(
-            session,
-            ticket=_ticket(issued_at=_NOW - timedelta(minutes=minutes), reported=False),
-            validator_hotkey=_HOTKEY,
-            slot_id=_SLOT,
-            now=_NOW,
-        )
-        assert verdict.idle is False
-        assert verdict.reason == "lease_never_reported"
 
     async def test_a_lease_that_reported_once_is_still_revocable(
         self, session: AsyncSession

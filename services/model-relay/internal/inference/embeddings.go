@@ -218,20 +218,11 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 	if providerResult != nil {
 		outcome.fallbackPhase = providerResult.fallbackPhase
 	}
-	if providerResult != nil && providerResult.result != nil && !providerResult.direct {
-		if receiptFreeResultOverload(
-			providerResult.result, cfg.EmbeddingModel, cfg.EmbeddingProvider,
-		) {
-			_ = d.openProviderCircuit(
-				ctx,
-				now,
-				providerResult.result.status,
-				"embedding_provider_backpressure_"+strconv.Itoa(providerResult.result.status),
-			)
-		} else if providerResult.result.status < 400 {
-			_ = d.closeProviderCircuit(ctx, now)
-		}
-	}
+	// The shared OpenRouter circuit gates every scoring and source-review lease.
+	// A pinned embedding model's 429 says nothing about chat-route capacity, so
+	// it must neither park unrelated leases nor heal a chat outage on success.
+	// The failed embedding request still settles as infrastructure and cannot
+	// create a score; route-specific embedding health needs its own circuit.
 	if callErr != nil {
 		outcome.upstreamAttempts = callErr.attempts
 		outcome.timedOut = callErr.timedOut

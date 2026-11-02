@@ -211,11 +211,12 @@ func TestRunArgs_DefaultsHardenAndBound(t *testing.T) {
 		t.Errorf("default must drop all capabilities, got %v", args)
 	}
 	for flag, value := range map[string]string{
-		"--user":   "65532:65532",
-		"--tmpfs":  "/tmp:rw,noexec,nosuid,nodev,size=512m",
-		"--memory": "3g",
-		"--cpus":   "2",
-		"--ulimit": "nofile=1024:1024",
+		"--user":        "65532:65532",
+		"--tmpfs":       "/tmp:rw,noexec,nosuid,nodev,size=512m",
+		"--memory":      "3g",
+		"--memory-swap": "3g",
+		"--cpus":        "2",
+		"--ulimit":      "nofile=1024:1024",
 	} {
 		if !hasFlagPair(args, flag, value) {
 			t.Errorf("expected %s %s, got %v", flag, value, args)
@@ -252,9 +253,11 @@ func TestDiagnosticsCapturesSanitizedResourceEvidence(t *testing.T) {
 		}
 	}
 
-	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque"})
-	if diagnostics.InfrastructureCode() != "sandbox_oom" {
-		t.Fatalf("expected sandbox_oom, got %+v", diagnostics)
+	d.hostMemAvailable = func() (uint64, bool) { return 8 << 30, true }
+
+	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque", memoryLimitBytes: 3 << 30})
+	if verdict, ok := diagnostics.ResourceFailure(); !ok || verdict.Code != CodeHarnessOOM || !verdict.MinerFault {
+		t.Fatalf("expected harness_oom, got %+v %+v", verdict, diagnostics)
 	}
 	if diagnostics.MemoryPeakBytes == nil || *diagnostics.MemoryPeakBytes != 3221225472 {
 		t.Fatalf("memory peak missing: %+v", diagnostics)
@@ -273,7 +276,7 @@ func TestDiagnosticsNonOOMExitIsNotInfrastructure(t *testing.T) {
 		return []byte(`{"Running":false,"OOMKilled":false,"ExitCode":2}`), nil
 	}
 	diagnostics := d.Diagnostics(context.Background(), &Handle{ContainerID: "opaque"})
-	if diagnostics.ExitCode != 2 || diagnostics.InfrastructureCode() != "" {
+	if _, classified := diagnostics.ResourceFailure(); diagnostics.ExitCode != 2 || classified {
 		t.Fatalf("ordinary exit must remain non-infrastructure: %+v", diagnostics)
 	}
 }
@@ -576,5 +579,100 @@ func TestCredentialEnvValuesIgnoresShortPlaceholdersAndNonCredentialKeys(t *test
 	want := []string{"0123456789abcdef-longer", "0123456789abcdef"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("credential values = %v, want %v (longest first)", got, want)
+	}
+}
+
+// TestRunArgs_EgressProofRelayAndBrokerOnly is the sandbox half of the egress
+// proof recorded in docs/sandbox-egress.md, an activation prerequisite for the
+// bench v13 block-bound confirmation seeds: with the egress network and proxy
+// configured, the untrusted harness container reaches exactly the trusted
+// ticket broker (relay + tool endpoint) and the allowlisting proxy — no other
+// name resolves to the host, no port is published off loopback, and nothing
+// bypasses the proxy except the broker and loopback. A regression here would
+// reopen the "published seed = live answer key" channel the binding closes.
+func TestRunArgs_EgressProofRelayAndBrokerOnly(t *testing.T) {
+	d := NewLocalDocker()
+	d.RequireRootless = true
+	d.HostGatewayIP = "192.0.2.44"
+	d.EgressNetwork = "ditto-sandbox"
+	d.EgressProxy = "http://172.31.240.2:3128"
+	host := "c-" + strings.Repeat("a", 52) + brokerCapabilityHostSuffix
+	args := d.runArgs("img", map[string]string{
+		"DITTOBENCH_INFERENCE_BASE_URL": "http://" + host + ":11436/v1/inference",
+		"OLLAMA_BASE_URL":               "http://" + host + ":11436",
+	})
+
+	if !hasFlagPair(args, "--network", "ditto-sandbox") {
+		t.Fatalf("harness must join the egress-restricted network: %v", args)
+	}
+	if !hasFlagPair(args, "--cap-drop", "ALL") {
+		t.Fatalf("harness must drop every capability: %v", args)
+	}
+	for _, forbidden := range []string{"--privileged", "--network=host", "host", "-v", "--volume", "--device"} {
+		for i, arg := range args {
+			if arg == forbidden && !(forbidden == "host" && i > 0 && args[i-1] != "--network") {
+				if forbidden == "host" && args[i-1] != "--network" {
+					continue
+				}
+				t.Fatalf("harness run args must never carry %q: %v", forbidden, args)
+			}
+		}
+	}
+	// The only names the container can resolve to the host: the documented
+	// broker alias and the ticket-bound capability host. Nothing else.
+	var hostAliases []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--add-host" {
+			hostAliases = append(hostAliases, args[i+1])
+		}
+	}
+	wantAliases := []string{"host.docker.internal:192.0.2.44", host + ":192.0.2.44"}
+	if !reflect.DeepEqual(hostAliases, wantAliases) {
+		t.Fatalf("host aliases = %v, want exactly %v", hostAliases, wantAliases)
+	}
+	// The harness port is published on loopback only, never on a routable
+	// interface.
+	var published []string
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "--publish" || args[i] == "-p" {
+			published = append(published, args[i+1])
+		}
+	}
+	if !reflect.DeepEqual(published, []string{"127.0.0.1:0:8080"}) {
+		t.Fatalf("published ports = %v, want loopback-only harness port", published)
+	}
+	// Every outbound call is forced through the allowlisting proxy; only the
+	// broker names and loopback bypass it. No wildcard, no public host.
+	if !hasFlagPair(args, "-e", "HTTPS_PROXY=http://172.31.240.2:3128") ||
+		!hasFlagPair(args, "-e", "HTTP_PROXY=http://172.31.240.2:3128") {
+		t.Fatalf("proxy env missing: %v", args)
+	}
+	if !hasFlagPair(args, "-e", "NO_PROXY=host.docker.internal,localhost,127.0.0.1,"+host) {
+		t.Fatalf("NO_PROXY must name only the broker and loopback: %v", args)
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "NO_PROXY=") && strings.Contains(arg, "*") {
+			t.Fatalf("NO_PROXY must not wildcard the proxy away: %v", arg)
+		}
+	}
+}
+
+// TestRunArgs_NoEgressNetworkIsTheUnrestrictedFallback documents the switch
+// itself: with DITTOBENCH_SANDBOX_EGRESS_NETWORK unset the harness lands on the
+// default full-egress bridge. The egress proof therefore also requires every
+// scoring validator to set the variable (the managed compose stack does; the
+// bare-metal Ansible role is opt-in via dittobench_sandbox_egress_enabled).
+func TestRunArgs_NoEgressNetworkIsTheUnrestrictedFallback(t *testing.T) {
+	d := NewLocalDocker()
+	d.EgressNetwork = ""
+	d.EgressProxy = ""
+	args := d.runArgs("img", nil)
+	if slices.Contains(args, "--network") {
+		t.Fatalf("no egress network configured must mean no --network flag: %v", args)
+	}
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "HTTPS_PROXY=") || strings.HasPrefix(arg, "HTTP_PROXY=") {
+			t.Fatalf("no egress proxy configured must inject no proxy env: %v", args)
+		}
 	}
 }

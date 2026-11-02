@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,8 +63,11 @@ async def set_miner_avatar(
     hippius = _require_hippius(request)
     try:
         body = MinerAvatarSetRequest.model_validate_json(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValidationError as exc:
+        # Route through the envelope's validation handler: a pydantic message
+        # carries `input_value=...`, and the public body must never echo
+        # user-supplied input back.
+        raise RequestValidationError(exc.errors()) from exc
     if body.netuid != expected_netuid():
         raise HTTPException(
             status_code=400, detail="netuid does not match this deployment"

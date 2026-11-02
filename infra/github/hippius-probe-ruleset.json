@@ -1,0 +1,57 @@
+{
+  "name": "Hippius probe independent code review",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    },
+    {
+      "actor_type": "RepositoryRole",
+      "actor_id": 5,
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/main"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": [
+          "squash"
+        ],
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": true,
+        "required_reviewers": [
+          {
+            "reviewer": {
+              "id": 12645310,
+              "type": "Team"
+            },
+            "minimum_approvals": 1,
+            "file_patterns": [
+              ".github/workflows/coding-hippius-probe.yml",
+              "scripts/hippius-probe/**",
+              "apps/platform/scripts/probe_hippius_coding_storage.py",
+              "apps/platform/scripts/profile_hippius_coding_storage.py",
+              "apps/platform/ditto/api_server/coding_hippius_probe.py",
+              "infra/github/hippius-probe-*.json",
+              "infra/terraform/stacks/gcp-platform/hippius-probe.tf"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

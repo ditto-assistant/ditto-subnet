@@ -154,6 +154,21 @@ describe('screening list summaries', () => {
       items: Array<{ attempts: Array<unknown> }>
     }
     expect(full.items[0].attempts).toHaveLength(2)
+
+    const identity = compactScreeningSubmissions(payload, 'identity') as {
+      detail: string
+      items: Array<Record<string, unknown>>
+    }
+    expect(identity.detail).toBe('identity')
+    expect(identity.items[0]).toEqual({
+      agent_id: agentId(1),
+      agent_name: 'screened-agent',
+      agent_version: 2,
+      agent_status: 'screening_failed',
+      submitted_at: '2026-07-25T12:00:00Z',
+      artifact_sha256: 'ab'.repeat(32),
+    })
+    expect(bytes(identity)).toBeLessThan(bytes(summary))
   })
 
   it('replaces quarantine evidence arrays with counts and codes in summary mode', () => {
@@ -171,7 +186,7 @@ describe('screening list summaries', () => {
           policy_version: 9,
           manifest_digest: 'ef'.repeat(32),
           finding_digest: '12'.repeat(32),
-          reason_code: 'unsafe_source',
+          screening_reason_code: 'unsafe_source',
           evidence: Array.from({ length: 8 }, (_, index) => ({
             module_id: `module-${index}`,
             code: `CODE_${index}`,
@@ -550,6 +565,68 @@ describe('compactMinerOwnerFootprint', () => {
 })
 
 describe('compactValidatorFleet', () => {
+  it('keeps bounded aggregate run progress without private heartbeat fields', () => {
+    const run = {
+      agent_id: '842c28de-6b6c-445a-8c3f-cf5492422ef6',
+      slot_id: 'slot-0',
+      bench_version: 13,
+      started_at: '2026-09-21T16:13:30Z',
+      stage: 'running_benchmark',
+      completed_checks: 120,
+      total_checks: 350,
+      percent: 34,
+      stalled: false,
+      purpose: 'canonical_quorum',
+      run_token: 'private-run-token',
+      cases: [{ question: 'private-question' }],
+    }
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-09-21T16:20:00Z',
+      validators: [{ validator_hotkey: '5' + 'A'.repeat(47), active_benchmarks: Array(10).fill(run) }],
+    })
+    const member = compactValidatorFleet(payload).validators[0]
+    expect(member.active_benchmark_count).toBe(10)
+    expect(member.active_benchmarks).toHaveLength(8)
+    expect(member.active_benchmarks[0]).toEqual({
+      agent_id: run.agent_id, slot_id: 'slot-0', bench_version: 13,
+      started_at: run.started_at, stage: 'running_benchmark',
+      completed_checks: 120, total_checks: 350, percent: 34,
+      stalled: false, purpose: 'canonical_quorum',
+    })
+    expect(JSON.stringify(member)).not.toContain('private-')
+  })
+
+  it('carries announced host specs and nulls a pre-v32 or malformed block', () => {
+    const specs = {
+      cpu_count: 16,
+      cpu_physical_cores: 8,
+      memory_total_mib: 65_536,
+      disk_total_gib: 500,
+      architecture: 'x86_64',
+    }
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-10-17T22:00:00Z',
+      validators: [
+        { validator_hotkey: '5' + 'A'.repeat(47), host_specs: specs },
+        { validator_hotkey: '5' + 'B'.repeat(47) },
+        { validator_hotkey: '5' + 'C'.repeat(47), host_specs: { cpu_count: 'many' } },
+      ],
+    })
+    const [announced, legacy, malformed] = compactValidatorFleet(payload).validators
+    expect(announced.host_specs).toEqual(specs)
+    expect(legacy.host_specs).toBeNull()
+    expect(malformed.host_specs).toBeNull()
+  })
+
+  it('preserves legacy counts and rejects unbound or malformed progress', () => {
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-09-21T16:20:00Z',
+      validators: [{ validator_hotkey: '5' + 'A'.repeat(47), active_benchmarks: [{ slot_id: 'slot-0' }, null] }],
+    })
+    expect(payload.validators[0].active_benchmark_count).toBe(2)
+    expect(payload.validators[0].active_benchmarks).toEqual([])
+  })
+
   it('counts serving validators and buckets software versions before paging', () => {
     const payload = validatorFleetObservabilitySchema.parse({
       generated_at: '2026-08-20T13:40:00Z',

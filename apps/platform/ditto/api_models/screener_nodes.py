@@ -18,7 +18,10 @@ from ditto.api_models.system_health import (
     HostSpecs,
     SystemMetrics,
 )
-from ditto_screening_protocol import SourceReviewObservationPayload
+from ditto_screening_protocol import (
+    ScoredRuntimeEvidenceLease,
+    SourceReviewObservationPayload,
+)
 
 ScreenerProvider = Literal["gcp", "targon", "hetzner", "home", "test"]
 ScreenerNodeStatus = Literal["active", "draining", "quarantined", "revoked"]
@@ -143,14 +146,22 @@ class ScreenerControllerNodeState(BaseModel):
     ready: bool
     active_lease: bool
     screening_concurrency: Annotated[int, Field(ge=0)] = 0
+    admission_open: bool = True
     image_reference: str | None = None
     heartbeat_seen_at: datetime | None = None
+    # Legacy GCP fleet rows share one hotkey, so active_lease marks every row
+    # while any of them screens. This comes from the instance's own heartbeat
+    # and is null for enrolled nodes.
+    instance_busy: bool | None = None
 
 
 class ScreenerControllerNodesResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     nodes: tuple[ScreenerControllerNodeState, ...]
+    # Running, unexpired attempts on the shared legacy GCP hotkey. More than
+    # the busy legacy rows means a claim has not yet been heartbeated.
+    legacy_gcp_running_attempts: Annotated[int, Field(ge=0)]
 
 
 class ScreenerCapacityEventRequest(BaseModel):
@@ -184,7 +195,19 @@ class ScreenerCapacitySnapshotRequest(BaseModel):
     gce_pending: Annotated[int, Field(ge=0)]
     gce_draining: Annotated[int, Field(ge=0)]
     fallback_reason: Annotated[str, Field(max_length=160)] | None = None
-    last_provider_success_at: datetime | None = None
+    last_provider_success_at: Annotated[
+        datetime | None,
+        Field(
+            description=(
+                "Time of the last successful GCE fleet read by the capacity "
+                "controller (managed-group target and instance counts). It "
+                "advances whenever those GCE reads succeed, even when the "
+                "provider-routing read fails in the same pass, and is not "
+                "advanced when a GCE read fails. It does not indicate that any "
+                "other provider (for example Targon) is healthy or has recovered."
+            )
+        ),
+    ] = None
     last_provider_error_code: (
         Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None
     ) = None
@@ -231,6 +254,7 @@ class ScreenerNodeView(BaseModel):
     screener_hotkey: str
     status: ScreenerNodeStatus
     capacity: int
+    verification_replay_capacity: int = 0
     image_reference: str | None = None
     token_expires_at: datetime
     registered_at: datetime
@@ -575,6 +599,8 @@ class SubmissionSourceReviewSourceResponse(BaseModel):
 
     source_url_b64: str
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Annotated[int, Field(ge=1, le=1_000)]
+    scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None
 
 
 class SubmissionSourceReviewCompleteRequest(BaseModel):
@@ -649,6 +675,10 @@ class ScreenerCapacityView(BaseModel):
     snapshot: ScreenerCapacitySnapshotResponse | None
     nodes: list[ScreenerNodeView]
     events: list[ScreenerCapacityEventView]
+    event_retention_days: int | None = None
+    """Capacity events older than this are pruned; ``None`` keeps them all."""
+    legacy_bearer_accepted: bool
+    """Whether screener endpoints still accept the fleet-wide shared bearer."""
     builds: list[TrustedImageBuildView] = Field(default_factory=list)
     provider_jobs: list[ScreenerProviderJobView] = Field(default_factory=list)
     provider_control: ScreenerProviderSettingsControl

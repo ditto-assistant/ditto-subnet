@@ -1180,3 +1180,119 @@ func TestNoFaultFailuresOnlyUseCodesTheDeployedFleetAllowlists(t *testing.T) {
 		}
 	}
 }
+
+func TestChatWallConfirmsEmbeddingDeclinesOnTheSharedGrant(t *testing.T) {
+	// ditto-subnet#2970: the chat settle that crosses the token wall marks the
+	// shared grant exhausted, and the relay then answers every embedding with
+	// 4102 although the embedding lane is untouched.
+	chatWall := func() *brokerSession {
+		return &brokerSession{
+			requestBudget:          8192,
+			tokenBudget:            75_000_000,
+			embeddingRequestBudget: 100_000,
+			embeddingTokenBudget:   1_000_000_000,
+			maxOutputTokens:        8192,
+			successes:              40,
+			promptTokens:           74_000_000,
+			completionTokens:       1_200_000,
+			embeddingRequests:      1,
+		}
+	}
+	spent := chatWall()
+	for _, code := range []int{platformDeclineBudgetExhausted, platformDeclineTokenBudgetExhausted} {
+		if !declineMatchesBudgetEvidenceLocked(spent, code, true, 10) {
+			t.Fatalf("embedding %d after the chat token wall was not confirmed", code)
+		}
+	}
+	requestWall := chatWall()
+	requestWall.promptTokens, requestWall.completionTokens, requestWall.successes = 1_000, 1_000, 8192
+	if !declineMatchesBudgetEvidenceLocked(requestWall, platformDeclineBudgetExhausted, true, 10) {
+		t.Fatal("embedding 4102 after the chat request wall was not confirmed")
+	}
+	if declineMatchesBudgetEvidenceLocked(spent, platformDeclineReservationTooLarge, true, 10) {
+		t.Fatal("4109 was confirmed from chat evidence")
+	}
+
+	// A healthy chat lane still cannot explain an embedding decline.
+	healthy := chatWall()
+	healthy.promptTokens, healthy.completionTokens = 2_500_000, 400_000
+	if declineMatchesBudgetEvidenceLocked(healthy, platformDeclineBudgetExhausted, true, 10) {
+		t.Fatal("embedding 4102 under a healthy chat lane was charged to the miner")
+	}
+	// Nor can chat spend the broker has no authenticated budget for.
+	unbudgeted := chatWall()
+	unbudgeted.tokenBudget, unbudgeted.requestBudget = 0, 0
+	if declineMatchesBudgetEvidenceLocked(unbudgeted, platformDeclineBudgetExhausted, true, 10) {
+		t.Fatal("chat spend without a chat budget confirmed an embedding decline")
+	}
+}
+
+func TestEmbeddingDeclineAfterChatTokenWallIsTheAgentsAllowance(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls++
+		if upstreamCalls == 1 {
+			// The crossing chat call is allowed to finish and returns 200.
+			writeJSON(w, http.StatusOK, map[string]any{
+				"usage":   map[string]int{"prompt_tokens": 74_000_000, "completion_tokens": 1_200_000},
+				"choices": []map[string]any{{"message": map[string]string{"content": "OK"}}},
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error_code":4102,"message":"embedding grant has spent its request budget"}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	terminalFailures := 0
+	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
+		RequestBudget:          8192,
+		TokenBudget:            75_000_000,
+		EmbeddingRequestBudget: 100_000,
+		EmbeddingTokenBudget:   1_000_000_000,
+		MaxOutputTokens:        8192,
+	})
+	sourceIP := "192.0.2.203"
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chat := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+	chat.RemoteAddr = sourceIP + ":4321"
+	chat.SetPathValue("rest", "v1/chat/completions")
+	chatRec := httptest.NewRecorder()
+	broker.handle(chatRec, chat)
+	if chatRec.Code != http.StatusOK {
+		t.Fatalf("crossing chat call status=%d, want 200", chatRec.Code)
+	}
+
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	if response := callEmbedding(broker, sourceIP, "small input"); response.Code != http.StatusBadGateway {
+		t.Fatalf("embedding status=%d, want fail-closed 502", response.Code)
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.GrantDenials != 1 || end.GrantAgentDeclines != 1 || end.DeclineEvidenceMismatches != 0 {
+		t.Fatalf("embedding decline after the chat wall was not the agent's: %+v", end)
+	}
+	if terminalFailures != 1 {
+		t.Fatalf("terminal agent callbacks=%d, want 1", terminalFailures)
+	}
+	failure := relayFinalizeFailure(relayDegradedSince(start, end))
+	if failure.Kind != "sandbox_failure" || failure.Retryable || failure.Code != "inference_allowance_exhausted" {
+		t.Fatalf("chat-wall embedding decline still re-leases the agent: %+v", failure)
+	}
+}

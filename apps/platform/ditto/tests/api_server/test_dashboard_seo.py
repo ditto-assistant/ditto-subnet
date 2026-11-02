@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -10,7 +11,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from ditto.api_server import factory
+from ditto.api_server import dashboard_seo, factory
 from ditto.api_server.dashboard_seo import (
     DOC_CACHE_CONTROL,
     HTML_CACHE_CONTROL,
@@ -94,6 +95,9 @@ class TestRobotsAndLlms:
         assert "max-age=30" in body
         assert "nothing here is a sample" in body
         assert "sample ranks" not in body.lower()
+        assert f"- Gamma service treasury: {_ORIGIN}/gamma" in body
+        assert f"- Build bounties: {_ORIGIN}/bounties" in body
+        assert f"- Generator competition: {_ORIGIN}/generators" in body
 
 
 class TestSitemap:
@@ -101,6 +105,9 @@ class TestSitemap:
         xml = sitemap_xml(_ORIGIN, None)
         assert "<loc>https://platform-api.heyditto.ai/</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/leaderboard</loc>" in xml
+        assert "<loc>https://platform-api.heyditto.ai/gamma</loc>" in xml
+        assert "<loc>https://platform-api.heyditto.ai/bounties</loc>" in xml
+        assert "<loc>https://platform-api.heyditto.ai/generators</loc>" in xml
         assert "<loc>https://platform-api.heyditto.ai/operations/screeners</loc>" in xml
         assert (
             "<loc>https://platform-api.heyditto.ai/operations/validators</loc>" in xml
@@ -214,6 +221,28 @@ class TestInjectLiveSeo:
             'content="https://platform-api.heyditto.ai/operations/screeners"' in html
         )
 
+    def test_bounties_route_has_its_own_metadata(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML, origin=_ORIGIN, path="/bounties", snapshot=_snapshot()
+        )
+        assert "<title>Build bounties · Ditto SN118</title>" in html
+        assert "signed terms, open slots" in html
+        assert (
+            'property="og:url" content="https://platform-api.heyditto.ai/bounties"'
+            in html
+        )
+
+    def test_generators_route_has_its_own_metadata(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML, origin=_ORIGIN, path="/generators", snapshot=_snapshot()
+        )
+        assert "<title>Generator competition · Ditto SN118</title>" in html
+        assert "per-generator case outcomes" in html
+        assert (
+            'property="og:url" content="https://platform-api.heyditto.ai/generators"'
+            in html
+        )
+
     def test_missing_snapshot_does_not_invent_ranks(self) -> None:
         html = inject_live_seo(_MARKED_HTML, origin=_ORIGIN, path="/", snapshot=None)
         assert "rank #" not in html
@@ -247,18 +276,18 @@ class TestInjectLiveSeo:
         assert f'name="twitter:image" content="{avatar}"' in html
         assert 'property="og:image:alt" content="jupiter"' in html
         og_image = html.split('property="og:image"')[1].split(">")[0]
-        assert "paperditto-512.png" not in og_image
+        assert "dittobench-og.png" not in og_image
         assert "og:image:width" not in html
 
-    def test_home_opengraph_keeps_the_mascot_even_if_champion_has_an_avatar(
+    def test_home_opengraph_keeps_the_brand_card_even_if_champion_has_an_avatar(
         self,
     ) -> None:
         html = inject_live_seo(
             _MARKED_HTML, origin=_ORIGIN, path="/", snapshot=_snapshot()
         )
-        mascot = "https://platform-api.heyditto.ai/assets/paperditto-512.png"
-        assert f'property="og:image" content="{mascot}"' in html
-        assert f'name="twitter:image" content="{mascot}"' in html
+        card = "https://platform-api.heyditto.ai/assets/dittobench-og.png"
+        assert f'property="og:image" content="{card}"' in html
+        assert f'name="twitter:image" content="{card}"' in html
 
     def test_agent_path_uses_the_owning_miner_avatar(self) -> None:
         html = inject_live_seo(
@@ -272,14 +301,14 @@ class TestInjectLiveSeo:
             in html.split('property="og:image"')[1].split(">")[0]
         )
 
-    def test_miner_without_avatar_falls_back_to_the_mascot(self) -> None:
+    def test_miner_without_avatar_falls_back_to_the_brand_card(self) -> None:
         html = inject_live_seo(
             _MARKED_HTML,
             origin=_ORIGIN,
             path="/miner/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
             snapshot=_snapshot(),
         )
-        assert "paperditto-512.png" in html
+        assert "dittobench-og.png" in html
         assert "og:image:width" in html
 
     def test_reviews_is_noindex(self) -> None:
@@ -375,7 +404,7 @@ def seo_dist(tmp_path, monkeypatch: pytest.MonkeyPatch):
     (assets / "index-Ab12Cd34.js").write_text(
         'console.log("ditto dashboard bundle");\n', encoding="utf-8"
     )
-    (assets / "paperditto-512.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
+    (assets / "dittobench-og.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
     monkeypatch.setattr(factory, "_DASHBOARD_DIST", dist)
     monkeypatch.setattr(factory, "_DASHBOARD_FILE", dist / "index.html")
     monkeypatch.setattr(factory, "_DASHBOARD_ASSETS", assets)
@@ -447,6 +476,80 @@ class TestSeoRoutes:
 
 @pytest.mark.usefixtures("seo_dist")
 class TestLiveHtmlThroughFactory:
+    async def test_reset_during_cold_seo_read_serves_static_shell(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started = asyncio.Event()
+
+        async def slow_snapshot(_request):
+            started.set()
+            await asyncio.Event().wait()
+            return _snapshot(), 30.0
+
+        monkeypatch.setattr(dashboard_seo, "_read_snapshot", slow_snapshot)
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            pending = asyncio.create_task(client.get("/"))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            reset_seo_cache()
+            page = await asyncio.wait_for(pending, timeout=1)
+            assert page.status_code == 200
+            assert '<div id="root">' in page.text
+            assert '"@type":"ItemList"' not in page.text
+
+    async def test_caller_cancellation_still_stops_cold_seo_request(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started = asyncio.Event()
+
+        async def slow_snapshot(_request):
+            started.set()
+            await asyncio.Event().wait()
+            return _snapshot(), 30.0
+
+        monkeypatch.setattr(dashboard_seo, "_read_snapshot", slow_snapshot)
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            pending = asyncio.create_task(client.get("/"))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            pending.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+
+    async def test_slow_seo_read_does_not_block_the_dashboard_shell(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def slow_snapshot(_request):
+            started.set()
+            await release.wait()
+            return _snapshot(), 30.0
+
+        monkeypatch.setattr(dashboard_seo, "_read_snapshot", slow_snapshot)
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            first = await asyncio.wait_for(client.get("/"), timeout=2)
+            await asyncio.wait_for(started.wait(), timeout=1)
+            assert first.status_code == 200
+            assert '<div id="root">' in first.text
+            assert '"@type":"ItemList"' not in first.text
+
+            release.set()
+            refresh = dashboard_seo._refresh_task
+            assert refresh is not None
+            await asyncio.wait_for(refresh, timeout=1)
+            second = await client.get("/")
+            assert second.status_code == 200
+            assert '"@type":"ItemList"' in second.text
+
     async def test_html_stays_short_cached_without_inventing_ranks(self) -> None:
         app = create_api_server(make_api_server_config(dashboard_enabled=True))
         resp = await _get(app, "/")

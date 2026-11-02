@@ -142,6 +142,7 @@ def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
             "enabled": config.screener_auth.enabled,
             "hotkey": config.screener_auth.hotkey or "<unset>",
             "api_token": _redact(config.screener_auth.api_token),
+            "legacy_bearer_accepted": config.screener_auth.legacy_bearer_accepted,
         },
         "pricing": {
             "fee_usd": str(config.pricing.fee_usd),
@@ -169,9 +170,6 @@ def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
             "use_tls": config.storage.use_tls,
             "access_key": _redact(config.storage.access_key),
             "secret_key": _redact(config.storage.secret_key),
-        },
-        "coding_private_catalog": {
-            "configured": config.coding_private_catalog is not None,
         },
         "embedding": {
             "enabled": config.embedding.enabled,
@@ -210,6 +208,10 @@ def main(argv: list[str] | None = None) -> int:
             port=config.port,
             log_config=None,
             server_header=False,
+            # Explicit, not the default: the per-client limits and the artifact
+            # audit trail key on the peer uvicorn resolves from X-Forwarded-For,
+            # trusted only from FORWARDED_ALLOW_IPS (the same-host Caddy).
+            proxy_headers=True,
             # Keep the Date header: responses carry Cache-Control max-age, and a
             # browser needs Date to compute the response's current age and honor
             # freshness. Only the Server banner is suppressed.

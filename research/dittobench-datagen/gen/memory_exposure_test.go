@@ -23,12 +23,14 @@ func TestContainsWholeAnswerUsesTokenBoundaries(t *testing.T) {
 	}
 }
 
+// v10 is frozen (TestV10KnownVector); five seeds replace the original 20.
 func TestV10MemoryTransformationGateAcrossQualificationSeeds(t *testing.T) {
+	t.Parallel()
 	profile, ok := ProfileForVersion("full", protocol.BenchVersionV10)
 	if !ok {
 		t.Fatal("missing v10 full profile")
 	}
-	for seed := int64(1); seed <= 20; seed++ {
+	for seed := int64(1); seed <= 5; seed++ {
 		artifact, err := GenerateDataset(seed, profile, protocol.BenchVersionV10)
 		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)
@@ -45,6 +47,31 @@ func TestV10MemoryTransformationGateAcrossQualificationSeeds(t *testing.T) {
 		}
 		if result.VerbatimShare() >= 0.50 {
 			t.Errorf("seed %d verbatim share %.4f is not below 0.50", seed, result.VerbatimShare())
+		}
+	}
+}
+
+// TestMemoryExposureAuditIsAVersionFloor: the audit applies to every contract
+// carrying evidence bindings (v10+), so v13 is audited the day it exists, and
+// pre-v10 artifacts are refused rather than silently scored as transformed.
+func TestMemoryExposureAuditIsAVersionFloor(t *testing.T) {
+	t.Parallel()
+	v9, _ := ProfileForVersion("full", protocol.BenchVersionV9)
+	old, err := GenerateDataset(1, v9, protocol.BenchVersionV9)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AuditMemoryExposure(old); err == nil {
+		t.Fatal("v9 artifact without evidence bindings was audited")
+	}
+	for _, artifact := range v13FortySeeds(t)[:5] {
+		seed := artifact.Seed
+		result, err := AuditMemoryExposure(artifact)
+		if err != nil {
+			t.Fatalf("seed %d: %v", seed, err)
+		}
+		if result.Eligible < 200 {
+			t.Fatalf("seed %d audited only %d evidence-bound v13 cases", seed, result.Eligible)
 		}
 	}
 }

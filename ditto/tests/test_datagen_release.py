@@ -22,7 +22,10 @@ def test_terraform_cannot_roll_back_a_semantic_release_image() -> None:
     terraform = DATAPIPELINE_TF.read_text()
 
     assert 'resource "google_cloud_run_v2_service" "datapipeline"' in terraform
-    assert "ignore_changes = [template[0].containers[0].image]" in terraform
+    assert 'scaling_mode       = "AUTOMATIC"' in terraform
+    assert "min_instance_count = 0" in terraform
+    assert "scaling[0].manual_instance_count" in terraform
+    assert "template[0].containers[0].image" in terraform
     assert "from = module.datapipeline[0].google_cloud_run_v2_service.this" in terraform
     assert "to   = google_cloud_run_v2_service.datapipeline[0]" in terraform
     assert 'role     = "roles/run.developer"' in terraform

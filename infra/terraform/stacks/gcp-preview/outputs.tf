@@ -6,6 +6,10 @@ output "runtime_service_account" {
   value = google_service_account.runtime.email
 }
 
+output "bake_service_account" {
+  value = try(google_service_account.bake[0].email, null)
+}
+
 output "lease_bucket" {
   value = google_storage_bucket.leases.name
 }

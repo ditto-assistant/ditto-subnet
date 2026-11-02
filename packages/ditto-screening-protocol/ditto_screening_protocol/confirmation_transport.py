@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from ipaddress import ip_address
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, get_args
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -444,7 +444,10 @@ class V9ConfirmationPreparedReport(BaseModel):
 # ever becoming an error-string channel. Anything a reporter cannot classify
 # arrives as "unclassified" rather than as an arbitrary type or message. Both
 # sides read this one list so a validator can never widen it unilaterally.
-CONFIRMATION_FAILURE_CLASS_VALUES = (
+#
+# The first group classifies the reporter's own exception TYPE, which localizes
+# the failing process but not the failing boundary inside it.
+CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES = (
     "sandbox_oom",
     "lease_revoked",
     "validator_infrastructure",
@@ -456,6 +459,172 @@ CONFIRMATION_FAILURE_CLASS_VALUES = (
     "timeout",
     "transport",
     "unclassified",
+)
+
+# The second group is the trusted scorer's OWN bounded diagnostic, forwarded
+# unchanged. Every scorer error reaches the reporter as one exception type, so
+# the type-derived class above collapses each of them to "dittobench" and the
+# boundary that actually broke survives only in that one validator's host logs
+# -- unreadable for a managed or third-party validator, which is every host but
+# ours. These slugs are the scorer's existing ``longmem_<operation>_<kind>``
+# allowlist (``longmemeval.FailureDiagnostic``), already crossing the protected
+# scorer->validator response as a header; forwarding them costs no new channel
+# and no new vocabulary. Still a closed set: a reporter that sees an unknown
+# slug must fall back to its type-derived class rather than pass it through.
+# Executor-stage classes. The harness slugs below name a boundary the submitted
+# harness reached; these name a stage of the scorer's OWN pipeline, reported
+# when the harness allowlist matches nothing. Before they existed the scorer
+# returned "unclassified" in that case and the handler suppressed the header
+# entirely, so the stage -- already computed, already in the scorer's local log
+# -- never crossed the boundary. Measured 2026-10-28 on bundle 9d764326: the
+# harness passthrough shipped and the failure still reported `dittobench` with
+# no status, because no seed call, /run call, or case failure was involved at
+# all. The vocabulary is closed: Go reports only stages present in its own
+# `confirmationExecutorStageClasses` map, which a source-parsing test holds
+# against every `wrapConfirmationExecutionFailure` call site in the binary.
+CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES = (
+    "longmem_exec_ablation_dataset",
+    "longmem_exec_broker_session",
+    "longmem_exec_dimension_execution",
+    "longmem_exec_embedding_phase",
+    "longmem_exec_execution",
+    "longmem_exec_harness_health",
+    "longmem_exec_installation_validation",
+    "longmem_exec_longmem_dataset",
+    "longmem_exec_provider_capabilities",
+    "longmem_exec_provider_session",
+    "longmem_exec_runtime_acquire",
+    "longmem_exec_runtime_close",
+    "longmem_exec_runtime_material",
+    "longmem_exec_runtime_validation",
+    "longmem_exec_sandbox_availability",
+    "longmem_exec_sandbox_start",
+    "longmem_exec_sandbox_stop",
+    "longmem_exec_screened_image",
+    "longmem_exec_source_validation",
+)
+
+# Coordinator-step classes. "dimension_execution" wraps one call that runs
+# LongMemEval first and both ablations second; these name the step inside it,
+# so a failure after LongMemEval completes is distinguishable from one within.
+CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES = (
+    "longmem_dim_ablation_construct",
+    "longmem_dim_ablation_coordinate",
+    "longmem_dim_ablation_evaluate",
+    "longmem_dim_ablation_marshal",
+    "longmem_dim_ablation_responder",
+    "longmem_dim_ablation_upstream",
+    "longmem_dim_budget_unfundable",
+    "longmem_dim_deadline_missing",
+    "longmem_dim_longmem_digest",
+    "longmem_dim_longmem_execute",
+    "longmem_dim_longmem_marshal",
+    "longmem_dim_longmem_validate",
+    "longmem_dim_mode_inactive",
+    "longmem_dim_wire_digest",
+)
+
+# LongMemEval executor classes: the phase inside longmemeval.Execute that broke
+# and, for the provider-accounting checks, which check. Measured 2026-10-28 on
+# bundle 2ede5da4: the stage class arrived as longmem_exec_dimension_execution,
+# naming one call with ~60 failure points beneath it, none of which logged its
+# cause even on a validator we operate. Generated from the Go vocabulary
+# (longmemeval.ExecutionFailureClasses) and held to it by a Go test that reads
+# this file, so the two cannot drift silently.
+CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES = (
+    "longmem_eval_accounting_final",
+    "longmem_eval_accounting_final_cost_source",
+    "longmem_eval_accounting_final_fallback_used",
+    "longmem_eval_accounting_final_identity_drift",
+    "longmem_eval_accounting_final_mixed_zero_lanes",
+    "longmem_eval_accounting_final_provider_evidence",
+    "longmem_eval_accounting_final_request_free_accounting",
+    "longmem_eval_accounting_initial",
+    "longmem_eval_accounting_initial_cost_source",
+    "longmem_eval_accounting_initial_fallback_used",
+    "longmem_eval_accounting_initial_identity_drift",
+    "longmem_eval_accounting_initial_lane_coverage",
+    "longmem_eval_accounting_initial_meter_unavailable",
+    "longmem_eval_accounting_initial_nonzero_start",
+    "longmem_eval_accounting_initial_provider_evidence",
+    "longmem_eval_accounting_initial_request_free_accounting",
+    "longmem_eval_accounting_judge",
+    "longmem_eval_accounting_judge_cost_source",
+    "longmem_eval_accounting_judge_fallback_used",
+    "longmem_eval_accounting_judge_identity_drift",
+    "longmem_eval_accounting_judge_lane_coverage",
+    "longmem_eval_accounting_judge_meter_unavailable",
+    "longmem_eval_accounting_judge_provider_evidence",
+    "longmem_eval_accounting_judge_receipt_changed",
+    "longmem_eval_accounting_judge_receipt_uncommitted",
+    "longmem_eval_accounting_judge_regressed",
+    "longmem_eval_accounting_judge_request_free_accounting",
+    "longmem_eval_accounting_run",
+    "longmem_eval_accounting_run_cost_source",
+    "longmem_eval_accounting_run_fallback_used",
+    "longmem_eval_accounting_run_identity_drift",
+    "longmem_eval_accounting_run_lane_coverage",
+    "longmem_eval_accounting_run_meter_unavailable",
+    "longmem_eval_accounting_run_provider_evidence",
+    "longmem_eval_accounting_run_receipt_changed",
+    "longmem_eval_accounting_run_receipt_uncommitted",
+    "longmem_eval_accounting_run_regressed",
+    "longmem_eval_accounting_run_request_free_accounting",
+    "longmem_eval_accounting_seed",
+    "longmem_eval_accounting_seed_cost_source",
+    "longmem_eval_accounting_seed_fallback_used",
+    "longmem_eval_accounting_seed_identity_drift",
+    "longmem_eval_accounting_seed_lane_coverage",
+    "longmem_eval_accounting_seed_meter_unavailable",
+    "longmem_eval_accounting_seed_provider_evidence",
+    "longmem_eval_accounting_seed_receipt_changed",
+    "longmem_eval_accounting_seed_receipt_uncommitted",
+    "longmem_eval_accounting_seed_regressed",
+    "longmem_eval_accounting_seed_request_free_accounting",
+    "longmem_eval_aggregate",
+    "longmem_eval_dataset",
+    "longmem_eval_evidence",
+    "longmem_eval_judge_budget",
+    "longmem_eval_judge_opaque",
+    "longmem_eval_projection",
+    "longmem_eval_reader_budget",
+    "longmem_eval_run_opaque",
+    "longmem_eval_run_unreceipted",
+    "longmem_eval_seed_incomplete",
+    "longmem_eval_seed_opaque",
+    "longmem_eval_setup",
+    "longmem_eval_time_budget",
+)
+
+CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES = (
+    "longmem_run_http_status",
+    "longmem_run_malformed_json",
+    "longmem_run_missing_final_text",
+    "longmem_run_request",
+    "longmem_run_response_read",
+    "longmem_run_response_too_large",
+    "longmem_run_tool_endpoint",
+    "longmem_seed_http_status",
+    "longmem_seed_incomplete_ack",
+    "longmem_seed_malformed_json",
+    "longmem_seed_request",
+    "longmem_seed_response_read",
+    "longmem_seed_response_too_large",
+)
+
+# Everything the trusted scorer may assign itself, harness boundary or own
+# pipeline stage. The reporter forwards any member unchanged and degrades
+# anything else to its type-derived class.
+CONFIRMATION_SCORER_FAILURE_CLASS_VALUES = (
+    *CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES,
+    *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+    *CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+    *CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
+)
+
+CONFIRMATION_FAILURE_CLASS_VALUES = (
+    *CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES,
+    *CONFIRMATION_SCORER_FAILURE_CLASS_VALUES,
 )
 
 ConfirmationFailureClass = Literal[
@@ -470,7 +639,128 @@ ConfirmationFailureClass = Literal[
     "timeout",
     "transport",
     "unclassified",
+    "longmem_run_http_status",
+    "longmem_run_malformed_json",
+    "longmem_run_missing_final_text",
+    "longmem_run_request",
+    "longmem_run_response_read",
+    "longmem_run_response_too_large",
+    "longmem_run_tool_endpoint",
+    "longmem_seed_http_status",
+    "longmem_seed_incomplete_ack",
+    "longmem_seed_malformed_json",
+    "longmem_seed_request",
+    "longmem_seed_response_read",
+    "longmem_seed_response_too_large",
+    "longmem_exec_ablation_dataset",
+    "longmem_exec_broker_session",
+    "longmem_exec_dimension_execution",
+    "longmem_exec_embedding_phase",
+    "longmem_exec_execution",
+    "longmem_exec_harness_health",
+    "longmem_exec_installation_validation",
+    "longmem_exec_longmem_dataset",
+    "longmem_exec_provider_capabilities",
+    "longmem_exec_provider_session",
+    "longmem_exec_runtime_acquire",
+    "longmem_exec_runtime_close",
+    "longmem_exec_runtime_material",
+    "longmem_exec_runtime_validation",
+    "longmem_exec_sandbox_availability",
+    "longmem_exec_sandbox_start",
+    "longmem_exec_sandbox_stop",
+    "longmem_exec_screened_image",
+    "longmem_exec_source_validation",
+    "longmem_dim_ablation_construct",
+    "longmem_dim_ablation_coordinate",
+    "longmem_dim_ablation_evaluate",
+    "longmem_dim_ablation_marshal",
+    "longmem_dim_ablation_responder",
+    "longmem_dim_ablation_upstream",
+    "longmem_dim_budget_unfundable",
+    "longmem_dim_deadline_missing",
+    "longmem_dim_longmem_digest",
+    "longmem_dim_longmem_execute",
+    "longmem_dim_longmem_marshal",
+    "longmem_dim_longmem_validate",
+    "longmem_dim_mode_inactive",
+    "longmem_dim_wire_digest",
+    "longmem_eval_accounting_final",
+    "longmem_eval_accounting_final_cost_source",
+    "longmem_eval_accounting_final_fallback_used",
+    "longmem_eval_accounting_final_identity_drift",
+    "longmem_eval_accounting_final_mixed_zero_lanes",
+    "longmem_eval_accounting_final_provider_evidence",
+    "longmem_eval_accounting_final_request_free_accounting",
+    "longmem_eval_accounting_initial",
+    "longmem_eval_accounting_initial_cost_source",
+    "longmem_eval_accounting_initial_fallback_used",
+    "longmem_eval_accounting_initial_identity_drift",
+    "longmem_eval_accounting_initial_lane_coverage",
+    "longmem_eval_accounting_initial_meter_unavailable",
+    "longmem_eval_accounting_initial_nonzero_start",
+    "longmem_eval_accounting_initial_provider_evidence",
+    "longmem_eval_accounting_initial_request_free_accounting",
+    "longmem_eval_accounting_judge",
+    "longmem_eval_accounting_judge_cost_source",
+    "longmem_eval_accounting_judge_fallback_used",
+    "longmem_eval_accounting_judge_identity_drift",
+    "longmem_eval_accounting_judge_lane_coverage",
+    "longmem_eval_accounting_judge_meter_unavailable",
+    "longmem_eval_accounting_judge_provider_evidence",
+    "longmem_eval_accounting_judge_receipt_changed",
+    "longmem_eval_accounting_judge_receipt_uncommitted",
+    "longmem_eval_accounting_judge_regressed",
+    "longmem_eval_accounting_judge_request_free_accounting",
+    "longmem_eval_accounting_run",
+    "longmem_eval_accounting_run_cost_source",
+    "longmem_eval_accounting_run_fallback_used",
+    "longmem_eval_accounting_run_identity_drift",
+    "longmem_eval_accounting_run_lane_coverage",
+    "longmem_eval_accounting_run_meter_unavailable",
+    "longmem_eval_accounting_run_provider_evidence",
+    "longmem_eval_accounting_run_receipt_changed",
+    "longmem_eval_accounting_run_receipt_uncommitted",
+    "longmem_eval_accounting_run_regressed",
+    "longmem_eval_accounting_run_request_free_accounting",
+    "longmem_eval_accounting_seed",
+    "longmem_eval_accounting_seed_cost_source",
+    "longmem_eval_accounting_seed_fallback_used",
+    "longmem_eval_accounting_seed_identity_drift",
+    "longmem_eval_accounting_seed_lane_coverage",
+    "longmem_eval_accounting_seed_meter_unavailable",
+    "longmem_eval_accounting_seed_provider_evidence",
+    "longmem_eval_accounting_seed_receipt_changed",
+    "longmem_eval_accounting_seed_receipt_uncommitted",
+    "longmem_eval_accounting_seed_regressed",
+    "longmem_eval_accounting_seed_request_free_accounting",
+    "longmem_eval_aggregate",
+    "longmem_eval_dataset",
+    "longmem_eval_evidence",
+    "longmem_eval_judge_budget",
+    "longmem_eval_judge_opaque",
+    "longmem_eval_projection",
+    "longmem_eval_reader_budget",
+    "longmem_eval_run_opaque",
+    "longmem_eval_run_unreceipted",
+    "longmem_eval_seed_incomplete",
+    "longmem_eval_seed_opaque",
+    "longmem_eval_setup",
+    "longmem_eval_time_budget",
 ]
+
+# The tuple is what Platform's CHECK constraint and the reporter's fallback are
+# written against; the Literal is what rejects an unknown slug at the signed
+# wire boundary. A value added to one and not the other produces a request that
+# validates but cannot be stored, at the exact moment a failure is being
+# reported -- so bind them here rather than trusting two hand-edited lists.
+assert get_args(ConfirmationFailureClass) == CONFIRMATION_FAILURE_CLASS_VALUES
+
+# Highest HTTP status the scorer's bounded diagnostic can carry.  0 means the
+# boundary broke before any status existed (a connection error, an unreadable
+# body, a missing final message), which is itself discriminating and must stay
+# distinguishable from "the reporter did not send a status at all".
+MAX_CONFIRMATION_FAILURE_STATUS = 599
 
 # The last progress stage the slot published before it broke, plus "unknown"
 # for a slot that failed before publishing any stage at all.
@@ -497,6 +787,15 @@ class V9ConfirmationFailRequest(BaseModel):
     # old Platform fails its signature check — deploy Platform first.
     failure_class: ConfirmationFailureClass | None = None
     failure_stage: ConfirmationFailureStage | None = None
+    # Present only alongside a scorer-forwarded class, which is the only kind
+    # that has a status: it is the scorer's own bounded HTTP status for the
+    # harness boundary that broke, and without it a ``*_http_status`` class
+    # says a status was the problem while leaving which one on the host. A
+    # reporter predating this field signs the v2 message and Platform verifies
+    # v2; one that sends a status signs v3, which binds it like the other two.
+    failure_status: (
+        Annotated[int, Field(ge=0, le=MAX_CONFIRMATION_FAILURE_STATUS)] | None
+    ) = None
     nonce: UUID
     requested_at: datetime
     signature: SignatureHex
@@ -505,6 +804,17 @@ class V9ConfirmationFailRequest(BaseModel):
     def _diagnostics_travel_together(self) -> V9ConfirmationFailRequest:
         if (self.failure_class is None) != (self.failure_stage is None):
             raise ValueError("failure class and stage must be reported together")
+        if (
+            self.failure_status is not None
+            and self.failure_class not in CONFIRMATION_SCORER_FAILURE_CLASS_VALUES
+        ):
+            # A type-derived class has no status behind it, so a status next to
+            # one would be invented rather than measured. Refuse it here: the
+            # ledger this lands in is read by an operator deciding whether to
+            # spend the next bounded canary.
+            raise ValueError(
+                "failure status may only accompany a scorer-reported class"
+            )
         return self
 
     @field_validator("requested_at")
@@ -548,8 +858,16 @@ __all__ = [
     "ConfirmationExecutionProfile",
     "ConfirmationInferenceGrantOffer",
     "ConfirmationProviderLaneProfile",
+    "CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_HARNESS_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_REPORTER_FAILURE_CLASS_VALUES",
+    "CONFIRMATION_SCORER_FAILURE_CLASS_VALUES",
     "MAX_BUNDLE_REQUEST_CAP",
     "MAX_BUNDLE_TOKEN_CAP",
+    "MAX_CONFIRMATION_FAILURE_STATUS",
     "SignatureHex",
     "V9ConfirmationClaimRequest",
     "V9ConfirmationCompletionReport",

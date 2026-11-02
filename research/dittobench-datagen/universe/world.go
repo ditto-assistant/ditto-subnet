@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-datagen/internal/appearance"
 	"github.com/ditto-assistant/dittobench-datagen/internal/humandata"
+	"github.com/ditto-assistant/dittobench-datagen/internal/publicdata"
 	"github.com/ditto-assistant/dittobench-datagen/persona"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -104,7 +106,11 @@ type IntegrityFacts struct {
 
 // World is the shared state used throughout one v8 dataset.
 type World struct {
-	Seed           int64
+	Seed int64
+	// BenchVersion selects version-gated surface rendering (bench_version >= 13
+	// renders identity records and question frames from per-seed grammars).
+	// Generate leaves it zero, which renders the frozen v8..v12 surface.
+	BenchVersion   int
 	UserName       string
 	UserCompany    string
 	People         []Person
@@ -117,6 +123,7 @@ type World struct {
 	Accent         string
 	Preferences    []Preference
 	Integrity      IntegrityFacts
+	Probes         *V13Probes
 }
 
 // ProtectedTerms returns semantic identity and join-key surfaces that writing
@@ -150,16 +157,40 @@ var countryPool = []string{"France", "Spain", "Portugal", "Belgium", "the Nether
 
 // Generate returns one deterministic world. scale is a run-size hint (small =
 // 1, medium = 2, full = 3); it changes population, never the generation rules.
+// It is the frozen v8 contract; versioned callers use GenerateForVersion.
 func Generate(seed int64, scale int) World {
+	return GenerateForVersion(seed, scale, 0)
+}
+
+// GenerateForVersion is Generate under an explicit benchmark contract. Every
+// version through 12 renders the identical world; bench_version >= 13 renders
+// the project/person identity records and the question frames from per-seed
+// grammars (v13_surface.go) while people, projects, trips, stories, values,
+// pair identities, and oracles stay exactly the same.
+func GenerateForVersion(seed int64, scale, benchVersion int) World {
 	if scale < 1 {
 		scale = 1
 	}
 	if scale > 3 {
 		scale = 3
 	}
+	v13 := benchVersion >= protocol.BenchVersionV13
 	r := rand.New(rand.NewSource(worldSeed(seed)))
-	w := World{Seed: seed, UserName: UserName(seed), UserCompany: coinedCompany(r), Accent: colors[r.Intn(len(colors))]}
-	w.Preferences = worldPreferences(seed, w.Accent)
+	w := World{Seed: seed, BenchVersion: benchVersion, UserName: UserName(seed)}
+	if v13 {
+		w.UserCompany = corpusCompany(r)
+		// The accent comes from the appearance stream (shared with the mock
+		// discover_capabilities inventory), so the world's stated preference and
+		// the served option list always agree. The frozen path's colour draw is
+		// consumed anyway so the rest of the world stays on the same rng phase
+		// as a same-seed v13 world with a different accent policy would not be.
+		_ = r.Intn(len(colors))
+		w.Accent = appearance.ForSeed(seed).Accent
+	} else {
+		w.UserCompany = coinedCompany(r)
+		w.Accent = colors[r.Intn(len(colors))]
+	}
+	w.Preferences = worldPreferencesForVersion(seed, w.Accent, benchVersion)
 	w.Integrity = IntegrityFacts{
 		CanaryNonce:      persona.CanaryNonce(seed),
 		CanaryBaits:      [2]string{persona.CoinShaped(seed, "canary-bait"), persona.CoinShaped(seed, "canary-bait-2")},
@@ -179,13 +210,17 @@ func Generate(seed int64, scale int) World {
 	seenNicknames := map[string]bool{}
 	seenCompanies := map[string]bool{w.UserCompany: true}
 	seenEmails := map[string]bool{}
+	company := coinedCompany
+	if v13 {
+		company = corpusCompany
+	}
 	for i := 0; i < peopleN; i++ {
 		name := uniquePersonName(r, seenNames, w.People, i)
 		given := strings.Fields(name)[0]
 		nick := humandata.DistinctPreferredNameExcluding(given, r, i, seenNicknames)
 		seenNicknames[strings.ToLower(nick)] = true
-		previousEmployer := uniqueCompany(r, seenCompanies)
-		employer := uniqueCompany(r, seenCompanies)
+		previousEmployer := uniqueCompanyWith(r, seenCompanies, company)
+		employer := uniqueCompanyWith(r, seenCompanies, company)
 		previous := uniqueEmail(name, previousEmployer, 2*i, true, seenEmails)
 		current := uniqueEmail(name, employer, 2*i+1, true, seenEmails)
 		if previous == current {
@@ -203,13 +238,28 @@ func Generate(seed int64, scale int) World {
 			CorrectionPairID: protocol.OpaqueCaseID(seed, "world-person-email-correction", i),
 			ToolNotePairID:   protocol.OpaqueCaseID(seed, "world-person-tool-note", i),
 		}
+		if v13 {
+			// v13 (#1825): relation, role, city, and event context come from the
+			// public corpora and compositional banks instead of four hand lists of
+			// twelve. Each replaces the frozen path's single draw one-for-one.
+			p.Relation = corpusRelation(r)
+			p.Role = publicdata.Occupation(r)
+			p.City = publicdata.City(r, i)
+			p.Context = corpusContext(r)
+		}
 		w.People = append(w.People, p)
+	}
+	if v13 {
+		recoverV13CrossUserAnchors(&w, scale)
 	}
 
 	seenProjects := map[string]bool{}
 	seenProjectAliases := map[string]bool{}
 	for i := 0; i < projectN; i++ {
 		projectName, projectAlias := uniqueProjectIdentity(r, seenProjects, seenProjectAliases)
+		if v13 {
+			projectName, projectAlias = uniqueCorpusProjectIdentity(r, seenProjects, seenProjectAliases)
+		}
 		original := 180000 + r.Intn(2600000)
 		deltas := []int{-48_725, -31_342, -17_899, 12_675, 23_980, 45_125, 68_342, 92_750}
 		corrected := original + deltas[r.Intn(len(deltas))]
@@ -220,8 +270,8 @@ func Generate(seed int64, scale int) World {
 		paid := ((original * paidPercent / 100) + 50) / 100 * 100
 		p := Project{
 			Name: projectName, Alias: projectAlias,
-			RecordID: "AP-" + strings.ToUpper(protocol.OpaqueCaseID(seed, "world-project-record", i)[:8]), Purpose: projectPurpose(r),
-			Client: uniqueCompany(r, seenCompanies), Vendor: uniqueCompany(r, seenCompanies), Lead: i % len(w.People),
+			RecordID: "AP-" + strings.ToUpper(protocol.OpaqueCaseID(seed, "world-project-record", i)[:8]), Purpose: projectPurposeForVersion(r, benchVersion),
+			Client: uniqueCompanyWith(r, seenCompanies, company), Vendor: uniqueCompanyWith(r, seenCompanies, company), Lead: i % len(w.People),
 			OriginalCents: original, CorrectedCents: corrected, PaidCents: paid,
 			OutstandingCents: corrected - paid,
 			ContextPairID:    protocol.OpaqueCaseID(seed, "world-project-context", i),
@@ -234,8 +284,12 @@ func Generate(seed int64, scale int) World {
 
 	seenTripAliases := map[string]bool{}
 	seenTripRoutes := map[string]bool{}
+	alias := tripAlias
+	if v13 {
+		alias = corpusTripAlias
+	}
 	for i := 0; i < tripN; i++ {
-		purpose := tripPurpose(r)
+		purpose := tripPurposeForVersion(r, benchVersion)
 		countries := tripCountries(r, purpose, seenTripRoutes)
 		oldLegs := [3]int{4 + r.Intn(9), 4 + r.Intn(9), 3 + r.Intn(8)}
 		legs := oldLegs
@@ -245,7 +299,7 @@ func Generate(seed int64, scale int) World {
 			legs[changed] = 2
 		}
 		t := Trip{
-			Alias:     uniqueString(r, seenTripAliases, tripAlias),
+			Alias:     uniqueString(r, seenTripAliases, alias),
 			Companion: (i*2 + 1) % len(w.People),
 			Purpose:   purpose, When: tripWhen(r), Countries: countries,
 			OldLegDays: oldLegs, LegDays: legs, PreviousDays: sum3(oldLegs), CurrentDays: sum3(legs),
@@ -259,19 +313,50 @@ func Generate(seed int64, scale int) World {
 	// Story generation owns an independent seed stream: adding surface variety
 	// cannot perturb the people/projects/trips already established above. Each
 	// arc contributes three long memories and story-only join/state facts.
-	w.StoryArcs, w.Stories = buildStories(seed, scale, w)
+	if benchVersion >= protocol.BenchVersionV13 {
+		w.StoryArcs, w.Stories = buildStoriesV2(seed, scale, w)
+	} else {
+		w.StoryArcs, w.Stories = buildStories(seed, scale, w, benchVersion)
+	}
 	w.Pairs = w.renderPairs(r)
+	if benchVersion >= protocol.BenchVersionV13 {
+		appendV13Probes(&w)
+	}
 	return w
 }
 
 func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 	pairs := make([]protocol.MemoryPair, 0, len(w.People)*4+len(w.Projects)*3+len(w.Trips)*3+2)
 	base := time.Date(2024, 1, 8, 9, 0, 0, 0, time.UTC)
+	// v13 (#1827): "people-03-d", "project-07-ledger", "story-02-outcome" and a
+	// 137-hour stride told a /seed reader which generator family, which entity,
+	// and which slot every pair was before it read a word. From v13 the id is an
+	// OpaqueCaseID of the emission ordinal and the timestamps are reassigned
+	// after rendering by assignV13Timestamps, so calendar position no longer
+	// follows emission order (people, then projects, then trips, then stories).
+	v13 := w.BenchVersion >= protocol.BenchVersionV13
 	add := func(id, session, prompt, response string) {
-		pairs = append(pairs, protocol.MemoryPair{PairID: id, SessionID: session, Timestamp: base.Add(time.Duration(len(pairs)*137) * time.Hour).Format(time.RFC3339), Prompt: prompt, Response: response})
+		timestamp := base.Add(time.Duration(len(pairs)*137) * time.Hour).Format(time.RFC3339)
+		if v13 && !protocol.IsOpaqueCaseID(session) {
+			// Story pairs already carry the opaque id buildStories assigned (the
+			// Story object mirrors it for reviewer citations); every other label
+			// is replaced by the opaque id of its emission ordinal.
+			session = protocol.OpaqueCaseID(w.Seed, "v13-world-session", len(pairs))
+		}
+		pairs = append(pairs, protocol.MemoryPair{PairID: id, SessionID: session, Timestamp: timestamp, Prompt: prompt, Response: response})
+	}
+	// addAt is the story v2 path: the memory carries its own arc-chronological,
+	// jittered timestamp instead of the positional 137-hour grid, so neither the
+	// session id nor the timestamp predicts the arc or the slot (#1827).
+	addAt := func(id, session, timestamp, prompt, response string) {
+		pairs = append(pairs, protocol.MemoryPair{PairID: id, SessionID: session, Timestamp: timestamp, Prompt: prompt, Response: response})
 	}
 	for i, p := range w.People {
-		add(p.IdentityPairID, fmt.Sprintf("people-%02d-a", i), shortLead(r)+p.Name+" is my "+p.Relation+". Everyone there calls them “"+p.Nickname+".”", warmResponse(w.Seed, p.IdentityPairID,
+		identity := shortLead(r) + p.Name + " is my " + p.Relation + ". Everyone there calls them “" + p.Nickname + ".”"
+		if w.v13Surface() {
+			identity = w.v13PersonIdentity(p, i)
+		}
+		add(p.IdentityPairID, fmt.Sprintf("people-%02d-a", i), identity, warmResponse(w.Seed, p.IdentityPairID,
 			"Aw, I love that nickname. I’ll remember them.",
 			"That history helps — I know who you mean.",
 			"I’ve got the person and nickname together."))
@@ -311,7 +396,11 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 	add(w.BusinessPairID, "business-import", "Here is the raw operations paste:\n\n"+wall.String(), "Send it my way — I’ll untangle this without losing how everything connects.")
 	for i, p := range w.Projects {
 		lead := w.People[p.Lead]
-		add(p.ContextPairID, fmt.Sprintf("project-%02d-context", i), fmt.Sprintf("When I say “%s” I mean %s for %s, not the similarly named client work. %s owns it internally; %s is the vendor, and the AP record is %s.", p.Alias, p.Name, p.Client, lead.Name, p.Vendor, p.RecordID), warmResponse(w.Seed, p.ContextPairID,
+		context := fmt.Sprintf("When I say “%s” I mean %s for %s, not the similarly named client work. %s owns it internally; %s is the vendor, and the AP record is %s.", p.Alias, p.Name, p.Client, lead.Name, p.Vendor, p.RecordID)
+		if w.v13Surface() {
+			context = w.v13ProjectIdentity(p, lead, i)
+		}
+		add(p.ContextPairID, fmt.Sprintf("project-%02d-context", i), context, warmResponse(w.Seed, p.ContextPairID,
 			"Got you — every name in the right role.",
 			"I’ll keep the shorthand mapped correctly.",
 			"I won’t mix up the project or people."))
@@ -358,7 +447,11 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 			"I’ve got the change; everything else stays."))
 	}
 	for _, story := range w.Stories {
-		prompt, response := story.render(w.Seed)
+		prompt, response := story.renderForVersion(w.Seed, w.BenchVersion)
+		if story.Timestamp != "" {
+			addAt(story.PairID, story.SessionID, story.Timestamp, prompt, response)
+			continue
+		}
 		add(story.PairID, story.SessionID, prompt, response)
 	}
 	for i, preference := range w.Preferences {
@@ -391,10 +484,26 @@ func (w World) renderPairs(r *rand.Rand) []protocol.MemoryPair {
 			"All three registrations are distinct in my notes.",
 			"Understood — vendor badge, correctly attributed."))
 	}
+	if v13 {
+		w.assignV13Timestamps(pairs)
+	}
 	return spreadPairs(pairs)
 }
 
-func worldPreferences(seed int64, accent string) []Preference {
+// worldPreferencesForVersion seeds the three product preferences under an
+// explicit contract; v8 through v12 share the frozen six-font hand list. From v13 the font and every rejected alternative come from the appearance
+// stream over the public corpora (Google Fonts families, xkcd/CSS colours), so
+// the near-misses a harness must reject are corpus entries such as "Inter
+// Tight" against "Inter" rather than five other hand-picked names.
+func worldPreferencesForVersion(seed int64, accent string, benchVersion int) []Preference {
+	if benchVersion >= protocol.BenchVersionV13 {
+		choice := appearance.ForSeed(seed)
+		return []Preference{
+			{Domain: "accent color", Value: accent, Rejected: choice.RejectedAccents(), PairID: protocol.OpaqueCaseID(seed, "world-preference", 0)},
+			{Domain: "interface font", Value: choice.Font, Rejected: choice.RejectedFonts(), PairID: protocol.OpaqueCaseID(seed, "world-preference", 1)},
+			{Domain: "color mode", Value: choice.Mode, Rejected: choice.RejectedModes(), PairID: protocol.OpaqueCaseID(seed, "world-preference", 2)},
+		}
+	}
 	fonts := []string{"Atkinson Hyperlegible", "Inter", "Source Sans 3", "IBM Plex Sans", "Georgia", "Aptos"}
 	modes := []string{"dark", "light", "system"}
 	h := fnv.New64a()
@@ -616,9 +725,9 @@ func coinedCompany(r *rand.Rand) string {
 	return strings.TrimSpace(stem + " " + suffixes[r.Intn(len(suffixes))])
 }
 
-func uniqueCompany(r *rand.Rand, seen map[string]bool) string {
+func uniqueCompanyWith(r *rand.Rand, seen map[string]bool, generate func(*rand.Rand) string) string {
 	for {
-		candidate := coinedCompany(r)
+		candidate := generate(r)
 		first := strings.Fields(candidate)[0]
 		collision := false
 		for prior := range seen {
@@ -698,6 +807,20 @@ func projectNamesAreRelated(name, alias string) bool {
 func projectPurpose(r *rand.Rand) string {
 	return []string{"retail launch", "annual report", "museum installation", "client migration", "brand research", "regional workshop", "fundraising campaign", "supplier transition"}[r.Intn(8)]
 }
+
+func projectPurposeForVersion(r *rand.Rand, benchVersion int) string {
+	if benchVersion >= protocol.BenchVersionV13 {
+		return publicdata.Purpose(r, publicdata.PurposeProject)
+	}
+	return projectPurpose(r)
+}
+
+func tripPurposeForVersion(r *rand.Rand, benchVersion int) string {
+	if benchVersion >= protocol.BenchVersionV13 {
+		return publicdata.Purpose(r, publicdata.PurposeTrip)
+	}
+	return tripPurpose(r)
+}
 func tripAlias(r *rand.Rand) string {
 	first := []string{"harbor", "lantern", "north", "blue", "cedar", "silver", "quiet", "copper", "juniper", "willow"}[r.Intn(10)]
 	second := []string{"loop", "route", "circuit", "run", "trail", "path", "line", "crossing"}[r.Intn(8)]
@@ -719,6 +842,11 @@ func tripCountries(r *rand.Rand, purpose string, seen map[string]bool) [3]string
 		"archive project":    {"United Kingdom", "Portugal", "France", "Italy", "Sweden"},
 	}
 	pool := append([]string(nil), pools[purpose]...)
+	if len(pool) < 3 {
+		// v13 purposes come from the public bank, which has no per-purpose
+		// country pool; every trip then draws its route from the shared pool.
+		pool = append([]string(nil), countryPool...)
+	}
 	for {
 		r.Shuffle(len(pool), func(i, j int) { pool[i], pool[j] = pool[j], pool[i] })
 		countries := [3]string{pool[0], pool[1], pool[2]}

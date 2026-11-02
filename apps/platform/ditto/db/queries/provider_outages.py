@@ -14,16 +14,62 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_models.ticket_status import TicketStatus
-from ditto.db.models import ProviderOutageCircuit, ValidatorTicket
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.db.models import BenchmarkCanary, ProviderOutageCircuit, ValidatorTicket
 from ditto.db.queries.inference import revoke_ticket_inference
 
 OPENROUTER_PROVIDER = "openrouter"
 PROVIDER_PROBE_TTL = timedelta(minutes=10)
+PROVIDER_OUTAGE_PARKED_DETAIL = "provider_outage_parked"
+# The relay's cooldown is two minutes, so a still-overloaded provider flaps
+# between open, half-open, and closed. A circuit counts as healthy only after
+# it has recorded no failure for this long; until then a retry grant re-leases
+# into the same outage (ditto-subnet#2087).
+PROVIDER_RECOVERY_QUIET_WINDOW = timedelta(minutes=30)
 
 
 def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def provider_outage_active(
+    circuit: ProviderOutageCircuit | None, *, now: datetime
+) -> bool:
+    """Whether the provider is open or failed within the quiet window."""
+    if circuit is None:
+        return False
+    if circuit.state != "closed":
+        return True
+    return _aware(circuit.last_failure_at) > now - PROVIDER_RECOVERY_QUIET_WINDOW
+
+
+def provider_gate_closed(
+    circuit: ProviderOutageCircuit | None, *, now: datetime
+) -> bool:
+    """Whether :func:`lock_provider_work_gate` refuses every new workload now.
+
+    The read-only, fleet-wide twin of the gate: open and cooling down, or open
+    with a live half-open probe already claimed. After ``retry_at`` with no
+    probe registered, one workload would be admitted, so the gate reads open.
+    """
+    if circuit is None or circuit.state == "closed":
+        return False
+    if _aware(circuit.retry_at) > now:
+        return True
+    return (
+        circuit.probe_kind is not None
+        and circuit.probe_expires_at is not None
+        and _aware(circuit.probe_expires_at) > now
+    )
+
+
+async def read_provider_circuit(
+    session: AsyncSession, *, provider: str = OPENROUTER_PROVIDER
+) -> ProviderOutageCircuit | None:
+    """The circuit row without a lock, for read-only projections."""
+    return await session.scalar(
+        select(ProviderOutageCircuit).where(ProviderOutageCircuit.provider == provider)
+    )
 
 
 def scoring_probe_key(*, validator_hotkey: str, slot_id: str) -> str:
@@ -124,6 +170,30 @@ async def park_scoring_leases(
             continue
         await revoke_ticket_inference(session, ticket=ticket, now=now)
         ticket.status = TicketStatus.EXPIRED
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            canary = await session.scalar(
+                select(BenchmarkCanary)
+                .where(
+                    BenchmarkCanary.agent_id == ticket.agent_id,
+                    BenchmarkCanary.validator_hotkey == ticket.validator_hotkey,
+                    BenchmarkCanary.deadline == ticket.deadline,
+                )
+                .with_for_update()
+            )
+            if canary is not None and canary.status == "issued":
+                canary.status = "failed"
+                canary.failure_detail = PROVIDER_OUTAGE_PARKED_DETAIL
+                canary.finished_at = now
+            parked += 1
+            continue
+        if ticket.purpose == TicketPurpose.GENERATOR_ROUND:
+            # A round run is not a scoring attempt. Parking it must neither
+            # start a scoring cooldown, mint a no-fault scoring resume, nor
+            # overwrite the shared row's scoring failure evidence. The agent
+            # returns to the round's pending set for another lease.
+            ticket.retry_after = None
+            parked += 1
+            continue
         ticket.deadline = now
         ticket.retry_after = max(now, _aware(circuit.retry_at))
         # One logical ticket may receive at most one no-fault outage resume.
@@ -134,7 +204,7 @@ async def park_scoring_leases(
             circuit.epoch if ticket.provider_outage_attempted_epoch is None else None
         )
         ticket.failure_reason = "infrastructure"
-        ticket.failure_detail = "provider_outage_parked"
+        ticket.failure_detail = PROVIDER_OUTAGE_PARKED_DETAIL
         ticket.failed_at = now
         parked += 1
     return parked
@@ -142,9 +212,14 @@ async def park_scoring_leases(
 
 __all__ = [
     "OPENROUTER_PROVIDER",
+    "PROVIDER_OUTAGE_PARKED_DETAIL",
+    "PROVIDER_RECOVERY_QUIET_WINDOW",
     "ProviderWorkGate",
     "lock_provider_work_gate",
     "park_scoring_leases",
+    "provider_gate_closed",
+    "provider_outage_active",
+    "read_provider_circuit",
     "register_provider_probe",
     "scoring_probe_key",
 ]

@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/traces"
@@ -312,6 +313,11 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	admissionOpen = false
 
 	reservedGrant := result.grant
+	// The provider call keeps the boot config but takes the live scored
+	// provider routing, resolved for this ticket (canary or fleet).
+	cfg.ScoredProviderRouting = effectiveScoredProviderRouting(
+		admissionCfg.ScoredProviderRouting, result.ticketPurpose)
+	ctx = withOpenRouterSession(ctx, cfg.OpenRouterSessionAffinity, headers.grant.String(), headers.generation, model)
 	upstreamPayload, herr := lockedUpstreamPayload(payload, model, maxTokens, reservedGrant.BenchVersion)
 	if herr != nil {
 		// Unreachable (reasoning already validated), kept for parity with
@@ -366,12 +372,27 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// finally). The deferred copy is a no-op when the explicit call ran.
 	defer settle()
 
-	recovered, exhausted := completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
-		reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+	var recovered *chatCompletionResult
+	var exhausted *chatProviderExhausted
+	// Ditto Router dogfood: only when the competition lane is explicitly on
+	// and this agent's miner linked a consenting Ditto account. Everyone else
+	// keeps the centralized OpenRouter path below, byte for byte.
+	if d.Cfg != nil && d.Cfg.DittoRouter.RoutesLane(config.DittoRouterLaneCompetition) {
+		if onBehalfOf, linked := d.dittoRouterOnBehalfOf(ctx, reservedGrant.AgentID); linked {
+			recovered, exhausted = completeChatViaDittoRouter(ctx, d.Upstream, cfg, d.Cfg.DittoRouter,
+				upstreamPayload, model, onBehalfOf, d.sleep())
+		} else {
+			recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
+				reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+		}
+	} else {
+		recovered, exhausted = completeChatWithRecovery(ctx, d.Upstream, cfg, upstreamPayload, model,
+			reservedGrant.RouteProvider.String, quantization, promptPrice, completionPrice, d.sleep())
+	}
 	if exhausted != nil {
-		if status, overloaded := receiptFreeOverload(
-			exhausted.phases, model, reservedGrant.RouteProvider.String,
-		); overloaded {
+		if status, overloaded := receiptFreeOverload(exhausted.phases, model); overloaded {
+			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
+		} else if status, broke := gatewayCreditExhausted(exhausted.phases); broke {
 			_ = d.openProviderCircuit(ctx, now, status, exhausted.terminalErrorCode)
 		}
 	} else {

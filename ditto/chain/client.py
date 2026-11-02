@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any
+from urllib.parse import quote
+
+import httpx
 
 from ditto.chain.errors import (
     ChainAuthError,
@@ -12,6 +18,13 @@ from ditto.chain.errors import (
     ExtrinsicNotFoundError,
 )
 from ditto.chain.models import BlockInfo, ChainConfig, ExtrinsicInfo, NeuronInfo
+from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
+from ditto_screening_protocol.treasury_enforcement import TreasuryWeightCapability
+from ditto_screening_protocol.treasury_identity import (
+    TreasuryDispatchObservation,
+    read_finalized_collector_pin,
+    read_treasury_dispatch_observation,
+)
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -47,6 +60,8 @@ _TEMPO_STORAGE = "Tempo"
 _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
+_LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
+_SUBNET_OWNER_HOTKEY_STORAGE = "SubnetOwnerHotkey"
 
 
 class ChainClient:
@@ -258,6 +273,33 @@ class ChainClient:
         raw = await self._query_subtensor_storage(_WEIGHTS_RATE_LIMIT_STORAGE, netuid)
         return None if raw is None else int(raw)
 
+    async def get_last_epoch_block(self, netuid: int) -> int | None:
+        """Read the block at which the subnet's epoch last stepped.
+
+        ``SubtensorModule.LastEpochBlock(netuid)`` is the anchor of the chain's
+        stateful epoch schedule (the same storage drand 2.0 and the patched
+        Pylon image read). The weight loop commits at a fixed offset after it,
+        so every managed validator samples the ledger and commits in the same
+        part of the epoch instead of drifting on its own ``LastUpdate``.
+        ``None`` when the storage entry is empty (unknown netuid).
+
+        Raises:
+            ChainConnectionError: When the substrate node is unreachable.
+            ChainTimeoutError: When the query exceeds its timeout.
+        """
+        raw = await self._query_subtensor_storage(_LAST_EPOCH_BLOCK_STORAGE, netuid)
+        return None if raw is None else int(raw)
+
+    async def get_subnet_owner_hotkey(self, netuid: int) -> str | None:
+        """Read the chain's owner hotkey, whose registered incentive is withheld.
+
+        UID 0 is not an ownership signal: it can be occupied by another miner
+        after a deregistration. The caller must also verify this hotkey is in
+        the current registered-neuron snapshot before setting burn weights.
+        """
+        raw = await self._query_subtensor_storage(_SUBNET_OWNER_HOTKEY_STORAGE, netuid)
+        return str(raw) if raw else None
+
     async def get_commit_reveal_enabled(self, netuid: int) -> bool | None:
         """Read the subnet's ``CommitRevealWeightsEnabled`` hyperparameter.
 
@@ -293,10 +335,9 @@ class ChainClient:
 
     async def _query_subtensor_storage(self, storage_function: str, netuid: int) -> Any:
         """Query ``SubtensorModule.<storage_function>(netuid)`` at the latest block."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_SUBTENSOR_MODULE,
                     storage_function=storage_function,
@@ -399,6 +440,151 @@ class ChainClient:
             f"with {len(weights)} entries"
         )
 
+    # --- Commitments ---
+
+    def has_identity(self) -> bool:
+        """True when this client can submit identity-scoped extrinsics."""
+        return bool(self._config.identity_name and self._config.identity_token)
+
+    async def set_commitment(self, data: bytes) -> None:
+        """Publish ``data`` as this hotkey's subnet commitment via Pylon.
+
+        Used for generator-round seed commitments Platform elects this
+        validator to publish. Pylon schedules the extrinsic and returns before
+        it lands; read it back with :meth:`get_own_commitment`. The
+        Commitments pallet keeps one value per hotkey and subnet, so each call
+        overwrites the last.
+
+        Raises:
+            ChainAuthError: When the client has no identity, or Pylon refuses it.
+            ChainConnectionError: When Pylon rejects or cannot reach the chain.
+            ValueError: When ``data`` is empty or over the pallet's 128 bytes.
+        """
+        if not self.has_identity():
+            raise ChainAuthError("set_commitment requires a Pylon identity client")
+        if not data or len(data) > 128:
+            raise ValueError("commitment data must be 1..128 bytes")
+        pylon = self._ensure_pylon()
+        try:
+            await pylon.v1.identity.set_commitment(data.hex())
+        except Exception as e:
+            raise _translate_pylon_error(e, "set_commitment") from e
+        logger.info(
+            f"set_commitment submitted for netuid={self._config.netuid} "
+            f"({len(data)} bytes)"
+        )
+
+    async def get_own_commitment(self, hotkey: str) -> tuple[int, bytes] | None:
+        """Read ``hotkey``'s current subnet commitment as ``(block, data)``.
+
+        ``None`` when the hotkey has no commitment. The block is the one the
+        chain stamped the commitment at.
+        """
+        pylon = self._ensure_pylon()
+        try:
+            response = await pylon.v1.identity.get_commitment(hotkey)
+        except Exception as e:
+            translated = _translate_pylon_error(e, "get_commitment")
+            if isinstance(translated, ExtrinsicNotFoundError):
+                return None
+            raise translated from e
+        raw = str(response.commitment)
+        data = bytes.fromhex(raw.removeprefix("0x"))
+        return int(response.commitment_block_number), data
+
+    async def _weight_receipt_request(
+        self,
+        method: str,
+        suffix: str = "",
+        *,
+        body: dict[str, Any] | None = None,
+        params: dict[str, int] | None = None,
+    ) -> dict[str, Any] | None:
+        """None means known unsupported/rejected-before-create, never timeout."""
+        identity = self._config.identity_name
+        token = self._config.identity_token
+        if not identity or not token:
+            return None
+        url = (
+            f"{self._config.pylon_url.rstrip('/')}/api/_unstable/identity/"
+            f"{quote(identity, safe='')}/subnet/{self._config.netuid}"
+            f"/ditto/weight-receipts{suffix}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.request(
+                    method,
+                    url,
+                    json=body,
+                    params=params,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code in (404, 405, 501):
+                return None
+            payload = response.json()
+            if (
+                response.status_code == 503
+                and isinstance(payload, dict)
+                and payload.get("detail") == "unacknowledged receipt capacity reached"
+            ):
+                return None
+            if response.status_code != 200 or not isinstance(payload, dict):
+                raise ChainConnectionError(
+                    f"Pylon weight receipt request failed ({response.status_code})"
+                )
+            return payload
+        except httpx.TimeoutException as exc:
+            raise ChainTimeoutError(
+                "Pylon receipt outcome unknown after timeout"
+            ) from exc
+        except (httpx.HTTPError, ValueError) as exc:
+            raise ChainConnectionError("Pylon receipt outcome unknown") from exc
+
+    async def put_weights_with_receipt(
+        self, request_id: str, body: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        return await self._weight_receipt_request(
+            "PUT", f"/{quote(request_id, safe='')}", body=body
+        )
+
+    async def get_treasury_weight_capability(self) -> TreasuryWeightCapability | None:
+        """Read actual identity-scoped Pylon guard support, never an image label."""
+        identity, token = self._config.identity_name, self._config.identity_token
+        if not identity or not token:
+            return None
+        url = (
+            f"{self._config.pylon_url.rstrip('/')}/api/_unstable/identity/"
+            f"{quote(identity, safe='')}/subnet/{self._config.netuid}"
+            "/ditto/treasury-capability"
+        )
+        async with httpx.AsyncClient(timeout=3) as client:
+            response = await client.get(
+                url, headers={"Authorization": f"Bearer {token}"}
+            )
+        if response.status_code in (404, 405, 501):
+            return None
+        if response.status_code != 200:
+            raise ChainConnectionError("treasury guard capability unavailable")
+        payload = response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("invalid treasury guard capability")
+        raw = payload.get("treasury")
+        return TreasuryWeightCapability.model_validate(raw) if raw is not None else None
+
+    async def list_weight_receipts(
+        self, *, after_task_id: int = 0, limit: int = 20
+    ) -> dict[str, Any] | None:
+        return await self._weight_receipt_request(
+            "GET", params={"after_task_id": after_task_id, "limit": limit}
+        )
+
+    async def acknowledge_weight_receipt(
+        self, request_id: str, body: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        return await self._weight_receipt_request(
+            "POST", f"/{quote(request_id, safe='')}/ack", body=body
+        )
+
     # --- Success status (Pylon gap) ---
 
     async def check_extrinsic_success(
@@ -427,10 +613,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the events query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 events = await substrate.query(
                     module=_SYSTEM_MODULE,
                     storage_function="Events",
@@ -489,10 +674,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_SUBTENSOR_MODULE,
                     storage_function=_OWNER_STORAGE,
@@ -536,10 +720,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_TIMESTAMP_MODULE,
                     storage_function=_TIMESTAMP_NOW_STORAGE,
@@ -562,6 +745,94 @@ class ChainClient:
         # Substrate ``pallet_timestamp`` stores milliseconds. Convert to
         # seconds at the boundary so downstream code never sees ms.
         return int(raw) // 1000
+
+    async def get_treasury_collector_pin(
+        self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
+    ) -> TreasuryLedgerPin:
+        """Revalidate collector identity with finalized read-only storage queries."""
+
+        try:
+            async with (
+                asyncio.timeout(8),
+                self._live_substrate() as substrate,
+            ):
+                return await read_finalized_collector_pin(
+                    substrate,
+                    policy,
+                    first_block=first_block,
+                    pinned_block=pinned_block,
+                )
+        except ValueError:
+            raise
+        except TimeoutError as error:
+            raise ChainTimeoutError(
+                "finalized treasury identity read timed out"
+            ) from error
+        except Exception as error:
+            raise ChainConnectionError(
+                "finalized treasury identity unavailable"
+            ) from error
+
+    async def get_treasury_dispatch_observation(
+        self, policy: TreasuryEmissionPolicy
+    ) -> TreasuryDispatchObservation:
+        """Read fresh finalized identity and epoch from the configured chain."""
+
+        try:
+            async with (
+                asyncio.timeout(8),
+                self._live_substrate() as substrate,
+            ):
+                return await read_treasury_dispatch_observation(substrate, policy)
+        except ValueError:
+            raise
+        except TimeoutError as error:
+            raise ChainTimeoutError(
+                "treasury dispatch observation timed out"
+            ) from error
+        except Exception as error:
+            raise ChainConnectionError(
+                "treasury dispatch observation unavailable"
+            ) from error
+
+    def _live_substrate_urls(self) -> tuple[str, ...]:
+        """Return the configured provider first, then the network's entrypoint."""
+        urls = (
+            [self._config.subtensor_rpc_url] if self._config.subtensor_rpc_url else []
+        )
+        urls.append(self._substrate_url())
+        return tuple(dict.fromkeys(urls))
+
+    @asynccontextmanager
+    async def _live_substrate(self) -> AsyncIterator[Any]:
+        """Open a substrate connection on the first provider that accepts it.
+
+        The public entrypoint rejects websocket handshakes with HTTP 429 under
+        load, so a failed connect falls through to the next provider. Failures
+        after the connection opens propagate unchanged.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            stack = AsyncExitStack()
+            try:
+                substrate = await stack.enter_async_context(
+                    AsyncSubstrateInterface(url=url)
+                )
+            except Exception:
+                await stack.aclose()
+                if index + 1 < len(urls):
+                    logger.warning(
+                        "substrate provider %d of %d refused; trying next",
+                        index + 1,
+                        len(urls),
+                    )
+                    continue
+                raise
+            async with stack:
+                yield substrate
+            return
 
     def _substrate_url(self) -> str:
         """Resolve substrate WebSocket URL for the configured network identifier."""

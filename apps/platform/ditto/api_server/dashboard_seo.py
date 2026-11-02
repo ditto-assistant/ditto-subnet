@@ -51,6 +51,8 @@ STATIC_DOC_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 
 _SNAPSHOT_TTL_SECONDS = 30.0
 _SNAPSHOT_FAILURE_TTL_SECONDS = 5.0
+_SNAPSHOT_STALE_SECONDS = 120.0
+_SNAPSHOT_WAIT_SECONDS = 0.5
 _DEFAULT_ORIGIN = "https://dittobench.ai"
 # These aliases serve the same dashboard (infra/ansible/host_vars/
 # ditto-platform-prod.yml). Advertising each request host as canonical splits
@@ -110,7 +112,7 @@ CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
         "Submission pipeline · Ditto SN118",
         (
             "Every SN118 submission from upload to scored: admission, "
-            "validation, and integrity review."
+            "validation, and source review."
         ),
     ),
     (
@@ -160,6 +162,37 @@ CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
     ),
 )
 
+CRAWLABLE_PAGES += (
+    (
+        "/gamma",
+        "gamma",
+        "Gamma service treasury · Ditto SN118",
+        "Service funding policy and finalized public wallet receipts. "
+        "Chain transfers and confirmed service credits are separate evidence.",
+    ),
+    (
+        "/activity",
+        "activity",
+        "Admin activity · Ditto SN118",
+        "Public audit history of Backroom actions, settings changes, "
+        "and canary requests.",
+    ),
+    (
+        "/bounties",
+        "bounties",
+        "Build bounties · Ditto SN118",
+        "Paid build work on Ditto repositories: signed terms, open slots, "
+        "claims, review decisions, awards, and payments.",
+    ),
+    (
+        "/generators",
+        "generators",
+        "Generator competition · Ditto SN118",
+        "Case-generator rounds: committed seeds, per-generator case outcomes, "
+        "panel standings, projected payouts, and the emission split.",
+    ),
+)
+
 CRAWLABLE_PAGE_PATHS: tuple[str, ...] = tuple(
     path for path, _page, _title, _desc in CRAWLABLE_PAGES if path != "/"
 )
@@ -184,8 +217,10 @@ _ENTITY_PATH = re.compile(
     r"/(?P<ident>[^/]+)/?$"
 )
 
-_DEFAULT_OG_IMAGE = "/assets/paperditto-512.png"
-_DEFAULT_OG_ALT = "Ditto paper mascot"
+# The brand-kit social card (1200x630): wordmark on the Carbon canvas.
+_DEFAULT_OG_IMAGE = "/assets/dittobench-og.png"
+_DEFAULT_OG_ALT = "Ditto Subnet 118 leaderboard"
+_ORGANIZATION_LOGO = "/assets/icons/app-icon-512.png"
 
 
 @dataclass(frozen=True)
@@ -246,12 +281,16 @@ class _SnapshotCache:
 
 _cache_lock = asyncio.Lock()
 _cached: _SnapshotCache | None = None
+_refresh_task: asyncio.Task[None] | None = None
 
 
 def reset_seo_cache() -> None:
     """Drop the process-local snapshot (tests)."""
-    global _cached
+    global _cached, _refresh_task
     _cached = None
+    if _refresh_task is not None:
+        _refresh_task.cancel()
+    _refresh_task = None
 
 
 def public_origin(request: Request) -> str:
@@ -332,6 +371,9 @@ def llms_txt(origin: str) -> str:
             f"- Screener fleet: {origin}/operations/screeners",
             f"- Recent submissions: {origin}/submissions",
             f"- ATH reviews: {origin}/ath",
+            f"- Gamma service treasury: {origin}/gamma",
+            f"- Build bounties: {origin}/bounties",
+            f"- Generator competition: {origin}/generators",
             f"- Miner profile: {origin}/miner/{{hotkey}}",
             f"  or {origin}/h/{{handle}}",
             f"- Agent evidence: {origin}/agent/{{agent_id}}",
@@ -394,7 +436,9 @@ def llms_full_txt(origin: str) -> str:
             "| `/bench/config` | Frozen scoring setup for the active bench |",
             "| `/bench/glossary` | Metric and category vocabulary |",
             "| `/bench/timeline` | Historical bench releases |",
-            "| `/bench/rollout` | In-progress bench version collection |",
+            "| `/bench/rollout` | Bench rollout progress and promotion gates |",
+            "| `/bounties` | Build bounties: current terms and slot counts |",
+            "| `/bounties/{{id}}` | One bounty: revisions, slots, and history |",
             "",
             "Source tarballs become downloadable only after the public-source",
             "window; review-held and rejected source stays private.",
@@ -449,6 +493,9 @@ def sitemap_xml(origin: str, snapshot: SeoSnapshot | None) -> str:
         (origin + "/operations/builds", "0.5", "hourly"),
         (origin + "/submissions", "0.5", "hourly"),
         (origin + "/ath", "0.4", "hourly"),
+        (origin + "/gamma", "0.4", "hourly"),
+        (origin + "/bounties", "0.4", "hourly"),
+        (origin + "/generators", "0.4", "hourly"),
     ]
     if snapshot is not None:
         seen: set[str] = set()
@@ -512,24 +559,48 @@ def snapshot_from_leaderboard(board: PublicLeaderboardResponse) -> SeoSnapshot:
 
 
 async def load_seo_snapshot(request: Request) -> SeoSnapshot | None:
-    """Return the cached board projection, refreshing at most every 30s.
+    """Serve HTML promptly even if the full leaderboard read is slow.
 
-    Fail closed: no session maker, or any error while building the public
-    board, yields ``None`` rather than a placeholder ranking.
+    A fresh snapshot is preferred. During a refresh, a bounded-old snapshot
+    remains usable for crawler metadata; on a cold start the static shell is
+    preferable to making every browser wait for the board query.
     """
-    global _cached
+    global _refresh_task
     now = time.monotonic()
     cached = _cached
     if cached is not None and now < cached.expires_at:
         return cached.snapshot
-
-    async with _cache_lock:
-        cached = _cached
-        if cached is not None and time.monotonic() < cached.expires_at:
+    if _refresh_task is None or _refresh_task.done():
+        _refresh_task = asyncio.create_task(_refresh_seo_snapshot(request))
+    if cached is not None:
+        if (
+            cached.snapshot is not None
+            and now < cached.expires_at + _SNAPSHOT_STALE_SECONDS
+        ):
             return cached.snapshot
+        if cached.snapshot is None:
+            return None
+    refresh_task = _refresh_task
+    assert refresh_task is not None
+    try:
+        await asyncio.wait_for(asyncio.shield(refresh_task), _SNAPSHOT_WAIT_SECONDS)
+    except TimeoutError:
+        return None
+    except asyncio.CancelledError:
+        current_task = asyncio.current_task()
+        if refresh_task.cancelled() and (
+            current_task is None or not current_task.cancelling()
+        ):
+            return None
+        raise
+    return _cached.snapshot if _cached is not None else None
+
+
+async def _refresh_seo_snapshot(request: Request) -> None:
+    global _cached
+    async with _cache_lock:
         snapshot, ttl = await _read_snapshot(request)
         _cached = _SnapshotCache(expires_at=time.monotonic() + ttl, snapshot=snapshot)
-        return snapshot
 
 
 async def _read_snapshot(request: Request) -> tuple[SeoSnapshot | None, float]:
@@ -637,7 +708,7 @@ def _og_image(
     """Return ``(url, alt, is_default_logo)``.
 
     Miner / handle / agent pages use the public avatar when the board has
-    one. Board pages and miners without a picture keep the paper mascot.
+    one. Board pages and miners without a picture keep the brand card.
     """
     miner = _entity_miner(path, snapshot)
     if miner is not None and miner.avatar_url:
@@ -715,8 +786,8 @@ def _render_head(
     if is_logo:
         image_extras = (
             '    <meta property="og:image:type" content="image/png" />\n'
-            '    <meta property="og:image:width" content="512" />\n'
-            '    <meta property="og:image:height" content="512" />\n'
+            '    <meta property="og:image:width" content="1200" />\n'
+            '    <meta property="og:image:height" content="630" />\n'
         )
     else:
         image_extras = ""
@@ -821,7 +892,7 @@ def _organization_schema(origin: str) -> dict[str, Any]:
         "@type": "Organization",
         "name": "Ditto",
         "url": "https://heyditto.ai",
-        "logo": origin + "/assets/paperditto-512.png",
+        "logo": origin + _ORGANIZATION_LOGO,
         "description": (
             "Ditto is the smart home for your agents. SN118 is the public "
             "Bittensor subnet that scores miner-submitted memory agents "

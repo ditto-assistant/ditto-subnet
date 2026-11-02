@@ -27,8 +27,11 @@ from ditto.validator.weights import (
     _entry_confirmations,
     _entry_seed_composites,
     _entry_stderr,
+    _indifference_band,
     _paired_dethrone,
+    _score_ceiling_deadlocked,
     _unpaired_band,
+    _weight_tied,
     compute_weights,
     contested_confirmation_set,
     select_champion,
@@ -102,6 +105,138 @@ def _champ() -> Any:
     return _e("champ", 0.80, stderr=0.03, minutes=0)
 
 
+class TestCappedStatisticalBand:
+    _SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
+
+    @pytest.mark.parametrize("champion_score", [0.90, 0.9975])
+    def test_low_variance_difference_below_margin_does_not_join_tie_or_cohort(
+        self, champion_score: float
+    ) -> None:
+        seeds = list(range(15))
+        champion = _e(
+            "champ",
+            champion_score,
+            confirmations=[champion_score] * 15,
+            seeds=seeds,
+        )
+        candidate = _e(
+            "candidate",
+            champion_score - 0.004,
+            confirmations=[
+                champion_score - (0.003 if seed % 2 else 0.005) for seed in seeds
+            ],
+            seeds=seeds,
+            minutes=1,
+        )
+        paired = _paired_dethrone(candidate, champion, 1.64)
+        assert paired is not None
+        assert 0.0 < 1.64 * paired[2] < abs(paired[0]) < 0.007
+        assert not _weight_tied(
+            candidate,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        assert not _beats(
+            candidate,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        if champion_score > 0.99:
+            assert _score_ceiling_deadlocked(
+                candidate,
+                champion,
+                margin=0.007,
+                dethrone_z=1.64,
+                statistical_band_cap=True,
+            )
+        assert compute_weights(
+            [champion, candidate],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+            tie_pooling=True,
+            statistical_band_cap=True,
+        ) == {"champ": 0.65, "candidate": 0.14}
+
+    def test_noisy_fresh_challenger_can_dethrone_inside_raw_band(self) -> None:
+        champion = _e("champ", 0.90, stderr=0.02)
+        challenger = _e("chall", 0.92, stderr=0.02, minutes=1)
+
+        assert 1.64 * math.sqrt(2 * 0.02**2) > 0.02
+        assert _unpaired_band(
+            challenger, champion, 0.007, 1.64, statistical_band_cap=True
+        ) == pytest.approx(0.014)
+        assert _beats(
+            challenger,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        assert not _beats(challenger, champion, margin=0.007, dethrone_z=1.64)
+
+    def test_variance_inflation_does_not_pool_champion_share(self) -> None:
+        seeds = list(range(15))
+        champion = _e("champ", 0.90, confirmations=[0.90] * 15, seeds=seeds)
+        erratic = _e(
+            "erratic",
+            11 / 15,
+            confirmations=[1.0] * 11 + [0.0] * 4,
+            seeds=seeds,
+            minutes=1,
+        )
+        paired = _paired_dethrone(erratic, champion, 1.64)
+
+        assert paired is not None
+        assert abs(paired[0]) > _indifference_band(0.007, 1.64 * paired[2], capped=True)
+        assert abs(paired[0]) < 1.64 * paired[2]
+        assert not _weight_tied(
+            erratic,
+            champion,
+            margin=0.007,
+            dethrone_z=1.64,
+            statistical_band_cap=True,
+        )
+        assert _weight_tied(erratic, champion, margin=0.007, dethrone_z=1.64)
+        weights = compute_weights(
+            [champion, erratic],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+            tie_pooling=True,
+            statistical_band_cap=True,
+        )
+        assert weights == {"champ": 0.65, "erratic": 0.14}
+
+    def test_ceiling_deadlock_does_not_admit_erratic_cohort_member(self) -> None:
+        seeds = list(range(15))
+        champion = _e("champ", 0.9975, confirmations=[0.9975] * 15, seeds=seeds)
+        erratic = _e(
+            "erratic",
+            11 / 15,
+            confirmations=[1.0] * 11 + [0.0] * 4,
+            seeds=seeds,
+            minutes=1,
+        )
+
+        weights = compute_weights(
+            [champion, erratic],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+            tie_pooling=True,
+            statistical_band_cap=True,
+        )
+        assert weights == {"champ": 0.65, "erratic": 0.14}
+
+
 class TestEntryStderr:
     def test_absent_field_is_none(self) -> None:
         assert _entry_stderr(_e("a", 0.5)) is None
@@ -139,19 +274,6 @@ class TestEfficiencyStderrScale:
 
 
 class TestVersionedHighScoreBandDecay:
-    def test_pre_v6_band_is_byte_identical(self) -> None:
-        champion = _e("champ", 0.95, bench_version=5)
-        challenger = _e("chall", 0.956, bench_version=5, minutes=1)
-
-        assert _dethrone_band_scale(challenger, champion, 0.95) == 1.0
-        assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
-
-    def test_mixed_version_comparison_keeps_legacy_band(self) -> None:
-        champion = _e("champ", 0.95, bench_version=6)
-        challenger = _e("chall", 0.956, bench_version=5, minutes=1)
-
-        assert _dethrone_band_scale(challenger, champion, 0.95) == 1.0
-
     def test_v6_below_decay_start_keeps_full_band(self) -> None:
         champion = _e("champ", 0.60, bench_version=6)
         challenger = _e("chall", 0.606, bench_version=6, minutes=1)
@@ -159,7 +281,7 @@ class TestVersionedHighScoreBandDecay:
         assert _dethrone_band_scale(challenger, champion, 0.60) == 1.0
         assert _beats(challenger, champion, margin=0.007, dethrone_z=0.0) is False
 
-    @pytest.mark.parametrize("bench_version", [6, 7, 8])
+    @pytest.mark.parametrize("bench_version", [8])
     def test_v6_and_later_decay_the_band_near_the_ceiling(
         self, bench_version: int
     ) -> None:
@@ -1022,10 +1144,10 @@ class TestPairedDethrone:
 
 class TestBeatsPaired:
     def test_tight_paired_lead_dethrones_where_unpaired_holds(self) -> None:
-        # Both carry stderr 0.03 AND aligned seeds, with a steady +0.05 per-seed
+        # Both carry stderr 0.03 AND aligned seeds, with a steady +0.03 per-seed
         # lead. PAIRED: se_diff ~ 0, so the fixed 0.02-point test margin wins and
-        # the 0.05 lead clears it. UNPAIRED (seeds stripped): the independent-sum
-        # band 1.64*sqrt(0.03^2 + 0.03^2) = 0.070 holds the same 0.05 lead. Same
+        # the 0.03 lead clears it. UNPAIRED (seeds stripped): the independent-sum
+        # term is 0.070 and holds the 0.03 lead. Same
         # data, opposite verdict -- that is exactly the CRN pairing win.
         champ = _e(
             "champ",
@@ -1037,18 +1159,18 @@ class TestBeatsPaired:
         )
         chal = _e(
             "chal",
-            0.85,
+            0.83,
             stderr=0.03,
-            confirmations=[0.85, 0.84, 0.86],
+            confirmations=[0.83, 0.82, 0.84],
             seeds=[1, 2, 3],
             minutes=1,
         )
         assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is True
         chal_unpaired = _e(
             "chal",
-            0.85,
+            0.83,
             stderr=0.03,
-            confirmations=[0.85, 0.84, 0.86],
+            confirmations=[0.83, 0.82, 0.84],
             minutes=1,
         )
         assert _beats(chal_unpaired, champ, margin=0.02, dethrone_z=1.64) is False
@@ -1097,10 +1219,10 @@ class TestContestedConfirmationSet:
         assert contested_confirmation_set([old, new], **self._KW) == []
 
     def test_z_band_widens_the_contested_zone(self) -> None:
-        # Deficit 0.05 clears the fixed 0.02-point margin but sits inside the z band
-        # (1.64 * sqrt(0.03^2 + 0.03^2) ~= 0.0696), so the pair is contested.
+        # Deficit 0.03 clears the fixed 0.02-point margin but sits inside the
+        # legacy statistical band of about 0.070, so the pair is contested.
         champ = _e("5A" + "a" * 44, 0.80, stderr=0.03)
-        chall = _e("5B" + "b" * 44, 0.75, stderr=0.03, minutes=1)
+        chall = _e("5B" + "b" * 44, 0.77, stderr=0.03, minutes=1)
         got = contested_confirmation_set(
             [champ, chall], current_version=1, margin=0.02, dethrone_z=1.64
         )
@@ -1472,3 +1594,119 @@ class TestCeilingCappedBand:
             ceiling_band_clamp=True,
         )
         assert moved[perfect.miner_hotkey] == pytest.approx(0.65)
+
+
+class TestCrownIncumbency:
+    """``crown_mode: incumbent`` defends the crown from the served incumbent.
+
+    The 2026-09-09 flap: UID 104's lineage anchor was older than UID 43's, so
+    the classic walk made 104 the provisional champion on every read and 43 held
+    the crown only while its official lead exceeded the (clamped) band. As the
+    continual mean wobbled by a quantum the crown flipped 43 -> 104 -> 43 and
+    eight validators took 0.42 vTrust twice. With the incumbent served, 43 opens
+    the walk and 104 has to *clear* the band to take it back.
+    """
+
+    _SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
+
+    def _flap(self) -> tuple[Any, Any]:
+        # Senior lineage (older first_seen) trailing the holder by less than
+        # the decayed 0.007 band at 0.80 -- exactly the shape of the live flap.
+        senior = _e("5A" + "a" * 44, 0.7981, bench_version=12, minutes=0)
+        holder = _e("5B" + "b" * 44, 0.8010, bench_version=12, minutes=60)
+        return senior, holder
+
+    def test_classic_walk_hands_the_crown_to_the_senior_lineage(self) -> None:
+        senior, holder = self._flap()
+        champion = select_champion([holder, senior], margin=0.007, dethrone_z=1.64)
+        assert champion is not None and champion.agent_id == senior.agent_id
+
+    def test_incumbent_keeps_the_crown_inside_the_band(self) -> None:
+        senior, holder = self._flap()
+        champion = select_champion(
+            [holder, senior],
+            margin=0.007,
+            dethrone_z=1.64,
+            ceiling_band_clamp=True,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert champion is not None and champion.agent_id == holder.agent_id
+        weights = compute_weights(
+            [holder, senior],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+            ceiling_band_clamp=True,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert weights[holder.miner_hotkey] == pytest.approx(0.65)
+        assert weights[senior.miner_hotkey] == pytest.approx(0.14)
+
+    def test_senior_lineage_retakes_only_by_clearing_the_band(self) -> None:
+        holder = _e("5B" + "b" * 44, 0.8010, bench_version=12, minutes=60)
+        senior = _e("5A" + "a" * 44, 0.8300, bench_version=12, minutes=0)
+        champion = select_champion(
+            [holder, senior],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert champion is not None and champion.agent_id == senior.agent_id
+
+    def test_later_challengers_still_walk_in_first_seen_order(self) -> None:
+        incumbent = _e("5A" + "a" * 44, 0.80, bench_version=12, minutes=0)
+        first = _e("5B" + "b" * 44, 0.90, bench_version=12, minutes=10)
+        second = _e("5C" + "c" * 44, 0.9005, bench_version=12, minutes=20)
+        # Both clear the incumbent; the second is inside the band of the first,
+        # so the earlier arrival keeps the crown among non-incumbents.
+        champion = select_champion(
+            [second, first, incumbent],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=incumbent.agent_id,
+        )
+        assert champion is not None and champion.agent_id == first.agent_id
+
+    def test_absent_incumbent_falls_back_to_the_classic_walk(self) -> None:
+        senior, holder = self._flap()
+        classic = select_champion([holder, senior], margin=0.007, dethrone_z=1.64)
+        gone = select_champion(
+            [holder, senior],
+            margin=0.007,
+            dethrone_z=1.64,
+            incumbent_agent_id=uuid4(),
+        )
+        assert classic is not None and gone is not None
+        assert gone.agent_id == classic.agent_id == senior.agent_id
+
+    def test_incumbency_is_off_by_default_everywhere(self) -> None:
+        senior, holder = self._flap()
+        entries = [holder, senior]
+        assert (
+            select_champion(entries, margin=0.007, dethrone_z=1.64).agent_id  # type: ignore[union-attr]
+            == senior.agent_id
+        )
+        assert compute_weights(
+            entries,
+            margin=0.007,
+            tail_size=4,
+            rank_shares=self._SHARES,
+            dethrone_z=1.64,
+        )[senior.miner_hotkey] == pytest.approx(0.65)
+        assert (
+            contested_confirmation_set(
+                entries, current_version=12, margin=0.007, dethrone_z=1.64
+            )[0].agent_id
+            == senior.agent_id
+        )
+        assert (
+            contested_confirmation_set(
+                entries,
+                current_version=12,
+                margin=0.007,
+                dethrone_z=1.64,
+                incumbent_agent_id=holder.agent_id,
+            )[0].agent_id
+            == holder.agent_id
+        )

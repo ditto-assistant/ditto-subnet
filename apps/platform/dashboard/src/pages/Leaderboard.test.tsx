@@ -21,6 +21,8 @@ const leaderboardCss = readFileSync(
   join(HERE, "..", "styles", "pages", "leaderboard.css"),
   "utf-8",
 );
+const tokenCss = readFileSync(join(HERE, "..", "styles", "tokens.css"), "utf-8");
+const widgetCss = readFileSync(join(HERE, "..", "styles", "widgets.css"), "utf-8");
 const cssNorm = leaderboardCss.replace(/\s+/g, " ");
 
 const leaderboard = loadFixture<LeaderboardPayload>("leaderboard");
@@ -283,6 +285,76 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     // Emissions is present but deliberately not sortable; its tip explains
     // the KOTH role.
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
+  });
+
+  it("renders no Coding row even if a deprecated coding_shadow field arrives", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  coding_shadow: {
+                    status: "complete",
+                    score: 0,
+                    result_count: 3,
+                    score_quorum: 3,
+                    bench_version: 12,
+                    coding_contract_version: 1,
+                    completed_at: "2026-09-10T20:00:00Z",
+                    shadow_only: true,
+                    weight_eligible: false,
+                  },
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    expect(document.querySelectorAll("#rows tr[data-i]:first-child .score-stack-row")).toHaveLength(
+      3,
+    );
+    expect(document.querySelector(".coding-shadow-row")).toBeNull();
+    expect(document.querySelector("[data-coding-filter]")).toBeNull();
+    expect(document.querySelector(".coding-shadow-summary")).toBeNull();
+  });
+
+  it("keeps a miner's picture on the same line as the name it belongs to", async () => {
+    // The identity line wraps its chips, so avatar and name have to be ONE
+    // flex item: as siblings the name's 120px basis plus the picture
+    // overflowed the compact pane's narrow identity column and dropped the
+    // name to the line below, stranding the avatar above it.
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? { ...entry, avatar_url: "/api/v1/public/miners/" + entry.miner_hotkey + "/avatar" }
+              : { ...entry, avatar_url: null },
+          ),
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelector("img.miner-avatar")).toBeTruthy());
+    const lead = document.querySelector(".winner-name .winner-name-lead") as HTMLElement;
+    expect(lead.querySelector("img.miner-avatar")).toBeTruthy();
+    expect(lead.querySelector("[data-entity-link]")).toBeTruthy();
+    // A row without a picture keeps the same wrapper, so both shapes size alike.
+    const rows = [...document.querySelectorAll("#rows tr[data-i] .winner-name")];
+    expect(rows.length).toBeGreaterThan(1);
+    for (const row of rows) expect(row.querySelector(".winner-name-lead")).toBeTruthy();
+    expect(cssNorm).toContain(
+      ".winner-name-lead { display: flex; min-width: 0; flex: 1 1 120px; align-items: center; gap: 7px; }",
+    );
   });
 
   it("shows the fold crown clock, not this tarball's upload", async () => {
@@ -587,6 +659,7 @@ describe("board view controls (row 1 slice)", () => {
                         agent_name: "prior-version",
                         agent_version: 4,
                         canonical_composite: 0.91,
+                        official_composite: 0.786333,
                         confirmation_seed_depth: 1,
                       },
                     ],
@@ -613,6 +686,9 @@ describe("board view controls (row 1 slice)", () => {
     });
     expect(chip).toHaveClass("settled");
     expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("this exact submission"));
+    const score = document.querySelector(".family-child:not([hidden]) .family-member-score");
+    expect(score?.textContent).toBe("0.786333");
+    expect(score).toHaveAttribute("title", expect.stringContaining("Official composite"));
   });
 
   it("labels all v9 confirmation states and suppresses pending rows in enforce mode", async () => {
@@ -753,6 +829,108 @@ describe("board view controls (row 1 slice)", () => {
     expect(longmemRow?.querySelector(".mval")?.textContent).toBe("0.000");
   });
 
+  it("shows router shadow placeholders while measurements are queued or running", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          router_shadow_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  router_shadow_status: index === 0 ? "queued" : "running",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelectorAll(".router-shadow-chip")).toHaveLength(2));
+    expect(el("leaderboard-notice")).toHaveTextContent("Router shadow is active");
+    const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
+    for (const label of ["Router shadow queued", "Router shadow running"]) {
+      const row = rows.find((candidate) => candidate.textContent?.includes(label));
+      expect(row).toBeTruthy();
+    }
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    expect(routerRow?.querySelector(".mval")?.textContent).toBe("queued");
+    expect(routerRow?.querySelector(".bar.router")).toBeNull();
+  });
+
+  it("shows the measured router shadow composite with chip, bar, and no weight language", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          router_shadow_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  router_shadow_composite: 0.333333,
+                  router_shadow_status: "measured",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelector(".router-shadow-chip")?.textContent).toBe("Router 0.333"),
+    );
+    const chip = document.querySelector(".router-shadow-chip");
+    expect(chip?.className).toContain("settled");
+    expect(chip?.getAttribute("data-tooltip")).toContain("does not change ranking or emissions");
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    expect(routerRow?.querySelector(".mval")?.textContent).toBe("0.333");
+    expect(routerRow?.querySelector(".bar.router")).toBeTruthy();
+  });
+
+  it("renders no router chip, placeholder, or notice outside router shadow mode", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index < 2
+              ? {
+                  ...entry,
+                  router_shadow_status: index === 0 ? "queued" : "running",
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelector(".router-shadow-chip")).toBeNull());
+    expect(el("leaderboard-notice").textContent).not.toContain("Router shadow is active");
+    const routerRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "Router",
+    );
+    // Like LongMem, a measured composite renders data-driven regardless of
+    // mode, but unmetered rows only ever appear via the shadow-mode gate.
+    expect(routerRow).toBeUndefined();
+  });
+
+  it("keeps a dedicated router bar encoding in both modes", () => {
+    expect(tokenCss.match(/--router:/g)).toHaveLength(2);
+    expect(widgetCss).toMatch(/\.bar\.router\s*\{\s*background: var\(--router\);\s*\}/);
+  });
+
   it("defaults to the Scored tab with live counts (provisional is pre-quorum feedback)", async () => {
     renderPage();
     await waitForBoard();
@@ -880,6 +1058,41 @@ describe("board view controls (row 1 slice)", () => {
     expect(document.querySelector(".run-cost-cell")?.textContent).toContain("7 completed");
   });
 
+  it("labels latency as a per-case median over the run's own case count", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, i) => ({
+            ...entry,
+            median_ms: 51_000,
+            n: i === 0 ? 351 : 250,
+          })),
+        };
+      },
+    });
+    await waitForBoard();
+    const th = document.querySelector('th[data-sort="latency"]') as HTMLElement;
+    expect(th).toHaveTextContent("Median case latency");
+    const tip = th.querySelector(".tip")?.getAttribute("data-tooltip") ?? "";
+    expect(tip).toContain("not total run time");
+    expect(tip).not.toMatch(/\d+ cases/);
+    await waitFor(() =>
+      expect(document.querySelector("#rows tr[data-i] td.lat")).toHaveTextContent("51 s"),
+    );
+    const counts = document.querySelectorAll("#rows tr[data-i] td.lat .cases");
+    expect(counts[0]).toHaveTextContent("median/case · 351 cases");
+    expect(counts[1]).toHaveTextContent("median/case · 250 cases");
+    const cell = document.querySelector("#rows tr[data-i] td.lat") as HTMLElement;
+    expect(cell).toHaveAttribute(
+      "title",
+      "51 s median per case across the run's 351 scored cases. Advisory: latency does not enter the score.",
+    );
+    expect(cssNorm).toContain('.board #board td.lat::before { content: "Median case latency"; }');
+  });
+
   it("opens a row's miner drill-down route on click (plain tabbable tr, no role=button)", async () => {
     renderPage();
     await waitForBoard();
@@ -956,6 +1169,52 @@ describe("dethrone floor + rollout strip (row 36)", () => {
     );
   });
 
+  it("names the scoring version and the paying version apart mid-rollout", async () => {
+    const collecting = (body: unknown): LeaderboardPayload => ({
+      ...(body as LeaderboardPayload),
+      selection_mode: "authoritative",
+      active_bench_version: 7,
+      desired_bench_version: 8,
+      current_bench_version: 8,
+      scoring_bench_version: 8,
+      emission_bench_version: 7,
+    });
+    renderPage({
+      patch: (name, body) => (name === "leaderboard" ? collecting(body) : body),
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("leaderboard-version-context").textContent).toContain(
+        "Rows rank by their settled v7 score while v8 collects",
+      ),
+    );
+    // The half miners read as a stalled rollout: v8 is being scored, v7 pays.
+    expect(el("leaderboard-version-context").textContent).toContain(
+      "Validator weights stay on v7 until the v8 rollout fully activates",
+    );
+  });
+
+  it("stops splitting the versions once the rollout has activated", async () => {
+    const activated = (body: unknown): LeaderboardPayload => ({
+      ...(body as LeaderboardPayload),
+      selection_mode: "authoritative",
+      active_bench_version: 8,
+      desired_bench_version: 8,
+      current_bench_version: 8,
+      scoring_bench_version: 8,
+      emission_bench_version: 8,
+    });
+    renderPage({
+      patch: (name, body) => (name === "leaderboard" ? activated(body) : body),
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("leaderboard-version-context").textContent).toBe(
+        "This pool drives validator weights.",
+      ),
+    );
+  });
+
   it("keeps a superseded rollout from reading as in progress", async () => {
     const superseded = (body: unknown): RolloutState => ({
       ...(body as RolloutState),
@@ -975,6 +1234,72 @@ describe("dethrone floor + rollout strip (row 36)", () => {
     expect(el("rollout-note").textContent).toBe(
       "Weights remain on v7 throughout. A superseded rollout never moves emissions.",
     );
+  });
+
+  // #2079 follow-up: #2098 names the board's scoring and emission versions.
+  // The strip answers the next question, what emissions are waiting on, from
+  // Platform's own barrier count and promotion sentence.
+  it("names scoring vs emissions and carries the served promotion gate mid-rollout", async () => {
+    const requirement =
+      "Bench v8 scoring is in progress; Bench v7 still controls emissions. Emission " +
+      "authority moves to v8 only once the first 5 inherited priority-cohort positions " +
+      "each hold a complete 3-score v8 quorum.";
+    const collecting = (body: unknown): RolloutState => ({
+      ...(body as RolloutState),
+      active_version: 7,
+      desired_version: 8,
+      status: "collecting",
+      priority_complete: false,
+      priority_cohort_size: 5,
+      // Four finished leaders plus a banned one the barrier skips: the served
+      // count says 5, the members alone could only ever show 4.
+      priority_cohort_ready_count: 5,
+      members: [
+        { position: 1, score_count: 3 },
+        { position: 2, score_count: 3 },
+        { position: 3, score_count: 0 },
+        { position: 4, score_count: 3 },
+        { position: 5, score_count: 3 },
+      ],
+      promotion_pending: true,
+      promotion_requirement: requirement,
+    });
+    renderPage({
+      patch: (name, body) => {
+        if (name === "bench-rollout") return collecting(body);
+        if (name === "leaderboard")
+          return {
+            ...(body as LeaderboardPayload),
+            current_bench_version: 8,
+            scoring_bench_version: 8,
+            active_bench_version: 7,
+            emission_bench_version: 7,
+            desired_bench_version: 8,
+          };
+        return body;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("rollout-head").textContent).toContain(
+        "v8 scoring in progress · v7 controls emissions",
+      ),
+    );
+    expect(el("rollout-progress").textContent).toContain("5 of 5");
+    expect(el("rollout-progress").textContent).toContain(
+      "This priority-cohort quorum is the first gate emissions wait on.",
+    );
+    expect(el("rollout-promotion").textContent).toBe(requirement);
+  });
+
+  it("shows no pending promotion once the rollout has activated", async () => {
+    // The stock fixture is the completed transition: v7 activated and paying.
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(el("rollout-head").textContent).toContain("activated"));
+    expect(el("rollout-head").textContent).toContain("v7 controls emissions");
+    expect(el("rollout-head").textContent).not.toContain("scoring in progress");
+    expect(document.getElementById("rollout-promotion")).toBeNull();
   });
 });
 
@@ -1265,6 +1590,39 @@ describe("registration-aware crown clarity", () => {
   });
 });
 
+describe("provisional champion (protocol 28)", () => {
+  it("keeps the held champion crowned and never presents its share as paid", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            champion_reward_eligible: false,
+            provisional_champion: true,
+            recipients: (payload.emissions?.recipients ?? []).map((recipient) =>
+              recipient.role === "champion" ? { ...recipient, paid: false } : recipient,
+            ),
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("emissions-title").textContent).toContain(championEntry.agent_name as string),
+    );
+    expect(el("emissions-title").textContent).toContain("holds the crown provisionally");
+    expect(el("emissions-title").textContent).toContain("unpaid while its review is open");
+    expect(el("emissions-title").textContent).not.toContain("receives");
+    const championRow = Array.from(document.querySelectorAll("#rows tr[data-i]")).find((row) =>
+      row.textContent?.includes(championEntry.agent_name as string),
+    ) as HTMLElement;
+    expect(championRow.querySelector(".emission-badge.champion")?.textContent).toContain("unpaid");
+  });
+});
+
 // ── Row 1 (chip vocabulary slice): the composite cell chips ──
 describe("composite cell chips (row 1 slice)", () => {
   it("distinguishes the active seed window from legacy recorded history", async () => {
@@ -1455,5 +1813,48 @@ describe("tooltip description ids", () => {
 
     expect(referenced.size).toBeGreaterThan(20);
     expect(ambiguous).toEqual([]);
+  });
+
+  it("names the pinned ledger, the next-pin verdict, and fleet agreement from the fold", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(el("emissions-next-pin").classList.contains("show")).toBe(true));
+    const line = el("emissions-next-pin").textContent ?? "";
+    // Identity comes off emissions.ledger_pin; the verdict off next_pin_projection.
+    expect(line).toContain("Validators are folding pin #24,281 · block 8,741,511.");
+    expect(line).toContain("crown holds");
+    expect(line).toContain("defended from the previous pin");
+    await waitFor(() =>
+      expect(el("chain-pin-agreement").textContent).toContain(
+        "8 of 12 validator vectors match pin #24,281",
+      ),
+    );
+    // The per-epoch record renders under the board on this page.
+    await waitFor(() => expect(el("crown-history").textContent).toContain("pin #24,281"));
+  });
+
+  it("says nothing about pins on a board that predates them", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name === "leaderboard") {
+          const payload = body as { emissions?: Record<string, unknown> };
+          if (payload.emissions) {
+            delete payload.emissions.ledger_pin;
+            delete payload.emissions.next_pin_projection;
+            delete payload.emissions.crown_incumbent_active;
+          }
+        }
+        if (name === "weights") {
+          const payload = body as { pin_agreement?: unknown };
+          delete payload.pin_agreement;
+        }
+        return body;
+      },
+    });
+    await waitForBoard();
+    // The store is module-scoped, so the previous case's payload may still be
+    // on screen until this case's fetch lands; wait for the new board.
+    await waitFor(() => expect(el("emissions-next-pin").classList.contains("show")).toBe(false));
+    await waitFor(() => expect(document.getElementById("chain-pin-agreement")).toBeNull());
   });
 });

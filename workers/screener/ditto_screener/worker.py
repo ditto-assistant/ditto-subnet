@@ -14,17 +14,25 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
+import os
 import re
 import socket
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from pydantic import ValidationError
+
 from ditto_screener import __version__
-from ditto_screener.errors import PlatformError
+from ditto_screener.errors import (
+    PlatformAuthOnlyFailure,
+    PlatformError,
+    PlatformRejected,
+)
 from ditto_screener.gate import LeaseDeadline
 from ditto_screener.heartbeat import (
     DockerHealth,
@@ -39,24 +47,37 @@ from ditto_screener.heartbeat import (
     collect_host_specs,
     probe_docker_health,
 )
+from ditto_screener.platform import ClaimedAttemptRef, ClaimResponseInvalid
 from ditto_screener.policy import (
+    PolicyEvidence,
     ScreeningOutcome,
-    SourceReviewObservation,
     builtin_policy_manifest,
     core_decision,
 )
 from ditto_screener.review_settings import (
+    MAX_SHADOW_PROVIDER_STAGES,
     EffectiveReviewSettings,
+    ProbeBatteryObservationRequest,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
     bootstrap_review_settings,
 )
-from ditto_screener.signing import sign_heartbeat, sign_verdict
+from ditto_screener.review_usage import ReviewUsageCollector, collect_review_usage
+from ditto_screener.router_screen import build_signed_router_source_screen
+from ditto_screener.signing import (
+    sign_completion_receipt,
+    sign_heartbeat,
+    sign_verdict,
+)
+from ditto_screener.verification_receipts import mechanical_evidence_sha256
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenerQueueItem,
     ScreenEvidenceItem,
+    ScreeningReviewUsageRequest,
     ScreenResultOutcome,
     ScreenReviewAudit,
     SourceReviewAdjudication,
@@ -68,6 +89,10 @@ from ditto_screening_protocol.private_failure import (
     PRIVATE_FAILURE_DETAIL_LIMIT,
     PRIVATE_FAILURE_LOG_TAIL_LIMIT,
     private_failure_text,
+)
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
+    WORKER_CLAIM_NOT_STARTED,
 )
 
 if TYPE_CHECKING:
@@ -83,6 +108,78 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
+# A durable claim this worker settled before fetching or running anything of
+# the artifact. Platform retries it automatically (INFRA_AUTO_RETRY_REASON_CODES).
+CLAIM_NOT_STARTED_REASON_CODE = WORKER_CLAIM_NOT_STARTED
+
+
+# Shadow mode appends this after the deciding evidence. It records sandbox
+# headroom and never changes the typed outcome, so it must not become the
+# public reason or a private-failure cause.
+_SEED_ENVELOPE_OBSERVATION = "seed-envelope-usage"
+_PRIVATE_BUILD_FAILURE_CODES = frozenset(
+    {"docker-build", "docker-build-infrastructure", "docker-build-timeout"}
+)
+
+
+# After a review gateway 402 the worker stops claiming, then lets one claim
+# through as a probe; each further 402 doubles the pause up to the cap. A
+# funded account therefore costs at most one attempt per worker per window.
+CREDITS_PAUSE_INITIAL_SECONDS = 300.0
+CREDITS_PAUSE_MAX_SECONDS = 1800.0
+
+
+def _verdict_reason_code(
+    outcome: ScreenResultOutcome,
+    evidence: tuple[PolicyEvidence, ...],
+) -> str | None:
+    """Infer a reason for legacy decisions without an explicit deciding code.
+
+    Seed observations are appended last so they survive the evidence cap.
+    Treating that tail as the reason relabels a quarantine or pass as a seed
+    failure. Seed probes decide only deterministic rejections; successful
+    oracle observations cannot explain a quarantine or inconclusive outcome.
+    """
+    if outcome == ScreenResultOutcome.PASS_INCONCLUSIVE:
+        return "source-review-inconclusive"
+    if not evidence:
+        return None
+    shadow_seed = outcome != ScreenResultOutcome.DETERMINISTIC_REJECT
+    for item in reversed(evidence):
+        if item.code == _SEED_ENVELOPE_OBSERVATION:
+            continue
+        if shadow_seed and item.code.startswith("seed-"):
+            continue
+        if outcome in {
+            ScreenResultOutcome.QUARANTINE,
+            ScreenResultOutcome.INCONCLUSIVE,
+        } and item.code in {"behavioral-oracle-passed", "challenge-observed"}:
+            continue
+        return item.code
+    # No deciding evidence remains; do not reintroduce an observation as a reason.
+    return None
+
+
+def _attach_private_failure_feedback(
+    outcome: ScreenResultOutcome, reason_code: str | None
+) -> bool:
+    """Private diagnostics are legal only on a protocol failure outcome.
+
+    Pass and quarantine results cannot carry them. A shadow ``/seed`` code on
+    those outcomes used to satisfy the reason check, and constructing the
+    signed request then raised ``private failure feedback requires a failure
+    outcome``, which the worker replaced with ``worker-result-processing-failed``.
+    """
+    if outcome in {
+        ScreenResultOutcome.RETRYABLE_INFRA,
+        ScreenResultOutcome.INCONCLUSIVE,
+    }:
+        return True
+    if outcome != ScreenResultOutcome.DETERMINISTIC_REJECT:
+        return False
+    return reason_code in _PRIVATE_BUILD_FAILURE_CODES or (
+        reason_code or ""
+    ).startswith("seed-")
 
 
 def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
@@ -111,7 +208,7 @@ def _private_failure_feedback(detail: str, reason_code: str | None) -> str:
 
 # v6 adds the announced host specs (CPU/RAM/disk). A worker that cannot read
 # its own hardware still reports at v5 rather than going dark.
-_HEARTBEAT_PROTOCOL_VERSION = 7
+_HEARTBEAT_PROTOCOL_VERSION = 8
 _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS = 5
 _SYSTEMD_WORKER_CGROUP = re.compile(
     r"(?:^|/)ditto-screener-worker@([1-9][0-9]*)\.service(?:/|$)"
@@ -209,6 +306,9 @@ class ScreenerWorker:
             if fleet_release_probe is not None
             else collect_fleet_release(builtin_policy_version=SCREENING_POLICY_VERSION)
         )
+        # Start on the v7 wire so a rolling older Platform keeps accepting
+        # heartbeats; switch to signed fixture capability only after its ack.
+        self._fixture_protocol_adopted = False
         # A node can run multiple independent local workers. Their enrollment
         # identity remains the shared ``node_id`` while every heartbeat must
         # use its process identity, otherwise Platform overwrites concurrent
@@ -217,7 +317,12 @@ class ScreenerWorker:
         self._active_agent_id: UUID | None = None
         self._active_progress_stage: ScreenerProgressStage | None = None
         self._active_lease_deadline: LeaseDeadline | None = None
+        self._active_lease_wall: datetime | None = None
+        self._active_attempt_id: Any = None
+        self._active_progress_at: int | None = None
         self._job_started_at: int | None = None
+        self._credits_pause_until = float("-inf")
+        self._credits_pause_seconds = 0.0
         self._last_heartbeat_timestamp = 0
         self._last_heartbeat_monotonic = float("-inf")
         self._last_heartbeat_state: ScreenerRuntimeState | None = None
@@ -244,11 +349,56 @@ class ScreenerWorker:
             policy_manifest_digest=bootstrap_manifest.digest,
         )
 
+    def _active_lease_path(self) -> Path | None:
+        journal = self._config.review_journal_file
+        if not journal:
+            return None
+        return Path(journal).with_name("active-lease.json")
+
+    def _publish_active_lease(self) -> None:
+        """Local lease the release updater reads. It is not a verdict.
+
+        Best effort: a local file error must never abort a claimed review, so
+        failures are logged and the updater falls back to its drain bound.
+        """
+        path = self._active_lease_path()
+        if path is None or self._active_attempt_id is None:
+            return
+        deadline = self._active_lease_wall
+        # An open lease has no platform deadline. The updater must not invent one.
+        if deadline is None:
+            return
+        body = {
+            "agent_id": str(self._active_agent_id),
+            "attempt_id": str(self._active_attempt_id),
+            "lease_deadline": int(deadline.timestamp()),
+            "progress_at": self._active_progress_at or int(time.time()),
+            "revision": self._fleet_release.revision,
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".json.tmp")
+            temporary.write_text(json.dumps(body, sort_keys=True), encoding="utf-8")
+            os.replace(temporary, path)
+        except OSError as error:
+            logger.warning("could not publish the local drain lease: %s", error)
+
+    def _clear_active_lease(self) -> None:
+        path = self._active_lease_path()
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as error:
+            logger.warning("could not clear the local drain lease: %s", error)
+
     def _set_progress(self, stage: ScreenerProgressStage) -> None:
         """Advance public-safe progress without waiting on telemetry I/O."""
         if self._active_agent_id is None or self._job_started_at is None:
             return
         self._active_progress_stage = stage
+        self._active_progress_at = int(time.time())
+        self._publish_active_lease()
         progress = ScreenerProgress(stage=stage, started_at=self._job_started_at)
         task = asyncio.create_task(
             self._report_heartbeat("screening", force=True, progress_override=progress)
@@ -279,6 +429,9 @@ class ScreenerWorker:
             self._config.netuid,
             self._config.platform_api_url,
         )
+        # A lease file left by a process that died mid-review describes no live
+        # work in this process; the updater must not wait on it.
+        self._clear_active_lease()
         while not stop.is_set():
             await self._report_heartbeat("polling")
             try:
@@ -329,10 +482,20 @@ class ScreenerWorker:
             host_specs = self._host_specs
             protocol_version = (
                 _HEARTBEAT_PROTOCOL_VERSION
-                if host_specs is not None
-                else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+                if host_specs is not None and self._fixture_protocol_adopted
+                else (
+                    7
+                    if host_specs is not None
+                    else _HEARTBEAT_PROTOCOL_VERSION_WITHOUT_HOST_SPECS
+                )
             )
-            release = self._fleet_release if protocol_version >= 7 else None
+            release = (
+                self._fleet_release
+                if protocol_version >= 8
+                else self._fleet_release.model_copy(update={"source_fixture_v1": False})
+                if protocol_version >= 7
+                else None
+            )
             policy_version = self._heartbeat_policy_version
             signature = sign_heartbeat(
                 self._keypair,
@@ -367,6 +530,10 @@ class ScreenerWorker:
                 signature=signature,
             )
             response = await self._platform.submit_heartbeat(request)
+            if response.accepted:
+                self._fixture_protocol_adopted = getattr(
+                    response, "source_fixture_v1_heartbeat_supported", False
+                )
             if (
                 response.accepted
                 and response.lease_deadline is not None
@@ -375,7 +542,12 @@ class ScreenerWorker:
                 renewed = self._screen_deadline(response.lease_deadline)
                 if renewed is not None:
                     self._active_lease_deadline.renew(renewed.expires_at)
+                    # Keep the updater's local view on the renewed Platform
+                    # lease, or a live review looks expired after one TTL.
+                    self._active_lease_wall = response.lease_deadline
+                    self._publish_active_lease()
         except Exception as error:  # noqa: BLE001 - observability is best effort
+            self._fixture_protocol_adopted = False
             logger.warning("screener heartbeat failed (screening continues): %s", error)
         finally:
             # Throttle an older platform that has not deployed the optional
@@ -443,40 +615,205 @@ class ScreenerWorker:
             # Correct the startup/previous-policy heartbeat before claiming so
             # the capacity controller can admit this node during a rollback.
             await self._report_heartbeat("polling", force=True)
-        queue = await self._platform.claim_next(
-            policy_version=screen_version,
-            review_settings=review_settings,
-            instance_id=self._instance_id,
-        )
+        # A drain's SIGTERM can land during any await above. Once claim_next
+        # returns the lease is durable, so a stopping worker must not claim.
+        if stop.is_set():
+            return 0
+        if self._credits_paused():
+            return 0
+        try:
+            queue = await self._platform.claim_next(
+                policy_version=screen_version,
+                review_settings=review_settings,
+                instance_id=self._instance_id,
+            )
+        except ClaimResponseInvalid as error:
+            logger.error("%s", error)
+            await self._fail_unstarted_claims(
+                error.attempts,
+                policy_version=screen_version,
+                review_settings=review_settings,
+                error=error,
+            )
+            return 0
+        claim_received_at = int(time.time())
         if queue.required_policy_version != required_policy:
-            raise PlatformError(
+            policy_changed = PlatformError(
                 "platform changed screening policy during claim: expected "
                 f"{required_policy}, received {queue.required_policy_version}"
             )
-        if not queue.items:
+            logger.warning("%s", policy_changed)
+            await self._fail_unstarted_claims(
+                queue.items,
+                policy_version=screen_version,
+                review_settings=review_settings,
+                error=policy_changed,
+            )
             return 0
+        if not queue.items:
+            from ditto_screener.l2_report_canary import consume as consume_l2_canary
+
+            canary_claimed = False
+
+            def on_canary_claim(claim):  # type: ignore[no-untyped-def]
+                nonlocal canary_claimed
+                canary_claimed = True
+                self._active_agent_id = claim.agent_id
+                self._job_started_at = int(time.time())
+                self._set_progress("preparing")
+
+            canary_heartbeat_stop = asyncio.Event()
+            canary_heartbeat = asyncio.create_task(
+                self._heartbeat_while_active(canary_heartbeat_stop)
+            )
+            try:
+                if await consume_l2_canary(
+                    config=self._config,
+                    platform=self._platform,
+                    primary_gate=self._gate,
+                    settings=review_settings,
+                    instance_id=self._instance_id,
+                    on_claim=on_canary_claim,
+                    progress=self._set_progress,
+                ):
+                    return 1
+            finally:
+                canary_heartbeat_stop.set()
+                await canary_heartbeat
+                if canary_claimed:
+                    progress_tasks = tuple(self._progress_heartbeat_tasks)
+                    for task in progress_tasks:
+                        task.cancel()
+                    await asyncio.gather(*progress_tasks, return_exceptions=True)
+                    self._progress_heartbeat_tasks.clear()
+                    self._active_agent_id = None
+                    self._active_progress_stage = None
+                    self._job_started_at = None
+                    await self._report_heartbeat("polling", force=True)
+            # Only an idle primary worker may consume the optional shadow lane;
+            # the Platform serializes its global budget and active assessment.
+            from ditto_screener.conversation_worker import consume
+
+            heartbeat_stop = asyncio.Event()
+            heartbeat = asyncio.create_task(
+                self._heartbeat_while_active(heartbeat_stop)
+            )
+            try:
+                return int(await consume(self._config, self._platform))
+            finally:
+                heartbeat_stop.set()
+                await heartbeat
         logger.info("screener sweep: %d agent(s) to screen", len(queue.items))
         done = 0
-        for item in queue.items:
-            if stop.is_set():
-                break
+        for index, item in enumerate(queue.items):
+            # The first claimed item is always screened, even when stop arrived
+            # during the claim: _screen_one publishes the lease the drain waits
+            # on. Any further item has not started and is settled instead.
             item_policy_version = item.policy_version or screen_version
-            if not (
+            unstarted_error: PlatformError | None = None
+            if index and stop.is_set():
+                unstarted_error = PlatformError(
+                    "screener worker stopped before starting this claimed attempt"
+                )
+            elif not (
                 SCREENING_FLOOR_POLICY_VERSION
                 <= item_policy_version
                 <= SCREENING_POLICY_VERSION
             ):
-                raise PlatformError(
+                unstarted_error = PlatformError(
                     "claimed item policy is outside this worker's supported range: "
                     f"{item_policy_version}"
                 )
+                logger.warning("%s", unstarted_error)
+            if unstarted_error is not None:
+                await self._fail_unstarted_claims(
+                    queue.items[index:],
+                    policy_version=screen_version,
+                    review_settings=review_settings,
+                    error=unstarted_error,
+                )
+                return done
             await self._screen_one(
                 item,
                 policy_version=item_policy_version,
                 normal_review_settings=review_settings,
+                received_at=claim_received_at,
             )
             done += 1
         return done
+
+    def _credits_paused(self) -> bool:
+        remaining = self._credits_pause_until - time.monotonic()
+        if remaining <= 0:
+            return False
+        logger.warning(
+            "review gateway credits exhausted (HTTP 402); not claiming for "
+            "another %ds so the queue keeps its attempts. Fund the review "
+            "account or switch the endpoint's billing.",
+            int(remaining),
+        )
+        return True
+
+    def _observe_credits(self, reason_code: str | None) -> None:
+        """Pause claiming after a 402; any other outcome means the account works."""
+        if reason_code != SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED:
+            self._credits_pause_seconds = 0.0
+            self._credits_pause_until = float("-inf")
+            return
+        self._credits_pause_seconds = min(
+            CREDITS_PAUSE_MAX_SECONDS,
+            max(CREDITS_PAUSE_INITIAL_SECONDS, self._credits_pause_seconds * 2),
+        )
+        self._credits_pause_until = time.monotonic() + self._credits_pause_seconds
+        logger.error(
+            "review gateway credits exhausted (HTTP 402): pausing claims for %ds",
+            int(self._credits_pause_seconds),
+        )
+
+    async def _review_lineage(
+        self, item: ScreenerQueueItem, attempt_id: UUID
+    ) -> ReviewLineagePacket | None:
+        """The attempt's lineage packet, or None for an ordinary full review.
+
+        A packet that cannot be fetched never blocks screening: the attempt
+        falls back to the full review it would have had without a lineage.
+
+        The packet is requested even when the claim named no parent: under
+        the released-base lineage mode Platform may bind a declared, already
+        screened public base at packet time, and otherwise answers 409. The
+        bound reference may also differ from the claim-time parent.
+        """
+        try:
+            packet = await self._platform.get_review_lineage(
+                item.agent_id, attempt_id=attempt_id, artifact_sha256=item.sha256
+            )
+        except (PlatformError, ValidationError, ValueError) as error:
+            if item.lineage_parent_agent_id is None:
+                # The ordinary case for a first submission: no reference.
+                logger.info(
+                    "agent_id=%s no lineage reference; full review: %s",
+                    item.agent_id,
+                    str(error)[:120],
+                )
+            else:
+                logger.warning(
+                    "agent_id=%s lineage packet unavailable; full review: %s",
+                    item.agent_id,
+                    str(error)[:200],
+                )
+            return None
+        logger.info(
+            "agent_id=%s lineage parent=%s reference=%s scope=%s changed_files=%d "
+            "rulings=%d findings=%d",
+            item.agent_id,
+            packet.parent.agent_id,
+            packet.reference_kind or "same_owner_version",
+            packet.scope.value,
+            packet.changed_file_count,
+            len(packet.rulings),
+            len(packet.findings),
+        )
+        return packet
 
     async def _screen_one(
         self,
@@ -484,16 +821,31 @@ class ScreenerWorker:
         *,
         policy_version: int,
         normal_review_settings: EffectiveReviewSettings | None = None,
+        received_at: int | None = None,
     ) -> None:
-        """Gate one agent and post its signed verdict. Never raises."""
+        """Gate one agent and post its signed verdict. Never raises.
+
+        ``received_at`` is when the claim carrying ``item`` arrived. Its signed
+        runtime lease is checked for freshness against that time once, not
+        against the clock at each later use.
+        """
         agent_id = item.agent_id
         if item.attempt_id is None:
-            logger.error("claimed agent_id=%s without a screening attempt id", agent_id)
+            # Platform creates an attempt for every claim; without one there
+            # is nothing to screen under or sign a result against.
+            logger.error(
+                "claimed agent_id=%s without a screening attempt id; skipping it",
+                agent_id,
+            )
             return
         attempt_id = item.attempt_id
         self._active_agent_id = agent_id
         self._active_lease_deadline = self._screen_deadline(item.lease_deadline)
+        self._active_lease_wall = item.lease_deadline
+        self._active_attempt_id = attempt_id
         self._job_started_at = int(time.time())
+        if received_at is None:
+            received_at = self._job_started_at
         self._set_progress("preparing")
         heartbeat_stop = asyncio.Event()
         heartbeat_task = asyncio.create_task(
@@ -525,6 +877,37 @@ class ScreenerWorker:
             screened_image: BuiltImageArtifact | None = None
             screened_image_upload_id: UUID | None = None
 
+            async def record_mechanical_verification(
+                check_code: str, *, image_sha256: str | None = None
+            ) -> None:
+                if policy_version != 13:
+                    return
+                try:
+                    await self._platform.record_verification_receipt(
+                        agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        policy_version=policy_version,
+                        check_code=check_code,
+                        evidence_sha256=mechanical_evidence_sha256(
+                            check_code=check_code,
+                            artifact_sha256=item.sha256.lower(),
+                            image_sha256=image_sha256,
+                        ),
+                        image_sha256=image_sha256,
+                    )
+                except PlatformError:
+                    # A rolling Platform upgrade or lost receipt transport
+                    # must remain visible as `not_recorded`, never become a
+                    # false screening failure or a fabricated check pass.
+                    logger.warning(
+                        "verification receipt not recorded agent_id=%s "
+                        "attempt_id=%s check=%s",
+                        agent_id,
+                        attempt_id,
+                        check_code,
+                    )
+
             async def publish_image(image: BuiltImageArtifact) -> None:
                 nonlocal screened_image, screened_image_upload_id
                 screened_image_upload_id = await self._platform.upload_screened_image(
@@ -537,7 +920,60 @@ class ScreenerWorker:
                     image_ref=image.image_ref,
                 )
                 screened_image = image
+                await record_mechanical_verification(
+                    "build_image_digest", image_sha256=image.sha256.lower()
+                )
 
+            async def publish_held_image(image: BuiltImageArtifact) -> None:
+                # Keep the verified artifact available for exact-attempt private
+                # checks while the source decision remains quarantined. Never
+                # attach it to the agent or the non-passing verdict.
+                await self._platform.upload_screened_image(
+                    agent_id,
+                    attempt_id=attempt_id,
+                    path=image.path,
+                    sha256=image.sha256,
+                    size_bytes=image.size_bytes,
+                    image_id=image.image_id,
+                    image_ref=image.image_ref,
+                )
+                await record_mechanical_verification(
+                    "build_image_digest", image_sha256=image.sha256.lower()
+                )
+
+            async def record_archive_verification() -> None:
+                await record_mechanical_verification("archive_sha")
+
+            async def record_runtime_verification(
+                check_code: str, evidence_sha256: str
+            ) -> None:
+                if policy_version != 13:
+                    return
+                try:
+                    await self._platform.record_verification_receipt(
+                        agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        policy_version=policy_version,
+                        check_code=check_code,
+                        evidence_sha256=evidence_sha256,
+                    )
+                except PlatformError:
+                    # An unavailable writer cannot turn an observation into a
+                    # check pass. Backroom will retain `not_recorded`.
+                    logger.warning(
+                        "runtime verification receipt not recorded agent_id=%s "
+                        "attempt_id=%s check=%s",
+                        agent_id,
+                        attempt_id,
+                        check_code,
+                    )
+
+            # (collector, elapsed ms, lineage scope) of the model review, set
+            # only when the gate actually ran for this attempt.
+            review_usage_snapshot: (
+                tuple[ReviewUsageCollector, int, str | None] | None
+            ) = None
             if item.precheck_reason_code is not None:
                 if item.precheck_reason_code != EXACT_CROSS_MINER_DUPLICATE:
                     raise PlatformError(
@@ -549,6 +985,7 @@ class ScreenerWorker:
                     code=EXACT_CROSS_MINER_DUPLICATE,
                     summary="artifact is an exact cross-miner duplicate",
                     detail="exact cross-miner duplicate",
+                    policy_version=policy_version,
                 )
             else:
                 screen_deadline = self._active_lease_deadline
@@ -566,108 +1003,99 @@ class ScreenerWorker:
                         code="lease-budget-exhausted",
                         summary="insufficient screening lease budget at claim",
                         detail="screener error: insufficient lease budget at claim",
+                        policy_version=policy_version,
                     )
                 else:
                     artifact = await self._platform.get_artifact(
                         agent_id, attempt_id=attempt_id
                     )
+                    review_lineage = await self._review_lineage(item, attempt_id)
 
-                    async def remote_build():  # type: ignore[no-untyped-def]
-                        if self._config.remote_build_mode == "off":
-                            return None
-                        # The remote and local caps are separate on purpose.
-                        # A normal 70-minute lease budgets 25 minutes for
-                        # Targon, then up to 45 minutes for local Docker. Do not
-                        # derive this from the local cap: older hosts may carry
-                        # a stale local override, which previously collapsed
-                        # Targon to a one-minute attempt.
-                        return await self._platform.build_submission_image(
-                            agent_id,
+                    review_started = time.monotonic()
+                    with collect_review_usage() as review_usage:
+                        result = await self._gate.screen(
+                            agent_id=agent_id,
                             attempt_id=attempt_id,
-                            timeout=self._config.remote_build_timeout_seconds,
+                            bench_version=item.bench_version,
+                            miner_hotkey=item.miner_hotkey,
+                            sha256=item.sha256,
+                            download_url=str(artifact.download_url),
+                            progress=self._set_progress,
+                            deadline=screen_deadline,
+                            publish_image=publish_image,
+                            publish_held_image=publish_held_image,
+                            record_archive_verification=record_archive_verification,
+                            record_runtime_verification=record_runtime_verification,
+                            # A build-only item requests the mechanical lane. That
+                            # lane is used both for an already-adjudicated rebuild
+                            # and for score-first admission when the complete source
+                            # and behavioral review is intentionally deferred. It
+                            # builds, serves, isolates, and exports the image without
+                            # spending private-policy/model budget.
+                            build_only=item.build_only,
+                            policy_only=item.policy_only,
+                            deferred_source_review=item.deferred_source_review,
+                            policy_version=policy_version,
+                            scored_runtime_evidence=item.scored_runtime_evidence,
+                            scored_runtime_evidence_received_at=received_at,
+                            review_lineage=review_lineage,
+                            sandbox_memory_limit_mib=item.sandbox_memory_limit_mib,
                         )
-
-                    async def remote_build_consumed(build_id: UUID) -> None:
-                        await self._platform.discard_submission_image_build(
-                            agent_id,
-                            attempt_id=attempt_id,
-                            build_id=build_id,
-                        )
-
-                    # A local build has no provider-owned image-build record.
-                    # Its review must therefore stay in this gate: the fleet
-                    # source-review claim correctly requires a completed
-                    # provider build and runtime smoke, and queueing one here
-                    # would wait on a prerequisite that local mode can never
-                    # produce.
-                    remote_source_review: (
-                        Callable[[], Awaitable[SourceReviewObservation | None]] | None
-                    ) = None
-                    if self._config.remote_build_mode != "off":
-
-                        async def review_with_remote_provider() -> (
-                            SourceReviewObservation | None
-                        ):
-                            payload = await self._platform.review_submission_source(
-                                agent_id,
-                                attempt_id=attempt_id,
-                                timeout=self._config.source_review_timeout_seconds,
-                            )
-                            if payload is None:
-                                return None
-                            return SourceReviewObservation(
-                                ok=payload.ok,
-                                risk_level=payload.risk_level,
-                                finding_digest=payload.finding_digest,
-                                categories=tuple(payload.categories),
-                                error_code=payload.error_code,
-                                finding=(
-                                    payload.finding.model_dump(mode="json")
-                                    if payload.finding is not None
-                                    else None
-                                ),
-                                failure_disposition=payload.failure_disposition,
-                                clearance_certified=payload.clearance_certified,
-                                review_audit=(
-                                    payload.review_audit.model_dump(mode="json")
-                                    if payload.review_audit is not None
-                                    else None
-                                ),
-                            )
-
-                        remote_source_review = review_with_remote_provider
-
-                    result = await self._gate.screen(
+                    review_usage_snapshot = (
+                        review_usage,
+                        int((time.monotonic() - review_started) * 1000),
+                        review_lineage.scope.value if review_lineage else None,
+                    )
+            if result.policy_version != policy_version:
+                raise PlatformError(
+                    "screening decision policy version does not match the claim"
+                )
+            try:
+                shadow_review = self._gate.pop_shadow_review(attempt_id)
+                if shadow_review is not None:
+                    await self._submit_shadow_review(
                         agent_id=agent_id,
                         attempt_id=attempt_id,
-                        bench_version=item.bench_version,
-                        miner_hotkey=item.miner_hotkey,
-                        sha256=item.sha256,
-                        download_url=str(artifact.download_url),
-                        progress=self._set_progress,
-                        deadline=screen_deadline,
-                        publish_image=publish_image,
-                        remote_build=remote_build,
-                        remote_build_consumed=remote_build_consumed,
-                        remote_source_review=remote_source_review,
-                        # A build-only item requests the mechanical lane. That
-                        # lane is used both for an already-adjudicated rebuild
-                        # and for score-first admission when the complete source
-                        # and behavioral review is intentionally deferred. It
-                        # builds, serves, isolates, and exports the image without
-                        # spending private-policy/model budget.
-                        build_only=item.build_only,
-                        policy_only=item.policy_only,
-                        deferred_source_review=item.deferred_source_review,
-                        policy_version=policy_version,
+                        artifact_sha256=item.sha256.lower(),
+                        result=shadow_review,
                     )
-            shadow_review = self._gate.pop_shadow_review(attempt_id)
-            if shadow_review is not None:
-                await self._submit_shadow_review(
+            except Exception as error:
+                # Telemetry bugs must not discard the authoritative decision.
+                # Exception text can contain private findings or credentials.
+                logger.warning(
+                    "shadow review telemetry failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
+            if review_usage_snapshot is not None and not item.build_only:
+                await self._submit_review_usage(
                     agent_id=agent_id,
                     attempt_id=attempt_id,
                     artifact_sha256=item.sha256.lower(),
-                    result=shadow_review,
+                    snapshot=review_usage_snapshot,
+                )
+            try:
+                battery = self._gate.pop_probe_battery(attempt_id)
+                if battery is not None:
+                    await self._submit_probe_battery(
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        artifact_sha256=item.sha256.lower(),
+                        summary=battery,
+                    )
+            except Exception as error:
+                # Same rule as the shadow review: report-only telemetry.
+                logger.warning(
+                    "probe battery telemetry failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
+            if screened_image is not None:
+                await self._emit_router_source_screen(
+                    agent_id=agent_id,
+                    agent_artifact_sha256=item.sha256.lower(),
+                    screened_image_sha256=screened_image.sha256.lower(),
+                    policy_version=policy_version,
                 )
             # Typed non-verdicts still complete and park the attempt. Reporting
             # removes the false "running" state; Platform requires an exact
@@ -704,6 +1132,7 @@ class ScreenerWorker:
             is_quarantine = typed_outcome == ScreenResultOutcome.QUARANTINE
             is_audited_result = typed_outcome in {
                 ScreenResultOutcome.QUARANTINE,
+                ScreenResultOutcome.INCONCLUSIVE,
                 ScreenResultOutcome.PASS_INCONCLUSIVE,
             }
             has_review_notes = bool(result.review_notes)
@@ -716,19 +1145,12 @@ class ScreenerWorker:
                     "build-only screen produced a quarantine outcome for "
                     f"agent_id={agent_id}"
                 )
-            reason_code = (
-                "source-review-inconclusive"
-                if typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
-                else result.evidence[-1].code
-                if result.evidence
-                else None
+            reason_code = result.reason_code or _verdict_reason_code(
+                typed_outcome, result.evidence
             )
             private_failure_detail: str | None = None
             private_failure_log_tail: str | None = None
-            if typed_outcome in {
-                ScreenResultOutcome.RETRYABLE_INFRA,
-                ScreenResultOutcome.INCONCLUSIVE,
-            } or reason_code in {"docker-build", "docker-build-infrastructure"}:
+            if _attach_private_failure_feedback(typed_outcome, reason_code):
                 # The public reason stays generic. Preserve the exact bounded
                 # diagnostic for the submission owner, with the same sanitizer
                 # Platform applies before durable storage. This includes an
@@ -766,7 +1188,13 @@ class ScreenerWorker:
             )
             review_audit = (
                 ScreenReviewAudit.model_validate(result.review_audit)
-                if typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+                if (
+                    typed_outcome == ScreenResultOutcome.PASS_INCONCLUSIVE
+                    or (
+                        policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                        and typed_outcome == ScreenResultOutcome.INCONCLUSIVE
+                    )
+                )
                 and result.review_audit is not None
                 else None
             )
@@ -847,6 +1275,21 @@ class ScreenerWorker:
                 image_ref=screened_image.image_ref if screened_image else None,
                 image_upload_id=screened_image_upload_id,
             )
+            completion_receipt_signature = (
+                sign_completion_receipt(
+                    self._keypair,
+                    screener_hotkey=self._config.screener_hotkey,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    artifact_sha256=item.sha256.lower(),
+                    adjudication_digest=adjudication_digest,
+                    receipt=adjudication.completion_receipt,
+                )
+                if adjudication is not None
+                and adjudication.completion_receipt is not None
+                and adjudication_digest is not None
+                else None
+            )
             result_submission_started = True
             resp = await self._platform.submit_result(
                 agent_id,
@@ -890,6 +1333,7 @@ class ScreenerWorker:
                 finding=finding,
                 review_audit=review_audit,
                 adjudication=adjudication,
+                completion_receipt_signature=completion_receipt_signature,
                 review_notes=review_notes,
                 image_sha256=screened_image.sha256 if screened_image else None,
                 image_size_bytes=screened_image.size_bytes if screened_image else None,
@@ -901,6 +1345,7 @@ class ScreenerWorker:
                 policy_only=item.policy_only,
             )
             result_applied = True
+            self._observe_credits(reason_code)
             logger.info(
                 "screened agent_id=%s miner=%s outcome=%s passed=%s "
                 "elapsed_s=%d -> %s%s",
@@ -914,12 +1359,31 @@ class ScreenerWorker:
             )
         except PlatformError as error:
             if result_submission_started:
-                # A late/conflicting verdict (409) or exhausted transient retry:
-                # the original signed request may already have reached Platform.
-                # Never replace it with a different fallback verdict.
                 logger.warning(
                     "verdict for agent_id=%s not applied: %s", agent_id, error
                 )
+                # A definitive validation rejection or an auth-only failure
+                # can be reported immediately. A plain PlatformError may hide
+                # an accepted verdict. A 409 can follow an accepted request
+                # whose response was lost, so never replace that verdict.
+                fallback_reason = None
+                if isinstance(error, PlatformRejected) and error.status_code in {
+                    400,
+                    413,
+                    422,
+                }:
+                    fallback_reason = "worker-verdict-rejected"
+                elif isinstance(error, PlatformAuthOnlyFailure):
+                    fallback_reason = "worker-verdict-auth-failed"
+                if fallback_reason is not None:
+                    await self._submit_claim_failure(
+                        item=item,
+                        attempt_id=attempt_id,
+                        policy_version=policy_version,
+                        effective_review_settings=effective_review_settings,
+                        reason_code=fallback_reason,
+                        error=error,
+                    )
             else:
                 # A claim is already durable. Returning to polling without a
                 # terminal result makes Platform infer worker-lease-orphaned
@@ -954,7 +1418,14 @@ class ScreenerWorker:
         finally:
             # A review can finish before a later build/image step raises. Do not
             # retain that attempt's private result in the long-lived worker.
-            self._gate.pop_shadow_review(attempt_id)
+            try:
+                self._gate.pop_shadow_review(attempt_id)
+            except Exception as error:
+                logger.warning(
+                    "shadow review cleanup failed attempt_id=%s error_type=%s",
+                    attempt_id,
+                    type(error).__name__,
+                )
             heartbeat_stop.set()
             await heartbeat_task
             progress_tasks = tuple(self._progress_heartbeat_tasks)
@@ -962,7 +1433,11 @@ class ScreenerWorker:
                 task.cancel()
             await asyncio.gather(*progress_tasks, return_exceptions=True)
             self._progress_heartbeat_tasks.clear()
+            self._clear_active_lease()
             self._active_agent_id = None
+            self._active_attempt_id = None
+            self._active_lease_wall = None
+            self._active_progress_at = None
             self._active_progress_stage = None
             self._active_lease_deadline = None
             self._job_started_at = None
@@ -970,10 +1445,43 @@ class ScreenerWorker:
                 self._gate.apply_review_settings(normal_review_settings)
             await self._report_heartbeat("polling", force=True)
 
+    async def _fail_unstarted_claims(
+        self,
+        items: Sequence[ScreenerQueueItem | ClaimedAttemptRef],
+        *,
+        policy_version: int,
+        review_settings: EffectiveReviewSettings,
+        error: Exception,
+    ) -> None:
+        """Settle claims this worker will not screen instead of dropping them.
+
+        Each lease is durable once ``claim_next`` returns. Dropped, it stays
+        ``running`` until Platform infers ``worker-lease-orphaned`` and parks
+        the agent for a manual retry. Nothing of the artifact was fetched or
+        run, so this fleet-owned code is retried automatically. Each result is
+        signed under the attempt's own policy, the only one Platform accepts.
+        """
+        for item in items:
+            if item.attempt_id is None:
+                logger.error(
+                    "claimed agent_id=%s without a screening attempt id; "
+                    "nothing to settle",
+                    item.agent_id,
+                )
+                continue
+            await self._submit_claim_failure(
+                item=item,
+                attempt_id=item.attempt_id,
+                policy_version=item.policy_version or policy_version,
+                effective_review_settings=review_settings,
+                reason_code=CLAIM_NOT_STARTED_REASON_CODE,
+                error=error,
+            )
+
     async def _submit_claim_failure(
         self,
         *,
-        item: ScreenerQueueItem,
+        item: ScreenerQueueItem | ClaimedAttemptRef,
         attempt_id: UUID,
         policy_version: int,
         effective_review_settings: EffectiveReviewSettings,
@@ -1060,6 +1568,75 @@ class ScreenerWorker:
             response.status,
         )
 
+    async def _submit_probe_battery(
+        self,
+        *,
+        agent_id: UUID,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        summary: dict[str, Any],
+    ) -> None:
+        """Best-effort report-only battery leads; never part of the verdict.
+
+        The gate stamps the summary with the revision it ran under; the worker's
+        current status may already name a later revision.
+        """
+        revision = summary.get("settings_revision")
+        if not isinstance(revision, int) or revision < 1:
+            logger.warning("discarding probe battery without an applied revision")
+            return
+        try:
+            request = ProbeBatteryObservationRequest.model_validate(
+                {
+                    **summary,
+                    "attempt_id": attempt_id,
+                    "artifact_sha256": artifact_sha256,
+                },
+                strict=False,
+            )
+            await self._platform.submit_probe_battery(agent_id, request)
+        except (ValidationError, ValueError, PlatformError) as error:
+            logger.warning(
+                "probe battery telemetry was not persisted attempt_id=%s error_type=%s",
+                attempt_id,
+                type(error).__name__,
+            )
+
+    async def _submit_review_usage(
+        self,
+        *,
+        agent_id: UUID,
+        attempt_id: UUID,
+        artifact_sha256: str,
+        snapshot: tuple[ReviewUsageCollector, int, str | None],
+    ) -> None:
+        """Best-effort per-attempt model usage telemetry before the verdict.
+
+        Never raises: a telemetry fault must not discard the decision, and the
+        exception text can carry private context, so only its type is logged.
+        """
+        collector, elapsed_ms, lineage_scope = snapshot
+        if collector.empty:
+            return
+        try:
+            await self._platform.submit_review_usage(
+                agent_id,
+                ScreeningReviewUsageRequest(
+                    attempt_id=attempt_id,
+                    artifact_sha256=artifact_sha256,
+                    stages=collector.entries(),
+                    elapsed_ms=max(0, elapsed_ms),
+                    lineage_scope=lineage_scope,  # type: ignore[arg-type]
+                    budget_stop=collector.budget_stop,
+                ),
+            )
+        except Exception as error:
+            logger.warning(
+                "review usage telemetry failed attempt_id=%s error_type=%s",
+                attempt_id,
+                type(error).__name__,
+            )
+
     async def _submit_shadow_review(
         self,
         *,
@@ -1075,52 +1652,141 @@ class ScreenerWorker:
                 "discarding shadow result without an applied platform revision"
             )
             return
-        observation = result.observation
-        risk_level = cast(
-            Literal["low", "medium", "high"] | None, observation.risk_level
-        )
-        disposition: Literal["safe", "violation", "inconclusive", "retryable_infra"] = (
-            "safe"
-            if observation.ok and observation.risk_level == "low"
-            else "violation"
-            if observation.ok
-            else "inconclusive"
-            if observation.failure_disposition == "inconclusive"
-            else "retryable_infra"
-        )
-        request = ShadowReviewObservationRequest(
-            attempt_id=attempt_id,
-            artifact_sha256=artifact_sha256,
-            settings_revision=settings.revision,
-            settings_scope=settings.scope,
-            settings_checksum=settings.checksum,
-            disposition=disposition,
-            risk_level=risk_level,
-            categories=observation.categories,
-            finding_digest=observation.finding_digest,
-            resolution_basis=result.resolution_basis,
-            clearance_path=result.clearance_path,
-            critic_disposition=result.critic_disposition,
-            adjudicator_disposition=result.adjudicator_disposition,
-            response_models=result.response_models,
-            response_providers=result.response_providers,
-            usage=ShadowReviewUsage(
-                input_tokens=result.usage.input_tokens,
-                output_tokens=result.usage.output_tokens,
-                cached_input_tokens=result.usage.cached_input_tokens,
-                reasoning_tokens=result.usage.reasoning_tokens,
-                estimated_cost_usd=result.usage.estimated_cost_usd,
-                reported_cost_usd=result.usage.reported_cost_usd,
-            ),
-        )
         try:
+            bounded = False
+
+            def bound_text(value: str | None, limit: int) -> str | None:
+                nonlocal bounded
+                if value is not None and len(value) > limit:
+                    bounded = True
+                    return value[:limit]
+                return value
+
+            def bound_cost(value: float) -> float:
+                nonlocal bounded
+                cost = min(max(value, 0.0), 25.0)
+                bounded |= cost != value
+                return cost
+
+            observation = result.observation
+            risk_level = cast(
+                Literal["low", "medium", "high"] | None, observation.risk_level
+            )
+            disposition: Literal[
+                "safe", "violation", "inconclusive", "retryable_infra"
+            ] = (
+                "safe"
+                if observation.ok and observation.risk_level == "low"
+                else "violation"
+                if observation.ok
+                else "inconclusive"
+                if observation.failure_disposition == "inconclusive"
+                else "retryable_infra"
+            )
+            categories = tuple(value[:64] for value in observation.categories[:8])
+            response_models = tuple(
+                value[:100]
+                for value in result.response_models[-MAX_SHADOW_PROVIDER_STAGES:]
+            )
+            response_providers = tuple(
+                value[:100]
+                for value in result.response_providers[-MAX_SHADOW_PROVIDER_STAGES:]
+            )
+            bounded = (
+                categories != observation.categories
+                or response_models != result.response_models
+                or response_providers != result.response_providers
+            )
+            request = ShadowReviewObservationRequest(
+                attempt_id=attempt_id,
+                artifact_sha256=artifact_sha256,
+                settings_revision=settings.revision,
+                settings_scope=settings.scope,
+                settings_checksum=settings.checksum,
+                disposition=disposition,
+                risk_level=risk_level,
+                categories=categories,
+                finding_digest=observation.finding_digest,
+                resolution_basis=bound_text(result.resolution_basis, 80),
+                clearance_path=bound_text(result.clearance_path, 100),
+                critic_disposition=bound_text(result.critic_disposition, 80),
+                adjudicator_disposition=bound_text(result.adjudicator_disposition, 80),
+                response_models=response_models,
+                response_providers=response_providers,
+                usage=ShadowReviewUsage(
+                    input_tokens=result.usage.input_tokens,
+                    output_tokens=result.usage.output_tokens,
+                    cached_input_tokens=result.usage.cached_input_tokens,
+                    reasoning_tokens=result.usage.reasoning_tokens,
+                    estimated_cost_usd=bound_cost(result.usage.estimated_cost_usd),
+                    reported_cost_usd=(
+                        bound_cost(result.usage.reported_cost_usd)
+                        if result.usage.reported_cost_usd is not None
+                        else None
+                    ),
+                ),
+            )
+            if bounded:
+                logger.info(
+                    "bounded shadow review telemetry attempt_id=%s "
+                    "original_model_stages=%s original_provider_stages=%s",
+                    attempt_id,
+                    len(result.response_models),
+                    len(result.response_providers),
+                )
             await self._platform.submit_shadow_review(agent_id, request)
-        except PlatformError as error:
+        except (ValidationError, ValueError, PlatformError) as error:
+            # Do not log validation inputs or transport exception messages.
             logger.warning(
-                "shadow review telemetry was not persisted attempt_id=%s: %s",
+                "shadow review telemetry was not persisted attempt_id=%s error_type=%s",
                 attempt_id,
+                type(error).__name__,
+            )
+
+    async def _emit_router_source_screen(
+        self,
+        *,
+        agent_id: UUID,
+        agent_artifact_sha256: str,
+        screened_image_sha256: str,
+        policy_version: int,
+    ) -> None:
+        """Best-effort shadow router-track source screen. Verdict-neutral.
+
+        Produces a signed, content-addressed router source-screen evidence next
+        to the memory verdict. It is shadow-only (``weight_eligible=False``) and
+        can never deny a submission or change its signed result. No paired
+        held-out router arm is produced today, so ``sample=None`` maps to the
+        benign ``INFRASTRUCTURE`` outcome — the opt-in / yes-and default. A future
+        held-out arm producer feeds a real sample here without any other change.
+        Only the content-addressed digest is logged; never the key or findings.
+        """
+        settings = self._review_settings_status
+        if settings is None or settings.mode != "shadow" or settings.revision < 1:
+            return
+        try:
+            evidence, signature = build_signed_router_source_screen(
+                keypair=self._keypair,
+                screener_hotkey=self._config.screener_hotkey,
+                agent_artifact_sha256=agent_artifact_sha256,
+                screened_image_sha256=screened_image_sha256,
+                policy_version=policy_version,
+                sample=None,
+            )
+        except Exception as error:  # noqa: BLE001 - shadow track must never raise
+            logger.warning(
+                "router source screen not produced agent_id=%s: %s",
+                agent_id,
                 error,
             )
+            return
+        logger.info(
+            "router source screen agent_id=%s outcome=%s evidence_sha256=%s sig_len=%d",
+            agent_id,
+            evidence.outcome.value,
+            evidence.evidence_sha256,
+            len(signature),
+        )
 
     async def _sleep_or_stop(self, stop: asyncio.Event, seconds: float) -> None:
         """Sleep up to ``seconds``, waking early if ``stop`` is set."""

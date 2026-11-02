@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -349,6 +350,88 @@ func TestSeedStoreLockTimeoutIsTypedOnlyForExact503Contract(t *testing.T) {
 	}
 }
 
+func TestSeedDeadlineIsTypedOnlyWhenTheSeedOwnDeadlineFires(t *testing.T) {
+	previousBase, previousV7 := seedTimeout, v7SeedTimeout
+	seedTimeout, v7SeedTimeout = 20*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() { seedTimeout, v7SeedTimeout = previousBase, previousV7 })
+
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() {
+		close(release)
+		srv.Close()
+	})
+
+	t.Run("own deadline", func(t *testing.T) {
+		_, err := SeedForVersion(sandboxContext(), srv.URL, protocol.SeedRequest{}, 13)
+		if !errors.Is(err, ErrSeedDeadlineExceeded) {
+			t.Fatalf("errors.Is(seed deadline) = false: %v", err)
+		}
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("typed error dropped the transport cause: %v", err)
+		}
+	})
+	t.Run("caller cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(sandboxContext())
+		time.AfterFunc(10*time.Millisecond, cancel)
+		_, err := SeedForVersion(ctx, srv.URL, protocol.SeedRequest{}, 13)
+		if err == nil || errors.Is(err, ErrSeedDeadlineExceeded) {
+			t.Fatalf("a cancelled run was typed as a seed deadline: %v", err)
+		}
+	})
+	t.Run("outer deadline first", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(sandboxContext(), 10*time.Millisecond)
+		defer cancel()
+		_, err := SeedForVersion(ctx, srv.URL, protocol.SeedRequest{}, 13)
+		if err == nil || errors.Is(err, ErrSeedDeadlineExceeded) {
+			t.Fatalf("an outer run deadline was typed as a seed deadline: %v", err)
+		}
+	})
+	t.Run("ordinary failure", func(t *testing.T) {
+		failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer failing.Close()
+		_, err := SeedForVersion(sandboxContext(), failing.URL, protocol.SeedRequest{}, 13)
+		if err == nil || errors.Is(err, ErrSeedDeadlineExceeded) {
+			t.Fatalf("a non-deadline failure was typed as a seed deadline: %v", err)
+		}
+	})
+}
+
+// liveDeadlineContext reports a deadline without having expired yet: the
+// window in which a child sharing that deadline can fire first.
+type liveDeadlineContext struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c liveDeadlineContext) Deadline() (time.Time, bool) { return c.deadline, true }
+
+func TestSeedDeadlineIsNotTypedWhenItMatchesTheCallerDeadline(t *testing.T) {
+	deadline := time.Now().Add(-time.Millisecond)
+	expired, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	cause := fmt.Errorf("post /seed: %w", context.DeadlineExceeded)
+
+	equal := liveDeadlineContext{Context: context.Background(), deadline: deadline}
+	if err := seedDeadlineError(equal, expired, time.Minute, cause); errors.Is(err, ErrSeedDeadlineExceeded) {
+		t.Fatalf("a caller deadline equal to the seed deadline was typed as the seed's: %v", err)
+	}
+	later := liveDeadlineContext{Context: context.Background(), deadline: deadline.Add(time.Second)}
+	if err := seedDeadlineError(later, expired, time.Minute, cause); !errors.Is(err, ErrSeedDeadlineExceeded) {
+		t.Fatalf("a seed deadline strictly before the caller's was not typed: %v", err)
+	}
+	if err := seedDeadlineError(context.Background(), expired, time.Minute, cause); !errors.Is(err, ErrSeedDeadlineExceeded) {
+		t.Fatalf("a caller without a deadline lost the seed classification: %v", err)
+	}
+}
+
 func TestRunCase(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.RunRequest
@@ -552,5 +635,39 @@ func TestSeedForVersionWireIdentity(t *testing.T) {
 	}
 	if len(bodies) != 2 || !bytes.Equal(bodies[0], bodies[1]) {
 		t.Fatalf("v7 seed request bytes must be identical to the legacy path: %q vs %q", bodies[0], bodies[1])
+	}
+}
+
+func TestRunRequestCarriesCaseScopedInferenceURL(t *testing.T) {
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode run request: %v", err)
+		}
+		bodies = append(bodies, body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"final_text":"ok"}`)
+	}))
+	defer srv.Close()
+
+	if _, _, err := RunCaseWithTelemetry(sandboxContext(), srv.URL, "c1", "hi", nil,
+		CaseOptions{InferenceBaseURL: "http://host.docker.internal:11436/v1/inference/cases/tok123"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := RunCaseWithTelemetry(sandboxContext(), srv.URL, "c1", "hi", nil, CaseOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("want 2 run requests, got %d", len(bodies))
+	}
+	if got := bodies[0]["inference_base_url"]; got != "http://host.docker.internal:11436/v1/inference/cases/tok123" {
+		t.Fatalf("inference_base_url = %v", got)
+	}
+	if _, present := bodies[1]["inference_base_url"]; present {
+		t.Fatal("unset InferenceBaseURL must not appear on the wire")
+	}
+	if bodies[0]["case_id"] != "c1" {
+		t.Fatalf("wrapper must not disturb protocol fields: case_id = %v", bodies[0]["case_id"])
 	}
 }

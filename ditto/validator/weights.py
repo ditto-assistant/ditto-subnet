@@ -20,11 +20,13 @@ change, mirroring the platform's ledger read.
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from ditto.validator.config import (
+    BASIS_POINT_SCALE,
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
@@ -33,11 +35,14 @@ from ditto.validator.config import (
     TOP5_MAX_CONFIRMATION_SEEDS,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
-from ditto.validator.crn import confirmation_seeds
+from ditto.validator.crn import confirmation_seeds, crn_block_binding_active
+from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from ditto.api_models.generator_ledger import GeneratorLedgerEntry
+    from ditto.api_models.router_ledger import RouterLedgerEntry
     from ditto.api_models.validator import LedgerEntry, LedgerResponse
 
 # ``bench_version`` is retained for telemetry and re-score scheduling. The
@@ -58,6 +63,34 @@ DEFAULT_BENCH_VERSION = 1
 # leaderboard, marked provisional). Keep in sync with the platform's
 # MIN_ELIGIBLE_CASES (ditto-platform ditto/db/queries/scores.py).
 MIN_ELIGIBLE_CASES = 100
+
+# Key under which :func:`compute_weights` reports every share it folded to a
+# provisional incumbent (protocol 28). Not an SS58 address, so it can never
+# collide with a miner, and :func:`split_unpaid_share` strips it before the
+# vector meets :func:`apply_miner_emission_cap`.
+UNPAID_SHARE_KEY = "<unpaid>"
+
+
+@dataclass(frozen=True)
+class CrownGate:
+    """Protocol-34 crown rules served as ``LedgerResponse.crown_gate``.
+
+    ``min_shared_seeds``: a challenger takes the crown only on the paired
+    shared-seed statistic, and only once it holds at least this many
+    confirmation seeds in common with the reigning champion. An unpaired or
+    shallow comparison can never move the crown.
+
+    ``standing_rank``: only an entry inside the top ``standing_rank`` of the
+    fold's ranking (quality-first, the board's official order) may hold or
+    take the crown. A champion that falls below it is replaced by the
+    highest-ranked standing entry with ``min_shared_seeds`` shared seeds
+    against it, or by the rank-1 entry when none qualifies.
+
+    ``None`` everywhere this is accepted is the exact pre-34 fold.
+    """
+
+    min_shared_seeds: int
+    standing_rank: int
 
 
 def resolve_miner_emission_share(
@@ -117,8 +150,6 @@ def apply_miner_emission_cap(
     """
     if not 0.0 <= miner_share <= 1.0:
         raise ValueError(f"miner_share must be in [0, 1], got {miner_share}")
-    if not burn_hotkey:
-        raise ValueError("burn_hotkey must be non-empty")
 
     miners = {
         hotkey: weight
@@ -126,6 +157,8 @@ def apply_miner_emission_cap(
         if hotkey != burn_hotkey and weight > 0.0
     }
     total = sum(miners.values())
+    if (total <= 0.0 or miner_share < 1.0) and not burn_hotkey:
+        raise ValueError("burn_hotkey must be non-empty")
     if total <= 0.0:
         return {burn_hotkey: 1.0}
 
@@ -136,6 +169,330 @@ def apply_miner_emission_cap(
     if burn_share > 0.0:
         capped[burn_hotkey] = burn_share
     return capped
+
+
+def owner_burn_destination_required(
+    weights: Mapping[str, float],
+    *,
+    miner_share: float,
+    paid_miner_fraction: float = 1.0,
+    service_bps: int = 0,
+) -> bool:
+    """Whether the submitted vector will contain the subnet-owner burn hotkey.
+
+    ``miner_share`` is the non-burn fraction (``1 - burn_share``).
+    ``paid_miner_fraction`` is how much of that fraction is actually paid:
+    track allocation times the provisional incumbent's paid fraction.
+    ``service_bps`` is zero outside an enforcing treasury fold. A value this
+    function cannot interpret requires the destination, so the caller resolves
+    the owner hotkey instead of submitting a vector that drops a residual.
+    """
+    if (
+        isinstance(miner_share, bool)
+        or isinstance(paid_miner_fraction, bool)
+        or not math.isfinite(miner_share)
+        or not math.isfinite(paid_miner_fraction)
+        or not 0.0 <= miner_share <= 1.0
+        or not 0.0 <= paid_miner_fraction <= 1.0
+        or type(service_bps) is not int
+        or not 0 <= service_bps <= 10000
+    ):
+        return True
+    positive = any(
+        isinstance(weight, (int, float))
+        and not isinstance(weight, bool)
+        and weight > 0.0
+        for weight in weights.values()
+    )
+    service = service_bps / 10_000
+    paid = (1.0 - service) * miner_share * paid_miner_fraction if positive else 0.0
+    return (1.0 - service - paid) > 0.0
+
+
+def resolve_track_shares(
+    ledger: LedgerResponse, *, default: Mapping[str, int]
+) -> dict[str, int]:
+    """The per-track basis-point split this epoch, from the platform ledger.
+
+    Mirrors :func:`resolve_miner_emission_share`: the platform *may* serve a
+    ``track_shares_bps`` governance field, but this fold refuses to trust
+    anything that is not a coherent ``{track_id: bps}`` map. A missing field, a
+    non-``str`` id, a non-``int`` (or ``bool``) bps, a value outside
+    ``[0, BASIS_POINT_SCALE]``, or an eligible sum exceeding
+    ``BASIS_POINT_SCALE`` all fall back to the compiled ``default`` — so a
+    malformed or truncated ledger degrades to the shipped split rather than an
+    arbitrary one, and every validator folds the same integer bps with no
+    rounding disagreement. v1 ships on the compiled default only (no platform
+    dependency); older platforms omit the field and fold byte-identically.
+    """
+    raw = getattr(ledger, "track_shares_bps", None)
+    if not isinstance(raw, Mapping) or not raw:
+        return dict(default)
+    resolved: dict[str, int] = {}
+    for track_id, bps in raw.items():
+        if (
+            not isinstance(track_id, str)
+            or not track_id
+            or isinstance(bps, bool)
+            or not isinstance(bps, int)
+            or not 0 <= bps <= BASIS_POINT_SCALE
+        ):
+            return dict(default)
+        resolved[track_id] = bps
+    if sum(resolved.values()) > BASIS_POINT_SCALE:
+        return dict(default)
+    return resolved
+
+
+def compute_router_weights(
+    entries: Sequence[RouterLedgerEntry], *, rank_shares: Sequence[float]
+) -> dict[str, float]:
+    """Rank floor-clearing router miners by the scorer's ``combined_score``.
+
+    The centralized router scorer has already gated on the correctness floor and
+    folded token-dominant efficiency into ``combined_score`` (see
+    :mod:`ditto.api_models.router_ledger`); this validator-side fold only ranks
+    the published pool and assigns the frozen ``rank_shares`` by position, using
+    the same ``first_seen`` then ``agent_id`` tie-break as the memory fold so
+    every validator folds identical bytes off the identical ledger. Only entries
+    the scorer marked ``weight_eligible`` with a positive ``combined_score`` earn
+    anything; an empty pool folds to ``{}`` (zero router emission — exactly the
+    shadow state). The returned vector is a *relative* allocation;
+    :func:`blend_track_weights` normalizes it to the track's basis-point share,
+    so ``rank_shares`` need only be finite and positive, not sum to one.
+
+    This runs inside ``Track.fold`` on the consensus ``put_weights`` path, so it
+    must never raise: malformed ``rank_shares`` (empty, non-finite, or ≤ 0)
+    **degrade to ``{}``** (router earns nothing → its bps burn) rather than
+    crashing the whole fold. A genuine misconfiguration is caught loudly at boot
+    by :meth:`ditto.validator.config.ValidatorConfig.__post_init__`; this is the
+    fail-closed runtime backstop.
+    """
+    if not rank_shares:
+        return {}
+    if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
+        return {}
+    scored = [
+        entry
+        for entry in entries
+        if entry.weight_eligible and entry.combined_score > 0.0
+    ]
+    if not scored:
+        return {}
+    ranked = sorted(
+        scored,
+        key=lambda entry: (-entry.combined_score, entry.first_seen, entry.agent_id),
+    )
+    distinct: list[RouterLedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    recipients = distinct[: len(rank_shares)]
+    return {
+        entry.miner_hotkey: rank_shares[index] for index, entry in enumerate(recipients)
+    }
+
+
+def compute_generator_weights(
+    entries: Sequence[GeneratorLedgerEntry], *, rank_shares: Sequence[float]
+) -> dict[str, float]:
+    """Rank generator-competition miners by their latest fresh run score.
+
+    Platform has already run each generator on secret seeds against a
+    top-agent panel and folded every hotkey to its latest run scored inside the
+    freshness window (see :mod:`ditto.api_models.generator_ledger`). This fold
+    only ranks that pool and assigns ``rank_shares`` by position, tie-breaking
+    on ``first_seen`` then ``submission_id`` so every validator folds identical bytes.
+    Only entries marked ``weight_eligible`` with a positive score earn anything,
+    and
+    malformed ``rank_shares`` degrade to ``{}``: like the router fold, this
+    runs on the consensus ``put_weights`` path and must never raise.
+    """
+    if not rank_shares:
+        return {}
+    if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
+        return {}
+    scored = [
+        entry
+        for entry in entries
+        if entry.weight_eligible and math.isfinite(entry.score) and entry.score > 0.0
+    ]
+    ranked = sorted(
+        scored,
+        key=lambda entry: (-entry.score, entry.first_seen, str(entry.submission_id)),
+    )
+    distinct: list[GeneratorLedgerEntry] = []
+    seen_hotkeys: set[str] = set()
+    for entry in ranked:
+        if entry.miner_hotkey in seen_hotkeys:
+            continue
+        seen_hotkeys.add(entry.miner_hotkey)
+        distinct.append(entry)
+    return {
+        entry.miner_hotkey: rank_shares[index]
+        for index, entry in enumerate(distinct[: len(rank_shares)])
+    }
+
+
+def _has_positive_weight(vector: Mapping[str, float]) -> bool:
+    """Whether a track vector carries any payable (strictly positive) weight.
+
+    The single predicate shared by :func:`blend_track_weights` (what actually
+    contributes to the fold) and :func:`track_allocated_share` (what counts as
+    allocated so its bps are *not* burned). A ``{hotkey: 0.0}`` vector is truthy
+    yet pays nobody; folding it as "allocated" would leak its share onto other
+    tracks' miners instead of burning it, so both call sites must agree here.
+    """
+    return any(weight > 0.0 for weight in vector.values())
+
+
+def blend_track_weights(
+    vectors: Mapping[str, Mapping[str, float]],
+    shares_bps: Mapping[str, int],
+) -> dict[str, float]:
+    """Blend independent per-track weight vectors into one by emission share.
+
+    Each track folds its own vector, but the chain accepts exactly one vector per
+    validator, so tracks are combined here by their configured basis-point share.
+
+    A single fully-allocated track (``BASIS_POINT_SCALE`` bps) passes through
+    byte-for-byte: this is the regression guard that a one-track memory registry
+    reproduces today's fold exactly (the vector then meets the unchanged
+    :func:`apply_miner_emission_cap` just as before). Otherwise each track's
+    positive weights are normalized within the track and scaled by
+    ``bps / BASIS_POINT_SCALE``, so a hotkey ranked in two tracks accrues both
+    slices. A track with an empty vector or a non-positive share contributes
+    nothing; its share becomes a shortfall that :func:`track_allocated_share`
+    routes to burn. All-empty folds to ``{}`` (the caller then routes the whole
+    vector to burn).
+    """
+    contributing = {
+        track_id: vector
+        for track_id, vector in vectors.items()
+        if _has_positive_weight(vector) and shares_bps.get(track_id, 0) > 0
+    }
+    if not contributing:
+        return {}
+    if len(contributing) == 1:
+        ((only_id, only_vector),) = contributing.items()
+        if shares_bps.get(only_id, 0) == BASIS_POINT_SCALE:
+            return {
+                hotkey: weight for hotkey, weight in only_vector.items() if weight > 0.0
+            }
+    combined: dict[str, float] = {}
+    for track_id, vector in contributing.items():
+        positives = {
+            hotkey: weight for hotkey, weight in vector.items() if weight > 0.0
+        }
+        total = math.fsum(positives.values())
+        if total <= 0.0:
+            continue
+        scale = (shares_bps[track_id] / BASIS_POINT_SCALE) / total
+        for hotkey, weight in positives.items():
+            combined[hotkey] = combined.get(hotkey, 0.0) + weight * scale
+    return combined
+
+
+def track_allocated_share(
+    shares_bps: Mapping[str, int],
+    vectors: Mapping[str, Mapping[str, float]],
+) -> float:
+    """Fraction of the miner pool actually claimed by non-empty tracks.
+
+    :func:`apply_miner_emission_cap` renormalizes the blended miner vector to
+    ``miner_share``, so an empty track's basis points do **not** burn on their
+    own. To make a track's shortfall burn while leaving the cap untouched, the
+    caller passes ``miner_share * track_allocated_share(...)`` — the summed bps of
+    every track that produced a positive-weight vector (the same
+    :func:`_has_positive_weight` predicate the blend uses), over
+    ``BASIS_POINT_SCALE``. A zero-only vector counts as unallocated, so its share
+    burns instead of leaking onto other tracks.
+    With a single fully-allocated non-empty track the result is exactly ``1.0``,
+    so ``miner_share`` is unchanged and the fold stays byte-identical to the
+    pre-track pipeline; the multi-track shortfall-to-burn only bites once a
+    second track is eligible.
+    """
+    allocated = sum(
+        bps
+        for track_id, bps in shares_bps.items()
+        if bps > 0 and _has_positive_weight(vectors.get(track_id, {}))
+    )
+    return allocated / BASIS_POINT_SCALE
+
+
+def reassign_unclaimed_shares(
+    shares_bps: Mapping[str, int],
+    vectors: Mapping[str, Mapping[str, float]],
+    *,
+    fallbacks: Mapping[str, str],
+) -> dict[str, int]:
+    """Move an empty track's bps to its declared fallback track.
+
+    By default an eligible track that folds no payable miner leaves its share
+    unclaimed and :func:`track_allocated_share` burns it. A track may instead
+    name a fallback (``fallbacks[track_id]``, e.g. ``generator -> memory``):
+    when the track produced no positive weight and the fallback is itself a
+    paying track with a positive share, the track's bps are added to the
+    fallback's and the track drops out of the map. The generator track
+    declares memory so a governed generator share with no weight-eligible
+    generator (Platform still in shadow, an empty round window) pays agent
+    miners rather than burning, which also keeps that state byte-identical
+    to the memory-only fold: with
+    ``{memory: 9000, generator: 1000}`` and no eligible generator, memory
+    folds at the full ``BASIS_POINT_SCALE`` and passes through unchanged.
+
+    One hop only, in a deterministic order, so the result never depends on
+    dict iteration: a fallback that is itself empty keeps the moved bps
+    unclaimed, and they burn exactly as its own would. Integer bps in, integer
+    bps out, so every validator folds the same split.
+    """
+    original = {track_id: bps for track_id, bps in shares_bps.items() if bps > 0}
+    resolved = dict(original)
+    for track_id in sorted(original):
+        target = fallbacks.get(track_id)
+        if (
+            target is None
+            or target == track_id
+            # A fallback governance holds at 0 bps is not paying: the share
+            # stays unclaimed and burns rather than funding a zeroed track.
+            or target not in original
+            or _has_positive_weight(vectors.get(track_id, {}))
+        ):
+            continue
+        # Move only the track's own configured bps (never bps it received),
+        # so a chain of fallbacks is still a single hop.
+        resolved[track_id] -= original[track_id]
+        resolved[target] = resolved.get(target, 0) + original[track_id]
+    return {track_id: bps for track_id, bps in resolved.items() if bps > 0}
+
+
+def split_unpaid_share(weights: Mapping[str, float]) -> tuple[dict[str, float], float]:
+    """Separate a provisional incumbent's unpaid share from a blended vector.
+
+    Returns the payable vector and the fraction of the vector's positive weight
+    that is payable. The caller scales ``miner_share`` by that fraction exactly
+    as it does for an empty track's shortfall (:func:`track_allocated_share`),
+    so the unpaid share burns through the unchanged
+    :func:`apply_miner_emission_cap` instead of being renormalized onto the
+    miners who are paid: each keeps precisely the share it would hold had the
+    incumbent been paid. Without :data:`UNPAID_SHARE_KEY` the vector comes back
+    unchanged with a fraction of exactly ``1.0``, so the cap input is
+    byte-identical to the protocol-27 pipeline.
+    """
+    if UNPAID_SHARE_KEY not in weights:
+        return dict(weights), 1.0
+    paid = {
+        hotkey: weight
+        for hotkey, weight in weights.items()
+        if hotkey != UNPAID_SHARE_KEY
+    }
+    total = math.fsum(weight for weight in weights.values() if weight > 0.0)
+    if total <= 0.0:
+        return paid, 0.0
+    return paid, math.fsum(weight for weight in paid.values() if weight > 0.0) / total
 
 
 def _entry_version(entry: LedgerEntry) -> int:
@@ -246,19 +603,23 @@ def filter_eligible(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
 # Versions that carry a full-confirmation receipt contract, and may therefore
 # have their ordinary quorum withheld when the Platform serves an enforce marker.
 #
-# A receipt requirement is a per-version contract that a version must *opt into*:
-# it only means something once the confirmation lane actually issues bundles at
-# that version and the profile has been calibrated there. Bench v9 is the only
-# version that ever did. v10 and v11 shipped without the lane following them, so
-# they have no receipts to require, and the confirmation system is planned to
-# return at v12 — add 12 here as part of that work, alongside the Platform-side
-# issuance pins (``apps/platform/ditto/api_server/confirmation_bundles.py`` and
-# the ``bench_version == 9`` predicates around it).
+# Derived from the shared protocol package, never retyped: a version has a
+# receipt contract exactly when its scores carry the signed base-evidence stack
+# the confirmation lane projects (``CONFIRMATION_BENCH_VERSIONS``, itself derived
+# from the one ``V9EvidenceBenchVersion`` alias). This used to be a hand-written
+# ``{9}`` with a note to "add 12 later"; the lane then followed the live bench
+# (#894) while this pin did not, so an enforce marker on a v12 ledger would have
+# withheld nothing at all -- the receipt system stranded at v9 for a second time,
+# this time at the fold. Whether enforce is *served* remains the Platform's
+# decision (``set_confirmation_bundle_settings``), taken only after qualified
+# shadow bundles exist at the live version; this constant only says which
+# versions that marker can act on.
 #
-# This set may be enumerated precisely because it fails OPEN: a version absent
-# from it pays on its ordinary quorum. Do not confuse it with a payable-version
-# allowlist, which must never be enumerated — see :func:`filter_weight_confirmed`.
-RECEIPT_CONTRACT_VERSIONS = frozenset({9})
+# This set fails OPEN: a version absent from it pays on its ordinary quorum, and
+# a present one pays unless the Platform explicitly serves enforce. Do not
+# confuse it with a payable-version allowlist, which must never be enumerated —
+# see :func:`filter_weight_confirmed`.
+RECEIPT_CONTRACT_VERSIONS = frozenset(CONFIRMATION_BENCH_VERSIONS)
 
 
 def filter_weight_confirmed(
@@ -322,6 +683,10 @@ def compute_weights(
     dethrone_z: float = 0.0,
     tie_pooling: bool = False,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    incumbent_agent_id: UUID | None = None,
+    unpaid_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -375,6 +740,12 @@ def compute_weights(
     ``put_weights`` rather than zeroing the chain. Pylon/Subtensor normalizes the
     returned vector, so only the ratios matter; when there is no tail the champion
     is the whole vector.
+
+    ``unpaid_agent_id`` names a provisional incumbent (protocol 28): an entry
+    that takes part in the fold -- crown, rank, tie pooling, score-ceiling
+    cohort -- exactly like any other, but whose shares are reported under
+    :data:`UNPAID_SHARE_KEY` instead of its hotkey so the caller burns them
+    (:func:`split_unpaid_share`). ``None`` leaves the vector exactly as before.
     """
     eligible = filter_eligible(entries)
     scored = [e for e in eligible if _effective_composite(e) > 0.0]
@@ -386,7 +757,13 @@ def compute_weights(
     # Order-independent of when each agent happened to be scored — only creation
     # order matters.
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
+        incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     if len(rank_shares) != tail_size + 1:
         raise ValueError("rank_shares must contain champion plus tail_size entries")
@@ -402,6 +779,7 @@ def compute_weights(
             margin=margin,
             dethrone_z=dethrone_z,
             ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         )
         if tie_pooling
         else []
@@ -422,10 +800,18 @@ def compute_weights(
         recipient_shares = list(rank_shares[: len(recipients)])
     if tie_pooling and not ceiling_cohort:
         recipient_shares = _pool_tied_rank_shares(
-            recipients, recipient_shares, dethrone_z=dethrone_z
+            recipients,
+            recipient_shares,
+            margin=margin,
+            dethrone_z=dethrone_z,
+            statistical_band_cap=statistical_band_cap,
         )
     weights = {
-        entry.miner_hotkey: recipient_shares[index]
+        (
+            UNPAID_SHARE_KEY
+            if entry.agent_id == unpaid_agent_id
+            else entry.miner_hotkey
+        ): recipient_shares[index]
         for index, entry in enumerate(recipients)
     }
 
@@ -436,7 +822,9 @@ def _pool_tied_rank_shares(
     recipients: Sequence[LedgerEntry],
     shares: Sequence[float],
     *,
+    margin: float,
     dethrone_z: float,
+    statistical_band_cap: bool = False,
 ) -> list[float]:
     """Average the occupied rank shares inside deterministic tie groups.
 
@@ -454,7 +842,11 @@ def _pool_tied_rank_shares(
         anchor = recipients[start]
         end = start + 1
         while end < len(recipients) and _weight_tied(
-            recipients[end], anchor, dethrone_z=dethrone_z
+            recipients[end],
+            anchor,
+            margin=margin,
+            dethrone_z=dethrone_z,
+            statistical_band_cap=statistical_band_cap,
         ):
             end += 1
         if end - start > 1:
@@ -465,7 +857,12 @@ def _pool_tied_rank_shares(
 
 
 def _weight_tied(
-    candidate: LedgerEntry, anchor: LedgerEntry, *, dethrone_z: float
+    candidate: LedgerEntry,
+    anchor: LedgerEntry,
+    *,
+    margin: float,
+    dethrone_z: float,
+    statistical_band_cap: bool = False,
 ) -> bool:
     """Whether two occupied slots may share weight without inventing evidence."""
     if _quality_primary_efficiency_active((candidate, anchor)):
@@ -478,7 +875,9 @@ def _weight_tied(
     if paired is None:
         return False
     mean_diff, _anchor_ref, se_diff = paired
-    return abs(mean_diff) <= dethrone_z * se_diff
+    if not statistical_band_cap:
+        return abs(mean_diff) <= dethrone_z * se_diff
+    return abs(mean_diff) <= _capped_statistical_band(margin, dethrone_z * se_diff)
 
 
 def _score_ceiling_cohort(
@@ -488,6 +887,7 @@ def _score_ceiling_cohort(
     margin: float,
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> list[LedgerEntry]:
     """Return the uncapped best-score cohort when KOTH cannot be dethroned.
 
@@ -509,13 +909,20 @@ def _score_ceiling_cohort(
         margin=margin,
         dethrone_z=dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     ):
         return []
 
     anchor = ranked[0]
     cohort = [anchor]
     for entry in ranked[1:]:
-        if not _weight_tied(entry, anchor, dethrone_z=dethrone_z):
+        if not _weight_tied(
+            entry,
+            anchor,
+            margin=margin,
+            dethrone_z=dethrone_z,
+            statistical_band_cap=statistical_band_cap,
+        ):
             break
         cohort.append(entry)
     return cohort if len(cohort) > 1 else []
@@ -544,11 +951,22 @@ def select_champion(
     margin: float,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
     scored = [e for e in filter_eligible(entries) if _effective_composite(e) > 0.0]
     return (
-        _champion(scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp)
+        _champion(
+            scored,
+            margin,
+            dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
+            incumbent_agent_id=incumbent_agent_id,
+            crown_gate=crown_gate,
+        )
         if scored
         else None
     )
@@ -635,6 +1053,15 @@ def _bounded_efficiency_factor(entry: LedgerEntry) -> float | None:
         return None
     if _entry_version(entry) < 9:
         return 1.0
+    # Deliberately v9-only, unlike the receipt reads in ``_quality_composite``
+    # and ``_entry_seed_composites``. Bench v9 tied its bounded factor to the
+    # receipt from #675 on. Bench v10+ never did: Platform's KOTH projection
+    # (``koth._bounded_efficiency_factor``) honours the factor whether or not a
+    # receipt is served. Widening this would neutralize every live v10+ factor
+    # while confirmation is off or shadowing (no receipts are served then) and
+    # split the validator from the Platform pin on efficiency tie-breaks. Under
+    # enforce, every served confirmation-capable row carries a receipt, so the
+    # branch could not fire for v10+ anyway (#2989).
     if _entry_version(entry) == 9 and getattr(entry, "v9_confirmation", None) is None:
         return 1.0
     if (
@@ -774,9 +1201,20 @@ def _effective_composite(entry: LedgerEntry) -> float:
 
 
 def _quality_composite(entry: LedgerEntry) -> float:
-    """Return authoritative quality before relative efficiency is applied."""
+    """Return authoritative quality before relative efficiency is applied.
+
+    A verified full-confirmation receipt is the quality authority for every
+    version with a receipt contract (:data:`RECEIPT_CONTRACT_VERSIONS`), not
+    only Bench v9. Platform crowns on ``full_effective_micros`` for each
+    confirmation-capable version (``koth_entries_from_ledger``); reading the
+    raw quorum composite here for v10+ crowned a different champion under
+    enforce and every weight receipt then failed ``ledger_pin_mismatch``
+    (#2989). Platform serves receipts only alongside an explicit enforce
+    marker, so a ledger served while confirmation is off or shadowing has no
+    receipt and still pays its continual aggregate, unchanged.
+    """
     receipt = getattr(entry, "v9_confirmation", None)
-    if _entry_version(entry) == 9 and receipt is not None:
+    if _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS and receipt is not None:
         value = getattr(receipt, "full_effective_micros", None)
         if isinstance(value, int) and not isinstance(value, bool):
             return value / 1_000_000
@@ -789,8 +1227,15 @@ def _quality_primary_efficiency_active(entries: Sequence[LedgerEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
-def _indifference_band(margin: float, statistical: float | None) -> float:
-    """``max(margin, statistical)``, with the statistical term capped.
+def _capped_statistical_band(margin: float, statistical: float) -> float:
+    """Cap uncertainty without adding the dethrone margin to tie membership."""
+    return min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin)
+
+
+def _indifference_band(
+    margin: float, statistical: float | None, *, capped: bool = True
+) -> float:
+    """``max(margin, statistical)``; cap when that fold branch calls for it.
 
     A 3-shared-seed paired SE can explode from one outlier and ask for a
     0.03 lead on a 0.92-vs-0.88 board. The cap keeps uncertainty able to
@@ -798,7 +1243,25 @@ def _indifference_band(margin: float, statistical: float | None) -> float:
     """
     if statistical is None:
         return margin
-    return max(margin, min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
+    if capped:
+        statistical = _capped_statistical_band(margin, statistical)
+    return max(margin, statistical)
+
+
+def _unpaired_statistical_band(
+    challenger: LedgerEntry, champion: LedgerEntry, dethrone_z: float
+) -> float | None:
+    """Statistical term on the comparison score scale, when both SEs exist."""
+    if dethrone_z <= 0.0:
+        return None
+    se_c = _entry_stderr(challenger)
+    se_champ = _entry_stderr(champion)
+    if se_c is None or se_champ is None:
+        return None
+    if not _quality_primary_efficiency_active((challenger, champion)):
+        se_c *= _efficiency_stderr_scale(challenger)
+        se_champ *= _efficiency_stderr_scale(champion)
+    return dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
 
 
 def _dethrone_composite(entry: LedgerEntry, *, quality_primary: bool) -> float:
@@ -843,12 +1306,14 @@ def _entry_seed_composites(entry: LedgerEntry) -> dict[int, float] | None:
     non-negative int seeds with no duplicate; anything else is treated as absent
     (a consensus-safe guard so two validators never pair off a differently-parsed
     map)."""
-    # A v9 full-confirmation receipt is a separate signed score authority. Its
-    # KOTH comparison must use that verified receipt, never legacy continual
-    # histories that the receipt does not bind and an untrusted Platform could
-    # otherwise attach to recreate the pre-v9 paired-dethrone path.
+    # A full-confirmation receipt is a separate signed score authority for
+    # every version with a receipt contract. Its KOTH comparison must use that
+    # verified receipt, never legacy continual histories that the receipt does
+    # not bind and an untrusted Platform could otherwise attach to recreate the
+    # pre-v9 paired-dethrone path. Platform already omits those histories from
+    # any row it serves with a receipt (#2989).
     if (
-        _entry_version(entry) == 9
+        _entry_version(entry) in RECEIPT_CONTRACT_VERSIONS
         and getattr(entry, "v9_confirmation", None) is not None
     ):
         return None
@@ -918,16 +1383,81 @@ def _elastic_confirmation_seed_ceiling(
     return min(cap, max(floor, required))
 
 
+def reign_seed_planning(
+    anchors: Iterable[object] | None,
+    *,
+    champion_agent_id: UUID,
+    version: int,
+) -> tuple[str | None, bool]:
+    """``(block_hash, allow_fresh_seeds)`` for one reign, from the ledger's pins.
+
+    Mirrors Platform's ``reign_seed_planning``: below the binding floor the
+    legacy unbound derivation with fresh seeds allowed; at or above it the
+    finalized block hash Platform pinned for this champion
+    (``LedgerResponse.confirmation_seed_anchors``), or -- with no matching pin
+    -- **no fresh seeds**, so a validator never introduces a confirmation seed
+    a miner could have computed from public ids. Every input is ledger data,
+    so the whole fleet plans the same family.
+    """
+    if not crn_block_binding_active(version):
+        return (None, True)
+    for anchor in anchors or ():
+        if (
+            getattr(anchor, "champion_agent_id", None) == champion_agent_id
+            and getattr(anchor, "bench_version", None) == version
+        ):
+            block_hash = getattr(anchor, "anchor_block_hash", None)
+            if isinstance(block_hash, str) and block_hash:
+                return (block_hash, True)
+    return (None, False)
+
+
+def version_seed_planning(
+    anchors: Iterable[object] | None, *, version: int
+) -> tuple[str | None, bool]:
+    """``(block_hash, allow_fresh_seeds)`` for a comparison not keyed on a champion.
+
+    The version-bump re-score sweep hashes the whole stale set rather than one
+    champion, so it binds to the version's **oldest pinned reign anchor** (the
+    ledger serves them oldest first). Any finalized block nobody could know at
+    submission time gives the unpredictability; agreeing on *which* one is what
+    the ledger order buys. Below the floor: legacy, unbound.
+    """
+    if not crn_block_binding_active(version):
+        return (None, True)
+    for anchor in anchors or ():
+        if getattr(anchor, "bench_version", None) != version:
+            continue
+        block_hash = getattr(anchor, "anchor_block_hash", None)
+        if isinstance(block_hash, str) and block_hash:
+            return (block_hash, True)
+    return (None, False)
+
+
 def _bounded_continual_seed_set(
     champion: LedgerEntry,
     entries: Sequence[LedgerEntry],
     *,
     current_version: int,
     ceiling: int,
+    block_hash: str | None = None,
+    allow_fresh_seeds: bool = True,
 ) -> tuple[int, ...]:
-    """Most-shared durable seeds first, then fresh champion-anchored CRNs."""
-    anchor = confirmation_seeds(
-        [str(champion.agent_id)], version=current_version, count=ceiling
+    """Most-shared durable seeds first, then fresh champion-anchored CRNs.
+
+    ``block_hash`` / ``allow_fresh_seeds`` come from :func:`reign_seed_planning`:
+    a bound reign plans fresh bound seeds, an unpinned bench v13+ reign plans
+    recorded coverage only.
+    """
+    anchor = (
+        confirmation_seeds(
+            [str(champion.agent_id)],
+            version=current_version,
+            count=ceiling,
+            block_hash=block_hash,
+        )
+        if allow_fresh_seeds
+        else []
     )
     anchor_order = {seed: index for index, seed in enumerate(anchor)}
     coverage: dict[int, int] = {}
@@ -964,8 +1494,14 @@ def top5_confirmation_set(
     cohort_size: int | None = None,
     max_cohort_size: int = 25,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    confirmation_seed_anchors: Iterable[object] | None = None,
 ) -> Top5ConfirmationPlan | None:
     """Plan one continual champion-anchored shared-seed round.
+
+    ``confirmation_seed_anchors`` is ``LedgerResponse.confirmation_seed_anchors``:
+    at bench v13+ the champion's family is derived from its pinned finalized
+    block, and with no pin yet the plan covers recorded seeds only.
 
     ``cohort_size`` is how many ranked agents the *platform's operator* wants
     rescored (``LedgerResponse.continual_retest_cohort_size``). ``None`` --- an
@@ -992,7 +1528,11 @@ def top5_confirmation_set(
     if not scored:
         return None
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     # Never below the emission set, never above the cap: a platform that
     # reported something absurd (or a hostile one) cannot make this validator
@@ -1010,11 +1550,18 @@ def top5_confirmation_set(
         z=dethrone_z,
         maximum=max_seeds,
     )
+    block_hash, allow_fresh_seeds = reign_seed_planning(
+        confirmation_seed_anchors,
+        champion_agent_id=champion.agent_id,
+        version=current_version,
+    )
     full = _bounded_continual_seed_set(
         champion,
         emission_members,
         current_version=current_version,
         ceiling=cap,
+        block_hash=block_hash,
+        allow_fresh_seeds=allow_fresh_seeds,
     )
     champion_map = _entry_seed_composites(champion) or {}
     covered = 0
@@ -1105,6 +1652,8 @@ def _beats(
     dethrone_z: float,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    crown_gate: CrownGate | None = None,
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
     **indifference band** = max(fixed composite-point margin, statistical band).
@@ -1112,18 +1661,20 @@ def _beats(
     When both entries carry aligned per-seed confirmation composites over at
     least two SHARED CRN seeds (P5) and ``dethrone_z > 0``, the statistical term
     is a **paired** z-test (:func:`_paired_dethrone`): the lead is the mean
-    per-seed difference and the band is ``dethrone_z * se_diff``, where se_diff is
-    the SEM of the paired differences. Pairing cancels shared dataset difficulty,
-    so the band is tighter than the unpaired form at the same confidence.
+    per-seed difference and the statistical term is ``dethrone_z * se_diff``,
+    where se_diff is the SEM of the paired differences. Pairing cancels shared
+    dataset difficulty, so the band is tighter at the same confidence.
 
-    Otherwise the **unpaired** rule applies (byte-identical to before):
+    Otherwise the **unpaired** rule applies:
 
-        band = max( margin,
-                    dethrone_z * sqrt(se_challenger² + se_champion²) )
+        band = max(margin, min(dethrone_z * sqrt(se_challenger² + se_champion²),
+                               KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
 
     a two-sample z-test that engages only when BOTH entries carry a
     ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
-    is exactly the fixed composite-point margin. Both sides use
+    is exactly the fixed composite-point margin. Both statistical terms use
+    :func:`_indifference_band` before version decay and the optional ceiling
+    clamp. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
     else the raw composite). Pure and deterministic (consensus-safe).
 
@@ -1133,13 +1684,24 @@ def _beats(
 
     Protocol-21 quality-primary compares authoritative quality, not the
     efficiency-adjusted projection, so a 0.001 official lead cannot skip
-    hysteresis merely because a factor is present."""
+    hysteresis merely because a factor is present.
+
+    Under a protocol-34 ``crown_gate`` only the paired branch can dethrone,
+    and only with ``crown_gate.min_shared_seeds`` shared seeds: an incumbent's
+    retest-folded score is never compared with a newcomer's unretested
+    three-seed canonical."""
+    if crown_gate is not None and (
+        _shared_seed_count(challenger, champion) < crown_gate.min_shared_seeds
+        or _paired_dethrone(challenger, champion, dethrone_z) is None
+    ):
+        return False
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     return observed_score > required_score
 
@@ -1151,6 +1713,7 @@ def _dethrone_scores(
     dethrone_z: float,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> tuple[float, float]:
     """Return the observed and strictly-exceeded required challenger scores."""
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
@@ -1166,17 +1729,11 @@ def _dethrone_scores(
 
     chall = _dethrone_composite(challenger, quality_primary=quality_primary)
     champ = _dethrone_composite(champion, quality_primary=quality_primary)
-    band = margin
-    if dethrone_z > 0.0:
-        se_c = _entry_stderr(challenger)
-        se_champ = _entry_stderr(champion)
-        if se_c is not None and se_champ is not None:
-            if not quality_primary:
-                se_c *= _efficiency_stderr_scale(challenger)
-                se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
+    band = _indifference_band(
+        margin,
+        _unpaired_statistical_band(challenger, champion, dethrone_z),
+        capped=statistical_band_cap,
+    )
     band *= _dethrone_band_scale(challenger, champion, champ)
     band = _ceiling_capped_band(
         band, challenger, champion, champ, active=ceiling_band_clamp
@@ -1194,6 +1751,7 @@ def _score_ceiling_deadlocked(
     margin: float,
     dethrone_z: float,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> bool:
     """Whether even the challenger's maximum score cannot clear the crown."""
     observed_score, required_score = _dethrone_scores(
@@ -1202,6 +1760,7 @@ def _score_ceiling_deadlocked(
         margin,
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
     )
     quality_primary = _quality_primary_efficiency_active((challenger, champion))
     ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
@@ -1214,6 +1773,9 @@ def _champion(
     dethrone_z: float = 0.0,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
     order, dethroning only when a later entry clears the indifference band
@@ -1230,11 +1792,65 @@ def _champion(
     with efficiency as an exact-quality tiebreak; the crown still requires the
     challenger to clear the indifference band on authoritative quality. A
     0.001 official lead is not a dethrone.
+
+    A protocol-34 ``crown_gate`` (:class:`CrownGate`) first enforces champion
+    standing -- an opener outside the top ``standing_rank`` hands the crown to
+    the best-qualified standing entry -- and then walks only standing
+    challengers, each of which must win the paired comparison on at least
+    ``min_shared_seeds`` shared seeds. The result is always a standing entry.
     """
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
-    champ = ordered[0]
-    for e in ordered[1:]:
-        if _beats(e, champ, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp):
+    # Crown incumbency (``LedgerResponse.crown_mode == "incumbent"``): the
+    # previous epoch pin's champion, resolved into this pool by the platform,
+    # opens the walk instead of the earliest lineage. Without it a senior
+    # claimant sitting inside the band retakes the crown on every read as the
+    # continual mean wobbles by a score quantum -- and clips every validator
+    # that read the other side of the flip. Every other entry still has to
+    # clear the band over the running champion, in the same first-seen order,
+    # so ``first_seen`` keeps breaking ties among non-incumbents. An incumbent
+    # that is not in the pool (bootstrap, lineage gone) is simply absent and
+    # the classic walk runs; the platform never serves the id without the
+    # marker, and the worker never passes it without the marker.
+    incumbent = next((e for e in entries if e.agent_id == incumbent_agent_id), None)
+    if incumbent is not None:
+        champ = incumbent
+        challengers = [e for e in ordered if e.agent_id != incumbent.agent_id]
+    else:
+        champ = ordered[0]
+        challengers = ordered[1:]
+    if crown_gate is not None:
+        quality_primary = _quality_primary_efficiency_active(entries)
+        ranked = sorted(
+            entries,
+            key=lambda e: _ranking_key(e, quality_primary=quality_primary),
+        )
+        standing = ranked[: max(1, crown_gate.standing_rank)]
+        standing_ids = {e.agent_id for e in standing}
+        if champ.agent_id not in standing_ids:
+            outgoing = champ
+            champ = next(
+                (
+                    e
+                    for e in standing
+                    if _shared_seed_count(e, outgoing) >= crown_gate.min_shared_seeds
+                ),
+                standing[0],
+            )
+        challengers = [
+            e
+            for e in ordered
+            if e.agent_id in standing_ids and e.agent_id != champ.agent_id
+        ]
+    for e in challengers:
+        if _beats(
+            e,
+            champ,
+            margin,
+            dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
+            crown_gate=crown_gate,
+        ):
             champ = e
     return champ
 
@@ -1282,6 +1898,9 @@ def agents_needing_rescore(
     tail_size: int,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
@@ -1298,7 +1917,13 @@ def agents_needing_rescore(
     if not scored:
         return []
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
+        incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
@@ -1311,27 +1936,16 @@ def _unpaired_band(
     dethrone_z: float,
     *,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
 ) -> float:
     """The unpaired indifference band :func:`_beats` applies to this pair:
-    ``max(margin, dethrone_z * sqrt(se_c² + se_champ²))``, the
-    statistical term engaging only when both entries carry a stderr."""
-    band = margin
-    if dethrone_z > 0.0:
-        se_c = _entry_stderr(challenger)
-        se_champ = _entry_stderr(champion)
-        if se_c is not None and se_champ is not None:
-            # Standard error is expressed on the same pre-efficiency score
-            # scale as the entry's quality.  The contested-set predicate must
-            # compare the same transformed distributions as ``_beats``;
-            # otherwise a curve-v3 penalty/bonus can make scheduling disagree
-            # with the actual dethrone decision. Quality-primary dethrones on
-            # quality, so leave stderr unscaled there.
-            if not _quality_primary_efficiency_active((challenger, champion)):
-                se_c *= _efficiency_stderr_scale(challenger)
-                se_champ *= _efficiency_stderr_scale(champion)
-            stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
-            if stat_band > band:
-                band = stat_band
+    ``max(margin, statistical)``, capped at the consensus multiple of margin.
+    The statistical term engages only when both entries carry a stderr."""
+    band = _indifference_band(
+        margin,
+        _unpaired_statistical_band(challenger, champion, dethrone_z),
+        capped=statistical_band_cap,
+    )
     champ = _dethrone_composite(
         champion,
         quality_primary=_quality_primary_efficiency_active((challenger, champion)),
@@ -1356,15 +1970,23 @@ def _entry_has_seeds(entry: LedgerEntry, seeds: Sequence[int]) -> bool:
     return set(seeds).issubset(have.keys())
 
 
-def _shares_confirmation_seeds(a: LedgerEntry, b: LedgerEntry) -> bool:
+def _shares_confirmation_seeds(
+    a: LedgerEntry, b: LedgerEntry, *, minimum: int = 2
+) -> bool:
     """Whether the paired dethrone statistic can already decide this pair:
-    both entries carry per-seed confirmation composites over at least two
-    shared CRN seeds (the :func:`_paired_dethrone` precondition)."""
+    both entries carry per-seed confirmation composites over at least
+    ``minimum`` shared CRN seeds (two is the :func:`_paired_dethrone`
+    precondition; a protocol-34 crown gate raises it)."""
+    return _shared_seed_count(a, b) >= minimum
+
+
+def _shared_seed_count(a: LedgerEntry, b: LedgerEntry) -> int:
+    """Confirmation seeds both entries carry a validated composite for."""
     a_map = _entry_seed_composites(a)
     b_map = _entry_seed_composites(b)
     if a_map is None or b_map is None:
-        return False
-    return len(set(a_map) & set(b_map)) >= 2
+        return 0
+    return len(set(a_map) & set(b_map))
 
 
 def contested_confirmation_set(
@@ -1374,6 +1996,9 @@ def contested_confirmation_set(
     margin: float,
     dethrone_z: float = 0.0,
     ceiling_band_clamp: bool = False,
+    statistical_band_cap: bool = False,
+    incumbent_agent_id: UUID | None = None,
+    crown_gate: CrownGate | None = None,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
     sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
@@ -1413,7 +2038,13 @@ def contested_confirmation_set(
     if len(scored) < 2:
         return []
     champion = _champion(
-        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        scored,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
+        statistical_band_cap=statistical_band_cap,
+        incumbent_agent_id=incumbent_agent_id,
+        crown_gate=crown_gate,
     )
     if _entry_version(champion) != current_version:
         return []
@@ -1433,9 +2064,18 @@ def contested_confirmation_set(
             )
         )
         <= _unpaired_band(
-            e, champion, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+            e,
+            champion,
+            margin,
+            dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
+            statistical_band_cap=statistical_band_cap,
         )
-        and not _shares_confirmation_seeds(e, champion)
+        and not _shares_confirmation_seeds(
+            e,
+            champion,
+            minimum=2 if crown_gate is None else crown_gate.min_shared_seeds,
+        )
     ]
     if not contested:
         return []

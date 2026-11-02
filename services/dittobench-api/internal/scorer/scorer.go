@@ -145,6 +145,36 @@ func answerCarriesValue(answer, needleValue string) bool {
 	return containsNumberToken(got, want)
 }
 
+// answerCarriesValueV14 is answerCarriesValue under the v14 number boundary:
+// a "." or "," that no digit follows ends the token, so "the index is 3,418,
+// up 2%" and "3,418." mid-reply both carry "3,418", while "3,418.5" and
+// "3,4180" still do not. The leading boundary, the sign rule and the separator
+// stripping are unchanged, so the needle still cannot match inside another
+// number and a decoy is read by the same rule. The caller passes the reply as
+// grade.ReplyAsRead reads it (markdown rendered, non-ASCII spaces folded).
+func answerCarriesValueV14(answer, needleValue string) bool {
+	want := stripSeparators(needleValue)
+	if want == "" {
+		return false
+	}
+	text := stripSeparators(normalizeAnswer(answer))
+	for i := 0; ; {
+		j := strings.Index(text[i:], want)
+		if j < 0 {
+			return false
+		}
+		j += i
+		before := j == 0 || !numAttached(text[j-1])
+		end := j + len(want)
+		after := end >= len(text) || !numAttached(text[end]) ||
+			((text[end] == '.' || text[end] == ',') && (end+1 >= len(text) || !isDigit(text[end+1])))
+		if before && after {
+			return true
+		}
+		i = j + 1
+	}
+}
+
 // stripSeparators removes thousands separators (commas, spaces) that fall between
 // digits so "3,418" / "3 418" / "3418" all normalize to "3418", without merging
 // two genuinely separate numbers ("call 5, order 9" stays "call 5, order 9").
@@ -390,6 +420,14 @@ func MetamorphicConsistency(perCase []protocol.CaseScore) *float64 {
 		// them here charged one signal twice and let a family that measures no
 		// phrasing at all contribute a quarter of the phrasing-robustness rate.
 		if strings.HasPrefix(cs.TwinGroup, persona.InjectionTwinPrefix) {
+			continue
+		}
+		// v13 restraint groups (decision_twin, tool cases) are scored by their
+		// own group rule (ApplyV13RestraintGroupRule); their members are tool
+		// scores with no Correct verdict and would read as a trivially
+		// consistent family here. Relation is populated only for v13, so this
+		// is a no-op for every earlier report.
+		if cs.Relation == protocol.TwinRelationDecision {
 			continue
 		}
 		// An undelivered sibling makes the whole family unusable: a 3-member group
@@ -747,7 +785,7 @@ func TransformAuditFactor(perCase []protocol.CaseScore, enforced bool) float64 {
 // historical constants byte-for-byte.
 func CompositeGateForVersion(perCase []protocol.CaseScore, benchVersion int) float64 {
 	if benchVersion >= protocol.BenchVersionV7 {
-		return compositeGateV7(perCase)
+		return compositeGateV7(perCase, benchVersion)
 	}
 	gate := CompositeGate(perCase)
 	if benchVersion >= protocol.BenchVersionV5 {
@@ -785,7 +823,10 @@ func CompositeGateForVersion(perCase []protocol.CaseScore, benchVersion int) flo
 // over-called, so an isolated stray call is nearly free while a harness that acts
 // on every recall question takes the full bounded hit.
 func MemoryOverCallFactor(perCase []protocol.CaseScore) float64 {
-	return memoryOverCallFactorWith(perCase, memoryOverCallMaxPenalty)
+	// The pre-v7 gate. Its contract predates the declarative-acknowledgement
+	// category entirely, so it keeps the lifecycle-only exclusion (see
+	// memoryWriteCategory).
+	return memoryOverCallFactorWith(perCase, memoryOverCallMaxPenalty, protocol.BenchVersionV3)
 }
 
 // metamorphicMaxPenalty is the deepest the metamorphic-consistency factor can
@@ -1225,6 +1266,14 @@ var memoryTools = map[string]bool{
 	"search_subjects":             true,
 	"fetch_memories":              true,
 	"search_memories_in_subjects": true,
+}
+
+// IsMemoryTool reports whether name is one of the catalog's memory-retrieval
+// tools (harness-internal, never served by the mock endpoint). The v13 catalog
+// capture uses it to decide whether an offered catalog left the model in a
+// position to ACT.
+func IsMemoryTool(name string) bool {
+	return memoryTools[name]
 }
 
 // allMemoryTools reports whether every expected tool is a memory-retrieval tool

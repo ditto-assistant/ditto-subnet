@@ -1,0 +1,10 @@
+[Unit]
+Description=Primary screener partition (VMs, reviews and workers)
+[Slice]
+CPUAccounting=yes
+CPUQuota=2400%
+CPUWeight=200
+MemoryAccounting=yes
+MemoryHigh=22G
+MemoryMax=24G
+TasksMax=infinity

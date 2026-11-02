@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -22,6 +23,13 @@ type QuestionPlan struct {
 	Facts           []string
 	Constraints     []string
 	Operations      []string
+	// Claims are the typed graded assertions of a story v2 plan (bench_version
+	// >= 13, questions_v13.go). Validator-internal; nil for every other family.
+	Claims []Claim
+	// Unanswerable plans prove absence; Family binds a decision twin.
+	Unanswerable bool
+	Family       string
+	asOfAnchor   time.Time
 
 	oracleKind  string
 	oracleIndex int
@@ -60,10 +68,30 @@ var errLexicalShortcut = errors.New("lexical shortcut")
 // excluded; every structural ambiguity, missing needle, or oracle mismatch
 // fails generation instead of entering a scored dataset.
 func (w World) QuestionPlans(count int) ([]QuestionPlan, error) {
+	return w.questionPlansFiltered(count, nil, nil)
+}
+
+// questionPlansFiltered is QuestionPlans with an optional (oracle, index)
+// exclusion set applied to the candidate list before validation and an
+// optional required set selected ahead of the ordinary draw. Nil or empty sets
+// leave the v8 selection byte-identical; the v13 caller (QuestionPlansExcluding)
+// also rebalances the story quota so ordinary programs keep a floor share after
+// the v13 families are carved out.
+func (w World) questionPlansFiltered(count int, exclude, require map[string]bool) ([]QuestionPlan, error) {
 	if count <= 0 {
 		return nil, nil
 	}
+	v13 := len(exclude) > 0 || len(require) > 0
 	candidates := w.questionCandidates()
+	if len(exclude) > 0 {
+		kept := candidates[:0]
+		for _, candidate := range candidates {
+			if !exclude[excludeKey(candidate.oracleKind, candidate.oracleIndex)] {
+				kept = append(kept, candidate)
+			}
+		}
+		candidates = kept
+	}
 	if count > len(candidates) {
 		return nil, fmt.Errorf("world has %d validated question candidates, need %d", len(candidates), count)
 	}
@@ -71,6 +99,7 @@ func (w World) QuestionPlans(count int) ([]QuestionPlan, error) {
 	r.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
 	storyPlans := make([]QuestionPlan, 0, len(w.StoryArcs)*5)
 	ordinaryPlans := make([]QuestionPlan, 0, len(candidates))
+	requiredPlans := make([]QuestionPlan, 0, len(require))
 	seenQuestions := make(map[string]bool, len(candidates))
 	for i := range candidates {
 		if err := w.validatePlan(candidates[i]); err != nil {
@@ -87,25 +116,42 @@ func (w World) QuestionPlans(count int) ([]QuestionPlan, error) {
 			return nil, fmt.Errorf("duplicate rendered question %q", candidates[i].Case.Question)
 		}
 		seenQuestions[q] = true
-		if isStoryOracle(candidates[i].oracleKind) {
+		switch {
+		case require[excludeKey(candidates[i].oracleKind, candidates[i].oracleIndex)]:
+			requiredPlans = append(requiredPlans, candidates[i])
+		case isStoryOracle(candidates[i].oracleKind):
 			storyPlans = append(storyPlans, candidates[i])
-		} else {
+		default:
 			ordinaryPlans = append(ordinaryPlans, candidates[i])
 		}
 	}
-	if len(storyPlans)+len(ordinaryPlans) < count {
-		return nil, fmt.Errorf("world has only %d shortcut-free question candidates, need %d", len(storyPlans)+len(ordinaryPlans), count)
+	if len(requiredPlans) < len(require) {
+		return nil, fmt.Errorf("world validated %d of %d required question candidates", len(requiredPlans), len(require))
+	}
+	if len(storyPlans)+len(ordinaryPlans)+len(requiredPlans) < count {
+		return nil, fmt.Errorf("world has only %d shortcut-free question candidates, need %d", len(storyPlans)+len(ordinaryPlans)+len(requiredPlans), count)
 	}
 	// Every scored medium/full profile carries a fixed number of deep-story
 	// programs. Seed changes their entities, joins, state transitions, wording,
 	// and placement, but not the difficulty-class count.
-	storyQuota := storyQuestionQuota(count, len(storyPlans))
-	if len(ordinaryPlans) < count-storyQuota {
-		storyQuota = count - len(ordinaryPlans)
+	remaining := count - len(requiredPlans)
+	storyQuota := storyQuestionQuota(remaining, len(storyPlans))
+	if v13 {
+		// v13 carves point-in-time and grounded-abstention pairs out of the same
+		// budget, so "every story program" would leave almost no ordinary world
+		// program. Cap story at two thirds of what remains so ordinary contact,
+		// project, and trip programs keep a floor share.
+		if capped := remaining * 2 / 3; storyQuota > capped {
+			storyQuota = capped
+		}
+	}
+	if len(ordinaryPlans) < remaining-storyQuota {
+		storyQuota = remaining - len(ordinaryPlans)
 	}
 	selected := make([]QuestionPlan, 0, count)
+	selected = append(selected, requiredPlans...)
 	selected = append(selected, storyPlans[:storyQuota]...)
-	selected = append(selected, ordinaryPlans[:count-storyQuota]...)
+	selected = append(selected, ordinaryPlans[:remaining-storyQuota]...)
 	r.Shuffle(len(selected), func(i, j int) { selected[i], selected[j] = selected[j], selected[i] })
 	return selected, nil
 }
@@ -126,7 +172,7 @@ func isStoryOracle(kind string) bool { return strings.HasPrefix(kind, "story-") 
 func (w World) questionCandidates() []QuestionPlan {
 	out := make([]QuestionPlan, 0, 2*len(w.People)+3*len(w.Projects)+4*len(w.Trips))
 	for i, p := range w.People {
-		current := contactCurrentQuestion(p, i)
+		current := w.contactCurrentQuestion(p, i)
 		out = append(out, w.personPlan(oracleContactCurrent, i, current, p.Email, p.PreviousEmail))
 
 		previous := []string{
@@ -135,6 +181,9 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("I need the pre-correction email for %s — my %s who handled the %s in %s. What was it?", p.Nickname, p.Relation, p.Context, p.City),
 			fmt.Sprintf("Looking back before the update, which email did I first have for %s, my %s from the %s who lives in %s?", p.Nickname, p.Relation, p.Context, p.City),
 		}[i%4]
+		if w.v13Surface() {
+			previous = w.v13Question(oracleContactPrevious, i, map[string]string{"nickname": p.Nickname, "relation": p.Relation, "city": p.City, "context": p.Context})
+		}
 		out = append(out, w.personPlan(oracleContactPrevious, i, previous, p.PreviousEmail, p.Email))
 	}
 
@@ -146,6 +195,10 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("What remains on the corrected %s bill tied to %q, the %s project for %s, after what we already paid?", p.Vendor, p.Alias, p.Purpose, p.Client),
 			fmt.Sprintf("Reconcile %q for %s: after replacing the original %s invoice figure with the approved one and subtracting the partial payment, what balance remains?", p.Alias, p.Client, p.Vendor),
 		}[i%4]
+		projectSlots := map[string]string{"aliasq": fmt.Sprintf("%q", p.Alias), "purpose": p.Purpose, "client": p.Client, "vendor": p.Vendor}
+		if w.v13Surface() {
+			outstanding = w.v13Question(oracleProjectOutstanding, i, projectSlots)
+		}
 		out = append(out, QuestionPlan{
 			Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
 			RequiredPairIDs: []string{p.ContextPairID, p.LedgerPairID, p.CorrectionPairID},
@@ -160,6 +213,9 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("What up-to-date email belongs to the person running %q on our side — %s's %s engagement?", p.Alias, p.Client, p.Purpose),
 			fmt.Sprintf("I am sending the %q update. Resolve the internal owner from the %s work for %s, then use their current rather than original email.", p.Alias, p.Purpose, p.Client),
 		}[i%4]
+		if w.v13Surface() {
+			current = w.v13Question(oracleProjectLeadCurrent, i, projectSlots)
+		}
 		out = append(out, w.projectLeadPlan(oracleProjectLeadCurrent, i, current, lead.Email, lead.PreviousEmail))
 
 		previous := []string{
@@ -168,6 +224,9 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("What was the original email for the internal owner of the %s project for %s that we call %q?", p.Purpose, p.Client, p.Alias),
 			fmt.Sprintf("Looking back before the update, which email was saved for %q's internal owner on the %s work for %s?", p.Alias, p.Purpose, p.Client),
 		}[i%4]
+		if w.v13Surface() {
+			previous = w.v13Question(oracleProjectLeadPrevious, i, projectSlots)
+		}
 		out = append(out, w.projectLeadPlan(oracleProjectLeadPrevious, i, previous, lead.PreviousEmail, lead.Email))
 	}
 
@@ -183,6 +242,14 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("Can you piece together the updated stays for %s, our %s trip from %s? How long is the trip altogether now?", trip.Alias, trip.Purpose, trip.When),
 			fmt.Sprintf("Remind me how long %s is now — the %s trip from %s — after we changed the %s stay.", trip.Alias, trip.Purpose, trip.When, changedCountry),
 		}[i%4]
+		tripSlots := map[string]string{
+			"alias": trip.Alias, "purpose": trip.Purpose, "when": trip.When,
+			"c0": trip.Countries[0], "c1": trip.Countries[1], "c2": trip.Countries[2],
+			"changed": changedCountry, "country": trip.Countries[changed],
+		}
+		if w.v13Surface() {
+			current = w.v13Question(oracleTripCurrent, i, tripSlots)
+		}
 		out = append(out, tripPlan(w, oracleTripCurrent, i, current, trip.CurrentDays, commonEvidence, constraints))
 
 		previous := []string{
@@ -191,6 +258,9 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("How many days had we originally planned for the stay we later revised on %s, our %s trip from %s?", trip.Alias, trip.Purpose, trip.When),
 			fmt.Sprintf("In our first plan for %s, the %s trip from %s, how long was the stay that eventually changed?", trip.Alias, trip.Purpose, trip.When),
 		}[i%4]
+		if w.v13Surface() {
+			previous = w.v13Question(oracleTripChangedLegPrevious, i, tripSlots)
+		}
 		out = append(out, tripPlan(w, oracleTripChangedLegPrevious, i, previous, trip.OldLegDays[changed], commonEvidence, []string{trip.Alias, trip.Purpose, trip.When}))
 
 		leg := []string{
@@ -199,6 +269,9 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("For %s, our %s trip, how many days is the changed %s stay now?", trip.Alias, trip.Purpose, changedCountry),
 			fmt.Sprintf("After changing the %s part of %s, our trip from %s, how many days are we spending there?", changedCountry, trip.Alias, trip.When),
 		}[i%4]
+		if w.v13Surface() {
+			leg = w.v13Question(oracleTripChangedLegCurrent, i, tripSlots)
+		}
 		out = append(out, tripPlan(w, oracleTripChangedLegCurrent, i, leg, trip.LegDays[changed], commonEvidence, constraints))
 
 		longest := trip.LegDays[0]
@@ -213,19 +286,102 @@ func (w World) questionCandidates() []QuestionPlan {
 			fmt.Sprintf("Once the %s change is included, what is the longest stay on %s, our %s trip from %s?", changedCountry, trip.Alias, trip.Purpose, trip.When),
 			fmt.Sprintf("For %s in %s, our %s trip with the changed %s stay, how many days is the longest stop?", trip.Alias, trip.When, trip.Purpose, changedCountry),
 		}[i%4]
+		if w.v13Surface() {
+			change = w.v13Question(oracleTripLongestCurrent, i, tripSlots)
+		}
 		out = append(out, tripPlan(w, oracleTripLongestCurrent, i, change, longest, commonEvidence, constraints))
 	}
 	out = append(out, w.storyQuestionCandidates()...)
 	return out
 }
 
-func contactCurrentQuestion(p Person, index int) string {
+func (w World) contactCurrentQuestion(p Person, index int) string {
+	if w.v13Surface() {
+		return w.v13Question(oracleContactCurrent, index, map[string]string{"name": p.Name, "employer": p.Employer, "context": p.Context})
+	}
 	return []string{
 		fmt.Sprintf("For the %s follow-up, what email should I actually use now for %s at %s? I want to avoid sending the note to an inbox nobody checks anymore, so please double-check before I hit send.", p.Context, p.Name, p.Employer),
 		fmt.Sprintf("I need to reach %s at %s about the %s. Which email is current? I remember we had to replace an older one, and I would rather verify than have this disappear.", p.Name, p.Employer, p.Context),
 		fmt.Sprintf("Which up-to-date email belongs to %s at %s, the person from the %s? I am pulling together the final details before I send anything and want to make sure it reaches them.", p.Name, p.Employer, p.Context),
 		fmt.Sprintf("What is the corrected email for %s at %s? This is for the %s follow-up, and I do not want the message disappearing into their old workplace. Please check the latest one.", p.Name, p.Employer, p.Context),
 	}[index%4]
+}
+
+// projectOutstandingPlan renders the ordinary outstanding-balance program for
+// one project. Shared by the v8 candidate list and the v13 decision twins so
+// both draw the same surface family.
+func (w World) projectOutstandingPlan(i int) QuestionPlan {
+	return w.projectOutstandingSurface(i, i)
+}
+
+// projectOutstandingSurface renders the outstanding-balance program for project
+// i under surface variant `variant`. The ordinary pool always passes variant ==
+// i (the frozen v8 draw); the v13 decision twins walk the other variants when
+// the frozen one trips the lexical-shortcut exclusion.
+func (w World) projectOutstandingSurface(i, variant int) QuestionPlan {
+	p := w.Projects[i]
+	outstanding := []string{
+		fmt.Sprintf("For %q, the %s work for %s, what is still owed to %s once the approved correction and the payment already sent are reconciled?", p.Alias, p.Purpose, p.Client, p.Vendor),
+		fmt.Sprintf("AP needs the remaining balance for %s's invoice on %q for %s. Use the corrected total, not the draft, and account for our payment.", p.Vendor, p.Alias, p.Client),
+		fmt.Sprintf("What remains on the corrected %s bill tied to %q, the %s project for %s, after what we already paid?", p.Vendor, p.Alias, p.Purpose, p.Client),
+		fmt.Sprintf("Reconcile %q for %s: after replacing the original %s invoice figure with the approved one and subtracting the partial payment, what balance remains?", p.Alias, p.Client, p.Vendor),
+	}[variant%4]
+	return QuestionPlan{
+		Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
+		RequiredPairIDs: []string{p.ContextPairID, p.LedgerPairID, p.CorrectionPairID},
+		Facts:           []string{"project alias", "client and purpose", "draft invoice and payment", "approved correction", "vendor identity"},
+		Constraints:     []string{p.Alias, p.Client, p.Vendor, p.Purpose}, Operations: []string{"resolve project alias", "replace draft with correction", "subtract payment"},
+		oracleKind: oracleProjectOutstanding, oracleIndex: i,
+	}
+}
+
+// tripChangedLegCurrentPlan renders the ordinary changed-leg program for one
+// trip. Shared by the v8 candidate list and the v13 decision twins.
+func (w World) tripChangedLegCurrentPlan(i int) QuestionPlan {
+	return w.tripChangedLegCurrentSurface(i, i)
+}
+
+// tripChangedLegCurrentSurface renders the changed-leg program for trip i under
+// surface variant `variant` (see projectOutstandingSurface).
+func (w World) tripChangedLegCurrentSurface(i, variant int) QuestionPlan {
+	trip := w.Trips[i]
+	changed := changedLeg(trip)
+	changedCountry := strings.TrimPrefix(trip.Countries[changed], "the ")
+	commonEvidence := []string{trip.ContextPairID, trip.PlanPairID, trip.CorrectionPairID}
+	constraints := []string{trip.Alias, trip.Purpose, trip.When, changedCountry}
+	leg := []string{
+		fmt.Sprintf("On %s, the %s trip from %s, how many days are we spending in %s after the change?", trip.Alias, trip.Purpose, trip.When, trip.Countries[changed]),
+		fmt.Sprintf("How long is the updated stay in %s for %s, the %s trip from %s?", trip.Countries[changed], trip.Alias, trip.Purpose, trip.When),
+		fmt.Sprintf("For %s, our %s trip, how many days is the changed %s stay now?", trip.Alias, trip.Purpose, changedCountry),
+		fmt.Sprintf("After changing the %s part of %s, our trip from %s, how many days are we spending there?", changedCountry, trip.Alias, trip.When),
+	}[variant%4]
+	return tripPlan(w, oracleTripChangedLegCurrent, i, leg, trip.LegDays[changed], commonEvidence, constraints)
+}
+
+// ProjectOutstandingPlan exposes one validated outstanding-balance program for
+// v13 decision-twin composition.
+func (w World) ProjectOutstandingPlan(index int) (QuestionPlan, error) {
+	if index < 0 || index >= len(w.Projects) {
+		return QuestionPlan{}, fmt.Errorf("project index %d out of range", index)
+	}
+	plan := w.projectOutstandingPlan(index)
+	if err := w.validatePlan(plan); err != nil {
+		return QuestionPlan{}, err
+	}
+	return plan, nil
+}
+
+// TripChangedLegCurrentPlan exposes one validated changed-leg program for v13
+// decision-twin composition.
+func (w World) TripChangedLegCurrentPlan(index int) (QuestionPlan, error) {
+	if index < 0 || index >= len(w.Trips) {
+		return QuestionPlan{}, fmt.Errorf("trip index %d out of range", index)
+	}
+	plan := w.tripChangedLegCurrentPlan(index)
+	if err := w.validatePlan(plan); err != nil {
+		return QuestionPlan{}, err
+	}
+	return plan, nil
 }
 
 // ContactCurrentPlan exposes one fully validated person-contact program for
@@ -237,11 +393,31 @@ func (w World) ContactCurrentPlan(index int) (QuestionPlan, error) {
 		return QuestionPlan{}, fmt.Errorf("contact index %d out of range", index)
 	}
 	p := w.People[index]
-	plan := w.personPlan(oracleContactCurrent, index, contactCurrentQuestion(p, index), p.Email, p.PreviousEmail)
+	plan := w.personPlan(oracleContactCurrent, index, w.contactCurrentQuestion(p, index), p.Email, p.PreviousEmail)
+	if w.v13Surface() {
+		// Isolation must retain this exact person and graph. If the first
+		// wording overlaps its evidence, try other V13 wordings of the same
+		// oracle; never skip structural validation or change the answer.
+		for variant := 1; variant < 32; variant++ {
+			err := w.validatePlan(plan)
+			if err == nil {
+				return plan, nil
+			}
+			if !errors.Is(err, errLexicalShortcut) {
+				return QuestionPlan{}, err
+			}
+			plan = w.contactCurrentSurface(index, index+variant)
+		}
+	}
 	if err := w.validatePlan(plan); err != nil {
 		return QuestionPlan{}, err
 	}
 	return plan, nil
+}
+
+func (w World) contactCurrentSurface(index, variant int) QuestionPlan {
+	p := w.People[index]
+	return w.personPlan(oracleContactCurrent, index, w.contactCurrentQuestion(p, variant), p.Email, p.PreviousEmail)
 }
 
 func (w World) personPlan(kind string, index int, question, answer, extraDistractor string) QuestionPlan {
@@ -296,12 +472,18 @@ func tripPlan(w World, kind string, index int, question string, answer int, evid
 }
 
 func (w World) storyQuestionCandidates() []QuestionPlan {
+	if w.BenchVersion >= protocol.BenchVersionV13 {
+		return w.storyQuestionCandidatesV13()
+	}
 	out := make([]QuestionPlan, 0, len(w.StoryArcs)*7)
 	for i, arc := range w.StoryArcs {
 		person := w.People[arc.PersonIndex]
 		trip := w.Trips[arc.TripIndex]
 		r := rand.New(rand.NewSource(storyQuestionSeed(w.Seed, arc.ID)))
 		anchor, constraints := storyAnchor(r, person, trip)
+		if w.v13Surface() {
+			anchor, constraints = w.v13StoryAnchor(r, person, trip)
+		}
 
 		balanceTask := []string{
 			"Where did the available budget land after everything?",
@@ -309,6 +491,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"After all the changes and payments, what remains?",
 			"Can you work out the final available balance for me?",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			balanceTask = w.v13StoryTask(r, oracleStoryBalanceCurrent)
+		}
 		balancePlan := w.storyPlan(oracleStoryBalanceCurrent, i, composeStoryQuestion(r, anchor, balanceTask), constraints,
 			fmt.Sprintf("%d", arc.CurrentBalanceCents), protocol.AnswerMoney, w.storyBalanceDistractors(i), nil,
 			[]string{"personal relationship and event", "support case", "purchase order", "original budget", "budget correction", "prior payment", "later cost", "credit"},
@@ -320,6 +505,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"How much did the approval correction add or remove?",
 			"What amount did finance change the budget by?",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			deltaTask = w.v13StoryTask(r, oracleStoryBudgetDelta)
+		}
 		deltaPlan := w.storyPlan(oracleStoryBudgetDelta, i, composeStoryQuestion(r, anchor, deltaTask), constraints,
 			fmt.Sprintf("%d", absInt(arc.BudgetDeltaCents)), protocol.AnswerMoney, w.storyDeltaDistractors(i), nil,
 			[]string{"personal relationship and event", "support case", "purchase order", "original budget", "budget correction", "separate payment", "separate later cost and credit"},
@@ -331,6 +519,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"What was available at the middle point, right after the revised approval and first payment?",
 			"Before the last expense and credit arrived, what balance were we working with?",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			postTask = w.v13StoryTask(r, oracleStoryPostApproval)
+		}
 		postAnswer := arc.BaseBudgetCents + arc.BudgetDeltaCents - arc.PaidCents
 		postPlan := w.storyPlan(oracleStoryPostApproval, i, composeStoryQuestion(r, anchor, postTask), constraints,
 			fmt.Sprintf("%d", postAnswer), protocol.AnswerMoney, w.storyPostApprovalDistractors(i), nil,
@@ -349,6 +540,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"Across those final three changes, did we end up gaining or losing money, and how much?",
 			"Did the follow-up changes move the balance up or down overall, and by how much?",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			netTask = w.v13StoryTask(r, oracleStoryLaterNetChange)
+		}
 		netItems := []string{direction, fmt.Sprintf("%d", absInt(net))}
 		netPlan := w.storyPlan(oracleStoryLaterNetChange, i, composeStoryQuestion(r, anchor, netTask), constraints,
 			strings.Join(netItems, "; "), protocol.AnswerList, storyNetDistractors(arc, net, wrongDirection), nil,
@@ -369,6 +563,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"Where should I send the note?",
 			"What email did we end up using?",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			contactTask = w.v13StoryTask(r, oracleStoryContactCurrent)
+		}
 		out = append(out, w.storyPlan(oracleStoryContactCurrent, i, composeStoryQuestion(r, anchor, contactTask), constraints,
 			arc.CurrentContact, protocol.AnswerValue, w.storyContactDistractors(i), nil,
 			[]string{"personal relationship and event", "requested working name", "support case", "purchase order", "original work channel", "channel correction"},
@@ -380,6 +577,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"What practical lesson did I learn from this?",
 			"What was the rule I wanted to remember afterward?",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			lessonTask = w.v13StoryTask(r, oracleStoryLesson)
+		}
 		out = append(out, w.storyPlan(oracleStoryLesson, i, composeStoryQuestion(r, anchor, lessonTask), constraints,
 			arc.Lesson, protocol.AnswerValue, w.storyLessonDistractors(i), arc.LessonAcceptAny,
 			[]string{"personal relationship and event", "support case", "purchase order", "corrected outcome", "explicit lesson"},
@@ -391,6 +591,9 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			"Where did this leave us: which email, how much money, and what rule for next time?",
 			"Pull together the current contact, the final amount, and what I learned from the experience.",
 		}[r.Intn(4)]
+		if w.v13Surface() {
+			summaryTask = w.v13StoryTask(r, oracleStoryOutcomeSummary)
+		}
 		summaryItems := []string{arc.CurrentContact, fmt.Sprintf("%d", arc.CurrentBalanceCents), arc.Lesson}
 		summaryAnswer := strings.Join(summaryItems, "; ")
 		summary := w.storyPlan(oracleStoryOutcomeSummary, i, composeStoryQuestion(r, anchor, summaryTask), constraints,
@@ -589,6 +792,9 @@ func memoryCase(seed int64, kind string, index int, question, answer, answerKind
 }
 
 func (w World) validatePlan(plan QuestionPlan) error {
+	if plan.Unanswerable {
+		return w.validateUnanswerablePlan(plan)
+	}
 	minConstraints := 3
 	if isStoryOracle(plan.oracleKind) {
 		minConstraints = 2
@@ -639,7 +845,11 @@ func (w World) validatePlan(plan QuestionPlan) error {
 	if !sameStrings(plan.Operations, wantOperations) {
 		return fmt.Errorf("declared operations %v do not match oracle operations %v", plan.Operations, wantOperations)
 	}
-	if err := w.validateStoryPlan(plan); err != nil {
+	if isStoryV2Oracle(plan.oracleKind) {
+		if err := w.validateStoryPlanV13(plan); err != nil {
+			return err
+		}
+	} else if err := w.validateStoryPlan(plan); err != nil {
 		return err
 	}
 	for _, omitted := range plan.RequiredPairIDs {
@@ -692,6 +902,9 @@ func (w World) validatePlan(plan QuestionPlan) error {
 }
 
 func (w World) oracleEvidence(plan QuestionPlan) []string {
+	if isStoryV2Oracle(plan.oracleKind) {
+		return w.storyV13Evidence(plan.oracleKind, plan.oracleIndex)
+	}
 	switch plan.oracleKind {
 	case oracleContactCurrent:
 		p := w.People[plan.oracleIndex]
@@ -717,11 +930,14 @@ func (w World) oracleEvidence(plan QuestionPlan) []string {
 		arc := w.StoryArcs[plan.oracleIndex]
 		return append([]string(nil), arc.StoryPairIDs[:]...)
 	default:
-		return nil
+		return w.v13OracleEvidence(plan)
 	}
 }
 
 func (w World) oracleOperations(plan QuestionPlan) []string {
+	if isStoryV2Oracle(plan.oracleKind) {
+		return storyV13Operations(plan.oracleKind)
+	}
 	switch plan.oracleKind {
 	case oracleContactCurrent:
 		return []string{"resolve the relationship and event to a person", "join the person to their current employer", "follow the nickname-and-employer correction to the current address"}
@@ -756,7 +972,7 @@ func (w World) oracleOperations(plan QuestionPlan) []string {
 	case oracleStoryOutcomeSummary:
 		return []string{"resolve the interpersonal anchor", "follow the support case into the work story", "follow the purchase order into the outcome", "reconcile the current balance", "replace the stale work-only contact", "select the outcome lesson"}
 	default:
-		return nil
+		return w.v13OracleOperations(plan)
 	}
 }
 
@@ -799,6 +1015,9 @@ func (w World) resolveWithEvidence(plan QuestionPlan, available map[string]bool)
 			}
 		}
 		return true
+	}
+	if isStoryV2Oracle(plan.oracleKind) {
+		return w.resolveStoryV13(plan, available)
 	}
 	switch plan.oracleKind {
 	case oracleContactCurrent:
@@ -883,11 +1102,14 @@ func (w World) resolveWithEvidence(plan QuestionPlan, available map[string]bool)
 			return arc.Lesson, true
 		}
 	default:
-		return "", false
+		return w.v13ResolveWithEvidence(plan, available)
 	}
 }
 
 func (w World) subjectMatches(plan QuestionPlan) int {
+	if isStoryV2Oracle(plan.oracleKind) {
+		return w.storyV13SubjectMatches(plan)
+	}
 	matches := 0
 	switch plan.oracleKind {
 	case oracleContactCurrent, oracleContactPrevious:
@@ -934,6 +1156,8 @@ func (w World) subjectMatches(plan QuestionPlan) int {
 				matches++
 			}
 		}
+	default:
+		matches = w.v13SubjectMatches(plan)
 	}
 	return matches
 }

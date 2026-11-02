@@ -17,10 +17,26 @@ This is the miner-facing skill. Load it before editing the starter kit,
 scoring, or uploading. A local score is not a production clearance: walk the
 served path against `$backroom-review` before `full`, packaging, or upload.
 
-Live scoring is **bench 11**, `run_size=full`, observed tools, locked
-`openai/gpt-oss-20b`. Update `LIVE_SCORING_BENCH_VERSION` in
-`miners/dittobench-starter-kit/scripts/local-rehearsal.py` when Platform
-activates a new version.
+The numbers below drift. For the live scoring bench, emission split, payout
+curve, champion, next epoch, and your own agents' status, run `$subnet-status`
+(`python3 .agents/skills/subnet-status/scripts/subnet_status.py --hotkey <ss58>`).
+
+Live scoring is **bench 14**, `run_size=full`, observed tools, locked
+`openai/gpt-oss-20b`. Without `--bench-version`, `uv run ditto practice` reads
+the live scoring version (`active_version`) from the public rollout endpoint
+(`https://dittobench.ai/api/v1/public/bench/rollout`) at run time, so the
+default follows Platform activation. `LIVE_SCORING_BENCH_VERSION` in
+`miners/dittobench-starter-kit/scripts/local-rehearsal.py` is only the offline
+fallback (also used when `DITTOBENCH_PUBLIC_ROLLOUT_URL=off`); bump it with
+each activation. A live version newer than the checkout's `MAX_BENCH_VERSION`
+fails loudly: update ditto-subnet. The wire `bench_version` a harness receives
+stays 9 in every contract.
+
+Bench 14 activated on 2026-10-28. It carries the v13 surface and gates
+(shadow, replayed locally with `--gates`, below) with action-scoped
+declarative over-call scoring. Pin `--bench-version 13` only to compare
+against the previous contract. See
+[`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md).
 
 ## Practice loops (do not collapse these)
 
@@ -29,9 +45,10 @@ activates a new version.
 | `cargo run -- mem-eval --k 10` | Retrieval only, no chat model | Retrieval/reranker iteration |
 | `cargo run -- evaluate` | Fixed local subset, **name-only** tool scorer, **no** `tool_endpoint` | Fast prompt/tool-name iteration |
 | `cargo run -- practice --n 20` | Rotating kit templates, still name-only, still no observer | Slightly less overfit than `evaluate` |
-| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, bench 11 | Smoke after a harness change |
+| `uv run ditto practice --run-size small` | Real generator + observed `tool_endpoint`, live bench (14) | Smoke after a harness change |
 | `uv run ditto practice --run-size medium` | Same path, deeper seeding and isolation | Development once small is healthy |
 | `uv run ditto practice --run-size full` | Same path, **on-chain envelope** | Required before upload |
+| `uv run ditto practice --gates` | Same path on the live contract + shadow replay of the public v13 gates with per-case notes | Before upload; after any answer, prompt, catalog, or tool-execution change |
 | Hosted `/v1/submit` | Remote rehearsal, tools **self-report-capped**, often defaults to bench 9 | Reachability only |
 | On-chain | Screened image + ticket-bound chat/embeddings | The only payout score |
 
@@ -46,14 +63,14 @@ is ~0.7 is expected. Name-only local scoring plus a tiny template pool is not
 
 ## Run sizes (teach these; do not skip full)
 
-From the **repository root**. All three use live bench 11 and a validator-visible
-`tool_endpoint`. Only the envelope changes.
+From the **repository root**. All three use the live bench (14) and a
+validator-visible `tool_endpoint`. Only the envelope changes.
 
-| `--run-size` | Bench 11 envelope | When the agent should run it |
+| `--run-size` | Bench 13/14 envelope | When the agent should run it |
 |---|---|---|
-| `small` | 6 tool + 6 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
-| `medium` | 48 tool + 64 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
-| `full` | 100 tool + 225 memory, 5 waves, isolation (on-chain n≈351 with audit cases) | **Before upload**, and before telling the miner a local score will transfer. Hours. |
+| `small` | 6 tool + 27 memory, 1 wave, no isolation | After every prompt, tool-routing, or observed-execution change. Minutes. |
+| `medium` | 48 tool + 95 memory, 4 waves, isolation | When small is green and you are iterating on seeding, isolation, or harder families. |
+| `full` | 100 tool + 250 memory (the published mix: 227 primary, 9 isolation, 14 integrity), 5 waves | **Before upload**, and before telling the miner a local score will transfer. Hours. |
 
 ```bash
 uv run ditto practice --run-size small
@@ -133,6 +150,8 @@ Go + Ollama `embeddinggemma`. Chat uses `.env`; on-chain ignores that key.
 3. Confirm observed tools still work → `uv run ditto practice --run-size small`
 4. After small is healthy, catch seeding/isolation misses → `--run-size medium`
 5. After any answer, prompt, tool, or routing change → walk the served path
+   and run `uv run ditto practice --gates`; every would-zero
+   note names a served-path defect (see *Bench v13 gates*)
 6. Before upload or quoting a transferrable score → served-path review must
    pass, then `--run-size full --report /tmp/dittobench-report.json`
 
@@ -144,7 +163,9 @@ would fail `$backroom-review`.
 
 Require all of:
 
-- `bench_version` is 11 (or the live version in the rehearsal constant)
+- `bench_version` is the live scoring version (14; the rehearsal prints
+  `rehearsing bench_version N` up front), or 13 only when you passed
+  `--bench-version 13` to compare against the previous contract
 - `run_size` is the one you asked for
 - `capped_tool_cases` is 0 (or explain why)
 - `observed_tool_cases` is > 0 on a tool-heavy run
@@ -152,6 +173,37 @@ Require all of:
 
 `run_size` in the report must match the flag you passed. A 1.0 `tool_mean` on
 `small` or `medium` does not predict `full`.
+
+## Bench v13 gates (shadow; replay locally)
+
+Bench v13 grades the prose and adds relay-observed gates that charge
+substitution, never a correct model-emitted answer
+(`miners/dittobench-starter-kit/PROTOCOL.md` "Bench v13"). `--gates` records
+what the kit offered and emitted per case and replays every public rule against
+the public (salt 0) pass-off artifact:
+
+```bash
+uv run ditto practice --gates --keep-artifacts /tmp/v13-gates
+python3 miners/dittobench-starter-kit/scripts/rehearsal_gates.py \
+  --dataset /tmp/v13-gates/dataset.json --transcript /tmp/v13-gates/transcript.json \
+  --completions /tmp/v13-gates/completions.jsonl \
+  --projection /tmp/v13-gates/projection.json --report /tmp/v13-gates/report.json
+```
+
+| Note | What it charges | Honest fix |
+|---|---|---|
+| `served_text_not_model_emitted` | `/100` rescale, direction map, composed or replaced slot | serve the model's value as written; the slot is a verbatim copy or absent |
+| `slot_not_in_prose` | a slot the prose does not carry | same |
+| `answer_in_prompt` | the graded value computed on the host and placed in a prompt span | keep the system prompt values-free; retrieved memory is exempt |
+| `restraint_without_offer` / `expected_tool_not_offered` | a request-keyed empty or one-tool catalog | offer the full catalog, or keep the published semantic top-3 |
+| `swallowed_model_call` | a model-emitted call the host did not execute | execute every model call through `tool_endpoint` |
+| `twin_concordant` / `counterfactual_insensitive` | always-ask / always-decline / always-act across a matched pair | let the model read memory and decide |
+
+The notes are shadow in v13.0: nothing moves the local score. Treat a would-zero
+note as the same served-path finding the operator review bar reads; fix the
+path, do not tune the note away. The stock kit passes the wire system prompt
+through unchanged by default and retains model-authored output; it still needs
+a served-path review before anyone treats it as safe.
 
 ## Package and upload
 
@@ -168,10 +220,43 @@ uv run ditto --network finney upload --path ... --name ... --coldkey ... --hotke
 Do not put keys, `.env`, or host Docker sockets in the image. Follow
 [`docs/MINER.md`](../../../docs/MINER.md) for wallet, fee, and status.
 
+## Generator miners at a bench version change
+
+The generator competition (`miners/dittobench-generator-starter-kit`) follows the
+agent bench. What a version bump means for a generator miner (operator policy;
+full detail in
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md)
+and the kit README's migration note):
+
+- **Every activated bench version N has a matching pack grading policy N.**
+  Two policies are accepted at once: the active version and the previous one
+  (today v13 and v14).
+- **No forced migration.** A generator that keeps emitting the previous policy
+  keeps its columns and is graded exactly as before. If a request offering N
+  breaks it, the scorer retries that seed once on the baseline request
+  (`legacy_retry`) instead of rejecting it.
+- **Opting in:** rebuild against the current `research/dittobench-datagen`,
+  declare `req.NewestAccepted(...)`, and rehearse with `-round-bench N-1` and
+  `-round-bench N`. Declaring N earns nothing by itself; do it where the new
+  policy changes what your cases measure.
+- **When rounds switch:** after the agent bench activates N and a validator
+  quorum can run N rounds. Until then rounds stay on N-1. An in-flight round
+  finishes on its frozen version.
+- **Notice:** a new policy is announced at least 7 days before activation.
+  A round at N accepts N and N-1 only, so activating N+1 retires N-1 for new
+  rounds (the only step that can strand a generator); that gets 14 days'
+  notice. `cases_per_seed` changes are announced before
+  they apply.
+- Starter kits (agent and generator) improve continuously. An improvement
+  learned from another miner's submission ships only after that submission is
+  public under the source-disclosure policy, so pull before rebuilding.
+
 ## Do not
 
 - Treat `evaluate` / hosted rehearsal as on-chain certification
 - Change v8+ scoring to make a local run look better
+- Rewrite the model's value on the way out (`/100`, direction map, reformat),
+  swallow a model tool call, or key the catalog on the request
 - Ship a served path that would fail `$backroom-review`
 - Widen a mutation past the harness the miner is iterating
 

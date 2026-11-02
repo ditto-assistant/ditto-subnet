@@ -23,6 +23,24 @@ describe('MCP scope challenges', () => {
     expect(await request.json()).toMatchObject({ method: 'tools/call' })
   })
 
+  it('requires write scope for one paid conversation retry', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'authorize_conversation_retry', arguments: {} } }),
+    })
+    expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
+  })
+
+  it('requires write scope for V13 scorer cohort activation and rotation', async () => {
+    for (const name of ['activate_v13_scorer_cohort', 'rotate_v13_scorer_cohort']) {
+      const request = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call',
+          params: { name, arguments: { hotkeys: ['5A', '5B', '5C'] } } }),
+      })
+      expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
+    }
+  })
+
   it('does not challenge read tools', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
@@ -180,6 +198,31 @@ describe('MCP scope challenges', () => {
     ])
   })
 
+  it('recognizes verified v13 court-clear releases as write-scoped', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'release_verified_v13_court_clear',
+          arguments: {
+            quarantineId: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+            reason: 'Court clear receipt re-verified; admit for scoring',
+            expectedSha256: 'ab'.repeat(32),
+            confirmation: 'RELEASE VERIFIED V13 COURT CLEAR',
+          },
+        },
+      }),
+    })
+
+    expect(await callsWriteTool(request)).toBe(true)
+    expect(await requiredScopesForRequest(request)).toEqual([
+      BACKROOM_WRITE_SCOPE,
+    ])
+  })
+
   it('recognizes scored rollout qualification as write-scoped', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
@@ -315,81 +358,6 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
   })
 
-  it('keeps shadow core qualification reads separate from its policy write', async () => {
-    for (const name of [
-      'get_core_qualification_policy',
-      'get_agent_core_qualification',
-    ]) {
-      const request = new Request('https://backroom.dittobench.ai/mcp', {
-        method: 'POST',
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'tools/call',
-          params: { name, arguments: {} },
-        }),
-      })
-      expect(await callsWriteTool(request)).toBe(false)
-      expect(await requiredScopesForRequest(request)).toEqual([])
-    }
-
-    const write = new Request('https://backroom.dittobench.ai/mcp', {
-      method: 'POST',
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 2,
-        method: 'tools/call',
-        params: { name: 'set_core_qualification_policy', arguments: {} },
-      }),
-    })
-    expect(await callsWriteTool(write)).toBe(true)
-    expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
-
-    const refresh = new Request('https://backroom.dittobench.ai/mcp', {
-      method: 'POST',
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 3,
-        method: 'tools/call',
-        params: { name: 'refresh_agent_core_qualification', arguments: {} },
-      }),
-    })
-    expect(await callsWriteTool(refresh)).toBe(true)
-    expect(await requiredScopesForRequest(refresh)).toEqual([BACKROOM_WRITE_SCOPE])
-  })
-
-  it('keeps coding catalog visibility read-only and lifecycle actions write-scoped', async () => {
-    const read = new Request('https://backroom.dittobench.ai/mcp', {
-      method: 'POST',
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'tools/call',
-        params: { name: 'get_coding_catalog_releases', arguments: {} },
-      }),
-    })
-    expect(await callsWriteTool(read)).toBe(false)
-    expect(await requiredScopesForRequest(read)).toEqual([])
-
-    for (const name of [
-      'register_coding_catalog_release',
-      'supersede_coding_catalog_release',
-      'retire_coding_catalog_release',
-    ]) {
-      const write = new Request('https://backroom.dittobench.ai/mcp', {
-        method: 'POST',
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 2,
-          method: 'tools/call',
-          params: { name, arguments: {} },
-        }),
-      })
-      expect(await callsWriteTool(write)).toBe(true)
-      expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
-    }
-  })
-
   it('recognizes a queue policy revision as write-scoped and its read as not', async () => {
     const write = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
@@ -500,6 +468,40 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(read)).toEqual([])
   })
 
+  it('recognizes a scoring lease revision as write-scoped and its read as not', async () => {
+    const write = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'set_scoring_lease_settings',
+          arguments: {
+            expectedRevision: 0,
+            settings: { scoring_ticket_ttl_minutes: 150 },
+            reason: 'v11 completions fit well inside 150 minutes',
+            confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+          },
+        },
+      }),
+    })
+    expect(await callsWriteTool(write)).toBe(true)
+    expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
+
+    const read = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_scoring_lease_settings', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(read)).toBe(false)
+    expect(await requiredScopesForRequest(read)).toEqual([])
+  })
+
   it('scopes confirmation policy and retest mutations without scoping audit reads', async () => {
     for (const name of [
       'set_confirmation_bundle_settings',
@@ -557,11 +559,7 @@ describe('MCP scope challenges', () => {
     for (const name of [
       'list_stuck_submissions',
       'agent_scoring_readiness',
-      'get_agent_coding_certifications',
-      'get_agent_coding_shadow_evaluations',
-      'get_coding_catalog_releases',
-      'get_core_qualification_policy',
-      'get_agent_core_qualification',
+      'get_validator_weight_diagnostics',
     ]) {
       const request = new Request('https://backroom.dittobench.ai/mcp', {
         method: 'POST',
@@ -612,6 +610,20 @@ describe('MCP scope challenges', () => {
     })
     expect(await callsWriteTool(request)).toBe(false)
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_ARTIFACT_SCOPE])
+  })
+
+  it('keeps the text-free L4 cohort on ordinary read scope', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'list_screening_adjudication_attempts', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(request)).toBe(false)
+    expect(await requiredScopesForRequest(request)).toEqual([])
   })
 
   it('gates source search on the artifact scope like an excerpt read', async () => {

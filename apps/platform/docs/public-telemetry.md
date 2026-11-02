@@ -15,21 +15,28 @@ SN118 publishes publicly and how. Implementation tracked per section below.
    researchers who want full per-epoch telemetry.
 3. **Public read API = yes.** Add a rate-limited, no-auth read endpoint so the
    dashboard (and anyone) can read the leaderboard without a validator hotkey.
-4. **The king's source becomes public after on-chain confirmation.** Source
-   release is **king-only** and gated on on-chain weights: a submission's source
-   becomes downloadable only once it has (1) held the KOTH crown and (2) had
-   validators' revealed on-chain weights set on it after commit-reveal. The
-   configured embargo (48 hours by default, operator-tunable anywhere from 6
-   hours to 720 hours / 30 days) is measured from that on-chain confirmation —
-   **not** from the third accepted validator score. A submission that never
-   reigned is never released, however it scored. One that held the crown but is
-   not yet chain-confirmed is withheld with no unlock time until commit-reveal
-   confirms validators backed it. A three-validator score quorum on a single
-   benchmark version remains a precondition — scores from different benchmark
-   versions never combine into a quorum — but it starts no clock, and neither
-   an operator clear nor a later re-score moves the embargo, which is anchored
-   to the on-chain confirmation alone. Quarantined, held, and rejected
-   submissions stay private regardless of rank.
+4. **The king's source becomes public only after completed winner earnings.**
+   Source release is king-only and requires proof that the exact submission
+   earned miner emissions as the winner in a completed on-chain tempo. A brief
+   crown, a pending commitment, or positive revealed weights alone is not proof
+   of earnings and starts no clock. The configured embargo (48 hours by default,
+   operator-tunable from 6 to 8760 hours) starts at `emission_confirmed_at`.
+   The legacy `weight_confirmed_at` field is telemetry only and cannot qualify a
+   release. Missing or ambiguous payout attribution leaves source private with
+   no unlock time. A three-validator score quorum on one benchmark version and
+   a cleared finalized state remain prerequisites; neither a later score nor
+   an operator clear resets the earnings-based clock. Quarantined, held, and
+   rejected submissions remain private. The subnet-wide disclosure policy can
+   withhold all source even after these prerequisites have been met.
+
+   **Current rollout stage:** the weight-only release gate is disabled and no
+   production observer writes completed-emission confirmations. Source remains
+   private until an independently verified producer binds the exact submission
+   to the consumed commit, revealed vector, and completed payout. Chain payout
+   reads and authenticated fold history are evidence groundwork, not automatic
+   attribution. Backroom's `get_source_release_policy` exposes the served gate
+   version and `automatic_confirmation_enabled: false`; its receipt counts do
+   not claim that automatic confirmation is running.
 
 ## Anti-gaming posture (the load-bearing rule)
 
@@ -148,7 +155,8 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   public-safe, read-only projection of the validator's frozen first-seen KOTH
   fold over finalized authoritative entries: the fixed 0.007 composite-point
   incumbent hysteresis, the
-  statistical band, and the 65% / 14% / 10% / 7% / 4% ranked distribution.
+  statistical band, and the ranked distribution in `rank_shares` (frozen default
+  65% / 14% / 10% / 7% / 4%, or the operator curve once the fleet folds it).
   When `tie_weighting_active` is true, contiguous evidence-tied recipients pool
   only the shares of the ranks they occupy and split that pool equally. Exact
   effective-composite ties qualify directly; non-exact ties require paired
@@ -205,8 +213,9 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   signed download URLs, source hashes, payments, and raw screener/build logs are
   never included in this listing.
   `downloadable=true` narrows the listing to submissions whose derived release
-  state currently permits a public source download; it composes with status and
-  search filters. `downloadable_count` reports that population after search but
+  state is available or awaiting its confirmed payout-based embargo deadline;
+  pending rows expose `artifact_release.available_at` but no download. It composes
+  with status and search filters. `downloadable_count` reports that population after search but
   before status filtering so the dashboard can label the quick filter.
   Each waiting entry also carries `validator_queue_rank` and
   `validator_queue_gate` — the queue preview, described next.
@@ -282,6 +291,16 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   block fields exist; otherwise the response labels the unpredictable CSPRNG
   fallback. Unknown historical generator pins fail closed with no command rather
   than silently using `latest`.
+- `GET /api/v1/public/bench/rollout` → rollout state with promotion progress:
+  `{ active_version, desired_version, status, promotion_pending,
+  promotion_requirement, priority_cohort_size, priority_cohort_ready_count,
+  priority_complete, ranked_quorum_agents, min_ranked_quorum_agents, members,
+  ... }`. `active_version` is the leaderboard's `emission_bench_version`; while
+  `promotion_pending` is true the board's `scoring_bench_version` is ahead of it
+  by design, and `promotion_requirement` names the two gates still holding
+  emissions (the priority-cohort quorum, counted with permanently ineligible
+  members satisfied, and the ranked quorum over the emission set). See
+  `benchmark-v3-rollout.md` for the gate semantics.
 - `GET /api/v1/public/bench/transcript/{sha256}/telemetry` → an allowlisted
   metrics projection from the immutable transcript whose digest is already
   bound into an accepted validator score. The platform reads only the
@@ -293,17 +312,25 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   transcripts without execution telemetry show a clear unavailable state rather
   than fabricated metrics.
 - `GET /api/v1/public/submissions?limit=` → `{ generated_at, count, quorum,
-  submissions: [ { agent_id, miner_hotkey, status, score_count,
-  median_composite, dataset_seed, dataset_sha256, last_scored_at,
-  artifact_release } ] }`.
+  submissions: [ { agent_id, miner_hotkey, status, bench_version, score_count,
+  total_score_count, median_composite, dataset_seed, dataset_sha256,
+  last_scored_at, artifact_release } ] }`.
   The index over the **k=3 transparency records**, most recently scored first.
   Only settled public scores (`scored` / `live`) appear; held-for-review and
   still-evaluating agents are excluded so a provisional or accused agent is never
   surfaced.
 - `GET /api/v1/public/agent/{agent_id}/scores` → `{ agent_id, miner_hotkey,
-  status, quorum, score_count, median_composite, dataset_seed, dataset_sha256,
-  dataset_run_size, artifact_release, scores: [ { validator_hotkey, composite, tool_mean,
-  memory_mean, median_ms, n, seed, run_id, signature, generated_at } ] }`.
+  status, quorum, bench_version, score_count, total_score_count,
+  median_composite, dataset_seed, dataset_sha256, dataset_run_size,
+  artifact_release, scores: [ { validator_hotkey, composite, tool_mean,
+  memory_mean, median_ms, n, bench_version, seed, run_id, signature,
+  generated_at } ] }`.
+  `score_count` and `median_composite` (here and on the index above) are scoped
+  to one `bench_version`, because composites from different benchmark versions
+  are incomparable: the active version once the agent holds a quorum there,
+  otherwise the newest version it was finalized in, otherwise the newest version
+  it has any row in (median null below quorum). `total_score_count` counts every
+  version, and `scores` keeps every row labeled with its own version.
   The full k=3 breakdown for one finalized agent: *which* validators scored it,
   each one's exact numbers + sr25519 signature (self-verifying against the
   published validator key), the median the platform finalized on, and the pinned
@@ -314,14 +341,14 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
 - `GET /api/v1/public/agent/{agent_id}/artifact` → `{ agent_id, bench_version,
   sha256, finalized_at, download_url, expires_at }`.
   Returns a five-minute private-bucket URL only when the agent **has held the
-  KOTH crown**, its on-chain weights have been confirmed after commit-reveal,
-  the configured embargo has elapsed since that confirmation, one benchmark
+  KOTH crown**, the exact submission has earned winner emissions in a completed
+  tempo, the configured embargo has elapsed since `emission_confirmed_at`, one benchmark
   version has three independently inserted score rows, and the agent is
   currently in a cleared finalized state (`scored` or legacy `live`). Before the
   deadline it fails with 425. An agent that has **never been king fails closed
   with 404** — `"only the king's source is released"` — as do unknown,
   held-for-review, quarantined, and rejected agents; an ever-king agent still
-  awaiting on-chain confirmation is withheld with no unlock time. The response
+  awaiting completed winner-earnings confirmation is withheld with no unlock time. The response
   is `private, no-store`. A fourth score, re-score, benchmark rollover,
   leaderboard change, or deregistration never resets the original clock.
 - `GET /api/v1/public/agent/{agent_id}/dataset` → `{ agent_id, miner_hotkey,
@@ -386,6 +413,36 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   reader should label it rather than treat the matrix as absent. A 503 is
   reserved for having never read the matrix, or having last read it so long ago
   that presenting it would misrepresent current chain state.
+- `GET /api/v1/public/treasury-allocation` → the Gamma treasury policy and
+  routing, plus (SN-350) the whole split of total miner emission per
+  recipient. Existing fields are unchanged. The split fields:
+  - `emission_split: [{ kind, id, share, bps }]`: what validators fold now.
+    `kind` is `burn`, `track` or `gamma`; `id` is the track id (`memory`,
+    `generator`) or Gamma service bucket id, and `null` for burn. `share` is
+    the fraction of total miner emission (0..1) and `bps` the same value in
+    basis points; the entries sum to 1 (10000 bps). Order is burn, tracks in
+    registry order, then Gamma buckets.
+  - `emission_split_source`: `epoch_pin` when the split is read from the
+    newest epoch pin (the burn share, track map and enforcing Gamma
+    allocation frozen for every validator), `settings` before any pin exists
+    (the live served settings with the protocol-33 track-map gate and Gamma
+    activation applied), `unavailable` when neither can be read (then the
+    list is empty).
+  - `emission_split_epoch`: the pin's subnet epoch index, or `null` when the
+    source is not `epoch_pin`.
+  - `emission_allocation_revision`: the operator's emission allocation
+    revision (Backroom `set_emission_allocation`); `0` before the first one,
+    when the split still comes from the three legacy settings.
+  - `forecast_split`: same shape, the configured split for coming epochs
+    (Gamma counted only while it enforces), before the fleet gate applies.
+
+  Every value is derived from the fields validators are served
+  (`burn_share`, `track_shares_bps`, the enforcing Gamma allocation): Gamma is
+  carved first, `burn_share` burns that fraction of the remainder, and the
+  track map splits the rest. A track's share assumes it has a payable miner;
+  a generator track with no eligible generator hands its share to memory, and
+  any other empty track burns. Once the map is served, the live split reads burn `0.5`,
+  memory `0.35`, generator `0.15`.
 - `GET /api/v1/public/health` → subnet rollup **from what the platform records**:
   `miners`, `scored_miners`, `scored_agents`, `last_scored_at`, `scores_24h`,
   `avg_latency_ms`. Note: no `success_rate` — the platform only ever sees a
@@ -402,15 +459,28 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   heartbeat-capable software; this endpoint does not pretend to enumerate every
   on-chain permit holder.
 
+  From protocol v32 each row also carries signed `host_specs` — logical and
+  physical CPUs, total RAM (MiB), total root disk (GiB), and architecture,
+  probed once per boot — so "is this host smaller than its peers?" is
+  answerable without asking the operator. The coarse percentages above say how
+  busy a host is; `host_specs` says how big it is. Older validators and a failed
+  probe publish `host_specs: null`.
+
   Slot capacity is published as two distinct numbers, because they answer two
   different questions. `configured_slots` (with `healthy_slots`) is what the
   validator *advertises*; `allowed_slots` is what the platform will actually
-  fund on it right now — the operator's `max_concurrent_slots` cap narrowing the
+  fund on it right now — the operator's `max_concurrent_slots` cap (or that
+  validator's own per-validator override) narrowing the
   advertisement, clamped to one while that validator's disk ceiling is tripped.
   The response-level `slot_policy` carries the fleet-wide cap and disk ceiling
   so the difference is explainable without re-deriving the policy. Advertised
   capacity above `allowed_slots` never receives a ticket, and presenting it as
-  available capacity overstates the fleet.
+  available capacity overstates the fleet. `reserved_round_slots` is how many of
+  `allowed_slots` are held back for generator-competition round runs while
+  validator rounds are enabled and the validator advertises round support
+  (`min(R, allowed_slots - 1)`, zero otherwise):
+  canonical and continual-retest work may hold at most
+  `allowed_slots - reserved_round_slots` leases on that validator.
 
   Heartbeat protocol v7 signs a closed `capabilities` object and a fixed
   six-component `stack` identity (`ditto_subnet`, `dittobench_api`,

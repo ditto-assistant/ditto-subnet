@@ -99,6 +99,7 @@ module "validator_vm" {
   # Keep validator code outside the platform inference secret's IAM boundary.
   service_account_email = var.validator_dedicated_identity_attached ? google_service_account.validator[0].email : local.run_sa_email
   labels                = { env = "dev", role = "validator", managed = "terraform" }
+  desired_status        = var.dev_environment_running ? "RUNNING" : "TERMINATED"
 }
 
 # --- Secret containers (values added out of band; see the runbook). ---
@@ -129,9 +130,9 @@ resource "google_secret_manager_secret" "validator_openrouter_key" {
 }
 
 # A GitHub token (fine-grained PAT / App token) with READ on ditto-assistant/
-# {dittobench-api, ditto-subnet, ditto-harness}. Clones the two repos over HTTPS
-# and is mounted as the BuildKit gh_token for miner harness builds (which pull
-# the private ditto-harness crate). Rotatable.
+# {dittobench-api, ditto-subnet, ditto-harness}. Clones the two repos over HTTPS.
+# It is never mounted into a miner harness build: ditto-harness is public and
+# the sandbox builds without BuildKit secrets. Rotatable.
 resource "google_secret_manager_secret" "validator_gh_token" {
   count     = local.validator_count
   project   = var.project

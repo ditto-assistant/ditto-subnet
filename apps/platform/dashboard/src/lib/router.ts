@@ -10,6 +10,8 @@
 import { bootParams } from "./config";
 
 export type PageName =
+  | "gamma"
+  | "activity"
   | "overview"
   | "leaderboard"
   | "pipeline"
@@ -17,6 +19,8 @@ export type PageName =
   | "submissions"
   | "reviews"
   | "ath"
+  | "bounties"
+  | "generators"
   | "benchmark";
 
 export type OperationsView = "validators" | "screeners" | "builds";
@@ -27,17 +31,22 @@ const OPERATIONS_VIEW_SET = new Set<OperationsView>(["validators", "screeners", 
 // benchmark subtitle is rewritten in place once the live bench version is
 // known.
 export const PAGES: Record<PageName, { title: string; sub: string }> = {
+  gamma: { title: "Gamma", sub: "Beta · service allocations and public wallet activity" },
+  activity: {
+    title: "Admin activity",
+    sub: "Public history of Backroom actions and operational changes",
+  },
   overview: {
     title: "Overview",
-    sub: "Subnet snapshot and the full leaderboard · ranked by composite",
+    sub: "Subnet snapshot and the full leaderboard · ranked by official score",
   },
   leaderboard: {
     title: "Leaderboard",
-    sub: "Every scored miner · canonical ranks · sortable by any metric",
+    sub: "Every scored miner · ranked by official score · sortable by any metric",
   },
   pipeline: {
     title: "Submission pipeline",
-    sub: "Every submission from upload to scored · admission, validation, and integrity review",
+    sub: "Every submission from upload to scored · admission, validation, and source review",
   },
   operations: {
     title: "Fleet",
@@ -54,6 +63,14 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   ath: {
     title: "ATH reviews",
     sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
+  },
+  bounties: {
+    title: "Bounties",
+    sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
+  },
+  generators: {
+    title: "Generator competition",
+    sub: "Case-generator rounds · committed seeds, case outcomes, and projected payouts",
   },
   benchmark: {
     title: "Benchmark",
@@ -133,6 +150,8 @@ export const ENTITY_PAGES: Record<string, PageName> = {
 // Per-page view state (submissions filters + either pager's "page"). It is
 // scoped to the page that owns it, so it must not ride along to another page.
 export const PAGE_SCOPED_PARAMS: string[] = [
+  "activity_q",
+  "activity_status",
   "status",
   "downloadable",
   "q",
@@ -140,6 +159,14 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "code",
   "login",
   "complete",
+  // Sign in with Ditto callback result, consumed once by the sign-in page.
+  "ditto",
+  "reason",
+  "attempt",
+  // The bounty a bounties-page reader opened.
+  "bounty",
+  // The generator submission a generators-page reader opened.
+  "generator",
 ];
 
 // The config knobs allowed to appear in the real query string.

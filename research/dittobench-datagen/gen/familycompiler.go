@@ -168,11 +168,18 @@ var familyBalanceOpeners = []string{
 // buildFamilyCompiler returns the v12 anti-family-compiler cases and the memory
 // pairs they seed. Every value is deterministic in seed. The caller adds the
 // pairs to wave 0 and the staged cases to the suite.
-func buildFamilyCompiler(seed int64, count int) []FamilyCompilerCase {
+func buildFamilyCompiler(seed int64, count int, benchVersion int) []FamilyCompilerCase {
 	if count <= 0 {
 		return nil
 	}
 	r := v12FamilyCompilerRand(seed)
+	// v13 (#1827): the fixed "2026-03-<ordinal>T<8+ordinal>:20" pattern named
+	// this family (and the case ordinal) to any /seed reader. A seeded
+	// business-hours timeline replaces it; v12 keeps its frozen bytes.
+	var timeline *protocol.OpaqueTimeline
+	if benchVersion >= protocol.BenchVersionV13 {
+		timeline = protocol.NewOpaqueTimeline(seed, "v13-family-compiler")
+	}
 	recordOp, ambiguity, counterfactual := splitFamilyCompiler(count)
 	out := make([]FamilyCompilerCase, 0, count)
 	ordinal := 0
@@ -194,15 +201,19 @@ func buildFamilyCompiler(seed int64, count int) []FamilyCompilerCase {
 		caseID := protocol.OpaqueCaseID(seed, "v12-family-compiler", ordinal)
 		pairID := protocol.OpaqueCaseID(seed, "v12-family-compiler-pair", ordinal)
 		ordinal++
+		timestamp := fmt.Sprintf("2026-03-%02dT%02d:20:00Z", 1+(ordinal%27), 8+(ordinal%12))
+		if timeline != nil {
+			timestamp = timeline.Next()
+		}
 		pair := protocol.MemoryPair{
 			PairID:    pairID,
 			SessionID: protocol.OpaqueCaseID(seed, "v12-family-compiler-session", ordinal),
-			Timestamp: fmt.Sprintf("2026-03-%02dT%02d:20:00Z", 1+(ordinal%27), 8+(ordinal%12)),
+			Timestamp: timestamp,
 			Prompt:    records,
 			Response:  "Noted — I've filed those account details.",
 		}
 		mc := protocol.MemoryCase{
-			BenchVersion:      protocol.BenchVersionV12,
+			BenchVersion:      benchVersion,
 			ID:                caseID,
 			QuestionID:        caseID,
 			QuestionType:      questionType,

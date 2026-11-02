@@ -1,0 +1,26 @@
+---
+# Imported first by every GCP converge playbook with `required_group` set to
+# the group its play targets. A play whose pattern matches no hosts is skipped
+# and the run still exits 0, so an undiscovered zone, an unlabelled instance or
+# a --limit outside the group would otherwise converge nothing and pass.
+#
+# The pattern includes `all` so the guard still runs under --limit, and the
+# check intersects with the hosts this play resolved to, which honours the
+# limit. assert runs on the controller: no host is contacted.
+- name: Require {{ required_group }} to resolve to at least one host
+  hosts: localhost:all
+  gather_facts: false
+  tags: always
+  tasks:
+    - name: Fail when {{ required_group }} resolves to no hosts
+      run_once: true
+      ansible.builtin.assert:
+        that:
+          - groups[required_group] | default([]) | intersect(ansible_play_hosts_all) | length > 0
+        fail_msg: >-
+          {{ required_group }} resolved to no hosts (inventory
+          {{ ansible_inventory_sources | join(', ') }}, limit
+          {{ ansible_limit | default('none') }}). Check that the instance
+          carries the managed=terraform and role labels and that its zone is
+          listed in inventory/gcp.yml.
+        quiet: true

@@ -14,7 +14,7 @@ SCREENER_CACHE_GC_INTERVAL_SECONDS="${SCREENER_CACHE_GC_INTERVAL_SECONDS:-3600}"
 SCREENER_CACHE_KEEP_STORAGE="${SCREENER_CACHE_KEEP_STORAGE:-40GB}"
 SCREENER_GCP_PROJECT="${SCREENER_GCP_PROJECT:-ditto-app-dev}"
 SCREENER_SOURCE_REVIEW_SECRET_ID="${SCREENER_SOURCE_REVIEW_SECRET_ID:-validator-openrouter-key}"
-SCREENER_DNS_PROBE_IMAGE="${SCREENER_DNS_PROBE_IMAGE:-python:3.12-alpine@sha256:6d43704baacd1bfbe7c295d7f13079d5d8104ed33568873133f8fc69980419df}"
+SCREENER_DNS_PROBE_IMAGE="${SCREENER_DNS_PROBE_IMAGE:-python:3.12-alpine@sha256:b658b05ce9c4eb97ec6fc19424818a1f31993659c2b505a532f470e83807815d}"
 
 checkout="$SCREENER_ROOT/src"
 source_dir="$checkout/workers/screener"
@@ -421,7 +421,7 @@ fi
 # currently running worker.
 configure_docker_endpoint
 
-# Refresh the protected key on every scheduled deployment run so Secret Manager
+# Refresh the protected key on every host-local pull check so Secret Manager
 # rotation does not require an unrelated code change.
 materialize_source_review_key
 

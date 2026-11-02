@@ -24,8 +24,11 @@ def plan_urls(
     if local:
         platform = PROD_PLATFORM if plan.attach_prod_api else "http://127.0.0.1:8000"
         if plan.dashboard:
-            api = platform if plan.attach_prod_api else f"{platform}/api/v1"
-            urls["dashboard"] = f"http://127.0.0.1:5173/?api={api}"
+            # `npm run dev` serves the dashboard on :8080 and proxies its
+            # same-origin /api/v1 to DITTO_DASHBOARD_PROXY_TARGET. Platform
+            # sends no CORS headers, so a cross-origin ?api= link cannot load.
+            urls["dashboard"] = "http://127.0.0.1:8080/"
+            urls["dashboard_proxy_target"] = platform
         if plan.backroom:
             urls["backroom"] = "http://127.0.0.1:3000"
         if plan.stack:

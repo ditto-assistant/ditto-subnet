@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
@@ -15,24 +16,72 @@ from ditto_screening_protocol import SCREENING_POLICY_VERSION
 ReviewMode = Literal["off", "shadow", "enforce", "inherit"]
 ReviewModel = Literal[
     "openai/gpt-5.6-terra",
+    "openai/gpt-6-sol",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
-SourceReviewModel = Literal["openai/gpt-5.6-luna"]
+SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]
 AdjudicatorModel = Literal["z-ai/glm-5.3-flash"]
+FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
+FANOUT_SHADOW_SETTINGS_FIELDS = (
+    "fanout_shadow_mode",
+    "fanout_shadow_image_source_sha",
+    "fanout_shadow_model",
+    "fanout_shadow_concurrency",
+    "fanout_shadow_max_steps",
+    "fanout_shadow_max_groups",
+    "fanout_shadow_max_requests",
+    "fanout_shadow_max_total_tokens",
+    "fanout_shadow_timeout_seconds",
+    "fanout_shadow_max_cost_usd",
+    "fanout_shadow_daily_cost_usd",
+    "fanout_shadow_global_concurrency",
+    "fanout_shadow_reserved_targon_slots",
+)
+PROBE_BATTERY_SETTINGS_FIELDS = (
+    "probe_battery_mode",
+    "probe_battery_timeout_seconds",
+)
+PROBE_REVIEW_SETTINGS_FIELDS = (
+    "probe_review_mode",
+    "probe_review_timeout_seconds",
+    "probe_review_max_cost_usd",
+)
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
+# The reviewer posture (stronger L2/L3 models and budgets) a top-five integrity
+# double-check deep pass is pinned to. No worker heartbeats under this scope, so
+# a revision here never changes the fleet's normal posture; Platform binds it to
+# one claimed attempt at a time.
+INTEGRITY_DOUBLE_CHECK_SCOPE = "integrity-double-check"
+# The prefix for report-only L2 canary postures (``l2-report-canary`` or
+# ``l2-report-canary-<name>``). Worker posture resolution skips these scopes,
+# so an experiment written here never changes a node's or the fleet's
+# production posture; Platform binds one revision to one scheduled canary.
+L2_REPORT_CANARY_SCOPE_PREFIX = "l2-report-canary"
 
+
+def is_l2_report_canary_scope(scope: str) -> bool:
+    """Whether ``scope`` names an isolated report-only canary posture.
+
+    The canary table's ``review_settings_pin_check`` spells the same set as
+    ``~ '^l2-report-canary(-|$)'``; a migration test pins the two together.
+    """
+    return scope == L2_REPORT_CANARY_SCOPE_PREFIX or scope.startswith(
+        f"{L2_REPORT_CANARY_SCOPE_PREFIX}-"
+    )
+
+
+# Keep these modules identical to worker builtin_policy_manifest. The optional
+# runtime challenge is no longer part of either built-in source-review profile.
 _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
     "core": [],
     "l1": [
         {"kind": "agentic_source_review", "id": "luna-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ],
     "l1_l2": [
         {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ],
 }
 
@@ -61,9 +110,9 @@ class ScreenerReviewSettings(BaseModel):
         "openai/gpt-5.6-sol",
     )
     l3_enabled: bool = True
-    l3_model: Literal["openai/gpt-5.6-sol"] = "openai/gpt-5.6-sol"
+    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol"] = "openai/gpt-5.6-sol"
     timeout_seconds: Annotated[int, Field(ge=30, le=1_800)] = 1_200
-    max_steps: Annotated[int, Field(ge=1, le=48)] = 32
+    max_steps: Annotated[int, Field(ge=1, le=256)] = 32
     # L1 Luna inspection depth. Distinct from ``max_steps``, which bounds L2.
     # Exhausting either bound no longer decides the artifact's fate on its
     # own: the recorded notes ledger does, through the gradient thresholds
@@ -83,10 +132,11 @@ class ScreenerReviewSettings(BaseModel):
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 3_600
-    max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
-    max_output_tokens: Annotated[int, Field(ge=1, le=128_000)] = 20_000
+    # Worker counts uncached input plus 10% of cached input against this cap.
+    max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)] = 425_000
+    max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 20_000
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400
-    max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 6.0
+    max_cost_usd: Annotated[float, Field(gt=0, le=25)] = 6.0
     critic_reasoning_effort: ReasoningEffort = "medium"
     # Gradient thresholds for a budget-terminated review's notes ledger.
     # ``concern_hold_count`` counts SUBSTANTIATED concerns -- distinct cited
@@ -107,7 +157,46 @@ class ScreenerReviewSettings(BaseModel):
     adjudicator_model: AdjudicatorModel = "z-ai/glm-5.3-flash"
     adjudicator_max_steps: Annotated[int, Field(ge=1, le=1_024)] = 128
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
+    # None preserves existing revisions: L4 inherits the L2 completion cap.
+    adjudicator_max_completion_tokens: Annotated[
+        int | None, Field(ge=1_000, le=128_000)
+    ] = None
+    # Independent report-only source-review experiment.  ``off`` is the code
+    # and rolling-deploy default; ``shadow`` may only create observations and
+    # cannot participate in the signed screening verdict.
+    fanout_shadow_mode: Literal["off", "shadow"] = "off"
+    fanout_shadow_image_source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] = (
+        "0" * 40
+    )
+    fanout_shadow_model: FanoutShadowModel = "z-ai/glm-5.3-flash"
+    fanout_shadow_concurrency: Annotated[int, Field(ge=1, le=4)] = 2
+    fanout_shadow_max_steps: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_groups: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_requests: Annotated[int, Field(ge=1, le=64)] = 40
+    fanout_shadow_max_total_tokens: Annotated[int, Field(ge=10_000, le=2_000_000)] = (
+        1_500_000
+    )
+    fanout_shadow_timeout_seconds: Annotated[int, Field(ge=60, le=1_800)] = 900
+    fanout_shadow_max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 3.0
+    fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
+    fanout_shadow_global_concurrency: Literal[1] = 1
+    fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
+    # Zero-token probe battery run against the gate's built image after the
+    # signed decision. ``shadow`` only records bounded observations; it can
+    # never change an outcome. ``off`` is the code and rolling-deploy default.
+    probe_battery_mode: Literal["off", "shadow"] = "off"
+    probe_battery_timeout_seconds: Annotated[int, Field(ge=30, le=600)] = 120
+    # Report-only probe reviewer agent after the battery: it spends Router
+    # tokens through a node-local key whose own daily cap is the second guard.
+    probe_review_mode: Literal["off", "shadow"] = "off"
+    probe_review_timeout_seconds: Annotated[int, Field(ge=120, le=900)] = 420
+    probe_review_max_cost_usd: Annotated[float, Field(gt=0, le=5)] = 1.0
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
+    # Send every L1 result through the L2/L3 models, even a certified low-risk
+    # clear. Workers OR this with their ``SCREENER_L2_ALWAYS_ESCALATE`` env, so
+    # it can only add escalation. The integrity double-check posture sets it so
+    # a top-five deep pass always reaches the stronger models.
+    l2_always_escalate: bool = False
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30
     policy_manifest_profile: PolicyManifestProfile = "l1"
     policy_manifest_rotation_id: Annotated[
@@ -146,7 +235,46 @@ class ScreenerReviewSettings(BaseModel):
             raise ValueError("L2 model chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
+        if (
+            self.adjudicator_max_completion_tokens is not None
+            and self.adjudicator_max_completion_tokens > self.max_output_tokens
+        ):
+            raise ValueError(
+                "adjudicator completion budget must not exceed output budget"
+            )
+        if (
+            self.fanout_shadow_mode == "shadow"
+            and self.fanout_shadow_image_source_sha == "0" * 40
+        ):
+            raise ValueError("shadow mode requires an exact trusted image source SHA")
+        if self.probe_review_mode == "shadow" and self.probe_battery_mode != "shadow":
+            # The reviewer starts from the battery's calibration and leads.
+            raise ValueError("the probe reviewer requires the probe battery")
         return self
+
+
+def review_settings_checksum(settings: ScreenerReviewSettings) -> str:
+    """Hash inactive/default late controls in the legacy shape for rolling upgrades."""
+    value = settings.model_dump(mode="json")
+    if settings.fanout_shadow_mode == "off":
+        for field in FANOUT_SHADOW_SETTINGS_FIELDS:
+            value.pop(field)
+    if not settings.l2_always_escalate:
+        # Workers that predate the control cannot hash a key they drop.
+        value.pop("l2_always_escalate")
+    if settings.adjudicator_max_completion_tokens is None:
+        # Keep the checksums of already-persisted revisions unchanged.
+        value.pop("adjudicator_max_completion_tokens")
+    if settings.probe_battery_mode == "off":
+        # Workers that predate the battery drop both keys before hashing.
+        for field in PROBE_BATTERY_SETTINGS_FIELDS:
+            value.pop(field)
+    if settings.probe_review_mode == "off":
+        # Workers that predate the reviewer drop its keys before hashing.
+        for field in PROBE_REVIEW_SETTINGS_FIELDS:
+            value.pop(field)
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class ScreenerReviewSettingsRevision(BaseModel):
@@ -226,6 +354,69 @@ class AdminShadowReviewObservation(BaseModel):
     created_at: datetime
 
 
+class AdminProbeBatteryLead(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    item_id: str
+    invariant: str
+
+
+_PROBE_REVIEW_ERROR = re.compile(r"[A-Za-z0-9_:]{1,80}")
+
+
+class AdminProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    invariant: str
+    verified: bool
+    citations: list[str] = []
+
+
+class AdminProbeReview(BaseModel):
+    """Bounded report-only reviewer summary: status, invariants and usage."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: str
+    verified: bool = False
+    invariants: list[str] = []
+    findings: list[AdminProbeReviewFinding] = []
+    requests: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cost_usd: float = 0.0
+    review_ms: int = 0
+    # Content-free label (stage:ExceptionClass[:status]). A stored value that
+    # is not one is dropped rather than echoed, and never fails the whole read.
+    error: str | None = None
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def drop_unbounded_error(cls, value: object) -> str | None:
+        if isinstance(value, str) and _PROBE_REVIEW_ERROR.fullmatch(value):
+            return value
+        return None
+
+
+class AdminProbeBatteryObservation(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    attempt_id: UUID
+    agent_id: UUID
+    artifact_sha256: str
+    settings_revision: int
+    settings_scope: str
+    status: Literal["complete", "calibration_failed", "timeout", "error"]
+    encoding: str | None
+    seed_first: bool
+    items_run: int
+    probe_count: int
+    leads: list[AdminProbeBatteryLead]
+    battery_ms: int
+    review: AdminProbeReview | None = None
+    created_at: datetime
+
+
 class ScreenerPolicyManifestView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -248,4 +439,33 @@ class AdminScreenerReviewSettingsResponse(BaseModel):
     known_instances: list[str]
     applied_instances: list[AppliedScreenerReviewSettings]
     shadow_observations: list[AdminShadowReviewObservation]
+    probe_battery_observations: list[AdminProbeBatteryObservation] = []
     policy_manifests: list[ScreenerPolicyManifestView]
+
+
+def integrity_double_check_posture_error(
+    settings: ScreenerReviewSettings,
+) -> str | None:
+    """Why a reviewer revision cannot serve as the double-check posture.
+
+    The double-check exists to run the stronger layered review, so a posture
+    that would skip L2 (``off``/``shadow``) or the L3 critic is refused rather
+    than silently degrading into a repeat of the normal screen.
+    """
+    if settings.mode != "enforce":
+        return f"posture mode must be enforce, not {settings.mode}"
+    if not settings.l2_always_escalate:
+        return "posture must always escalate to L2"
+    if not settings.l3_enabled:
+        return "posture must enable the L3 critic"
+    if settings.policy_manifest_profile != "l1_l2":
+        return "posture must use the l1_l2 policy manifest profile"
+    # Match the deployed worker's narrower settings contract. A valid
+    # Platform revision alone does not prove a worker can deserialize it.
+    if settings.timeout_seconds > 900:
+        return "posture timeout_seconds must be at most 900 for worker compatibility"
+    if settings.max_steps > 20:
+        return "posture max_steps must be at most 20 for worker compatibility"
+    if settings.critic_reasoning_effort not in ("low", "medium"):
+        return "posture critic_reasoning_effort must be low or medium"
+    return None

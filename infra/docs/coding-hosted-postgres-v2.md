@@ -8,9 +8,16 @@ The [host foundation](coding-hosted-host-v2.md) remains independently default-of
 
 ## Network boundary
 
-`enable_coding_hosted_postgres` requires `enable_coding_hosted_host`. The root
-passes the actual `module.pg_vm.internal_ip`, Platform VPC self-link and existing
-PostgreSQL target tag into the native-host module. The optional `postgres_peer`
+The production native-host invocation and its former activation variables were
+removed under SN-138 after cold snapshot recovery. Its dedicated peerings and
+cloud firewall exceptions are removed by the separately reviewed retirement plan;
+PostgreSQL VM/data are retained. The guest admission flag is false for future
+convergence; existing guest UFW/HBA rows require separate exact-rule cleanup.
+The descriptions below document the reusable module's optional network contract.
+
+When explicitly reinstated through a new reviewed host plan, the caller must pass
+the actual PostgreSQL private IP, Platform VPC self-link and existing PostgreSQL
+target tag into the native-host module. The optional `postgres_peer`
 input defaults null and rejects disabled hosts, another project's/network's
 self-link and addresses outside the current Platform `10.30.0.0/24` IPv4 subnet.
 
@@ -103,3 +110,47 @@ fixture forces a local connection, has no convergence roles or privilege
 escalation, and checks native rendering plus 13 invalid addresses. CI syntax
 checks the real playbook and runs that fixture with `--check`. These tests do not
 read production database credentials or apply network/host changes.
+
+## Native environment files
+
+The hosted worker and the custody service each read their own PostgreSQL
+environment copy. The private reader requires a file owned by the reading
+account, mode `0600`, single-link, inside a `0700` directory it owns, so one
+shared root-owned file cannot serve both. The default-off
+`coding_hosted_postgres_environment` role writes:
+
+- `/var/lib/ditto-coding-custody/private/postgres-environment.json`, owned by
+  `ditto-coding-custody`;
+- `/var/lib/ditto-coding-hosted/private/postgres-environment.json`, owned by
+  `ditto-coding-hosted`.
+
+Each is the JSON list of `POSTGRES_*=value` entries that the runtime parser
+accepts:
+- **Fixed fields:** user `ditto`, database `ditto_platform_prod`, port `5432`,
+  pool 1–4 and a 30-second command timeout.
+- **Host:** the exact Platform private IP.
+- **Password:** read only from `DITTO_CODING_PG_PASSWORD` in the controller's
+  local environment. It is not an Ansible variable, so inventory, Git and `-e`
+  cannot carry it, and a `coding_hosted_postgres_environment_password` variable
+  is refused.
+
+This is a separate protected convergence. It uses the same pattern as the first
+provisioning of `gcp-platform-pg.yml`: an operator who already holds
+`platform-db-password` exports it, runs
+`playbooks/gcp-coding-hosted-postgres-environment.yml` with the exact
+confirmation `MATERIALIZE NATIVE CODING POSTGRES ENVIRONMENT`, and unsets it. No
+workflow identity gets Secret Manager access.
+
+The role behaves as follows:
+- It validates a bounded, single-line password without logging it.
+- It refuses while the worker or any custody instance is live.
+- It writes each copy with `no_log` and without a diff.
+- It verifies ownership, mode, single link and the SHA-256 of each copy against
+  the rendered document, with `no_log`. It never reads the bytes back to the
+  controller and never prints the values or the digest.
+- It starts nothing. Admission still depends on the separately reviewed HBA and
+  firewall rules above.
+
+The `role_coding_hosted` group connects through IAP only
+(`group_vars/role_coding_hosted.yml`). Every native host role therefore reaches
+the private address the same way the Platform PostgreSQL VM is reached.

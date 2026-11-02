@@ -30,6 +30,7 @@ const control = (burn_share: number, overrides: Record<string, unknown> = {}) =>
       min_burn_share: 0,
       max_burn_share: 1,
       live_validator_count: 4,
+      rank_shares_served: false,
       ...overrides,
     },
   }) as BurnSettingsControl
@@ -63,7 +64,7 @@ describe('BurnControlPanel', () => {
     expect(updateBurnSettings).toHaveBeenCalledWith({
       data: {
         expectedRevision: 3,
-        settings: { burn_share: 0.25 },
+        settings: { burn_share: 0.25, rank_shares: null },
         reason: 'owner-approved burn for the treasury window',
         confirmation: BURN_CONFIRMATION,
       },
@@ -115,5 +116,30 @@ describe('BurnControlPanel', () => {
     expect((screen.getByLabelText(/Burn percentage/) as HTMLInputElement).disabled).toBe(
       true,
     )
+  })
+
+  it('carries a configured payout curve through a burn change and shows whether it is served', async () => {
+    const curve = [0.5, 0.2, 0.13, 0.1, 0.07]
+    const curved = control(0, {
+      settings: { burn_share: 0, rank_shares: curve },
+      rank_shares_served: true,
+    })
+    render(<BurnControlPanel initialState={curved} readOnly={false} />)
+    expect(screen.getByText('50/20/13/10/7 · served')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: /Burn 25%/ }))
+    fireEvent.change(screen.getByLabelText('Operator reason'), {
+      target: { value: 'owner-approved burn for the treasury window' },
+    })
+    fireEvent.change(screen.getByLabelText(new RegExp(BURN_CONFIRMATION)), {
+      target: { value: BURN_CONFIRMATION },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply burn' }))
+
+    await waitFor(() => expect(updateBurnSettings).toHaveBeenCalledTimes(1))
+    expect(updateBurnSettings.mock.calls[0][0].data.settings).toEqual({
+      burn_share: 0.25,
+      rank_shares: curve,
+    })
   })
 })

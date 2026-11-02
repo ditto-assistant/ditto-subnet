@@ -249,6 +249,10 @@ export interface EntityPanelProps {
   validatorNames: () => Record<string, string>;
   /** The settled/current bench version, for the miner bench chip. */
   currentBench: () => number | null;
+  /** The version the ledger pays on. Distinct from ``currentBench``, which
+   * follows the board's selected view and is a historical pin while one is
+   * chosen; only this one may be named as the emission authority. */
+  emissionBench?: () => number | null;
   /** Mid-rollout settled view (affects the displayed composite). */
   settledView?: () => boolean;
 }
@@ -570,7 +574,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     }
     if (current.tenant === "agent") {
       const e = current.entry;
-      const stage = activityStage(e.status);
+      const stage = activityStage(e.status, e);
       return {
         title: publicDisplayName(e.name, e.name_handle),
         handle: e.name_handle,
@@ -698,8 +702,16 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
                 <MinerSummary
                   entry={entry()}
                   settled={settled()}
-                  total={props.entries().filter(isEligible).length}
+                  total={
+                    // Finalized and provisional rows rank on separate
+                    // counters, so the denominator is this entry's own tier.
+                    props
+                      .entries()
+                      .filter((x) => isEligible(x) && isFinalized(x) === isFinalized(entry()))
+                      .length
+                  }
                   currentBench={props.currentBench()}
+                  emissionBench={props.emissionBench?.() ?? null}
                 />
               )}
             </Match>
@@ -763,9 +775,19 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
  * leads when held. */
 function minerStandingChip(e: RankedEntry): { text: string; class: string; title: string } {
   if (!isFinalized(e)) {
+    const scores = (e.score_count || 0) + " of " + (e.score_quorum || 3) + " scores";
+    // rankEntries gives ineligible rows no rank (a smoke run below the case
+    // floor, a shadow run): say so rather than print "Pnull".
+    if (e.rank == null) {
+      return {
+        text: "Unranked · " + scores,
+        class: "prev",
+        title:
+          "Provisional and not rank-eligible: shown for transparency, but this run will not rank.",
+      };
+    }
     return {
-      text:
-        "P" + e.rank + " · " + (e.score_count || 0) + " of " + (e.score_quorum || 3) + " scores",
+      text: "P" + e.rank + " · " + scores,
       class: "prev",
       title:
         "Provisional: accepted score feedback so far. The rank is final at " +
@@ -804,9 +826,10 @@ function minerStandingChip(e: RankedEntry): { text: string; class: string; title
   };
 }
 
-function minerBenchChip(
+export function minerBenchChip(
   e: RankedEntry,
   currentBench: number | null,
+  emissionBench: number | null = null,
 ): { text: string; class: string; title: string } {
   if (e.bench_version == null) {
     return isFinalized(e)
@@ -826,8 +849,15 @@ function minerBenchChip(
   }
   const settledVersion = currentBench;
   const old = settledVersion !== null && e.bench_version < settledVersion;
+  // A run scored ahead of the paying version is mid-rollout work, not live
+  // earnings. Saying only "DittoBench v13" while the ledger still pays v12 is
+  // what read as an activated rollout in #118 on 2026-09-21. This reads the
+  // emission pin, never the board's selected version: a historical view pins
+  // an old version that pays nothing, and naming it as the authority would be
+  // a worse error than staying quiet.
+  const ahead = emissionBench !== null && e.bench_version > emissionBench;
   return {
-    text: "DittoBench v" + e.bench_version + (old ? " · old" : ""),
+    text: "DittoBench v" + e.bench_version + (old ? " · old" : ahead ? " · not paying yet" : ""),
     class: old ? "prev" : "",
     title: old
       ? "Scored on DittoBench v" +
@@ -835,7 +865,13 @@ function minerBenchChip(
         ", a previous benchmark. Not directly comparable to the settled v" +
         settledVersion +
         "."
-      : "Scored on DittoBench v" + e.bench_version + ".",
+      : ahead
+        ? "Scored on DittoBench v" +
+          e.bench_version +
+          ", which is still being collected. Emissions stay settled on v" +
+          emissionBench +
+          " until that rollout activates."
+        : "Scored on DittoBench v" + e.bench_version + ".",
   };
 }
 
@@ -949,7 +985,7 @@ function MinerSubmissions(props: { submissions: PublicMinerSubmission[] }): JSX.
       <ul class="account-list miner-subs-list">
         <For each={visible()}>
           {(item) => {
-            const stage = () => activityStage(item.status);
+            const stage = () => activityStage(item.status, item);
             return (
               <li class="miner-sub">
                 <span class="miner-sub-main">
@@ -1079,6 +1115,7 @@ function MinerSummary(props: {
   settled: boolean;
   total: number;
   currentBench: number | null;
+  emissionBench: number | null;
 }): JSX.Element {
   const e = () => props.entry;
   const agg = () => e() as RankedEntry & ContinualAggregate;
@@ -1086,7 +1123,7 @@ function MinerSummary(props: {
   const rolling = () => agg().aggregate_method === "continual_mean";
   const kind = () => unrankedKind(e());
   const calcRows = () => compositeCalculationRows(e());
-  const bench = () => minerBenchChip(e(), props.currentBench);
+  const bench = () => minerBenchChip(e(), props.currentBench, props.emissionBench);
   return (
     <>
       <div class="stat-cols">
@@ -1096,7 +1133,7 @@ function MinerSummary(props: {
             k="Rank"
             v={
               isEligible(e())
-                ? "#" + e().rank + " of " + props.total
+                ? (isFinalized(e()) ? "#" : "P") + e().rank + " of " + props.total
                 : kind() === "zero"
                   ? "unranked (scored 0.000)"
                   : "unranked (provisional)"

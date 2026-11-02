@@ -26,6 +26,7 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ProviderOutageCircuit,
     Score,
     ScoreAuditEntry,
     ValidatorHeartbeat,
@@ -389,6 +390,35 @@ async def test_retry_grants_only_minimum_quorum_slots_and_preserves_history(
     assert len(actions[0].ticket_snapshot) == 4
 
 
+async def test_untargeted_retry_cannot_replay_as_targeted(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(retry_maker, score_count=2)
+    await _seed_online_heartbeat(retry_maker, hotkey="validator-2")
+    _install(app, retry_maker)
+    detail = await _detail(client, agent_id)
+    payload = {
+        "request_id": str(uuid4()),
+        "expected_snapshot": detail["snapshot"],
+        "reason": "Recover the final quorum slot after infrastructure correction",
+    }
+    response = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        json=payload,
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["recovery"]["granted_validator_hotkeys"] == ["validator-2"]
+    replay = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry-targeted",
+        json={**payload, "target_validator_hotkey": "validator-2"},
+        headers=_HEADERS,
+    )
+    assert replay.status_code == 409
+
+
 async def test_one_score_grants_only_two_more_attempts_and_keeps_score(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -502,38 +532,6 @@ async def test_offline_natural_retry_does_not_block_healthy_sibling_recovery(
         "validator-2",
         "validator-3",
     ]
-
-
-async def test_manual_grant_allows_exactly_one_more_same_version_issue(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    agent_id = await _seed(retry_maker)
-    _install(app, retry_maker)
-    detail = await client.get(
-        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
-    )
-    await client.post(
-        f"/api/v1/admin/validation-retries/{agent_id}/retry",
-        json={
-            "request_id": str(uuid4()),
-            "expected_snapshot": detail.json()["snapshot"],
-            "reason": "Verified validator infrastructure failure",
-        },
-        headers=_HEADERS,
-    )
-    async with retry_maker() as session, session.begin():
-        ticket = await issue_ticket(
-            session,
-            validator_hotkey="validator-0",
-            now=datetime.now(UTC) + timedelta(seconds=1),
-            ttl=timedelta(minutes=90),
-            bench_version=_BENCH_VERSION,
-        )
-    assert ticket is not None and ticket.agent_id == agent_id
-    assert ticket.attempt_count == MAX_ATTEMPTS_PER_VERSION + 1
-    assert ticket.manual_retry_grants == 1
 
 
 async def test_many_operator_grants_do_not_block_fresh_audited_recovery(
@@ -2056,6 +2054,93 @@ async def test_replace_score_fails_closed_on_run_change_or_busy_validator(
     )
 
 
+async def test_replacement_detail_reports_queued_and_active_retests_consistently(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A queued re-test must not read as "no request" while also blocking one."""
+    agent_id = await _seed(retry_maker, score_count=3, composites=[0.12, 0.81, 0.83])
+    busy_agent = await _seed(retry_maker)
+    async with retry_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.SCORED
+        busy = await session.get(
+            ValidatorTicket, (busy_agent, _BENCH_VERSION, "validator-0")
+        )
+        assert busy is not None
+        busy.status = TicketStatus.ISSUED
+        busy.deadline = datetime.now(UTC) + timedelta(minutes=30)
+    await _seed_capable_heartbeat(retry_maker, hotkey="validator-0")
+    _install(app, retry_maker)
+    url = f"/api/v1/admin/validation-retries/{agent_id}/validators/validator-0"
+
+    none = (await client.get(url, headers=_HEADERS)).json()
+    assert none["replacement_pending"] is False
+    assert none["replacement_queued"] is False
+    assert none["replacement_request_id"] is None
+    assert none["blocking_reason"] == (
+        "validator is currently assigned to another submission"
+    )
+
+    request_id = uuid4()
+    reason = "Validator relay failure made this accepted score untrustworthy"
+    queued_response = await client.post(
+        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
+        headers=_HEADERS,
+        json={
+            "reason": reason,
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(request_id),
+                    "expected_snapshot": none["snapshot"],
+                    "expected_run_id": "run-0",
+                }
+            ],
+        },
+    )
+    assert queued_response.status_code == 200, queued_response.text
+    assert queued_response.json()["queued"] == 1
+
+    queued = (await client.get(url, headers=_HEADERS)).json()
+    assert queued["replacement_pending"] is False
+    assert queued["replacement_queued"] is True
+    assert queued["replacement_request_id"] == str(request_id)
+    assert queued["replacement_reason"] == reason
+    assert queued["replacement_actor"] == "operator"
+    assert queued["replacement_allowed"] is False
+    assert queued["blocking_reason"] == (
+        "replacement re-test is already queued behind current validator work"
+    )
+
+    async with retry_maker() as session, session.begin():
+        busy = await session.get(
+            ValidatorTicket, (busy_agent, _BENCH_VERSION, "validator-0")
+        )
+        assert busy is not None
+        busy.status = TicketStatus.SCORED
+        promoted = await activate_next_score_retest(
+            session,
+            validator_hotkey="validator-0",
+            now=datetime.now(UTC),
+            supports_version=lambda version: version == _BENCH_VERSION,
+        )
+        assert promoted is not None and promoted.agent_id == agent_id
+
+    active = (await client.get(url, headers=_HEADERS)).json()
+    assert active["replacement_pending"] is True
+    assert active["replacement_queued"] is False
+    assert active["replacement_request_id"] == str(request_id)
+    assert active["replacement_reason"] == reason
+    assert active["replacement_actor"] == "operator"
+    assert active["replacement_allowed"] is False
+    assert active["blocking_reason"] == (
+        "replacement ticket is already issued and pending a score"
+    )
+
+
 async def test_v9_contract_retest_preview_is_exact_and_includes_evaluating_agents(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -2111,433 +2196,6 @@ async def test_v9_contract_retest_preview_is_exact_and_includes_evaluating_agent
     assert by_agent[str(shadow)]["queue_allowed"] is True
     assert by_agent[str(missing)]["observed_revision"] is None
     assert str(current) not in by_agent
-
-
-async def test_v9_contract_retest_includes_only_proven_case_attribution_defects(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    defective = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
-    genuine_zero = await _seed(
-        retry_maker, score_count=1, bench_version=9, ticket_count=1
-    )
-    healthy = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
-    common = {
-        "revision": V9_SCORE_CONTRACT_REVISION,
-        "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,
-        "rollout_mode": "enforce",
-    }
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=defective,
-        factor_bps=0,
-        model_use={
-            "result": "insufficient_evidence",
-            "case_attribution_complete": False,
-            "successful_requests": 734,
-        },
-        **common,
-    )
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=genuine_zero,
-        factor_bps=0,
-        model_use={
-            "result": "zero_inference",
-            "case_attribution_complete": False,
-            "successful_requests": 0,
-        },
-        **common,
-    )
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=healthy,
-        factor_bps=10_000,
-        model_use={
-            "result": "passed",
-            "case_attribution_complete": True,
-            "successful_requests": 734,
-        },
-        **common,
-    )
-    _install(app, retry_maker)
-
-    response = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
-    assert response.status_code == 200, response.text
-    items = response.json()["items"]
-    assert [item["agent_id"] for item in items] == [str(defective)]
-    assert items[0]["observed_rollout_mode"] == "enforce"
-    assert items[0]["semantic_gate_factor_bps"] == 0
-    assert items[0]["queue_allowed"] is True
-
-
-async def test_v9_contract_retest_requires_typed_confirmation_and_current_snapshot(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    agent_id = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=agent_id,
-        revision="v9-base-shadow-calibration-v1",
-        manifest_sha256="5" * 64,
-        rollout_mode="shadow",
-    )
-    _install(app, retry_maker)
-    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
-    item = preview.json()["items"][0]
-    payload = {
-        "basis": "v9_contract_mismatch",
-        "reason": "Replace a signed shadow score with the authoritative v9 contract",
-        "items": [
-            {
-                "agent_id": str(agent_id),
-                "request_id": str(uuid4()),
-                "expected_snapshot": item["snapshot"],
-                "expected_run_id": item["run_id"],
-            }
-        ],
-    }
-    missing_confirmation = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json=payload,
-    )
-    assert missing_confirmation.status_code == 422
-    wrong_confirmation = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json={**payload, "confirmation": "QUEUE RETESTS"},
-    )
-    assert wrong_confirmation.status_code == 422
-
-    async with retry_maker() as session, session.begin():
-        score = await session.get(Score, (agent_id, 9, "validator-0"))
-        assert score is not None
-        score.details = {
-            "v9_base": {
-                "score_contract": {
-                    "revision": V9_SCORE_CONTRACT_REVISION,
-                    "manifest_sha256": V9_SCORE_CONTRACT_MANIFEST_SHA256,
-                },
-                "score_gates": {"rollout_mode": "enforce"},
-                "semantic_gate_factor_bps": 10_000,
-            }
-        }
-    stale = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json={**payload, "confirmation": "QUEUE V9 CONTRACT RETESTS"},
-    )
-    assert stale.status_code == 200, stale.text
-    assert stale.json()["skipped"] == 1
-    assert "state changed" in stale.json()["results"][0]["detail"]
-
-
-async def test_v9_contract_retest_waits_for_reused_continual_ticket_then_reclaims_it(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """A mutable continual ticket must not erase accepted-score repair intent."""
-    agent_id = await _seed(
-        retry_maker,
-        score_count=1,
-        bench_version=9,
-        ticket_count=1,
-    )
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=agent_id,
-        revision="v9-base-shadow-calibration-v1",
-        manifest_sha256="5" * 64,
-        rollout_mode="shadow",
-    )
-    async with retry_maker() as session, session.begin():
-        ticket = await session.get(
-            ValidatorTicket,
-            (agent_id, 9, "validator-0"),
-        )
-        assert ticket is not None
-        ticket.status = TicketStatus.ISSUED
-        ticket.purpose = TicketPurpose.CONTINUAL_RETEST
-        ticket.purpose_revision += 1
-        ticket.issued_at = datetime.now(UTC)
-        ticket.deadline = datetime.now(UTC) + timedelta(minutes=90)
-    _install(app, retry_maker)
-
-    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
-    assert preview.status_code == 200, preview.text
-    [item] = preview.json()["items"]
-    assert item["ticket_status"] == "issued"
-    assert item["queue_allowed"] is True
-
-    queued = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json={
-            "basis": "v9_contract_mismatch",
-            "confirmation": "QUEUE V9 CONTRACT RETESTS",
-            "reason": "Restore authoritative v9 evidence after continual ticket reuse",
-            "items": [
-                {
-                    "agent_id": str(agent_id),
-                    "request_id": str(uuid4()),
-                    "expected_snapshot": item["snapshot"],
-                    "expected_run_id": item["run_id"],
-                }
-            ],
-        },
-    )
-    assert queued.status_code == 200, queued.text
-    assert queued.json()["queued"] == 1
-    assert queued.json()["activated"] == 0
-
-    async with retry_maker() as session, session.begin():
-        ticket = await session.get(
-            ValidatorTicket,
-            (agent_id, 9, "validator-0"),
-            with_for_update=True,
-        )
-        assert ticket is not None
-        ticket.status = TicketStatus.EXPIRED
-        ticket.retry_after = ticket.deadline + timedelta(hours=6)
-        promoted = await activate_next_score_retest(
-            session,
-            validator_hotkey="validator-0",
-            now=datetime.now(UTC),
-            supports_version=lambda version: version == 9,
-        )
-        assert promoted is not None
-        assert promoted.agent_id == agent_id
-        assert promoted.status == TicketStatus.ISSUED
-        assert promoted.purpose == TicketPurpose.CANONICAL_QUORUM
-        lifecycle = await session.scalar(
-            select(ScoreAuditEntry)
-            .where(
-                ScoreAuditEntry.agent_id == agent_id,
-                ScoreAuditEntry.validator_hotkey == "validator-0",
-                ScoreAuditEntry.event == EVENT_SCORE_RETEST_REQUESTED,
-            )
-            .order_by(ScoreAuditEntry.seq.desc())
-        )
-        assert lifecycle is not None
-        assert lifecycle.payload["basis"] == "v9_contract_mismatch"
-        assert lifecycle.payload["queued_ticket_status"] == "issued"
-
-
-async def test_v9_contract_retest_ignores_expired_v8_work_history(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    agent_id = await _seed(
-        retry_maker,
-        score_count=1,
-        bench_version=9,
-        ticket_count=1,
-    )
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=agent_id,
-        revision="v9-base-shadow-calibration-v1",
-        manifest_sha256="5" * 64,
-        rollout_mode="shadow",
-    )
-    async with retry_maker() as session, session.begin():
-        session.add(
-            ValidatorTicket(
-                agent_id=agent_id,
-                validator_hotkey="legacy-v8-validator",
-                status=TicketStatus.EXPIRED,
-                issued_at=_T0,
-                deadline=_T0 + timedelta(minutes=90),
-                bench_version=8,
-                attempt_count=MAX_ATTEMPTS_PER_VERSION,
-                manual_retry_grants=0,
-                retry_after=_T0,
-                purpose=TicketPurpose.CONTINUAL_RETEST,
-            )
-        )
-    _install(app, retry_maker)
-
-    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
-    assert preview.status_code == 200, preview.text
-    [item] = preview.json()["items"]
-    assert item["agent_id"] == str(agent_id)
-    assert item["queue_allowed"] is True
-
-    response = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json={
-            "basis": "v9_contract_mismatch",
-            "confirmation": "QUEUE V9 CONTRACT RETESTS",
-            "reason": "Replace v9 evidence without reviving retired v8 work",
-            "items": [
-                {
-                    "agent_id": str(agent_id),
-                    "request_id": str(uuid4()),
-                    "expected_snapshot": item["snapshot"],
-                    "expected_run_id": item["run_id"],
-                }
-            ],
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["queued"] == 1
-    assert response.json()["skipped"] == 0
-
-    async with retry_maker() as session:
-        legacy = await session.get(
-            ValidatorTicket,
-            (agent_id, 8, "legacy-v8-validator"),
-        )
-        assert legacy is not None
-        assert legacy.status == TicketStatus.EXPIRED
-
-
-async def test_v9_contract_retests_queue_and_promote_for_evaluating_agents(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    agent_ids = [
-        await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
-        for _ in range(2)
-    ]
-    for agent_id in agent_ids:
-        await _set_v9_score_contract(
-            retry_maker,
-            agent_id=agent_id,
-            revision="v9-base-shadow-calibration-v1",
-            manifest_sha256="5" * 64,
-            rollout_mode="shadow",
-        )
-    _install(app, retry_maker)
-    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
-    by_id = {item["agent_id"]: item for item in preview.json()["items"]}
-    request_ids = {agent_id: uuid4() for agent_id in agent_ids}
-    response = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json={
-            "basis": "v9_contract_mismatch",
-            "confirmation": "QUEUE V9 CONTRACT RETESTS",
-            "reason": (
-                "Replace rollout shadow evidence without deleting accepted scores"
-            ),
-            "items": [
-                {
-                    "agent_id": str(agent_id),
-                    "request_id": str(request_ids[agent_id]),
-                    "expected_snapshot": by_id[str(agent_id)]["snapshot"],
-                    "expected_run_id": by_id[str(agent_id)]["run_id"],
-                }
-                for agent_id in agent_ids
-            ],
-        },
-    )
-    assert response.status_code == 200, response.text
-    assert response.json()["queued"] == 2
-    assert [item["queue_position"] for item in response.json()["results"]] == [1, 2]
-
-    async with retry_maker() as session, session.begin():
-        promoted = await activate_next_score_retest(
-            session,
-            validator_hotkey="validator-0",
-            now=datetime.now(UTC),
-            supports_version=lambda version: version == 9,
-        )
-        assert promoted is not None and promoted.agent_id == agent_ids[0]
-        assert promoted.bench_version == 9
-        agent = await session.get(Agent, promoted.agent_id)
-        assert agent is not None and agent.status == AgentStatus.EVALUATING
-        lifecycle = await session.scalar(
-            select(ScoreAuditEntry)
-            .where(
-                ScoreAuditEntry.agent_id == promoted.agent_id,
-                ScoreAuditEntry.event == EVENT_SCORE_RETEST_REQUESTED,
-            )
-            .order_by(ScoreAuditEntry.seq.desc())
-        )
-        assert lifecycle is not None
-        assert lifecycle.payload["basis"] == "v9_contract_mismatch"
-        assert lifecycle.payload["required_v9_contract"]["revision"] == (
-            V9_SCORE_CONTRACT_REVISION
-        )
-
-
-async def test_v9_contract_retests_repair_scores_while_source_review_is_pending(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """A human hold must not preserve a known non-authoritative score.
-
-    Clearing source review changes the agent directly to ``scored``. If the
-    contract-repair lane ignored held agents, an operator could therefore make
-    a signed shadow score rankable without ever giving its validator a chance
-    to replace it under the enforce contract.
-    """
-    agent_id = await _seed(retry_maker, score_count=1, bench_version=9, ticket_count=1)
-    await _set_v9_score_contract(
-        retry_maker,
-        agent_id=agent_id,
-        revision="v9-base-shadow-calibration-v1",
-        manifest_sha256="5" * 64,
-        rollout_mode="shadow",
-        factor_bps=0,
-    )
-    async with retry_maker() as session, session.begin():
-        agent = await session.get(Agent, agent_id)
-        assert agent is not None
-        agent.status = AgentStatus.ATH_PENDING_REVIEW
-    _install(app, retry_maker)
-
-    preview = await client.get("/api/v1/admin/v9-contract-retests", headers=_HEADERS)
-    assert preview.status_code == 200, preview.text
-    item = preview.json()["items"][0]
-    assert item["agent_id"] == str(agent_id)
-    assert item["agent_status"] == AgentStatus.ATH_PENDING_REVIEW
-    assert item["observed_rollout_mode"] == "shadow"
-    assert item["queue_allowed"] is True
-
-    queued = await client.post(
-        "/api/v1/admin/validation-retries/validators/validator-0/queue-score-retests",
-        headers=_HEADERS,
-        json={
-            "basis": "v9_contract_mismatch",
-            "confirmation": "QUEUE V9 CONTRACT RETESTS",
-            "reason": "Replace held shadow evidence before source review can clear",
-            "items": [
-                {
-                    "agent_id": str(agent_id),
-                    "request_id": str(uuid4()),
-                    "expected_snapshot": item["snapshot"],
-                    "expected_run_id": item["run_id"],
-                }
-            ],
-        },
-    )
-    assert queued.status_code == 200, queued.text
-    assert queued.json()["queued"] == 1
-
-    async with retry_maker() as session, session.begin():
-        promoted = await activate_next_score_retest(
-            session,
-            validator_hotkey="validator-0",
-            now=datetime.now(UTC),
-            supports_version=lambda version: version == 9,
-        )
-        assert promoted is not None
-        assert promoted.agent_id == agent_id
-        assert promoted.bench_version == 9
-        held = await session.get(Agent, agent_id)
-        assert held is not None
-        assert held.status == AgentStatus.ATH_PENDING_REVIEW
 
 
 async def test_lists_only_unambiguous_finalized_score_outliers(
@@ -3080,21 +2738,6 @@ async def test_list_pages_after_stable_triage_sort(
     assert all(item["ticket_states"] == {} for item in page_body["submissions"])
 
 
-async def test_list_rejects_unknown_state(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    retry_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, retry_maker)
-    response = await client.get(
-        "/api/v1/admin/validation-retries",
-        params={"state": "wedged"},
-        headers=_HEADERS,
-    )
-    assert response.status_code == 422
-    assert "unknown retry state: wedged" in response.text
-
-
 async def test_list_snapshot_matches_single_agent_detail(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -3415,6 +3058,190 @@ async def test_timeout_exhaustion_still_recommends_retry(
     assert item["dominant_failure_code"] is None
 
 
+async def _seed_provider_parked_submission(
+    maker: async_sessionmaker[AsyncSession], *, circuit_state: str
+) -> UUID:
+    """ditto-subnet#2087: two accepted scores, third slot parked by the circuit.
+
+    The remaining ticket already spent its one no-fault outage resume, so the
+    park charged its budget and left it exhausted with ``provider_outage_parked``.
+    """
+    agent_id = await _seed_states(
+        maker,
+        name=f"provider-parked-{circuit_state}",
+        tickets=[
+            ("val-0", TicketStatus.SCORED, 1, None),
+            ("val-1", TicketStatus.SCORED, 1, None),
+            ("val-2", TicketStatus.EXPIRED, 3, _PAST),
+        ],
+    )
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        ticket = await session.scalar(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id == agent_id,
+                ValidatorTicket.validator_hotkey == "val-2",
+            )
+        )
+        assert ticket is not None
+        ticket.manual_retry_grants = 2
+        ticket.provider_outage_epoch = None
+        ticket.provider_outage_attempted_epoch = uuid4()
+        ticket.failure_reason = "infrastructure"
+        ticket.failure_detail = "provider_outage_parked"
+        ticket.failed_at = ticket.issued_at + timedelta(minutes=4)
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state=circuit_state,
+                epoch=uuid4(),
+                opened_at=now - timedelta(hours=6),
+                retry_at=now + timedelta(minutes=2),
+                last_failure_at=(
+                    now - timedelta(hours=1)
+                    if circuit_state == "closed"
+                    else now - timedelta(minutes=1)
+                ),
+                closed_at=(
+                    now - timedelta(minutes=5) if circuit_state == "closed" else None
+                ),
+                failure_count=41,
+                last_status=503,
+                last_error_code="upstream_http_503",
+                updated_at=now,
+            )
+        )
+    return agent_id
+
+
+async def test_open_provider_outage_blocks_plain_retry_recommendation_and_grant(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_provider_parked_submission(retry_maker, circuit_state="open")
+    _install(app, retry_maker)
+
+    listing = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    assert listing.status_code == 200, listing.text
+    item = listing.json()["submissions"][0]
+    assert item["retry_state"] == "exhausted"
+    assert item["recommended_action"] is None
+    assert item["recovery_allowed"] is False
+    assert item["provider_outage_blocks_retry"] is True
+    assert item["provider_outage"]["state"] == "open"
+    assert item["provider_outage"]["last_error_code"] == "upstream_http_503"
+    assert "provider outage circuit is still open" in item["blocking_reason"]
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["recommended_action"] is None
+    assert body["recovery_allowed"] is False
+    assert body["provider_outage_blocks_retry"] is True
+    assert body["provider_outage"]["failure_count"] == 41
+    assert body["provider_outage"]["closed_at"] is None
+    assert body["score_count"] == 2
+
+    refused = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": "retry into a still-open provider outage",
+        },
+    )
+    assert refused.status_code == 409, refused.text
+    assert "acknowledge_provider_outage" in refused.text
+
+    batch = await client.post(
+        "/api/v1/admin/validation-retries/batch-retry",
+        headers=_HEADERS,
+        json={
+            "reason": "batch retry into a still-open provider outage",
+            "items": [
+                {
+                    "agent_id": str(agent_id),
+                    "request_id": str(uuid4()),
+                    "expected_snapshot": body["snapshot"],
+                }
+            ],
+        },
+    )
+    assert batch.status_code == 200, batch.text
+    assert batch.json()["granted"] == 0
+    assert batch.json()["results"][0]["status"] == "skipped"
+
+    async with retry_maker() as session:
+        ticket = await session.scalar(
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id == agent_id,
+                ValidatorTicket.validator_hotkey == "val-2",
+            )
+        )
+        assert ticket is not None and ticket.manual_retry_grants == 2
+        assert (
+            await session.scalar(
+                select(ValidatorRetryRecovery).where(
+                    ValidatorRetryRecovery.agent_id == agent_id
+                )
+            )
+            is None
+        )
+
+    acknowledged = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": "operator verified the provider lane recovered",
+            "acknowledge_provider_outage": True,
+        },
+    )
+    assert acknowledged.status_code == 200, acknowledged.text
+    assert acknowledged.json()["recovery"]["granted_validator_hotkeys"] == ["val-2"]
+    assert acknowledged.json()["recovery"]["score_count"] == 2
+
+
+async def test_closed_circuit_is_not_reported_for_an_unrelated_submission(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A closed circuit no slot was parked by is noise, not evidence."""
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    now = datetime.now(UTC)
+    async with retry_maker() as session, session.begin():
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state="closed",
+                epoch=uuid4(),
+                opened_at=now - timedelta(days=2),
+                retry_at=now - timedelta(days=2),
+                last_failure_at=now - timedelta(days=2),
+                closed_at=now - timedelta(days=2),
+                failure_count=1,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                updated_at=now - timedelta(days=2),
+            )
+        )
+    _install(app, retry_maker)
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["recommended_action"] == "retry"
+    assert detail.json()["provider_outage"] is None
+    assert detail.json()["provider_outage_blocks_retry"] is False
+
+
 async def test_historical_infra_grant_does_not_authorize_retry(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -3607,3 +3434,340 @@ async def test_batch_retry_rejects_duplicate_agent_ids(
         "/api/v1/admin/validation-retries/batch-retry", headers=_HEADERS, json=payload
     )
     assert resp.status_code == 422
+
+
+async def _mark_provider_outage_exhausted(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    validator_hotkey: str,
+    attempted_epoch: UUID,
+) -> None:
+    """Shape a slot the way a second outage park leaves it (ditto-subnet#2087).
+
+    The lease already spent its single no-fault resume in ``attempted_epoch``,
+    so the next park charged it: expired, infrastructure-classified, and at its
+    attempt cap with no parked epoch left to resume from.
+    """
+    async with maker() as session, session.begin():
+        ticket = await session.get(
+            ValidatorTicket, (agent_id, _BENCH_VERSION, validator_hotkey)
+        )
+        assert ticket is not None
+        ticket.failure_reason = "infrastructure"
+        ticket.failure_detail = "provider_outage_parked"
+        ticket.failed_at = ticket.deadline
+        ticket.provider_outage_epoch = None
+        ticket.provider_outage_attempted_epoch = attempted_epoch
+
+
+async def _set_provider_circuit(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    state: str,
+    epoch: UUID,
+    last_failure_at: datetime,
+) -> None:
+    async with maker() as session, session.begin():
+        circuit = await session.get(ProviderOutageCircuit, "openrouter")
+        if circuit is None:
+            circuit = ProviderOutageCircuit(
+                provider="openrouter",
+                state=state,
+                epoch=epoch,
+                opened_at=last_failure_at,
+                retry_at=last_failure_at + timedelta(minutes=2),
+                last_failure_at=last_failure_at,
+                failure_count=1,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                updated_at=last_failure_at,
+            )
+            session.add(circuit)
+        circuit.state = state
+        circuit.epoch = epoch
+        circuit.opened_at = min(circuit.opened_at, last_failure_at)
+        circuit.retry_at = last_failure_at + timedelta(minutes=2)
+        circuit.last_failure_at = last_failure_at
+        circuit.closed_at = (
+            last_failure_at + timedelta(minutes=3) if state == "closed" else None
+        )
+        circuit.probe_kind = None
+        circuit.probe_key = None
+        circuit.probe_expires_at = None
+        circuit.updated_at = last_failure_at
+
+
+async def test_open_provider_circuit_withholds_retry_whatever_exhausted_the_slot(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An open circuit parks the next lease no matter what killed the last one.
+
+    ``park_scoring_leases`` expires every issued ticket and revokes its grant,
+    filtering on nothing but the live half-open probe, so while the circuit is
+    open a grant cannot be spent safely on any exhausted slot. Once it closes,
+    the recovery-window rule narrows back to the slots the outage itself parked.
+    """
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    async with retry_maker() as session, session.begin():
+        ticket = await session.get(
+            ValidatorTicket, (agent_id, _BENCH_VERSION, "validator-2")
+        )
+        assert ticket is not None
+        ticket.failure_reason = "scoring_error"
+        ticket.failure_detail = "harness_timeout"
+        ticket.failed_at = ticket.deadline
+    _install(app, retry_maker)
+    now = datetime.now(UTC)
+
+    await _set_provider_circuit(
+        retry_maker, state="open", epoch=uuid4(), last_failure_at=now
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["recovery_allowed"] is False
+    assert detail["recommended_action"] is None
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["provider_outage"]["state"] == "open"
+
+    # Closed but still inside the recovery window: this slot was not parked by
+    # the circuit and no park is in force, so the ordinary retry path returns.
+    await _set_provider_circuit(
+        retry_maker,
+        state="closed",
+        epoch=uuid4(),
+        last_failure_at=now - timedelta(minutes=5),
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["provider_outage_blocks_retry"] is False
+    assert detail["recommended_action"] == "retry"
+
+
+async def test_provider_outage_exhaustion_withholds_retry_until_provider_recovers(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Triage must not advertise ``retry`` into a still-failing provider.
+
+    ditto-subnet#2087: Backroom kept returning ``recommended_action=retry`` for
+    a slot the provider circuit had just parked, so each grant re-leased into
+    the same outage. Operator authority is unchanged (``recovery_allowed``);
+    only the recommendation waits, and the outage evidence is on the row.
+    """
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=3)
+    await _mark_provider_outage_exhausted(
+        retry_maker,
+        agent_id=agent_id,
+        validator_hotkey="validator-2",
+        attempted_epoch=uuid4(),
+    )
+    _install(app, retry_maker)
+    epoch = uuid4()
+    now = datetime.now(UTC)
+
+    await _set_provider_circuit(
+        retry_maker, state="open", epoch=epoch, last_failure_at=now
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["recovery_allowed"] is False
+    assert detail["recommended_action"] is None
+    assert detail["dominant_failure_code"] is None
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["provider_outage"]["state"] == "open"
+    assert detail["provider_outage"]["epoch"] == str(epoch)
+
+    listed = await client.get(
+        "/api/v1/admin/validation-retries",
+        params={"state": "exhausted"},
+        headers=_HEADERS,
+    )
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    (row,) = [item for item in body["submissions"] if item["agent_id"] == str(agent_id)]
+    assert row["retry_state"] == "exhausted"
+    assert row["recovery_allowed"] is False
+    assert row["recommended_action"] is None
+    assert row["provider_outage_blocks_retry"] is True
+    assert row["provider_outage"]["state"] == "open"
+
+    # A circuit that just closed after a recent failure is still flapping.
+    await _set_provider_circuit(
+        retry_maker,
+        state="closed",
+        epoch=epoch,
+        last_failure_at=now - timedelta(minutes=5),
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["provider_outage_blocks_retry"] is True
+    assert detail["recommended_action"] is None
+    assert detail["recovery_allowed"] is False
+
+    # A provider that has stayed quiet is healthy again: retry is the remedy.
+    await _set_provider_circuit(
+        retry_maker,
+        state="closed",
+        epoch=epoch,
+        last_failure_at=now - timedelta(hours=6),
+    )
+    detail = await _detail(client, agent_id)
+    assert detail["provider_outage_blocks_retry"] is False
+    assert detail["provider_outage"]["state"] == "closed"
+    assert detail["recovery_allowed"] is True
+    assert detail["recommended_action"] == "retry"
+
+
+async def test_targeted_final_quorum_retry_is_guarded_audited_and_idempotent(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(retry_maker, score_count=2)
+    await _seed_online_heartbeat(retry_maker, hotkey="validator-2")
+    await _seed_online_heartbeat(retry_maker, hotkey="validator-3")
+    _install(app, retry_maker)
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    payload = {
+        "request_id": str(uuid4()),
+        "expected_snapshot": detail.json()["snapshot"],
+        "reason": "Use the compatible validator after verified resource correction",
+        "target_validator_hotkey": "validator-3",
+    }
+    targeted = f"/api/v1/admin/validation-retries/{agent_id}/retry-targeted"
+    stale = await client.post(
+        targeted, json={**payload, "expected_snapshot": "0" * 64}, headers=_HEADERS
+    )
+    assert stale.status_code == 409
+    bad = await client.post(
+        targeted,
+        json={**payload, "target_validator_hotkey": "validator-0"},
+        headers=_HEADERS,
+    )
+    assert bad.status_code == 409
+    missing = await client.post(
+        targeted,
+        json={
+            key: value
+            for key, value in payload.items()
+            if key != "target_validator_hotkey"
+        },
+        headers=_HEADERS,
+    )
+    assert missing.status_code == 422
+    response = await client.post(targeted, json=payload, headers=_HEADERS)
+    assert response.status_code == 200
+    assert response.json()["recovery"]["granted_validator_hotkeys"] == ["validator-3"]
+    replay = await client.post(targeted, json=payload, headers=_HEADERS)
+    assert replay.status_code == 200 and replay.json()["idempotent"] is True
+    mismatch = await client.post(
+        targeted,
+        json={**payload, "target_validator_hotkey": "validator-2"},
+        headers=_HEADERS,
+    )
+    assert mismatch.status_code == 409
+    untargeted_replay = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        json={
+            key: value
+            for key, value in payload.items()
+            if key != "target_validator_hotkey"
+        },
+        headers=_HEADERS,
+    )
+    assert untargeted_replay.status_code == 409
+    async with retry_maker() as session:
+        tickets = list(
+            (
+                await session.scalars(
+                    select(ValidatorTicket)
+                    .where(ValidatorTicket.agent_id == agent_id)
+                    .order_by(ValidatorTicket.validator_hotkey)
+                )
+            ).all()
+        )
+        recoveries = list(
+            (
+                await session.scalars(
+                    select(ValidatorRetryRecovery).where(
+                        ValidatorRetryRecovery.agent_id == agent_id
+                    )
+                )
+            ).all()
+        )
+    assert [ticket.manual_retry_grants for ticket in tickets] == [0, 0, 0, 1]
+    assert len(recoveries) == 1 and recoveries[0].actor == "operator"
+    assert len(recoveries[0].ticket_snapshot) == 4
+    assert recoveries[0].target_validator_hotkey == "validator-3"
+
+
+async def test_retry_views_do_not_count_generator_round_runs(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """SN-334: a round run is neither live scoring work nor a spent attempt."""
+    # Two of three scores, so one more validator is needed and none has
+    # failed: the submission is simply queued.
+    agent_id = await _seed(retry_maker, score_count=2, ticket_count=2)
+    async with retry_maker() as session, session.begin():
+        # A round run still leased on a row the round created ...
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="validator-8",
+                slot_id="slot-2",
+                status=TicketStatus.ISSUED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=_PAST,
+                deadline=_FUTURE,
+                bench_version=_BENCH_VERSION,
+                attempt_count=0,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+        # ... and a finished one that left the row it created behind.
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="validator-9",
+                slot_id="slot-3",
+                status=TicketStatus.EXPIRED,
+                purpose=TicketPurpose.GENERATOR_ROUND,
+                purpose_revision=1,
+                issued_at=_T0 - timedelta(hours=2),
+                deadline=_T0 - timedelta(hours=1),
+                bench_version=_BENCH_VERSION,
+                attempt_count=0,
+                manual_retry_grants=0,
+                legacy_completion_allowed=False,
+            )
+        )
+    _install(app, retry_maker)
+
+    detail = await _detail(client, agent_id)
+    assert {ticket["validator_hotkey"] for ticket in detail["tickets"]} == {
+        "validator-0",
+        "validator-1",
+    }
+    # Not blocked as "a validator ticket is still active" by the round lease.
+    assert detail["blocking_reason"] != "a validator ticket is still active"
+
+    triage = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    assert triage.status_code == 200, triage.text
+    rows = [
+        item
+        for item in triage.json()["submissions"]
+        if item["agent_id"] == str(agent_id)
+    ]
+    assert len(rows) == 1
+    # Before SN-334 the live round lease read as "running" and the finished
+    # round-created row as an exhausted validator.
+    assert rows[0]["retry_state"] == "queued"
+    assert rows[0]["exhausted_validator_count"] == 0
+    assert rows[0]["attempts_used"] == 1
+    assert rows[0]["ticket_states"] == {"scored": 2}

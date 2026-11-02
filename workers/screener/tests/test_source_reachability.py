@@ -43,6 +43,39 @@ def test_explicit_copy_excludes_local_python_helper() -> None:
     )
 
 
+def test_secret_mount_does_not_expose_an_uncopied_helper() -> None:
+    result = analyze_reachability(
+        {
+            "Dockerfile": (
+                "FROM python:3.12 AS builder\n"
+                "COPY app /app/app\n"
+                "RUN --mount=type=secret,id=build_key python -m compileall /app/app\n"
+                "FROM python:3.12-slim\n"
+                "COPY --from=builder /app/app /app/app\n"
+                'ENTRYPOINT ["python", "/app/app/main.py"]\n'
+            ),
+            "app/main.py": "print('ready')\n",
+            "scripts/local_rehearsal.py": "print('local only')\n",
+        }
+    )
+    assert result["scripts/local_rehearsal.py"].state == ReachabilityState.PROVEN_INERT
+
+
+def test_build_context_bind_mount_keeps_uncopied_helper_unresolved() -> None:
+    result = analyze_reachability(
+        {
+            "Dockerfile": (
+                "FROM python:3.12\nCOPY app/main.py /app/main.py\n"
+                "RUN --mount=type=bind,source=scripts,target=/src python /app/main.py\n"
+                'ENTRYPOINT ["python", "/app/main.py"]\n'
+            ),
+            "app/main.py": "print('ready')\n",
+            "scripts/local_rehearsal.py": "print('available to build')\n",
+        }
+    )
+    assert result["scripts/local_rehearsal.py"].state == ReachabilityState.UNRESOLVED
+
+
 def test_broad_copy_without_execution_is_unresolved_not_reachable() -> None:
     files = {
         "Dockerfile": 'FROM python:3.12\nCOPY . /app\nCMD ["python", "/app/main.py"]\n',

@@ -8,9 +8,15 @@ Source review of a miner harness is `$backroom-review`. The scorer contract is
 
 ## Contract
 
-The scorer POSTs overlapping `/run` against the **one process-wide inference
-URL**. Miners do not route per-question `inference_base_url`.
-`case_scoped_inference_v1` is ignored.
+The scorer POSTs overlapping `/run`. Each carries a case-scoped
+`inference_base_url` minted by the validator; using it attributes that case's
+model calls exactly under concurrency. Below v13 it is attribution only -- no exclusive
+case window, no admission or scoring change -- and it is revoked when the case
+ends, so it must not become a shared client for the next case. The
+**process-wide inference URL** remains supported for harnesses that ignore the
+field. From v13 the existing `/run/<case_id>` route is preserved for
+claim-provenance and catalog capture; missing attribution under concurrency
+is a harness fault under the v13 contract. `case_scoped_inference_v1` is ignored.
 
 Kept: per-case `tool_endpoint`, ticket-scope `model_use`, memory wave barriers
 (seed wave *w*, run those cases, then *w+1*).
@@ -55,6 +61,22 @@ Before raising:
 After write, re-GET and confirm `effective.revision` and `case_concurrency`.
 New tickets only.
 
+## Scoring lease TTL
+
+The canonical scoring ticket TTL (and the paired score-retest replacement TTL)
+is a Backroom revision, not a Platform constant (#1156). Read
+`get_scoring_lease_settings` for `effective.settings.scoring_ticket_ttl_minutes`
+(default 180, bounds 60-240) and `effective.revision`. Change it only when the
+user asks: `set_scoring_lease_settings` with the complete settings object,
+`expectedRevision`, a reason, and `APPLY SCORING TICKET TTL <n> MINUTES`.
+
+It is stamped on **new** leases only; live tickets keep their deadline. The
+validator run budget is `min(harness cap, lease - 2 min)`, so a TTL under the
+165-minute harness cap binds the fleet without a validator release. The 240
+ceiling keeps every lease inside the 245-minute Compose stop grace / updater
+drain. Confirmation (4 h), retry cooldowns, and screening/build lease clocks
+are still constants.
+
 ## Debug map
 
 | Symptom | First look |
@@ -62,6 +84,7 @@ New tickets only.
 | Still serial | Stored revision still 1; or in-flight lease stamp; or scorer predates overlapping `/run` |
 | `6600.0s` / lease abort | `issued_at` before overlapping `/run`; leftover exhausted slots |
 | `tool_mean` ~0 on v10+ | tool route 409 without a case window — session-scoped provenance on 0.100.3+ |
-| `inference broker activation rejected` | grant TTL vs broker session cap (180-min canonical / 4h confirmation / leftover 430-min grants need 8h broker TTL) |
+| `inference broker activation rejected` | grant TTL vs broker session cap (`get_scoring_lease_settings` canonical, default 180 min, max 240 / 4h confirmation / leftover 430-min grants need 8h broker TTL) |
+| Leases expire mid-run after a TTL change | `get_scoring_lease_settings` revision history; only tickets minted after the write use it |
 | Chat 413 / allowance exhausted | `chat_request_budget` at 16384 hard max |
 | Embedding 429 | Platform 12/64/192 or Perplexity; local semaphore 8 should bind first |

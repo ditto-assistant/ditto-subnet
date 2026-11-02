@@ -36,6 +36,10 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "pids_limit": 512,
         "health_path": "/health",
         "container_port": 8080,
+        "seed_path": "/seed",
+        "seed_probe_mode": "shadow",
+        "seed_probe_timeout_seconds": 3.0,
+        "v13_runtime_receipts_mode": "off",
         "smoke_env": (("OPENROUTER_API_KEY", "sk-screener-smoke"),),
         "max_tarball_bytes": 4 * 1024 * 1024,
         "poll_seconds": 0.01,
@@ -82,6 +86,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "l2_audit_retention_days": 30,
         "review_settings_cache_file": "/tmp/ditto-screener-test/review-settings.json",
         "review_settings_max_stale_seconds": 900,
+        "review_inference_provider": "openrouter",
     }
     base.update(overrides)
     return ScreenerConfig(**base)

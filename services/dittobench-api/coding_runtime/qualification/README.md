@@ -77,6 +77,93 @@ build attestations. They cannot substitute for custodian review, native import,
 key custody, recovery or production execution evidence. All readiness/approval
 flags remain false even when every compatibility control passes.
 
+Local controls pin a local Unix engine for the invocation: the default is
+`unix:///var/run/docker.sock`, or an explicit local `DOCKER_HOST`. `DOCKER_CONTEXT`
+and remote engines are refused. The native host/name/data root is also refused
+by this diagnostic path; omitting native approval flags must not bypass its gates.
+Local calls also use a fresh empty private `docker-client` directory and a clean
+environment, so ambient registry credentials and client proxy settings are not
+inherited. That empty directory is retained beneath the private output root.
+
+## Separately approved native controls
+
+Native mode is an explicit, single-use compatibility invocation on the dedicated
+`ditto-coding-hosted-v2` Linux amd64 host, as the non-root `ditto-coding-hosted`
+daemon principal. It is not a private competition attempt or an automatic host
+qualification decision. The local diagnostic mode above remains separate.
+
+Before authorization, the custodian must review the exact release set, imported
+images, real host enforcement and private-input/key/recovery evidence. The
+post-import preflight alone is insufficient: its pending network, resource,
+pre-exec and cleanup checks must not be relabelled as passing evidence. This tool
+neither generates an approval nor contacts a key, provider, catalog or admission
+service. Only an independently communicated approval-file SHA authorizes a run.
+
+The closed approval record uses schema
+`dittobench-coding-native-controls-approval-v2`, purpose
+`private-compatibility-once`, and these required fields:
+
+| Field | Binding |
+|---|---|
+| `source_revision` | Exact clean checkout shared by runner, binding module and all four production images |
+| `release_manifest_sha256` | Independently reviewed release-set index SHA |
+| `plan_sha256`, `helper_sha256` | Exact private plan and public static linux/amd64 helper bytes |
+| `runner_sha256`, `binding_sha256` | Exact `run.py` and `native.py` bytes |
+| `machine_id_sha256`, `boot_id` | Intended host's stripped machine-ID hash and current boot UUID |
+| `issued_at_unix`, `expires_at_unix` | Current validity window, at most 24 hours |
+| `controls`, `max_jobs` | Exact plan case count times two; at most 1024 controls and 1, 2 or 4 parallel jobs |
+| `images` | Exactly `python`, `node`, `go`, `rust`, each with approved `image_ref`, `config_digest`, `approval_sha256`, `driver_profile` matching the release index |
+| `evidence_sha256` | Nonzero digests for `host_preflight`, `network_enforcement`, `resource_enforcement`, `preexec_confinement`, `cleanup_recovery`, `private_input_custody` |
+| `shadow_only`, `weight_eligible` | Explicit `true`, `false` |
+
+Evidence digests identify the custodian's separately reviewed records. This
+consumer does not parse or independently attest their contents; a fabricated
+record or a self-computed hash is not approval. Preserve the actual underlying
+evidence and its approval audit outside Git. These references do not constitute
+hardware attestation or protection against the trusted host principal/root.
+
+The plan, image-reference map, approval and release index must be worker-owned
+mode-0600 regular single-link files beneath protected canonical directories.
+The corpus and output parent must be worker-owned mode 0700 outside the checkout.
+The helper must be a protected single-link mode-0555 amd64 ELF. No shared writable
+ancestors or symlinks are accepted. The existing empty Docker client directory
+and private native socket must already be provisioned; the runner does not create
+or repair them. Pre-provision a dedicated worker-owned mode-0700
+`/var/lib/ditto-coding-hosted/qualification` directory for durable consumed markers.
+
+```text
+python3 -B -I run.py --plan /ABS/PRIVATE/plan.json --images /ABS/PRIVATE/images.json \
+  --corpus /ABS/PRIVATE/corpus --helper /ABS/PUBLIC/operator \
+  --checkout /ABS/REVIEWED/CHECKOUT --output /ABS/PRIVATE/new-native-matrix --jobs 2 \
+  --private-native-controls-once --native-approval /ABS/PRIVATE/approval.json \
+  --native-approval-sha256 INDEPENDENTLY_APPROVED_64_HEX_SHA \
+  --native-release-index /ABS/PRIVATE/release.json
+```
+
+Every native engine call uses `/usr/bin/docker`, the fixed owner-only native
+socket and a clean environment, never an ambient context. Images are selected by
+approved repository/manifest references with `--pull=never`; the case authority
+records the OCI manifest digest, not a local config ID. Rootless/containerd/cgroup
+metadata and zero containers are checked before and after the matrix. Host boot
+and expiry are rechecked before controls; per-control deadlines reserve cleanup
+time and cannot be extended by moving the wall clock backward.
+
+Before any container starts, the approval SHA is consumed through an exclusive,
+fsynced marker in the fixed qualification directory. A fresh output directory
+cannot reuse it; empty/partial markers also refuse retry. Do not delete markers,
+restore old state, change the approval or silently retry after interruption.
+This is operator-local one-shot state, not the competition's PostgreSQL start
+ledger. Root/same-UID state tampering is outside the boundary. Expired or failed
+runs require exact-resource reconciliation and a separately approved new action.
+
+Both modes now retain per-case input directories alongside observations, including
+when removal is unconfirmed. All files remain private operator artifacts; none
+are cleaned automatically. A native summary records `native_controls_passed` and
+`image_binding_kind=approved_native_oci_manifest` plus host/approval commitments.
+`runtime_qualification`, `production_api_approval`, `native_host_ready`,
+`canary_completed` and `weight_eligible` remain false: the control result is
+evidence for independent acceptance, not authorization to activate the competition.
+
 ## Native acceptance gates, in order
 
 | Gate | Required evidence before proceeding |

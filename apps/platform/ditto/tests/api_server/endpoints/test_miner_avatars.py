@@ -102,6 +102,30 @@ async def test_set_and_public_get(
     assert fetched.headers["content-type"].startswith("image/png")
 
 
+async def test_invalid_payload_is_generic_and_never_echoes_input(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    # A pydantic message quotes `input_value=...`; the envelope's validation
+    # handler keeps the public body generic so user input never echoes back.
+    _install(app, session_maker)
+    alice = _kp("//Alice")
+    payload, raw = _set_payload(alice, _PNG)
+    marker = f"echo-marker-{uuid4().hex}"
+    for form in (json.dumps({**payload, "netuid": marker}), f"not json {marker}"):
+        response = await client.post(
+            _URL,
+            data={"payload": form},
+            files={"file": ("me.png", raw, "image/png")},
+        )
+        assert response.status_code == 422
+        body = response.json()
+        assert body["error_code"] == 3001
+        assert body["message"] == "request validation failed"
+        assert marker not in response.text
+
+
 async def test_rejects_when_hippius_is_unset(
     app: FastAPI,
     client: httpx.AsyncClient,

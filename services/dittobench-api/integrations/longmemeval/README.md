@@ -176,17 +176,35 @@ agents only within an identical recorded reader/embedding condition. The local
 recipe is for already-screened images; use the production sandbox boundary for
 untrusted source or unadmitted images.
 
-## Official judging
+## Judging
 
-Build the evaluator from the pinned LongMemEval checkout using
-`Dockerfile.judge`, then run its unmodified `evaluate_qa.py gpt-4o` command.
+Build the evaluator from the pinned **Ditto fork** of LongMemEval using
+`Dockerfile.judge`, then run its `evaluate_qa.py deepseek-v4.1-flash` command.
 The image adds only an `httpx==0.27.2` compatibility pin required by the
-official repository's `openai==1.35.1` dependency.
+upstream repository's `openai==1.35.1` dependency.
+
+The judge is `deepseek/deepseek-v4.1-flash` pinned to Together, mirroring
+`internal/longmemeval/provider_runtime.go`, so a rehearsal measures the grader
+that actually scores submissions. `judge_evaluator.py` is the single source of
+that identity and both this proxy and the starter kit read it.
+
+The fork exists because upstream hard-codes the retiring `gpt-4o-2024-08-06`
+judge *and* pins `max_tokens=10`, which only works for a non-reasoning judge: a
+reasoning model spends that budget on reasoning tokens, returns `content=""`,
+and upstream's `'yes' in ''` silently scores every question "no". The fork
+raises the bound per judge, refuses an empty completion, and leaves the five
+prompt templates byte-identical. The recorded delta, the digests and the checks
+are in `docs/longmemeval-benchmark/judge-evaluator/`.
+
 `openrouter_judge_proxy.py` is a narrow compatibility boundary: it accepts only
-the evaluator's frozen `gpt-4o-2024-08-06` model, rewrites that identifier to
-OpenRouter's `openai/gpt-4o-2024-08-06`, and rejects any other model or endpoint.
-This keeps the official prompt and output-label logic unchanged while using the
-configured OpenRouter account.
+the configured judge model at exactly the frozen completion bound, pins the
+provider with `allow_fallbacks: false` under zero data retention, and rejects
+any other model, bound or endpoint. Rejecting the bound matters on its own —
+an unmodified upstream evaluator sends `max_tokens=10`, and refusing it turns a
+plausible 0% into a loud failure.
+
+**A score from this path is not an official-protocol LongMemEval score** and
+must not be compared with published LongMemEval numbers.
 
 ## Test
 

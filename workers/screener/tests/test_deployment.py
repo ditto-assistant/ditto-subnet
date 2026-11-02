@@ -1,4 +1,6 @@
 import json
+import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -50,11 +52,11 @@ def test_deploy_reinstalls_and_probes_embedded_protocol() -> None:
     assert "verify-installed-signing-contract.py" in bootstrap
 
 
-def test_bootstrap_preserves_separate_remote_and_local_build_budgets() -> None:
+def test_bootstrap_uses_local_build_budget_only() -> None:
     bootstrap = (ROOT / "scripts" / "bootstrap-screener.sh").read_text()
 
-    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500" in bootstrap
     assert "SCREENER_BUILD_TIMEOUT_SECONDS=2700" in bootstrap
+    assert "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS" not in bootstrap
 
 
 def test_deploy_repairs_legacy_remote_build_mode_and_restarts_worker() -> None:
@@ -83,109 +85,113 @@ def test_hetzner_fleet_keeps_builds_and_runtime_local() -> None:
     assert "SCREENER_REMOTE_BUILD_MODE=require" not in fleet_env
 
 
-def test_deploy_workflow_discovers_screeners_by_label_not_a_fixed_vm() -> None:
-    workflow = workflow_text("screener-deploy.yml")
+def test_gce_delivery_is_outbound_pull_without_an_ssh_workflow() -> None:
+    pull = (ROOT / "scripts" / "pull-screener-release.sh").read_text()
+    workflows = MONOREPO_ROOT / ".github" / "workflows"
 
-    # The pet VM name/zone are no longer hardcoded: discovery is label-driven.
-    assert "SCREENER_VM: ditto-screener-prod" not in workflow
-    assert "GCP_ZONE: us-central1-c" not in workflow
-    assert "labels.env=prod" in workflow
-    assert "labels.role=screener" in workflow
-    assert "labels.role=screener-fleet" in workflow
-    # Zone projection is normalized to a bare name for --zone.
-    assert "zone.basename()" in workflow
-
-
-def test_deploy_workflow_fans_out_over_the_fleet_in_parallel() -> None:
-    workflow = workflow_text("screener-deploy.yml")
-
-    # Discovery feeds a matrix so hosts deploy concurrently (bounded), instead of
-    # a sequential loop that could exceed the job timeout on a growing fleet.
-    assert "matrix: ${{ fromJson(needs.discover.outputs.matrix) }}" in workflow
-    assert "fail-fast: false" in workflow
-    assert "max-parallel:" in workflow
-    # Each host receives the exact GitHub release commit resolved once by the
-    # discovery job, never whatever happens to be current on main.
-    assert '"$name" "$zone" \'${{ needs.discover.outputs.revision }}\'' in workflow
+    assert not (workflows / "screener-deploy.yml").exists()
+    assert not (ROOT / "scripts" / "deploy-screener-via-ssh.sh").exists()
+    assert not (ROOT / "requirements-iap.txt").exists()
+    assert "screener-fleet-stable-1" in pull
+    assert "cosign verify" in pull
+    assert "gcloud compute" not in pull
 
 
-def test_deploy_workflow_enables_numpy_before_iap_transport() -> None:
-    workflow = workflow_text("screener-deploy.yml")
-    deploy_job = workflow.split("\n  deploy:\n", 1)[1]
-
-    # IAP checks for NumPy in gcloud's own interpreter and automatically uses
-    # the accelerated websocket path when the import succeeds.
-    setup = deploy_job.index("google-github-actions/setup-gcloud@")
-    python = deploy_job.index("gcloud info --format='value(basic.python_location)'")
-    install = deploy_job.index('"$gcloud_python" -m pip install')
-    verify = deploy_job.index('import numpy; print(f"NumPy {numpy.__version__}')
-    transport = deploy_job.index("deploy-screener-via-ssh.sh")
-    assert setup < python < install < verify < transport
-    assert "--require-hashes -r workers/screener/requirements-iap.txt" in deploy_job
-
-
-def test_deploy_streams_updater_over_one_ssh_session() -> None:
-    workflow = workflow_text("screener-deploy.yml")
-    transport = (ROOT / "scripts" / "deploy-screener-via-ssh.sh").read_text()
-
-    assert "gcloud compute scp" not in workflow
-    assert "deploy-screener-via-ssh.sh" in workflow
-    assert transport.count("gcloud compute ssh") == 1
-    assert '<"$updater"' in transport
-    assert "/tmp/update-screener.sh" not in transport
-    assert "SCREENER_EXPECTED_SHA=$expected_sha /bin/bash -s" in transport
-    assert "exec gcloud" in transport
-    assert "retry" not in transport.split("exec gcloud", 1)[1]
-
-
-def test_single_ssh_transport_preserves_bytes_and_exit_status(tmp_path: Path) -> None:
+def test_gce_pull_authenticates_and_activates_the_descriptor_once(
+    tmp_path: Path,
+) -> None:
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    fake_gcloud = fake_bin / "gcloud"
-    captured_stdin = tmp_path / "stdin"
-    captured_args = tmp_path / "args"
-    fake_gcloud.write_text(
+    fake_id = fake_bin / "id"
+    fake_id.write_text("#!/usr/bin/env bash\necho 0\n")
+    fake_id.chmod(0o755)
+    fake_cosign = fake_bin / "cosign"
+    fake_cosign.write_text('#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" >>"$CALLS"\n')
+    fake_cosign.chmod(0o755)
+    fake_systemctl = fake_bin / "systemctl"
+    fake_systemctl.write_text("#!/usr/bin/env bash\nexit 0\n")
+    fake_systemctl.chmod(0o755)
+    fake_flock = fake_bin / "flock"
+    fake_flock.write_text("#!/usr/bin/env bash\nexit 0\n")
+    fake_flock.chmod(0o755)
+    fake_install = fake_bin / "install"
+    fake_install.write_text('#!/usr/bin/env bash\ntarget="${!#}"\nmkdir -p "$target"\n')
+    fake_install.chmod(0o755)
+    fake_docker = fake_bin / "docker"
+    fake_docker.write_text(
         "#!/usr/bin/env bash\n"
-        'printf \'%s\\n\' "$@" >"$CAPTURED_ARGS"\n'
-        'cat >"$CAPTURED_STDIN"\n'
-        "exit 23\n"
+        "set -euo pipefail\n"
+        'case "$1" in\n'
+        "  pull) exit 0 ;;\n"
+        "  create) echo descriptor-container ;;\n"
+        "  cp)\n"
+        "    cat >\"$3\" <<'EOF'\n"
+        "FLEET_FORMAT_VERSION=1\n"
+        "FLEET_VERSION=1.2.3\n"
+        f"FLEET_REVISION={'b' * 40}\n"
+        "FLEET_UPDATE_PROTOCOL=1\n"
+        "SUBMISSION_BUILDER_IMAGE=us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder@sha256:"
+        + "c"
+        * 64
+        + "\nEOF\n"
+        "    ;;\n"
+        "  rm) exit 0 ;;\n"
+        "  image)\n"
+        '    if [[ "$*" == *RepoDigests* ]]; then\n'
+        '      echo "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:'
+        + "d"
+        * 64
+        + '"\n'
+        '    elif [[ "$*" == *fleet-release* ]]; then echo true\n'
+        "    else echo 1\n"
+        "    fi\n"
+        "    ;;\n"
+        "  *) exit 2 ;;\n"
+        "esac\n"
     )
-    fake_gcloud.chmod(0o755)
+    fake_docker.chmod(0o755)
 
+    root = tmp_path / "root"
+    (root / "state").mkdir(parents=True)
+    (root / "state/deployed-sha").write_text("a" * 40)
+    calls = tmp_path / "calls"
+    fake_update = tmp_path / "update.sh"
+    fake_update.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "$SCREENER_EXPECTED_SHA" >>"$CALLS"\n'
+        "printf '%s\\n' \"$SCREENER_EXPECTED_SHA\" "
+        '>"$SCREENER_ROOT/state/deployed-sha"\n'
+    )
+    fake_update.chmod(0o755)
     env = {
+        **os.environ,
         "PATH": f"{fake_bin}:/usr/bin:/bin",
-        "GCP_PROJECT": "test-project",
-        "CAPTURED_STDIN": str(captured_stdin),
-        "CAPTURED_ARGS": str(captured_args),
+        "CALLS": str(calls),
+        "SCREENER_ROOT": str(root),
+        "SCREENER_UPDATE_SCRIPT": str(fake_update),
     }
-    result = subprocess.run(
-        [
-            str(ROOT / "scripts" / "deploy-screener-via-ssh.sh"),
-            "screener-1",
-            "us-central1-a",
-            "a" * 40,
-        ],
-        env=env,
-        check=False,
+
+    command = [str(ROOT / "scripts/pull-screener-release.sh")]
+    first = subprocess.run(command, env=env, text=True, capture_output=True)
+    second = subprocess.run(command, env=env, text=True, capture_output=True)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    lines = calls.read_text().splitlines()
+    assert lines.count("b" * 40) == 1
+    assert "verify" in lines
+    assert "healthy worker already consumes" in second.stderr
+    assert (root / "state/release-pull/managed-descriptor").read_text().strip() == (
+        "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "d" * 64
     )
 
-    assert result.returncode == 23
-    assert (
-        captured_stdin.read_bytes()
-        == (ROOT / "scripts" / "update-screener.sh").read_bytes()
-    )
-    args = captured_args.read_text().splitlines()
-    assert args[:3] == ["compute", "ssh", "screener-1"]
-    assert args.count("ssh") == 1
-    assert "--tunnel-through-iap" in args
-    remote_command = "sudo -n env SCREENER_EXPECTED_SHA=" + "a" * 40 + " /bin/bash -s"
-    assert remote_command in args
 
-
-def test_pull_request_ci_keeps_fast_safety_gates() -> None:
+def test_pr_ci_keeps_fast_safety_gates() -> None:
     workflow = workflow_text("screener-ci.yml")
 
+    assert "workflow_dispatch:" in workflow
     assert "pull_request:" in workflow
+    assert "  push:" not in workflow
     assert 'uv run pytest -m "not integration"' in workflow
     assert "uv run ruff format --check ." in workflow
     assert "uv run ruff check ." in workflow
@@ -193,6 +199,22 @@ def test_pull_request_ci_keeps_fast_safety_gates() -> None:
     assert "docker build -f workers/screener/Dockerfile" in workflow
     assert "tests/test_gate_docker_integration.py" not in workflow
     assert "screener-core-e2e" not in workflow
+
+
+def test_manual_and_release_ci_keep_starter_provenance_checks() -> None:
+    # Cost controls deliberately removed automatic path-triggered PR CI. The
+    # manual verifier and selected screener releases must still collect the
+    # complete non-integration suite, including the starter drift guard.
+    guard = ROOT / "tests" / "test_starter_provenance_current.py"
+    assert guard.is_file()
+    workflow = workflow_text("screener-ci.yml")
+    release = workflow_text("release.yml").split("  verify-screener:\n", 1)[1]
+    release = release.split("  verify-screener-orchestrator:\n", 1)[0]
+    for gate in (workflow, release):
+        assert 'uv run pytest -m "not integration"' in gate
+        assert "--ignore" not in gate
+    assert "Gate screener release on exact merge source" in release
+    assert "ref: ${{ github.sha }}" in release
 
 
 def test_container_entrypoints_do_not_require_a_writable_uv_cache() -> None:
@@ -221,18 +243,17 @@ def test_core_e2e_is_daily_and_manually_dispatchable() -> None:
     assert "if: always()" in workflow
 
 
-def test_screener_is_a_monorepo_component_with_release_scoped_deploy() -> None:
+def test_screener_is_a_monorepo_component_with_pull_release_delivery() -> None:
     components = tomllib.loads(
         (MONOREPO_ROOT / "release" / "components.toml").read_text()
     )["components"]
-    deploy_workflow = workflow_text("screener-deploy.yml")
+    release_workflow = workflow_text("release.yml")
 
     assert components["screener"]["paths"] == ["workers/screener/**"]
     assert components["screener"]["depends_on"] == ["screening_protocol"]
-    assert "push:\n    branches: [main]" not in deploy_workflow
-    assert "gh release view" in deploy_workflow
-    assert "schedule:" in deploy_workflow
-    assert "workflow_dispatch:" in deploy_workflow
+    assert "assemble-screener-fleet-release:" in release_workflow
+    assert "screener-fleet-stable-$SCREENER_FLEET_UPDATE_PROTOCOL" in release_workflow
+    assert "zero-sized GCE fleet is a successful no-op" in release_workflow
 
 
 def test_updater_enables_the_unit_so_it_survives_a_reboot() -> None:
@@ -341,6 +362,14 @@ def test_rootless_executor_is_separate_from_worker_and_denies_private_egress() -
         '"${user_systemctl[@]}" enable --now "$SCREENER_ROOTLESS_UNIT"'
     )
     assert guard_start < user_daemon_start
+    group_grant = installer.index('usermod -aG "$EXECUTOR_GROUP" "$SCREENER_USER"')
+    consumer_probe = installer.index(
+        'runuser -u "$SCREENER_USER" -- env DOCKER_HOST="$docker_host"'
+    )
+    drop_rootful = installer.index('gpasswd -d "$SCREENER_USER" docker')
+    assert user_daemon_start < group_grant < consumer_probe < drop_rootful
+    assert 'stat -c %G "$runtime_dir/docker.sock"' in installer
+    assert "rootless screener docker did not become ready" in installer
     assert 'daemon_root="$EXECUTOR_HOME/docker"' in installer
     assert "SCREENER_EXECUTOR_HOME=/var/lib/ditto-screener-docker" in bootstrap
     assert 'executor_home="$(env_value SCREENER_EXECUTOR_HOME)"' in updater
@@ -456,6 +485,9 @@ def test_golden_image_bake_pipeline_exists() -> None:
 
     assert "image_family      = var.image_family" in packer
     assert "ditto-screener-fleet" in packer
+    # The builder plugin runs with the bake credentials; pin it exactly.
+    plugin_versions = re.findall(r'^\s*version\s*=\s*"([^"]+)"', packer, re.M)
+    assert plugin_versions == ["= 1.2.7"]
     # Bakes via the same bootstrap script in bake mode; stores no secret.
     assert "SCREENER_BAKE_ONLY=1" in packer
     assert "environment: prod" in workflow
@@ -472,6 +504,11 @@ def test_systemd_unit_runs_the_extracted_screener_entrypoint() -> None:
     assert "ditto.screener" not in unit
     assert "KillMode=mixed" in unit
     assert "TimeoutStopSec=15min" in unit
+    # The worker only execs the docker client against the rootless daemon
+    # socket and openssl; the daemon's setuid newuidmap/newgidmap needs live
+    # in its own user unit, so the worker must not be able to gain privileges.
+    assert "NoNewPrivileges=true" in unit
+    assert "NoNewPrivileges=false" not in unit
 
 
 def test_updater_installs_and_rolls_back_the_repository_owned_unit() -> None:

@@ -33,6 +33,13 @@ function searchText(value: unknown): string {
   return String(value == null ? "" : value).toLowerCase();
 }
 
+// A UID is matched both bare and as "uid 42", the way the leaderboard filter
+// does it (boardMatches): people type the number on its own as often as they
+// type the label in front of it.
+function uidText(uid: number | null | undefined): string {
+  return uid == null ? "" : uid + " uid " + uid;
+}
+
 function onSubmissionsPage(): boolean {
   return currentPageName() === "submissions";
 }
@@ -75,8 +82,17 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
         hotkey: entry.miner_hotkey,
         title: shortKey(entry.miner_hotkey),
         detail:
-          (entry.rank ? "Rank #" + entry.rank : "Unranked") + " · composite " + fx(entry.composite),
-        text: [entry.miner_hotkey, entry.agent_name, model, entry.bench_version]
+          (entry.rank ? "Rank #" + entry.rank : "Unranked") +
+          " · composite " +
+          fx(entry.composite) +
+          (entry.miner_uid == null ? "" : " · UID " + entry.miner_uid),
+        text: [
+          entry.miner_hotkey,
+          entry.agent_name,
+          model,
+          entry.bench_version,
+          uidText(entry.miner_uid),
+        ]
           .map(searchText)
           .join(" "),
       };
@@ -110,6 +126,7 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
           agentVersionLabel(entry.version),
           entry.agent_id,
           entry.miner_hotkey,
+          uidText(entry.miner_uid),
           entry.status,
           stage,
           entry.review_reason,
@@ -270,7 +287,7 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
 
   const hasQuery = () => Boolean(value().trim());
   const metaText = () => {
-    if (!hasQuery()) return "Search by hotkey, agent name, or ID";
+    if (!hasQuery()) return "Search by hotkey, agent name, UID, or ID";
     const count = matches().length;
     return count
       ? count + (count === 1 ? " result" : " results") + " · Enter to open"
@@ -348,7 +365,7 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
                 <div class="search-empty">
                   No miner or submission matches “{value().trim()}”.
                   <br />
-                  Try a full or partial hotkey, agent name, or ID.
+                  Try a full or partial hotkey, agent name, UID, or ID.
                 </div>
               }
             >

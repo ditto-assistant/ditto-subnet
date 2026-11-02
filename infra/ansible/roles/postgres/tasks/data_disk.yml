@@ -1,0 +1,125 @@
+---
+# OPTIONAL, DEFAULT-OFF: make the attached persistent data disk usable.
+#
+# Terraform has created and attached ditto-pg-platform-data (50 GB, pd-balanced,
+# prevent_destroy) since the stack was written, but nothing ever put a filesystem
+# on it or mounted it — so the cluster, its WAL, and the collector logs all still
+# share the boot disk (#1745). This task file is the idempotent representation of
+# the *mount*, nothing more:
+#
+#   * it never relocates PGDATA, WAL, or the log directory — that is an offline
+#     maintenance-window migration, documented in
+#     .agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md;
+#   * it never reformats a disk that already carries a filesystem;
+#   * it never unmounts. Flipping postgres_data_disk_enabled back to false skips
+#     these tasks; it does not remove the mount or the fstab entry (that would be
+#     a data-availability event). Unmount by hand, deliberately.
+#
+# Two independent gates, both required before anything is written:
+#   postgres_data_disk_enabled     — mount an already-formatted disk;
+#   postgres_data_disk_allow_format — additionally permit mkfs on a disk that
+#                                     blkid reports as carrying no filesystem.
+
+- name: Inspect the attached PostgreSQL data disk
+  ansible.builtin.stat:
+    path: "{{ postgres_data_disk_device }}"
+    follow: true
+  register: postgres_data_disk_stat
+  when: postgres_data_disk_enabled | bool
+
+- name: Require the attached PostgreSQL data disk to be present
+  ansible.builtin.assert:
+    that:
+      - postgres_data_disk_stat.stat.exists | default(false)
+    fail_msg: >-
+      postgres_data_disk_enabled is true but {{ postgres_data_disk_device }} does
+      not exist on this host. The disk is created and attached by
+      infra/terraform/stacks/gcp-platform (module compute/gcp, device_name
+      ditto-pg-platform-data). Confirm the attachment through a protected
+      Terraform plan before enabling this, and check `lsblk -o
+      NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS` on the host.
+    quiet: true
+  when: postgres_data_disk_enabled | bool
+
+# Probe rather than trust: a disk that already carries data must never be
+# reformatted by a converge.
+- name: Probe the existing filesystem on the PostgreSQL data disk
+  ansible.builtin.command:
+    argv: [blkid, -o, value, -s, TYPE, "{{ postgres_data_disk_device }}"]
+  register: postgres_data_disk_blkid
+  changed_when: false
+  check_mode: false
+  failed_when: postgres_data_disk_blkid.rc not in [0, 2]
+  when: postgres_data_disk_enabled | bool
+
+- name: Set the observed PostgreSQL data-disk filesystem fact
+  ansible.builtin.set_fact:
+    postgres_data_disk_existing_fstype: "{{ postgres_data_disk_blkid.stdout | default('') | trim }}"
+  when: postgres_data_disk_enabled | bool
+
+- name: Refuse to touch a PostgreSQL data disk carrying a foreign filesystem
+  ansible.builtin.assert:
+    that:
+      - postgres_data_disk_existing_fstype in ['', postgres_data_disk_fstype]
+    fail_msg: >-
+      {{ postgres_data_disk_device }} already carries a
+      '{{ postgres_data_disk_existing_fstype }}' filesystem, not
+      '{{ postgres_data_disk_fstype }}'. This role will not reformat or mount it.
+      Inspect the disk by hand and decide deliberately.
+    quiet: true
+  when: postgres_data_disk_enabled | bool
+
+- name: Require explicit authorization before creating a filesystem
+  ansible.builtin.assert:
+    that:
+      - postgres_data_disk_allow_format | bool
+    fail_msg: >-
+      {{ postgres_data_disk_device }} has no filesystem, so mounting it requires
+      mkfs.{{ postgres_data_disk_fstype }}. That is a separate authorization: re-run
+      with postgres_data_disk_allow_format=true once an operator has confirmed the
+      disk is genuinely empty (`sudo blkid {{ postgres_data_disk_device }}` returns
+      nothing and `lsblk` shows no children).
+    quiet: true
+  when:
+    - postgres_data_disk_enabled | bool
+    - postgres_data_disk_existing_fstype | length == 0
+
+- name: Create the filesystem on the empty PostgreSQL data disk
+  community.general.filesystem:
+    dev: "{{ postgres_data_disk_device }}"
+    fstype: "{{ postgres_data_disk_fstype }}"
+    force: false # never reformat
+  when:
+    - postgres_data_disk_enabled | bool
+    - postgres_data_disk_allow_format | bool
+    - postgres_data_disk_existing_fstype | length == 0
+
+- name: Ensure the PostgreSQL data-disk mountpoint exists
+  ansible.builtin.file:
+    path: "{{ postgres_data_disk_mountpoint }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"
+  when: postgres_data_disk_enabled | bool
+
+# nofail: a detached or renamed disk must never leave the database VM stuck in
+# emergency mode at boot.
+- name: Mount the PostgreSQL data disk and persist it in fstab
+  ansible.posix.mount:
+    path: "{{ postgres_data_disk_mountpoint }}"
+    src: "{{ postgres_data_disk_device }}"
+    fstype: "{{ postgres_data_disk_fstype }}"
+    opts: "{{ postgres_data_disk_mount_opts }}"
+    state: mounted
+  when: postgres_data_disk_enabled | bool
+
+- name: Report that mounting the data disk does not relocate the cluster
+  ansible.builtin.debug:
+    msg: >-
+      {{ postgres_data_disk_device }} is mounted at
+      {{ postgres_data_disk_mountpoint }}. PGDATA, WAL, and
+      {{ postgres_log_gc_dir }} are UNCHANGED and still on the boot disk. Moving
+      them is an offline migration with its own runbook — see
+      .agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md.
+  when: postgres_data_disk_enabled | bool

@@ -64,7 +64,44 @@ const waiting = (over: Partial<PipelineEntryExt>): PipelineEntryExt => ({
   ...over,
 });
 
+const codingShadow = (
+  status: "scheduled" | "collecting" | "complete" | "stale",
+  resultCount: number,
+  score: number | null = null,
+): NonNullable<PipelineEntryExt["coding_shadow"]> => ({
+  status,
+  score,
+  result_count: resultCount,
+  score_quorum: 3,
+  bench_version: status === "stale" ? 6 : 7,
+  coding_contract_version: 1,
+  completed_at: status === "complete" ? "2026-07-31T13:30:00Z" : null,
+  shadow_only: true,
+  weight_eligible: false,
+});
+
 describe("the Up next badge (#458)", () => {
+  it("keeps incomplete screenings visible without implying an infrastructure interruption", () => {
+    const container = board(
+      [
+        waiting({
+          status: "screening_failed",
+          agent_id: "failed",
+          screening_reason: "Bounded source review was inconclusive",
+        }),
+      ],
+      { statusCounts: { screening_failed: 1 } },
+    );
+    const card = container.querySelector("#pipeline-admission .pipeline-item");
+    expect(card).not.toBeNull();
+    expect(card?.textContent).toContain("Screening incomplete");
+    expect(card?.getAttribute("data-admission")).toBe("waiting");
+    expect(card?.getAttribute("aria-label")).toContain("Screening incomplete");
+    expect(card?.textContent).not.toContain("Building image & admission");
+    expect(card?.textContent).not.toContain("Historical");
+    expect(container.textContent).toContain("0 in progress · 0 queued · 1 incomplete");
+  });
+
   it("badges rank 1 only when nothing gates the lease", () => {
     const container = board([waiting({ validator_queue_rank: 1, agent_id: "head" })], {
       statusCounts: { waiting_validator: 1 },
@@ -234,6 +271,28 @@ describe("continual retests and rescores in Evaluating", () => {
     const stale = { ...retest, active_benchmarks: [{ bench_version: 6, slot_id: "slot-0" }] };
     expect(pipelineBoardStage(stale, 7)).toBe("scored");
     expect(pipelineRescoreState(stale, 7)).toBeNull();
+  });
+});
+
+describe("the retired Coding shadow", () => {
+  it("renders no Coding lane or card even if a deprecated field arrives", () => {
+    const container = board(
+      [
+        waiting({
+          agent_id: "legacy-coding",
+          status: "scored",
+          coding_shadow: codingShadow("complete", 3, 0),
+        }),
+      ],
+      { statusCounts: { scored: 1 } },
+    );
+    expect(container.querySelector(".pipeline-coding-lane")).toBeNull();
+    expect(container.querySelector(".pipeline-coding-shadow")).toBeNull();
+    expect(
+      container.querySelector<HTMLAnchorElement>(
+        '#pipeline-scored .pipeline-item[href*="legacy-coding"]',
+      ),
+    ).not.toHaveAttribute("aria-label", expect.stringContaining("Coding"));
   });
 });
 

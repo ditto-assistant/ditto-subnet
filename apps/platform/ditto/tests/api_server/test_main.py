@@ -158,7 +158,7 @@ class TestConfigToLogDict:
         assert "api" in echo
         assert "postgres" in echo
         assert "chain" in echo
-        assert echo["coding_private_catalog"] == {"configured": False}
+        assert "coding_private_catalog" not in echo
 
     def test_postgres_password_redacted(self):
         from ditto.tests.api_server.conftest import make_api_server_config
@@ -185,3 +185,17 @@ class TestConfigToLogDict:
         assert echo["postgres"]["database"] == "ditto"
         assert echo["chain"]["pylon_url"] == "http://pylon:8001"
         assert echo["chain"]["netuid"] == 118
+
+    def test_screener_legacy_bearer_posture_exposed_without_token(self):
+        from dataclasses import replace
+
+        from ditto.tests.api_server.conftest import make_api_server_config
+
+        config = make_api_server_config()
+        config = replace(
+            config,
+            screener_auth=replace(config.screener_auth, legacy_bearer_enabled=False),
+        )
+        echo = _config_to_log_dict(config)
+        assert echo["screener"]["legacy_bearer_accepted"] is False
+        assert echo["screener"]["api_token"].startswith("***")

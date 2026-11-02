@@ -1,0 +1,136 @@
+{
+  "champion_agent_id": "00000000-0000-4000-8000-0000000000a1",
+  "expected_miner_shares": {
+    "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty": 0.17721518987341772
+  },
+  "ledger": {
+    "active_bench_version": 7,
+    "burn_share": 0.0,
+    "confirmation_seed_anchors": [],
+    "continual_retest_cohort_size": 5,
+    "count": 1,
+    "crown_incumbent_agent_id": "00000000-0000-4000-8000-0000000000a1",
+    "crown_mode": "incumbent",
+    "dethrone_band_mode": "headroom_capped",
+    "entries": [
+      {
+        "agent_id": "00000000-0000-4000-8000-0000000000b2",
+        "bench_version": 7,
+        "composite": 0.8,
+        "composite_stderr": 7.850462293418876e-17,
+        "confirmation_composites": null,
+        "confirmation_history": null,
+        "confirmation_seeds": null,
+        "continual_aggregate_method": "mean_after_quorum",
+        "effective_composite": null,
+        "efficiency_bonus": null,
+        "efficiency_curve_version": null,
+        "efficiency_factor": null,
+        "first_seen": "2026-09-20T14:37:11Z",
+        "miner_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+        "n": 114,
+        "run_id": "runner-up-1",
+        "score_proofs": [
+          {
+            "bench_version": 7,
+            "composite": 0.8,
+            "run_id": "runner-up-0",
+            "seed": 42,
+            "signature": null,
+            "ticket_deadline": null,
+            "transcript_sha256": null,
+            "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ0"
+          },
+          {
+            "bench_version": 7,
+            "composite": 0.8,
+            "run_id": "runner-up-1",
+            "seed": 42,
+            "signature": null,
+            "ticket_deadline": null,
+            "transcript_sha256": null,
+            "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ1"
+          },
+          {
+            "bench_version": 7,
+            "composite": 0.8,
+            "run_id": "runner-up-2",
+            "seed": 42,
+            "signature": null,
+            "ticket_deadline": null,
+            "transcript_sha256": null,
+            "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ2"
+          }
+        ],
+        "seed": 42,
+        "sha256": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "signature": null,
+        "size_bytes": null,
+        "status": "scored",
+        "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ1"
+      }
+    ],
+    "epoch_index": 25029,
+    "ledger_digest": "0440e5d87e32bb7ab537e9048328f5d0ff261683f0fa7377c41413e5c542cc12",
+    "pinned_block": 9033831,
+    "provisional_incumbent": {
+      "agent_id": "00000000-0000-4000-8000-0000000000a1",
+      "bench_version": 7,
+      "composite": 0.95,
+      "composite_stderr": 7.850462293418876e-17,
+      "confirmation_composites": null,
+      "confirmation_history": null,
+      "confirmation_seeds": null,
+      "continual_aggregate_method": "mean_after_quorum",
+      "effective_composite": null,
+      "efficiency_bonus": null,
+      "efficiency_curve_version": null,
+      "efficiency_factor": null,
+      "first_seen": "2026-09-19T14:37:11Z",
+      "miner_hotkey": "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
+      "n": 114,
+      "run_id": "leader-1",
+      "score_proofs": [
+        {
+          "bench_version": 7,
+          "composite": 0.95,
+          "run_id": "leader-0",
+          "seed": 42,
+          "signature": null,
+          "ticket_deadline": null,
+          "transcript_sha256": null,
+          "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ0"
+        },
+        {
+          "bench_version": 7,
+          "composite": 0.95,
+          "run_id": "leader-1",
+          "seed": 42,
+          "signature": null,
+          "ticket_deadline": null,
+          "transcript_sha256": null,
+          "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ1"
+        },
+        {
+          "bench_version": 7,
+          "composite": 0.95,
+          "run_id": "leader-2",
+          "seed": 42,
+          "signature": null,
+          "ticket_deadline": null,
+          "transcript_sha256": null,
+          "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ2"
+        }
+      ],
+      "seed": 42,
+      "sha256": "abababababababababababababababababababababababababababababababab",
+      "signature": null,
+      "size_bytes": null,
+      "status": "scored",
+      "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQ1"
+    },
+    "reward_eligibility_mode": "enforce",
+    "stale": false,
+    "track_shares_bps": {}
+  }
+}

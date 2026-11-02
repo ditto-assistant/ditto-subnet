@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -22,15 +23,35 @@ from pathlib import Path
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+import rehearsal_gates  # noqa: E402  (sibling module: the public v13 gate replay)
+
 DEFAULT_KIT_DIR = SCRIPT_DIR.parent
 REPO_ROOT = DEFAULT_KIT_DIR.parents[1]
 API_DIR = REPO_ROOT / "services" / "dittobench-api"
 LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
-# Live SN118 scoring contract. Update with Platform current_bench_version
-# activation; do not confuse with research CurrentBenchVersion (still v8).
-LIVE_SCORING_BENCH_VERSION = 11
+# Live SN118 scoring contract. Without --bench-version the rehearsal reads
+# Platform's active_version from the public rollout endpoint at run time; this
+# constant is only the offline fallback. Keep it at the activated version
+# (Backroom get_benchmark_rollout_control); do not confuse with research
+# CurrentBenchVersion (still v8).
+LIVE_SCORING_BENCH_VERSION = 14
+PUBLIC_ROLLOUT_URL = "https://dittobench.ai/api/v1/public/bench/rollout"
+# Override (or set to "off" to skip the lookup) for air-gapped rehearsals.
+PUBLIC_ROLLOUT_URL_ENV = "DITTOBENCH_PUBLIC_ROLLOUT_URL"
 MIN_BENCH_VERSION = 8
-MAX_BENCH_VERSION = 12
+# Bench 14 is the live scoring contract (activated 2026-10-28). The harness
+# wire stays 9.
+# Inclusive ceiling; tracks the shared MAX_SUPPORTED_BENCH_VERSION that
+# ditto/tests/test_bench_version_pins.py diffs across every layer.
+MAX_BENCH_VERSION = 15
+# Environment variables the harness honours only during a local rehearsal.
+COMPLETION_LOG_ENV = "DITTOBENCH_COMPLETION_LOG"
+# The kit's `answer` slot is off by default (the wire stays at bench 9, so a
+# default-on slot would change grading); `--gates` turns it on so the
+# v13 slot rules are exercised locally. Mirrors src/v13.rs ANSWER_SLOT_ENV.
+ANSWER_SLOT_ENV = "DITTOBENCH_ANSWER_SLOT"
 LONGMEM_DATASET_SHA256 = (
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 )
@@ -39,10 +60,21 @@ LONGMEM_DATASET_URL = (
     "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/"
     f"{LONGMEM_DATASET_REVISION}/longmemeval_s_cleaned.json"
 )
-LONGMEM_SOURCE_REVISION = "9e0b455f4ef0e2ab8f2e582289761153549043fc"
-LONGMEM_JUDGE_IMAGE = f"ditto-longmemeval-judge:{LONGMEM_SOURCE_REVISION[:12]}"
 LONGMEM_CONDITION = "longmemeval-s-cleaned-native-memory-tools-v2"
 TERMINAL_STATUSES = {"done", "failed"}
+# The published runtime envelope (docs/RUNTIME-ENVELOPE.md). A standalone
+# starter-kit checkout lacks the monorepo copy and uses these fallbacks, which
+# mirror the published values.
+RUNTIME_ENVELOPE_PATH = (
+    REPO_ROOT
+    / "packages"
+    / "ditto-screening-protocol"
+    / "ditto_screening_protocol"
+    / "data"
+    / "runtime_envelope.json"
+)
+_ENVELOPE_FALLBACK = {"memory_limit_mib": 8192, "cpus": 2, "case_concurrency": 8}
+MEMORY_WARN_FRACTION = 0.85
 SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]+"),
     re.compile(r"(?i)(authorization:\s*bearer\s+)[^\s]+"),
@@ -51,6 +83,45 @@ SECRET_PATTERNS = (
 
 class RehearsalError(RuntimeError):
     """An actionable local-rehearsal failure."""
+
+
+_JUDGE_EVALUATOR: Any = None
+
+
+def judge_evaluator() -> Any:
+    """Load the judge identity shared with the production LongMemEval lane.
+
+    The evaluator is Ditto's fork of LongMemEval, not upstream. Upstream
+    hard-codes the retiring gpt-4o judge and pins max_tokens=10, which makes a
+    reasoning judge return an empty completion that upstream silently scores
+    "no" on every question. The fork raises the bound, refuses an empty
+    completion, and leaves the five prompt templates byte-identical. See
+    services/dittobench-api/integrations/longmemeval/judge_evaluator.py and
+    docs/longmemeval-benchmark/judge-evaluator/.
+
+    Loaded lazily: that module lives in the monorepo under
+    services/dittobench-api, which a standalone starter-kit checkout does not
+    have. Imported at module scope it would fail before ``parse_args`` ran, so
+    even ``--help`` would die with a traceback instead of reaching the
+    actionable ``API_DIR`` check in ``run``.
+    """
+    global _JUDGE_EVALUATOR
+    if _JUDGE_EVALUATOR is None:
+        if str(LONGMEM_DIR) not in sys.path:
+            sys.path.insert(0, str(LONGMEM_DIR))
+        try:
+            import judge_evaluator as module
+        except ImportError as exc:
+            raise RehearsalError(
+                "the LongMemEval judge identity ships with the ditto-subnet "
+                f"monorepo; missing {LONGMEM_DIR / 'judge_evaluator.py'}"
+            ) from exc
+        _JUDGE_EVALUATOR = module
+    return _JUDGE_EVALUATOR
+
+
+def longmem_judge_image() -> str:
+    return f"ditto-longmemeval-judge:{judge_evaluator().FORK_REVISION[:12]}"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -77,10 +148,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--bench-version",
         type=int,
-        default=LIVE_SCORING_BENCH_VERSION,
+        default=None,
         help=(
-            "DittoBench contract to generate and score "
-            f"(default: {LIVE_SCORING_BENCH_VERSION}, live SN118 scoring)"
+            "DittoBench contract to generate and score (default: the live SN118 "
+            "scoring version from the public rollout endpoint, falling back to "
+            f"{LIVE_SCORING_BENCH_VERSION} offline)"
         ),
     )
     parser.add_argument(
@@ -98,6 +170,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--report",
         type=Path,
         help="write the combined Bench and optional LongMemEval report as JSON",
+    )
+    parser.add_argument(
+        "--gates",
+        action="store_true",
+        help=(
+            "replay the public Bench v13 gates (catalog-present + safe harbor, "
+            "swallowed call, provenance normaliser, causal gate, twin/pair "
+            "post-pass) against the run and print per-case notes; shadow only"
+        ),
+    )
+    parser.add_argument(
+        "--keep-artifacts",
+        type=Path,
+        help=(
+            "copy the pass-off dataset artifact, transcript, completion log, and "
+            "gate result into this directory for an offline re-run "
+            "(scripts/rehearsal_gates.py)"
+        ),
     )
     parser.add_argument(
         "--longmem-eval",
@@ -124,11 +214,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--longmem-limit must be between 1 and 500")
     if args.longmem_limit is not None and not args.longmem_eval:
         parser.error("--longmem-limit requires --longmem-eval")
-    if not MIN_BENCH_VERSION <= args.bench_version <= MAX_BENCH_VERSION:
+    if args.bench_version is not None and not (
+        MIN_BENCH_VERSION <= args.bench_version <= MAX_BENCH_VERSION
+    ):
         parser.error(
             f"--bench-version must be between {MIN_BENCH_VERSION} and "
             f"{MAX_BENCH_VERSION}"
         )
+    if args.keep_artifacts is not None and not args.gates:
+        parser.error("--keep-artifacts requires --gates")
     return args
 
 
@@ -181,6 +275,58 @@ def request_json(
     if not isinstance(decoded, dict):
         raise RehearsalError(f"{method} {url} returned a non-object JSON response")
     return decoded
+
+
+def fetch_live_bench_version(url: str, *, timeout: float = 5) -> int | None:
+    """Platform's activated scoring version from the public rollout endpoint,
+    or None when it cannot be read (offline, CDN error, malformed body)."""
+    request = urllib.request.Request(
+        url,
+        # An explicit User-Agent: the CDN refuses urllib's default one.
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "ditto-local-rehearsal/1",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            decoded = json.load(response)
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return None
+    version = decoded.get("active_version") if isinstance(decoded, dict) else None
+    if isinstance(version, bool) or not isinstance(version, int):
+        return None
+    return version
+
+
+def resolve_bench_version(requested: int | None) -> int:
+    """The contract to rehearse: an explicit --bench-version, else the live
+    scoring version, else the offline fallback. A live version newer than this
+    checkout can run fails loudly instead of rehearsing an older contract."""
+    if requested is not None:
+        return requested
+    url = os.environ.get(PUBLIC_ROLLOUT_URL_ENV, PUBLIC_ROLLOUT_URL).strip()
+    live = None if url.lower() in ("", "off") else fetch_live_bench_version(url)
+    if live is None:
+        print(
+            "could not read the live scoring bench version; using the offline "
+            f"fallback {LIVE_SCORING_BENCH_VERSION} (pass --bench-version to pin)",
+            file=sys.stderr,
+        )
+        return LIVE_SCORING_BENCH_VERSION
+    if not MIN_BENCH_VERSION <= live <= MAX_BENCH_VERSION:
+        raise RehearsalError(
+            f"live SN118 scoring is bench {live}, but this checkout rehearses "
+            f"bench {MIN_BENCH_VERSION}-{MAX_BENCH_VERSION}; update ditto-subnet "
+            "or pass --bench-version explicitly"
+        )
+    if live != LIVE_SCORING_BENCH_VERSION:
+        print(
+            f"live scoring is bench {live} (this checkout's offline fallback is "
+            f"{LIVE_SCORING_BENCH_VERSION}); rehearsing bench {live}",
+            file=sys.stderr,
+        )
+    return live
 
 
 def write_report(path: Path, payload: dict[str, Any]) -> None:
@@ -284,22 +430,24 @@ def format_summary(run: dict[str, Any]) -> str:
 
 
 def format_longmem_summary(result: dict[str, Any]) -> str:
-    scope = (
-        "official full condition"
-        if result["official_full_condition"]
-        else "partial practice"
-    )
+    scope = "full condition" if result["full_condition"] else "partial practice"
     return "\n".join(
         [
             "",
             f"=== LongMemEval-S ({scope}) ===",
             f"condition: {result['condition']}",
+            f"judge:     {result['judge_model']} @{result['judge_route_provider']}",
             f"correct:   {result['correct']}/{result['n']}",
             f"accuracy:  {result['accuracy']:.6f}",
             f"abstention:{result['abstention_correct']}/{result['abstention_n']}",
             "",
             "LongMemEval is a separate offline adapter score. It is not folded",
             "into the Bench composite, KOTH rank, confirmation, or payout.",
+            "",
+            "This judge matches the one SN118 scores with in production. It is",
+            "NOT LongMemEval's official gpt-4o judge, so this number is not an",
+            "official-protocol LongMemEval score and must not be compared with",
+            "published LongMemEval results.",
         ]
     )
 
@@ -407,20 +555,161 @@ def scorer_environment(tmp: Path, broker_port: int) -> dict[str, str]:
     environment["DITTOBENCH_BROKER_PORT"] = str(broker_port)
     environment["DITTOBENCH_PRIVATE_ARTIFACT_DIR"] = str(private_dir)
     environment["DITTOBENCH_ARTIFACT_DIR"] = str(artifact_dir)
-    # One case at a time is friendlier to a laptop-sized local Ollama while
-    # preserving deterministic score semantics (latency is not scored).
-    environment.setdefault("DITTOBENCH_V8_CASE_CONCURRENCY", "1")
+    # Validators overlap this many /run calls on one harness, so practice does
+    # too: a harness that shares state across concurrent cases, or whose peak
+    # memory is the sum of eight cases, must fail here first. An explicit
+    # DITTOBENCH_V8_CASE_CONCURRENCY still wins (with a warning in run()).
+    environment.setdefault(
+        "DITTOBENCH_V8_CASE_CONCURRENCY", str(runtime_envelope()["case_concurrency"])
+    )
     return environment
 
 
-def longmem_judge_context() -> str:
-    return (
-        "https://github.com/xiaowu0162/LongMemEval.git"
-        f"?ref=refs/heads/main&checksum={LONGMEM_SOURCE_REVISION}"
+def runtime_envelope() -> dict[str, int]:
+    """Memory cap, CPUs and case concurrency from the published envelope."""
+    try:
+        raw = json.loads(RUNTIME_ENVELOPE_PATH.read_text(encoding="utf-8"))
+        return {
+            "memory_limit_mib": int(raw["harness"]["memory_limit_mib"]),
+            "cpus": int(raw["harness"]["cpus"]),
+            "case_concurrency": int(raw["concurrency"]["case_concurrency"]),
+        }
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(_ENVELOPE_FALLBACK)
+
+
+def process_group_rss_bytes(pgid: int) -> int:
+    """Resident memory of every process in ``pgid`` (portable ``ps``)."""
+    completed = subprocess.run(
+        ["ps", "-A", "-o", "pgid=,rss="], capture_output=True, text=True, check=False
+    )
+    total_kib = 0
+    for line in completed.stdout.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == str(pgid) and fields[1].isdigit():
+            total_kib += int(fields[1])
+    return total_kib * 1024
+
+
+def store_bytes(tmp: Path) -> int:
+    """The harness store size. Validators keep it in the /tmp tmpfs, whose pages
+    count against the same memory cap as the process."""
+    return sum(
+        path.stat().st_size for path in tmp.glob("rehearsal.db*") if path.is_file()
     )
 
 
+class HarnessMemoryWatch:
+    """Sample the harness's resident memory plus its store against the cap.
+
+    Practice runs the harness as a host process, so the kernel will not OOM-kill
+    it at the validator cap. This reports the same number the validator's cgroup
+    would charge and fails the rehearsal when it crosses the published cap, so
+    an over-cap harness is found here rather than on a scored lease.
+    """
+
+    def __init__(self, pgid: int, tmp: Path, *, interval: float = 1.0) -> None:
+        self.pgid = pgid
+        self.tmp = tmp
+        self.interval = interval
+        self.peak_bytes = 0
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def sample(self) -> None:
+        used = process_group_rss_bytes(self.pgid) + store_bytes(self.tmp)
+        self.peak_bytes = max(self.peak_bytes, used)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self.interval):
+            self.sample()
+
+    def start(self) -> HarnessMemoryWatch:
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=5)
+
+
+def enforce_memory_envelope(peak_bytes: int, cap_mib: int) -> str:
+    """Report peak usage against the cap; raise past it like a validator would."""
+    peak_mib = peak_bytes / (1024 * 1024)
+    line = (
+        f"harness memory peak {peak_mib:.0f} MiB (RSS + store) of the "
+        f"{cap_mib} MiB validator cap ({100 * peak_mib / cap_mib:.0f}%)"
+    )
+    if peak_mib >= cap_mib:
+        raise RehearsalError(
+            f"harness_oom (local): {line}. A validator kills this harness and "
+            "charges the attempt; see docs/RUNTIME-ENVELOPE.md"
+        )
+    if peak_mib >= MEMORY_WARN_FRACTION * cap_mib:
+        line += " -- WARNING: little headroom before a scored OOM"
+    return line
+
+
+def pin_harness_cpus(pid: int, cpus: int) -> str | None:
+    """Pin the harness to the validator's CPU count where the OS allows it."""
+    if not hasattr(os, "sched_setaffinity"):
+        return (
+            f"note: this OS cannot pin the harness to {cpus} CPUs; validators "
+            f"give it {cpus}, so local latency is optimistic"
+        )
+    available = sorted(os.sched_getaffinity(0))
+    os.sched_setaffinity(pid, set(available[:cpus]))
+    return None
+
+
+def longmem_judge_context() -> str:
+    judge = judge_evaluator()
+    return (
+        f"{judge.FORK_REPOSITORY}"
+        f"?ref={judge.FORK_REF}&checksum={judge.FORK_REVISION}"
+    )
+
+
+def verify_longmem_judge_evaluator() -> None:
+    """Assert the evaluator inside the judge image is the recorded fork file.
+
+    The build context is already content-pinned by ``checksum=``, so this does
+    not guard the network. It guards this repository: if the recorded fork
+    revision and the recorded evaluator digest ever disagree -- a constant
+    bumped without the digest, or a digest bumped without the constant -- the
+    rehearsal must stop rather than score 500 questions with an evaluator whose
+    behaviour nobody reviewed.
+    """
+    judge = judge_evaluator()
+    completed = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--entrypoint",
+            "sha256sum",
+            longmem_judge_image(),
+            judge.EVALUATOR_PATH,
+        ],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=sanitized_build_env(),
+        check=True,
+    )
+    fields = completed.stdout.split()
+    observed = fields[0] if fields else ""
+    if observed != judge.FORK_EVALUATOR_SHA256:
+        raise RehearsalError(
+            "judge image carries evaluator sha256 "
+            f"{observed or '<unreadable>'}, expected "
+            f"{judge.FORK_EVALUATOR_SHA256} for fork revision "
+            f"{judge.FORK_REVISION}"
+        )
+
+
 def ensure_longmem_judge_image() -> None:
+    judge = judge_evaluator()
+    image = longmem_judge_image()
     inspected = subprocess.run(
         [
             "docker",
@@ -428,36 +717,40 @@ def ensure_longmem_judge_image() -> None:
             "inspect",
             "--format",
             '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
-            LONGMEM_JUDGE_IMAGE,
+            image,
         ],
         stdout=subprocess.PIPE,
         text=True,
         stderr=subprocess.DEVNULL,
         check=False,
     )
-    if (
-        inspected.returncode == 0
-        and inspected.stdout.strip() == LONGMEM_SOURCE_REVISION
-    ):
-        return
-    dockerfile = (LONGMEM_DIR / "Dockerfile.judge").read_bytes()
-    print("building the pinned official LongMemEval judge image...", flush=True)
-    subprocess.run(
-        [
-            "docker",
-            "build",
-            "--file",
-            "-",
-            "--label",
-            f"org.opencontainers.image.revision={LONGMEM_SOURCE_REVISION}",
-            "--tag",
-            LONGMEM_JUDGE_IMAGE,
-            longmem_judge_context(),
-        ],
-        input=dockerfile,
-        env=sanitized_build_env(),
-        check=True,
-    )
+    if inspected.returncode != 0 or inspected.stdout.strip() != judge.FORK_REVISION:
+        dockerfile = (LONGMEM_DIR / "Dockerfile.judge").read_bytes()
+        print(
+            "building the pinned LongMemEval judge image "
+            f"(Ditto fork {judge.FORK_REVISION[:12]} of upstream "
+            f"{judge.UPSTREAM_REVISION[:12]})...",
+            flush=True,
+        )
+        subprocess.run(
+            [
+                "docker",
+                "build",
+                "--file",
+                "-",
+                "--label",
+                f"org.opencontainers.image.revision={judge.FORK_REVISION}",
+                "--label",
+                f"ai.heyditto.longmemeval.upstream={judge.UPSTREAM_REVISION}",
+                "--tag",
+                image,
+                longmem_judge_context(),
+            ],
+            input=dockerfile,
+            env=sanitized_build_env(),
+            check=True,
+        )
+    verify_longmem_judge_evaluator()
 
 
 def start_process(
@@ -499,19 +792,22 @@ def summarize_longmem(
         or not all(isinstance(value, str) and value for value in ids)
     ):
         raise RehearsalError(
-            "official LongMemEval judge returned "
+            "LongMemEval judge returned "
             f"{len(rows)} unique rows; expected {expected}"
         )
+    judge = judge_evaluator()
     labels: list[bool] = []
     abstention: list[bool] = []
     for row in rows:
         autoeval = row.get("autoeval_label")
         if (
             not isinstance(autoeval, dict)
-            or autoeval.get("model") != "gpt-4o-2024-08-06"
+            or autoeval.get("model") != judge.JUDGE_MODEL
         ):
+            recorded = autoeval.get("model") if isinstance(autoeval, dict) else None
             raise RehearsalError(
-                "LongMemEval output is not from the pinned official judge"
+                f"LongMemEval output was judged by {recorded!r}, not the pinned "
+                f"judge {judge.JUDGE_MODEL!r}"
             )
         label = autoeval.get("label")
         if not isinstance(label, bool):
@@ -520,22 +816,31 @@ def summarize_longmem(
         if str(row["question_id"]).endswith("_abs"):
             abstention.append(label)
     return {
-        "schema_version": 1,
+        # 2: the judge is no longer the official gpt-4o, so
+        # `official_full_condition` was renamed to `full_condition` and
+        # `official_protocol` added. A 500-question run is still a full
+        # condition; it is not an official-protocol LongMemEval score.
+        "schema_version": 2,
         "condition": LONGMEM_CONDITION,
         "bench_version": bench_version,
         "dataset_sha256": LONGMEM_DATASET_SHA256,
         "dataset_revision": LONGMEM_DATASET_REVISION,
-        "source_revision": LONGMEM_SOURCE_REVISION,
+        "source_revision": judge.FORK_REVISION,
+        "upstream_revision": judge.UPSTREAM_REVISION,
+        "evaluator_sha256": judge.FORK_EVALUATOR_SHA256,
         "reader_model": "openai/gpt-4.1",
         "reader_profile": "longmemeval-openrouter-gpt41-reader-v1",
-        "judge_model": "gpt-4o-2024-08-06",
-        "judge_profile": "longmemeval-official-gpt4o-openrouter-v1",
+        "judge_model": judge.JUDGE_MODEL,
+        "judge_profile": judge.JUDGE_PROFILE_REVISION,
+        "judge_max_completion_tokens": judge.JUDGE_MAX_COMPLETION_TOKENS,
+        "judge_route_provider": judge.JUDGE_ROUTE_PROVIDER,
+        "official_protocol": judge.OFFICIAL_PROTOCOL,
         "n": len(labels),
         "correct": sum(labels),
         "accuracy": round(sum(labels) / len(labels), 6),
         "abstention_n": len(abstention),
         "abstention_correct": sum(abstention),
-        "official_full_condition": limit is None and len(labels) == 500,
+        "full_condition": limit is None and len(labels) == 500,
         "evaluation_sha256": sha256_file(evaluation_path),
     }
 
@@ -682,15 +987,20 @@ def run_longmem(
                 f"type=bind,src={tmp},dst=/results",
                 "--mount",
                 f"type=bind,src={dataset},dst=/data/longmemeval_s_cleaned.json,readonly",
-                LONGMEM_JUDGE_IMAGE,
-                "gpt-4o",
+                longmem_judge_image(),
+                judge_evaluator().JUDGE_SHORT_NAME,
                 "/results/longmemeval-hypotheses.jsonl",
                 "/data/longmemeval_s_cleaned.json",
             ],
             env=sanitized_build_env(),
             check=True,
         )
-        evaluation = tmp / "longmemeval-hypotheses.jsonl.eval-results-gpt-4o"
+        evaluation = tmp / (
+            "longmemeval-hypotheses.jsonl"
+            + judge_evaluator().evaluation_suffix(
+                judge_evaluator().JUDGE_SHORT_NAME
+            )
+        )
         result = summarize_longmem(
             evaluation,
             limit=args.longmem_limit,
@@ -711,6 +1021,120 @@ def run_longmem(
             output.close()
 
 
+def harness_rehearsal_env(tmp: Path, *, gates: bool) -> dict[str, str]:
+    """Harness environment for the rehearsal: an isolated store, plus the
+    completion log the v13 gate replay reads and the `answer` slot switch
+    when `--gates` is on."""
+    environment = os.environ.copy()
+    # A canonical validator starts every submission with a fresh store. Keep
+    # local rehearsals equally isolated from seed-user and previous runs.
+    environment["DITTOBENCH_DB"] = str(tmp / "rehearsal.db")
+    if gates:
+        environment[COMPLETION_LOG_ENV] = str(tmp / "completions.jsonl")
+        environment[ANSWER_SLOT_ENV] = "1"
+    else:
+        environment.pop(COMPLETION_LOG_ENV, None)
+        environment.pop(ANSWER_SLOT_ENV, None)
+    return environment
+
+
+def scorer_advertised_bench_versions(api_url: str) -> list[int] | None:
+    """The bench versions the local scorer build advertises (`/v1/capabilities`
+    `supported_bench_versions`), or None when the build carries no release
+    identity and cannot answer."""
+    try:
+        capabilities = request_json(f"{api_url}/v1/capabilities")
+    except RehearsalError:
+        return None
+    versions = capabilities.get("supported_bench_versions")
+    if not isinstance(versions, list):
+        return None
+    return sorted(int(v) for v in versions)
+
+
+def require_scorer_bench_version(api_url: str, bench_version: int) -> None:
+    """Fail loudly, before submitting, when the local scorer at this checkout
+    does not advertise the requested contract. The kit ceiling
+    (`MAX_BENCH_VERSION`) may lead the scorer while a contract is still landing;
+    the scorer's `(supported: ...)` 400 on /v1/submit is the same fact stated
+    less helpfully."""
+    advertised = scorer_advertised_bench_versions(api_url)
+    if advertised is None or bench_version in advertised:
+        return
+    raise RehearsalError(
+        f"the local scorer build advertises bench versions {advertised}, not "
+        f"{bench_version}; run --bench-version {max(advertised)} or check out a "
+        "services/dittobench-api that advertises "
+        f"{bench_version} (cmd/dittobench-api supportedBenchVersions)"
+    )
+
+
+def gate_artifact_paths(tmp: Path, run_id: str) -> dict[str, Path]:
+    """Where the local scorer and harness left the pass-off artifacts."""
+    return {
+        "dataset": tmp / "artifacts" / f"{run_id}.json",
+        "transcript": tmp / "artifacts" / f"{run_id}.transcript.json",
+        "projection": tmp / "private-projections" / f"{run_id}.projection.json",
+        "completions": tmp / "completions.jsonl",
+    }
+
+
+def replay_gates(tmp: Path, completed: dict[str, Any]) -> dict[str, Any]:
+    """Replay the public v13 gates over a finished run's kept artifacts."""
+    run_id = str(completed.get("run_id", ""))
+    paths = gate_artifact_paths(tmp, run_id)
+    for name in ("dataset", "transcript"):
+        if not paths[name].is_file():
+            raise RehearsalError(
+                f"--gates needs the {name} artifact from the local scorer; "
+                f"missing {paths[name]}"
+            )
+    completions = (
+        rehearsal_gates.load_jsonl(paths["completions"])
+        if paths["completions"].is_file()
+        else []
+    )
+    projection = (
+        rehearsal_gates.load_json(paths["projection"])
+        if paths["projection"].is_file()
+        else None
+    )
+    report = (
+        completed.get("report") if isinstance(completed.get("report"), dict) else None
+    )
+    return rehearsal_gates.evaluate_run(
+        rehearsal_gates.load_json(paths["dataset"]),
+        rehearsal_gates.load_json(paths["transcript"]),
+        completions,
+        report,
+        projection,
+    )
+
+
+def keep_gate_artifacts(
+    destination: Path, tmp: Path, completed: dict[str, Any], gates: dict[str, Any]
+) -> list[Path]:
+    """Copy the pass-off artifacts and the gate result out of the temporary
+    directory so `scripts/rehearsal_gates.py` can re-run offline. The private
+    projection manifest is copied too: it is this run's own alias map, needed
+    to join the harness log to the canonical case ids."""
+    destination.mkdir(parents=True, exist_ok=True)
+    run_id = str(completed.get("run_id", ""))
+    kept: list[Path] = []
+    for name, source in gate_artifact_paths(tmp, run_id).items():
+        if not source.is_file():
+            continue
+        target = destination / f"{name}{source.suffix or '.json'}"
+        shutil.copyfile(source, target)
+        os.chmod(target, 0o600)
+        kept.append(target)
+    for name, payload in (("report.json", completed), ("gates.json", gates)):
+        target = destination / name
+        write_report(target, payload)
+        kept.append(target)
+    return kept
+
+
 def run(args: argparse.Namespace) -> int:
     require_command("cargo")
     require_command("go")
@@ -722,6 +1146,8 @@ def run(args: argparse.Namespace) -> int:
             "local rehearsal needs the ditto-subnet monorepo checkout; "
             f"missing {API_DIR}"
         )
+    args.bench_version = resolve_bench_version(args.bench_version)
+    print(f"rehearsing bench_version {args.bench_version}", flush=True)
 
     with tempfile.TemporaryDirectory(prefix="dittobench-local-rehearsal-") as raw_tmp:
         tmp = Path(raw_tmp)
@@ -756,10 +1182,7 @@ def run(args: argparse.Namespace) -> int:
             check=True,
         )
 
-        harness_env = os.environ.copy()
-        # A canonical validator starts every submission with a fresh store. Keep
-        # local rehearsals equally isolated from seed-user and previous runs.
-        harness_env["DITTOBENCH_DB"] = str(tmp / "rehearsal.db")
+        harness_env = harness_rehearsal_env(tmp, gates=args.gates)
         api_env = scorer_environment(tmp, broker_port)
 
         harness: subprocess.Popen[bytes] | None = None
@@ -774,6 +1197,19 @@ def run(args: argparse.Namespace) -> int:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                 )
+                envelope = runtime_envelope()
+                cpu_note = pin_harness_cpus(harness.pid, envelope["cpus"])
+                if cpu_note:
+                    print(cpu_note, flush=True)
+                concurrency = int(harness_env["DITTOBENCH_V8_CASE_CONCURRENCY"])
+                if concurrency < envelope["case_concurrency"]:
+                    print(
+                        f"warning: case concurrency {concurrency} is below the "
+                        f"validators' {envelope['case_concurrency']}; peak memory "
+                        "and shared-state bugs under overlap are not exercised",
+                        flush=True,
+                    )
+                memory_watch = HarnessMemoryWatch(harness.pid, tmp).start()
                 api = subprocess.Popen(
                     [str(api_binary), "-port", str(api_port)],
                     cwd=API_DIR,
@@ -785,6 +1221,7 @@ def run(args: argparse.Namespace) -> int:
                 print("waiting for the harness and scorer...", flush=True)
                 wait_for_health(harness_url, harness)
                 wait_for_health(api_url, api)
+                require_scorer_bench_version(api_url, args.bench_version)
 
                 accepted = request_json(
                     f"{api_url}/v1/submit",
@@ -804,6 +1241,14 @@ def run(args: argparse.Namespace) -> int:
                     flush=True,
                 )
                 completed = poll_run(api_url, run_id, timeout=args.timeout)
+                memory_watch.stop()
+                memory_watch.sample()
+                print(
+                    enforce_memory_envelope(
+                        memory_watch.peak_bytes, envelope["memory_limit_mib"]
+                    ),
+                    flush=True,
+                )
                 if completed.get("status") != "done":
                     failure = completed.get("failure") or {}
                     detail = (
@@ -814,6 +1259,20 @@ def run(args: argparse.Namespace) -> int:
                     raise RehearsalError(f"local scorer failed run {run_id}: {detail}")
                 print(format_summary(completed))
                 combined = dict(completed)
+                if args.gates:
+                    gates = replay_gates(tmp, completed)
+                    combined["gates"] = gates
+                    print(rehearsal_gates.format_gates(gates))
+                    if args.keep_artifacts is not None:
+                        kept = keep_gate_artifacts(
+                            args.keep_artifacts.expanduser().resolve(),
+                            tmp,
+                            completed,
+                            gates,
+                        )
+                        print(
+                            f"kept {len(kept)} pass-off artifacts in {args.keep_artifacts}"
+                        )
                 report_path = (
                     args.report.expanduser().resolve()
                     if args.report is not None

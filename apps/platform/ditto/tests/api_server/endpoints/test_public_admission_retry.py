@@ -1,7 +1,9 @@
 """Honest fail-once admission state on the public pipeline (issue #1215).
 
 ``admission_retry`` distinguishes parked provider failures, stuck Ditto
-infrastructure, and guarded retries without promising automatic retry.
+infrastructure, and guarded retries. Only a fleet-owned failure in
+``INFRA_AUTO_RETRY_REASON_CODES`` promises (and schedules) an automatic retry.
+``lane`` names the admission lane only where Platform holds evidence for it.
 """
 
 from __future__ import annotations
@@ -19,7 +21,24 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import Agent, ScreeningAttempt, ScreeningRetryOverride
+from ditto.db.models import (
+    Agent,
+    BenchmarkRollout,
+    ScreeningAttempt,
+    ScreeningRetryOverride,
+    SubmissionImageBuild,
+    ValidatorQueueWithdrawal,
+)
+from ditto.db.queries.benchmark_rollout import active_bench_version
+from ditto.db.queries.screening import (
+    PROVIDER_BACKOFF_REASON_CODES,
+    expire_screening_attempts,
+)
+from ditto.db.queries.screening_infra_retry import (
+    INFRA_AUTO_RETRY_MAX_STREAK,
+    INFRA_AUTO_RETRY_REASON_CODES,
+    infra_retry_delay,
+)
 
 _BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
@@ -90,11 +109,24 @@ async def _seed_failed_attempt(
     return attempt_id
 
 
+@pytest.mark.parametrize(
+    ("reason_code", "infrastructure"),
+    [
+        ("source-review-model-timeout", True),
+        # Historical spelling: still parked in the source-review lane, no
+        # longer a live backoff code (#2458).
+        ("source-review-retryable-infra", False),
+    ],
+)
 async def test_source_review_failure_reports_parked_without_retry_time(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_code: str,
+    infrastructure: bool,
 ) -> None:
     agent_id = await _seed_agent(
-        maker, name="retry-visible", status=AgentStatus.SCREENING_FAILED
+        maker, name=f"retry-visible-{reason_code}", status=AgentStatus.SCREENING_FAILED
     )
     now = datetime.now(UTC)
     finished_at = now - timedelta(minutes=3)
@@ -103,7 +135,7 @@ async def test_source_review_failure_reports_parked_without_retry_time(
         agent_id=agent_id,
         finished_at=finished_at,
         deadline=now + timedelta(minutes=40),
-        reason_code="source-review-retryable-infra",
+        reason_code=reason_code,
     )
     _install(app, maker)
 
@@ -113,8 +145,9 @@ async def test_source_review_failure_reports_parked_without_retry_time(
     assert retry is not None
     assert retry["state"] == "parked"
     assert retry["attempt_count"] == 1
-    assert retry["last_failure_infrastructure"] is True
+    assert retry["last_failure_infrastructure"] is infrastructure
     assert retry["next_retry_at"] is None
+    assert retry["lane"] == "source_review"
 
 
 async def test_operator_override_reports_immediate_eligibility(
@@ -177,6 +210,166 @@ async def test_ditto_infrastructure_failure_reports_stuck(
     assert retry["next_retry_at"] is None
 
 
+@pytest.mark.parametrize("reason_code", ["docker-build-infrastructure"])
+async def test_automatic_infrastructure_failure_reports_the_scheduled_retry(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_code: str,
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name=f"infra-auto-{reason_code}", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    finished_at = now - timedelta(minutes=1)
+    attempt_id = await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=finished_at,
+        deadline=now + timedelta(minutes=60),
+        reason_code=reason_code,
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "retry_queued"
+    assert retry["last_failure_infrastructure"] is True
+    assert datetime.fromisoformat(retry["next_retry_at"]) == (
+        finished_at + infra_retry_delay(1, attempt_id)
+    )
+
+
+async def test_capped_infrastructure_failure_reports_stuck(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="infra-capped", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    for index in range(INFRA_AUTO_RETRY_MAX_STREAK):
+        await _seed_failed_attempt(
+            maker,
+            agent_id=agent_id,
+            finished_at=now - timedelta(hours=5) + timedelta(minutes=30 * index),
+            deadline=now + timedelta(minutes=60),
+            reason_code="docker-build-infrastructure",
+        )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "stuck"
+    assert retry["next_retry_at"] is None
+    assert retry["last_failure_infrastructure"] is True
+
+
+async def test_public_endpoint_does_not_run_the_fleet_history_query(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto.db.queries import screening_infra_retry as module
+
+    def forbidden(_cutoff: datetime):  # noqa: ANN202
+        raise AssertionError("public endpoint must not scan fleet history")
+
+    monkeypatch.setattr(module, "failing_agents_query", forbidden)
+    agent_id = await _seed_agent(
+        maker, name="infra-cheap", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code="docker-build-infrastructure",
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    assert response.json()["admission_retry"]["state"] == "retry_queued"
+
+
+async def _seed_infra_failure(
+    maker: async_sessionmaker[AsyncSession], agent_id: UUID
+) -> None:
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code="docker-build-infrastructure",
+    )
+
+
+async def test_withdrawn_agent_is_not_promised_an_automatic_retry(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="infra-withdrawn", status=AgentStatus.SCREENING_FAILED
+    )
+    await _seed_infra_failure(maker, agent_id)
+    async with maker() as session, session.begin():
+        session.add(
+            ValidatorQueueWithdrawal(
+                withdrawal_id=uuid4(),
+                agent_id=agent_id,
+                bench_version=await active_bench_version(session),
+                actor="operator@example.com",
+                reason="withdrawn",
+                expected_snapshot="x",
+                score_count=0,
+                ticket_snapshot=[],
+                created_at=datetime.now(UTC),
+            )
+        )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "stuck"
+    assert retry["next_retry_at"] is None
+
+
+async def test_old_era_agent_is_not_promised_an_automatic_retry(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="infra-old-era", status=AgentStatus.SCREENING_FAILED
+    )
+    await _seed_infra_failure(maker, agent_id)
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        # An activated rollout newer than the agent: it is from a previous era.
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.created_at = now - timedelta(hours=2)
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=6,
+                desired_version=7,
+                status="activated",
+                cohort_size=5,
+                created_at=now - timedelta(hours=1),
+                activated_at=now,
+            )
+        )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    assert response.json()["admission_retry"]["state"] == "stuck"
+
+
 async def test_miner_docker_build_rejection_is_not_retryable_admission(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:
@@ -198,24 +391,166 @@ async def test_miner_docker_build_rejection_is_not_retryable_admission(
     assert response.json()["admission_retry"] is None
 
 
-async def test_running_and_terminal_states(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+async def _seed_running_attempt(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    agent_id: UUID,
+    build: tuple[str, str] | None,
+    build_only: bool = False,
 ) -> None:
-    running = await _seed_agent(
-        maker, name="retry-running", status=AgentStatus.SCREENING
+    """A running attempt, with its (status, runtime_status) image build if any."""
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_hotkey("screener"),
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                started_at=now - timedelta(minutes=5),
+                deadline=now + timedelta(minutes=40),
+                build_only=build_only,
+            )
+        )
+        await session.flush()
+        if build is not None:
+            build_id = uuid4()
+            session.add(
+                SubmissionImageBuild(
+                    build_id=build_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    environment="prod",
+                    artifact_sha256=sha256(str(agent_id).encode()).hexdigest(),
+                    image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                    output_key=f"remote-builds/{build_id}/image.tar",
+                    status=build[0],
+                    runtime_status=build[1],
+                )
+            )
+
+
+@pytest.mark.parametrize(
+    ("build", "build_only", "lane"),
+    [
+        (("queued", "pending"), False, "build"),
+        (("succeeded", "pending"), False, "runtime_smoke"),
+        (("succeeded", "succeeded"), False, "source_review"),
+        # A build-only rebuild never enters source review.
+        (("succeeded", "succeeded"), True, None),
+        # The worker builds or smokes locally: no row evidences its lane.
+        (("fallback_required", "skipped"), False, None),
+        (("succeeded", "skipped"), False, None),
+        (None, False, None),
+    ],
+)
+async def test_running_attempt_reports_only_an_evidenced_lane(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    build: tuple[str, str] | None,
+    build_only: bool,
+    lane: str | None,
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name=f"lane-{build}-{build_only}", status=AgentStatus.SCREENING
     )
-    rejected = await _seed_agent(
-        maker, name="retry-rejected", status=AgentStatus.REJECTED
+    await _seed_running_attempt(
+        maker, agent_id=agent_id, build=build, build_only=build_only
     )
     _install(app, maker)
 
-    response = await client.get(f"/api/v1/public/agent/{running}/pipeline")
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
     assert response.status_code == 200, response.text
     retry = response.json()["admission_retry"]
-    assert retry is not None
     assert retry["state"] == "running"
-    assert retry["next_retry_at"] is None
+    assert retry["lane"] == lane
 
-    response = await client.get(f"/api/v1/public/agent/{rejected}/pipeline")
+
+@pytest.mark.parametrize(
+    ("reason_code", "lane"),
+    [
+        ("cloudrun-build-unavailable", "build"),
+        ("targon-runtime-unavailable", "runtime_smoke"),
+        ("executor-isolation-unavailable", None),
+        # Operator-retried and ambiguous about the lane: no evidence, no lane.
+    ],
+)
+async def test_failed_attempt_reports_the_lane_its_reason_names(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+    reason_code: str,
+    lane: str | None,
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name=f"lane-{reason_code}", status=AgentStatus.SCREENING_FAILED
+    )
+    now = datetime.now(UTC)
+    await _seed_failed_attempt(
+        maker,
+        agent_id=agent_id,
+        finished_at=now - timedelta(minutes=1),
+        deadline=now + timedelta(minutes=60),
+        reason_code=reason_code,
+    )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
     assert response.status_code == 200, response.text
-    assert response.json()["admission_retry"] is None
+    assert response.json()["admission_retry"]["lane"] == lane
+
+
+async def test_expired_lease_reports_the_lane_its_build_reached(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="lane-lease-expired", status=AgentStatus.SCREENING
+    )
+    await _seed_running_attempt(
+        maker, agent_id=agent_id, build=("succeeded", "pending")
+    )
+    async with maker() as session, session.begin():
+        assert (
+            await expire_screening_attempts(
+                session, now=datetime.now(UTC) + timedelta(hours=1)
+            )
+            == 1
+        )
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "parked"
+    assert retry["last_failure_infrastructure"] is False
+    assert retry["lane"] == "runtime_smoke"
+
+
+def test_every_infrastructure_retry_code_names_a_lane() -> None:
+    from ditto.api_server.endpoints.public import _ADMISSION_LANE_BY_REASON_CODE
+
+    assert set(_ADMISSION_LANE_BY_REASON_CODE) == {
+        *PROVIDER_BACKOFF_REASON_CODES,
+        *INFRA_AUTO_RETRY_REASON_CODES,
+        # Historical spelling of source-review-model-timeout (#2458).
+        "source-review-retryable-infra",
+    }
+
+
+async def test_queued_submission_reports_no_lane(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id = await _seed_agent(
+        maker, name="lane-requeued", status=AgentStatus.UPLOADED
+    )
+    await _seed_infra_failure(maker, agent_id)
+    _install(app, maker)
+
+    response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+    assert response.status_code == 200, response.text
+    retry = response.json()["admission_retry"]
+    assert retry["state"] == "queued"
+    assert retry["lane"] is None

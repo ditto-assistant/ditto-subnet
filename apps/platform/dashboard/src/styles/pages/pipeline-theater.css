@@ -1,0 +1,1490 @@
+/* Pipeline theater (/pipeline): the submission pipeline as three acts,
+   Build (factory), Screening (security) and Scoring (arena), drawn in the
+   Paper style of ditto-app's agent avatars (ditto-assistant/ditto-app#3482).
+
+   Colour rules. Figures and props are paper: light fills, one ink line,
+   round joins. A figure scopes its own brand-kit tint in light mode
+   (data-ditto-theme + data-ditto-mode="light" in the markup), so paper stays
+   paper on a dark dashboard, exactly as ditto-app renders it. Free-standing
+   lines (floors, legs, girders) take the page's text roles so they read on
+   either ground. Status lights use the shared good / warn / danger encodings.
+
+   Motion rules. Transform and opacity only. Everything pauses while the
+   theater is off screen, the tab is hidden or the viewer pauses it
+   ([data-playing="false"]), and nothing animates under reduced motion: every
+   act then rests on its final pose, which is also each element's un-animated
+   default. */
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.theater {
+  margin-bottom: 36px;
+}
+.theater-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.theater-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 24px;
+  margin-bottom: 20px;
+}
+.theater-head h2 {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 800;
+  text-wrap: balance;
+}
+.theater-head p {
+  max-width: 68ch;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.theater-pause {
+  flex: none;
+}
+.theater-acts {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px 36px;
+}
+@media (min-width: 1000px) {
+  .theater-acts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .act-arena {
+    grid-column: 1 / -1;
+  }
+}
+.act {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--hair, var(--border));
+}
+.act-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.act-step {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+.act-head h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+.act-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 28px;
+  margin: 0;
+}
+.act-stat dt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.act-stat[data-tone] dt::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--stat-tone);
+}
+.act-stat[data-tone="good"] {
+  --stat-tone: var(--good);
+}
+.act-stat[data-tone="warn"] {
+  --stat-tone: var(--warn);
+}
+.act-stat[data-tone="danger"] {
+  --stat-tone: var(--danger);
+}
+.act-stat dd {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 2px 0 0;
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.act-stat dd small {
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.act-cast {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.act-cast li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 10px 2px 4px;
+  border: 1px solid var(--hair, var(--border));
+  border-radius: 999px;
+  font-size: 13px;
+}
+.act-cast-detail {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+.act-empty,
+.act-replay,
+.arena-empty {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+.act-lanes {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 12px 28px;
+}
+.act-lanes h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.theater-mini {
+  flex: none;
+  overflow: visible;
+}
+
+/* ── Arena boards ────────────────────────────────────────────────────────── */
+.arena-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.arena-caption {
+  min-height: 2.8em;
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+.arena-caption-count {
+  margin-right: 10px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.arena-boards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr));
+  gap: 16px 32px;
+}
+.arena-table-scroll {
+  min-width: 0;
+  overflow-x: auto;
+}
+.arena-table {
+  width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.arena-table caption {
+  padding-bottom: 6px;
+  font-weight: 600;
+  text-align: left;
+}
+.arena-table caption span {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+.arena-table th,
+.arena-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--hair, var(--border));
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+.arena-table thead th {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
+.arena-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.arena-table tbody tr {
+  transition: background-color 200ms var(--ease-out-quart);
+}
+.arena-table tbody tr.is-current {
+  background: color-mix(in oklab, var(--selection) 70%, transparent);
+}
+.arena-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.arena-ref {
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+/* ── Scenes ──────────────────────────────────────────────────────────────── */
+.theater-scene {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+.scene-arena[data-layout="wide"] {
+  max-height: 420px;
+}
+.scene-floor {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.scene-label {
+  fill: var(--text-dim);
+  font: 600 10.5px var(--sans);
+}
+.scene-arrow {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.scene-tag rect {
+  fill: var(--paper);
+  stroke: var(--paper-ink);
+  stroke-width: 1.2;
+}
+.scene-tag text {
+  fill: var(--paper-ink);
+  font: 600 10px var(--sans);
+}
+.scene-tag[data-tone="warn"] rect {
+  fill: color-mix(in oklab, var(--warn) 24%, var(--paper));
+}
+.scene-tag[data-tone="danger"] rect {
+  fill: color-mix(in oklab, var(--danger) 22%, var(--paper));
+}
+.scene-belt {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+}
+.scene-belt-run {
+  stroke: var(--paper-ink);
+  stroke-width: 1.2;
+  stroke-dasharray: 6 8;
+  opacity: 0.45;
+  animation: theater-belt 1.1s linear infinite;
+}
+.scene-roller circle {
+  fill: var(--paper);
+  stroke: var(--paper-ink);
+  stroke-width: 1.3;
+}
+.scene-roller path {
+  stroke: var(--paper-ink);
+  stroke-width: 1.2;
+}
+.scene-roller-spin {
+  animation: theater-spin 1.1s linear infinite;
+}
+.scene-legs {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+/* Factory */
+.hopper-bin {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.hopper-sheet {
+  fill: var(--paper);
+  stroke: var(--paper-ink);
+  stroke-width: 1.3;
+}
+.hopper-count {
+  fill: var(--paper-ink);
+  font: 800 22px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.factory-hopper .scene-label {
+  fill: var(--paper-muted);
+}
+.hopper-chute {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.scene-girder {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 7;
+  stroke-linecap: round;
+}
+.scene-girder-rivets {
+  fill: none;
+  stroke: var(--bg);
+  stroke-width: 2;
+  stroke-dasharray: 1 13;
+  stroke-linecap: round;
+}
+.machine-housing,
+.machine-rod,
+.machine-plate {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.machine-ink,
+.machine-claw {
+  fill: none;
+  stroke: var(--paper-ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.machine-hat {
+  fill: oklch(84% 0.08 155);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.machine-spray circle {
+  fill: oklch(78% 0.1 220);
+  stroke: var(--paper-ink);
+  stroke-width: 0.8;
+  opacity: 0;
+}
+.machine[data-state="working"] .machine-stamp-head {
+  animation: theater-stamp 1.5s var(--ease-out-quart) infinite;
+}
+.machine[data-state="working"] .machine-spray circle {
+  animation: theater-spray 0.9s linear infinite;
+}
+.machine[data-state="working"] .machine-spray circle:nth-child(2n) {
+  animation-delay: -0.45s;
+}
+.machine[data-state="working"] .machine-arm {
+  animation: theater-arm 2.2s var(--ease-out-quart) infinite;
+}
+.machine[data-state="working"] .machine-hat {
+  animation: theater-hat 2.2s linear infinite;
+}
+.machine[data-state="replay"] .machine-stamp-head {
+  animation: theater-stamp-replay 9s var(--ease-out-quart) infinite;
+}
+.machine[data-state="replay"] .machine-spray circle {
+  animation: theater-spray-replay 9s linear infinite;
+}
+.machine[data-state="replay"] .machine-arm {
+  animation: theater-arm-replay 9s var(--ease-out-quart) infinite;
+}
+.machine[data-state="replay"] .machine-hat {
+  animation: theater-hat-replay 9s linear infinite;
+}
+.replay-blank,
+.replay-painted {
+  opacity: 0;
+}
+.factory-replay[data-motion="on"] .replay-walk {
+  animation: theater-factory-walk 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.factory-replay[data-motion="on"] .replay-blank {
+  animation: theater-layer-blank 9s linear infinite;
+}
+.factory-replay[data-motion="on"] .replay-painted {
+  animation: theater-layer-painted 9s linear infinite;
+}
+.factory-replay[data-motion="on"] .replay-done {
+  animation: theater-layer-done 9s linear infinite;
+}
+
+/* Security */
+.sec-tunnel {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+}
+.sec-curtain {
+  fill: none;
+  stroke: var(--paper-ink);
+  stroke-width: 1.3;
+  opacity: 0.45;
+}
+.sec-monitor-frame {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+}
+.sec-monitor-screen {
+  fill: oklch(32% 0.05 230);
+}
+.sec-monitor-bag {
+  fill: none;
+  stroke: oklch(80% 0.11 200);
+  stroke-width: 1.6;
+}
+.sec-scanline {
+  fill: oklch(86% 0.13 160);
+  opacity: 0;
+}
+.sec-monitor[data-scanning] .sec-scanline {
+  opacity: 0.8;
+  animation: theater-scan 1.6s ease-in-out infinite alternate;
+}
+.sec-monitor-stand {
+  stroke: var(--text-dim);
+  stroke-width: 2.4;
+}
+.sec-ladder rect {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1;
+}
+.sec-ladder[data-state="done"] rect {
+  fill: var(--good);
+}
+.sec-ladder[data-state="current"] rect {
+  fill: var(--accent);
+  animation: theater-pulse 1.2s ease-in-out infinite alternate;
+}
+.sec-ladder-label {
+  fill: var(--text-dim);
+  font: 600 7.5px var(--sans);
+}
+.sec-bag-body {
+  fill: oklch(70% 0.1 45);
+  stroke: var(--paper-ink);
+  stroke-width: 1.5;
+}
+.sec-bag-handle,
+.sec-bag-strap {
+  fill: none;
+  stroke: var(--paper-ink);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.sec-bag-strap {
+  opacity: 0.4;
+}
+.sec-arch-outline {
+  fill: none;
+  stroke: var(--paper-ink);
+  stroke-width: 13;
+  stroke-linejoin: round;
+}
+.sec-arch {
+  fill: none;
+  stroke: var(--paper-raised);
+  stroke-width: 10;
+  stroke-linejoin: round;
+}
+.sec-arch-panel {
+  stroke: var(--paper-ink);
+  stroke-width: 1.4;
+  opacity: 0.5;
+}
+.sec-lamp-base {
+  fill: var(--paper);
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+}
+.sec-lamp,
+.sec-lamp-glow {
+  fill: var(--lamp, transparent);
+  opacity: 0;
+}
+.sec-lamp {
+  stroke: var(--paper-ink);
+  stroke-width: 1.6;
+}
+.sec-detector[data-light="green"] {
+  --lamp: var(--good);
+}
+.sec-detector[data-light="amber"] {
+  --lamp: var(--warn);
+}
+.sec-detector[data-light="red"] {
+  --lamp: var(--danger);
+}
+.sec-detector[data-light="pending"] {
+  --lamp: var(--accent);
+}
+.sec-detector:not([data-light="pending"]) .sec-lamp {
+  opacity: 1;
+}
+.sec-detector:not([data-light="pending"]) .sec-lamp-glow {
+  opacity: 0.22;
+}
+.sec-detector[data-light="pending"] .sec-lamp {
+  animation: theater-blink 1.2s ease-in-out infinite;
+}
+.sec-detector[data-replay="true"]:not([data-light="pending"]) .sec-lamp {
+  animation: theater-lamp 9s linear infinite;
+}
+.sec-detector[data-replay="true"]:not([data-light="pending"]) .sec-lamp-glow {
+  animation: theater-lamp-glow 9s linear infinite;
+}
+.sec-rope {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.6;
+  stroke-dasharray: 4 3;
+  stroke-linecap: round;
+}
+.sec-sign {
+  fill: color-mix(in oklab, var(--warn) 26%, var(--paper));
+  stroke: var(--paper-ink);
+  stroke-width: 1.3;
+}
+.sec-sign-text {
+  fill: var(--paper-ink);
+  font: 700 10px var(--sans);
+}
+.sec-bench {
+  fill: var(--paper-raised);
+  stroke: var(--paper-ink);
+  stroke-width: 1.4;
+}
+.sec-bench-legs {
+  stroke: var(--text-dim);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+.sec-replay[data-motion="on"] .sec-bag-replay {
+  animation: theater-bag 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.sec-replay[data-motion="on"][data-light="green"] .sec-walker {
+  animation: theater-walk-green 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.sec-replay[data-motion="on"][data-light="amber"] .sec-walker {
+  animation: theater-walk-amber 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.sec-replay[data-motion="on"][data-light="red"] .sec-walker {
+  animation: theater-walk-red 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+.sec-replay[data-motion="on"][data-light="pending"] .sec-walker {
+  animation: theater-walk-pending 9s cubic-bezier(0.45, 0, 0.25, 1) infinite;
+}
+
+/* Arena */
+.arena-mat {
+  fill: color-mix(in oklab, var(--selection) 35%, transparent);
+  stroke: var(--hair, var(--border));
+  stroke-width: 1.5;
+}
+.arena-line {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+  stroke-dasharray: 6 7;
+}
+.arena-hazard {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 5;
+  stroke-dasharray: 10 8;
+  opacity: 0.55;
+}
+.arena-banner rect {
+  fill: var(--island);
+  stroke: var(--paper-ink);
+  stroke-width: 1.4;
+}
+.arena-banner-round {
+  fill: var(--island-ink);
+  font: 800 14px var(--sans);
+  font-variant-numeric: tabular-nums;
+}
+.arena-banner-sub {
+  fill: var(--island-muted);
+  font: 600 9.5px var(--sans);
+}
+.case-sheet {
+  fill: var(--paper);
+  stroke: var(--paper-ink);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+.case-card[data-prop="maze"] .case-sheet {
+  fill: oklch(88% 0.07 300);
+}
+.case-card[data-prop="knot"] .case-sheet {
+  fill: var(--paper-raised);
+}
+.case-back {
+  fill: var(--paper-raised);
+}
+.case-maze {
+  stroke: var(--paper-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.case-sticky {
+  fill: oklch(91% 0.12 95);
+  stroke: var(--paper-ink);
+  stroke-width: 1.4;
+  stroke-linejoin: round;
+}
+.case-fold {
+  fill: oklch(80% 0.12 90);
+  stroke: var(--paper-ink);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+}
+.case-lines {
+  fill: none;
+  stroke: var(--paper-ink);
+  stroke-width: 1.3;
+  stroke-linecap: round;
+  opacity: 0.5;
+}
+.case-stamp {
+  transform: rotate(-12deg);
+}
+.case-stamp rect {
+  fill: color-mix(in oklab, var(--paper) 85%, transparent);
+  stroke: var(--danger);
+  stroke-width: 2.2;
+}
+.case-stamp text {
+  fill: var(--danger);
+  font: 800 11px var(--sans);
+  letter-spacing: 0.04em;
+}
+.flight[data-kind="single"] {
+  animation: theater-fly-x1 var(--dur) linear forwards;
+}
+.flight[data-kind="single"] .flight-y {
+  animation: theater-fly-y1 var(--dur) linear forwards;
+}
+.flight[data-kind="double"] {
+  animation: theater-fly-x2 var(--dur) linear forwards;
+}
+.flight[data-kind="double"] .flight-y {
+  animation: theater-fly-y2 var(--dur) linear forwards;
+}
+.flight[data-kind="dupe"] {
+  animation: theater-fly-x1 var(--dur) linear forwards;
+}
+.flight[data-kind="dupe"] .flight-y {
+  animation: theater-fly-y1 var(--dur) linear forwards;
+}
+.flight-spin {
+  animation: theater-card-spin var(--dur) var(--ease-out-quart) forwards;
+}
+.flight[data-kind="dupe"] .case-stamp {
+  opacity: 0;
+  animation: theater-stamp-in 900ms var(--ease-out-expo) var(--dur) forwards;
+}
+.flight[data-kind="dupe"] .flight-spin {
+  animation:
+    theater-card-spin var(--dur) var(--ease-out-quart) forwards,
+    theater-dupe-fade 700ms ease-in calc(var(--dur) + 350ms) forwards;
+}
+
+/* ── Paper figures ───────────────────────────────────────────────────────── */
+/* Shapes inside a group that sets its own fill (sunshades, freckles) keep
+   the group's fill; everything else is painted with the figure's tint. */
+.pf-body :is(path, rect):not([fill]),
+.pf-accessories :is(path, rect, circle, ellipse):not([fill]):not([fill] *) {
+  fill: var(--ditto-selection);
+}
+.pf-body-depth :is(path, rect):not([fill]) {
+  fill: var(--ditto-paper-raised);
+}
+.pf-body :is(path, rect),
+.pf-accessories :is(path, rect, circle, ellipse) {
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pf-bubble {
+  fill: var(--ditto-selection);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 0.9;
+  stroke-linejoin: round;
+}
+.pf-brow {
+  fill: none;
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 4.62;
+  stroke-linecap: round;
+}
+.pf-eye circle {
+  fill: var(--ditto-paper-ink);
+}
+.pf-eye .pf-glint {
+  fill: oklch(100% 0 0);
+}
+.pf-smile {
+  fill: none;
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 5.04;
+  stroke-linecap: round;
+}
+.pf-grin,
+.pf-gasp {
+  fill: var(--ditto-paper-ink);
+  opacity: 0;
+}
+.pf-brow,
+.pf-eyes,
+.pf-eye,
+.pf-mouth,
+.pf-smile,
+.pf-hand {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+.pf-brow,
+.pf-eyes,
+.pf-mouth,
+.pf-smile,
+.pf-hand,
+.pf-grin,
+.pf-gasp {
+  transition:
+    transform 220ms var(--ease-out-quart),
+    opacity 160ms ease;
+}
+.pf-eyes[data-eyewear="1"] .pf-eye,
+.pf-eyes[data-eyewear="2"] .pf-eye {
+  scale: 0.64;
+}
+.pf-eyes[data-eyewear="3"] .pf-eye {
+  opacity: 0;
+}
+.pf-hand path:first-child {
+  fill: var(--hand-fill, var(--ditto-paper));
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+}
+.pf-hand path + path {
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
+/* Assembly progress on the factory line. */
+.pf-ditto[data-build="blank"] .pf-body :is(path, rect):not([fill="none"]),
+.pf-ditto[data-build="blank"] .pf-bubble {
+  fill: var(--ditto-paper);
+}
+.pf-ditto[data-build="blank"] .pf-face,
+.pf-ditto[data-build="blank"] .pf-accessories,
+.pf-ditto[data-build="painted"] .pf-accessories {
+  display: none;
+}
+
+/* Moods. */
+.pf[data-mood="focus"] .pf-brow-l {
+  transform: translateY(2px) rotate(8deg);
+}
+.pf[data-mood="focus"] .pf-brow-r {
+  transform: translateY(2px) rotate(-8deg);
+}
+.pf[data-mood="focus"] .pf-eyes {
+  transform: scale(1, 0.86);
+}
+.pf[data-mood="focus"] .pf-mouth {
+  transform: scale(0.66, 0.6);
+}
+.pf[data-mood="cheer"] .pf-brow {
+  transform: translateY(-3px);
+}
+.pf[data-mood="cheer"] .pf-eyes {
+  transform: scale(1, 0.85);
+}
+.pf[data-mood="cheer"] .pf-smile {
+  opacity: 0;
+}
+.pf[data-mood="cheer"] .pf-grin {
+  opacity: 1;
+}
+.pf[data-mood="bonk"] .pf-brow {
+  transform: translateY(-4.6px);
+}
+.pf[data-mood="bonk"] .pf-eyes {
+  transform: scale(1.1);
+}
+.pf[data-mood="bonk"] .pf-smile {
+  opacity: 0;
+}
+.pf[data-mood="bonk"] .pf-gasp {
+  opacity: 1;
+}
+.pf[data-mood="worried"] .pf-brow-l {
+  transform: translateY(-2px) rotate(-12deg);
+}
+.pf[data-mood="worried"] .pf-brow-r {
+  transform: translateY(-2px) rotate(12deg);
+}
+.pf[data-mood="worried"] .pf-smile {
+  transform: scale(0.8, -0.7);
+}
+.pf[data-mood="sleepy"] .pf-eyes {
+  transform: scaleY(0.25);
+}
+.pf-ditto[data-mood="focus"] .pf-hand-l {
+  transform: translate(6px, -12px);
+}
+.pf-ditto[data-mood="focus"] .pf-hand-r {
+  transform: translate(-6px, -12px);
+}
+.pf-ditto[data-mood="cheer"] .pf-hand-l {
+  transform: translate(26px, -74px) rotate(-12deg);
+}
+.pf-ditto[data-mood="cheer"] .pf-hand-r {
+  transform: translate(-26px, -74px) rotate(12deg);
+}
+.pf-ditto[data-mood="bonk"] .pf-hand-l {
+  transform: translate(10px, -46px) rotate(-30deg);
+}
+.pf-ditto[data-mood="bonk"] .pf-hand-r {
+  transform: translate(-10px, -46px) rotate(30deg);
+}
+.pf-dizzy {
+  animation: theater-spin 1.4s linear infinite;
+}
+.pf-star {
+  fill: oklch(86% 0.15 92);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 1;
+  stroke-linejoin: round;
+  transform: rotate(calc(var(--i) * 120deg)) translateX(24px);
+}
+.pf[data-alive] .pf-bob {
+  animation: theater-bob 3.4s ease-in-out infinite;
+  animation-delay: var(--seed-delay, 0ms);
+}
+.pf[data-alive][data-mood="cheer"] .pf-bob {
+  animation: theater-hop 520ms var(--ease-out-quart) 2 alternate;
+}
+.pf[data-alive][data-mood="bonk"] .pf-bob {
+  animation: theater-wobble 560ms var(--ease-out-quart);
+}
+.pf[data-alive] .pf-eye {
+  animation: theater-blink-eye 5.2s infinite;
+  animation-delay: var(--seed-delay, 0ms);
+}
+.pf[data-alive][data-mood="bonk"] .pf-eye,
+.pf[data-alive][data-mood="cheer"] .pf-eye {
+  animation: none;
+}
+
+/* Paper people (generators). */
+.pf-head,
+.pf-ear {
+  fill: var(--skin);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2.2;
+}
+.pf-hair :is(path, circle, rect):not([fill]) {
+  fill: var(--hair);
+}
+.pf-hair :is(path, circle, rect) {
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.pf-shirt {
+  fill: var(--ditto-selection);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2.2;
+  stroke-linejoin: round;
+}
+.pf-collar {
+  fill: var(--ditto-paper-raised);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.pf-leg {
+  fill: color-mix(in oklab, var(--ditto-paper-ink) 72%, var(--ditto-selection));
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2;
+}
+.pf-shoe {
+  fill: var(--ditto-paper-ink);
+}
+.pf-clipboard rect {
+  fill: var(--ditto-paper);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2;
+}
+.pf-clipboard .pf-clip {
+  fill: var(--ditto-paper-raised);
+}
+.pf-clipboard path {
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+.pf-headset :is(path, rect) {
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+.pf-headset rect {
+  fill: var(--ditto-paper-ink);
+}
+.pf-specs {
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 2.2;
+}
+.pf-pencil rect {
+  fill: oklch(84% 0.13 88);
+  stroke: var(--ditto-paper-ink);
+  stroke-width: 1.8;
+}
+.pf-pencil path {
+  fill: var(--ditto-paper-ink);
+}
+.pf-human[data-throwing] .pf-throw-hand {
+  animation: theater-throw 260ms var(--ease-out-quart) forwards;
+}
+
+/* ── Play state ──────────────────────────────────────────────────────────── */
+.theater[data-playing="false"] *,
+.theater[data-playing="false"] *::before {
+  animation-play-state: paused !important;
+}
+.theater[data-motion="off"] * {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .theater * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* ── Keyframes ───────────────────────────────────────────────────────────── */
+@keyframes theater-belt {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+@keyframes theater-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes theater-bob {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px);
+  }
+}
+@keyframes theater-hop {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-9px);
+  }
+}
+@keyframes theater-wobble {
+  0% {
+    transform: rotate(0);
+  }
+  25% {
+    transform: translateX(-3px) rotate(-6deg);
+  }
+  55% {
+    transform: translateX(3px) rotate(5deg);
+  }
+  100% {
+    transform: rotate(0);
+  }
+}
+@keyframes theater-blink-eye {
+  0%,
+  95%,
+  100% {
+    transform: scaleY(1);
+  }
+  97% {
+    transform: scaleY(0.1);
+  }
+}
+@keyframes theater-throw {
+  0% {
+    transform: translate(0, 0) rotate(0);
+  }
+  55% {
+    transform: translate(-14px, -20px) rotate(-38deg);
+  }
+  100% {
+    transform: translate(10px, -10px) rotate(24deg);
+  }
+}
+@keyframes theater-stamp {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  38%,
+  52% {
+    transform: translateY(44px);
+  }
+}
+@keyframes theater-spray {
+  0% {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  30% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+@keyframes theater-arm {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  42%,
+  58% {
+    transform: translateY(38px);
+  }
+}
+@keyframes theater-hat {
+  0%,
+  50% {
+    opacity: 1;
+  }
+  52%,
+  88% {
+    opacity: 0;
+  }
+  92%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes theater-stamp-replay {
+  0%,
+  14%,
+  26%,
+  100% {
+    transform: translateY(0);
+  }
+  18%,
+  21% {
+    transform: translateY(44px);
+  }
+}
+@keyframes theater-spray-replay {
+  0%,
+  36%,
+  51%,
+  100% {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  38%,
+  49% {
+    opacity: 1;
+    transform: translateY(10px);
+  }
+}
+@keyframes theater-arm-replay {
+  0%,
+  62%,
+  78%,
+  100% {
+    transform: translateY(0);
+  }
+  68%,
+  72% {
+    transform: translateY(38px);
+  }
+}
+@keyframes theater-hat-replay {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  71%,
+  95% {
+    opacity: 0;
+  }
+  97%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes theater-factory-walk {
+  0% {
+    transform: translateX(-300px);
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  12%,
+  26% {
+    transform: translateX(-216px);
+  }
+  34%,
+  52% {
+    transform: translateX(-108px);
+  }
+  60%,
+  80% {
+    transform: translateX(0);
+  }
+  93% {
+    transform: translateX(104px);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(104px);
+    opacity: 0;
+  }
+}
+@keyframes theater-layer-blank {
+  0%,
+  43% {
+    opacity: 1;
+  }
+  45%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes theater-layer-painted {
+  0%,
+  43% {
+    opacity: 0;
+  }
+  45%,
+  70% {
+    opacity: 1;
+  }
+  72%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes theater-layer-done {
+  0%,
+  70% {
+    opacity: 0;
+  }
+  72%,
+  100% {
+    opacity: 1;
+  }
+}
+@keyframes theater-scan {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(49px);
+  }
+}
+@keyframes theater-pulse {
+  from {
+    opacity: 0.55;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes theater-blink {
+  0%,
+  100% {
+    opacity: 0.25;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@keyframes theater-lamp {
+  0%,
+  56% {
+    opacity: 0;
+  }
+  58%,
+  95% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes theater-lamp-glow {
+  0%,
+  56% {
+    opacity: 0;
+  }
+  58%,
+  95% {
+    opacity: 0.22;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes theater-bag {
+  0% {
+    transform: translateX(-146px);
+  }
+  36%,
+  100% {
+    transform: translateX(0);
+  }
+}
+@keyframes theater-walk-green {
+  0% {
+    transform: translateX(calc(10px - var(--fx)));
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  30%,
+  42% {
+    transform: translateX(calc(176px - var(--fx)));
+  }
+  52%,
+  62% {
+    transform: translateX(calc(237px - var(--fx)));
+  }
+  80% {
+    transform: translateX(0);
+  }
+  93% {
+    transform: translateX(calc(470px - var(--fx)));
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(calc(470px - var(--fx)));
+    opacity: 0;
+  }
+}
+@keyframes theater-walk-amber {
+  0% {
+    transform: translateX(calc(10px - var(--fx)));
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  30%,
+  42% {
+    transform: translateX(calc(176px - var(--fx)));
+  }
+  52%,
+  62% {
+    transform: translateX(calc(237px - var(--fx)));
+  }
+  80% {
+    transform: translateX(0);
+  }
+  95% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+}
+@keyframes theater-walk-red {
+  0% {
+    transform: translateX(calc(10px - var(--fx)));
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  30%,
+  42% {
+    transform: translateX(calc(176px - var(--fx)));
+  }
+  52%,
+  64% {
+    transform: translateX(calc(237px - var(--fx)));
+  }
+  76% {
+    transform: translateX(0);
+  }
+  95% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+}
+@keyframes theater-walk-pending {
+  0% {
+    transform: translateX(calc(10px - var(--fx)));
+    opacity: 0;
+  }
+  4% {
+    opacity: 1;
+  }
+  30%,
+  42% {
+    transform: translateX(calc(176px - var(--fx)));
+  }
+  54% {
+    transform: translateX(0);
+  }
+  95% {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateX(0);
+    opacity: 0;
+  }
+}
+@keyframes theater-fly-x1 {
+  from {
+    transform: translateX(var(--x0));
+  }
+  to {
+    transform: translateX(var(--x1));
+  }
+}
+@keyframes theater-fly-y1 {
+  0% {
+    transform: translateY(var(--y0));
+    animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1);
+  }
+  45% {
+    transform: translateY(var(--p1));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.75, 0.45);
+  }
+  100% {
+    transform: translateY(var(--y1));
+  }
+}
+@keyframes theater-fly-x2 {
+  0% {
+    transform: translateX(var(--x0));
+  }
+  56% {
+    transform: translateX(var(--x1));
+  }
+  100% {
+    transform: translateX(var(--x2));
+  }
+}
+@keyframes theater-fly-y2 {
+  0% {
+    transform: translateY(var(--y0));
+    animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1);
+  }
+  26% {
+    transform: translateY(var(--p1));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.75, 0.45);
+  }
+  56% {
+    transform: translateY(var(--y1));
+    animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1);
+  }
+  78% {
+    transform: translateY(var(--p2));
+    animation-timing-function: cubic-bezier(0.5, 0, 0.75, 0.45);
+  }
+  100% {
+    transform: translateY(var(--y2));
+  }
+}
+@keyframes theater-card-spin {
+  from {
+    transform: rotate(-30deg);
+  }
+  to {
+    transform: rotate(690deg);
+  }
+}
+@keyframes theater-stamp-in {
+  0% {
+    opacity: 0;
+    transform: rotate(-12deg) scale(1.8);
+  }
+  40%,
+  100% {
+    opacity: 1;
+    transform: rotate(-12deg) scale(1);
+  }
+}
+@keyframes theater-dupe-fade {
+  to {
+    opacity: 0;
+    transform: translateY(26px) rotate(720deg) scale(0.6);
+  }
+}
+
+/* ── Page frame around the theater ───────────────────────────────────────── */
+.theater-snapshot {
+  display: block;
+  margin: 0 0 14px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.pipeline-manifest {
+  padding-top: 20px;
+  border-top: 1px solid var(--hair, var(--border));
+}
+.pipeline-manifest-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 800;
+}

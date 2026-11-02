@@ -1,0 +1,10 @@
+[Unit]
+Description=Schedule bounded retention for the Ditto PostgreSQL logging collector
+
+[Timer]
+OnCalendar={{ postgres_log_gc_on_calendar }}
+RandomizedDelaySec={{ postgres_log_gc_randomized_delay }}
+Persistent=true
+
+[Install]
+WantedBy=timers.target

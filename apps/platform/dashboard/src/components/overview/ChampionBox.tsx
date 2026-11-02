@@ -6,13 +6,15 @@
 import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
-import { fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
+import { agentName, fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
 import {
   crownComparisonNote,
   crownContest,
   crownWhyHigh,
   displayComposite,
   foldArrival,
+  nextPinVerdict,
+  pinLabel,
   signedScore,
 } from "../../lib/scoring";
 import { TipTarget } from "../ui/Tooltip";
@@ -45,17 +47,33 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
         : shortKey(emissions()?.champion_miner_hotkey)) || "Unidentified champion"
     );
   };
+  const championRecipient = () =>
+    (emissions()?.recipients || []).find((r) => r.role === "champion");
   const share = (): number | undefined => {
     const e = emissions();
-    const recipient = (e?.recipients || []).find((r) => r.role === "champion");
+    const recipient = championRecipient();
     return recipient && Number.isFinite(recipient.share_of_miner_pool)
       ? recipient.share_of_miner_pool
       : e?.champion_share;
   };
+  /** The King as the crown rules see it (protocol 34); absent from an older
+   * Platform, which falls back to the board entry. */
+  const king = () => {
+    const current = emissions()?.king;
+    return current && String(current.agent_id) === String(emissions()?.champion_agent_id)
+      ? current
+      : null;
+  };
   const composite = (): number | null => {
+    const official = king()?.official_score;
+    if (official != null && Number.isFinite(official)) return official;
     const entry = championEntry();
     return entry ? displayComposite(entry, store.settledView()) : null;
   };
+  const officialRank = (): number | null =>
+    king()?.official_rank ?? (championEntry()?.rank as number | null | undefined) ?? null;
+  const confirmations = (): number | null =>
+    king()?.shared_seed_confirmations ?? championRecipient()?.shared_seed_confirmations ?? null;
 
   return (
     <section class="champion-box" aria-labelledby="champion-box-kicker">
@@ -63,7 +81,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
         <span class="crown" aria-hidden="true">
           ♛
         </span>
-        {scoreCeilingPool() ? "KOTH · score-ceiling joint crown" : "KOTH · reigning champion"}
+        {scoreCeilingPool() ? "Score-ceiling joint crown" : "King"}
       </div>
       <div class="champion-body" id="champion-body" role="status" aria-live="polite">
         <Show
@@ -78,7 +96,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 >
                   <div class="champion-state">
                     No reigning champion in the current pool — the KOTH fold has no eligible
-                    finalized run yet. Raw rank #1 leads the board below.
+                    finalized run yet. Rank #1 leads the board below.
                   </div>
                 </Show>
               }
@@ -114,9 +132,9 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               <TipTarget
                 tag="div"
                 class="champion-score tip-chip"
-                text="Finalized Score-column number in [0,1] that drives rank. The crown can sit on a lower-ranked row: rank is not the crown test."
+                text="Official score: the continual mean of the three quorum scores plus completed retest waves. The board's rank orders by it; the crown moves only on a head-to-head over shared seeds."
               >
-                <span class="champion-score-label">Composite</span>
+                <span class="champion-score-label">Official score</span>
                 {fx(composite() as number)}
               </TipTarget>
             </Show>
@@ -127,9 +145,14 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 Joint champions <b>{jointChampions().length}</b>
               </span>
             </Show>
-            <Show when={!scoreCeilingPool() && championEntry()?.rank}>
+            <Show when={!scoreCeilingPool() && officialRank()}>
               <span>
-                Raw rank <b>{"#" + championEntry()?.rank}</b>
+                Official rank <b>{"#" + officialRank()}</b>
+              </span>
+            </Show>
+            <Show when={!scoreCeilingPool() && confirmations() != null}>
+              <span id="champion-confirmations">
+                <b>{confirmations()}</b> shared-seed confirmations
               </span>
             </Show>
             <Show
@@ -146,6 +169,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                       : share()) as number,
                   )}
                 </b>
+                {!scoreCeilingPool() && championRecipient()?.paid === false ? " unpaid" : ""}
               </span>
             </Show>
             <Show when={!scoreCeilingPool() && foldArrival(championEntry() || {})}>
@@ -163,50 +187,92 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 Bench <b>{"v" + championEntry()?.bench_version}</b>
               </span>
             </Show>
+            {/* Which frozen ledger the fleet is folding and whether the next
+                pin moves the crown — the platform's own projection, so this
+                box never re-derives a fold. */}
+            <Show when={emissions()?.ledger_pin}>
+              {(pin) => (
+                <span
+                  id="champion-pin"
+                  title="Validators fold one frozen ledger per chain epoch; weights move only at the next pin."
+                >
+                  Weights follow <b>{pinLabel(pin())}</b>
+                </span>
+              )}
+            </Show>
+            <Show when={nextPinVerdict(emissions())}>
+              {(verdict) => (
+                <span id="champion-next-pin">
+                  Next pin{" "}
+                  <b>
+                    {verdict().changes
+                      ? "moves the crown to " +
+                        (store
+                          .entries()
+                          .find((entry) => String(entry.agent_id) === verdict().championId)
+                          ?.agent_name
+                          ? agentName(
+                              store
+                                .entries()
+                                .find((entry) => String(entry.agent_id) === verdict().championId)
+                                ?.agent_name,
+                            )
+                          : shortKey(verdict().championId))
+                      : "keeps the crown"}
+                  </b>
+                </span>
+              )}
+            </Show>
           </div>
           {/* The held-crown note: the champion sitting below raw #1 is the
               standing that confuses readers most, so the box says why in
               place instead of leaving it to the strip on the other page. */}
           <Show when={scoreCeilingPool()}>
-            <div class="champion-note" id="champion-note">
-              The single-winner dethrone threshold cannot be exceeded within the score range. Every
-              highest evidence-tied agent shares the full miner pool equally, including ties beyond
-              the normal tail cutoff.
-            </div>
+            <details class="fold champion-fold">
+              <summary>Why this crown</summary>
+              <div class="champion-note" id="champion-note">
+                The single-winner dethrone threshold cannot be exceeded within the score range.
+                Every highest evidence-tied agent shares the full miner pool equally, including ties
+                beyond the normal tail cutoff.
+              </div>
+            </details>
           </Show>
           <Show when={!scoreCeilingPool() && ((championEntry()?.rank as number) || 1) > 1}>
-            <div class="champion-note" id="champion-note">
-              {(() => {
-                const contest = crownContest(emissions()?.raw_leader_decision, emissions());
-                const rank = championEntry()?.rank as number;
-                const above = rank - 1;
-                const aboveText =
-                  above === 1 ? "1 agent scores higher" : above + " agents score higher";
-                if (!contest) {
+            <details class="fold champion-fold">
+              <summary>Why this crown</summary>
+              <div class="champion-note" id="champion-note">
+                {(() => {
+                  const contest = crownContest(emissions()?.raw_leader_decision, emissions());
+                  const rank = championEntry()?.rank as number;
+                  const above = rank - 1;
+                  const aboveText =
+                    above === 1 ? "1 agent scores higher" : above + " agents score higher";
+                  if (!contest) {
+                    return (
+                      "Holds the crown from official #" +
+                      rank +
+                      ": " +
+                      aboveText +
+                      ", but none by enough on the shared-seed head-to-head. Rank is not the crown."
+                    );
+                  }
                   return (
-                    "Holds the crown from raw #" +
+                    "Holds the crown from official #" +
                     rank +
-                    ": " +
+                    ". " +
                     aboveText +
-                    ", but none by enough on the shared-seed head-to-head. Rank is not the crown."
+                    ", but the head-to-head lead is " +
+                    signedScore(contest.challengerLead) +
+                    " and the crown needs " +
+                    signedScore(contest.requiredLead) +
+                    ". " +
+                    crownWhyHigh(contest) +
+                    " " +
+                    crownComparisonNote(contest.method)
                   );
-                }
-                return (
-                  "Holds the crown from raw #" +
-                  rank +
-                  ". " +
-                  aboveText +
-                  ", but the head-to-head lead is " +
-                  signedScore(contest.challengerLead) +
-                  " and the crown needs " +
-                  signedScore(contest.requiredLead) +
-                  ". " +
-                  crownWhyHigh(contest) +
-                  " " +
-                  crownComparisonNote(contest.method)
-                );
-              })()}
-            </div>
+                })()}
+              </div>
+            </details>
           </Show>
         </Show>
       </div>

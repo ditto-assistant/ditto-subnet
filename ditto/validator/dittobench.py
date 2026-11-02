@@ -12,6 +12,7 @@ wire contract is identical by design), so it round-trips straight back into
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import hashlib
 import logging
@@ -20,7 +21,7 @@ import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 from uuid import UUID, uuid4
 
 import httpx
@@ -29,16 +30,25 @@ from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
 )
+from ditto.api_models.generator_round_validator import (
+    GENERATOR_ROUND_BENCH_FEATURE_PREFIX,
+    GENERATOR_ROUND_BENCH_VERSIONS,
+    GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX,
+    MAX_ROUND_COLUMN_CASES,
+)
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
     ScoreReport,
 )
 from ditto.api_models.validator_capabilities import (
+    ScoredRuntimeEnvEvidence,
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
     ScorerProbeOutcome,
     ScorerProbeReason,
+    V14ScoredRuntimeEnvEvidence,
+    V15ScoredRuntimeEnvEvidence,
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_confirmation import (
@@ -54,17 +64,92 @@ from ditto.validator.config import (
     run_budget_seconds,
 )
 from ditto.validator.errors import (
+    ConfirmationScorerError,
     DittobenchError,
     LeaseDeadlineError,
     SandboxOomError,
     ValidatorInfrastructureError,
 )
+from ditto_screening_protocol.bench_v9 import (
+    SUPPORTED_BENCH_VERSIONS as _SHARED_SUPPORTED_BENCH_VERSIONS,
+)
 from ditto_screening_protocol.bench_v9 import supports_confirmation
+from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
+    CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+)
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
 
 logger = logging.getLogger(__name__)
+
+# Dataset modes /v2/score accepts with private bytes: the Platform-private
+# benchmark artifact and a generator-competition round dataset.
+_PRIVATE_DATASET_MODES = frozenset({"platform-private-v1", "generator-round-v1"})
+# The scorer runs a screened image without the source tarball. Advertised
+# upward so Platform stops handing this validator miner source.
+SOURCE_FREE_SCREENED_IMAGE_FEATURE = "screened-image-source-free-v1"
+
+_ROUND_MAX_CASES_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_MAX_CASES_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_max_cases(features: object) -> int | None:
+    """The round column size both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-max-cases-<n>`` (its pack
+    contract's ``challenge.MaxCases``); this validator's own job and result
+    models bound a column at ``MAX_ROUND_COLUMN_CASES``. ``None`` when the
+    scorer advertises no size, which Platform reads as the legacy column.
+    """
+    if not isinstance(features, list):
+        return None
+    sizes = [
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_MAX_CASES_FEATURE.fullmatch(feature))
+    ]
+    if not sizes:
+        return None
+    return min(max(sizes), MAX_ROUND_COLUMN_CASES)
+
+
+_ROUND_BENCH_FEATURE = re.compile(
+    re.escape(GENERATOR_ROUND_BENCH_FEATURE_PREFIX) + r"([1-9][0-9]{0,3})"
+)
+
+
+def scorer_generator_round_bench_versions(
+    features: object, observed_versions: tuple[int, ...]
+) -> tuple[int, ...] | None:
+    """The round bench versions both the scorer and this validator can run.
+
+    The scorer advertises ``generator-round-bench-<n>`` for each version its
+    ``generator-round-v1`` mode runs; this validator runs only its own round
+    contracts (``GENERATOR_ROUND_BENCH_VERSIONS``) that the scorer is also
+    verified for. ``None`` when the scorer advertises no version, which
+    Platform reads as the original v13-only round mode.
+    """
+    if not isinstance(features, list):
+        return None
+    advertised = {
+        int(match.group(1))
+        for feature in features
+        if isinstance(feature, str)
+        and (match := _ROUND_BENCH_FEATURE.fullmatch(feature))
+    }
+    if not advertised:
+        return None
+    return tuple(
+        sorted(
+            advertised & set(GENERATOR_ROUND_BENCH_VERSIONS) & set(observed_versions)
+        )
+    )
+
 
 # Terminal job states reported by dittobench-api's store.
 _DONE = "done"
@@ -85,6 +170,17 @@ _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
         "longmem_run_response_too_large",
         "longmem_run_missing_final_text",
         "longmem_run_tool_endpoint",
+        # Executor-stage classes. These name a stage of the scorer's own
+        # pipeline rather than a harness boundary, so there is no HTTP exchange
+        # behind them and 0 is the only status they may carry. Imported rather
+        # than restated: this set is the admission gate, and a class the shared
+        # contract allows but this gate rejects is silently unreportable --
+        # which is the exact blindness the executor classes exist to remove.
+        *CONFIRMATION_EXECUTOR_FAILURE_CLASS_VALUES,
+        # Coordinator steps and LongMemEval executor phases: likewise points in
+        # the scorer's own pipeline, never an HTTP exchange, so 0 only.
+        *CONFIRMATION_DIMENSION_FAILURE_CLASS_VALUES,
+        *CONFIRMATION_EXECUTION_FAILURE_CLASS_VALUES,
     }
 )
 _CONFIRMATION_HTTP_STATUS_FAILURES = frozenset(
@@ -122,28 +218,50 @@ _PROGRESS_STAGE_ORDER: dict[BenchmarkProgressStage, int] = {
 }
 
 
-def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
+class ConfirmationFailureDiagnostic(NamedTuple):
+    """One accepted scorer class/status pair, ready for the signed hand-back."""
+
+    failure_class: str
+    failure_status: int
+
+    def suffix(self) -> str:
+        """The host-log form, kept so an operator on the box reads it unchanged."""
+        return (
+            f" [failure_class={self.failure_class} "
+            f"failure_status={self.failure_status}]"
+        )
+
+
+def _confirmation_failure_diagnostic(
+    response: httpx.Response,
+) -> ConfirmationFailureDiagnostic | None:
     """Return one bounded scorer diagnostic, or nothing for any drift.
 
     The confirmation response body deliberately remains stage-only. These
     purpose-specific headers cross only the protected local scorer boundary,
     and are accepted solely when their class/status pair matches a shape the
     Go scorer can emit from its reviewed allowlist.
+
+    Returned structurally rather than pre-formatted because the caller now owes
+    this pair to Platform as well as to the log line: formatting it into the
+    message first is what made the class unrecoverable from anywhere but the
+    host. The four shape checks below are the only admission gate, so whatever
+    survives them is exactly what may be signed.
     """
     failure_class = response.headers.get(_CONFIRMATION_FAILURE_CLASS_HEADER)
     raw_status = response.headers.get(_CONFIRMATION_FAILURE_STATUS_HEADER)
     if failure_class is None or raw_status is None:
-        return ""
+        return None
     if (
         not raw_status
         or len(raw_status) > 3
         or not raw_status.isascii()
         or not raw_status.isdecimal()
     ):
-        return ""
+        return None
     status = int(raw_status)
     if raw_status != str(status) or status > 599:
-        return ""
+        return None
     if failure_class in _CONFIRMATION_ZERO_STATUS_FAILURES:
         valid = status == 0
     elif failure_class in _CONFIRMATION_HTTP_STATUS_FAILURES:
@@ -155,8 +273,8 @@ def _confirmation_failure_diagnostic(response: httpx.Response) -> str:
     else:
         valid = False
     if not valid:
-        return ""
-    return f" [failure_class={failure_class} failure_status={status}]"
+        return None
+    return ConfirmationFailureDiagnostic(failure_class, status)
 
 
 _SOURCE_REVISION = re.compile(r"^[0-9a-f]{40}$")
@@ -172,10 +290,16 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # track the dittobench-api ``supportedBenchVersions`` set: v11 shipped there and
 # in the Platform, but was omitted here, so validators advertised only [8, 9, 10]
 # and the Platform counted zero v11-capable validators while v8/9/10 kept working.
-# v12 (anti-KV-substrate contract + causal model-dependence score gate) is now
-# executable in the scorer, so it is advertised here too; on-chain activation
+#
+# It is therefore no longer retyped here. The shared protocol package derives it
+# from the one hand-typed epoch enumeration (``V9EvidenceBenchVersion``) and
+# ``ditto/tests/test_bench_version_pins.py`` diffs that derivation against the
+# scorer, datagen, Platform, starter-kit and Backroom pins, so a bump that
+# reaches the scorer but not this file fails CI instead of the fleet. Being
+# *ahead* of the scorer is harmless -- the intersection below drops what the
+# scorer does not offer -- being behind it is the outage. On-chain activation
 # remains a separate Platform rollout step.
-SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9, 10, 11, 12)
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = _SHARED_SUPPORTED_BENCH_VERSIONS
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both
@@ -196,14 +320,31 @@ _SCORER_IMAGE_STALE = "scorer_image_stale"
 _ORIGIN_BINARY = "binary"
 
 _SANDBOX_INFRASTRUCTURE_CODES = {
+    # Legacy: a scorer before the deterministic OOM rule sent every OOM kill
+    # as this code with no cap or host evidence. It stays no-fault.
     "sandbox_oom",
     "sandbox_tmpfs_exhausted",
+    # An OOM kill the evidence cannot pin on the harness's own cap: the cgroup
+    # stayed below its limit, or host MemAvailable fell under the published
+    # floor before the kill. docs/RUNTIME-ENVELOPE.md publishes the rule.
+    "host_memory_pressure",
+    # A SIGKILL (exit 137) with no OOM flag. Nothing proves who sent it, so the
+    # attempt is no-fault; Platform counts a repeat on a second validator as
+    # the harness's own failure.
+    "harness_killed_137",
     # The scorer could not establish its validator-owned sandbox network path:
     # either the egress network was missing at container start or the observed
     # tool listener could not self-verify. This is validator infrastructure,
     # not the agent's fault, so it must end the sweep and back off rather than
     # blame and re-lease the agent in a tight resubmit loop.
     "sandbox_network_unavailable",
+    # ``docker run`` could not find the scorer's own request-scoped
+    # ``dittobench-sub:`` tag at container start or compatibility restart: a host
+    # image prune, disk-pressure cleanup, or restart race removed it after Build.
+    # The tag is validator-owned, so the miner is not at fault. Current scorers
+    # send ``screened_image_unavailable`` for this so validators that predate
+    # this entry also back off; it is listed for scorers that still send it.
+    "sandbox_image_unavailable",
     # The ticket inference route failed or its upstream provider degraded
     # mid-run. Also validator-side infrastructure, so
     # back off instead of failing the agent and re-leasing it in a loop.
@@ -228,6 +369,11 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
     # bounded 600-second lock wait. The harness never ran, so consuming the
     # miner's attempt would charge them for shared scorer infrastructure.
     "seed_store_lock_timeout",
+    # The harness died on SIGILL before it ever became healthy: this host's CPU
+    # lacks an instruction the screened image uses, and the same image starts on
+    # other validators. Platform parks the ticket for this validator only, so it
+    # is not re-leased here without bound.
+    "sandbox_cpu_unsupported",
 }
 
 
@@ -287,6 +433,55 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # ``validator_infrastructure`` AND ``retryable is True`` before it even looks at
 # the code. So the agent codes are excluded three independent ways. The test
 # ``test_agent_attributable_inference_failures_stay_the_agents`` pins all three.
+_ADMISSION_CODES = frozenset(
+    {
+        "request_too_large",
+        "invalid_json",
+        "invalid_schema",
+        "stale_session",
+        "model_not_allowed",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    }
+)
+_MINER_REQUEST_ADMISSION_CODES = frozenset(
+    {"request_too_large", "invalid_json", "invalid_schema", "model_not_allowed"}
+)
+_NON_AGENT_ADMISSION_CODES = _ADMISSION_CODES - _MINER_REQUEST_ADMISSION_CODES
+
+
+def _admission_suffix(payload: dict[str, object]) -> str | None:
+    """The dominant sanitized admission code, if the scorer counted one."""
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return None
+    diagnostics = failure.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    taxonomy = diagnostics.get("admission_taxonomy")
+    if not isinstance(taxonomy, dict) or not taxonomy:
+        return None
+    counts: dict[str, int] = {}
+    for code, bucket in taxonomy.items():
+        if not isinstance(code, str) or code not in _ADMISSION_CODES:
+            continue
+        count = bucket.get("count") if isinstance(bucket, dict) else None
+        if not isinstance(count, int) or count <= 0:
+            continue
+        counts[code] = count
+    if not counts:
+        return None
+    # Generic 409 and 429 responses do not prove a miner fault: the Platform
+    # can also return them for route/grant state or capacity. Any such refusal
+    # prevents attributing this mixed run solely to the miner.
+    candidates = _NON_AGENT_ADMISSION_CODES & counts.keys()
+    if not candidates:
+        candidates = frozenset(counts)
+    return max(candidates, key=lambda code: (counts[code], code))
+
+
 _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     {
         "inference_allowance_exhausted",
@@ -295,7 +490,14 @@ _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
     }
 )
 
+# The one sandbox resource verdict that is the agent's: an OOM kill at the
+# harness's own published cap while the host kept headroom. The scorer sends it
+# as terminal ``sandbox_failure`` / ``retryable: false`` so the wire kind matches
+# the charge; it reaches Platform as ``sandbox_oom`` with this detail.
+_HARNESS_OOM = "harness_oom"
+
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+assert _HARNESS_OOM not in _SANDBOX_INFRASTRUCTURE_CODES
 
 
 def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | None:
@@ -330,14 +532,37 @@ def _platform_route_proof_gap(payload: dict[str, object]) -> bool:
     because a systematically unprobeable submission must still run out of
     attempts instead of holding validator slots forever.
     """
+    return _bounded_retry_failure_code(payload) == _ROUTE_PROOF_UNAVAILABLE
+
+
+_SEED_DEADLINE_EXCEEDED = "seed_deadline_exceeded"
+
+# Scorer failures that are not the agent's to own but must still retry inside
+# the ORDINARY attempt budget. Never a subset of
+# ``_SANDBOX_INFRASTRUCTURE_CODES``: those mint a grant and raise the cap.
+#
+# ``seed_deadline_exceeded``: the harness did not acknowledge ``/seed`` within
+# the scorer's own deadline. A loaded validator host and a harness that embeds
+# too slowly are indistinguishable from inside one run, so the cause is named on
+# the ticket (it used to arrive as an anonymous ``scoring_error``) without
+# granting the unbounded re-lease a no-fault code would.
+_BOUNDED_RETRY_CODES = frozenset({_ROUTE_PROOF_UNAVAILABLE, _SEED_DEADLINE_EXCEEDED})
+
+assert not (_BOUNDED_RETRY_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
+
+
+def _bounded_retry_failure_code(payload: dict[str, object]) -> str | None:
+    """The scorer's bounded-retry infrastructure code, if it sent one."""
     failure = payload.get("failure")
     if not isinstance(failure, dict):
-        return False
-    return (
-        failure.get("kind") == "validator_infrastructure"
-        and failure.get("retryable") is True
-        and failure.get("code") == _ROUTE_PROOF_UNAVAILABLE
-    )
+        return None
+    if (
+        failure.get("kind") != "validator_infrastructure"
+        or failure.get("retryable") is not True
+    ):
+        return None
+    code = failure.get("code")
+    return code if isinstance(code, str) and code in _BOUNDED_RETRY_CODES else None
 
 
 def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
@@ -360,7 +585,8 @@ def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
     code = failure.get("code")
     return (
         code
-        if isinstance(code, str) and code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES
+        if isinstance(code, str)
+        and (code in _AGENT_ATTRIBUTABLE_INFERENCE_CODES or code == _HARNESS_OOM)
         else None
     )
 
@@ -514,15 +740,17 @@ class DittobenchClient:
         return self._transcripts.pop(run_id, None)
 
     def _control_headers(self) -> dict[str, str]:
-        """Authorize this validator on the scorer's inference control plane.
+        """Authorize this validator on the scorer's control plane.
 
-        The scorer admits ``/v1/inference/session*`` from a loopback peer or a
-        matching bearer. It joins sandbox-docker's network namespace while this
-        worker stays on the Compose bridge, so the call always arrives from a
-        private-bridge address and the bearer is the only thing that can
-        authorize it. Sent on the control plane alone — the shared
-        ``httpx.AsyncClient`` also talks to the platform, so this must never
-        become a client-wide default header.
+        The scorer requires this bearer on every control-plane route except
+        ``GET /health`` (logged in shadow mode, rejected under
+        ``DITTOBENCH_CONTROL_AUTH_MODE=enforce``), so every scorer call in
+        this client sends it. The scorer joins sandbox-docker's network
+        namespace while this worker stays on the Compose bridge, so the call
+        always arrives from a private-bridge address and the bearer is the
+        only thing that can authorize it. Sent on the control plane alone —
+        the shared ``httpx.AsyncClient`` also talks to the platform, so this
+        must never become a client-wide default header.
         """
         token = str(getattr(self._config, "dittobench_control_token", "") or "")
         return {"Authorization": f"Bearer {token}"} if token else {}
@@ -650,9 +878,16 @@ class DittobenchClient:
                 await asyncio.wait({poll_task})
         if response.status_code != 200:
             diagnostic = _confirmation_failure_diagnostic(response)
-            raise DittobenchError(
+            message = (
                 "v9 confirmation execution rejected "
-                f"({response.status_code}): {response.text[:200]}{diagnostic}"
+                f"({response.status_code}): {response.text[:200]}"
+            )
+            if diagnostic is None:
+                raise DittobenchError(message)
+            raise ConfirmationScorerError(
+                f"{message}{diagnostic.suffix()}",
+                scorer_failure_class=diagnostic.failure_class,
+                scorer_failure_status=diagnostic.failure_status,
             )
         try:
             return V9ConfirmationScorerResult.model_validate(response.json())
@@ -902,6 +1137,7 @@ class DittobenchClient:
         try:
             response = await self._client.get(
                 f"{self._config.dittobench_api_url}/v1/capabilities",
+                headers=self._control_headers(),
                 timeout=getattr(
                     self._config, "dittobench_capabilities_timeout_seconds", 3.0
                 ),
@@ -1048,13 +1284,89 @@ class DittobenchClient:
             origin=payload.get("source_revision_origin"),
         )
         self.full_run_capacity = full_run_capacity
+        scored_runtime_env = None
+        if 13 in observed_versions and payload.get("scored_runtime_env") is not None:
+            try:
+                # The v13 type pins bench_version, so a v14 packet in this
+                # legacy slot is invalid and ignored like any other bad packet.
+                candidate = ScoredRuntimeEnvEvidence.model_validate(
+                    payload["scored_runtime_env"]
+                )
+                if candidate.source_revision == source_revision:
+                    scored_runtime_env = candidate
+            except ValueError:
+                # An invalid optional packet cannot upgrade the verified
+                # scorer identity or authorize a source review clearance.
+                pass
+        v14_scored_runtime_env = None
+        if (
+            14 in observed_versions
+            and payload.get("v14_scored_runtime_env") is not None
+        ):
+            try:
+                v14_candidate = V14ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v14_scored_runtime_env"]
+                )
+                if v14_candidate.source_revision == source_revision:
+                    v14_scored_runtime_env = v14_candidate
+            except ValueError:
+                pass
+        v15_scored_runtime_env = None
+        if (
+            15 in observed_versions
+            and payload.get("v15_scored_runtime_env") is not None
+        ):
+            try:
+                v15_candidate = V15ScoredRuntimeEnvEvidence.model_validate(
+                    payload["v15_scored_runtime_env"]
+                )
+                if v15_candidate.source_revision == source_revision:
+                    v15_scored_runtime_env = v15_candidate
+            except ValueError:
+                pass
         try:
+            generator_rounds = (
+                13 in observed_versions
+                and isinstance(payload.get("features"), list)
+                and "generator-round-v1" in payload["features"]
+            )
+            source_free_screened_images = (
+                isinstance(payload.get("features"), list)
+                and SOURCE_FREE_SCREENED_IMAGE_FEATURE in payload["features"]
+            )
             return ScorerBenchmarkCapability(
                 status="fresh_verified",
+                deterministic_v13_datasets=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "v13-deterministic-enterprise-v1" in payload["features"]
+                ),
+                private_datasets=(
+                    13 in observed_versions
+                    and isinstance(payload.get("features"), list)
+                    and "platform-private-v1" in payload["features"]
+                ),
+                generator_rounds=generator_rounds,
+                source_free_screened_images=source_free_screened_images,
+                generator_round_max_cases=(
+                    scorer_generator_round_max_cases(payload.get("features"))
+                    if generator_rounds
+                    else None
+                ),
+                generator_round_bench_versions=(
+                    scorer_generator_round_bench_versions(
+                        payload.get("features"), observed_versions
+                    )
+                    if generator_rounds
+                    else None
+                ),
                 supported_bench_versions=observed_versions,
                 observed_at=observed_at,
                 software_version=software_version,
                 source_revision=source_revision,
+                scored_runtime_env=scored_runtime_env,
+                v14_scored_runtime_env=v14_scored_runtime_env,
+                v15_scored_runtime_env=v15_scored_runtime_env,
                 probe=self._record_scorer_probe(
                     "served",
                     observed_at=observed_at,
@@ -1159,10 +1471,12 @@ class DittobenchClient:
     async def score_tarball(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
+        private_dataset_bytes: bytes | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -1205,6 +1519,8 @@ class DittobenchClient:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
         if self._config.dittobench_mock:
             self.last_details = {}
+            if private_dataset_mode is not None or private_dataset_bytes is not None:
+                raise DittobenchError("private datasets cannot use mock scoring")
             self.last_transcript = None
             return self._mock_report()
         run_id = await self._submit(
@@ -1212,6 +1528,8 @@ class DittobenchClient:
             tarball_sha256=tarball_sha256,
             seed=seed,
             dataset_sha256=dataset_sha256,
+            private_dataset_mode=private_dataset_mode,
+            private_dataset_bytes=private_dataset_bytes,
             run_size=run_size,
             bench_version=bench_version,
             screened_image_url=screened_image_url,
@@ -1234,6 +1552,74 @@ class DittobenchClient:
             ticket_deadline=ticket_deadline,
         )
 
+    async def run_generator_round(
+        self,
+        *,
+        tarball_url: str | None,
+        tarball_sha256: str,
+        dataset_bytes: bytes,
+        dataset_sha256: str,
+        seed: int,
+        screened_image_url: str | None,
+        screened_image_sha256: str | None,
+        screened_image_size_bytes: int | None,
+        screened_image_id: str | None,
+        screened_image_ref: str | None,
+        inference_session_id: str | None,
+        inference_grant_id: UUID | None,
+        inference_agent_id: UUID | None,
+        inference_slot_id: str | None,
+        inference_ticket_deadline: datetime | None,
+        ticket_deadline: datetime,
+        bench_version: int = 13,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        progress_callback: ProgressCallback | None = None,
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Run a generator-round dataset against one screened image at the
+        round's frozen ``bench_version`` (Platform's job carries it).
+
+        Returns the scorer run id and the raw per-case results (case ids are
+        ``column/case``; faults carry the ``generator_round_fault`` category).
+        """
+        if self._config.dittobench_mock:
+            raise DittobenchError("generator rounds cannot use mock scoring")
+        run_id = await self._submit(
+            tarball_url=tarball_url,
+            tarball_sha256=tarball_sha256,
+            seed=seed,
+            dataset_sha256=dataset_sha256,
+            private_dataset_mode="generator-round-v1",
+            private_dataset_bytes=dataset_bytes,
+            run_size="full",
+            bench_version=bench_version,
+            screened_image_url=screened_image_url,
+            screened_image_sha256=screened_image_sha256,
+            screened_image_size_bytes=screened_image_size_bytes,
+            screened_image_id=screened_image_id,
+            screened_image_ref=screened_image_ref,
+            inference_session_id=inference_session_id,
+            inference_grant_id=inference_grant_id,
+            inference_agent_id=inference_agent_id,
+            inference_slot_id=inference_slot_id,
+            inference_ticket_deadline=inference_ticket_deadline,
+            ticket_deadline=ticket_deadline,
+            benchmark_runtime=benchmark_runtime,
+        )
+        report = await self._poll_run(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=bench_version,
+            ticket_deadline=ticket_deadline,
+            raw=True,
+        )
+        assert isinstance(report, dict)
+        per_case = report.get("per_case")
+        if not isinstance(per_case, list) or not all(
+            isinstance(case, dict) for case in per_case
+        ):
+            raise DittobenchError("round report carries no per-case results")
+        return str(report.get("run_id") or run_id), per_case
+
     def _mock_report(self) -> ScoreReport:
         """Canned report for ``VALIDATOR_DITTOBENCH_MOCK`` (local plumbing tests)."""
         logger.info("dittobench mock enabled: returning canned ScoreReport")
@@ -1254,10 +1640,12 @@ class DittobenchClient:
     async def _submit(
         self,
         *,
-        tarball_url: str,
+        tarball_url: str | None,
         tarball_sha256: str | None = None,
         seed: int | None = None,
         dataset_sha256: str | None = None,
+        private_dataset_mode: str | None = None,
+        private_dataset_bytes: bytes | None = None,
         run_size: str | None = None,
         bench_version: int | None = None,
         screened_image_url: str | None = None,
@@ -1276,10 +1664,11 @@ class DittobenchClient:
         del ticket_deadline  # Manual retry policy forbids admission replay.
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
-        body: dict[str, object] = {
-            "tarball_url": tarball_url,
-            "run_size": run_size or self._config.run_size,
-        }
+        body: dict[str, object] = {"run_size": run_size or self._config.run_size}
+        # Platform withholds source from a source-free scorer; the screened
+        # image is then the only artifact the scorer fetches.
+        if tarball_url is not None:
+            body["tarball_url"] = tarball_url
         if tarball_sha256:
             body["tarball_sha256"] = tarball_sha256
         screened_image_fields = (
@@ -1352,13 +1741,36 @@ class DittobenchClient:
                 f"benchmark v{bench_version} requires a pinned dataset"
             )
         body["dataset_sha256"] = dataset_sha256
+        if private_dataset_mode is not None or private_dataset_bytes is not None:
+            # The Platform-private artifact is a v13 contract; a generator round
+            # runs at any round contract (the pack grading policies) it froze.
+            allowed_versions = (
+                GENERATOR_ROUND_BENCH_VERSIONS
+                if private_dataset_mode == "generator-round-v1"
+                else (13,)
+            )
+            if (
+                private_dataset_mode not in _PRIVATE_DATASET_MODES
+                or bench_version not in allowed_versions
+                or not private_dataset_bytes
+                or len(private_dataset_bytes) > 32 << 20
+            ):
+                raise DittobenchError("private dataset input is incomplete")
+            if hashlib.sha256(private_dataset_bytes).hexdigest() != dataset_sha256:
+                raise DittobenchError("private dataset digest mismatch")
+            body["private_dataset_mode"] = private_dataset_mode
+            body["private_dataset_bytes"] = base64.b64encode(
+                private_dataset_bytes
+            ).decode("ascii")
         body["bench_version"] = bench_version
         if benchmark_runtime is not None:
             body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")
         endpoint = "/v2/score"
         url = f"{self._config.dittobench_api_url}{endpoint}"
         try:
-            resp = await self._client.post(url, json=body)
+            resp = await self._client.post(
+                url, json=body, headers=self._control_headers()
+            )
         except httpx.HTTPError as e:
             raise DittobenchError(f"submit failed: {e}") from e
         if resp.status_code in (429, 503):
@@ -1389,6 +1801,25 @@ class DittobenchClient:
         expected_bench_version: int | None = None,
         ticket_deadline: datetime | None = None,
     ) -> ScoreReport:
+        result = await self._poll_run(
+            run_id,
+            progress_callback=progress_callback,
+            expected_bench_version=expected_bench_version,
+            ticket_deadline=ticket_deadline,
+            raw=False,
+        )
+        assert isinstance(result, ScoreReport)
+        return result
+
+    async def _poll_run(
+        self,
+        run_id: str,
+        *,
+        progress_callback: ProgressCallback | None,
+        expected_bench_version: int | None,
+        ticket_deadline: datetime | None,
+        raw: bool,
+    ) -> ScoreReport | dict[str, Any]:
         if (
             expected_bench_version is None
             or expected_bench_version not in SUPPORTED_BENCH_VERSIONS
@@ -1422,13 +1853,22 @@ class DittobenchClient:
         run_token = hashlib.sha256(run_id.encode()).hexdigest()[:16]
         try:
             while time.monotonic() - started <= budget:
-                resp = await self._client.get(url)
+                resp = await self._client.get(url, headers=self._control_headers())
+                # A poll that cannot be read says nothing about the run itself,
+                # which is still live in the sandbox. Cancel it like every other
+                # non-terminal exit so it cannot keep the sandbox after the
+                # ticket has been handed back.
                 if resp.status_code != 200:
+                    await self._cancel(run_id)
                     raise DittobenchError(
                         f"poll rejected ({resp.status_code}): {resp.text[:200]}"
                     )
-                data = resp.json()
+                try:
+                    data = resp.json()
+                except ValueError:
+                    data = None
                 if not isinstance(data, dict):
+                    await self._cancel(run_id)
                     raise DittobenchError("poll response was not a JSON object")
                 snapshot = safe_progress_snapshot(data)
                 if snapshot is not None:
@@ -1464,6 +1904,13 @@ class DittobenchClient:
                             f"ticket={expected_bench_version!r} "
                             f"job={job_version!r} report={reported_version!r}"
                         )
+                    if raw:
+                        # Generator-round runs carry no transcript or v9 base
+                        # evidence: their per-case results go to the round
+                        # matrix, never into a signed agent score.
+                        if not isinstance(rep, dict):
+                            raise DittobenchError("round report was not an object")
+                        return rep
                     # Offline reproducibility: fetch the run's transcript
                     # artifact and bind its digest into the report details, so
                     # the score signature covers it and the worker can publish
@@ -1518,13 +1965,29 @@ class DittobenchClient:
                     # binding it to one branch would lose it on exactly the
                     # failures that are hardest to read from the outside.
                     log_tail = _container_log_tail(data)
+                    if agent_failure_code == _HARNESS_OOM:
+                        raise SandboxOomError(
+                            f"run {run_id} exceeded its published sandbox memory cap",
+                            code=_HARNESS_OOM,
+                            container_log_tail=log_tail,
+                        )
                     if agent_failure_code is not None:
                         if agent_failure_code == "model_inference_required":
                             message = f"run {run_id} made no authoritative model call"
                         elif agent_failure_code == "inference_request_rejected":
+                            admission = _admission_suffix(data)
+                            if admission is not None:
+                                agent_failure_code = (
+                                    f"inference_request_rejected:{admission}"
+                                )
                             message = (
                                 f"run {run_id} had an inference request rejected "
-                                "before reservation"
+                                f"before reservation ({admission or 'unclassified'})"
+                            )
+                            logger.info(
+                                "inference admission taxonomy run=%s code=%s",
+                                run_id,
+                                admission or "unclassified",
                             )
                         else:
                             message = f"run {run_id} exhausted its inference allowance"
@@ -1540,12 +2003,6 @@ class DittobenchClient:
                     # why ditto-subnet#279 could not name the ~60-minute
                     # `mnemo*` killer. It now reaches the ticket as
                     # `failure_detail`.
-                    if infrastructure_code == "sandbox_oom":
-                        raise SandboxOomError(
-                            f"run {run_id} exhausted the sandbox memory allowance",
-                            code=infrastructure_code,
-                            container_log_tail=log_tail,
-                        )
                     if infrastructure_code is not None:
                         infrastructure_detail = _sandbox_infrastructure_failure_detail(
                             data, infrastructure_code
@@ -1565,6 +2022,13 @@ class DittobenchClient:
                             f"run {run_id} could not prove its model route "
                             "disposition; the platform challenge was unfinished",
                             code=_ROUTE_PROOF_UNAVAILABLE,
+                            container_log_tail=log_tail,
+                        )
+                    if _bounded_retry_failure_code(data) == _SEED_DEADLINE_EXCEEDED:
+                        raise DittobenchError(
+                            f"run {run_id} harness did not acknowledge /seed "
+                            "within the scorer's seed deadline",
+                            code=_SEED_DEADLINE_EXCEEDED,
                             container_log_tail=log_tail,
                         )
                     # The unclassified branch, and the one agent 5fdadd33 landed
@@ -1612,6 +2076,7 @@ class DittobenchClient:
                     min(self._config.dittobench_poll_seconds, remaining)
                 )
         except httpx.HTTPError as e:
+            await self._cancel(run_id)
             raise DittobenchError(f"poll failed: {e}") from e
         except asyncio.CancelledError:
             await self._cancel(run_id)
@@ -1650,7 +2115,7 @@ class DittobenchClient:
             return None
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}/transcript"
         try:
-            resp = await self._client.get(url)
+            resp = await self._client.get(url, headers=self._control_headers())
         except httpx.HTTPError as e:
             logger.warning("run %s transcript fetch failed: %s", run_id, e)
             return None
@@ -1688,7 +2153,9 @@ class DittobenchClient:
         """
         url = f"{self._config.dittobench_api_url}/v1/runs/{run_id}"
         try:
-            resp = await self._client.delete(url, timeout=_CANCEL_TIMEOUT_SECONDS)
+            resp = await self._client.delete(
+                url, headers=self._control_headers(), timeout=_CANCEL_TIMEOUT_SECONDS
+            )
             if resp.status_code not in (200, 202, 404, 405):
                 logger.warning(
                     "dittobench run %s cancellation rejected (%d): %s",

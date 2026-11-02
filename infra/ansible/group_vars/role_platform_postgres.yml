@@ -6,7 +6,6 @@
 # --- GCP placement ---
 gcp_project: ditto-app-dev
 gcp_region: us-central1
-gcp_zone: us-central1-a
 
 # --- Connection over IAP (the VM has no public IP) ---
 # Set GCP_OSLOGIN_USER to your OS Login username, e.g. nick_anderson_omniaura_ai
@@ -33,8 +32,10 @@ base_ssh_set_allow_users: false
 # Separate reviewed guest admission after the native host's private route and
 # candidate network boundary are qualified. The exact IP comes from Terraform's
 # coding_hosted_postgres_access output; never admit the whole Coding subnet.
+# Native host retired under SN-138. This prevents future guest admission.
+# Existing guest UFW/HBA cleanup is separate from Terraform network teardown.
 coding_hosted_postgres_enabled: false
-coding_hosted_postgres_client_ip: ""
+coding_hosted_postgres_client_ip: "10.33.0.2"
 
 # UFW is additive: disabling this flag is not an automatic rule deletion. Follow
 # the exact-rule rollback procedure; neither this flag nor peering grants keys.
@@ -95,13 +96,44 @@ postgres_tuning:
   autovacuum_vacuum_scale_factor: 0.05
   autovacuum_analyze_scale_factor: 0.025
   autovacuum_vacuum_cost_delay: "2ms"
+  # Slow-query logging stays at 500ms on purpose. The 2026-09-08 outage (#1745)
+  # was caused by the collector directory never being reclaimed, not by this
+  # threshold: the Sept 7 log is the only evidence for the 25k statements of
+  # 5-30s that still need a fix. Retention below bounds the cost of keeping it.
   log_min_duration_statement: 500
   log_checkpoints: "on"
   log_lock_waits: "on"
   log_temp_files: 0
+  # log_directory / log_filename must stay in step with postgres_log_gc_dir and
+  # postgres_log_gc_glob; roles/postgres/tasks/log_gc.yml asserts that they do.
   log_directory: "'/opt/ditto/logs/postgresql'"
   logging_collector: "on"
   log_filename: "'postgresql-%Y-%m-%d.log'"
+  # Rotation only opens a new file. Reclaim is postgres_log_gc_* below.
   log_rotation_age: "1d"
   log_rotation_size: "100MB"
   shared_preload_libraries: "'pg_stat_statements'"
+
+# --- Collector retention (the #1745 fix) ---
+# This is the host whose 30 GB root filesystem filled with 12 GB of collector
+# logs at ~635 MB/day. Both bounds are stated here, not just inherited, because
+# this is the host the incident runbook sends an operator to read.
+#   7 days x ~635 MB/day = ~4.4 GB, comfortably under the ceiling;
+#   6144 MB is the hard, oldest-first ceiling (~6% of the 100 GB boot disk), so a
+#   slow-query burst cannot outrun the age policy the way it did in September.
+postgres_log_gc_enabled: true
+postgres_log_gc_retention_days: 7
+postgres_log_gc_max_total_mb: 6144
+
+# --- Attached 50 GB data disk: still NOT mounted (deliberate) ---
+# ditto-pg-platform-data is attached by Terraform with no filesystem, so PGDATA,
+# WAL, and the logs all remain on the boot disk. Mounting it is safe and
+# idempotent, but relocating the cluster is an offline migration — see
+# .agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md.
+# Enable by setting this true (and, for a first mount of the unformatted disk,
+# passing -e postgres_data_disk_allow_format=true once).
+postgres_data_disk_enabled: false
+
+# SN-49: isolated recovery custody and single-bucket credentials are qualified.
+# Converge with gcp-platform-pg-backup.yml to leave the database service alone.
+postgres_backup_enabled: true

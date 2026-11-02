@@ -1,3 +1,4 @@
+import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture } from './contributor.test-fixtures'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -7,8 +8,10 @@ import {
   BACKROOM_ARTIFACT_SCOPE,
   BACKROOM_READ_SCOPE,
   BACKROOM_WRITE_SCOPE,
+  compactAgentScores,
   createBackroomMcpServer,
   type McpGrantProps,
+  TOOL_SCOPE_REQUIREMENTS,
 } from './mcp.server'
 
 const session: BackroomSession = {
@@ -61,17 +64,510 @@ afterEach(() => {
 })
 
 describe('Backroom MCP tools', () => {
+  it('guards Gamma runtime changes with exact confirmation, write scope and actor', async () => {
+    const { readFileSync } = await import('node:fs')
+    const pin = JSON.parse(readFileSync(new URL(
+      '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_enforcing_pin_v2.json', import.meta.url,
+    ), 'utf8'))
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const input = { mode: 'observe', expectedRevision: 0, activationEpoch: null, managedValidatorHotkeys: pin.fleet.map((member: { validator_hotkey: string }) => member.validator_hotkey),
+      approvalJson: JSON.stringify({ ...pin.approval, actor: 'FORGED' }),
+      expectedPolicyDigest: pin.policy_digest, expectedCollectorPolicyDigest: pin.policy.collector_policy_digest,
+      reason: 'Configure public proof only', confirmation: `GAMMA OBSERVE ${pin.policy_digest}` }
+    const settings = { version: 1, mode: 'observe', approval: pin.approval,
+      approved_policy_digest: pin.policy_digest, collector_policy_digest: pin.policy.collector_policy_digest,
+      managed_validator_hotkeys: input.managedValidatorHotkeys, activation_epoch: null }
+    const row = { revision: 1, parent_revision: 0, settings, checksum: 'a'.repeat(64),
+      actor: 'platform_admin_token', reason: input.reason, created_at: '2026-10-05T18:00:00Z' }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(row))
+    vi.stubGlobal('fetch', fetchMock)
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect((await readonly.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally { await readonly.client.close(); await readonly.server.close() }
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: { ...input, confirmation: 'ACTIVATE' } })).isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toEqual(row)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-runtime')
+      expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+      expect(JSON.parse(String(init.body))).toEqual({ expected_revision: 0, settings, reason: input.reason, confirmation: input.confirmation })
+      // Zod canonicalizes known object fields before the equality check.
+      const reversed = Object.fromEntries(Object.entries(settings).reverse())
+      fetchMock.mockResolvedValue(Response.json({ ...row, settings: reversed }))
+      expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).not.toBe(true)
+      const { activation_epoch: _epoch, ...omittedEpoch } = reversed
+      fetchMock.mockResolvedValue(Response.json({ ...row, settings: omittedEpoch }))
+      expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).not.toBe(true)
+      fetchMock.mockResolvedValue(Response.json({ ...row, parent_revision: 9 }))
+      expect((await writer.client.callTool({ name: 'record_treasury_runtime', arguments: input })).isError).toBe(true)
+    } finally { await writer.client.close(); await writer.server.close() }
+  })
+
+  it('gates funding reconciliation writes and preserves the authenticated actor', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ confirmation_digest: 'a'.repeat(64), confirmation: 'RECORD GM FUNDING HISTORY ' + 'a'.repeat(64), purchases: 1, credited_usd_cents: 25000, verification_level: 'operator_reconciled', spending_authority: 'none', inserted: 1, replayed: 0 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const batch = { holding_wallet: '5' + 'a'.repeat(47), reason: 'Reconcile historical funding', records: [{ purchase: { purchase_id: '11111111-2222-4333-8444-555555555555', occurred_at: '2026-01-01T00:00:30Z', credited_usd_cents: 25000 }, payment: { reference: '9000000-3', kind: 'payment', occurred_at: '2026-01-01T00:00:00Z', input_asset: 'TAO', input_amount_atomic: '2000000000' } }] }
+    const input = { batchJson: JSON.stringify(batch), confirmation_digest: 'a'.repeat(64), confirmation: 'RECORD GM FUNDING HISTORY ' + 'a'.repeat(64) }
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      expect((await readonly.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: input })).isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally { await readonly.client.close(); await readonly.server.close() }
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      expect((await writer.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: { ...input, confirmation: 'yes' } })).isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const forged = await writer.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: { ...input, actor: 'forged@example.com' } })
+      if (!forged.isError) {
+        const [, forgedInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(new Headers(forgedInit.headers).get('X-Admin-Actor')).toBe(session.email)
+      }
+      fetchMock.mockClear()
+      expect((await writer.client.callTool({ name: 'record_treasury_funding_reconciliation', arguments: input })).isError).not.toBe(true)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-funding')
+      expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+      expect(JSON.parse(String(init.body)).batch.records[0].purchase.status).toBe('completed')
+    } finally { await writer.client.close(); await writer.server.close() }
+  })
+
+  describe('manual Gamma collector transfers', () => {
+    const destination = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'
+    const requestId = '11111111-2222-4333-8444-555555555555'
+    const envelope = {
+      version: 1, collector_policy_digest: 'a'.repeat(64), destination,
+      request: {
+        request_id: requestId, after_operation: 3, source_block: 100, bucket_id: 'gm_credits',
+        amount_rao: 1_500_000_000, retained_alpha_rao: 10_000_000_000, expires_block: 200,
+        reason: 'Fund GM credits for October',
+      },
+    }
+    const preview = { envelope, confirmation_digest: 'b'.repeat(64), spending_authority: 'not_queued' }
+    const confirmation = `TRANSFER 1.5 ALPHA TO GM_CREDITS ${destination}`
+    const previewInput = {
+      bucket_id: 'gm_credits', amount_alpha: '1.5', retained_alpha_rao: 10_000_000_000,
+      reason: 'Fund GM credits for October',
+    }
+
+    it('previews with the operator actor, the Platform body and the exact confirmation phrase', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(preview))
+      vi.stubGlobal('fetch', fetchMock)
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        // The panel's preview server function requires a write-level session.
+        expect((await readonly.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: previewInput })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const args of [
+          { ...previewInput, amount_rao: 1_500_000_000 },
+          { ...previewInput, amount_alpha: undefined },
+          { ...previewInput, amount_alpha: '1.0000000001' },
+          { ...previewInput, amount_alpha: '0' },
+        ]) {
+          expect((await writer.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: args })).isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'preview_treasury_manual_transfer', arguments: previewInput })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual({ ...preview, confirmation })
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/treasury-manual\/preview$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        expect(body).toEqual({
+          request_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+          bucket_id: 'gm_credits', amount_rao: 1_500_000_000, retained_alpha_rao: 10_000_000_000,
+          reason: 'Fund GM credits for October',
+        })
+
+        const { amount_alpha: _alpha, ...rest } = previewInput
+        const exact = await writer.client.callTool({
+          name: 'preview_treasury_manual_transfer',
+          arguments: { ...rest, amount_rao: 1_500_000_000, request_id: requestId },
+        })
+        expect(exact.isError).not.toBe(true)
+        const [, exactInit] = fetchMock.mock.calls[1] as [string, RequestInit]
+        expect(JSON.parse(String(exactInit.body))).toMatchObject({ request_id: requestId, amount_rao: 1_500_000_000 })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('queues only the exact previewed confirmation and adapts to the Platform wire literal', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+      const transfer = {
+        request_id: requestId, envelope, status: 'queued', actor: session.email,
+        created_at: '2026-10-24T18:00:00Z', updated_at: '2026-10-24T18:00:00Z', last_error: null, receipt: null,
+      }
+      const fetchMock = vi.fn().mockImplementation(async () => Response.json(transfer))
+      vi.stubGlobal('fetch', fetchMock)
+      const input = { envelope, confirmation_digest: preview.confirmation_digest, confirmation }
+      const readonly = await connect([BACKROOM_READ_SCOPE])
+      try {
+        expect((await readonly.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: input })).isError).toBe(true)
+        expect(fetchMock).not.toHaveBeenCalled()
+      } finally { await readonly.client.close(); await readonly.server.close() }
+      const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+      try {
+        for (const wrong of [
+          'TRANSFER SN118 ALPHA ONCE',
+          `TRANSFER 15 ALPHA TO GM_CREDITS ${destination}`,
+          confirmation.toLowerCase(),
+          `${confirmation} `,
+        ]) {
+          const refused = await writer.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: { ...input, confirmation: wrong } })
+          expect(refused.isError).toBe(true)
+        }
+        expect(fetchMock).not.toHaveBeenCalled()
+
+        const response = await writer.client.callTool({ name: 'queue_treasury_manual_transfer', arguments: input })
+        expect(response.isError).not.toBe(true)
+        expect(readJsonResult(response)).toEqual(transfer)
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+        expect(url).toMatch(/\/api\/v1\/admin\/treasury-manual$/)
+        expect(init.method).toBe('POST')
+        expect(new Headers(init.headers).get('X-Admin-Actor')).toBe(session.email)
+        expect(JSON.parse(String(init.body))).toEqual({
+          envelope, confirmation_digest: preview.confirmation_digest, confirmation: 'TRANSFER SN118 ALPHA ONCE',
+        })
+      } finally { await writer.client.close(); await writer.server.close() }
+    })
+
+    it('publishes the queue tool as a destructive, write-scoped, non-idempotent operation', async () => {
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+      try {
+        const { tools } = await client.listTools()
+        const previewTool = tools.find(tool => tool.name === 'preview_treasury_manual_transfer')
+        const queueTool = tools.find(tool => tool.name === 'queue_treasury_manual_transfer')
+        expect(previewTool?.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false })
+        expect(queueTool?.annotations).toEqual({
+          readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true,
+        })
+        expect(TOOL_SCOPE_REQUIREMENTS.get('preview_treasury_manual_transfer')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(TOOL_SCOPE_REQUIREMENTS.get('queue_treasury_manual_transfer')).toBe(BACKROOM_WRITE_SCOPE)
+        expect(previewTool?.description).toContain('not_queued')
+        for (const fragment of [
+          'real on-chain SN118 alpha transfer from the Gamma collector',
+          "named bucket's holding coldkey",
+          'Custody re-verifies everything',
+          'one unresolved claim blocks another',
+          'Call preview first',
+        ]) expect(queueTool?.description).toContain(fragment)
+        const help = readJsonResult(await client.callTool({
+          name: 'get_backroom_tool_help', arguments: { tool: 'queue_treasury_manual_transfer' },
+        })) as { guidance: string }
+        expect(help.guidance).toContain('DESTRUCTIVE')
+        expect(help.guidance).toContain('preview_treasury_manual_transfer first')
+      } finally { await client.close(); await server.close() }
+    })
+  })
+
+  it('preflights a receipt with read scope and never invokes receipt ingress', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const selection = { stage: 'service_distribution', epoch_index: 9, bucket_id: 'gamma', source_block: 100,
+      block: 130, block_hash: '0x' + 'ab'.repeat(32), extrinsic_index: 0,
+      extrinsic_hash: '0x' + 'cd'.repeat(32), amount_atomic: 25, reason: 'Read exact finalized receipt',
+      payee_rule_id: null, parent_receipt_id: null }
+    const output = { ready: false, receipt_id: null, already_recorded: false, refusal: 'unavailable',
+      read_phase: 'source_events', attempt_count: 3, timed_out: true, publication: 'not_performed',
+      spending_authority: 'none', provider_credit_status: 'not_proven' }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(output))
+    vi.stubGlobal('fetch', fetchMock)
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const result = await readonly.client.callTool({ name: 'get_treasury_receipt_preflight', arguments: { selectorJson: JSON.stringify({
+        ...selection, actor: 'FORGED', confirmation: 'IGNORED', finalized: true }) } })
+      expect(result.isError).not.toBe(true)
+      expect(readJsonResult(result)).toEqual(output)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-receipts/preflight')
+      expect(JSON.parse(String(init.body))).toEqual({ ...selection, source_claims: [] })
+      expect(init.headers).not.toHaveProperty('X-Admin-Actor')
+      // An aggregate manual transfer must reach Platform with every source claim.
+      const source_claims = [
+        { source_block: 100, amount_rao: 10, epoch_index: 9 },
+        { source_block: 110, amount_rao: 15, epoch_index: 10 },
+      ]
+      await readonly.client.callTool({ name: 'get_treasury_receipt_preflight', arguments: {
+        selectorJson: JSON.stringify({ ...selection, source_claims }) } })
+      const [, aggregate] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(JSON.parse(String(aggregate.body))).toEqual({ ...selection, source_claims })
+    } finally { await readonly.client.close(); await readonly.server.close() }
+  })
+
+  it('records a verified receipt with signed actor and refuses read-only, imprecise or unconfirmed writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const selection = {
+      stage: 'vendor_payment', epoch_index: 9, bucket_id: 'gamma', source_block: null,
+      block: 130, block_hash: '0x' + 'ab'.repeat(32), extrinsic_index: 0,
+      extrinsic_hash: '0x' + 'cd'.repeat(32), amount_atomic: 25,
+      payee_rule_id: 'vendor', parent_receipt_id: null,
+      reason: 'Observe finalized configured vendor payment',
+      confirmation: 'INGEST VERIFIED TREASURY RECEIPT',
+    }
+    const receipt = {
+      ...selection, receipt_id: 'a'.repeat(64), policy_digest: 'b'.repeat(64),
+      amount_atomic: '25', status: 'chain_finalized', provider_credit_status: 'not_proven',
+      public_event_id: null, published: false, replayed: true,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(receipt))
+    vi.stubGlobal('fetch', fetchMock)
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const result = await readonly.client.callTool({ name: 'record_treasury_receipt', arguments: selection })
+      expect(result.isError).toBe(true)
+      expect(readTextResult(result)).toContain('read-only')
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally { await readonly.client.close(); await readonly.server.close() }
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      for (const invalid of [
+        { ...selection, confirmation: 'WRONG' },
+        { ...selection, amount_atomic: Number.MAX_SAFE_INTEGER + 1 },
+      ]) {
+        const result = await writer.client.callTool({ name: 'record_treasury_receipt', arguments: invalid })
+        expect(result.isError).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+      const result = await writer.client.callTool({ name: 'record_treasury_receipt', arguments: {
+        ...selection, actor: 'FORGED', credited_usd_nano: 'FAKE', finalized: true,
+      } })
+      expect(result.isError).not.toBe(true)
+      expect(readJsonResult(result)).toMatchObject({ published: false, replayed: true, provider_credit_status: 'not_proven' })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-receipts')
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer platform-admin-token', 'X-Admin-Actor': session.email })
+      const { confirmation: _confirmation, ...known } = selection
+      expect(JSON.parse(String(init.body))).toEqual(known)
+      expect(readTextResult(result)).not.toContain('FORGED')
+      expect(readTextResult(result)).not.toContain('confirmation')
+    } finally { await writer.client.close(); await writer.server.close() }
+  })
+
+  it('preflights a proposed public Gamma policy with read scope and no actor/write side effects', async () => {
+    const { readFileSync } = await import('node:fs')
+    const pin = JSON.parse(readFileSync(new URL(
+      '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_enforcing_pin_v2.json', import.meta.url,
+    ), 'utf8'))
+    const report = {
+      checked_at: '2026-10-05T16:00:00Z', proposed_policy_digest: pin.policy_digest,
+      proposed_collector_policy_digest: pin.policy.collector_policy_digest,
+      proposal_signature_verified: true, configured_policy_matches: false,
+      configured_collector_matches: false, chain_status: 'unavailable', observation: null,
+      chain_failure_stage: 'identity', chain_failure_kind: 'timeout', chain_failure_step: 'epoch_storage',
+      gate_scope: 'managed_validators', managed_validator_hotkeys: [], chain_permitted_setter_count: null,
+      required_setter_count: null, setters: [], truncated: false,
+      fleet_ready_for_proposed_policy: false, blocking_reasons: ['chain_unavailable'],
+      weight_effect: 'none', can_enforce_weights: false, copy_behavior_verified: false,
+    }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(report))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const args = { approvalJson: JSON.stringify({ ...pin.approval, future: true }),
+      expectedPolicyDigest: pin.policy_digest, expectedCollectorPolicyDigest: pin.policy.collector_policy_digest }
+    try {
+      const result = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })
+      expect(result.isError).not.toBe(true)
+      expect(readJsonResult(result)).toEqual(report)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/treasury-settings/activation-preflight')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({ approval: pin.approval,
+        expected_policy_digest: pin.policy_digest, expected_collector_policy_digest: pin.policy.collector_policy_digest,
+        managed_validator_hotkeys: [] })
+      expect(new Headers(init.headers).has('X-Admin-Actor')).toBe(false)
+      const managed = pin.fleet.map((m: { validator_hotkey: string }) => m.validator_hotkey)
+      const wrongRoster = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: { ...args, managedValidatorHotkeys: managed } })
+      expect(wrongRoster.isError).toBe(true)
+      const invalid = await client.callTool({ name: 'get_treasury_activation_preflight', arguments: { ...args, approvalJson: 'x'.repeat(8193) } })
+      expect(invalid.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+      fetchMock.mockResolvedValue(Response.json({ ...report, can_enforce_weights: true }))
+      expect((await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })).isError).toBe(true)
+      fetchMock.mockResolvedValue(Response.json({ ...report, proposed_policy_digest: 'f'.repeat(64) }))
+      expect((await client.callTool({ name: 'get_treasury_activation_preflight', arguments: args })).isError).toBe(true)
+    } finally { await client.close(); await server.close() }
+  })
+
+  it('keeps benchmark canary mutations write-scoped', async () => {
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const id = '11111111-1111-4111-8111-111111111111'
+    try {
+      for (const [name, args] of [
+        ['issue_benchmark_canary', { canaryId: id, agentId: id, benchVersion: 13,
+          validatorHotkey: '5'.repeat(48), slotId: 'slot-0',
+          expectedArtifactSha256: 'a'.repeat(64), expectedScreenedImageSha256: 'b'.repeat(64),
+          expectedActiveVersion: 12, reason: 'A non-authoritative diagnostic',
+          confirmation: `ISSUE CANARY V13 ${id}` }],
+        ['cancel_benchmark_canary', { canaryId: id, reason: 'Stop this diagnostic',
+          confirmation: `CANCEL CANARY ${id}` }],
+      ] as const) {
+        const response = await client.callTool({ name, arguments: args })
+        expect(response.isError).toBe(true)
+        expect(readTextResult(response)).toContain('read-only')
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('judges exact-source canary guards read-only with the admin token server-side', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const payload = {
+      authority: 'none', agent_id: agentId, source_attempt_id: sourceAttemptId,
+      agent_artifact_sha256: 'a'.repeat(64), source_attempt_artifact_sha256: null,
+      agent_status: 'scored', attempt_policy_version: 13, arrival_bench_version: 13,
+      score_row_count: 3, attempt_agent_id: agentId, legacy_null_attempt_sha256: true,
+      active_canary_id: null, report_only_packet_available: true,
+      guards: [
+        { guard: 'score_row_count', passed: false, current: 3, expected: 2,
+          conflict_detail: 'canary exact-source guard changed: score_row_count', note: null },
+        { guard: 'attempt_artifact_sha256', passed: false, current: null, expected: 'a'.repeat(64),
+          conflict_detail: 'canary exact-source guard changed: attempt_artifact_sha256',
+          note: 'legacy attempt has no pinned artifact SHA' },
+      ],
+      guards_pass: false,
+      signed_download_url: 'must-not-escape',
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_l2_report_canary_preflight',
+        arguments: { agentId, sourceAttemptId, artifactSha256: 'a'.repeat(64),
+          expectedAgentStatus: 'scored', expectedScoreCount: 2 },
+      })
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as typeof payload
+      expect(body.guards_pass).toBe(false)
+      expect(body.guards.map((check) => check.conflict_detail)).toEqual([
+        'canary exact-source guard changed: score_row_count',
+        'canary exact-source guard changed: attempt_artifact_sha256',
+      ])
+      expect(body.legacy_null_attempt_sha256).toBe(true)
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain(
+        `/preflight/${agentId}/${sourceAttemptId}?artifact_sha256=${'a'.repeat(64)}` +
+          '&expected_agent_status=scored&expected_score_count=2',
+      )
+      expect(init.method).toBe('GET')
+      expect(JSON.stringify(readTextResult(response))).not.toContain('platform-admin-token')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads block-bound vTrust and pending rounds without exposing ciphertext', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      netuid: 118, block: 9029509, block_hash: `0x${'a'.repeat(64)}`,
+      last_epoch_block: 9029509, pending_epoch_at: 0, subnet_epoch_index: 25017,
+      tempo: 360, blocks_since_last_step: 0, next_epoch_block: 9029869,
+      epoch: null,
+      validators: [{ validator_uid: 139, validator_hotkey: '5WSL',
+        validator_trust_u16: 60947, validator_trust: 60947 / 65535,
+        last_update_block: 9029448,
+        weights: [{ uid: 43, hotkey: '5Miner', value: 65535 }] }],
+      consensus: [{ uid: 43, value: 42597 }],
+      pending_commits: [
+        // Legacy drand 1.0.1 lane: the round points 129 blocks past the commit,
+        // inside epoch 25016 rather than at its boundary 9029509 + 3.
+        { validator_hotkey: '5WSL', commit_epoch: 25016, commit_block: 9029448,
+          reveal_round: 32049696, commit_block_timestamp: 1788950770,
+          implied_reveal_block: 9029577, implied_reveal_offset_blocks: 68,
+          ciphertext: 'must-not-escape' },
+        { validator_hotkey: '5WSL', commit_epoch: 25017, commit_block: 9029509,
+          reveal_round: 32050000, commit_block_timestamp: null,
+          implied_reveal_block: null, implied_reveal_offset_blocks: null },
+      ],
+      historical_clipping_verified: false, weights_submitted: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_validator_weight_diagnostics', arguments: { validatorUid: 139 } })
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as typeof payload
+      expect(body.block).toBe(9029509)
+      expect(body.validators[0].validator_trust_u16).toBe(60947)
+      expect(body.pending_commits[0].reveal_round).toBe(32049696)
+      expect(body.next_epoch_block).toBe(9029869)
+      expect(body.pending_commits[0].implied_reveal_block).toBe(9029577)
+      expect(body.pending_commits[0].implied_reveal_offset_blocks).toBe(68)
+      expect(body.pending_commits[1].implied_reveal_block).toBeNull()
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(body.historical_clipping_verified).toBe(false)
+      expect(body.weights_submitted).toBe(false)
+      expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/admin/validator-weight-diagnostics?validator_uid=139')
+      fetchMock.mockResolvedValue(Response.json({ detail: 'unavailable' }, { status: 503 }))
+      expect((await client.callTool({ name: 'get_validator_weight_diagnostics', arguments: {} })).isError).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('publishes every Backroom operation with MCP safety annotations', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.listTools()
 
     expect(response.tools.map((tool) => tool.name).sort()).toEqual(
       [
+        'activate_v13_scorer_cohort',
+        'rotate_v13_scorer_cohort',
         'advance_scored_policy_rescreen',
         'execute_screening_quarantine_batch',
         'expand_benchmark_rollout_cohort',
         'get_backroom_access',
         'get_backroom_tool_help',
+        'get_generator_competition_settings',
+        'set_generator_competition_settings',
+        'list_generator_submissions',
+        'get_generator_submission',
+        'get_generator_run',
+        'get_generator_probe',
+        'rotate_generator_probe_seed',
+        'list_generator_promotion_candidates',
+        'get_generator_board',
+        'rescore_generator_submission',
+        'reject_generator_submission',
+        'reinstate_generator_submission',
+        'list_generator_rounds',
+        'get_generator_round',
+        'preview_generator_round',
+        'get_generator_scorer',
+        'get_generator_round_loop',
+        'tick_generator_rounds',
+        'get_generator_round_dataset',
+        'void_generator_round',
+        'close_generator_round',
+        'republish_generator_round_commitment',
+        'release_generator_round_lease',
+        'register_default_generator',
+        'create_default_generator_upload',
         'get_ath_review',
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
@@ -79,81 +575,191 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
+        'get_track_share_settings',
+        'get_emission_allocation',
+        'get_copy_court_settings',
+        'get_confirmation_seed_anchors',
         'get_copy_review_source_diff',
+        'get_continual_retest_diagnostic',
+        'list_infra_voids',
+        'get_provider_outages',
         'get_continual_retest_settings',
-        'get_core_qualification_policy',
         'get_confirmation_bundle_settings',
         'get_confirmation_bundle',
         'get_confirmation_lane_diagnosis',
         'get_efficiency_bonus_settings',
+        'get_emission_eligibility_policy',
         'get_inference_concurrency_settings',
+        'get_decision_lane',
         'get_inference_runtime_metrics',
+        'get_source_review_queue_slo',
+        'get_outlier_escalation',
+        'get_outlier_escalation_dry_run',
+        'get_inference_failure_taxonomy',
         'list_inference_traces',
         'download_inference_trace',
         'peek_inference_trace',
         'download_runtime_profile',
         'get_queue_policy_settings',
         'get_screener_capacity',
+        'get_database_backup_status',
+        'get_screening_infra_retries',
         'set_screener_provider_settings',
         'set_screener_node_channel_settings',
+        'set_screener_node_replay_capacity',
+        'get_screener_replay_process_readiness',
+        'register_screener_replay_process_key',
+        'revoke_screener_replay_process_key',
+        'revoke_miner_github_link',
         'create_screener_bootstrap_grant',
         'get_screener_review_settings',
+        'get_screener_fanout_shadow',
+        'get_l2_report_canary',
+        'get_l2_report_canary_preflight',
+        'get_canonical_starter_fixture_preflight',
+        'get_v13_official_controls',
+        'get_v13_official_control_approvals',
+        'get_v13_official_control_artifact',
+        'get_conversation_assessments',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
         'rotate_screener_policy_manifest',
         'get_screener_policy_activation',
+        'get_v13_review_clock',
         'schedule_screener_policy_activation',
+        'schedule_v13_review_clock',
         'restore_scored_screening_snapshot',
         'get_validator_fleet',
         'get_validator_slot_settings',
+        'get_scoring_lease_settings',
         'list_validator_assignments',
+        'get_validator_capacity',
+        'get_validator_request_outcomes',
         'list_confirmation_bundles',
         'set_burn_settings',
+        'set_track_share_settings',
+        'set_emission_allocation',
         'set_continual_retest_settings',
-        'set_core_qualification_policy',
-        'refresh_agent_core_qualification',
         'set_efficiency_bonus_settings',
         'set_queue_policy_settings',
         'set_validator_slot_settings',
+        'set_validator_issuance_pause',
+        'set_scoring_lease_settings',
         'set_confirmation_bundle_settings',
         'authorize_confirmation_bundle_retest',
         'read_copy_review_source_diff_file',
+        'get_lineage_source_diff',
+        'get_screening_review_lineage',
         'get_screening_baseline_diff',
         'read_screening_baseline_diff_file',
         'get_screening_quarantine_context',
         'get_screening_quarantine_contexts',
         'get_screening_review_queue',
+        'get_screening_review_deadline',
         'get_screening_failure_diagnostic',
+        'list_screening_adjudication_attempts',
+        'get_screening_review_cost',
+        'get_screening_review_budget',
+        'get_screening_verification_readiness',
+        'get_v13_private_generation_group',
+        'get_v13_benign_approval',
+        'get_v13_replay_private_group',
+        'get_v13_replay_private_receipt',
+        'get_v13_replay_private_statistics',
+        'get_v13_scorer_cohort',
+        'get_v13_scorer_cohort_history',
+        'get_v13_scorer_cohort_preflight',
+        'get_v13_report_only_current_packet',
         'get_screening_submission',
         'get_source_release_policy',
+        'get_agent_source_release_evidence',
+        'get_artifact_fetch_audit',
+        'get_miner_github_link',
+        'get_github_contributor_status',
+        'get_github_link_revocation_preflight',
+        'get_miner_cla_status',
+        'get_cla_policy',
+        'set_cla_policy',
+        'publish_cla_version',
+        'get_bounty_board',
+        'get_bounty',
+        'get_bounty_claim',
+        'get_bounty_queue',
+        'get_bounty_payout_policy',
+        'preview_bounty_revision',
+        'publish_bounty_revision',
+        'set_bounty_claims_paused',
+        'review_bounty_submission',
+        'reassign_bounty_reviewer',
+        'control_bounty_slot',
+        'decide_bounty_appeal',
+        'award_bounty_claim',
+        'set_bounty_payout_policy',
+        'approve_bounty_obligation',
+        'dispatch_bounty_obligation',
+        'reconcile_bounty_transfer',
+        'record_bounty_fact',
+        'record_bounty_evaluation',
+        'decide_bounty_evaluation',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'get_competition_submission_terms',
+        'get_treasury_settings',
+        'get_treasury_receipts',
+        'get_treasury_ledger',
+        'get_treasury_receipt_preflight',
+        'get_treasury_manual_transfers',
+        'get_treasury_funding_history',
+        'preview_treasury_funding_reconciliation',
+        'record_treasury_funding_reconciliation',
+        'preview_treasury_manual_transfer',
+        'queue_treasury_manual_transfer',
+        'get_treasury_activation_preflight',
+        'get_treasury_ledger_readiness',
+        'quote_treasury_topup',
+        'preview_treasury_topup',
         'get_validation_retry',
         'list_stuck_submissions',
         'list_lease_revocations',
+        'list_copy_court_recommendations',
+        'preview_copy_court_triage',
+        'get_unreleased_copy_signal',
+        'list_unreleased_copy_signals',
+        'get_competition_improvement_metrics',
+        'get_unreleased_copy_settings',
+        'apply_unreleased_copy_settings',
+        'apply_copy_court_settings',
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
-        'get_agent_coding_certifications',
-        'get_agent_coding_shadow_evaluations',
-        'get_coding_catalog_releases',
-        'get_agent_core_qualification',
+        'get_validator_weight_diagnostics',
+        'get_agent_emission_eligibility',
+        'get_claim_provenance_cases',
         'get_agent_scores',
         'get_leaderboard',
+        'get_ledger_epoch_snapshots',
         'get_miner_owner_footprint',
         'get_score_history',
         'get_scored_policy_rescreen',
         'get_screened_image_rebuild',
         'get_validator_score_replacement',
         'list_v9_contract_retests',
+        'list_v13_benign_approvals',
         'open_ath_review',
         'preview_screening_quarantine_batch',
         'list_screening_quarantines',
+        'list_screening_review_events',
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
+        'search_submissions',
         'summarize_screening_failures',
         'read_screening_source_file',
+        'record_treasury_settings',
+        'record_treasury_runtime',
+        'get_treasury_runtime',
+        'get_runtime_interface_report',
+        'record_treasury_receipt',
         'search_screening_source',
         'rebuild_screened_image',
         'get_screening_artifact',
@@ -164,25 +770,39 @@ describe('Backroom MCP tools', () => {
         'reinstate_evicted_submission_to_queue',
         'qualify_scored_benchmark_rollout',
         'start_benchmark_rollout',
+        'list_benchmark_canaries',
+        'get_benchmark_canary',
+        'issue_benchmark_canary',
+        'cancel_benchmark_canary',
+        'get_operator_diagnostic',
+        'isolate_operator_diagnostic',
         'resolve_screening_quarantine',
+        'release_verified_v13_court_clear',
         'resolve_screening_dispute',
         'resolve_ath_review',
+        'create_ath_rulings_upload',
+        'preview_ath_rulings_batch',
+        'execute_ath_rulings_batch',
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
+        'schedule_l2_report_canary',
+        'register_canonical_starter_fixture',
+        'review_canonical_starter_fixture',
+        'schedule_canonical_starter_fixture',
         'retry_trusted_image_build',
         'expire_running_screening',
         'reject_screening_submission',
         'retry_validator_evaluation',
         'replace_validator_score',
         'queue_validator_score_retests',
+        'void_infra_scores',
         'set_inference_concurrency_settings',
         'start_runtime_profile',
         'set_source_release_policy',
         'set_submission_cooldown',
+        'set_conversation_settings',
+        'authorize_conversation_retry',
         'unban_hotkey',
-        'register_coding_catalog_release',
-        'supersede_coding_catalog_release',
-        'retire_coding_catalog_release',
       ].sort(),
     )
     expect(response.tools.map((tool) => tool.name)).not.toContain(
@@ -194,7 +814,14 @@ describe('Backroom MCP tools', () => {
           properties?: Record<string, { maxLength?: number }>
         }
       ).properties?.reason
-      expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()
+      if (tool.name === 'record_treasury_receipt' || tool.name === 'preview_treasury_manual_transfer') {
+        // Machine observation metadata and the manual transfer envelope's
+        // audit reason are bounded by the Platform wire model; neither is a
+        // case review or a substitute for independent proof.
+        expect(reason?.maxLength).toBe(240)
+      } else {
+        expect(reason?.maxLength, `${tool.name} must preserve detailed reasons`).toBeUndefined()
+      }
     }
     // The catalog is loaded before any call. Keep both the complete JSON and
     // its descriptions bounded so a new operational tutorial cannot silently
@@ -209,25 +836,194 @@ describe('Backroom MCP tools', () => {
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
     // screening-reject tool, the gradient-hold and adjudicator controls, the
-    // screener policy-activation write schema, the coding certification read
-    // tool, the four bounded shadow core-qualification operations, the
-    // shadow coding-evaluation ledger read, the exact
-    // node/resource/image/controller bootstrap-grant schema, and the signed
-    // catalog register/retire/read tools, plus the two complete screener
+    // screener policy-activation write schema, the exact
+    // node/resource/image/controller bootstrap-grant schema, plus the two complete screener
     // provider/node capacity write schemas plus the two one-at-a-time scored
     // policy-rescreen checkpoint controls. Keep modest headroom for schema
     // evolution; tighten the description budgets, not this whole-payload
     // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(115_000)
+    // The block-bound weight diagnostic adds one tool and its bounded UID input;
+    // The copy-court pair adds two read tools with a small input schema;
+    // apply_copy_court_settings reuses the existing settings schema. The epoch-pin
+    // history read tool adds one more small input schema. The batched ATH
+    // rulings triple adds the rulings-document schema twice (inline preview and
+    // inline execute) plus the bounded board projection; its tutorials live in
+    // get_backroom_tool_help. The two policy-v13 decision-record reads add one
+    // uuid input and one outcome-filtered page input (the decision record
+    // itself is a response). 131_000 admits the union of the batched ATH
+    // rulings triple and the bench v13 gate-evidence notes (130_073 together);
+    // each fit under 130_000 alone. Raised again to 132_000 when the screener
+    // fan-out shadow read (#1893) landed on main between those reads being
+    // measured and merged; none of them is a tutorial.
+    // Four canary operations add explicit lease identity/digest/CAS inputs;
+    // measured catalog is 133,733 bytes. Descriptions remain short summaries.
+    // One bounded conversation observation tool adds ~900 bytes.
+    // The audited retry adds exact report/artifact digests; measured 136,355 bytes.
+    // Exact-agent continual retest diagnosis adds one bounded read schema.
+    // One bounded L4 cohort read adds a compact schema and catalog line.
+    // The two V13 clock tools and bounded, default-off replay control bring
+    // the measured catalog just above 142 KB. The infra-retry and ordinary
+    // source-review queue-age SLO reads add two bounded catalog entries.
+    // The hosted-inference failure taxonomy adds one no-input read tool whose
+    // one-line catalog entry is its whole payload cost.
+    // The reopened-hold reason contract adds ~460 bytes across the queue and
+    // get_ath_review: which of `hold.reason` / `superseded_*` is the CURRENT
+    // reason and which is withdrawn history. That is a correctness rule for
+    // anything that quotes a reason back to a miner, not a tutorial.
+    // Eight digest-only V13 provenance/analysis tools and three process-key
+    // tools add bounded entries. Detailed procedures remain in tool help.
+    // The scorer-pin rotation/history/current-packet controls add bounded entries.
+    // The two validator-retry inputs gain acknowledgeProviderOutage (#2087);
+    // measured 163,528 bytes together.
+    // The no-input outlier-escalation read adds about 360 bytes; its bounds
+    // live on the Platform endpoint. With later main tools the catalog measured
+    // 164,066 bytes. Four treasury policy, quote and preview tools bring the
+    // measured catalog to 167,798 bytes. The exact-source canary preflight
+    // adds one bounded read; retain about 0.5 KB headroom at 169,300 bytes.
+    // The taxonomy's report-only rate_limit_bursts note adds about 80 bytes.
+    // The bounded outlier-escalation dry-run read measures 169,755 bytes;
+    // retain about 0.5 KB headroom.
+    // The search_submissions lookup (server-side filters, #560) brings the
+    // measured catalog to 171,685 bytes. The exact-key per-case
+    // claim-provenance read (#1852) adds a seven-field input; measured
+    // 172,734 bytes together. Keep the same ~0.5 KB headroom.
+    // The two terminal-review eligibility reads (#2041) add a settings-history
+    // input and one uuid input; measured 174,477 bytes together.
+    // Naming the fleet-effective posture in its catalog line measures 174,513.
+    // Main also adds the no-input validator-capacity read (#2036), and the
+    // guarded verified V13 court-clear release adds a bounded writer entry.
+    // Four canonical starter fixture controls bring the measured catalog to
+    // 179,468 bytes before the optional review-posture pin, node cap and
+    // expected-value canary guard inputs. Keep operational tutorials in help
+    // and retain the existing catalog budget as these inputs evolve.
+    // Main measured 179,967 bytes. The one-tool any-pair lineage source diff
+    // (#2673, manifest or one file by optional path) is paid for by publishing
+    // the artifact-scope source readers' agent ids as plain `format: uuid`
+    // (the services still parse them strictly): measured 179,446 bytes.
+    // Measure the serialized UTF-8 catalog, including guarded Gamma controls.
+    // The quarantine batch execute now publishes its real decisions schema
+    // instead of `{}` (about 1.5 KB), which takes the catalog past 180,000.
+    // Eight contributor tools now include audited exact-link recovery. Keep
+    // UUID schemas compact and allow this addition; prose budgets stay fixed.
+    // The eighteen build-bounty operator tools (#2942) publish compact catalog
+    // schemas (ids as format uuid, terms as an object; services parse
+    // strictly) and one-line summaries with procedures in tool help: measured
+    // 197,867 bytes together. Main's runtime-interface report read (#2994)
+    // adds 659: measured 198,526 with both. The appeals queue option (#2943)
+    // and the two compact bounty evaluation writes (#2944), whose enums stay
+    // in the catalog, measure 200,358. Keep the same ~0.5 KB headroom.
+    // Two optional failure-release guards on both batch inputs add 715 bytes.
+    // Keep procedure text in tool help and retain about 0.5 KB headroom.
+    // Six official-control operations add compact UUID schemas and short
+    // summaries. Detailed procedures stay in help; services validate IDs.
+    // One publication-evidence read adds two compact UUIDs and a one-line
+    // summary: measured 205,900 bytes. Retain about 0.5 KB headroom.
+    // The retained source-review evidence read (#3111) together with the
+    // exact-artifact source handoffs (#3107) measured 206,434 on main.
+    // Retiring the thirteen coding-track tools (SN-186: certifications, shadow
+    // evaluations, contract-v1 catalog, native private-v2 custody, shadow
+    // reconcile/ticket-set and the control-plane read) removes their release,
+    // receipt and exact-run schemas: measured 196,554 bytes. Retain about
+    // 0.5 KB headroom.
+    // Eleven generator-competition tools (seven reads, four guarded writes)
+    // publish compact uuid inputs and one-line summaries; the whole-object
+    // settings write carries its 15 bounded fields (~1.6 KB). On top of the
+    // retirement above, measured 203,881 bytes; keep about 0.5 KB headroom.
+    // Eleven generator-round tools (five reads, six guarded writes; the
+    // round dataset download is artifact-scoped) publish compact string
+    // inputs and one-line summaries with procedures in tool help. Measured
+    // 210,748 bytes; keep about 0.5 KB headroom.
+    // The lineage-scoped review packet read (one UUID input, one-line summary)
+    // adds about 0.5 KB on top; keep the same ~0.5 KB headroom.
+    // The copy-court family triage preview (one uuid input, one-line summary,
+    // artifact scope) and the recommendation feed's agentId filter measure
+    // 212,328 bytes; keep the same ~0.5 KB headroom.
+    // The queue policy's lineage_reference_mode enum (three values on the
+    // set_queue_policy_settings input) adds about 55 bytes on top; keep the
+    // same headroom.
+    // The screening review cost read (one bounded integer input, one-line
+    // summary, detail in tool help) brings the measured catalog to 212,797
+    // bytes; keep about 0.5 KB headroom.
+    // The dark decision lane adds the get_decision_lane read (no input,
+    // one-line summary) and the optional decision_lane object on the
+    // set_inference_concurrency_settings input, measured 214,803 bytes; keep
+    // about 0.5 KB headroom.
+    // The per-attempt review budget read (one uuid input, one-line summary,
+    // detail in tool help) measures 215,494 bytes; keep about 0.5 KB headroom.
+    // The artifact fetch audit read (agentId-or-sha, before, limit; one-line
+    // summary, detail in tool help) measures 216,078 bytes; keep about 0.5 KB.
+    // The unreleased-copy pair (one artifact-scoped uuid read, one bounded
+    // list; one-line summaries, detail in tool help) measures 217,360 bytes;
+    // keep about 0.5 KB.
+    // The operator-diagnostic read and isolate pair (uuid / uuid+digest+reason
+    // inputs, one-line summaries, detail in tool help) measures 218,834 bytes;
+    // keep about 0.5 KB.
+    // The infra-void pair (one guarded write with up to 50 items, one bounded
+    // list; one-line summaries, detail in tool help) adds about 2.5 KB;
+    // keep about 0.5 KB.
+    // The provider-outage read (three bounded paging inputs, one-line
+    // summary, detail in tool help) measures 221,908 bytes; keep about 0.5 KB.
+    // The competition improvement read (two optional filters, one-line
+    // summary, detail in tool help) measures 222,758 bytes; keep about 0.5 KB.
+    // The unreleased-copy settings pair (no-input read; mode, threshold,
+    // revision, reason and confirmation write) adds about 0.6 KB; keep
+    // about 0.5 KB.
+    // Tempo-aligned wave pacing (two bounded integers on the continual retest
+    // write) measures 224,063 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(224_550)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
-    // in get_backroom_tool_help, not here. 23_500 admits the screener
+    // in get_backroom_tool_help, not here. The budget admits the screener
     // policy-activation pair, four short shadow qualification catalog lines,
-    // the coding-evaluation ledger read, the bootstrap-grant line, and three
-    // short catalog-release lines; operational tutorials stay in
-    // get_backroom_tool_help.
+    // and the bootstrap-grant line; operational tutorials stay in
+    // get_backroom_tool_help. Raised from 24_000 for the epoch-pin history
+    // line (its catalog entry is already the concise 157-char form, and the
+    // catalog had no headroom left under 24_000), then to 25_100 to admit the
+    // three one-line batched ATH rulings catalog entries (upload, preview,
+    // execute). The two one-line policy-v13 decision-record reads
+    // (get_screening_decision_record, list_screening_decisions) and the
+    // resolve_ath_review citation rule fit under that bound (24_938); the
+    // one-line bench v13+ confirmation seed anchor read (its notes live in the
+    // detailed help) lands at 25_047, so the bound moves to 25_200;
+    // the one-line bench v13 gate-evidence and dispute-kind notes on the score
+    // and dispute tools land at 25_237, so it moves to 25_400. The short
+    // L4 cohort diagnostic adds one catalog line without another tutorial.
+    // The infra-retry read summary lands at 25,990, so the bound moves to 26_200.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      23_500,
+      // Includes the V13 clock, independent replay, infra-retry, ordinary
+      // source-review queue-age SLO, failure taxonomy route_basis,
+      // reopened-hold reason, three process-key summaries, and current V13
+      // provenance reads plus scorer pin rotation and history; measured at 29,121.
+      // The one-line outlier-escalation read (79 chars; detail in tool help)
+      // plus later main summaries measured 29,329. Two short treasury
+      // shadow-policy descriptions bring the measured total to 29,850.
+      // The taxonomy's rate_limit_bursts catalog note measured 30,520; the
+      // one-line outlier-escalation dry-run read brings it to 30,794, and the
+      // claim-provenance read summary to 30,878. The two one-line
+      // terminal-review eligibility reads (#2041) measure 31,038.
+      // Naming the fleet-effective posture (protocol 28) measures 31,074;
+      // main adds the validator-capacity summary (#2036) and the guarded
+      // verified V13 court-clear release summary.
+      // Four fixture tool summaries bring the measured total to 31,772.
+      // The canary review-posture pin clause measured 31,854; the node
+      // canary cap (#2447) also adds a short catalog note.
+      // Six concise official-control summaries, with procedure text in help.
+      // Retiring the thirteen coding-track summaries (SN-186) measures 25,588.
+      // The eleven generator-competition summaries bring it to 26,304, and
+      // the eleven generator-round summaries to 27,023; keep about 200 chars
+      // of headroom. The one-line emission allocation pair (SN-350) adds
+      // about 150 chars. The one-line generator scorer capability read
+      // measures 27,441. The validator request-outcome read (job polls and
+      // the weight ledger, one line) brings the measured total to 27,653.
+      // The one-line decision-lane read measures 27,740; the one-line
+      // per-attempt review budget read brings it to 27,845. The two one-line
+      // unreleased-copy reads measure 28,028; keep about 200 chars.
+      // The two one-line infra-void summaries bring it to 28,306.
+      // The one-line provider-outage read brings the measured total to
+      // 28,400; keep about 200 chars.
+      // The unreleased-copy settings pair adds two one-line summaries; measured
+      // 28,613 after the competition-improvement read.
+      28_800,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -279,6 +1075,7 @@ describe('Backroom MCP tools', () => {
       expect.arrayContaining([
         'aggregate_mode',
         'tie_weighting_mode',
+        'statistical_band_mode',
         'idle_retests_enabled',
         'wave_membership',
         'retest_cohort_size',
@@ -315,6 +1112,12 @@ describe('Backroom MCP tools', () => {
     )
     expect(validatorSlotWrite?.annotations?.readOnlyHint).toBe(false)
     expect(validatorSlotWrite?.annotations?.destructiveHint).toBe(true)
+    const issuancePauseWrite = response.tools.find(
+      (tool) => tool.name === 'set_validator_issuance_pause',
+    )
+    expect(issuancePauseWrite?.annotations?.readOnlyHint).toBe(false)
+    expect(issuancePauseWrite?.annotations?.destructiveHint).toBe(true)
+    expect(issuancePauseWrite?.description).toContain('Existing tickets continue')
     // Operators read these descriptions before ramping a live fleet, so the
     // properties that make the confirmation meaningful must stay documented.
     expect(validatorSlotWrite?.description).toContain('APPLY VALIDATOR SLOT CAP <n>')
@@ -889,8 +1692,73 @@ describe('Backroom MCP tools', () => {
     expect(payload.guidance).toContain('APPLY QUEUE POLICY SETTINGS')
     expect(payload.guidance).toContain('deferred_source_review')
 
+    const eligibility = readJsonResult(await client.callTool({
+      name: 'get_backroom_tool_help',
+      arguments: { tool: 'get_agent_emission_eligibility' },
+    })) as { guidance: string }
+    expect(eligibility.guidance).toContain('reward_eligible')
+    expect(eligibility.guidance).toContain('posture_satisfied')
+    expect(eligibility.guidance).toContain('in_ledger')
+    expect(eligibility.guidance).toContain('awaiting_next_window')
+
+    const catalog = await client.listTools()
+    for (const tool of [
+      'get_treasury_ledger_readiness', 'get_continual_retest_diagnostic',
+      'get_validator_slot_settings', 'get_miner_owner_footprint',
+      'get_inference_concurrency_settings', 'get_score_history',
+      'list_stuck_submissions', 'get_confirmation_bundle_settings',
+      'search_screening_source', 'read_screening_source_file',
+    ]) {
+      const entry = catalog.tools.find(item => item.name === tool)
+      expect(entry?.annotations?.readOnlyHint).toBe(true)
+      const help = readJsonResult(await client.callTool({
+        name: 'get_backroom_tool_help', arguments: { tool },
+      })) as { guidance: string }
+      expect(help.guidance.length).toBeGreaterThan(entry?.description?.length ?? 0)
+      if (tool === 'get_treasury_ledger_readiness') {
+        expect(help.guidance).toContain('ledger-serving schedule reader')
+        expect(help.guidance).toContain('writes no pin')
+        expect(help.guidance).toContain('Authority readiness is not proof')
+        expect(help.guidance).toContain('no settings write, transfer or activation')
+      }
+    }
+
     await client.close()
     await server.close()
+  })
+
+  it('retains actual detailed help and permission annotations for compacted receipt-era discovery', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const catalog = await client.listTools()
+      const serialized = JSON.stringify(catalog.tools)
+      console.info('receipt-era MCP catalog', {
+        chars: serialized.length,
+        utf8Bytes: Buffer.byteLength(serialized, 'utf8'),
+      })
+      for (const [name, fragment, scope, readOnly] of [
+        ['get_copy_review_source_diff', 'per-file diff manifest', BACKROOM_ARTIFACT_SCOPE, true],
+        ['get_lineage_source_diff', 'rejected ancestor', BACKROOM_ARTIFACT_SCOPE, true],
+        ['preview_copy_court_triage', 'without recording', BACKROOM_ARTIFACT_SCOPE, true],
+        ['get_screening_review_lineage', 'never a verdict', BACKROOM_ARTIFACT_SCOPE, true],
+        ['apply_copy_court_settings', 'complete', BACKROOM_WRITE_SCOPE, false],
+        ['expand_benchmark_rollout_cohort', 'exact next ranked suffix', BACKROOM_WRITE_SCOPE, false],
+        ['get_ath_review', 'ath_pending_review', undefined, true],
+        ['open_ath_review', 'manual investigation', BACKROOM_WRITE_SCOPE, false],
+        ['preview_screening_quarantine_batch', 'exact agent and artifact', undefined, true],
+      ] as const) {
+        const response = await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: name } })
+        expect(response.isError).not.toBe(true)
+        const help = readJsonResult(response) as { tool: string; guidance: string; summary: string }
+        expect(help.tool).toBe(name)
+        expect(help.guidance).toContain(fragment)
+        expect(help.guidance.length).toBeGreaterThan(help.summary.length)
+        const tool = catalog.tools.find(tool => tool.name === name)
+        expect(tool?.description).toBe(help.summary)
+        expect(tool?.annotations?.readOnlyHint).toBe(readOnly)
+        expect(TOOL_SCOPE_REQUIREMENTS.get(name)).toBe(scope)
+      }
+    } finally { await client.close(); await server.close() }
   })
 
   it('omits settings history by default and pages it newest-first on demand', async () => {
@@ -906,6 +1774,24 @@ describe('Backroom MCP tools', () => {
     })
     const control = {
       current: revision(3),
+      release_gate: {
+        version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+        archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
+        receipt_diagnostics: [{ report: {
+          schema_version: 3, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
+          observation: { submission_status: 'accepted', submission_observed_at: 90,
+            recovery_status: 'validating_claim_failed', recovery_observed_at: 100,
+            page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1,
+            last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] },
+            failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' },
+          },
+        }, received_at: '2026-10-09T02:00:00Z', stale: false }],
+        pending_kings: 7,
+        confirmed_kings: 0,
+        rows_limit: 25,
+        rows_has_more: false,
+        rows: [],
+      },
       // Deliberately unordered: the MCP contract, not upstream incidental
       // ordering, guarantees newest-first audit pages.
       // Revision 1 was backfilled after revisions 2 and 3. Timestamp order,
@@ -934,6 +1820,13 @@ describe('Backroom MCP tools', () => {
     })
     expect(readJsonResult(currentOnly)).toMatchObject({
       current: { revision: 3 },
+      release_gate: { version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false, pending_kings: 7, confirmed_kings: 0,
+        archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
+        receipt_diagnostics: [{ report: { schema_version: 3, observation: {
+          last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] },
+          failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' },
+        } } }],
+      },
       history: [],
       history_count: 3,
       history_limit: 0,
@@ -967,6 +1860,198 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('requires backroom:write up front for every tool annotated as a write', async () => {
+    // docs/mcp.md: a new write tool must be added to WRITE_TOOL_NAMES so the
+    // pre-flight scope check answers a read-only token with a 403 step-up
+    // challenge. Without it the call only fails in-band, and clients never
+    // learn to re-authorize for write.
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+    const { tools } = await client.listTools()
+    const writeTools = tools
+      .filter((tool) => tool.annotations?.readOnlyHint === false)
+      .map((tool) => tool.name)
+
+    expect(writeTools.length).toBeGreaterThan(0)
+    expect(
+      writeTools.filter(
+        (name) => TOOL_SCOPE_REQUIREMENTS.get(name) !== BACKROOM_WRITE_SCOPE,
+      ),
+    ).toEqual([])
+
+    await client.close()
+    await server.close()
+  })
+
+  it('publishes only portable input schemas so a freshly connected client imports every tool (#2559)', async () => {
+    // A connector that cannot parse one tool's input schema drops that tool
+    // from its imported catalog without failing the rest. The two V13 scorer
+    // cohort writers were the only tools using z.tuple, whose draft-07
+    // array-form `items` kept them out of refreshed Codex catalogs even
+    // after the four fixture tools appeared (#2490, #2559).
+    const fresh = await connect([BACKROOM_READ_SCOPE])
+    const full = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const { tools } = await fresh.client.listTools()
+      const names = tools.map((tool) => tool.name)
+      // The catalog does not depend on scope; calls are gated, discovery is not.
+      expect((await full.client.listTools()).tools.map((tool) => tool.name)).toEqual(names)
+      expect(names).toEqual(expect.arrayContaining([
+        'get_canonical_starter_fixture_preflight',
+        'register_canonical_starter_fixture',
+        'review_canonical_starter_fixture',
+        'schedule_canonical_starter_fixture',
+        'activate_v13_scorer_cohort',
+        'rotate_v13_scorer_cohort',
+      ]))
+
+      const unportable: Array<string> = []
+      const visit = (node: unknown, path: string) => {
+        if (Array.isArray(node)) {
+          node.forEach((item, index) => visit(item, `${path}[${index}]`))
+          return
+        }
+        if (!node || typeof node !== 'object') return
+        for (const [key, value] of Object.entries(node)) {
+          if ((key === 'items' && Array.isArray(value)) || key === 'prefixItems' || key === 'additionalItems') {
+            unportable.push(`${path}/${key}`)
+          }
+          visit(value, `${path}/${key}`)
+        }
+      }
+      for (const tool of tools) visit(tool.inputSchema, tool.name)
+      expect(unportable).toEqual([])
+
+      // An intersection publishes as `{}`: clients then cannot send the
+      // arguments the tool validates, so every write must publish properties.
+      // The two presigned-upload writes are the only ones that take no arguments.
+      const opaque = tools
+        .filter((tool) => tool.annotations?.readOnlyHint === false)
+        .filter((tool) => tool.name !== 'create_ath_rulings_upload')
+        .filter((tool) => tool.name !== 'create_default_generator_upload')
+        .filter((tool) => Object.keys(tool.inputSchema?.properties ?? {}).length === 0)
+        .map((tool) => tool.name)
+      expect(opaque).toEqual([])
+      const quarantineExecute = tools.find(
+        (tool) => tool.name === 'execute_screening_quarantine_batch',
+      )?.inputSchema as { properties: Record<string, unknown>; required?: Array<string> }
+      expect(Object.keys(quarantineExecute.properties).sort()).toEqual([
+        'confirmed',
+        'decisions',
+        'previewToken',
+      ])
+      expect(quarantineExecute.required?.sort()).toEqual(['confirmed', 'decisions', 'previewToken'])
+
+      for (const name of ['activate_v13_scorer_cohort', 'rotate_v13_scorer_cohort']) {
+        const schema = tools.find((tool) => tool.name === name)?.inputSchema as {
+          properties: Record<string, unknown>
+        }
+        expect(schema.properties.hotkeys).toEqual({
+          type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 16,
+        })
+      }
+      const rotateSchema = tools.find((tool) => tool.name === 'rotate_v13_scorer_cohort')
+        ?.inputSchema as { properties: Record<string, unknown>; required?: Array<string> }
+      expect(rotateSchema.properties.expectedCurrentHotkeys).toEqual({
+        type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 16,
+      })
+      expect(rotateSchema.required).not.toContain('expectedCurrentHotkeys')
+    } finally {
+      await fresh.client.close()
+      await fresh.server.close()
+      await full.client.close()
+      await full.server.close()
+    }
+  })
+
+  it('keeps the V13 scorer cohort writers write-scoped and forwards three to sixteen hotkeys', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const packet = {
+      source_revision: 'b'.repeat(40),
+      release_descriptor_digest: `sha256:${'d'.repeat(64)}`,
+      scorer_image_digest: `sha256:${'e'.repeat(64)}`,
+      scorer_env_sha256: 'f'.repeat(64),
+      injected_keys: ['OPENROUTER_API_KEY'],
+    }
+    const hotkeys = ['5Alpha', '5Bravo', '5Charlie']
+    const rotate = {
+      hotkeys, packet, expectedCurrentPacket: { ...packet, source_revision: 'a'.repeat(40) },
+      expectedCurrentRotationId: 3, expectedSlotSettingsRevision: 15,
+      expectedSlotSettingsChecksum: 'c'.repeat(64), reason: 'Rotate to the unanimous signed packet',
+      confirmation: 'ROTATE V13 SCORER PACKET',
+    }
+    const activate = {
+      hotkeys, packet, expectedSlotSettingsRevision: 15,
+      expectedSlotSettingsChecksum: 'c'.repeat(64), reason: 'Pin the managed scorer cohort',
+      confirmation: 'PIN V13 SCORER COHORT',
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json({ rotation_id: 4 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(TOOL_SCOPE_REQUIREMENTS.get('activate_v13_scorer_cohort')).toBe(BACKROOM_WRITE_SCOPE)
+    expect(TOOL_SCOPE_REQUIREMENTS.get('rotate_v13_scorer_cohort')).toBe(BACKROOM_WRITE_SCOPE)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      for (const [name, args] of [
+        ['activate_v13_scorer_cohort', activate],
+        ['rotate_v13_scorer_cohort', rotate],
+      ] as const) {
+        const response = await readOnly.client.callTool({ name, arguments: args })
+        expect(response.isError).toBe(true)
+        expect(readTextResult(response)).toContain('read-only')
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await readOnly.client.close()
+      await readOnly.server.close()
+    }
+
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const seventeen = Array.from({ length: 17 }, (_, index) => `5Member${index}`)
+      for (const members of [hotkeys.slice(0, 2), seventeen]) {
+        const response = await writer.client.callTool({
+          name: 'rotate_v13_scorer_cohort',
+          arguments: { ...rotate, hotkeys: members },
+        })
+        expect(response.isError).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // Adding a fourth member binds the change to the current membership.
+      const widened = await writer.client.callTool({
+        name: 'rotate_v13_scorer_cohort',
+        arguments: {
+          ...rotate, hotkeys: [...hotkeys, '5Delta'], packet: rotate.expectedCurrentPacket,
+          expectedCurrentHotkeys: hotkeys,
+        },
+      })
+      expect(widened.isError).not.toBe(true)
+      expect(fetchMock).toHaveBeenCalledOnce()
+      expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)))
+        .toMatchObject({ hotkeys: [...hotkeys, '5Delta'], expected_current_hotkeys: hotkeys })
+      fetchMock.mockClear()
+
+      const response = await writer.client.callTool({ name: 'rotate_v13_scorer_cohort', arguments: rotate })
+      expect(response.isError).not.toBe(true)
+      expect(fetchMock).toHaveBeenCalledOnce()
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/admin/v13-scorer-cohort/rotate')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        hotkeys, packet, expected_current_rotation_id: 3, expected_current_hotkeys: null,
+        actor: session.email,
+      })
+      expect(readTextResult(response)).not.toContain('platform-admin-token')
+    } finally {
+      await writer.client.close()
+      await writer.server.close()
+    }
+  })
+
   it('publishes bounded pagination inputs for every MCP collection page', async () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     const response = await client.listTools()
@@ -981,9 +2066,11 @@ describe('Backroom MCP tools', () => {
     > = {
       get_screening_review_queue: { maxLimit: 200, maxDefault: 50 },
       list_screening_quarantines: { maxLimit: 200, maxDefault: 50 },
+      list_screening_review_events: { maxLimit: 20, maxDefault: 10 },
       list_screening_disputes: { maxLimit: 200, maxDefault: 50 },
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
+      search_submissions: { maxLimit: 200, maxDefault: 20 },
       search_screening_source: { maxLimit: 200, maxDefault: 50 },
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
@@ -991,6 +2078,7 @@ describe('Backroom MCP tools', () => {
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
       get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
       list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
+      get_screener_fanout_shadow: { maxLimit: 100, maxDefault: 50 },
     }
 
     for (const [name, bounds] of Object.entries(paginatedTools)) {
@@ -1038,6 +2126,7 @@ describe('Backroom MCP tools', () => {
       'get_queue_policy_settings',
       'get_validator_slot_settings',
       'get_inference_concurrency_settings',
+      'get_scoring_lease_settings',
     ]
 
     for (const name of settingsReads) {
@@ -1069,6 +2158,20 @@ describe('Backroom MCP tools', () => {
         })
       }
     }
+    // Search is for finding a named row, so it defaults to the narrow
+    // identity projection and to every generation.
+    const search = response.tools.find((candidate) => candidate.name === 'search_submissions')
+    const searchProperties = search?.inputSchema?.properties as
+      | Record<string, { default?: unknown; enum?: Array<string> }>
+      | undefined
+    expect(searchProperties?.detail).toMatchObject({
+      default: 'identity',
+      enum: ['identity', 'summary', 'full'],
+    })
+    expect(searchProperties?.generation).toMatchObject({
+      default: 'all',
+      enum: ['active', 'all'],
+    })
 
     await client.close()
     await server.close()
@@ -1125,7 +2228,9 @@ describe('Backroom MCP tools', () => {
       quarantineId: '11111111-1111-4111-8111-111111111111',
       expectedAgentId: '22222222-2222-4222-8222-222222222222',
       expectedArtifactSha256: 'ab'.repeat(32),
-      resolution: 'rescreen',
+      resolution: 'release',
+      expectedAttemptId: '33333333-3333-4333-8333-333333333333',
+      expectedScoreCount: 1,
       reason: 'Run the preserved artifact against the current policy',
     }
     const previewPayload = {
@@ -1159,6 +2264,10 @@ describe('Backroom MCP tools', () => {
     expect(preview.isError).not.toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
     expect(fetchMock.mock.calls[0]?.[0]).toContain('/batch-preview')
+    expect(JSON.parse(fetchMock.mock.calls[0]?.[1].body).decisions[0]).toMatchObject({
+      resolution: 'release', expected_attempt_id: decision.expectedAttemptId,
+      expected_score_count: 1,
+    })
 
     const execute = await client.callTool({
       name: 'execute_screening_quarantine_batch',
@@ -1347,6 +2456,7 @@ describe('Backroom MCP tools', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -1886,6 +2996,17 @@ describe('Backroom MCP tools', () => {
         known_instances: ['ditto-screener-prod'],
         applied_instances: [],
         shadow_observations: [],
+        policy_manifests: [{
+          revision: 106,
+          scope: 'subnet-screener-1',
+          policy_version: 13,
+          profile: 'l1_l2',
+          rotation_id: 'policy-v11-global-topdown',
+          digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+          reason: 'Preserve the existing policy manifest contract.',
+          actor: 'operator@example.com',
+          created_at: '2026-09-14T02:51:58.121154Z',
+        }],
       }),
     )
     vi.stubGlobal('fetch', fetchMock)
@@ -1898,9 +3019,157 @@ describe('Backroom MCP tools', () => {
     expect(readJsonResult(response)).toMatchObject({
       known_instances: ['ditto-screener-prod'],
       applied_instances: [],
+      policy_manifests: [{
+        revision: 106,
+        profile: 'l1_l2',
+        rotation_id: 'policy-v11-global-topdown',
+      }],
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-review-settings',
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads bounded fan-out shadow comparisons through a read-only grant', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        metrics: {
+          total: 1, queued: 0, running: 0, succeeded: 1, incomplete: 0,
+          skipped: 0, compared: 1, disagreements: 1, incomplete_coverage: 0,
+          rolling_24h_reserved_cost_usd: 3,
+          rolling_24h_reported_cost_usd: 0.12,
+          rolling_24h_unmetered: 0,
+        },
+        items: [{
+          shadow_id: '00000000-0000-4000-8000-000000000001',
+          agent_id: '00000000-0000-4000-8000-000000000002',
+          attempt_id: '00000000-0000-4000-8000-000000000003',
+          artifact_sha256: 'a'.repeat(64),
+          policy_version: 9,
+          policy_manifest_profile: 'l1',
+          policy_manifest_rotation_id: 'pilot',
+          policy_manifest_digest: 'c'.repeat(64),
+          settings_revision: 4, settings_scope: '*',
+          settings_checksum: 'b'.repeat(64), status: 'succeeded',
+          outcome: 'candidate', baseline: { outcome: 'clear' },
+          report: { coverage_complete: true, usage: { reported_cost_usd: 0.12 } },
+          disagrees_with_baseline: true, coverage_complete: true,
+          error_code: null, provider: 'targon', reserved_cost_usd: 3,
+          reported_cost_usd: 0.12, unmetered: false,
+          reserved_at: '2026-09-14T12:00:00Z',
+          created_at: '2026-09-14T12:00:00Z',
+          started_at: '2026-09-14T12:00:01Z',
+          completed_at: '2026-09-14T12:01:00Z',
+        }],
+        count: 1, returned: 1, limit: 25, offset: 0, has_more: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screener_fanout_shadow',
+      arguments: { status: 'succeeded', limit: 25 },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      metrics: { disagreements: 1, rolling_24h_reserved_cost_usd: 3 },
+      items: [{ outcome: 'candidate', disagrees_with_baseline: true }],
+      count: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-fanout-shadow?status=succeeded&limit=25&offset=0',
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it.each(['both', 'elapsed', 'completed', 'neither'] as const)('retains admission diagnostics with %s timestamps in the read tool', async (timestamps) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const diagnostics = {
+      scope: 'process', in_flight: true, attempts: 9, busy_skips: 15,
+      last_outcome: 'idle',
+      ...(timestamps === 'both' || timestamps === 'elapsed' ? { last_elapsed_ms: 1740 } : {}),
+      ...(timestamps === 'both' || timestamps === 'completed' ? { last_completed_at: '2026-10-09T03:00:00Z' } : {}),
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
+      daily_budget_microusd: 180000000, reserved_last_day_microusd: 0,
+      proposed_submission_fee_rao: 200000000, current_submission_fee_rao: 40000000,
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+      items: [], admission_diagnostics: diagnostics,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_conversation_assessments', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({ admission_diagnostics: diagnostics })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments?limit=50',
+        expect.any(Object),
+      )
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads private conversation evidence through a read-only tool', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const assessmentId = '11111111-1111-4111-8111-111111111111'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      assessment_id: assessmentId,
+      agent_id: '22222222-2222-4222-8222-222222222222',
+      instrument: 'conversational-continuity-v1',
+      model: 'gpt-6-astra',
+      status: 'incomplete',
+      error_code: 'judge_cost_limit',
+      exchanges: [],
+      grades: null,
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_conversation_assessments',
+      arguments: { assessment_id: assessmentId },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      status: 'incomplete', error_code: 'judge_cost_limit', grades: null,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/conversation-assessments/${assessmentId}/report`,
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads database recovery metadata without exposing contents or secrets', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      observed_at: '2026-10-04T12:00:00Z', bucket: 'ditto-platform-pg-backups',
+      backup_status: 'missing', daily: [], monthly: [],
+      hours_since_last_success: null, manifest: null,
+      snapshot_status: 'unavailable', newest_snapshot: null,
+      secret_access_key: 'must-be-stripped',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'get_database_backup_status', arguments: {} })
+    expect(response.isError).not.toBe(true)
+    const result = readJsonResult(response)
+    expect(result).toMatchObject({ backup_status: 'missing', snapshot_status: 'unavailable' })
+    expect(JSON.stringify(result)).not.toContain('must-be-stripped')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/database-backup-status',
       expect.any(Object),
     )
     await client.close()
@@ -1937,6 +3206,248 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/screener-capacity',
       expect.any(Object),
     )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads screening infrastructure retry state read-only and bounded', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const payload = {
+      generated_at: '2026-09-21T12:00:00Z',
+      basis: 'Derived from screening attempt history at read time; nothing is stored.',
+      policy: {
+        auto_retry_reason_codes: ['docker-build-infrastructure'],
+        base_backoff_seconds: 600, max_backoff_seconds: 3600, jitter_fraction: 0.2,
+        auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8, plan_max_claimable: 500,
+        breaker_distinct_agents: 3, breaker_window_seconds: 300, breaker_open_seconds: 600,
+        breaker_probe_interval_seconds: 300, breaker_history_lookback_seconds: 172800,
+      },
+      summary: {
+        parked_agents: 1,
+        by_state: { backoff: 0, breaker_held: 0, probe_due: 0, due: 0, capped: 1 },
+        not_admitted: 0, aged_out_agents: 2, open_breakers: 0, half_open_breakers: 0,
+        breakers_total: 1,
+      },
+      agents: [{
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        attempt_id: '22222222-2222-4222-8222-222222222222',
+        reason_code: 'docker-build-infrastructure', provider: 'gcp', lane: 'buildkit',
+        consecutive_failures: 8, failed_at: '2026-09-21T11:00:00Z',
+        backoff_until: '2026-09-21T12:00:00Z', next_retry_at: '2026-09-21T12:00:00Z',
+        state: 'capped', breaker_phase: 'closed', admitted: true, claim_outlook: 'needs_operator',
+      }],
+      agents_limit: 200, agents_truncated: false,
+      breakers: [{
+        reason_code: 'docker-build-infrastructure', provider: 'gcp', lane: 'buildkit',
+        phase: 'closed', opened_at: null, open_until: null, last_probe_at: null,
+        next_probe_at: null, parked_agents: 1,
+      }],
+      breakers_limit: 50, breakers_truncated: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const listed = (await client.listTools()).tools.find(
+        (tool) => tool.name === 'get_screening_infra_retries',
+      )
+      expect(listed?.annotations?.readOnlyHint).toBe(true)
+      expect(listed?.description).toContain('Derived at read time')
+      const response = await client.callTool({ name: 'get_screening_infra_retries', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        summary: { by_state: { capped: 1 }, aged_out_agents: 2 },
+        agents: [{ state: 'capped', claim_outlook: 'needs_operator', consecutive_failures: 8 }],
+        policy: { auto_retry_max_streak: 8 },
+      })
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/screening-infra-retries',
+        expect.any(Object),
+      )
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'get_screening_infra_retries' },
+        }),
+      ) as { guidance: string }
+      expect(help.guidance).toContain('wait for an operator retry')
+      expect(help.guidance).toContain('per signature')
+      expect(help.guidance).toContain('earliest next_retry_at first')
+      expect(help.guidance).not.toContain('longest')
+      expect(help.guidance).toContain('half_open')
+      expect(help.guidance).toContain('a worker on another provider can still claim those agents by backoff alone')
+      expect(help.guidance).toContain('holds every worker')
+      expect(help.guidance).toContain('aged_out_agents')
+      expect(help.guidance).toContain('source-review-adjudicator-key-unavailable')
+      expect(help.guidance).toContain('screening-lane signature')
+      // half_open still holds all but one probe per signature per interval.
+      expect(help.guidance).not.toContain('nothing is held')
+      expect(help.guidance).toContain('its other agents stay held')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('documents last_provider_success_at as the last GCE fleet read in the capacity tool help', async () => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_backroom_tool_help',
+      arguments: { tool: 'get_screener_capacity' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const payload = readJsonResult(response) as { tool: string; guidance: string }
+    expect(payload.tool).toBe('get_screener_capacity')
+    // The field only proves a GCE fleet read succeeded; operators must not read it
+    // as another provider's health, and it can advance while routing is down.
+    expect(payload.guidance).toContain('last_provider_success_at is the last successful GCE fleet read')
+    expect(payload.guidance).toContain('not a health signal for any other provider')
+    expect(payload.guidance).toContain('can advance while provider routing is unavailable')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('schedules a report canary pinned to an isolated review posture', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const canaryId = '33333333-3333-4333-8333-333333333333'
+    const requestId = '44444444-4444-4444-8444-444444444444'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const view = {
+      canary_id: canaryId,
+      request_id: requestId,
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      artifact_sha256: 'a'.repeat(64),
+      target_node_id: 'subnet-screener-1',
+      expected_agent_status: 'rejected',
+      expected_score_count: 0,
+      review_label: 'known_reject',
+      run_mode: 'source_only',
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      review_settings_checksum: 'c'.repeat(64),
+      settings_revision: null,
+      settings_checksum: null,
+      status: 'queued',
+      claimed_instance_id: null,
+      lease_expires_at: null,
+      report: null,
+      error_code: null,
+      created_at: '2026-09-29T00:00:00Z',
+      completed_at: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'schedule_l2_report_canary',
+        arguments: {
+          requestId,
+          agentId,
+          sourceAttemptId,
+          artifactSha256: 'a'.repeat(64),
+          expectedAgentStatus: 'rejected',
+          expectedScoreCount: 0,
+          targetNodeId: 'subnet-screener-1',
+          reviewLabel: 'known_reject',
+          reviewSettingsRevision: 141,
+          confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+        },
+      })
+      expect(response.isError).not.toBe(true)
+      // The pin survives Backroom's response parsing for later diagnosis.
+      expect(readJsonResult(response)).toMatchObject({
+        review_settings_revision: 141,
+        review_settings_scope: 'l2-report-canary-ctl137',
+        review_settings_checksum: 'c'.repeat(64),
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned')
+      expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        request_id: requestId,
+        review_settings_revision: 141,
+        confirm_report_only: true,
+      })
+
+      const help = readJsonResult(
+        await client.callTool({
+          name: 'get_backroom_tool_help',
+          arguments: { tool: 'schedule_l2_report_canary' },
+        }),
+      ) as { summary: string; guidance: string }
+      expect(help.summary).toContain('reviewSettingsRevision')
+      expect(help.guidance).toContain('l2-report-canary-<name>')
+      expect(help.guidance).toContain('Never write a node or worker scope for an experiment')
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('applies the conversation switch with the authenticated operator identity', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
+      settings_revision: 1, settings_actor: session.email, settings_reason: 'Start the shadow canary',
+      settings_updated_at: '2026-09-18T12:00:00Z', daily_budget_microusd: 150000000,
+      reserved_last_day_microusd: 0, proposed_submission_fee_rao: 200000000,
+      current_submission_fee_rao: 40000000, items: [],
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({name: 'set_conversation_settings', arguments: {
+      mode: 'shadow', expected_revision: 0, reason: 'Start the shadow canary',
+      confirmation: 'APPLY CONVERSATION SHADOW SETTINGS', actor: 'spoofed@example.com',
+    }})
+    expect(response.isError).not.toBe(true)
+    const options = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(JSON.parse(String(options.body))).toMatchObject({ actor: session.email, mode: 'shadow', expected_revision: 0 })
+    expect(readJsonResult(response)).toMatchObject({ settings_revision: 1, mode: 'shadow' })
+    await client.close()
+    await server.close()
+  })
+
+  it('queues one conversation retry with the authenticated actor and preserves its audit', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const assessmentId = '11111111-1111-4111-8111-111111111111'
+    const authorization = { actor: session.email, reason: 'One approved relay fix retry', report_sha256: 'b'.repeat(64),
+      authorized_at: '2026-09-18T22:00:00Z', expires_at: '2026-09-20T22:00:00Z' }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({
+      mode: 'shadow', instrument: 'conversational-continuity-v1', judge_model: 'gpt-6-astra',
+      settings_revision: 3, daily_budget_microusd: 150000000, reserved_last_day_microusd: 150000000,
+      next_budget_slot_at: '2026-09-19T18:24:00Z', proposed_submission_fee_rao: 200000000,
+      current_submission_fee_rao: 100000000,
+      items: [{ assessment_id: assessmentId, agent_id: assessmentId, artifact_sha256: 'a'.repeat(64),
+        bench_version: 12, status: 'incomplete', created_at: '2026-09-18T18:24:00Z', expires_at: '2026-09-18T19:29:00Z',
+        base_quality_micros: 900000, conversation_micros: null, proposed_quality_micros: null,
+        reserved_microusd: 30000000, spent_microusd: null, error_code: 'harness_inference_incomplete',
+        report_sha256: 'b'.repeat(64), retry_of: null, retry_assessment_id: null, retry_authorization: authorization }],
+      fee_change_request: { expected_revision: 0, cooldown_seconds: 3600, fee_amount_rao: 200000000,
+        reason: 'Fund conversation assessment', actor: 'conversation-rollout', confirmation: 'example' },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const args = { expected_revision: 3, assessment_id: assessmentId, expected_artifact_sha256: 'a'.repeat(64),
+      expected_report_sha256: 'b'.repeat(64), reason: authorization.reason, confirmation: 'AUTHORIZE ONE CONVERSATION RETRY', actor: 'spoofed@example.com' }
+    const readonly = await connect([BACKROOM_READ_SCOPE])
+    expect((await readonly.client.callTool({ name: 'authorize_conversation_retry', arguments: args })).isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await readonly.client.close()
+    await readonly.server.close()
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({ name: 'authorize_conversation_retry', arguments: args })
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock.mock.calls[0]?.[0]).toContain('/conversation-assessments/authorize-retry')
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({ ...args, actor: session.email })
+    expect(readJsonResult(response)).toMatchObject({ next_budget_slot_at: '2026-09-19T18:24:00Z',
+      current_submission_fee_rao: 100000000, items: [{ retry_authorization: authorization, retry_assessment_id: null }] })
     await client.close()
     await server.close()
   })
@@ -2020,11 +3531,12 @@ describe('Backroom MCP tools', () => {
       build_concurrency: 1,
       runtime_concurrency: 1,
       source_review_concurrency: 1,
+      canary_concurrency: 0,
     }
     const reason = 'Start the approved one-slot Hetzner production canary'
     const confirmation =
       'APPLY SCREENER NODE subnet-screener-1 ' +
-      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1'
+      'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=0'
     const control = {
       current: {
         environment: 'prod',
@@ -2043,6 +3555,7 @@ describe('Backroom MCP tools', () => {
         build_active: 0,
         runtime_active: 0,
         source_review_active: 0,
+        canary_active: 0,
       },
     }
     const fetchMock = vi
@@ -2114,6 +3627,132 @@ describe('Backroom MCP tools', () => {
 
     expect(response.isError).toBe(true)
     expect(fetchMock).not.toHaveBeenCalled()
+    await client.close()
+    await server.close()
+  })
+
+  it('sets only the exact independent node replay cap with operator audit', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const hotkey = '5IndependentReplayHotkey'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({
+        snapshot: null, nodes: [], events: [], event_retention_days: null,
+        builds: [], provider_jobs: [], node_controls: [],
+      }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const response = await client.callTool({
+      name: 'set_screener_node_replay_capacity',
+      arguments: {
+        nodeId: 'subnet-screener-2', expectedHotkey: hotkey,
+        expectedStatus: 'active', expectedCapacity: 0, capacity: 1,
+        reason: 'Start one independent report-only replay canary',
+        confirmation: `SET SCREENER NODE subnet-screener-2 HOTKEY=${hotkey} REPLAY_CAPACITY=1`,
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-nodes/subnet-screener-2/verification-replay-capacity')
+    expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      expected_hotkey: hotkey, expected_status: 'active', expected_capacity: 0,
+      capacity: 1, reason: 'Start one independent report-only replay canary',
+    })
+    await client.close()
+    await server.close()
+  })
+
+  it('reads exact signed-worker readiness and keeps process-key writes scoped', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key = 'a'.repeat(64)
+    const readiness = {
+      node_id: 'subnet-screener-2', node_status: 'active', provider: 'hetzner',
+      provider_resource_id: 'host-2', screener_hotkey: '5Independent',
+      replay_capacity: 0, instance_id: 'subnet-screener-2-worker-1',
+      active_key_sha256: key, active_key_revision: 1,
+      key_registered_at: '2026-09-23T00:00:00Z', heartbeat_seen_at: null,
+      heartbeat_key_sha256: null, heartbeat_policy_version: null,
+      heartbeat_release: null, minimum_runner_release: null,
+      signed_heartbeat_fresh: false, release_qualified: false,
+      ready_for_capacity_one: false, missing: ['signed_worker_heartbeat_current'],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(readiness))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const read = await client.callTool({ name: 'get_screener_replay_process_readiness' })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ ready_for_capacity_one: false, active_key_sha256: key })
+    const args = {
+      expectedHotkey: '5Independent', publicKeyHex: 'b'.repeat(64),
+      reason: 'Register one isolated canary process',
+      confirmation: `REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/${key}`,
+    }
+    for (const [name, input] of [
+      ['register_screener_replay_process_key', args],
+      ['revoke_screener_replay_process_key', {
+        expectedHotkey: '5Independent', expectedKeySha256: key,
+        reason: 'Emergency revoke isolated process',
+        confirmation: `REVOKE V13 REPLAY PROCESS subnet-screener-2/${key}`,
+      }],
+    ] as const) {
+      const denied = await client.callTool({ name, arguments: input })
+      expect(denied.isError).toBe(true)
+      expect(readTextResult(denied)).toContain('read-only')
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await client.close()
+    await server.close()
+  })
+
+  it('forwards guarded process-key registration and revocation with the operator identity', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key = '4ca14526b2751b640d549ce7caf8ac39438592211a0ec370064d57666a682ad6'
+    const readiness = {
+      node_id: 'subnet-screener-2', node_status: 'active', provider: 'hetzner',
+      provider_resource_id: 'host-2', screener_hotkey: '5Independent',
+      replay_capacity: 0, instance_id: 'subnet-screener-2-worker-1',
+      active_key_sha256: key, active_key_revision: 1,
+      key_registered_at: '2026-09-23T00:00:00Z', heartbeat_seen_at: null,
+      heartbeat_key_sha256: null, heartbeat_policy_version: null,
+      heartbeat_release: null, minimum_runner_release: null,
+      signed_heartbeat_fresh: false, release_qualified: false,
+      ready_for_capacity_one: false, missing: ['signed_worker_heartbeat_current'],
+    }
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(readiness))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json({ ...readiness, active_key_sha256: null, active_key_revision: null, key_registered_at: null }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const register = await client.callTool({
+      name: 'register_screener_replay_process_key', arguments: {
+        expectedHotkey: '5Independent', publicKeyHex: 'b'.repeat(64),
+        reason: 'Register one isolated canary process',
+        confirmation: `REGISTER V13 REPLAY PROCESS subnet-screener-2/subnet-screener-2-worker-1/${key}`,
+      },
+    })
+    expect(register.isError).not.toBe(true)
+    const [registerUrl, registerInit] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(registerUrl).toBe('https://platform-api.heyditto.ai/api/v1/admin/screening-verification-replays/process-keys/subnet-screener-2')
+    expect(registerInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(registerInit.body))).toMatchObject({
+      expected_hotkey: '5Independent', instance_id: 'subnet-screener-2-worker-1',
+      public_key_hex: 'b'.repeat(64),
+    })
+    const revoke = await client.callTool({
+      name: 'revoke_screener_replay_process_key', arguments: {
+        expectedHotkey: '5Independent', expectedKeySha256: key,
+        reason: 'Emergency revoke isolated process',
+        confirmation: `REVOKE V13 REPLAY PROCESS subnet-screener-2/${key}`,
+      },
+    })
+    expect(revoke.isError).not.toBe(true)
+    const [revokeUrl, revokeInit] = fetchMock.mock.calls[2] as [string, RequestInit]
+    expect(revokeUrl).toBe(`${registerUrl}/revoke`)
+    expect(revokeInit.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(revokeInit.body))).toMatchObject({ expected_key_sha256: key })
     await client.close()
     await server.close()
   })
@@ -2276,6 +3915,275 @@ describe('Backroom MCP tools', () => {
           confirmation: 'APPLY BURN SETTINGS',
         }),
       }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the track split and tolerates an older Platform that omits new fields', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const control = {
+      current: [],
+      history: [],
+      default: { track_shares_bps: null },
+      effective: {
+        revision: 0,
+        scope: '*',
+        settings: { track_shares_bps: null },
+        checksum: '',
+        source: 'default',
+        max_age_seconds: 5,
+        in_force_bps: { memory: 10000 },
+        unallocated_bps: 0,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_track_share_settings', arguments: {} })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: {
+        settings: { track_shares_bps: null },
+        in_force_bps: { memory: 10000 },
+        served: null,
+        required_protocol: 33,
+        generator_mode: null,
+      },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies the generator activation split with the exact split phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const split = { memory: 9000, generator: 1000 }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          revision: 1,
+          parent_revision: 0,
+          scope: '*',
+          settings: { track_shares_bps: split },
+          reason: 'pay the generator competition 10%',
+          actor: 'peyton@omniaura.ai',
+          created_at: '2026-10-25T12:00:00Z',
+          checksum: 'ab'.repeat(32),
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          current: [],
+          history: [],
+          default: { track_shares_bps: null },
+          effective: {
+            revision: 1,
+            scope: '*',
+            settings: { track_shares_bps: split },
+            checksum: 'ab'.repeat(32),
+            source: 'revision',
+            max_age_seconds: 5,
+            in_force_bps: split,
+            unallocated_bps: 0,
+            served: true,
+            required_protocol: 33,
+            live_validator_count: 4,
+            generator_mode: 'enforce',
+            confirmation_hint: 'APPLY TRACK SHARES memory=9000 generator=1000',
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const refused = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: split },
+        reason: 'pay the generator competition 10%',
+        confirmation: 'APPLY TRACK SHARES',
+      },
+    })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    const unpaid = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: { memory: 9000, router: 1000 } },
+        reason: 'pay the router track 10%',
+        confirmation: 'APPLY TRACK SHARES memory=9000 router=1000',
+      },
+    })
+    expect(unpaid.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const response = await client.callTool({
+      name: 'set_track_share_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings: { track_shares_bps: split },
+        reason: 'pay the generator competition 10%',
+        confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      effective: { revision: 1, in_force_bps: split, served: true },
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: { track_shares_bps: split },
+          reason: 'pay the generator competition 10%',
+          actor: 'peyton@omniaura.ai',
+          confirmation: 'APPLY TRACK SHARES memory=9000 generator=1000',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('applies one emission allocation with the exact split phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const entries = [
+      { kind: 'burn', bps: 5000 },
+      { kind: 'track', id: 'memory', bps: 3500 },
+      { kind: 'track', id: 'generator', bps: 1500 },
+    ]
+    const served = { burn_share: 0.5, track_shares_bps: { memory: 7000, generator: 3000 }, gamma_bps: {} }
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      allocation: { entries },
+      served,
+      burn_settings_revision: 18,
+      track_share_settings_revision: 1,
+      treasury_settings_revision: 0,
+      checksum: 'ab'.repeat(32),
+      reason: 'adopt the live split as one allocation',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-10-26T12:00:00Z',
+    }
+    const view = {
+      burn_share: 0.5,
+      track_shares_bps: { memory: 7000, generator: 3000 },
+      gamma_bps: {},
+      split: [
+        { kind: 'burn', bps: 5000, percent: 50 },
+        { kind: 'track', id: 'memory', bps: 3500, percent: 35 },
+        { kind: 'track', id: 'generator', bps: 1500, percent: 15 },
+      ],
+    }
+    const control = {
+      revision: 1,
+      source: 'allocation',
+      current: revision,
+      history: [revision],
+      confirmation_hint: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      configured: view,
+      track_shares_served: true,
+      in_force: view,
+      pinned: null,
+      in_sync: true,
+      gamma_mode: null,
+      gamma_buckets: [],
+      gamma_ranges: null,
+      legacy_equivalent: null,
+      rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07],
+      max_age_seconds: 5,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(revision))
+      .mockResolvedValueOnce(Response.json(control))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const wrongPhrase = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries,
+        reason: 'adopt the live split as one allocation',
+        confirmation: 'APPLY EMISSION ALLOCATION memory=3500 generator=1500 burn=5000',
+      },
+    })
+    expect(wrongPhrase.isError).toBe(true)
+    const shortSum = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries: entries.slice(0, 2),
+        reason: 'adopt the live split as one allocation',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500',
+      },
+    })
+    expect(shortSum.isError).toBe(true)
+    const unpaid = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries: [...entries.slice(0, 2), { kind: 'track', id: 'generator', bps: 500 }, { kind: 'track', id: 'router', bps: 1000 }],
+        reason: 'pay the router track',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 router=1000 generator=500',
+      },
+    })
+    expect(unpaid.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const response = await client.callTool({
+      name: 'set_emission_allocation',
+      arguments: {
+        expectedRevision: 0,
+        entries: [entries[2], entries[0], entries[1]],
+        reason: 'adopt the live split as one allocation',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({ revision: 1, in_sync: true })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/emission-allocation',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          expected_revision: 0,
+          settings: { entries: [entries[2], entries[0], entries[1]] },
+          reason: 'adopt the live split as one allocation',
+          actor: 'peyton@omniaura.ai',
+          confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+        }),
+      }),
+    )
+
+    const read = await client.callTool({ name: 'get_emission_allocation', arguments: { historyLimit: 1 } })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({
+      source: 'allocation',
+      configured: { split: [{ kind: 'burn', percent: 50 }, { id: 'memory', percent: 35 }, { id: 'generator', percent: 15 }] },
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/emission-allocation',
+      expect.objectContaining({ method: 'GET' }),
     )
 
     await client.close()
@@ -2552,6 +4460,7 @@ describe('Backroom MCP tools', () => {
       owner_concurrent_submission_limit: 2,
       deferred_source_review: {
         mode: 'off',
+        integrity_double_check_mode: 'off',
         min_cohort_size: 8,
         composite_mad_multiplier: 6,
         axis_mad_multiplier: 6,
@@ -2573,6 +4482,7 @@ describe('Backroom MCP tools', () => {
         require_cohort_complete: true,
         require_desired_era_drained: true,
       },
+      lineage_reference_mode: 'same_owner_version',
     }
     const control = {
       current: [],
@@ -2656,6 +4566,7 @@ describe('Backroom MCP tools', () => {
           owner_concurrent_submission_limit: 2,
           deferred_source_review: {
             mode: 'off',
+            integrity_double_check_mode: 'off',
             min_cohort_size: 8,
             composite_mad_multiplier: 6,
             axis_mad_multiplier: 6,
@@ -2677,6 +4588,7 @@ describe('Backroom MCP tools', () => {
             require_cohort_complete: true,
             require_desired_era_drained: true,
           },
+          lineage_reference_mode: 'same_owner_version',
         },
         reason: 'lengthen the lane cycle for the onboarding wave',
         confirmation: 'APPLY QUEUE POLICY SETTINGS',
@@ -2715,6 +4627,7 @@ describe('Backroom MCP tools', () => {
       relay_delay_fingerprint_mode: 'off' as const,
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
+      sandbox_memory_limit_mib: 6144,
     },
   }
 
@@ -2753,6 +4666,52 @@ describe('Backroom MCP tools', () => {
     const [url] = fetchMock.mock.calls[0] as [string]
     expect(url).toBe(
       'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings',
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads the dark decision lane switch, pin and ledger usage', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const window = {
+      window_seconds: 3600, requests: 0, completed: 0, failed: 0, canceled: 0,
+      input_tokens: 0, ledger_cost_microusd: 0, model_mismatches: 0,
+      provider_rejections: 0, provider_failures: 0, grants_with_lane: 0,
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        state: 'disabled',
+        settings_revision: 0,
+        settings_source: 'default',
+        settings: {
+          enabled: false, model: null, input_microusd_per_mtok: 42_000,
+          request_budget: 4096, token_budget: 25_000_000,
+          per_ticket_concurrency: 8, per_validator_concurrency: 32, global_concurrency: 64,
+          per_ticket_requests_per_minute: 600, per_validator_requests_per_minute: 2400,
+          global_requests_per_minute: 6000,
+        },
+        upstream: 'https://openrouter.ai/api/v1/systemone',
+        live_grants_with_lane: 0,
+        usage: [window],
+        terminal_error_codes_24h: [],
+        last_request_at: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_decision_lane', arguments: {} })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      state: 'disabled',
+      settings: { enabled: false, model: null },
+      usage: [{ window_seconds: 3600, ledger_cost_microusd: 0 }],
+    })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings/decision-lane',
     )
 
     await client.close()
@@ -2827,6 +4786,886 @@ describe('Backroom MCP tools', () => {
       settings_revision: 14,
       lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
       windows: [{ calls_per_second: 1.55, latency_p95_ms: 9995 }],
+    })
+    // Ordinary runtime reads never acquire the additional ledger scan.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(readJsonResult(response)).not.toHaveProperty('grant_costs')
+    const costs = {
+      observed_at: '2026-10-27T20:00:00Z', window_start: '2026-10-26T20:00:00Z',
+      window_end: '2026-10-27T20:00:00Z', aggregation_basis: 'grant_created_at_full_lifetime',
+      provider_bill_reconciled: false, groups: [], total_cost_microusd: 0,
+      unclassified_cost_microusd: 0, grants: 0, unclassified_grants: 0,
+    }
+    fetchMock.mockResolvedValueOnce(Response.json(readJsonResult(response)))
+      .mockResolvedValueOnce(Response.json(costs))
+    const withCosts = await client.callTool({
+      name: 'get_inference_runtime_metrics', arguments: { costWindowHours: 24 },
+    })
+    expect(withCosts.isError).not.toBe(true)
+    expect(readJsonResult(withCosts)).toMatchObject({ grant_costs: costs })
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+    expect(String(fetchMock.mock.calls[2]?.[0])).toContain('/admin/inference-grant-costs?hours=24')
+
+    fetchMock.mockResolvedValueOnce(Response.json(readJsonResult(response)))
+      .mockResolvedValueOnce(new Response('Cost view unavailable', { status: 503 }))
+    const withoutCosts = await client.callTool({
+      name: 'get_inference_runtime_metrics', arguments: { costWindowHours: 24 },
+    })
+    expect(withoutCosts.isError).not.toBe(true)
+    expect(readJsonResult(withoutCosts)).toMatchObject({
+      settings_revision: 14,
+      lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
+      grant_costs: null,
+      grant_costs_error: 'Cost view unavailable',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(5)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads fleet validator capacity with unknown estimates kept null', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        generated_at: '2026-09-27T00:00:00Z',
+        active_bench_version: 12,
+        online_window_seconds: 300,
+        live_validator_count: 1,
+        serviceable_validator_count: 1,
+        serviceable_slots: 8,
+        claimed_slots: 2,
+        active_assignment_count: 2,
+        estimated_remaining_slot_minutes: 120,
+        unestimated_assignment_count: 1,
+        eligible_unleased_count: 1,
+        oldest_eligible_unleased_age_seconds: 95,
+        relay: [
+          { request_kind: 'chat', active_requests: 12, global_limit: 256, saturation: 0.0469 },
+          { request_kind: 'embedding', active_requests: 0, global_limit: 64, saturation: 0 },
+        ],
+        validators: [
+          {
+            validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+            seen_at: '2026-09-27T00:00:00Z',
+            bench_serviceability: 'serving',
+            admission: 'accepting',
+            issuance_paused: false,
+            configured_slots: 8,
+            serviceable_slots: 8,
+            reserved_round_slots: 1,
+            claimed_slots: 2,
+            assignments: [
+              {
+                agent_id: '11111111-1111-4111-8111-111111111111',
+                agent_name: 'slow-agent',
+                slot_id: 'slot-0',
+                bench_version: 12,
+                purpose: 'canonical_quorum',
+                stage: 'running_benchmark',
+                started_at: '2026-09-26T23:00:00Z',
+                age_seconds: 3600,
+                completed_checks: 30,
+                total_checks: 90,
+                stalled: false,
+                checks_per_minute: 0.5,
+                estimated_remaining_slot_minutes: 120,
+              },
+              {
+                agent_id: '22222222-2222-4222-8222-222222222222',
+                agent_name: 'fresh-agent',
+                slot_id: 'slot-1',
+                bench_version: 12,
+                purpose: 'canonical_quorum',
+                stage: null,
+                started_at: '2026-09-26T23:59:00Z',
+                age_seconds: 60,
+                completed_checks: null,
+                total_checks: null,
+                stalled: false,
+                checks_per_minute: null,
+                estimated_remaining_slot_minutes: null,
+              },
+            ],
+          },
+        ],
+        validators_truncated: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({ name: 'get_validator_capacity', arguments: {} })
+
+    expect(response.isError).not.toBe(true)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/v1/admin/validator-capacity')
+    const body = readJsonResult(response) as {
+      serviceable_slots: number
+      claimed_slots: number
+      oldest_eligible_unleased_age_seconds: number | null
+      validators: { assignments: { estimated_remaining_slot_minutes: number | null }[] }[]
+    }
+    expect(body).toMatchObject({
+      serviceable_slots: 8,
+      claimed_slots: 2,
+      oldest_eligible_unleased_age_seconds: 95,
+    })
+    expect(
+      body.validators[0]?.assignments.map((item) => item.estimated_remaining_slot_minutes),
+    ).toEqual([120, null])
+    expect(body.validators[0]).toMatchObject({ reserved_round_slots: 1 })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads per-validator request outcomes through the admin endpoint', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        observed_at: '2026-10-28T18:00:00Z',
+        tracking_since: '2026-10-28T17:00:00Z',
+        recent_window_seconds: 900,
+        unauthenticated: { 'job:ValidatorAuthError': 2 },
+        validators: [
+          {
+            validator_hotkey: '5Validator',
+            lane: 'job',
+            last_poll_at: '2026-10-28T17:59:30Z',
+            last_outcome: 'http_428',
+            outcomes: [
+              {
+                outcome: 'http_428',
+                total: 14,
+                recent_15m: 9,
+                first_at: '2026-10-28T17:10:00Z',
+                last_at: '2026-10-28T17:59:30Z',
+                last_detail: 'validator heartbeat is stale',
+                last_slot_id: 'slot-1',
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validator_request_outcomes',
+      arguments: { validatorHotkey: '5Validator' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/api/v1/admin/validator-request-outcomes?validator_hotkey=5Validator',
+    )
+    expect(readJsonResult(response)).toMatchObject({
+      validators: [{ last_outcome: 'http_428', outcomes: [{ recent_15m: 9 }] }],
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  const ordinaryQueueSloPayload = () => ({
+    generated_at: '2026-09-23T00:00:00Z',
+    backlog_count: 4,
+    active_work_count: 1,
+    capacity_wait_count: 1,
+    infrastructure_backoff_count: 1,
+    escalation_count: 1,
+    p50_age_seconds: 300,
+    p95_age_seconds: 900,
+    oldest_age_seconds: 950,
+    throughput_window_hours: 24,
+    throughput_completed_count: 12,
+    throughput_per_hour: 0.5,
+    stale_running_ghost_count: 1,
+    resolved_quarantine_ghost_count: 0,
+    attempt_status_drift_ghost_count: 0,
+    ghost_count: 1,
+    max_actionable_age_threshold_seconds: null,
+    overdue_count: null,
+    p95_age_threshold_seconds: null,
+    p95_exceeds_threshold: null,
+  })
+
+  const athQueueStats = (queueClass: string | null, backlog: number) => ({
+    queue_class: queueClass,
+    backlog_count: backlog,
+    active_work_count: 0,
+    capacity_wait_count: 0,
+    infrastructure_backoff_count: 0,
+    escalation_count: backlog,
+    p50_age_seconds: backlog > 0 ? 3600 : null,
+    p95_age_seconds: backlog > 0 ? 7200 : null,
+    oldest_age_seconds: backlog > 0 ? 7500 : null,
+    oldest_agent_id: backlog > 0 ? '00000000-0000-4000-8000-000000000001' : null,
+    oldest_reason: backlog > 0 ? 'escalation' : null,
+    throughput_window_hours: 24,
+    throughput_completed_count: 2,
+    throughput_per_hour: 2 / 24,
+    max_actionable_age_threshold_seconds: queueClass === 'copy' ? 3600 : null,
+    overdue_count: queueClass === 'copy' ? 1 : null,
+    p95_age_threshold_seconds: null,
+    p95_exceeds_threshold: null,
+  })
+
+  const athQueueSloPayload = () => ({
+    generated_at: '2026-09-23T00:00:00Z',
+    ath: athQueueStats(null, 2),
+    copy_review: athQueueStats('copy', 2),
+    classes: [
+      athQueueStats('copy', 2),
+      athQueueStats('benchmark_overfit', 0),
+      athQueueStats('deferred_source_review', 0),
+      athQueueStats('integrity_double_check', 0),
+      athQueueStats('anomalous_score', 0),
+    ],
+    stranded_terminal_ghost_count: 1,
+    stranded_hold_ghost_count: 0,
+    held_without_review_ghost_count: 0,
+    ghost_count: 1,
+  })
+
+  it('reads the ordinary and ATH source-review queue-age SLOs', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes('/admin/ath-review-queue-slo')
+        ? Response.json(athQueueSloPayload())
+        : Response.json(ordinaryQueueSloPayload()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_source_review_queue_slo',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const body = readJsonResult(response)
+    // The ordinary snapshot keeps its existing top-level shape.
+    expect(body).toMatchObject({
+      backlog_count: 4,
+      escalation_count: 1,
+      stale_running_ghost_count: 1,
+      overdue_count: null,
+      p95_exceeds_threshold: null,
+      ath_review: {
+        ath: { backlog_count: 2, queue_class: null },
+        copy_review: { queue_class: 'copy', overdue_count: 1 },
+        stranded_terminal_ghost_count: 1,
+      },
+    })
+    expect(body).not.toHaveProperty('ath_review_error')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('keeps the ordinary queue-age SLO when the ATH read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) =>
+      String(input instanceof Request ? input.url : input).includes('/admin/ath-review-queue-slo')
+        ? Response.json({ detail: 'Not Found' }, { status: 404 })
+        : Response.json(ordinaryQueueSloPayload()),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_source_review_queue_slo',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const body = readJsonResult(response)
+    expect(body).toMatchObject({ backlog_count: 4, ath_review: null })
+    expect(body).toHaveProperty('ath_review_error')
+
+    await client.close()
+    await server.close()
+  })
+
+  const outlierEscalationPayload = () => ({
+    generated_at: '2026-09-25T12:00:00Z',
+    settings_loaded_at: '2026-09-25T08:00:00Z',
+    settings: {
+      mode: 'off',
+      min_bench_version: 12,
+      min_cohort_size: 10,
+      modified_z_threshold: 6.0,
+      min_composite_floor: 0.9,
+      per_axis_enforce: false,
+    },
+    defaults: {
+      mode: 'off',
+      min_bench_version: 12,
+      min_cohort_size: 8,
+      modified_z_threshold: 6.0,
+      min_composite_floor: 0.9,
+    },
+    sources: {
+      mode: 'default_invalid_env',
+      min_bench_version: 'default',
+      min_cohort_size: 'env',
+      modified_z_threshold: 'default',
+      min_composite_floor: 'default',
+      per_axis_enforce: 'default_invalid_env',
+    },
+    env_vars: { mode: 'DITTO_OUTLIER_ESCALATION_MODE' },
+    invalid_env_fields: ['mode', 'per_axis_enforce'],
+    review_kind: 'anomalous_score',
+    algorithm_version: 'outlier-escalation-v2',
+    pending_review_count: 1,
+    activity: {
+      window_hours: 168,
+      window_started_at: '2026-09-18T12:00:00Z',
+      observed_total: 4,
+      enforced_total: 1,
+      observed_in_window: 2,
+      enforced_in_window: 1,
+      latest_recorded_at: '2026-09-25T11:00:00Z',
+      recent_limit: 20,
+      recent: [
+        {
+          seq: 912,
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          recorded_at: '2026-09-25T11:00:00Z',
+          enforced: true,
+          bench_version: 12,
+          algorithm_version: 'outlier-escalation-v1',
+          evidence: {
+            composite: 0.99,
+            cohort_size: 12,
+            cohort_median: 0.6,
+            cohort_mad: 0.01,
+            modified_z: 26.3,
+            min_cohort_size: 8,
+            modified_z_threshold: 6.0,
+            min_composite_floor: 0.9,
+            upward: true,
+            above_floor: true,
+            raw_cohort: [0.6, 0.61],
+          },
+          internal_note: 'must-not-escape',
+        },
+      ],
+      recent_truncated: true,
+      axis_evidence_total: 3,
+      axis_evidence_in_window: 1,
+      recent_axis_evidence: [
+        {
+          seq: 913,
+          agent_id: '22222222-2222-4222-8222-222222222222',
+          recorded_at: '2026-09-25T11:30:00Z',
+          enforced: false,
+          bench_version: 12,
+          algorithm_version: 'outlier-escalation-v2',
+          evidence: {
+            composite: 0.62,
+            cohort_size: 12,
+            trigger: null,
+            per_axis_outlier_axes: ['memory_mean'],
+            per_axis: [
+              { axis: 'tool_mean', outlier: false, raw_axis_cohort: [0.5] },
+              { axis: 'memory_mean', outlier: true },
+            ],
+          },
+        },
+      ],
+      recent_axis_evidence_truncated: false,
+    },
+  })
+
+  it('reads the outlier escalation posture, sources, and bounded activity', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(outlierEscalationPayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof outlierEscalationPayload>
+      expect(body).toMatchObject({
+        settings: { mode: 'off', min_cohort_size: 10 },
+        sources: { mode: 'default_invalid_env', min_cohort_size: 'env' },
+        pending_review_count: 1,
+        activity: { observed_total: 4, enforced_total: 1, recent_truncated: true },
+      })
+      expect(body.activity.recent[0]).toMatchObject({ enforced: true, bench_version: 12 })
+      expect(body.activity.recent[0].evidence.modified_z).toBe(26.3)
+      expect(body.invalid_env_fields).toEqual(['mode', 'per_axis_enforce'])
+      expect(body.activity).toMatchObject({ axis_evidence_total: 3, axis_evidence_in_window: 1 })
+      expect(body.activity.recent_axis_evidence[0].evidence).toMatchObject({
+        per_axis_outlier_axes: ['memory_mean'],
+        per_axis: [
+          { axis: 'tool_mean', outlier: false },
+          { axis: 'memory_mean', outlier: true },
+        ],
+      })
+      expect(JSON.stringify(body)).not.toContain('raw_axis_cohort')
+      // Unknown fields, nested ones included, are stripped by the schema.
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(JSON.stringify(body)).not.toContain('raw_cohort')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation?limit=20&window_hours=168',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      // The catalog line stays terse; the detail lives in tool help.
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_outlier_escalation' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('default_invalid_env')
+      expect(guidance).toContain('/admin/score-outliers')
+      expect(guidance).toContain('per_axis_enforce')
+      expect(guidance).toContain('axis_evidence_in_window')
+      expect(guidance).toContain('recent_axis_evidence')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('keeps a non-finite outlier threshold visible and rejects an unknown source', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const nonFinite = outlierEscalationPayload()
+    nonFinite.settings.modified_z_threshold = null as unknown as number
+    nonFinite.sources.modified_z_threshold = 'env'
+    nonFinite.activity.latest_recorded_at = null as unknown as string
+    const drifted = outlierEscalationPayload()
+    drifted.sources.mode = 'guessed'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(nonFinite))
+      .mockResolvedValueOnce(Response.json(drifted))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const ok = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
+      expect(ok.isError).not.toBe(true)
+      expect(readJsonResult(ok)).toMatchObject({
+        settings: { modified_z_threshold: null },
+        sources: { modified_z_threshold: 'env' },
+        activity: { latest_recorded_at: null },
+      })
+
+      const bad = await client.callTool({ name: 'get_outlier_escalation', arguments: {} })
+      expect(bad.isError).toBe(true)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  const outlierDryRunPayload = () => ({
+    generated_at: '2026-09-25T12:00:00Z',
+    bench_version: 12,
+    bench_version_in_scope: true,
+    settings: {
+      mode: 'observe',
+      min_bench_version: 12,
+      min_cohort_size: 8,
+      modified_z_threshold: 4.5,
+      min_composite_floor: 0.9,
+    },
+    overridden_fields: ['modified_z_threshold'],
+    ledger_size: 40,
+    cohort_size: 39,
+    cohort_too_small: false,
+    ledger_median: 0.61,
+    ledger_mad: 0.02,
+    would_trigger_count: 3,
+    limit: 2,
+    would_trigger: [
+      {
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        miner_hotkey: '5Miner',
+        evidence: {
+          composite: 0.99,
+          cohort_size: 39,
+          cohort_median: 0.61,
+          cohort_mad: 0.02,
+          modified_z: 12.8,
+          min_cohort_size: 8,
+          modified_z_threshold: 4.5,
+          min_composite_floor: 0.9,
+          upward: true,
+          above_floor: true,
+          raw_cohort: [0.6, 0.61],
+        },
+        source_path: 'must-not-escape',
+      },
+    ],
+    truncated: true,
+    axis_evidence_count: 1,
+    axis_evidence: [
+      {
+        agent_id: '22222222-2222-4222-8222-222222222222',
+        miner_hotkey: '5Axis',
+        evidence: {
+          composite: 0.62,
+          trigger: null,
+          per_axis: [
+            {
+              axis: 'memory_mean',
+              value: 0.95,
+              cohort_size: 39,
+              cohort_median: 0.5,
+              cohort_mad: 0.01,
+              modified_z: 30.4,
+              upward: true,
+              outlier: true,
+              anomaly_unavailable: null,
+            },
+          ],
+        },
+      },
+    ],
+    axis_evidence_truncated: false,
+  })
+
+  it('dry-runs the outlier escalation with overrides and bounded rows', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+      .mockResolvedValueOnce(Response.json(outlierDryRunPayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { benchVersion: 12, modifiedZThreshold: 4.5, perAxisEnforce: true, limit: 2 },
+      })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof outlierDryRunPayload>
+      expect(body).toMatchObject({
+        bench_version: 12,
+        overridden_fields: ['modified_z_threshold'],
+        would_trigger_count: 3,
+        truncated: true,
+      })
+      expect(body.would_trigger[0].evidence.modified_z).toBe(12.8)
+      expect(body.axis_evidence_count).toBe(1)
+      expect(body.axis_evidence[0].evidence.per_axis?.[0]).toMatchObject({
+        axis: 'memory_mean',
+        modified_z: 30.4,
+        outlier: true,
+      })
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      expect(JSON.stringify(body)).not.toContain('raw_cohort')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=2&bench_version=12&modified_z_threshold=4.5&per_axis_enforce=true',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      // An explicit false is an override too: it previews composite-only holds
+      // even when the live setting enforces per axis.
+      await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { perAxisEnforce: false },
+      })
+      expect(String(fetchMock.mock.calls[1][0])).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=20&per_axis_enforce=false',
+      )
+
+      await client.callTool({ name: 'get_outlier_escalation_dry_run', arguments: {} })
+      expect(String(fetchMock.mock.calls[2][0])).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/outlier-escalation/dry-run?limit=20',
+      )
+
+      const invalidOverride = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { perAxisEnforce: 'yes' },
+      })
+      expect(invalidOverride.isError).toBe(true)
+
+      const invalid = await client.callTool({
+        name: 'get_outlier_escalation_dry_run',
+        arguments: { minCompositeFloor: 1.5 },
+      })
+      expect(invalid.isError).toBe(true)
+
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_outlier_escalation_dry_run' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('mode is reported but not applied')
+      expect(guidance).toContain('writes nothing')
+      expect(guidance).toContain('perAxisEnforce')
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  const claimProvenancePayload = () => ({
+    agent_id: '11111111-2222-4333-8444-555555555555',
+    artifact_sha256: 'ae'.repeat(32),
+    agent_status: 'scored',
+    validator_hotkey: '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY',
+    run_id: 'run_gate_1',
+    bench_version: 13,
+    composite: 0.7,
+    generated_at: '2026-09-23T00:19:00Z',
+    posture: 'shadow',
+    claim_provenance: { posture: 'shadow', settled_cases: 153, not_model_emitted_cases: 4 },
+    case_id: null,
+    finding: 'served_text_not_model_emitted',
+    include_unflagged: false,
+    per_case_available: true,
+    total_cases: 250,
+    matched_cases: 4,
+    malformed_cases: 0,
+    limit: 50,
+    truncated: false,
+    cases: [
+      {
+        case_index: 17,
+        case_id: 'memory-9f3a-0017',
+        category: 'temporal_reasoning',
+        kind: 'memory',
+        score: 1,
+        correct: true,
+        expected: ['must-not-escape'],
+        gate_notes: [
+          { gate: 'served_text_not_model_emitted', zeroing: true, note_id: '0123456789abcdef' },
+        ],
+        claim_provenance: {
+          posture: 'shadow',
+          findings: ['served_text_not_model_emitted'],
+          completions: 2,
+          unattributed_calls: 0,
+          tool_results: 0,
+          claim_tokens: 3,
+          complete: true,
+          model_emitted: false,
+          answer_in_prompt: false,
+        },
+        catalog: null,
+        relation: null,
+        twin_group: null,
+        cost_factor: null,
+        scorer_notes: [
+          'v13 claim provenance flagged (served_text_not_model_emitted); shadow posture, score unchanged',
+        ],
+      },
+    ],
+    not_persisted: [
+      'credited_response_field',
+      'claim_token_comparison',
+      'attributed_completion_ids',
+      'normalization_explanation',
+    ],
+    not_persisted_reason: 'absence here is not evidence either way.',
+  })
+
+  it('reads per-case claim provenance for an exact agent, artifact and run', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claimProvenancePayload()))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_claim_provenance_cases',
+        arguments: {
+          agentId: '11111111-2222-4333-8444-555555555555',
+          artifactSha256: 'ae'.repeat(32),
+          runId: 'run_gate_1',
+          finding: 'served_text_not_model_emitted',
+        },
+      })
+
+      expect(response.isError).not.toBe(true)
+      const body = readJsonResult(response) as ReturnType<typeof claimProvenancePayload>
+      expect(body).toMatchObject({ matched_cases: 4, total_cases: 250, truncated: false })
+      expect(body.cases[0].claim_provenance).toMatchObject({
+        model_emitted: false,
+        claim_tokens: 3,
+      })
+      expect(body.cases[0].gate_notes[0].note_id).toBe('0123456789abcdef')
+      expect(body.not_persisted).toContain('claim_token_comparison')
+      // The answer key never survives the Backroom schema, even if sent.
+      expect(JSON.stringify(body)).not.toContain('must-not-escape')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toBe(
+        'https://platform-api.heyditto.ai/api/v1/admin/agents/11111111-2222-4333-8444-555555555555/claim-provenance?' +
+          `artifact_sha256=${'ae'.repeat(32)}&run_id=run_gate_1&include_unflagged=false&limit=50&finding=served_text_not_model_emitted`,
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+
+      const help = await client.callTool({
+        name: 'get_backroom_tool_help',
+        arguments: { tool: 'get_claim_provenance_cases' },
+      })
+      const guidance = (readJsonResult(help) as { guidance: string }).guidance
+      expect(guidance).toContain('not_persisted')
+      expect(guidance).toContain('flagged_case_count')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('refuses a non-exact artifact key before calling the Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_claim_provenance_cases',
+        arguments: {
+          agentId: '11111111-2222-4333-8444-555555555555',
+          artifactSha256: 'AE'.repeat(32),
+          runId: 'run_gate_1',
+        },
+      })
+      expect(response.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads the failure taxonomy and keeps an unknown route unknown', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        observed_at: '2026-09-22T18:20:30Z',
+        window_seconds: [60, 300, 900, 3600],
+        group_limit: 40,
+        lanes: [
+          {
+            window_seconds: 300,
+            request_kind: 'chat',
+            calls: 903,
+            settled: 903,
+            completed: 694,
+            failed: 209,
+            canceled: 0,
+            in_flight: 0,
+            timed_out: 0,
+            rate_limited_failures: 209,
+            failure_share: 0.2315,
+            groups_total: 3,
+            groups_returned: 3,
+            groups_truncated: false,
+          },
+        ],
+        groups: [
+          {
+            window_seconds: 300,
+            request_kind: 'chat',
+            model: 'openai/gpt-oss-20b',
+            gateway: 'openrouter',
+            upstream_route: 'Groq',
+            route_basis: 'last_attempted',
+            terminal_error_code: 'upstream_http_429',
+            upstream_http_status: 429,
+            calls: 180,
+            completed: 0,
+            failed: 180,
+            canceled: 0,
+            timed_out: 0,
+            openrouter_attempts_max: 1,
+            share_of_settled_calls: 0.1993,
+          },
+          {
+            window_seconds: 300,
+            request_kind: 'chat',
+            model: 'openai/gpt-oss-20b',
+            gateway: 'openrouter',
+            upstream_route: null,
+            route_basis: 'unknown',
+            terminal_error_code: 'upstream_http_429',
+            upstream_http_status: 429,
+            calls: 29,
+            completed: 0,
+            failed: 29,
+            canceled: 0,
+            timed_out: 0,
+            openrouter_attempts_max: 1,
+            share_of_settled_calls: 0.0321,
+          },
+        ],
+        rate_limit_bursts: [
+          {
+            request_kind: 'chat',
+            window_seconds: 300,
+            rate_limited_failures: 209,
+            threshold: 100,
+            peak_global_concurrency: 31,
+            global_concurrency_limit: 96,
+            active: true,
+            tickets_total: 1,
+            tickets_truncated: false,
+            tickets: [
+              {
+                agent_id: '22222222-2222-4222-8222-222222222222',
+                bench_version: 13,
+                validator_hotkey: '5validator',
+                slot_id: 'slot-0',
+                ticket_deadline: '2026-09-22T19:00:00Z',
+                rate_limited_failures: 209,
+              },
+            ],
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_inference_failure_taxonomy',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/inference-failure-taxonomy',
+    )
+    const taxonomy = readJsonResult(response) as {
+      lanes: { rate_limited_failures: number }[]
+      groups: { upstream_route: string | null; route_basis: string }[]
+      rate_limit_bursts: { active: boolean; tickets: { slot_id: string }[] }[]
+    }
+    expect(taxonomy.lanes[0]).toMatchObject({
+      failed: 209,
+      rate_limited_failures: 209,
+      failure_share: 0.2315,
+    })
+    // The attributable half names its route; the rest stays explicitly unknown
+    // rather than borrowing the route of the calls that did report one.
+    expect(taxonomy.groups.map((group) => group.route_basis)).toEqual([
+      'last_attempted',
+      'unknown',
+    ])
+    expect(taxonomy.groups[1]?.upstream_route).toBeNull()
+    expect(
+      taxonomy.groups.some((group) => group.route_basis === 'confirmed_selected'),
+    ).toBe(false)
+    expect(taxonomy.rate_limit_bursts[0]).toMatchObject({
+      active: true,
+      tickets: [{ slot_id: 'slot-0' }],
     })
 
     await client.close()
@@ -3329,6 +6168,68 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('reads the default-off V13 review clock and guards its exact schedule write', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const empty = {
+      current_policy_document_digest: 'a'.repeat(64),
+      latest: null,
+      revisions: [],
+      finalizer_state: 'not_configured',
+    }
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(Response.json(empty)))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const read = await client.callTool({ name: 'get_v13_review_clock', arguments: {} })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toEqual(empty)
+    const invalid = await client.callTool({
+      name: 'schedule_v13_review_clock',
+      arguments: {
+        expectedRevision: 0,
+        policyDocumentDigest: 'a'.repeat(64),
+        policyManifestDigest: 'b'.repeat(64),
+        activateAt: '2026-10-01T12:00:00Z',
+        windowSeconds: 86400,
+        reason: 'publish a future first-claim window',
+        confirmation: 'WRONG PHRASE',
+      },
+    })
+    expect(invalid.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const scheduled = await client.callTool({
+      name: 'schedule_v13_review_clock',
+      arguments: {
+        expectedRevision: 0,
+        policyDocumentDigest: 'a'.repeat(64),
+        policyManifestDigest: 'b'.repeat(64),
+        activateAt: '2026-10-01T12:00:00Z',
+        windowSeconds: 86400,
+        reason: 'publish a future first-claim window',
+        confirmation: 'SCHEDULE V13 REVIEW CLOCK',
+      },
+    })
+    expect(scheduled.isError).not.toBe(true)
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/screener-policy-activation/review-clock')
+    expect(init.method).toBe('POST')
+    expect(JSON.parse(String(init.body))).toEqual({
+      expected_revision: 0,
+      policy_version: 13,
+      policy_document_digest: 'a'.repeat(64),
+      policy_manifest_digest: 'b'.repeat(64),
+      activate_at: '2026-10-01T12:00:00Z',
+      window_seconds: 86400,
+      reason: 'publish a future first-claim window',
+      actor: 'peyton@omniaura.ai',
+      confirmation: 'SCHEDULE V13 REVIEW CLOCK',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
   it('restores one exact scored screening snapshot cohort', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const restoreResponse = {
@@ -3725,6 +6626,57 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('proves two continual retest leases share one exact seed', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '69c73375-e6ef-41fa-b6d8-8df15feea985'
+    const lease = (validator: string, seed: string | null) => ({
+      agent_id: agentId,
+      agent_name: 'clear',
+      miner_hotkey: '5' + 'C'.repeat(47),
+      validator_hotkey: validator,
+      issued_at: '2026-09-22T17:35:16Z',
+      deadline: '2026-09-22T20:35:16Z',
+      bench_version: 13,
+      attempt_count: 1,
+      score_count: 3,
+      provisional_composite: 0.9,
+      slot_id: 'slot-1',
+      purpose: seed === null ? 'canonical_quorum' : 'continual_retest',
+      seed,
+    })
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        count: 3,
+        generation: 'active',
+        active_bench_version: 13,
+        items: [
+          lease('5' + 'A'.repeat(47), '9007199254740993'),
+          lease('5' + 'B'.repeat(47), '9007199254740993'),
+          lease('5' + 'D'.repeat(47), null),
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_validator_assignments',
+      arguments: { agentId },
+    })
+    expect(response.isError).not.toBe(true)
+    const result = readJsonResult(response) as {
+      items: Array<{ validator_hotkey: string; seed: string | null }>
+    }
+    expect(result.items.map((item) => item.seed)).toEqual([
+      '9007199254740993',
+      '9007199254740993',
+      null,
+    ])
+
+    await client.close()
+    await server.close()
+  })
+
   it('ramps the slot cap with the exact platform contract', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const settings = {
@@ -3796,6 +6748,66 @@ describe('Backroom MCP tools', () => {
       reason: 'ramp the fleet to three slots now that dispatch is stable',
       actor: 'peyton@omniaura.ai',
       confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('forwards per-validator overrides and the round reservation verbatim', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const bigHost = '5' + 'B'.repeat(47)
+    const settings = {
+      max_concurrent_slots: 3,
+      disk_percent_ceiling: 90,
+      memory_percent_ceiling: 90,
+      cpu_percent_ceiling: 0,
+      resource_block_percent_ceiling: 95,
+      paused_validator_hotkeys: [],
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+      },
+    }
+    const control = {
+      current: [],
+      history: [],
+      default: { ...settings, per_validator: {} },
+      effective: {
+        revision: 1,
+        scope: '*',
+        settings,
+        checksum: 'ef'.repeat(32),
+        source: 'revision',
+        hard_slot_ceiling: 8,
+        disk_restricted_slots: 1,
+        max_age_seconds: 5.0,
+      },
+      generator_round_reservation_active: true,
+      fleet: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 1 }))
+      .mockResolvedValueOnce(Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_validator_slot_settings',
+      arguments: {
+        expectedRevision: 0,
+        settings,
+        reason: 'size the big validator up and reserve two round slots on it',
+        confirmation: 'APPLY VALIDATOR SLOT CAP 3',
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).settings).toEqual(settings)
+    expect(readJsonResult(response)).toMatchObject({
+      generator_round_reservation_active: true,
+      effective: { settings },
     })
 
     await client.close()
@@ -3932,6 +6944,243 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  describe('scoring lease settings (#1156)', () => {
+    const scoringLeaseControl = (minutes: number, revision: number) => ({
+      current: revision
+        ? [
+            {
+              revision,
+              parent_revision: revision - 1,
+              scope: '*',
+              settings: { scoring_ticket_ttl_minutes: minutes },
+              reason: 'v11 completions fit well inside 150 minutes',
+              actor: 'peyton@omniaura.ai',
+              created_at: '2026-09-29T12:00:00Z',
+              checksum: 'cd'.repeat(32),
+            },
+          ]
+        : [],
+      history: [],
+      default: { scoring_ticket_ttl_minutes: 180 },
+      effective: {
+        revision,
+        scope: '*',
+        settings: { scoring_ticket_ttl_minutes: minutes },
+        checksum: revision ? 'cd'.repeat(32) : '',
+        source: revision ? 'revision' : 'default',
+        min_scoring_ticket_ttl_minutes: 60,
+        max_scoring_ticket_ttl_minutes: 240,
+        max_age_seconds: 5.0,
+      },
+    })
+
+    it('reads the effective scoring TTL and its bounds', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(scoringLeaseControl(180, 0)))
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+      const tools = await client.listTools()
+      expect(
+        tools.tools.find((tool) => tool.name === 'get_scoring_lease_settings')?.annotations
+          ?.readOnlyHint,
+      ).toBe(true)
+      expect(
+        tools.tools.find((tool) => tool.name === 'set_scoring_lease_settings')?.description,
+      ).toContain('NEW leases only')
+
+      const response = await client.callTool({ name: 'get_scoring_lease_settings', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        effective: {
+          revision: 0,
+          source: 'default',
+          settings: { scoring_ticket_ttl_minutes: 180 },
+          min_scoring_ticket_ttl_minutes: 60,
+          max_scoring_ticket_ttl_minutes: 240,
+        },
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        'https://platform-api.heyditto.ai/api/v1/admin/scoring-lease-settings',
+        expect.objectContaining({ method: 'GET' }),
+      )
+
+      await client.close()
+      await server.close()
+    })
+
+    it('applies a revision as the signed-in operator and re-reads the effect', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(Response.json({ revision: 1 }))
+        .mockResolvedValueOnce(Response.json(scoringLeaseControl(150, 1)))
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_scoring_lease_settings',
+        arguments: {
+          expectedRevision: 0,
+          settings: { scoring_ticket_ttl_minutes: 150 },
+          reason: 'v11 completions fit well inside 150 minutes',
+          confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+          ignoredExtra: true,
+        },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        effective: { revision: 1, source: 'revision', settings: { scoring_ticket_ttl_minutes: 150 } },
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/scoring-lease-settings')
+      expect(init.method).toBe('POST')
+      expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+      expect(JSON.parse(String(init.body))).toEqual({
+        scope: '*',
+        expected_revision: 0,
+        settings: { scoring_ticket_ttl_minutes: 150 },
+        reason: 'v11 completions fit well inside 150 minutes',
+        actor: 'peyton@omniaura.ai',
+        confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+      })
+
+      await client.close()
+      await server.close()
+    })
+
+    it('refuses a mismatched confirmation, a partial policy, or an out-of-range TTL locally', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      for (const [settings, confirmation] of [
+        [{ scoring_ticket_ttl_minutes: 150 }, 'APPLY SCORING TICKET TTL 180 MINUTES'],
+        [{}, 'APPLY SCORING TICKET TTL 150 MINUTES'],
+        [{ scoring_ticket_ttl_minutes: 430 }, 'APPLY SCORING TICKET TTL 430 MINUTES'],
+        [{ scoring_ticket_ttl_minutes: 59 }, 'APPLY SCORING TICKET TTL 59 MINUTES'],
+      ] as const) {
+        const response = await client.callTool({
+          name: 'set_scoring_lease_settings',
+          arguments: {
+            expectedRevision: 0,
+            settings,
+            reason: 'v11 completions fit well inside 150 minutes',
+            confirmation,
+          },
+        })
+        expect(response.isError).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      await client.close()
+      await server.close()
+    })
+
+    it('surfaces the stale-revision refusal verbatim with its recovery', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const detail =
+        'scoring lease settings changed; refresh before applying (expected 0, current 2)'
+      const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_scoring_lease_settings',
+        arguments: {
+          expectedRevision: 0,
+          settings: { scoring_ticket_ttl_minutes: 150 },
+          reason: 'v11 completions fit well inside 150 minutes',
+          confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+        },
+      })
+
+      expect(response.isError).toBe(true)
+      const message = readTextResult(response)
+      expect(message).toContain(detail)
+      expect(message).toContain('get_scoring_lease_settings')
+      expect(message).toContain('Nothing was applied')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      await client.close()
+      await server.close()
+    })
+
+    it('refuses a whitespace-only reason locally instead of reporting a conflict', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_scoring_lease_settings',
+        arguments: {
+          expectedRevision: 0,
+          settings: { scoring_ticket_ttl_minutes: 150 },
+          reason: '            ',
+          confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+        },
+      })
+
+      expect(response.isError).toBe(true)
+      expect(JSON.stringify(response.content)).not.toContain('get_scoring_lease_settings')
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      await client.close()
+      await server.close()
+    })
+
+    it('keeps confirmation-specific recovery for a Platform confirmation refusal', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+      const detail = 'confirmation must be exactly APPLY SCORING TICKET TTL 150 MINUTES'
+      const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail }, { status: 409 }))
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_scoring_lease_settings',
+        arguments: {
+          expectedRevision: 0,
+          settings: { scoring_ticket_ttl_minutes: 150 },
+          reason: 'v11 completions fit well inside 150 minutes',
+          confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+        },
+      })
+
+      expect(response.isError).toBe(true)
+      const message = readTextResult(response)
+      expect(message).toContain(detail)
+      expect(message).toContain('confirmation must name the TTL this revision applies')
+      expect(message).not.toContain('re-read get_scoring_lease_settings')
+
+      await client.close()
+      await server.close()
+    })
+
+    it('does not change the scoring TTL without the write scope', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+      const response = await client.callTool({
+        name: 'set_scoring_lease_settings',
+        arguments: {
+          expectedRevision: 0,
+          settings: { scoring_ticket_ttl_minutes: 150 },
+          reason: 'v11 completions fit well inside 150 minutes',
+          confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+        },
+      })
+
+      expect(response.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      await client.close()
+      await server.close()
+    })
+  })
+
   it('keeps benchmark contract refresh read-only without the write scope', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -4056,6 +7305,272 @@ describe('Backroom MCP tools', () => {
       }),
     )
 
+    await client.close()
+    await server.close()
+  })
+
+  it('previews ATH rulings read-only and gates upload and execute behind write', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = 'c25489aa-faf0-46fc-8b06-8e2240a5ac01'
+    const ruling = {
+      action: 'reject',
+      agent_id: agentId,
+      expected_sha256: 'ab'.repeat(32),
+      expected_score_count: 3,
+      reason: 'Reject lets_623 v1 under screening policy v12 for I5 (production-general engine)',
+      evidence_references: ['routing.py:357-395', 'baseline.py:1884-1887'],
+    }
+    const board = {
+      bench_version: 12,
+      read_at: '2026-09-13T16:30:56Z',
+      ranked_count: 41,
+      champion_agent_id: 'db0d4d25-dce7-4c7c-a49a-425beacb6c05',
+      champion_hotkey: '5Champion',
+      champion_score: 0.7812,
+      raw_leader_agent_id: agentId,
+      raw_leader_score: 0.819326,
+      fingerprint: 'f'.repeat(64),
+    }
+    const previewPayload = {
+      preview_token: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+      expires_at: '2026-09-13T16:40:56Z',
+      rulings_sha256: 'c'.repeat(64),
+      upload_key: null,
+      source: null,
+      board,
+      items: [
+        {
+          index: 0,
+          action: 'reject',
+          agent_id: agentId,
+          agent_name: 'lets_623',
+          agent_version: 1,
+          miner_hotkey: '5ECg59rv1wM4a3dY7Aka2bGRCKKCQoHmasAhAyaAJeqemR7Z',
+          agent_status: 'scored',
+          artifact_sha256: ruling.expected_sha256,
+          score_count: 3,
+          ok: true,
+          disposition: 'ready',
+          stale_guard: false,
+          would_change_crown: true,
+          conflict_reason: null,
+          steps: ['open', 'reject'],
+          reason: ruling.reason,
+          evidence_references: ruling.evidence_references,
+          message: 'will open then reject',
+        },
+      ],
+      ready_count: 1,
+      already_applied_count: 0,
+      blocked_count: 0,
+      crown_moving_count: 1,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(previewPayload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const preview = await client.callTool({
+      name: 'preview_ath_rulings_batch',
+      arguments: { rulings: [ruling] },
+    })
+    expect(preview.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/ath-rulings/batch-preview',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({ upload_key: null, rulings: [ruling], source: null }),
+      }),
+    )
+    const previewBody = readJsonResult(preview) as {
+      board: { raw_leader_agent_id: string }
+      crown_moving_count: number
+      items: Array<{ would_change_crown: boolean; steps: Array<string> }>
+    }
+    expect(previewBody.board.raw_leader_agent_id).toBe(agentId)
+    expect(previewBody.crown_moving_count).toBe(1)
+    expect(previewBody.items[0]?.would_change_crown).toBe(true)
+    expect(previewBody.items[0]?.steps).toEqual(['open', 'reject'])
+
+    // Both uploadKey and rulings, or neither, is a client-side refusal.
+    const ambiguous = await client.callTool({
+      name: 'preview_ath_rulings_batch',
+      arguments: { uploadKey: 'ath-rulings/v1/peyton-omniaura.ai/x.json', rulings: [ruling] },
+    })
+    expect(ambiguous.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const upload = await client.callTool({ name: 'create_ath_rulings_upload', arguments: {} })
+    expect(upload.isError).toBe(true)
+    expect(readTextResult(upload)).toContain('read-only')
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: previewPayload.preview_token,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+        rulings: [ruling],
+      },
+    })
+    expect(execute.isError).toBe(true)
+    expect(readTextResult(execute)).toContain('read-only')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('issues rulings uploads and executes a previewed batch with the exact phrase', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const uploadPayload = {
+      bucket: 'ditto-subnet-traces',
+      key: 'ath-rulings/v1/peyton-omniaura.ai/2026-09-13/6f1d7d9a-1a1a-4b2b-8c3c-4d4d5e5e6f6f.json',
+      url: 'https://s3.hippius.com/ditto-subnet-traces/ath-rulings/v1/peyton-omniaura.ai/x.json?X-Amz-Signature=stub',
+      method: 'PUT',
+      content_type: 'application/json',
+      expires_in: 300,
+      max_bytes: 1048576,
+    }
+    const board = {
+      bench_version: 12,
+      read_at: '2026-09-13T16:30:56Z',
+      ranked_count: 41,
+      champion_agent_id: 'db0d4d25-dce7-4c7c-a49a-425beacb6c05',
+      champion_hotkey: '5Champion',
+      champion_score: 0.7812,
+      raw_leader_agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+      raw_leader_score: 0.819326,
+      fingerprint: 'f'.repeat(64),
+    }
+    const executePayload = {
+      batch_id: '0b3c5d7e-9f01-4a23-8b45-c67d89e0f123',
+      rulings_sha256: 'c'.repeat(64),
+      upload_key: uploadPayload.key,
+      board_before: board,
+      board_after: { ...board, raw_leader_agent_id: board.champion_agent_id, fingerprint: 'e'.repeat(64) },
+      items: [
+        {
+          index: 0,
+          action: 'reject',
+          agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+          status: 'applied',
+          agent_status: 'banned',
+          would_change_crown: true,
+          steps_applied: ['open', 'reject'],
+          annotated: true,
+          message: 'ruling applied and audit rows annotated',
+        },
+        {
+          index: 1,
+          action: 'clear',
+          agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
+          status: 'failed',
+          agent_status: 'banned',
+          would_change_crown: false,
+          steps_applied: [],
+          message: 'agent is banned, not held',
+        },
+      ],
+      applied_count: 1,
+      already_applied_count: 0,
+      failed_count: 1,
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(uploadPayload))
+      .mockResolvedValueOnce(Response.json(executePayload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const upload = await client.callTool({ name: 'create_ath_rulings_upload', arguments: {} })
+    expect(upload.isError).not.toBe(true)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/ath-rulings/upload-url',
+    )
+    expect((readJsonResult(upload) as { key: string }).key).toBe(uploadPayload.key)
+
+    const wrongPhrase = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: { previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`, confirmation: 'APPLY' },
+    })
+    expect(wrongPhrase.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+      },
+    })
+    expect(execute.isError).not.toBe(true)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/ath-rulings/batch-execute',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        body: JSON.stringify({
+          preview_token: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+          confirmation: 'APPLY ATH RULINGS BATCH',
+          rulings: null,
+        }),
+      }),
+    )
+    const body = readJsonResult(execute) as {
+      applied_count: number
+      failed_count: number
+      board_after: { raw_leader_agent_id: string }
+      items: Array<{ status: string; message: string }>
+    }
+    expect(body.applied_count).toBe(1)
+    expect(body.failed_count).toBe(1)
+    expect(body.board_after.raw_leader_agent_id).toBe(board.champion_agent_id)
+    expect(body.items.map((item) => item.status)).toEqual(['applied', 'failed'])
+
+    await client.close()
+    await server.close()
+  })
+
+  it('retains committed court outcomes when the final board read fails without replay or raw detail', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const batchId = '0b3c5d7e-9f01-4a23-8b45-c67d89e0f123'
+    const agentId = 'c25489aa-faf0-46fc-8b06-8e2240a5ac01'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ detail: {
+      message: 'do-not-reflect-private-error',
+      private_secret: 'never-expose-this',
+      batch_id: batchId,
+      items: [{
+        index: 0, action: 'clear', agent_id: agentId, status: 'applied',
+        would_change_crown: true, steps_applied: ['open', 'clear'], annotated: true,
+        agent_status: 'scored', message: 'private audit context',
+      }, {
+        index: 1, action: 'reject', agent_id: 'db9b919d-241b-4131-a2cc-f426b4356950',
+        status: 'failed', would_change_crown: null, steps_applied: [],
+        write_outcome_unknown: true, annotated: false, message: 'private error',
+      }],
+      applied_count: 1, already_applied_count: 0, failed_count: 1,
+    } }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const execute = await client.callTool({
+      name: 'execute_ath_rulings_batch',
+      arguments: {
+        previewToken: `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`,
+        confirmation: 'APPLY ATH RULINGS BATCH',
+      },
+    })
+    expect(execute.isError).toBe(true)
+    const text = readTextResult(execute)
+    expect(text).toContain('inspect all item outcomes before any retry')
+    expect(text).toContain(batchId)
+    expect(text).toContain(agentId)
+    expect(text).toContain('"status":"applied"')
+    expect(text).toContain('"steps_applied":["open","clear"]')
+    expect(text).toContain('"applied_count":1')
+    expect(text).toContain('"write_outcome_unknown":true')
+    expect(text).toContain('"would_change_crown":null')
+    expect(text).not.toContain('private')
+    expect(text).not.toContain('never-expose-this')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
     await client.close()
     await server.close()
   })
@@ -4290,13 +7805,202 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('enumerates the ATH hold queue, not the auto-resolved quarantine queue', async () => {
+  it('keeps terminal quarantine ghosts out of the actionable queue (#2038)', async () => {
+    // An active quarantine whose exact agent is already banned under an ATH
+    // ruling is reconciliation work. The list must say so on the row and in
+    // separate counts instead of reading as an old, actionable review.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const ghost = {
+      quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+      agent_id: '0ecddb5c-b99b-410d-a380-1e86d1e56b54',
+      attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+      miner_hotkey: '5Miner',
+      agent_name: 'TeaCUP',
+      artifact_sha256: 'ab'.repeat(32),
+      policy_version: 13,
+      manifest_digest: '12'.repeat(32),
+      finding_digest: null,
+      screening_reason_code: 'source-review-high-risk',
+      status: 'active',
+      created_at: '2026-09-23T12:00:00Z',
+      resolved_at: null,
+      resolved_by: null,
+      resolution: null,
+      resolution_reason: null,
+      agent_status: 'banned',
+      terminal_ghost: true,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [ghost],
+        count: 1,
+        terminal_ghost_count: 1,
+        actionable_count: 0,
+        oldest_actionable_created_at: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'list_screening_quarantines',
+      arguments: { status: 'active', sort: 'oldest' },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      count: 1,
+      terminal_ghost_count: 1,
+      actionable_count: 0,
+      oldest_actionable_created_at: null,
+      items: [
+        {
+          quarantine_id: ghost.quarantine_id,
+          agent_status: 'banned',
+          terminal_ghost: true,
+        },
+      ],
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reports the orphaned quarantine closed by a terminal ATH reject (#2038)', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '0ecddb5c-b99b-410d-a380-1e86d1e56b54'
+    const quarantineId = 'e3bb1518-530f-42d7-a50b-b21ac9853798'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        review: {
+          review_id: '35b446e0-25ce-4ffb-a1c7-775a7bab1832',
+          agent_id: agentId,
+          miner_hotkey: '5Miner',
+          agent_name: 'TeaCUP',
+          agent_version: 1,
+          submitted_at: '2026-09-20T12:00:00Z',
+          status: 'resolved',
+          opened_at: '2026-09-21T12:00:00Z',
+          resolved_at: '2026-09-22T12:00:00Z',
+          resolved_by: 'peyton@omniaura.ai',
+          resolution: 'reject',
+          resolution_reason: 'Family compiler on served /run',
+          original: {
+            review_kind: 'benchmark_overfit',
+            duplicate_of: null,
+            reason: 'Deterministic benchmark-family routing',
+            policy_version: 13,
+            fingerprint_versions: {},
+            reference_provenance: 'unknown',
+            backfilled: false,
+          },
+          current_comparison: null,
+        },
+        agent_status: 'banned',
+        idempotent: false,
+        reconciled_quarantine_ids: [quarantineId],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'resolve_ath_review',
+      arguments: {
+        agentId,
+        resolution: 'reject',
+        reason: 'Family compiler on served /run',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_status: 'banned',
+      reconciled_quarantine_ids: [quarantineId],
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('previews a fenced reject that reconciles a terminal quarantine ghost (#2038)', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const decision = {
+      quarantineId: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+      expectedAgentId: '0ecddb5c-b99b-410d-a380-1e86d1e56b54',
+      expectedArtifactSha256: 'ab'.repeat(32),
+      resolution: 'reject',
+      reason: 'Agent is banned under its ATH ruling; closing the orphaned hold',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        preview_token: `1234567890.${'a'.repeat(64)}`,
+        expires_at: '2026-09-29T16:10:00Z',
+        items: [
+          {
+            quarantine_id: decision.quarantineId,
+            agent_id: decision.expectedAgentId,
+            agent_name: 'TeaCUP',
+            artifact_sha256: decision.expectedArtifactSha256,
+            resolution: 'reject',
+            reason: decision.reason,
+            disposition: 'ready',
+            resulting_agent_status: 'banned',
+            public_reason_code: null,
+            public_record_hash: null,
+            terminal_reconciliation: true,
+            terminal_ruling: {
+              agent_status: 'banned',
+              artifact_sha256: decision.expectedArtifactSha256,
+              ath_review_id: '35b446e0-25ce-4ffb-a1c7-775a7bab1832',
+              ath_action_id: '46c557f1-36df-4ffc-b2d8-886b8b8c2943',
+              ath_resolved_at: '2026-09-22T12:00:00Z',
+            },
+            message:
+              'will close the orphaned quarantine; submission stays banned under its terminal ruling',
+          },
+        ],
+        ready_count: 1,
+        already_applied_count: 0,
+        blocked_count: 0,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const preview = await client.callTool({
+      name: 'preview_screening_quarantine_batch',
+      arguments: { decisions: [decision] },
+    })
+
+    expect(preview.isError).not.toBe(true)
+    expect(readJsonResult(preview)).toMatchObject({
+      ready_count: 1,
+      items: [
+        {
+          quarantine_id: decision.quarantineId,
+          disposition: 'ready',
+          resulting_agent_status: 'banned',
+          terminal_reconciliation: true,
+          // The exact ruling the preview token is fenced to.
+          terminal_ruling: {
+            ath_review_id: '35b446e0-25ce-4ffb-a1c7-775a7bab1832',
+            ath_action_id: '46c557f1-36df-4ffc-b2d8-886b8b8c2943',
+          },
+        },
+      ],
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('enumerates the ATH hold queue, not the pre-score quarantine queue', async () => {
     // The defect: this tool read /admin/screening-quarantines?status=active,
-    // which the platform actor `platform:deferred-source-review` auto-resolves
-    // to `rescreen` within milliseconds. It therefore answered
-    // `{items: [], count: 0}` while agents sat in ath_pending_review, and the
-    // only working enumeration was an eight-call ~1.5MB sweep of
-    // list_screening_submissions.
+    // the separate pre-score hold queue (its evidence-only rows are written
+    // already resolved by `platform:deferred-source-review`). It therefore
+    // answered `{items: [], count: 0}` while agents sat in
+    // ath_pending_review, and the only working enumeration was an eight-call
+    // ~1.5MB sweep of list_screening_submissions.
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi.fn().mockResolvedValue(
       Response.json({
@@ -4372,6 +8076,88 @@ describe('Backroom MCP tools', () => {
         }),
       }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('shows a reopened hold its reconsideration reason and the rejection it withdrew', async () => {
+    // lets_635 v1: an I5 rejection was withdrawn as unsupported and the review
+    // guard-reopened, but the queue kept publishing the withdrawn REJECT prose
+    // as the live `hold.reason`, so a pending appeal read as a standing
+    // violation finding. The platform now projects the current reason and
+    // labels the prior decision; the tool must carry both through compaction.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const rejectProse = 'Reject under policy v13 for I5: benchmark-shaped answer assembly'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            review_id: '89af175c-2471-4a5b-b4a7-e495cfad8d22',
+            agent_id: 'a8437894-71ec-4a5a-a618-1757ab53806e',
+            miner_hotkey: '5Lets635',
+            miner_coldkey: null,
+            agent_name: 'lets_635',
+            agent_version: 1,
+            submitted_at: '2026-09-20T00:00:00Z',
+            status: 'pending',
+            agent_status: 'ath_pending_review',
+            opened_at: '2026-09-23T05:36:00Z',
+            resolved_at: null,
+            resolved_by: null,
+            resolution: null,
+            resolution_reason: null,
+            original: {
+              review_kind: 'deferred_source_review',
+              duplicate_of: null,
+              reason: 'I5 rejection withdrawn as unsupported; reconsidering under v13',
+              reason_source: 'reconsideration',
+              superseded_reason: 'Deferred source review qualified this submission for I5',
+              superseded_resolution: 'reject',
+              superseded_resolution_reason: rejectProse,
+              superseded_at: '2026-09-23T05:36:00Z',
+              policy_version: 13,
+              fingerprint_versions: {},
+              reference_provenance: 'corpus',
+              backfilled: false,
+            },
+          },
+        ],
+        count: 1,
+        limit: 50,
+        offset: 0,
+        review_kind: null,
+        generation: 'all',
+        active_bench_version: 13,
+        rollout_bench_version: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_review_queue',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    const queue = readJsonResult(response) as {
+      items: Array<Record<string, unknown>>
+      items_shared?: Record<string, unknown>
+    }
+    const hold = {
+      ...(queue.items_shared?.hold as Record<string, unknown> | undefined),
+      ...(queue.items[0]?.hold as Record<string, unknown> | undefined),
+    }
+    expect(hold.reason).toBe('I5 rejection withdrawn as unsupported; reconsidering under v13')
+    expect(hold.reason_source).toBe('reconsideration')
+    expect(hold.superseded_resolution).toBe('reject')
+    expect(hold.superseded_resolution_reason).toBe(rejectProse)
+    expect(hold.superseded_reason).toBe(
+      'Deferred source review qualified this submission for I5',
+    )
+    // The withdrawn finding is never the active reason on a pending row.
+    expect(hold.reason).not.toBe(rejectProse)
+    expect(queue.items[0]?.resolution ?? null).toBeNull()
 
     await client.close()
     await server.close()
@@ -4512,6 +8298,112 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('searches screening submissions server-side with the identity projection', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const row = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      miner_hotkey: '5Miner',
+      miner_coldkey: '5Cold',
+      agent_name: 'moonlight_v1',
+      agent_version: 2,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'scored',
+      screening_policy_version: 9,
+      screening_reason: null,
+      screening_reason_code: null,
+      submitted_at: '2026-07-19T12:00:00Z',
+      attempts: [
+        {
+          attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          policy_version: 9,
+          status: 'passed',
+          screener_hotkey: '5Screener',
+          started_at: '2026-07-19T12:01:00Z',
+          deadline: '2026-07-19T13:11:00Z',
+          finished_at: '2026-07-19T12:05:00Z',
+          reason: null,
+          reason_code: 'behavioral-oracle-passed',
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [row], count: 1, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'search_submissions',
+      arguments: {
+        agentNamePrefix: 'moon_light%',
+        minerColdkey: '5Cold',
+        agentStatus: ['scored', 'banned'],
+        screeningReasonCode: ['docker-build'],
+        submittedAfter: '2026-07-01T00:00:00Z',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual({
+      items: [
+        {
+          agent_id: row.agent_id,
+          agent_name: 'moonlight_v1',
+          agent_version: 2,
+          agent_status: 'scored',
+          submitted_at: '2026-07-19T12:00:00Z',
+          artifact_sha256: 'ab'.repeat(32),
+        },
+      ],
+      count: 1,
+      generation: 'all',
+      active_bench_version: 12,
+      detail: 'identity',
+      limit: 20,
+      offset: 0,
+    })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    const query = new URL(url).searchParams
+    expect(new URL(url).pathname).toBe('/api/v1/admin/screening-submissions')
+    expect(query.get('generation')).toBe('all')
+    expect(query.get('limit')).toBe('20')
+    // Metacharacters travel literally; Platform owns LIKE escaping.
+    expect(query.get('agent_name_prefix')).toBe('moon_light%')
+    expect(query.get('miner_coldkey')).toBe('5Cold')
+    expect(query.getAll('agent_status')).toEqual(['scored', 'banned'])
+    expect(query.getAll('screening_reason_code')).toEqual(['docker-build'])
+    expect(query.get('submitted_after')).toBe('2026-07-01T00:00:00Z')
+    expect(query.has('agent_name')).toBe(false)
+    expect(readTextResult(response)).not.toContain('attempts')
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses an unfiltered or malformed submission search without calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const unfiltered = await client.callTool({ name: 'search_submissions', arguments: {} })
+    expect(unfiltered.isError).toBe(true)
+    expect(readTextResult(unfiltered)).toContain('list_screening_submissions')
+
+    for (const args of [
+      { artifactSha256: 'ab'.repeat(31) },
+      { agentStatus: ['not-a-status'] },
+      { agentName: 'x'.repeat(65) },
+      { submittedAfter: '2026-07-01T00:00:00' },
+    ]) {
+      const response = await client.callTool({ name: 'search_submissions', arguments: args })
+      expect(response.isError, JSON.stringify(args)).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
   it('gets one exact screening submission without artifact scope', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
@@ -4540,6 +8432,11 @@ describe('Backroom MCP tools', () => {
           duplicate_of: null,
           duplicate_name: null,
           duplicate_version: null,
+          lineage_parent_agent_id: null,
+          lineage_scope: null,
+          lineage_packet_sha256: null,
+          lineage_full_review_reasons: null,
+          lineage_reference_kind: null,
         },
       ],
     }
@@ -4566,6 +8463,53 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('reads an unconfigured exact review deadline with read scope only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const diagnostic = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'uploaded',
+      policy_version: 0,
+      quarantine_id: null,
+      quarantine_status: null,
+      quarantine_resolution: null,
+      quarantine_attempt_id: null,
+      quarantine_artifact_matches: null,
+      manifest_digest: null,
+      deadline_state: 'not_configured',
+      finalizer_state: 'not_configured',
+      activation_revision: null,
+      activation_actor: null,
+      activation_reason: null,
+      activated_at: null,
+      start_event: null,
+      window_started_at: null,
+      deadline_at: null,
+      recorded_attempts: [],
+      observed_worker_hotkeys: [],
+      required_retries: null,
+      independent_worker_count: null,
+      failure_domain: null,
+      outstanding_mandatory_checks: null,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screening_review_deadline',
+      arguments: { agentId },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toEqual(diagnostic)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/review-deadline`,
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
   it('gates exact screening failure diagnostics on artifact scope', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
@@ -4575,7 +8519,7 @@ describe('Backroom MCP tools', () => {
       artifact_sha256: 'ab'.repeat(32),
       agent_status: 'screening_failed',
       attempt_id: attemptId,
-      policy_version: 11,
+      policy_version: 13,
       attempt_status: 'failed',
       started_at: '2026-09-02T16:53:47Z',
       deadline: '2026-09-02T17:07:22Z',
@@ -4584,6 +8528,17 @@ describe('Backroom MCP tools', () => {
       reason_code: 'worker-result-processing-failed',
       private_failure_detail: 'screener error: ValidationError: malformed finding',
       private_failure_log_tail: 'source_review: ValidationError: malformed finding',
+      l2_review_diagnostic: {
+        stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable',
+        prompt_revision: 'l2-v13', max_steps: 256, steps_used: 0,
+        max_input_tokens: 5_000_000, input_tokens_used: 0,
+        max_output_tokens: 1_000_000, output_tokens_used: 0,
+        max_cost_usd: 25, cost_usd_used: 0,
+        requested_model: 'openai/gpt-6-sol', response_provider: null,
+        final_stage: 'preflight', cause_detail: 'lease_unavailable',
+        max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+        source_text: 'private source must never reach the MCP result',
+      },
     }
     const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
     vi.stubGlobal('fetch', fetchMock)
@@ -4609,7 +8564,19 @@ describe('Backroom MCP tools', () => {
       arguments: { agentId, attemptId },
     })
     expect(allowed.isError).not.toBe(true)
-    expect(readJsonResult(allowed)).toEqual(diagnostic)
+    const observed = readJsonResult(allowed)
+    expect(observed).toMatchObject({
+      l2_review_diagnostic: {
+        reason_code: 'l2-runtime-evidence-unavailable',
+        requested_model: 'openai/gpt-6-sol',
+        final_stage: 'preflight', cause_detail: 'lease_unavailable',
+        max_steps: 256, steps_used: 0,
+        max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+      },
+      court_diagnostic: null,
+      court_completion_receipt: null,
+    })
+    expect(JSON.stringify(observed)).not.toContain('private source must never reach')
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
       expect.objectContaining({
@@ -4966,7 +8933,7 @@ describe('Backroom MCP tools', () => {
       policy_version: 7,
       manifest_digest: 'manifest',
       finding_digest: 'finding',
-      reason_code: 'source_review_suspicious',
+      screening_reason_code: 'source_review_suspicious',
       status: 'resolved',
       created_at: '2026-07-14T12:00:00Z',
       resolved_at: '2026-07-14T12:30:00Z',
@@ -5263,6 +9230,94 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
+  it('releases a verified v13 court clear only with write scope and confirmation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const quarantineId = 'e3bb1518-530f-42d7-a50b-b21ac9853798'
+    const expectedSha256 = 'ab'.repeat(32)
+    const reason = 'Court clear receipt re-verified; admit for scoring'
+    const quarantine = {
+      quarantine_id: quarantineId,
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+      miner_hotkey: '5Miner',
+      agent_name: 'memory-agent',
+      artifact_sha256: expectedSha256,
+      policy_version: 13,
+      manifest_digest: '12'.repeat(32),
+      finding_digest: null,
+      screening_reason_code: 'adjudicated-source-review-clear',
+      status: 'resolved',
+      created_at: '2026-09-28T12:00:00Z',
+      resolved_at: '2026-09-28T12:30:00Z',
+      resolved_by: 'peyton@omniaura.ai',
+      resolution: 'release',
+      resolution_reason: reason,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        quarantine,
+        agent_status: 'evaluating',
+        adjudication_digest: 'cd'.repeat(32),
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const refused = await readOnly.client.callTool({
+      name: 'release_verified_v13_court_clear',
+      arguments: {
+        quarantineId,
+        reason,
+        expectedSha256,
+        confirmation: 'RELEASE VERIFIED V13 COURT CLEAR',
+      },
+    })
+    await readOnly.client.close()
+    await readOnly.server.close()
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const unconfirmed = await client.callTool({
+      name: 'release_verified_v13_court_clear',
+      arguments: { quarantineId, reason, expectedSha256, confirmation: 'RELEASE' },
+    })
+    const response = await client.callTool({
+      name: 'release_verified_v13_court_clear',
+      arguments: {
+        quarantineId,
+        reason,
+        expectedSha256,
+        confirmation: 'RELEASE VERIFIED V13 COURT CLEAR',
+      },
+    })
+
+    expect(refused.isError).toBe(true)
+    expect(unconfirmed.isError).toBe(true)
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_status: 'evaluating',
+      adjudication_digest: 'cd'.repeat(32),
+      idempotent: false,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-quarantines/${quarantineId}/release-verified-v13-clear`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          reason,
+          expected_sha256: expectedSha256,
+          confirmation: 'RELEASE VERIFIED V13 COURT CLEAR',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
   it('does not let write scope implicitly issue screening artifact URLs', async () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock)
@@ -5349,7 +9404,7 @@ describe('Backroom MCP tools', () => {
       policy_version: 7,
       manifest_digest: 'cd'.repeat(32),
       finding_digest: 'ef'.repeat(32),
-      reason_code: 'agentic-source-review-tripwire',
+      screening_reason_code: 'agentic-source-review-tripwire',
       evidence: [
         {
           module_id: 'luna-source-review',
@@ -5803,6 +9858,15 @@ describe('Backroom MCP tools', () => {
       arguments: { agentId },
     })
     expect(allowed.isError).not.toBe(true)
+    // This payload has an older Platform's shape: no omission fields, so the
+    // tool reports none it can name and leaves completeness unknown (null)
+    // rather than claiming the total is complete.
+    expect(readJsonResult(allowed)).toMatchObject({
+      custom_added_lines: 3,
+      omitted_file_count: 0,
+      omitted_paths: [],
+      custom_added_lines_complete: null,
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/baseline-diff`,
       expect.objectContaining({
@@ -5813,6 +9877,769 @@ describe('Backroom MCP tools', () => {
     )
     await granted.client.close()
     await granted.server.close()
+  })
+
+  it('diffs any two agents for lineage review only with artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '6c1f0d2e-6c0a-4f0e-9a51-3f3b6a1d2c11'
+    const referenceAgentId = 'b2d4c9a8-1e7f-4b3a-8c2d-5e6f7a8b9c0d'
+    const manifest = {
+      agent_id: agentId,
+      reference_agent_id: referenceAgentId,
+      candidate_sha256: 'a'.repeat(64),
+      reference_sha256: 'b'.repeat(64),
+      files: [
+        {
+          path: 'src/mechanism.rs',
+          status: 'removed',
+          candidate_lines: 0,
+          reference_lines: 4,
+          added_lines: 0,
+          removed_lines: 4,
+          similarity: 0,
+          normalized_identical: false,
+        },
+        {
+          path: 'src/solver.rs',
+          status: 'renamed',
+          candidate_lines: 9,
+          reference_lines: 9,
+          added_lines: 0,
+          removed_lines: 0,
+          similarity: 1,
+          normalized_identical: true,
+          from_path: 'src/old_solver.rs',
+          to_path: 'src/solver.rs',
+        },
+      ],
+      file_count: 2,
+      identical_count: 0,
+      modified_count: 0,
+      added_count: 0,
+      removed_count: 1,
+      renamed_count: 1,
+      truncated: false,
+      omitted_file_count: 0,
+      omitted_paths: [],
+    }
+    const detail = {
+      agent_id: agentId,
+      reference_agent_id: referenceAgentId,
+      path: 'src/mechanism.rs',
+      candidate_present: false,
+      reference_present: true,
+      identical: false,
+      diff_lines: ['--- reference/src/mechanism.rs', '+++ candidate/src/mechanism.rs', '-fn hack() {}'],
+      truncated: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async (url: string) =>
+      Response.json(String(url).includes('/file?') ? detail : manifest),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refusedGrant = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    for (const [name, args] of [
+      ['get_lineage_source_diff', { agentId, referenceAgentId }],
+      ['get_lineage_source_diff', { agentId, referenceAgentId, path: 'src/mechanism.rs' }],
+    ] as const) {
+      const refused = await refusedGrant.client.callTool({ name, arguments: args })
+      expect(refused.isError).toBe(true)
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refusedGrant.client.close()
+    await refusedGrant.server.close()
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const same = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId: agentId.toUpperCase() },
+      })
+      expect(same.isError).toBe(true)
+      // Ids publish as plain `format: uuid`; the service still parses them
+      // strictly, so a malformed id never reaches the Platform.
+      for (const [name, args] of [
+        ['get_lineage_source_diff', { agentId: 'not-a-uuid', referenceAgentId }],
+        ['get_lineage_source_diff', { agentId, referenceAgentId: 'not-a-uuid', path: 'a.rs' }],
+        ['get_copy_review_source_diff', { agentId: 'not-a-uuid' }],
+        ['read_screening_baseline_diff_file', { agentId: 'not-a-uuid', path: 'a.rs' }],
+        ['list_screening_source_files', { agentId: 'not-a-uuid' }],
+      ] as const) {
+        const malformed = await granted.client.callTool({ name, arguments: args })
+        expect(malformed.isError, name).toBe(true)
+      }
+      expect(fetchMock).not.toHaveBeenCalled()
+      const tool = (await granted.client.listTools()).tools.find(
+        (entry) => entry.name === 'get_lineage_source_diff',
+      )
+      expect(tool?.inputSchema.required).toEqual(['agentId', 'referenceAgentId'])
+      expect(tool?.inputSchema.properties?.referenceAgentId).toEqual({
+        type: 'string',
+        format: 'uuid',
+      })
+
+      const listed = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId },
+      })
+      expect(listed.isError).not.toBe(true)
+      expect(readJsonResult(listed)).toMatchObject({
+        agent_id: agentId,
+        reference_agent_id: referenceAgentId,
+        removed_count: 1,
+        renamed_count: 1,
+        files: [
+          { path: 'src/mechanism.rs', status: 'removed' },
+          { path: 'src/solver.rs', status: 'renamed', from_path: 'src/old_solver.rs' },
+        ],
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/lineage-source-diff?reference_agent_id=${referenceAgentId}`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        }),
+      )
+
+      const file = await granted.client.callTool({
+        name: 'get_lineage_source_diff',
+        arguments: { agentId, referenceAgentId, path: 'src/mechanism.rs' },
+      })
+      expect(file.isError).not.toBe(true)
+      expect(readJsonResult(file)).toMatchObject({
+        path: 'src/mechanism.rs',
+        candidate_present: false,
+        reference_present: true,
+      })
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/lineage-source-diff/file?reference_agent_id=${referenceAgentId}&path=src%2Fmechanism.rs`,
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+        }),
+      )
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
+  })
+
+  it('previews copy court triage only with artifact scope and records nothing', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'a1a1a1a1-b2b2-4c3c-8d4d-e5e5e5e5e5e5'
+    const payload = {
+      agent_id: agentId,
+      review_id: 'f6f6f6f6-a7a7-4b8b-9c9c-d0d0d0d0d0d0',
+      review_status: 'resolved',
+      hold_class: 'near_duplicate',
+      triage_revision: 'family-diff-v1',
+      verdict: 'clear',
+      reason: 'Recommend CLEAR: every shared file is explained by released source.',
+      citations: [{ kind: 'resolved_ath_review', agent_id: '12121212-3434-4565-8787-909090909090' }],
+      evidence: {
+        basis: 'released_base_explains_overlap',
+        attribution: { unexplained: [], distinctive_present_count: 0 },
+      },
+      auto_clear_eligible: true,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refused = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const denied = await refused.client.callTool({
+      name: 'preview_copy_court_triage',
+      arguments: { agentId },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    await refused.client.close()
+    await refused.server.close()
+
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const malformed = await granted.client.callTool({
+        name: 'preview_copy_court_triage',
+        arguments: { agentId: 'not-a-uuid' },
+      })
+      expect(malformed.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await granted.client.callTool({
+        name: 'preview_copy_court_triage',
+        arguments: { agentId },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        verdict: 'clear',
+        triage_revision: 'family-diff-v1',
+        auto_clear_eligible: true,
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toContain(`/api/v1/admin/copy-court/triage/${agentId}/preview`)
+      expect(init.method ?? 'GET').toBe('GET')
+
+      fetchMock.mockResolvedValue(Response.json({ items: [], count: 0, limit: 50, offset: 0 }))
+      const listed = await granted.client.callTool({
+        name: 'list_copy_court_recommendations',
+        arguments: { agentId, pendingOnly: false },
+      })
+      expect(listed.isError).not.toBe(true)
+      expect(String(fetchMock.mock.calls[1][0])).toContain(`agent_id=${agentId}`)
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
+  })
+
+  it('reads unreleased-copy signals: evidence on artifact scope, list on read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5'
+    const matchedId = 'b7b7b7b7-c8c8-4d9d-8e0e-f1f1f1f1f1f1'
+    const runtime = {
+      running: true,
+      mode: 'shadow',
+      signal_version: 'uc1',
+      threshold: 40,
+      interval_seconds: 30,
+      storage_configured: true,
+      last_tick_started_at: '2026-11-01T12:00:00Z',
+      last_tick_finished_at: '2026-11-01T12:00:02Z',
+      last_tick_counters: { indexed: 8, evaluated: 4, flagged: 1 },
+      last_tick_error: null,
+    }
+    const evaluation = {
+      signal_version: 'uc1',
+      items_version: 'dc1',
+      threshold: 40,
+      flagged: true,
+      top_score: 119.25,
+      candidate_item_count: 1408,
+      compared_agent_count: 21,
+      excluded: { released_base: 1500, common: 30 },
+      evidence_status: 'attached',
+      matches: [
+        {
+          agent_id: matchedId,
+          agent_name: 'source',
+          agent_version: 17,
+          miner_hotkey: '5Source',
+          agent_status: 'scored',
+          uploaded_at: '2026-10-29T15:20:43Z',
+          released_at: null,
+          release_state: 'unreleased',
+          score: 119.25,
+          shared_count: 126,
+          shared_by_kind: { text: 78, seq: 38 },
+          items: [
+            {
+              kind: 'text',
+              text: 'zephyr quandary alpha marmalade',
+              candidate: 'src/guidance/cues.rs:75',
+              matched: 'app/guide_records.py:29',
+            },
+          ],
+        },
+      ],
+    }
+    const signal = {
+      agent_id: agentId,
+      agent_name: 'candidate',
+      agent_version: 2,
+      miner_hotkey: '5Candidate',
+      agent_status: 'rejected',
+      uploaded_at: '2026-10-29T21:13:22Z',
+      index: { items_version: 'dc1', item_count: 2941, error: null, indexed_at: '2026-10-29T21:13:23Z' },
+      mode: 'shadow',
+      computed_at: '2026-10-29T21:14:00Z',
+      recorded: evaluation,
+      live: null,
+      live_unavailable_reason: null,
+      runtime,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(signal))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const denied = await readOnly.client.callTool({
+      name: 'get_unreleased_copy_signal',
+      arguments: { agentId },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    fetchMock.mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            agent_id: agentId,
+            agent_name: 'candidate',
+            agent_version: 2,
+            miner_hotkey: '5Candidate',
+            agent_status: 'rejected',
+            uploaded_at: '2026-10-29T21:13:22Z',
+            mode: 'shadow',
+            flagged: true,
+            top_score: 119.25,
+            top_matched_agent_id: matchedId,
+            top_matched_name: 'source',
+            top_matched_version: 17,
+            computed_at: '2026-10-29T21:14:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+        coverage: {
+          agents: 3914,
+          indexed: 3914,
+          unreadable: 2,
+          oldest_unindexed_at: null,
+          evaluated: 3912,
+          flagged: 1,
+        },
+        runtime,
+      }),
+    )
+    const listed = await readOnly.client.callTool({
+      name: 'list_unreleased_copy_signals',
+      arguments: {},
+    })
+    expect(listed.isError).not.toBe(true)
+    expect(readJsonResult(listed)).toMatchObject({ total: 1, coverage: { flagged: 1 } })
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      '/api/v1/admin/unreleased-copy/signals?flagged_only=true&min_score=0&limit=50&offset=0',
+    )
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    fetchMock.mockResolvedValue(Response.json(signal))
+    const granted = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    try {
+      const response = await granted.client.callTool({
+        name: 'get_unreleased_copy_signal',
+        arguments: { agentId, live: true },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        mode: 'shadow',
+        recorded: {
+          flagged: true,
+          matches: [{ agent_id: matchedId, release_state: 'unreleased' }],
+        },
+      })
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(String(url)).toContain(`/api/v1/admin/unreleased-copy/agents/${agentId}?live=true`)
+      expect(init.method ?? 'GET').toBe('GET')
+    } finally {
+      await granted.client.close()
+      await granted.server.close()
+    }
+  })
+
+  it('reads competition improvement metrics with read scope and forwards filters', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const agentId = 'c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5'
+    const forkId = 'b7b7b7b7-c8c8-4d9d-8e0e-f1f1f1f1f1f1'
+    const high = {
+      agent_id: forkId,
+      name: 'fork',
+      version: 2,
+      bench_version: 14,
+      finalized_at: '2026-10-23T01:02:00Z',
+      composite: 0.94,
+      previous_frontier: 0.91,
+      delta: 0.03,
+      days_since_previous_high: 2.5,
+      driver: 'released_fork',
+      base_agent_id: agentId,
+    }
+    const payload = {
+      metrics_version: 'cim1',
+      generated_at: '2026-11-01T12:00:00Z',
+      bench_version: 14,
+      since: '2026-10-20',
+      definitions: { frontier: 'highest canonical composite' },
+      thresholds: {
+        first_bench_version: 13,
+        fork_containment: 0.5,
+        thin_fork_novel_fraction: 0.1,
+        top_n: 5,
+        noise_agents: 10,
+        min_noise_seeds: 3,
+        noise_sigmas: 2,
+        close_after_days: 2,
+      },
+      coverage: {
+        stored_days: 1,
+        closed_days: 1,
+        backfilled_days: 1,
+        last_computed_at: '2026-11-01T11:00:00Z',
+        agents: 4000,
+        indexed_agents: 3990,
+      },
+      runtime: {
+        running: true,
+        metrics_version: 'cim1',
+        interval_seconds: 3600,
+        last_tick_started_at: '2026-11-01T11:00:00Z',
+        last_tick_finished_at: '2026-11-01T11:00:09Z',
+        last_tick_counters: { days_computed: 14, releases: 1, forks: 1 },
+        last_tick_error: null,
+      },
+      benches: [
+        {
+          summary: {
+            bench_version: 14,
+            first_day: '2026-10-20',
+            last_day: '2026-10-23',
+            days: 4,
+            frontier_start: 0.91,
+            frontier_end: 0.94,
+            frontier_gain: 0.03,
+            gain_per_day: 0.01,
+            new_high_count: 1,
+            beyond_noise_high_count: 0,
+            median_days_between_highs: 2.5,
+            max_days_between_highs: 2.5,
+            days_since_last_high: 9.4,
+            champion_changes: 1,
+            drivers: { original: 0, same_owner_iteration: 0, released_fork: 1 },
+            gain_by_driver: { original: 0, same_owner_iteration: 0, released_fork: 0.03 },
+            largest_steps: [high],
+          },
+          noise: {
+            bench_version: 14,
+            agents_measured: 1,
+            median_seed_sd: 0.015,
+            max_seed_sd: 0.015,
+            median_quorum_sem: 0.006,
+            single_seed_delta_sd: 0.021,
+            beyond_noise_step: 0.042,
+            agents: [
+              {
+                agent_id: forkId,
+                name: 'fork',
+                version: 2,
+                composite: 0.94,
+                seed_count: 4,
+                seed_sd: 0.015,
+                quorum_sem: 0.006,
+              },
+            ],
+          },
+          new_highs: [high],
+          daily: [
+            {
+              bench_version: 14,
+              day: '2026-10-23',
+              frontier_composite: 0.94,
+              frontier_agent_id: forkId,
+              champion_agent_id: agentId,
+              champion_composite: 0.91,
+              top_n_mean: 0.925,
+              top_n_min: 0.91,
+              finalized_agent_count: 2,
+              new_high_count: 1,
+              releases_on_day: 0,
+              releases_to_date: 1,
+              forks_on_day: 0,
+              forks_to_date: 1,
+              thin_forks_to_date: 1,
+              embargo_hours: 24,
+              disclosure: 'public',
+              top: [{ agent_id: forkId, name: 'fork', version: 2, composite: 0.94 }],
+            },
+          ],
+        },
+      ],
+      releases: [
+        {
+          agent_id: agentId,
+          name: 'base',
+          version: 1,
+          bench_version: 14,
+          uploaded_at: '2026-10-20T12:00:00Z',
+          released_at: '2026-10-22T12:00:00Z',
+          embargo_hours: 24,
+          disclosure: 'public',
+          base_composite: 0.91,
+          fork_count: 1,
+          thin_fork_count: 1,
+          first_fork_lag_hours: 12,
+          median_fork_lag_hours: 12,
+          median_novel_fraction: 0.02,
+          median_delta: 0.03,
+          best_delta: 0.03,
+          forks_beating_base: 1,
+          forks: [
+            {
+              fork_agent_id: forkId,
+              fork_name: 'fork',
+              fork_version: 2,
+              fork_status: 'scored',
+              bench_version: 14,
+              fork_uploaded_at: '2026-10-23T00:00:00Z',
+              lag_hours: 12,
+              containment: 1,
+              novel_fraction: 0.02,
+              declared: false,
+              thin: true,
+              fork_composite: 0.94,
+              delta: 0.03,
+              shared_seed_count: 0,
+              shared_seed_delta: null,
+            },
+          ],
+        },
+      ],
+      embargo_windows: [
+        {
+          revision: 3,
+          embargo_hours: 24,
+          disclosure: 'public',
+          starts_at: '2026-10-19T12:00:00Z',
+          ends_at: null,
+          days: 13,
+          releases: 1,
+          forks: 1,
+          forks_per_release: 1,
+          thin_forks: 1,
+          thin_fork_share: 1,
+          median_fork_lag_hours: 12,
+          median_fork_delta: 0.03,
+          new_highs: 1,
+          new_highs_by_driver: { original: 0, same_owner_iteration: 0, released_fork: 1 },
+          frontier_gain_by_bench: { '14': 0.03 },
+          gain_per_day_by_bench: { '14': 0.01 },
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await readOnly.client.callTool({
+        name: 'get_competition_improvement_metrics',
+        arguments: { benchVersion: 14, since: '2026-10-20' },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        metrics_version: 'cim1',
+        releases: [{ fork_count: 1, forks: [{ thin: true }] }],
+        benches: [{ summary: { drivers: { released_fork: 1 } } }],
+      })
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(String(url)).toContain(
+        '/api/v1/admin/competition-improvement/metrics?bench_version=14&since=2026-10-20',
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+      const unfiltered = await readOnly.client.callTool({
+        name: 'get_competition_improvement_metrics',
+        arguments: {},
+      })
+      expect(unfiltered.isError).not.toBe(true)
+      expect(String(fetchMock.mock.calls[1][0])).toMatch(
+        /\/api\/v1\/admin\/competition-improvement\/metrics$/,
+      )
+    } finally {
+      await readOnly.client.close()
+      await readOnly.server.close()
+    }
+  })
+
+  it('reads and writes the audited unreleased-copy mode with write scope only', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const revision = {
+      revision: 1,
+      parent_revision: 0,
+      settings: { mode: 'enforce', threshold: 40 },
+      reason: 'Approved enforcement after the shadow backfill',
+      actor: 'peyton@omniaura.ai',
+      created_at: '2026-11-01T18:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        effective: {
+          mode: 'shadow',
+          threshold: 40,
+          revision: 0,
+          enforce_since: null,
+        },
+        history: [],
+        runtime: null,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const read = await readOnly.client.callTool({ name: 'get_unreleased_copy_settings', arguments: {} })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ effective: { mode: 'shadow', revision: 0 } })
+    const denied = await readOnly.client.callTool({
+      name: 'apply_unreleased_copy_settings',
+      arguments: {
+        expectedRevision: 0,
+        mode: 'enforce',
+        reason: revision.reason,
+        confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+      },
+    })
+    expect(denied.isError).toBe(true)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    fetchMock.mockResolvedValue(Response.json(revision))
+    const writer = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const applied = await writer.client.callTool({
+        name: 'apply_unreleased_copy_settings',
+        arguments: {
+          expectedRevision: 0,
+          mode: 'enforce',
+          reason: revision.reason,
+          confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+        },
+      })
+      expect(applied.isError).not.toBe(true)
+      expect(readJsonResult(applied)).toMatchObject({ revision: 1, settings: { mode: 'enforce' } })
+      const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit]
+      expect(String(url)).toContain('/api/v1/admin/unreleased-copy/settings')
+      expect(init.method).toBe('POST')
+      expect(JSON.parse(String(init.body))).toEqual({
+        expected_revision: 0,
+        settings: { mode: 'enforce', threshold: 40 },
+        reason: revision.reason,
+        actor: 'peyton@omniaura.ai',
+        confirmation: 'APPLY UNRELEASED COPY ENFORCE',
+      })
+    } finally {
+      await writer.client.close()
+      await writer.server.close()
+    }
+  })
+
+  it('reads screening review cost by lineage scope with read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const payload = {
+      lookback_days: 14,
+      window_start: '2026-10-14T00:00:00Z',
+      read_at: '2026-10-28T00:00:00Z',
+      groups: [
+        {
+          lineage_scope: 'diff', status: 'passed', attempts: 4, attempts_with_telemetry: 2,
+          mean_input_tokens: 1_200_000, p50_input_tokens: 1_100_000, p90_input_tokens: 1_900_000,
+          mean_output_tokens: 40_000, mean_cost_usd: 3.1, total_cost_usd: 6.2,
+          budget_exhausted: 0, mean_wall_minutes: 19.5,
+        },
+        {
+          lineage_scope: 'full', status: 'quarantined', attempts: 1, attempts_with_telemetry: 0,
+          mean_input_tokens: null, p50_input_tokens: null, p90_input_tokens: null,
+          mean_output_tokens: null, mean_cost_usd: null, total_cost_usd: null,
+          budget_exhausted: 1, mean_wall_minutes: 57,
+        },
+      ],
+      budget_reasons: [
+        { reason_code: 'l3-adjudicator-model-total-budget', lineage_scope: 'full', attempts: 1 },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const tooWide = await client.callTool({
+        name: 'get_screening_review_cost',
+        arguments: { lookbackDays: 31 },
+      })
+      expect(tooWide.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await client.callTool({
+        name: 'get_screening_review_cost',
+        arguments: { lookbackDays: 14 },
+      })
+      expect(response.isError, JSON.stringify(response.content)).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        lookback_days: 14,
+        budget_reasons: [{ reason_code: 'l3-adjudicator-model-total-budget' }],
+      })
+      expect(String(fetchMock.mock.calls[0][0])).toContain(
+        '/api/v1/admin/screening-review-cost?lookback_days=14',
+      )
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('reads one attempt\'s review budget with read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-token'
+    const attemptId = '16c416c6-1fc7-4244-9a07-b5e498014870'
+    const payload = {
+      attempt_id: attemptId,
+      agent_id: 'f9f69045-20df-41b8-ac96-c9b1959366b7',
+      status: 'quarantined',
+      reason_code: 'l3-adjudicator-model-total-budget',
+      build_only: false,
+      started_at: '2026-10-29T15:20:44Z',
+      finished_at: '2026-10-29T16:05:19Z',
+      wall_seconds: 2675.19,
+      telemetry_recorded: true,
+      recorded_at: '2026-10-29T16:05:14Z',
+      review_elapsed_ms: 2_645_680,
+      total_input_tokens: 61_300_139,
+      total_output_tokens: 173_136,
+      total_cost_usd: 0,
+      total_estimated_cost_usd: 23.535455,
+      stages: [
+        {
+          stage: 'l3_adjudicator', model: 'openai/gpt-6-sol', requests: 118,
+          input_tokens: 27_528_431, cached_input_tokens: 27_097_599, output_tokens: 19_626,
+          reasoning_tokens: 1_675, estimated_cost_usd: 12.954888, reported_cost_usd: 0,
+          wall_ms: null, tripped: [],
+        },
+      ],
+      l2_aggregate: {
+        raw_input_tokens: 40_316_969, cached_input_tokens: 39_222_870,
+        effective_input_tokens: 5_016_386, output_tokens: 90_848,
+        estimated_cost_usd: 23.535455, reported_cost_usd: 0, billable_cost_usd: 0,
+      },
+      limits: {
+        settings_revision: 140, settings_scope: 'subnet-screener-1',
+        max_input_tokens: 5_000_000, max_raw_input_tokens: 50_000_000,
+        max_output_tokens: 1_000_000, max_cost_usd: 25, l1_max_steps: 200,
+        l1_timeout_seconds: 3600, l2_max_steps: 256, l2_timeout_seconds: 1800,
+        adjudicator_max_steps: 128, adjudicator_timeout_seconds: 600,
+      },
+      exceeded_limits: ['input'],
+      budget_stop: null,
+      lineage: {
+        parent_agent_id: '9ea20eef-1ae6-4e93-bd50-bb6ce17edceb', parent_name: 'Hades',
+        parent_version: 16, scope: 'full', full_review_reasons: ['diff-too-large'],
+        reference_kind: 'same_owner_version', packet_sha256: '02'.repeat(32),
+        changed_file_count: null, changed_line_count: null,
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const invalid = await client.callTool({
+        name: 'get_screening_review_budget',
+        arguments: { attemptId: 'not-a-uuid' },
+      })
+      expect(invalid.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+      const response = await client.callTool({
+        name: 'get_screening_review_budget',
+        arguments: { attemptId },
+      })
+      expect(response.isError, JSON.stringify(response.content)).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        exceeded_limits: ['input'],
+        lineage: { full_review_reasons: ['diff-too-large'] },
+      })
+      expect(String(fetchMock.mock.calls[0][0])).toContain(
+        `/api/v1/admin/screening-attempts/${attemptId}/review-budget`,
+      )
+    } finally {
+      await client.close()
+      await server.close()
+    }
   })
 
   it('issues an audited artifact URL only with explicit artifact scope', async () => {
@@ -6393,6 +11220,8 @@ describe('Backroom MCP tools', () => {
         blocking_reason: null,
         recommended_action: null,
         dominant_failure_code: null,
+        provider_outage: null,
+        provider_outage_blocks_retry: null,
         earliest_retry_after: null,
         attempts_used: 3,
         exhausted_validator_count: 3,
@@ -6664,6 +11493,7 @@ describe('Backroom MCP tools', () => {
               expected_snapshot: snapshotB,
             },
           ],
+          acknowledge_provider_outage: false,
         }),
       }),
     )
@@ -6774,486 +11604,6 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('reports artifact-bound shadow coding certification history', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
-    const payload = {
-      agent_id: agentId,
-      agent_name: 'coding-agent',
-      miner_hotkey: '5Miner',
-      artifact_sha256: 'a'.repeat(64),
-      screened_image_sha256: 'b'.repeat(64),
-      coding_supported: true,
-      coding_certified: true,
-      active_certification_count: 1,
-      total: 1,
-      certifications: [
-        {
-          certification_row_id: '11111111-1111-4111-8111-111111111111',
-          validator_hotkey: '5Validator',
-          bench_version: 12,
-          ticket_deadline: '2026-08-20T20:00:00Z',
-          coding_contract_version: 1,
-          certification_id: 'cert-001',
-          status: 'certified',
-          failure_stage: null,
-          failure_code: null,
-          certification_sha256: 'c'.repeat(64),
-          canary_manifest_sha256: 'd'.repeat(64),
-          screened_image_sha256: 'b'.repeat(64),
-          transcript_object_key: `sha256/${'e'.repeat(64)}`,
-          frozen_submission_object_key: `sha256/${'f'.repeat(64)}`,
-          issued_at: '2026-08-20T18:00:00Z',
-          expires_at: '2026-08-20T19:00:00Z',
-          created_at: '2026-08-20T18:00:01Z',
-          active: true,
-          stale_reason: 'active',
-        },
-      ],
-    }
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const listed = await client.listTools()
-    const codingCertTool = listed.tools.find(
-      (tool) => tool.name === 'get_agent_coding_certifications',
-    )
-    expect(codingCertTool?.description).toMatch(/weight_eligible is always false/i)
-    expect(codingCertTool?.description).toMatch(/backroom:read/)
-
-    const response = await client.callTool({
-      name: 'get_agent_coding_certifications',
-      arguments: { agentId, limit: 25 },
-    })
-
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      agent_id: agentId,
-      coding_certified: true,
-      active_certification_count: 1,
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-certifications?limit=25`,
-      expect.objectContaining({
-        headers: expect.objectContaining({
-          Authorization: 'Bearer platform-admin-token',
-        }),
-      }),
-    )
-
-    await client.close()
-    await server.close()
-  })
-
-  it('reports the separate weight-zero shadow coding ledger', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
-    const payload = {
-      agent_id: agentId,
-      agent_name: 'coding-agent',
-      miner_hotkey: '5Miner',
-      artifact_sha256: 'a'.repeat(64),
-      screened_image_sha256: 'b'.repeat(64),
-      total_assignments: 1,
-      assignments: [
-        {
-          assignment_row_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          assignment_sha256: '1'.repeat(64),
-          coding_run_id: 'coding-run-001',
-          bench_version: 12,
-          coding_contract_version: 1,
-          artifact_sha256: 'a'.repeat(64),
-          screened_image_sha256: 'b'.repeat(64),
-          corpus_release_id: 'private-coding-corpus-v1',
-          catalog_commitment_sha256: '2'.repeat(64),
-          anchor_block_number: 1_000,
-          anchor_block_hash: `0x${'3'.repeat(64)}`,
-          selection_delay_blocks: 20,
-          selection_block_number: 1_020,
-          assigned_at: '2026-08-21T00:00:00Z',
-          task_count: 1,
-          core_qualification_observation_id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
-          certification_row_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-          current: true,
-          stale_reason: 'current',
-          created_at: '2026-08-21T00:00:00Z',
-          weight_eligible: false,
-        },
-      ],
-      total_runs: 1,
-      runs: [
-        {
-          run_row_id: '11111111-1111-4111-8111-111111111111',
-          assignment_row_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-          assignment_sha256: '1'.repeat(64),
-          coding_run_id: 'coding-run-001',
-          bench_version: 12,
-          coding_contract_version: 1,
-          artifact_sha256: 'a'.repeat(64),
-          screened_image_sha256: 'b'.repeat(64),
-          corpus_release_id: 'private-coding-corpus-v1',
-          run_manifest_sha256: 'c'.repeat(64),
-          task_set_manifest_sha256: 'd'.repeat(64),
-          task_count: 1,
-          selection_block_number: 1_020,
-          selection_block_hash: `0x${'4'.repeat(64)}`,
-          selection_block_timestamp: '2026-08-21T00:01:00Z',
-          issued: true,
-          core_qualification_observation_id: '22222222-2222-4222-8222-222222222222',
-          ticket_count: 1,
-          result_count: 1,
-          quorum_complete: false,
-          median_repair_mean_micros: null,
-          current: true,
-          stale_reason: 'current',
-          tickets: [
-            {
-              ticket_id: '33333333-3333-4333-8333-333333333333',
-              validator_hotkey: '5Validator',
-              certification_row_id: '44444444-4444-4444-8444-444444444444',
-              issued_at: '2026-08-21T00:00:00Z',
-              deadline: '2026-08-21T01:00:00Z',
-              authoring_freeze: {
-                freeze_id: '66666666-6666-4666-8666-666666666666',
-                ticket_id: '33333333-3333-4333-8333-333333333333',
-                validator_hotkey: '5Validator',
-                authoring_evidence_sha256: '6'.repeat(64),
-                authoring_event_root: '7'.repeat(64),
-                authoring_transcript_sha256: '8'.repeat(64),
-                authoring_transcript_bytes: 4096,
-                authoring_event_count: 4,
-                frozen_patch_sha256: '9'.repeat(64),
-                changed_path_root: 'a'.repeat(64),
-                final_tree_sha256: 'b'.repeat(64),
-                changed_path_count: 1,
-                changed_bytes: 128,
-                protected_paths_intact: true,
-                frozen_at: '2026-08-21T00:20:00Z',
-                weight_eligible: false,
-              },
-              result: {
-                result_id: '55555555-5555-4555-8555-555555555555',
-                ticket_id: '33333333-3333-4333-8333-333333333333',
-                validator_hotkey: '5Validator',
-                run_evidence_sha256: 'e'.repeat(64),
-                task_count: 1,
-                resolved_count: 1,
-                repair_failure_count: 0,
-                infrastructure_count: 0,
-                invalid_count: 0,
-                candidate_integrity_count: 0,
-                control_plane_integrity_count: 0,
-                scoreable_task_count: 1,
-                repair_mean_micros: 1_000_000,
-                submitted_at: '2026-08-21T00:30:00Z',
-                weight_eligible: false,
-              },
-            },
-          ],
-          created_at: '2026-08-21T00:00:00Z',
-          weight_eligible: false,
-        },
-      ],
-      shadow_only: true,
-    }
-    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE])
-
-    const response = await client.callTool({
-      name: 'get_agent_coding_shadow_evaluations',
-      arguments: { agentId, limit: 25 },
-    })
-
-    expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toMatchObject({
-      agent_id: agentId,
-      total_assignments: 1,
-      total_runs: 1,
-      runs: [{ issued: true }],
-      shadow_only: true,
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-shadow-evaluations?limit=25`,
-      expect.objectContaining({
-        headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }),
-      }),
-    )
-
-    await client.close()
-    await server.close()
-  })
-
-  it('registers, reads, and retires signed shadow coding catalog commitments', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const commitment = {
-      schema: 'dittobench-coding-catalog-commitment-v1',
-      coding_contract_version: 1,
-      weight_eligible: false,
-      corpus_release_id: 'private-coding-corpus-v1',
-      catalog_merkle_root: 'a'.repeat(64),
-      selection_derivation_id: 'coding-selection-v1',
-      selection_chain_genesis_hash: `0x${'b'.repeat(64)}`,
-      grader_contract_sha256: 'c'.repeat(64),
-      inference_grant_sha256: 'd'.repeat(64),
-      task_version_count: 100,
-      curator_hotkey: `5${'A'.repeat(47)}`,
-      committed_at_unix: 1_787_310_000,
-      commitment_sha256: 'e'.repeat(64),
-    }
-    const control = {
-      total: 1,
-      releases: [
-        {
-          release_row_id: '11111111-1111-4111-8111-111111111111',
-          commitment,
-          signature: 'f'.repeat(128),
-          registered_reason: 'register private coding catalog commitment',
-          registered_actor: 'peyton@omniaura.ai',
-          registered_at: '2026-08-21T00:00:00Z',
-          retired: false,
-          retired_reason: null,
-          retired_actor: null,
-          retired_at: null,
-          exposure_count: 0,
-          exposed_run_count: 0,
-          shadow_only: true,
-        },
-      ],
-      shadow_only: true,
-    }
-    const fetchMock = vi.fn().mockImplementation(async () => Response.json(control))
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    expect(
-      (
-        await client.callTool({
-          name: 'get_coding_catalog_releases',
-          arguments: { limit: 25 },
-        })
-      ).isError,
-    ).not.toBe(true)
-    const registered = await client.callTool({
-      name: 'register_coding_catalog_release',
-      arguments: {
-        commitment,
-        signature: 'f'.repeat(128),
-        reason: 'register private coding catalog commitment',
-        confirmation: 'REGISTER SHADOW CODING CATALOG private-coding-corpus-v1',
-      },
-    })
-    expect(registered.isError, JSON.stringify(registered.content)).not.toBe(true)
-    const replacementCommitment = {
-      ...commitment,
-      corpus_release_id: 'private-coding-corpus-v2',
-      catalog_merkle_root: '1'.repeat(64),
-      commitment_sha256: '2'.repeat(64),
-    }
-    const superseded = await client.callTool({
-      name: 'supersede_coding_catalog_release',
-      arguments: {
-        previousCorpusReleaseId: commitment.corpus_release_id,
-        expectedPreviousCommitmentSha256: commitment.commitment_sha256,
-        replacementCommitment,
-        replacementSignature: 'a'.repeat(128),
-        reason: 'append reviewed replacement and retire predecessor',
-        confirmation:
-          'SUPERSEDE SHADOW CODING CATALOG private-coding-corpus-v1 WITH private-coding-corpus-v2',
-      },
-    })
-    expect(superseded.isError, JSON.stringify(superseded.content)).not.toBe(true)
-    expect(
-      (
-        await client.callTool({
-          name: 'retire_coding_catalog_release',
-          arguments: {
-            corpusReleaseId: commitment.corpus_release_id,
-            expectedCommitmentSha256: commitment.commitment_sha256,
-            reason: 'retire exhausted private coding catalog',
-            confirmation: 'RETIRE SHADOW CODING CATALOG private-coding-corpus-v1',
-          },
-        })
-      ).isError,
-    ).not.toBe(true)
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
-      expect.anything(),
-    )
-    const registerCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/api/v1/admin/coding-catalog/releases'),
-    )
-    expect(JSON.parse(String(registerCall?.[1]?.body))).toMatchObject({
-      actor: 'peyton@omniaura.ai',
-      commitment: { weight_eligible: false },
-    })
-    const retireCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/api/v1/admin/coding-catalog/retire'),
-    )
-    expect(JSON.parse(String(retireCall?.[1]?.body))).toMatchObject({
-      actor: 'peyton@omniaura.ai',
-      corpus_release_id: 'private-coding-corpus-v1',
-    })
-    const supersedeCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith('/api/v1/admin/coding-catalog/supersede'),
-    )
-    expect(JSON.parse(String(supersedeCall?.[1]?.body))).toMatchObject({
-      actor: 'peyton@omniaura.ai',
-      previous_corpus_release_id: 'private-coding-corpus-v1',
-      replacement_commitment: { corpus_release_id: 'private-coding-corpus-v2' },
-    })
-
-    await client.close()
-    await server.close()
-  })
-
-  it('controls and inspects shadow core qualification without activating it', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
-    const policy = {
-      schema: 'ditto-core-qualification-policy-v1',
-      weight_eligible: false,
-      bench_version: 12,
-      enter_composite: 0.8,
-      enter_tool_mean: 0.8,
-      enter_memory_mean: 0.8,
-      exit_composite: 0.7,
-      exit_tool_mean: 0.7,
-      exit_memory_mean: 0.7,
-      enter_observations: 2,
-      exit_observations: 2,
-    }
-    const revision = {
-      revision: 1,
-      parent_revision: 0,
-      policy,
-      checksum: 'a'.repeat(64),
-      reason: 'calibrate shadow core qualification',
-      actor: 'peyton@omniaura.ai',
-      created_at: '2026-08-21T00:00:00Z',
-    }
-    const policyControl = {
-      bench_version: 12,
-      configured: true,
-      current: revision,
-      history: [revision],
-      required_confirmation: 'APPLY SHADOW CORE QUALIFICATION V12',
-      shadow_only: true,
-    }
-    const observation = {
-      sequence: 1,
-      observation_id: '11111111-1111-4111-8111-111111111111',
-      agent_id: agentId,
-      artifact_sha256: 'b'.repeat(64),
-      screened_image_sha256: 'c'.repeat(64),
-      bench_version: 12,
-      policy_revision: 1,
-      policy_checksum: 'a'.repeat(64),
-      score_evidence_sha256: 'd'.repeat(64),
-      score_count: 3,
-      full_size: true,
-      complete_wave: true,
-      validator_hotkeys: ['5ValA', '5ValB', '5ValC'],
-      run_ids: ['run-a', 'run-b', 'run-c'],
-      median_composite: 0.85,
-      median_tool_mean: 0.86,
-      median_memory_mean: 0.84,
-      entry_passed: true,
-      retention_passed: true,
-      qualified: true,
-      enter_streak: 2,
-      exit_streak: 0,
-      decision: 'entered',
-      source: 'score_commit',
-      actor: null,
-      reason: null,
-      observed_at: '2026-08-21T00:10:00Z',
-      weight_eligible: false,
-      current: true,
-      stale_reason: 'current',
-    }
-    const status = {
-      agent_id: agentId,
-      agent_name: 'core-agent',
-      miner_hotkey: '5Miner',
-      artifact_sha256: 'b'.repeat(64),
-      screened_image_sha256: 'c'.repeat(64),
-      bench_version: 12,
-      configured: true,
-      qualified: true,
-      current_observation: observation,
-      total: 1,
-      observations: [observation],
-      shadow_only: true,
-    }
-    const fetchMock = vi.fn().mockImplementation(async (input: RequestInfo | URL) => {
-      const url = String(input)
-      return Response.json(url.includes(`/agents/${agentId}/`) ? status : policyControl)
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
-
-    const readPolicy = await client.callTool({
-      name: 'get_core_qualification_policy',
-      arguments: { benchVersion: 12, historyLimit: 10 },
-    })
-    expect(readPolicy.isError).not.toBe(true)
-    expect(readJsonResult(readPolicy)).toMatchObject({ configured: true, shadow_only: true })
-
-    const written = await client.callTool({
-      name: 'set_core_qualification_policy',
-      arguments: {
-        expectedRevision: 0,
-        policy,
-        reason: 'calibrate shadow core qualification',
-        confirmation: 'APPLY SHADOW CORE QUALIFICATION V12',
-      },
-    })
-    expect(written.isError).not.toBe(true)
-
-    const readAgent = await client.callTool({
-      name: 'get_agent_core_qualification',
-      arguments: { agentId, benchVersion: 12, limit: 25 },
-    })
-    expect(readAgent.isError).not.toBe(true)
-    expect(readJsonResult(readAgent)).toMatchObject({ qualified: true, shadow_only: true })
-
-    const refreshed = await client.callTool({
-      name: 'refresh_agent_core_qualification',
-      arguments: {
-        agentId,
-        benchVersion: 12,
-        reason: 'recover current score evidence after a shadow outage',
-        confirmation: 'REFRESH SHADOW CORE QUALIFICATION V12',
-      },
-    })
-    expect(refreshed.isError).not.toBe(true)
-    expect(fetchMock).toHaveBeenCalledWith(
-      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/core-qualification?bench_version=12&limit=25`,
-      expect.anything(),
-    )
-    const writeCall = fetchMock.mock.calls.find(
-      ([url]) => String(url).endsWith('/api/v1/admin/core-qualification/policy'),
-    )
-    expect(JSON.parse(String(writeCall?.[1]?.body))).toMatchObject({
-      expected_revision: 0,
-      actor: 'peyton@omniaura.ai',
-      policy: { weight_eligible: false },
-    })
-    const refreshCall = fetchMock.mock.calls.find(([url]) =>
-      String(url).endsWith(`/agents/${agentId}/core-qualification/refresh`),
-    )
-    expect(JSON.parse(String(refreshCall?.[1]?.body))).toMatchObject({
-      bench_version: 12,
-      actor: 'peyton@omniaura.ai',
-    })
-
-    await client.close()
-    await server.close()
-  })
-
   it('serves authoritative scores, leaderboard, and history to a read-only grant without the admin token', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     const agentId = '11111111-1111-4111-8111-111111111111'
@@ -7343,12 +11693,42 @@ describe('Backroom MCP tools', () => {
       arguments: { minerHotkey: '5TopMiner' },
     })
     expect(scores.isError).not.toBe(true)
-    expect(readJsonResult(scores)).toMatchObject({
+    const scoresBody = readJsonResult(scores) as {
+      scores: Array<Record<string, unknown>>
+      scores_shared?: Record<string, unknown>
+      other_bench_versions: Array<{
+        bench_version: number | null
+        scores: Array<Record<string, unknown>>
+        scores_shared?: Record<string, unknown>
+      }>
+    }
+    expect(scoresBody).toMatchObject({
       agent_id: agentId,
+      selected_bench_version: 7,
+      score_count: 3,
+      total_score_count: 6,
       median_composite: 0.957,
       active_bench_version: 7,
       leaderboard: { rank: 1, emission_eligible: true },
     })
+    // SN-348: the selected v7 rows and the v6 group each hoist their own
+    // invariants; a field missing from a row lives in its group's shared
+    // object, never reads as null.
+    expect(scoresBody.scores_shared).toMatchObject({ bench_version: 7, seed: '424242' })
+    expect(scoresBody.scores[0]).not.toHaveProperty('bench_version')
+    expect(scoresBody.scores.map((row) => ({ ...scoresBody.scores_shared, ...row }))).toEqual([
+      expect.objectContaining({ validator_hotkey: '5ValA', bench_version: 7, composite: 0.957, run_id: 'run-a7' }),
+      expect.objectContaining({ validator_hotkey: '5ValB', bench_version: 7, composite: 0.955, run_id: 'run-b7' }),
+      expect.objectContaining({ validator_hotkey: '5ValC', bench_version: 7, composite: 0.96, run_id: 'run-c7' }),
+    ])
+    const v6 = scoresBody.other_bench_versions[0]!
+    expect(v6).toMatchObject({ bench_version: 6, score_count: 3, median_composite: 0.91 })
+    expect(v6.scores_shared).toMatchObject({ bench_version: 6, seed: '111' })
+    expect(v6.scores.map((row) => ({ ...v6.scores_shared, ...row }))).toEqual([
+      expect.objectContaining({ validator_hotkey: '5ValA', bench_version: 6, seed: '111', composite: 0.91 }),
+      expect.objectContaining({ validator_hotkey: '5ValB', bench_version: 6, seed: '111', composite: 0.92 }),
+      expect.objectContaining({ validator_hotkey: '5ValC', bench_version: 6, seed: '111', composite: 0.9 }),
+    ])
 
     const board = await client.callTool({
       name: 'get_leaderboard',
@@ -7385,6 +11765,265 @@ describe('Backroom MCP tools', () => {
     await client.close()
     await server.close()
   })
+  it('compacts agent scores losslessly per bench-version group', () => {
+    const row = (overrides: Record<string, unknown>) => ({
+      validator_hotkey: '5ValA',
+      composite: 0.1,
+      tool_mean: 0.2,
+      memory_mean: 0.3,
+      median_ms: 1000,
+      n: 40,
+      bench_version: 13,
+      seed: '8811366100733494301',
+      run_id: 'run-a13',
+      generated_at: '2026-10-20T00:00:00Z',
+      signature: 'd1'.repeat(64),
+      transcript_sha256: null,
+      gate_evidence: null,
+      ...overrides,
+    })
+    const detail = {
+      agent_id: '842c28de-6b6c-445a-8c3f-cf5492422ef6',
+      selected_bench_version: 13,
+      score_count: 3,
+      total_score_count: 5,
+      median_composite: 0.1,
+      scores: [
+        row({}),
+        row({ validator_hotkey: '5ValB', run_id: 'run-b13', signature: 'e1'.repeat(64) }),
+        // A null that differs from the group must survive as a row field.
+        row({ validator_hotkey: '5ValC', run_id: 'run-c13', transcript_sha256: '23'.repeat(32) }),
+      ],
+      other_bench_versions: [
+        {
+          bench_version: 12,
+          score_count: 2,
+          quorum_reached: false,
+          median_composite: null,
+          median_composite_authority: null,
+          scores: [
+            row({ bench_version: 12, seed: '7211616870656561578', composite: 0.79 }),
+            row({ validator_hotkey: '5ValB', bench_version: 12, seed: '7211616870656561578', composite: 0.78 }),
+          ],
+        },
+        {
+          bench_version: null,
+          score_count: 1,
+          quorum_reached: false,
+          median_composite: null,
+          median_composite_authority: null,
+          scores: [row({ bench_version: null, seed: '42' })],
+        },
+      ],
+    }
+
+    type CompactRows = {
+      scores: Array<Record<string, unknown>>
+      scores_shared?: Record<string, unknown>
+    }
+    const compact = compactAgentScores(detail) as unknown as CompactRows & {
+      other_bench_versions: Array<CompactRows & Record<string, unknown>>
+    }
+
+    // Invariant fields hoisted; varying ones stay on the row, including a
+    // null that differs from another row's value.
+    expect(compact.scores_shared).toMatchObject({ bench_version: 13, gate_evidence: null })
+    expect(compact.scores_shared).not.toHaveProperty('transcript_sha256')
+    expect(compact.scores[0]).toMatchObject({ transcript_sha256: null })
+    expect(compact.scores_shared).not.toHaveProperty('validator_hotkey')
+    expect(compact.scores_shared).not.toHaveProperty('signature')
+    expect(compact.scores[2]).toMatchObject({ transcript_sha256: '23'.repeat(32) })
+    expect(compact.scores[0]).not.toHaveProperty('bench_version')
+    // Reconstructing shared + row restores every original row exactly.
+    expect(compact.scores.map((r) => ({ ...compact.scores_shared, ...r }))).toEqual(detail.scores)
+    compact.other_bench_versions.forEach((group, index) => {
+      const original = detail.other_bench_versions[index]!
+      expect(group.scores.map((r) => ({ ...group.scores_shared, ...r }))).toEqual(original.scores)
+      expect({ ...group, scores: undefined, scores_shared: undefined }).toEqual({
+        ...original,
+        scores: undefined,
+        scores_shared: undefined,
+      })
+    })
+    // A single-row group has nothing to hoist and stays whole.
+    expect(compact.other_bench_versions[1]).not.toHaveProperty('scores_shared')
+  })
+
+  it('explains an owner-suppressed generation over read scope with the admin token server-side', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    // The #2105 shape: a newer generation whose canonical median beats its
+    // owner's 15-seed representative sits outside every cohort it outscores.
+    const newerId = '01f5373c-c626-4271-ac68-348bd52510d3'
+    const representativeId = '7a2ca671-788d-4b18-b6bf-799cc450680f'
+    const diagnostic = {
+      generated_at: '2026-09-22T23:51:00Z',
+      agent_id: newerId,
+      agent_status: 'scored',
+      active_bench_version: 13,
+      canonical_composite: 0.54072,
+      official_composite: 0.54072,
+      owner_representative_id: representativeId,
+      family: [
+        {
+          agent_id: newerId,
+          canonical_composite: 0.54072,
+          official_composite: 0.54072,
+          representative: false,
+          effective_composite: 0.54072,
+          canonical_sample_count: 3,
+          completed_wave_depth: 0,
+          first_seen: '2026-09-22T22:51:00Z',
+        },
+        {
+          agent_id: representativeId,
+          canonical_composite: 0.479032,
+          official_composite: 0.5965,
+          representative: true,
+          effective_composite: 0.5965,
+          canonical_sample_count: 3,
+          completed_wave_depth: 15,
+          first_seen: '2026-09-12T23:51:00Z',
+        },
+      ],
+      raw_confirmation_seeds: ['9223372036854775001'],
+      folded_confirmation_seeds: [],
+      in_raw_wave: false,
+      in_emission_set: false,
+      in_retest_cohort: false,
+      is_same_owner_challenger: false,
+      cohort_position: null,
+      cohort_size: 9,
+      configured_cohort_size: 5,
+      eligibility_mode: 'statistical',
+      eligibility_z: 1.64,
+      configured_max_size: 25,
+      ticket_status_counts: {},
+      active_ticket_count: 0,
+      seed_anchor_champion_id: representativeId,
+      seed_anchor_block: 123456,
+      seed_anchor_pinned: true,
+      admission_reason: 'owner_suppressed',
+      ledger_eligible: true,
+      canonical_sample_count: 3,
+      completed_wave_depth: 0,
+      official_sample_count: 3,
+      raw_confirmation_depth: 1,
+      composite_stderr: 0.01,
+      aggregate_mode: 'fleet_ready',
+      wave_membership: 'participants',
+      owner_key: 'owner:gryffindor',
+      representative_canonical_composite: 0.479032,
+      representative_official_composite: 0.5965,
+      representative_margin: 0.05578,
+      representative_selection: 'official_composite',
+      cohort_cutoff: {
+        agent_id: representativeId,
+        composite: 0.30444,
+        gap: -0.23628,
+        tie_band: 0.02,
+        within_tie_band: true,
+      },
+      emission_cutoff: {
+        agent_id: representativeId,
+        composite: 0.30444,
+        gap: -0.23628,
+        tie_band: 0.02,
+        within_tie_band: true,
+      },
+      claim: {
+        lane_enabled: true,
+        latest_block: 1000,
+        champion_agent_id: representativeId,
+        champion_crown_block: 900,
+        scheduled_round: false,
+        spare_capacity_window: false,
+        idle_retests_enabled: false,
+        in_catchup_set: false,
+        route_priority: 'not_routed',
+        route_position: null,
+        pending_seed_count: 2,
+        claimable_seed_available: false,
+        live_lease_count: 0,
+        newer_canonical_work_pending: false,
+        least_covered_admitted: null,
+        decision: 'not_in_cohort',
+        // A drifted platform must not leak challenge material through MCP.
+        pending_seeds: ['9223372036854775002'],
+      },
+      latest_ticket_status: null,
+      latest_ticket_validator_hotkey: null,
+      latest_ticket_updated_at: null,
+      latest_ticket_failure_reason: null,
+      terminal_ticket_count: 0,
+      latest_confirmation_composite: null,
+      latest_confirmation_recorded_at: null,
+      confirmation_dataset: { prompt: 'must-not-escape' },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(diagnostic))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({
+        name: 'get_continual_retest_diagnostic',
+        arguments: { agentId: newerId },
+      })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        agent_id: newerId,
+        owner_representative_id: representativeId,
+        admission_reason: 'owner_suppressed',
+        in_raw_wave: false,
+        in_emission_set: false,
+        in_retest_cohort: false,
+        representative_selection: 'official_composite',
+        cohort_cutoff: { gap: -0.23628, within_tie_band: true },
+        claim: {
+          decision: 'not_in_cohort',
+          route_priority: 'not_routed',
+          pending_seed_count: 2,
+          // A platform predating void re-run debt reads as owing nothing.
+          void_rerun_seed_count: 0,
+          void_rerun_claimable: false,
+          provider_outage_active: false,
+          provider_gate_closed: false,
+        },
+        raw_confirmation_seeds: ['9223372036854775001'],
+      })
+      const text = readTextResult(response)
+      expect(text).not.toContain('9223372036854775002')
+      expect(text).not.toContain('must-not-escape')
+      expect(text).not.toContain('platform-admin-token')
+
+      // The Platform admin bearer stays on the Worker's upstream call.
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(
+        `https://platform-api.heyditto.ai/api/v1/admin/agents/${newerId}/continual-retest-diagnostic`,
+      )
+      expect(init.method ?? 'GET').toBe('GET')
+      expect(init.headers).toMatchObject({ Authorization: 'Bearer platform-admin-token' })
+
+      // A name or hotkey is not an exact agent UUID; nothing reaches Platform.
+      const invalid = await client.callTool({
+        name: 'get_continual_retest_diagnostic',
+        arguments: { agentId: 'Gryffindor_v3' },
+      })
+      expect(invalid.isError).toBe(true)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+
+      // The score reads that omit owner-generation and cohort facts say where
+      // to find them, in on-demand help rather than the catalog.
+      for (const tool of ['get_agent_scores', 'get_leaderboard']) {
+        const help = await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool } })
+        expect((readJsonResult(help) as { guidance: string }).guidance).toContain(
+          'get_continual_retest_diagnostic',
+        )
+      }
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
   it('resolves an owner footprint on read scope alone, with standings joined', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const agentId = '55555555-5555-4555-8555-555555555555'
@@ -7511,5 +12150,217 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+  it('reads a pre-canary Platform node control with Platform defaults', async () => {
+    // Platform and Backroom deploy in parallel. A Platform build without the
+    // canary cap omits it; Backroom's read schema supplies Platform's own
+    // defaults instead of failing the capacity read.
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: {
+        screening_concurrency: 2,
+        sandbox_slots: 2,
+        build_concurrency: 2,
+        runtime_concurrency: 2,
+        source_review_concurrency: 2,
+      },
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: '2026-09-28T00:00:00Z',
+    }
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        snapshot: null,
+        nodes: [],
+        events: [],
+        node_controls: [
+          {
+            current: revision,
+            history: [revision],
+            usage: {
+              screening_active: 1,
+              sandbox_active: 0,
+              build_active: 0,
+              runtime_active: 0,
+              source_review_active: 0,
+            },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    try {
+      const response = await client.callTool({ name: 'get_screener_capacity', arguments: {} })
+      expect(response.isError).not.toBe(true)
+      expect(readJsonResult(response)).toMatchObject({
+        node_controls: [
+          {
+            current: { revision: 3, settings: { canary_concurrency: 1 } },
+            history: [{ settings: { canary_concurrency: 1 } }],
+            usage: { screening_active: 1, canary_active: 0, canary_queued: 0 },
+          },
+        ],
+      })
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+  it('requires the report-only canary cap on node concurrency writes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    try {
+      const tool = (await client.listTools()).tools.find(
+        (candidate) => candidate.name === 'set_screener_node_channel_settings',
+      )
+      expect(tool?.description).toContain('report-only L2 canary cap')
+      const settingsSchema = (
+        tool?.inputSchema.properties as Record<string, { required?: string[] }>
+      ).settings
+      expect(settingsSchema.required).toContain('canary_concurrency')
+      const help = async (name: string) =>
+        (
+          readJsonResult(
+            await client.callTool({ name: 'get_backroom_tool_help', arguments: { tool: name } }),
+          ) as { guidance: string }
+        ).guidance
+      const writeHelp = await help('set_screener_node_channel_settings')
+      expect(writeHelp).toContain('Supply all six limits')
+      expect(writeHelp).toContain('only while admission is open')
+      expect(writeHelp).toContain(
+        'min(canary_concurrency, 4, fresh workers minus screening_concurrency)',
+      )
+      expect(await help('get_screener_capacity')).toContain('usage.canary_active')
+
+      const response = await client.callTool({
+        name: 'set_screener_node_channel_settings',
+        arguments: {
+          nodeId: 'subnet-screener-1',
+          expectedRevision: 0,
+          settings: {
+            screening_concurrency: 1,
+            sandbox_slots: 1,
+            build_concurrency: 1,
+            runtime_concurrency: 1,
+            source_review_concurrency: 1,
+          },
+          reason: 'Start the approved one-slot Hetzner production canary',
+          confirmation:
+            'APPLY SCREENER NODE subnet-screener-1 ' +
+            'SCREENING=1 SANDBOX=1 BUILD=1 RUNTIME=1 SOURCE_REVIEW=1 CANARY=1',
+        },
+      })
+      expect(response.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+    } finally {
+      await client.close()
+      await server.close()
+    }
+  })
+
+})
+
+
+describe('contributor identity and CLA MCP tools', () => {
+  it('exposes exact-link recovery preflight as read-only', async () => {
+    const { githubRevocationFixture } = await import('./contributor.test-fixtures')
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(githubRevocationFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'get_github_link_revocation_preflight', arguments: { linkId: contributorFixture.link.link_id } })
+    expect(readJsonResult(response)).toEqual(githubRevocationFixture)
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === 'get_github_link_revocation_preflight')?.annotations)
+      .toMatchObject({ readOnlyHint: true, destructiveHint: false })
+    await client.close(); await server.close()
+  })
+
+  it('refuses GitHub recovery without write scope', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({ name: 'revoke_miner_github_link', arguments: {
+      linkId: contributorFixture.link.link_id, reason: 'recover a verified hostile link',
+      confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+    } })
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(TOOL_SCOPE_REQUIREMENTS.get('revoke_miner_github_link')).toBe(BACKROOM_WRITE_SCOPE)
+    await client.close(); await server.close()
+  })
+
+  it('attributes destructive recovery to the current operator', async () => {
+    const { revokedGithubFixture } = await import('./contributor.test-fixtures')
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...revokedGithubFixture,
+      operator_revocation: { ...revokedGithubFixture.operator_revocation, actor: session.email },
+    }))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === 'revoke_miner_github_link')?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false })
+    const result = await client.callTool({ name: 'revoke_miner_github_link', arguments: {
+      linkId: contributorFixture.link.link_id, reason: 'recover a verified hostile link',
+      confirmation: `REVOKE GITHUB LINK ${contributorFixture.link.link_id}`,
+      actor: 'untrusted-input@invalid.example',
+    } })
+    expect(result.isError).not.toBe(true)
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty('actor')
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe(session.email)
+    await client.close(); await server.close()
+  })
+
+  it('returns numeric GitHub identity, exact consent status and rollout adoption with read scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(claStatusFixture)).mockResolvedValueOnce(Response.json(claControlFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    expect(readJsonResult(await client.callTool({ name: 'get_miner_github_link', arguments: { hotkey: 'fixture' } }))).toEqual(contributorFixture)
+    expect(readJsonResult(await client.callTool({ name: 'get_miner_cla_status', arguments: { hotkey: 'fixture' } }))).toEqual(claStatusFixture)
+    expect(readJsonResult(await client.callTool({ name: 'get_cla_policy', arguments: {} }))).toMatchObject({ current: { mode: 'off' }, unsigned_active_hotkeys: 1 })
+    await client.close(); await server.close()
+  })
+
+  it.each(['set_cla_policy', 'publish_cla_version'])('refuses %s without write scope', async (name) => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const args = name === 'set_cla_policy' ? { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' } : { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test publication scope', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }
+    const refused = await client.callTool({ name, arguments: args })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(TOOL_SCOPE_REQUIREMENTS.get(name)).toBe(BACKROOM_WRITE_SCOPE)
+    await client.close(); await server.close()
+  })
+
+  it.each(['set_cla_policy', 'publish_cla_version'])('marks %s as destructive and non-idempotent', async (name) => {
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    const tools = await client.listTools()
+    expect(tools.tools.find((tool) => tool.name === name)?.annotations)
+      .toMatchObject({ readOnlyHint: false, destructiveHint: true, idempotentHint: false })
+    await client.close(); await server.close()
+  })
+
+  it('attributes writes to the current signed-in operator', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture)).mockResolvedValueOnce(Response.json(claControlFixture)).mockResolvedValueOnce(Response.json(claVersionFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+    await client.callTool({ name: 'set_cla_policy', arguments: { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' } })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ mode: 'shadow' })
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe(session.email)
+    await client.callTool({ name: 'publish_cla_version', arguments: { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test publication attribution', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) } })
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ version: 1 })
+    expect(fetchMock.mock.calls[2][1].headers['X-Admin-Actor']).toBe(session.email)
+    await client.close(); await server.close()
   })
 })

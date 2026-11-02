@@ -51,6 +51,8 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   upstream responses are fully buffered, sanitized, and re-serialized.
   The coding route is a separate disabled-by-default shadow lane; see
   [`CODING-SHADOW.md`](CODING-SHADOW.md).
+  `POST /api/v1/inference/decisions` is the dark decision-model lane; see
+  [Decision lane](#decision-lane-dark).
 - `internal/chain` — Pylon client: `/health` block probe and the
   validator-permit and registered-owner checks (`/block/recent/neurons`), with
   one-block snapshot caching and single-flight refreshes.
@@ -67,6 +69,53 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
 - `internal/testutil` — real-Postgres test harness (fresh database per test
   on the monorepo test container at `localhost:15433`; skips when
   unavailable).
+
+## Decision lane (dark)
+
+`POST /api/v1/inference/decisions` brokers a decision model (TypeSafe Jev)
+through OpenRouter's System One endpoint,
+`POST https://openrouter.ai/api/v1/systemone`, with the existing
+`OPENROUTER_API_KEY`. No other credential exists for it.
+`DITTO_DECISION_UPSTREAM_URL` may override the URL, but only to that same
+pinned OpenRouter path (it is a credential boundary like the chat and
+embedding URLs).
+
+The lane is off until the operator turns on `decision_lane` on the inference
+concurrency board (Backroom `set_inference_concurrency_settings`) with
+`enabled: true` and an exact `model`, e.g. `typesafe/jev-1.14` (never
+`~typesafe/jev-latest`). While it is off, the route answers the same 404 an
+unmounted path does, and grants are minted with no decision pin. The board
+also sets the stamped price (`input_microusd_per_mtok`, default 42000 =
+$0.042 per million input tokens), the per-run `request_budget` and
+`token_budget`, and the live concurrency and requests-per-minute rails. The
+model, price and walls are stamped onto each grant at mint, and `enabled` is
+a live kill switch.
+
+The body is the System One body (`{state, questions, assets?}`) passed
+through nearly verbatim. Harnesses may use any question type the provider
+supports (choice, score, noul, box), as many questions as the provider
+allows, and any state. The relay forces `model` to the grant's pin. It
+refuses only the fields it owns (`provider`, `session_id`, `user`,
+`trace`). It answers
+`{model, answers, usage: {input_tokens, output_tokens}}`, with `answers`
+passed through verbatim.
+
+The relay's controls are:
+
+- **Pin verification.** A response served by a model other than the pin
+  (or a dated snapshot of it, such as `typesafe/jev-1.13-20260917`) is an
+  uncharged infrastructure failure (502, `decision_model_mismatch`).
+- **Metering.** Receipted `usage.input_tokens` × the stamped price is booked
+  as `decision_cost_microusd`, which is ledger cost, never the provider
+  bill. Output is free.
+- **Walls.** The lane has its own request and token walls (4102/4104). They
+  never mark the grant exhausted, so chat survives a spent decision wall.
+- **Outages.** These use the existing 502/503/504 shapes, which the scorer
+  maps to the no-fault `model_relay_unavailable`.
+- **Provider rejections.** A provider 400/422 on the harness's own questions
+  is returned as an uncharged 400.
+
+No new decline or infra codes are introduced. The lane carries no score.
 
 ## Inference trace capture (`internal/traces`)
 
@@ -182,3 +231,36 @@ Caddy keeps them on Python while
 relay slots report the intended release SHA from `/health`, then set the flag
 true and converge the `platform_app` role. Roll back only this slice by setting
 the flag false and reconverging; inference routing is unaffected.
+
+## Ditto Router upstream (dogfood, off by default)
+
+The relay can forward a miner's chat inference to **Ditto's own Router** instead
+of OpenRouter, for miners who linked a Ditto account (`miner_ditto_links`,
+written by apps/platform's Sign in with Ditto flow). Attribution rides on
+`X-Ditto-On-Behalf-Of: <ditto_user_id>` read from the link row, never from the
+request, and the Router re-checks that user's own `credits:spend` consent (a
+402 comes back as `ditto_router_payment_required`, distinct from an outage,
+and is never retried). Everything else — unlinked miners, disabled lanes,
+lookup errors — takes the centralized OpenRouter path byte for byte.
+
+| Env | Default | Meaning |
+| --- | --- | --- |
+| `DITTO_ROUTER_UPSTREAM_ENABLED` | `false` | Master switch. |
+| `DITTO_ROUTER_UPSTREAM_URL` | `https://inference.heyditto.ai/v1/chat/completions` | Pinned to Ditto inference hosts (`router.heyditto.ai`, its `inference.heyditto.ai` compatibility host, staging, `pr-N`/`be-N` previews) and to the exact `/v1/chat/completions` path; anything else fails boot. |
+| `DITTO_ROUTER_API_KEY` | — | Owner-minted key on the DittoBench app endpoint. Required when enabled. |
+| `DITTO_ROUTER_LANES` | *(empty)* | csv of `screener`, `competition`. Empty routes nothing. |
+| `DITTO_ROUTER_COMPETITION_ACK` | — | Must be `memories-off-locked-model` before `competition` is accepted. |
+| `DITTO_ROUTER_ON_BEHALF_OF_HEADER` | `X-Ditto-On-Behalf-Of` | Header the Router reads the user id from. |
+
+Two Router endpoints back the two lanes, and the difference is the point:
+
+- **`dittobench-screener`** — memories **on** (`recall_enabled`, the screener's
+  KG), used by screener-side source review. Not wired in this service yet;
+  the screener worker has its own provider client.
+- **`dittobench-competition`** — memories **off**, `record_enabled` off, model
+  **locked** to the benchmark's pinned model, `model_mode` fixed. The scored
+  benchmark must measure the miner's agent, not Ditto's memory, so the ack
+  is required and the endpoint posture is part of the bench contract.
+
+Live parity (same model, same usage accounting, receipts on the Ditto side)
+must be shown on a canary before `competition` is enabled in production.

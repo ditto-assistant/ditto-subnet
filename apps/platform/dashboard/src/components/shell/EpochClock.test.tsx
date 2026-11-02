@@ -110,3 +110,21 @@ describe("EpochClock", () => {
     expect(clockText()).not.toBe(first);
   });
 });
+
+describe("EpochClock pin line", () => {
+  it("names the pinned ledger the fleet folds and how many vectors match it", () => {
+    render(() => (
+      <EpochClock
+        epoch={() => epochAt(1815)}
+        pin={() => ({ epoch_index: 25_028, previous_epoch_index: 25_027, matching: 9, total: 11 })}
+      />
+    ));
+    const text = document.querySelector("#epoch-clock .epoch-clock-pin")?.textContent ?? "";
+    expect(text).toBe("9 of 11 validator vectors match pin #25,028");
+  });
+
+  it("renders no pin line when the platform has none to report", () => {
+    render(() => <EpochClock epoch={() => epochAt(1815)} pin={() => null} />);
+    expect(document.querySelector("#epoch-clock .epoch-clock-pin")).toBeNull();
+  });
+});

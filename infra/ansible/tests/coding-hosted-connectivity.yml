@@ -1,0 +1,55 @@
+---
+- name: Verify default single-attempt connectivity remains dormant
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  roles:
+    - coding_hosted_connectivity
+  tasks:
+    - name: Verify safe default gates
+      ansible.builtin.assert:
+        that:
+          - not coding_hosted_connectivity_enabled
+          - coding_hosted_worker_mode == 'single'
+          - coding_hosted_rollout_approval_sha256 == ''
+    - name: Check legacy unit rendering without writing a file
+      vars:
+        coding_hosted_uid: 1001
+        coding_hosted_worker_python: /opt/ditto-coding-hosted/public/python
+        coding_hosted_worker_config: /var/lib/ditto-coding-hosted/private/single.json
+        rendered_unit: "{{ lookup('template', '../roles/coding_hosted_connectivity/templates/worker.service.j2') }}"
+      ansible.builtin.assert:
+        that:
+          - "'--private-shadow-once' in rendered_unit"
+          - "'--bounded-shadow-once' not in rendered_unit"
+          - "'KillMode=control-group' in rendered_unit"
+
+- name: Verify rollout mode alone cannot install or start anything
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    coding_hosted_worker_mode: rollout
+  roles:
+    - coding_hosted_connectivity
+  tasks:
+    - name: Verify explicit provisioning is still required
+      ansible.builtin.assert:
+        that:
+          - not coding_hosted_connectivity_enabled
+    - name: Check bounded unit rendering without writing a file
+      vars:
+        coding_hosted_uid: 1001
+        coding_hosted_worker_python: /opt/ditto-coding-hosted/public/python
+        coding_hosted_worker_config: /var/lib/ditto-coding-hosted/private/cohort.json
+        coding_hosted_rollout_approval_sha256: "{{ 'a' * 64 }}"
+        coding_hosted_rollout_connectivity_sha256: "{{ 'b' * 64 }}"
+        rendered_unit: "{{ lookup('template', '../roles/coding_hosted_connectivity/templates/worker.service.j2') }}"
+      ansible.builtin.assert:
+        that:
+          - "'--bounded-shadow-once' in rendered_unit"
+          - "'--private-shadow-once' not in rendered_unit"
+          - "'install-rollout ' + ('b' * 64) in rendered_unit"
+          - "'--approval-sha256 ' + ('a' * 64) in rendered_unit"
+          - "'KillMode=mixed' in rendered_unit"
+          - "'Restart=no' in rendered_unit"

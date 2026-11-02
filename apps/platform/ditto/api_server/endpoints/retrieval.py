@@ -1,8 +1,9 @@
 """Read-only retrieval endpoints.
 
 Public, unauthed reads. Status + hotkey are chain-public-equivalent;
-rate-limit + TLS deferred to a reverse proxy in front of the API
-(threat-model G6 known gap). ``Cache-Control: no-store`` on every
+TLS is terminated by the reverse proxy in front of the API, and the
+opt-in ``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE`` limit covers these routes
+(threat-model G6). ``Cache-Control: no-store`` on every
 response because these are state-machine status queries — polling
 exists exactly to detect transitions, and any intermediate cache
 defeats that.
@@ -111,9 +112,14 @@ async def agent_status(
     agent = await get_agent_by_id(session, agent_id=agent_id)
     if agent is None:
         raise AgentNotFoundError(f"no agent with id={agent_id}")
+    # Same hotkey-level ban rule as ``agent_by_hotkey``: ``ditto status`` reads
+    # this endpoint, and a banned miner must not see a stale per-agent status.
+    status = agent.status
+    if await is_hotkey_banned(session, hotkey=agent.miner_hotkey):
+        status = AgentStatus.BANNED
     return AgentStatusResponse(
         agent_id=agent.agent_id,
-        status=agent.status,
+        status=status,
         screening_reason=agent.screening_reason,
         screening_reason_code=agent.screening_reason_code,
     )

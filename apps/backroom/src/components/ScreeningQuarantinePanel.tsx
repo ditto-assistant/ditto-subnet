@@ -31,6 +31,7 @@ import {
   executeScreeningQuarantineDecisions,
   getOwnerAttestations,
   getScreeningArtifact,
+  getScreeningQuarantineContext,
   listScreeningQuarantines,
   listScreeningDisputes,
   previewScreeningQuarantineDecisions,
@@ -85,6 +86,50 @@ function formatDate(value: string | null) {
 
 function submissionLabel(version: number | null | undefined) {
   return version == null ? 'Legacy submission' : `Submission v${version}`
+}
+
+/**
+ * Render a machine code for display.
+ *
+ * A quarantine carries two codes from disjoint vocabularies: the
+ * screening-origin code it was opened under, and the operator's ruling code.
+ * They are never interchangeable, so every call site says which one it is
+ * showing. Nullable because Backroom may be deployed ahead of the field.
+ */
+function humanizeCode(code: string | null | undefined) {
+  return code ? code.replaceAll('_', ' ').replaceAll('-', ' ') : 'not recorded'
+}
+
+/**
+ * The screening-origin code, labelled as the reason it was held.
+ *
+ * Naming the origin is the whole point: an unlabelled code sitting under a
+ * `reject` badge reads as the reason for the rejection, which is how a
+ * CLEAR-side code such as `behavioral-oracle-passed` came to look like the
+ * justification for rejecting the submission it cleared.
+ */
+function ScreeningOrigin({ code }: { code: string | null | undefined }) {
+  return (
+    <span title="Why the screener held this submission. Not the operator's ruling.">
+      Held for {humanizeCode(code)}
+    </span>
+  )
+}
+
+/**
+ * The operator's ruling code, labelled as the decision rather than the lead.
+ *
+ * Derived by the platform from the resolution, so it is shown next to the
+ * resolution it explains and never substituted for the screening origin.
+ * Rendered only when the platform reports one; an unresolved quarantine has
+ * no ruling to name.
+ */
+function RulingBasis({ code }: { code: string }) {
+  return (
+    <span title="The operator decision this quarantine was closed with.">
+      Ruled {humanizeCode(code)}
+    </span>
+  )
 }
 
 function SubmissionBadge({ version }: { version: number | null | undefined }) {
@@ -230,12 +275,15 @@ export function ScreeningQuarantinePanel({
   const previewBatch = useServerFn(previewScreeningQuarantineDecisions)
   const executeBatch = useServerFn(executeScreeningQuarantineDecisions)
   const getArtifact = useServerFn(getScreeningArtifact)
+  const getContext = useServerFn(getScreeningQuarantineContext)
   const [items, setItems] = useState(initialItems)
   const [filter, setFilter] = useState<QuarantineFilter>('active')
   const [sort, setSort] = useState<QuarantineSort>('oldest')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<ScreeningQuarantine | null>(initialItems[0] ?? null)
+  const failedApproval = selected?.agent_status === 'screening_failed' && selected.status === 'resolved' && selected.resolution === 'rescreen'
   const [resolution, setResolution] = useState<QuarantineResolution>('rescreen')
+  const effectiveResolution = failedApproval ? 'release' : resolution
   const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -323,7 +371,8 @@ export function ScreeningQuarantinePanel({
           submissionLabel(item.agent_version),
           item.agent_id,
           item.miner_hotkey,
-          item.reason_code,
+          item.screening_reason_code ?? '',
+          item.resolution_reason_code ?? '',
           item.artifact_sha256,
         ]
           .join(' ')
@@ -426,15 +475,29 @@ export function ScreeningQuarantinePanel({
 
   const submitDecision = async () => {
     if (!selected || reason.trim().length < 3) return
-    await requestPreview([
-      {
-        quarantineId: selected.quarantine_id,
-        expectedAgentId: selected.agent_id,
-        expectedArtifactSha256: selected.artifact_sha256,
-        resolution,
-        reason: reason.trim(),
-      },
-    ])
+    try {
+      const context = failedApproval
+        ? await getContext({ data: { quarantineId: selected.quarantine_id } })
+        : null
+      if (context && (context.agent.score_count == null || !context.attempts[0])) {
+        throw new Error('Refresh after Platform supports guarded failure approval')
+      }
+      await requestPreview([
+        {
+          quarantineId: selected.quarantine_id,
+          expectedAgentId: selected.agent_id,
+          expectedArtifactSha256: selected.artifact_sha256,
+          ...(context ? {
+            expectedAttemptId: context.attempts[0].attempt_id,
+            expectedScoreCount: context.agent.score_count!,
+          } : {}),
+          resolution: effectiveResolution,
+          reason: reason.trim(),
+        },
+      ])
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to prepare approval')
+    }
   }
 
   return (
@@ -620,7 +683,8 @@ export function ScreeningQuarantinePanel({
                           <td className="block max-w-sm align-top sm:table-cell sm:px-4 sm:py-3">
                             <p className="font-medium text-white">{item.agent_name}</p>
                             <p className="mt-1 text-[10px] text-[var(--muted)]">
-                              {item.reason_code.replaceAll('_', ' ')} · policy v{item.policy_version}
+                              <ScreeningOrigin code={item.screening_reason_code} /> · policy
+                              v{item.policy_version}
                             </p>
                             <p className="mt-1 line-clamp-2 leading-4 text-[var(--muted-strong)]">
                               {item.finding?.summary ?? 'No source-review summary was recorded.'}
@@ -848,14 +912,25 @@ export function ScreeningQuarantinePanel({
                                 {item.agent_id}
                               </p>
                             </div>
-                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${item.status === 'active' ? 'bg-[var(--amber-dim)] text-[var(--amber)]' : 'bg-white/[0.06] text-[var(--muted-strong)]'}`}>
-                              {item.status === 'active' ? 'Needs decision' : item.resolution ?? 'Resolved'}
+                            {/* An active row behind an already banned/rejected agent is
+                                reconciliation work, not a review (ditto-subnet#2038). */}
+                            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${item.status === 'active' && !item.terminal_ghost ? 'bg-[var(--amber-dim)] text-[var(--amber)]' : 'bg-white/[0.06] text-[var(--muted-strong)]'}`}>
+                              {item.terminal_ghost
+                                ? `Agent ${item.agent_status ?? 'terminal'} · reconcile`
+                                : item.status === 'active'
+                                  ? 'Needs decision'
+                                  : item.resolution ?? 'Resolved'}
                             </span>
                           </div>
                           <div className="mt-3 flex flex-wrap items-center gap-2">
                             <p className="text-xs capitalize text-[var(--muted-strong)]">
-                              {item.reason_code.replaceAll('_', ' ')}
+                              <ScreeningOrigin code={item.screening_reason_code} />
                             </p>
+                            {item.resolution_reason_code ? (
+                              <p className="text-xs capitalize text-[var(--muted-strong)]">
+                                <RulingBasis code={item.resolution_reason_code} />
+                              </p>
+                            ) : null}
                             {item.finding && item.finding_verified ? (
                               <span
                                 className={`rounded-full px-2 py-0.5 text-[10px] font-medium uppercase ${
@@ -963,7 +1038,7 @@ export function ScreeningQuarantinePanel({
                     </dl>
                   </div>
 
-                  {selected.status === 'resolved' ? (
+                  {selected.status === 'resolved' && !failedApproval ? (
                     <div className="pt-5 text-xs leading-5 text-[var(--muted-strong)]">
                       <p>
                         <span className="font-medium text-white">{selected.resolved_by ?? 'Unknown operator'}</span>{' '}
@@ -974,14 +1049,15 @@ export function ScreeningQuarantinePanel({
                   ) : (
                     <div className="pt-6">
                       <fieldset disabled={readOnly || submitting}>
-                        <legend className="text-xs font-medium">Decision</legend>
+                        <legend className="text-xs font-medium">{failedApproval ? 'Approve after manual source review' : 'Decision'}</legend>
+                        {failedApproval ? <p className="mt-2 text-xs text-[var(--muted)]">Release this parked screening failure to build, health and validation checks. The failed attempts and prior rulings remain in its history.</p> : null}
                         <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                          {(Object.keys(resolutionCopy) as Array<QuarantineResolution>).map((value) => {
+                          {(failedApproval ? ['release' as const] : Object.keys(resolutionCopy) as Array<QuarantineResolution>).map((value) => {
                             const copy = resolutionCopy[value]
                             const Icon = copy.icon
                             return (
-                              <label key={value} className={`cursor-pointer rounded-lg border p-3 transition-colors ${resolution === value ? 'border-[var(--line-strong)] bg-white/[0.05]' : 'border-[var(--line)] hover:bg-white/[0.025]'}`}>
-                                <input type="radio" name="resolution" value={value} checked={resolution === value} onChange={() => setResolution(value)} className="sr-only" />
+                              <label key={value} className={`cursor-pointer rounded-lg border p-3 transition-colors ${effectiveResolution === value ? 'border-[var(--line-strong)] bg-white/[0.05]' : 'border-[var(--line)] hover:bg-white/[0.025]'}`}>
+                                <input type="radio" name="resolution" value={value} checked={effectiveResolution === value} onChange={() => setResolution(value)} className="sr-only" />
                                 <Icon className={`h-4 w-4 ${copy.tone}`} />
                                 <span className="mt-2 block text-xs font-medium">{copy.label}</span>
                                 <span className="mt-1 block text-[10px] leading-4 text-[var(--muted)]">{copy.description}</span>
@@ -1010,10 +1086,10 @@ export function ScreeningQuarantinePanel({
                             type="button"
                             onClick={() => void submitDecision()}
                             disabled={readOnly || submitting || reason.trim().length < 3}
-                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${resolution === 'reject' ? 'bg-[var(--red)] text-white' : resolution === 'rescreen' ? 'bg-[var(--amber)] text-[#1c1407]' : 'bg-[var(--acid)] text-[#11150d]'}`}
+                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${effectiveResolution === 'reject' ? 'bg-[var(--red)] text-white' : effectiveResolution === 'rescreen' ? 'bg-[var(--amber)] text-[#1c1407]' : 'bg-[var(--acid)] text-[#11150d]'}`}
                           >
                             {submitting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                            Confirm {resolution}
+                            Preview {effectiveResolution}
                           </button>
                         </div>
                       </div>
@@ -1195,6 +1271,12 @@ export function ScreeningQuarantinePanel({
                   </span>
                 </div>
                 <p className="mt-2 leading-5 text-[var(--muted)]">{item.reason}</p>
+                {item.public_reason_code ? (
+                  <p className="mt-2 font-mono text-[10px] leading-4 text-[var(--muted-strong)]">
+                    Public audit {item.public_reason_code}
+                    {item.public_record_hash ? ` · ${item.public_record_hash}` : ''}
+                  </p>
+                ) : null}
                 <p className="mt-1 text-[10px] text-[var(--muted)]">{item.message}</p>
               </div>
             ))}
@@ -1456,10 +1538,24 @@ function ScreeningDisputeQueue({
                   <div className="flex flex-wrap items-center gap-2">
                     <h2 className="text-lg font-semibold tracking-[-0.02em]">{selected.agent_name}</h2>
                     <SubmissionBadge version={selected.agent_version} />
-                    <span className="rounded-full bg-[var(--amber-dim)] px-2 py-0.5 text-[10px] font-medium text-[var(--amber)]">Disputed</span>
+                    <span className="rounded-full bg-[var(--amber-dim)] px-2 py-0.5 text-[10px] font-medium text-[var(--amber)]">
+                      {selected.kind === 'gate_notes' ? 'Gate notes disputed' : 'Disputed'}
+                    </span>
                   </div>
                   <p className="mt-2 break-all font-mono text-[10px] text-[var(--muted)]">{selected.agent_id}</p>
                   <p className="mt-2 text-xs text-[var(--muted-strong)]">Submitted {formatDate(selected.created_at)}</p>
+                  {selected.kind === 'gate_notes' ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--muted-strong)]">
+                      Appeals bench v13+ gate notes on a scored submission, not a quarantine. Read the cited
+                      notes back through the owner projection before deciding; either resolution only
+                      records your verdict and never changes the agent&apos;s status or scores.
+                    </p>
+                  ) : null}
+                  {selected.gate_note_ids && selected.gate_note_ids.length > 0 ? (
+                    <p className="mt-2 break-all font-mono text-[10px] text-[var(--muted)]">
+                      Cited gate notes: {selected.gate_note_ids.join(', ')}
+                    </p>
+                  ) : null}
                 </div>
                 <button
                   type="button"
@@ -1503,8 +1599,24 @@ function ScreeningDisputeQueue({
                       <label key={value} className={`cursor-pointer rounded-lg border p-3 transition-colors ${resolution === value ? 'border-[var(--line-strong)] bg-white/[0.05]' : 'border-[var(--line)] hover:bg-white/[0.025]'}`}>
                         <input type="radio" name="dispute-resolution" value={value} checked={resolution === value} onChange={() => setResolution(value)} className="sr-only" />
                         {value === 'release' ? <ShieldCheck className="h-4 w-4 text-[var(--acid)]" /> : <XCircle className="h-4 w-4 text-[var(--red)]" />}
-                        <span className="mt-2 block text-xs font-medium">{value === 'release' ? 'Accept and release' : 'Uphold rejection'}</span>
-                        <span className="mt-1 block text-[10px] leading-4 text-[var(--muted)]">{value === 'release' ? 'Return the submission to validator evaluation.' : 'Keep the submission rejected after final review.'}</span>
+                        <span className="mt-2 block text-xs font-medium">
+                          {selected.kind === 'gate_notes'
+                            ? value === 'release'
+                              ? 'Accept the appeal'
+                              : 'Uphold the gate notes'
+                            : value === 'release'
+                              ? 'Accept and release'
+                              : 'Uphold rejection'}
+                        </span>
+                        <span className="mt-1 block text-[10px] leading-4 text-[var(--muted)]">
+                          {selected.kind === 'gate_notes'
+                            ? value === 'release'
+                              ? 'Record that the cited notes are contested; scores and status are untouched.'
+                              : 'Record that the cited notes stand; scores and status are untouched.'
+                            : value === 'release'
+                              ? 'Return the submission to validator evaluation.'
+                              : 'Keep the submission rejected after final review.'}
+                        </span>
                       </label>
                     ))}
                   </div>

@@ -29,8 +29,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
 
@@ -42,8 +44,11 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
 )
 from ditto.api_models.inference import InferenceGrantOffer
+from ditto.api_models.private_dataset import (
+    PrivateDatasetRequest as PrivateDatasetRequest,
+)
 from ditto.api_models.stack_health import ValidatorStackHealth
-from ditto.api_models.system_health import SystemMetrics
+from ditto.api_models.system_health import HostSpecs, SystemMetrics
 from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
@@ -62,6 +67,7 @@ from ditto.api_models.validator_confirmation import (
     LongMemDimensionEnvelope as LongMemDimensionEnvelope,
 )
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
+from ditto.api_models.validator_weights_fold import WeightsFold
 from ditto_screening_protocol.bench_v9 import (
     V9AuthoritativeToolGate as V9AuthoritativeToolGate,
 )
@@ -95,6 +101,9 @@ from ditto_screening_protocol.bench_v9 import (
 from ditto_screening_protocol.bench_v9 import (
     V12ModelDependenceGate as V12ModelDependenceGate,
 )
+from ditto_screening_protocol.bench_v9 import (
+    V13ClaimProvenanceGate as V13ClaimProvenanceGate,
+)
 from ditto_screening_protocol.bench_v9 import normalize_v9_score_report_omitempty
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationCompositePolicy as V9ConfirmationCompositePolicy,
@@ -102,6 +111,7 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
+from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
@@ -246,11 +256,69 @@ class Top5ConfirmationJobRequest(BaseModel):
 
 
 class ConfirmationDatasetPin(BaseModel):
-    """One platform-generated dataset used by a continual confirmation lease."""
+    """One platform-generated dataset used by a continual confirmation lease.
+
+    The four optional fields are the seed's **finalized-block binding** (bench
+    v13+): ``seed == crn_seed([anchor_agent_id], version=bench_version,
+    k=seed_index, block_hash=seed_block_hash)``. The validator re-derives and
+    refuses a lease whose seed is not consistent with the pin Platform served
+    (it does not read the pinned hash back from the chain). Absent on legacy
+    versions and on seeds no pinned reign anchor derives; the lease is then
+    accepted as before.
+    """
 
     seed: Annotated[int, Field(ge=0)]
+    private_dataset_mode: Literal["platform-private-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     dataset_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     run_size: Annotated[str, Field(min_length=1)]
+    anchor_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            description="Champion the seed family is anchored on (bench v13+).",
+        ),
+    ] = None
+    seed_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Replicate index ``k`` of this seed within the family.",
+        ),
+    ] = None
+    seed_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description="Finalized chain block the family is bound to.",
+        ),
+    ] = None
+    seed_block_hash: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=r"^(0x)?[0-9a-f]{64}$",
+            description="Hash of ``seed_block``; the derivation input.",
+        ),
+    ] = None
+
+
+class ConfirmationSeedAnchorPin(BaseModel):
+    """One reign's pinned finalized-block anchor, served on the ledger.
+
+    Lets every validator re-derive the champion-anchored confirmation family
+    for ``bench_version`` (``crn_seed(..., block_hash=anchor_block_hash)``) and
+    agree fleet-wide without a chain read. Only pinned anchors are served; a
+    reign still in its finality wait is simply absent.
+    """
+
+    champion_agent_id: UUID
+    bench_version: Annotated[int, Field(ge=1)]
+    anchor_block: Annotated[int, Field(ge=0)]
+    anchor_block_hash: Annotated[str, Field(pattern=r"^(0x)?[0-9a-f]{64}$")]
 
 
 class BenchmarkRuntimeSettings(BaseModel):
@@ -262,6 +330,8 @@ class BenchmarkRuntimeSettings(BaseModel):
     relay_delay_fingerprint_mode: Literal["off", "shadow"] = "off"
     relay_delay_fingerprint_min_ms: Annotated[int, Field(ge=0, le=5_000)] = 25
     relay_delay_fingerprint_max_ms: Annotated[int, Field(ge=0, le=5_000)] = 250
+    # Platform-issued harness memory cap, applied identically by every scorer.
+    sandbox_memory_limit_mib: Annotated[int, Field(ge=512, le=32_768)] = 6_144
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:
@@ -286,6 +356,9 @@ class JobResponse(BaseModel):
     """
 
     agent_id: Annotated[UUID, Field(description="Agent this ticket is for.")]
+    private_dataset_mode: Literal["platform-private-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     slot_id: Annotated[str, Field(pattern=r"^slot-[0-7]$")] = "slot-0"
     miner_hotkey: Annotated[str, Field(description="Submitting miner's SS58 hotkey.")]
     sha256: Annotated[
@@ -535,6 +608,28 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="Signed sanitized managed-updater state under protocol v23.",
         ),
     ] = None
+    weights_fold: Annotated[
+        WeightsFold | None,
+        Field(
+            default=None,
+            description=(
+                "Which pinned ledger this validator last folded and the digest of "
+                "the weight vector it committed, under heartbeat protocol v27. "
+                "Null before the first fold of the process or on older validators."
+            ),
+        ),
+    ] = None
+    host_specs: Annotated[
+        HostSpecs | None,
+        Field(
+            default=None,
+            description=(
+                "Fixed host hardware (CPUs, RAM, disk, architecture) sampled once "
+                "per boot, under heartbeat protocol v32. Null when the probe failed "
+                "or on older validators."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -545,6 +640,20 @@ class ValidatorHeartbeatRequest(BaseModel):
             description="sr25519 signature over the canonical heartbeat payload.",
         ),
     ]
+
+    @model_validator(mode="after")
+    def weights_fold_requires_v27(self) -> ValidatorHeartbeatRequest:
+        if (
+            self.capabilities is not None
+            and self.capabilities.treasury_weights is not None
+            and self.protocol_version < 30
+        ):
+            raise ValueError("treasury weight guard requires heartbeat protocol v30")
+        if self.weights_fold is not None and self.protocol_version < 27:
+            raise ValueError("weights fold requires heartbeat protocol v27")
+        if self.host_specs is not None and self.protocol_version < 32:
+            raise ValueError("host specs require heartbeat protocol v32")
+        return self
 
     @model_validator(mode="after")
     def progress_requires_v4_active_ticket(self) -> ValidatorHeartbeatRequest:
@@ -708,9 +817,9 @@ class ValidatorHeartbeatResponse(BaseModel):
 class ArtifactResponse(BaseModel):
     """Returned by ``GET /validator/agent/{agent_id}/artifact``.
 
-    ``download_url`` is a short-lived pre-signed object-store URL the
-    daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
-    the bytes it pulls against what the miner registered.
+    ``download_url`` is a short-lived pre-signed object-store URL to the
+    source tarball. It is ``None`` for a validator whose scorer runs the
+    screened image without source; ``sha256`` still names the artifact.
     """
 
     agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
@@ -718,8 +827,14 @@ class ArtifactResponse(BaseModel):
         str, Field(description="Expected SHA-256 of the tarball, lowercase hex.")
     ]
     download_url: Annotated[
-        str, Field(description="Pre-signed URL to GET the tarball bytes.")
-    ]
+        str | None,
+        Field(
+            description=(
+                "Pre-signed source tarball URL; null when the validator scores "
+                "the screened image without source."
+            )
+        ),
+    ] = None
     expires_at: Annotated[
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]
@@ -782,6 +897,140 @@ class ArtifactResponse(BaseModel):
             }
         }
     )
+
+
+class _WireEvidence(BaseModel):
+    """Base for the nested per-case evidence records mirrored from Go.
+
+    Known fields are mirrored explicitly; unknown additions are ignored during
+    rolling upgrades and never become authoritative. The serializer emits only
+    the keys the report actually carried -- Go uses ``omitempty`` / nil pointers,
+    so a zero the engine omitted must not reappear as a Python default.
+    """
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+
+    @model_serializer(mode="wrap")
+    def _omit_unset(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        fields = type(self).model_fields
+        declared = {info.alias or name for name, info in fields.items()}
+        carried = {
+            key
+            for name in self.model_fields_set
+            if name in fields
+            for key in (name, fields[name].alias or name)
+        }
+        return {k: v for k, v in data.items() if k not in declared or k in carried}
+
+
+class ToolProvenanceEvidence(_WireEvidence):
+    """Per-case v10+ broker-to-endpoint tool provenance (``tool_provenance``).
+
+    Mirrors the DittoBench ``ToolProvenanceEvidence`` wire shape. Advisory
+    audit context only.
+    """
+
+    model_emitted: int = 0
+    endpoint_attempts: int = 0
+    matched: int = 0
+    unmatched: int = 0
+    model_selected_not_executed: int = 0
+    complete: bool = False
+    findings: list[str] = Field(default_factory=list)
+
+
+class OfferedTool(_WireEvidence):
+    """One tool the harness offered the model: wire name + schema digest."""
+
+    name: str
+    schema_sha256: str = ""
+
+
+class CatalogCompletion(_WireEvidence):
+    """Relay metadata of one attributed chat completion (bench v13 catalog gate)."""
+
+    tools_offered: int = 0
+    tools_choosable: int = 0
+    attribution_source: str = ""
+    claim_corroborated: bool = False
+    catalog_sha256: str = ""
+    tool_choice: str = ""
+    model_emitted_tool_calls: list[str] = Field(default_factory=list)
+    system_span_sha256: str = ""
+    after_last_tool_result: bool = False
+
+
+class CatalogEvidence(_WireEvidence):
+    """Bench v13 per-case relay record of the offered tool catalog (``catalog``).
+
+    Mirrors the DittoBench ``CatalogEvidence`` wire shape (bench_version >= 13;
+    nil before). Digests and counts only -- no prompt or completion text.
+    ``findings`` names the catalog-gate rule outcomes for the case.
+    """
+
+    completions_total: int | None = None
+    completions_after_last_tool_result: int = 0
+    completions_with_catalog: int = 0
+    catalog_present: bool = False
+    tools_offered: list[OfferedTool] = Field(default_factory=list)
+    tool_choice_suppressed_completions: int = 0
+    claim_attributed_completions: int = 0
+    claim_corroborated_completions: int = 0
+    overlap_completions: int = 0
+    overlap_completions_with_catalog: int = 0
+    catalog_present_lower_bound: bool = False
+    completions: list[CatalogCompletion] = Field(default_factory=list)
+    model_emitted_tool_calls: list[str] = Field(default_factory=list)
+    harness_system_span_sha256: list[str] = Field(default_factory=list)
+    complete: bool = False
+    findings: list[str] = Field(default_factory=list)
+
+
+class ClaimProvenanceEvidence(_WireEvidence):
+    """Bench v13 per-case claim-span provenance + causal verdict (``claim_provenance``).
+
+    Mirrors the DittoBench ``ClaimProvenanceEvidence`` wire shape
+    (bench_version >= 13; nil before). Hash-derived verdicts and counts only.
+    ``findings`` names the settled gate outcomes for the case.
+    """
+
+    completions: int | None = Field(default=None, ge=0)
+    unattributed_calls: int = Field(default=0, ge=0)
+    tool_results: int = Field(default=0, ge=0)
+    claim_tokens: int = Field(default=0, ge=0)
+    complete: bool = False
+    model_emitted: bool | None = None
+    answer_in_prompt: bool | None = None
+    posture: str = ""
+    findings: list[str] = Field(default_factory=list)
+
+
+class InferenceCostEvidence(_WireEvidence):
+    """Bench v13 per-case inference cost record + shadow factor (``inference_cost``).
+
+    Mirrors the DittoBench ``InferenceCostEvidence`` wire shape (bench_version
+    >= 13; nil before). ``factor_bps`` is the cost factor the v13 rule WOULD
+    apply, in basis points; it is reported only, never multiplied into a
+    score, in v13.0. The wire key ``class`` is a Python keyword, hence the
+    aliased ``case_class`` (serialised back under its wire name).
+    """
+
+    model_config = ConfigDict(
+        extra="ignore", populate_by_name=True, serialize_by_alias=True
+    )
+
+    case_class: str = Field(default="", alias="class")
+    completions: int = Field(default=0, ge=0)
+    choices_total: int = Field(default=0, ge=0)
+    output_tokens: int = Field(default=0, ge=0)
+    reasoning_tokens: int = Field(default=0, ge=0)
+    usage_unavailable: int = Field(default=0, ge=0)
+    attributed: bool = False
+    attribution: str = ""
+    budget_tokens: int = Field(default=0, ge=0)
+    excess_tokens: int = Field(default=0, ge=0)
+    factor_bps: int = Field(default=10000, ge=6000, le=10000)
 
 
 class CaseScore(BaseModel):
@@ -886,6 +1135,94 @@ class CaseScore(BaseModel):
             ),
         ),
     ] = False
+    # Bench v10+ / v13 report-only fields. Declared for the same reason as the
+    # v3 audit fields above: ``extra="ignore"`` would strip them from the
+    # persisted breakdown, and the v13 gate projection reads the per-case
+    # ``catalog`` / ``claim_provenance`` / ``inference_cost`` records and
+    # ``relation``. Every one is additive-optional: the Go engine omits them
+    # (``omitempty`` / nil) below the version that introduced it, and
+    # :func:`ditto.api_server.gate_evidence.persisted_case_dump` keeps the
+    # stored v<=12 breakdown byte-identical. Guarded by the wire round-trip
+    # test (``score_report_v13.json``).
+    audit_half: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "``base`` | ``transform`` for the two halves of a transform-audit "
+                "pair; empty for every other case."
+            ),
+        ),
+    ] = ""
+    undelivered: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="True when the case never reached the harness.",
+        ),
+    ] = False
+    validator_fault: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="True when an undelivered case was the validator's fault.",
+        ),
+    ] = False
+    allow_extra_tools: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="True when extra tool calls were not penalised on this case.",
+        ),
+    ] = False
+    relation: Annotated[
+        str,
+        Field(
+            default="",
+            description=(
+                "Bench v13+: the generator's metamorphic / counterfactual relation "
+                "for this case (e.g. ``base``, ``causal_counterfactual``); empty "
+                "below v13."
+            ),
+        ),
+    ] = ""
+    tool_provenance: Annotated[
+        ToolProvenanceEvidence | None,
+        Field(
+            default=None,
+            description="Bench v10+ broker-to-endpoint tool provenance; null before.",
+        ),
+    ] = None
+    catalog: Annotated[
+        CatalogEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ relay record of the tool catalog the harness offered "
+                "the model, with the catalog-gate findings; null before v13."
+            ),
+        ),
+    ] = None
+    claim_provenance: Annotated[
+        ClaimProvenanceEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ claim-span provenance and causal answer_in_prompt "
+                "verdict for a memory case; null before v13."
+            ),
+        ),
+    ] = None
+    inference_cost: Annotated[
+        InferenceCostEvidence | None,
+        Field(
+            default=None,
+            description=(
+                "Bench v13+ per-case inference cost record and shadow cost "
+                "factor; null before v13."
+            ),
+        ),
+    ] = None
 
     @field_validator("called", "expected", "notes", mode="before")
     @classmethod
@@ -1548,6 +1885,35 @@ class LedgerEntry(BaseModel):
     ]
 
 
+class CrownGateMarker(BaseModel):
+    """Protocol-34 crown rules a validator applies to the KOTH walk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    min_dethrone_confirmations: Annotated[
+        int,
+        Field(
+            ge=2,
+            le=15,
+            description=(
+                "Shared-seed confirmations a challenger must hold against the "
+                "champion before the paired comparison may move the crown."
+            ),
+        ),
+    ]
+    champion_standing_rank: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=5,
+            description=(
+                "Only an entry inside this many places of the fold's official "
+                "ranking may hold or take the crown."
+            ),
+        ),
+    ]
+
+
 class LedgerResponse(BaseModel):
     """Returned by ``GET /scoring/scores``.
 
@@ -1556,6 +1922,20 @@ class LedgerResponse(BaseModel):
     so the exposed pool and the computed weights agree by construction.
     """
 
+    treasury_pin: Annotated[
+        TreasuryPin | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Immutable epoch-bound treasury policy and collector observations. "
+                "V1 is shadow-only and cannot alter weights or authorize spending. "
+                "V2 requires offline approval and current finalized/fleet proof "
+                "before service-first weight dispatch; it never authorizes spending. "
+                "Absent preserves the legacy ledger wire."
+            ),
+        ),
+    ] = None
     entries: Annotated[
         list[LedgerEntry],
         Field(
@@ -1616,6 +1996,45 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    statistical_band_mode: Annotated[
+        Literal["capped"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-29 consensus marker. When capped, paired tie and "
+                "unpaired dethrone statistics are limited to twice the KOTH "
+                "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
+    crown_gate: Annotated[
+        CrownGateMarker | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-34 consensus marker. When present, a challenger "
+                "dethrones only on the paired shared-seed statistic with at "
+                "least min_dethrone_confirmations shared seeds, and the crown "
+                "must sit inside the top champion_standing_rank official "
+                "places. Absent preserves the pre-34 walk."
+            ),
+        ),
+    ] = None
+    rank_shares: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-31 operator payout curve: the champion's share, then "
+                "each tail slot's, summing to 1. Served only once every "
+                "recently-live weight setter reports v31. Absent keeps the "
+                "frozen 65/14/10/7/4 curve."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,
@@ -1656,6 +2075,29 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = 0.0
+    reward_eligibility_mode: Annotated[
+        Literal["enforce"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Present only while the operator's terminal-review emission gate "
+                "is enforcing (ditto-subnet #2041). When present, every entry "
+                "below has a terminal review decision for its exact artifact "
+                "digest at this benchmark version under the posture revision the "
+                "platform resolved: artifacts with an unresolved, inconclusive, "
+                "infrastructure-failed or escalated review have already been "
+                "withheld from this pool, and a clear recorded inside the current "
+                "emission window takes effect at the next one. Absent -- the "
+                "default, and what an older platform's omission means -- says the "
+                "gate is off or in shadow, in which case this ledger is exactly "
+                "what it was before the gate existed. The pool is filtered "
+                "platform-side either way, so a validator that ignores this field "
+                "folds correctly; it is served so the fold's telemetry can state "
+                "which posture produced the pool."
+            ),
+        ),
+    ] = None
     continual_retest_cohort_size: Annotated[
         int,
         Field(
@@ -1673,6 +2115,135 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = 5
+    confirmation_seed_anchors: list[ConfirmationSeedAnchorPin] = Field(
+        default_factory=list,
+        description=(
+            "Pinned finalized-block anchors of the active version's "
+            "confirmation seed families (bench v13+), oldest first. A "
+            "validator derives the champion-anchored CRN family from the "
+            "anchor whose champion_agent_id matches its fold's champion; with "
+            "no matching pin at a binding version it introduces no fresh "
+            "confirmation seed. Empty on older platforms and below the floor."
+        ),
+    )
+    track_shares_bps: dict[str, int] = Field(
+        default_factory=dict,
+        description=(
+            "Optional per-track emission share in basis points (0-10000), "
+            "keyed by track id (``memory``/``coding``/``router``/"
+            "``generator``). The "
+            "operator-owned governance knob for the multi-competition split, "
+            "served already-resolved like ``burn_share`` so the whole fleet "
+            "folds one decided allocation. Absent (an older platform) or "
+            "malformed falls back to the validator's compiled "
+            "``TRACK_SHARES_BPS`` — see ``weights.resolve_track_shares`` — so "
+            "omission is never a change from the shipped single-pool split."
+        ),
+    )
+
+    ledger_snapshot_id: UUID | None = Field(
+        default=None,
+        description="Immutable ledger snapshot identity for commit provenance.",
+    )
+    epoch_index: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Chain SubnetEpochIndex this ledger was pinned for. Present only "
+                "when the platform served an epoch-pinned ledger: every validator "
+                "reading during that epoch receives byte-identical entries and "
+                "markers, so a ledger change lands for the whole fleet at the "
+                "next pin instead of splitting it on who read first. Absent on a "
+                "live (unpinned) read."
+            ),
+        ),
+    ] = None
+    pinned_block: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            exclude_if=lambda value: value is None,
+            description="Head block the pin's epoch schedule was read at.",
+        ),
+    ] = None
+    pinned_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description="When the pin was taken (UTC); equals generated_at on a pin.",
+        ),
+    ] = None
+    ledger_digest: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=r"^[0-9a-f]{64}$",
+            exclude_if=lambda value: value is None,
+            description=(
+                "SHA-256 over the canonical JSON of entries plus the served fold "
+                "markers. Two validators folding the same pin hold the same "
+                "digest; it is what a validator echoes back so the platform can "
+                "show which snapshot each weight vector came from."
+            ),
+        ),
+    ] = None
+    crown_mode: Annotated[
+        Literal["incumbent"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Consensus activation marker for crown incumbency. When set to "
+                "incumbent, the fold starts its champion walk from "
+                "crown_incumbent_agent_id (the previous epoch's champion, "
+                "resolved through its owner family) and moves the crown only "
+                "when a challenger clears the dethrone band over it. Absent "
+                "keeps the historical earliest-lineage walk, in which a senior "
+                "claimant inside the band retakes the crown on every read."
+            ),
+        ),
+    ] = None
+    crown_incumbent_agent_id: Annotated[
+        UUID | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "The incumbent the fold defends when crown_mode is incumbent; "
+                "one of entries, or provisional_incumbent when that is served. "
+                "Absent whenever crown_mode is absent."
+            ),
+        ),
+    ] = None
+    provisional_incumbent: Annotated[
+        LedgerEntry | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol 28. The crown incumbent when the operator's "
+                "terminal-review emission gate withholds its exact artifact: it "
+                "is deliberately NOT in entries, because it may not be paid, and "
+                "is served only on an epoch pin whose crown_mode is incumbent, "
+                "with crown_incumbent_agent_id equal to its agent_id. It must "
+                "carry the same verifiable quorum score_proofs (and v9 "
+                "confirmation, when enforced) as any entry; a validator rejects "
+                "the whole ledger when it does not verify. The fold "
+                "adds it to the pool as the incumbent, derives champion, tail, "
+                "tie pooling and the score-ceiling cohort exactly as for any "
+                "entry, then burns every share it allocated to this entry "
+                "instead of renormalizing it onto other miners: a held champion "
+                "keeps the crown and its slot goes unpaid rather than "
+                "reassigned. Absent on every other ledger, which then folds "
+                "exactly as protocol 27."
+            ),
+        ),
+    ] = None
 
     model_config = ConfigDict(
         json_schema_extra={

@@ -202,9 +202,9 @@ export function ArtifactReleaseControlPanel({
             <div>
               <h2 className="text-sm font-semibold">Current privacy window</h2>
               <p className="mt-1 max-w-[70ch] text-xs leading-5 text-[var(--muted)]">
-                Applies to the leaderboard king only — rank #1. No other miner&rsquo;s source is
-                ever released. The window starts the moment an agent first takes the throne; even a
-                brief stint as king triggers it.
+                Applies only to a submission that has earned winner emissions in a completed
+                tempo. The privacy window starts from that confirmed payout. A brief crown or
+                positive revealed weights alone does not start the clock.
               </p>
             </div>
           </div>
@@ -253,7 +253,7 @@ export function ArtifactReleaseControlPanel({
             <div className="flex items-start gap-3">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <p>
-                Shortening is retroactive. If the king has already held the throne longer than the
+                Shortening is retroactive. If the time since confirmed winner earnings exceeds the
                 new window, its source becomes downloadable immediately, and that cannot be reversed
                 because released source cannot be made private again. Extending the window only holds
                 the king&rsquo;s source private for longer; anything already released stays public.

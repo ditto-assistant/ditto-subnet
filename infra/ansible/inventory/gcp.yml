@@ -5,7 +5,8 @@
 #
 # The Postgres VM has NO public IP, so Ansible connects over IAP (the network
 # module's firewall allows IAP SSH on 22). Connection details — the IAP
-# ProxyCommand and OS Login user — live in group_vars/role_postgres.yml.
+# ProxyCommand and OS Login user — live in group_vars/role_*.yml; the zone the
+# tunnel targets is composed per host below.
 #
 # Usage:
 #   ansible-inventory -i infra/ansible/inventory/gcp.yml --graph
@@ -14,8 +15,15 @@
 plugin: google.cloud.gcp_compute
 projects:
   - ditto-app-dev
+# Every zone infra/terraform/stacks/gcp-platform places instances in: the zonal
+# VMs (var.zone, var.screener_prod_zone) and the regional screener MIG
+# (var.screener_fleet_zones). A zone missing here hides its hosts silently;
+# tests/gcp-inventory.yml keeps this list equal to the Terraform zones.
 zones:
   - us-central1-a
+  - us-central1-b
+  - us-central1-c
+  - us-central1-f
 auth_kind: application
 
 # Group by the terraform labels set in modules/compute/gcp (env, role).
@@ -36,5 +44,7 @@ hostnames:
   - name
 
 # Record the private IP for reference; reachability is via the IAP ProxyCommand.
+# gcp_zone is the instance's own zone, which that ProxyCommand tunnels through.
 compose:
   ansible_host: networkInterfaces[0].networkIP
+  gcp_zone: zone

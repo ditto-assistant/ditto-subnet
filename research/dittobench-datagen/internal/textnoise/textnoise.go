@@ -38,10 +38,14 @@ type Stats struct {
 	Duplication    int
 	CommonSpelling int
 	Grammar        int
+	// Phonetic and Autocorrect are v2-only mechanisms (ProjectV2); v1 leaves
+	// them zero.
+	Phonetic    int
+	Autocorrect int
 }
 
 func (s Stats) Total() int {
-	return s.Keyboard + s.Transpose + s.Omission + s.Duplication + s.CommonSpelling + s.Grammar
+	return s.Keyboard + s.Transpose + s.Omission + s.Duplication + s.CommonSpelling + s.Grammar + s.Phonetic + s.Autocorrect
 }
 
 func (s *Stats) add(kind Kind) {
@@ -58,6 +62,10 @@ func (s *Stats) add(kind Kind) {
 		s.CommonSpelling++
 	case KindGrammar:
 		s.Grammar++
+	case KindPhonetic:
+		s.Phonetic++
+	case KindAutocorrect:
+		s.Autocorrect++
 	}
 }
 

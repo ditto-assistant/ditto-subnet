@@ -3,6 +3,9 @@ package inference
 import (
 	"bytes"
 	"encoding/json"
+	"maps"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -296,7 +299,7 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 	}
 
 	groq := base()
-	groqPreferences := providerPreferences(config.RoutingModeAdaptive, "Groq", "")
+	groqPreferences := providerPreferences(config.RoutingModeAdaptive, "Groq", "", "")
 	adaptProviderRequestCompatibility(groq, groqPreferences)
 	if _, present := groq["response_format"]; present {
 		t.Fatal("Groq-only JSON-object mode must be removed when tools are active")
@@ -309,7 +312,7 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 		payload     map[string]any
 		preferences map[string]any
 	}{
-		"other provider":    {base(), providerPreferences(config.RoutingModeAdaptive, "Amazon Bedrock", "")},
+		"other provider":    {base(), providerPreferences(config.RoutingModeAdaptive, "Amazon Bedrock", "", "")},
 		"tools disabled":    {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "none", "response_format": map[string]any{"type": "json_object"}}, groqPreferences},
 		"structured schema": {map[string]any{"tools": []any{map[string]any{"type": "function"}}, "tool_choice": "auto", "response_format": map[string]any{"type": "json_schema"}}, groqPreferences},
 	} {
@@ -322,7 +325,7 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 	}
 
 	aggregate := base()
-	aggregatePreferences := providerPreferences(config.RoutingModeAggregateThroughput, "nebius", "")
+	aggregatePreferences := providerPreferences(config.RoutingModeAggregateThroughput, "nebius", "", "")
 	adaptProviderRequestCompatibility(aggregate, aggregatePreferences)
 	if _, present := aggregate["response_format"]; !present {
 		t.Fatal("aggregate route should preserve JSON-object mode")
@@ -341,6 +344,30 @@ func TestAdaptProviderRequestCompatibilityAvoidsGroqJSONModeWithTools(t *testing
 	order, _ := reliabilityPreferences["order"].([]string)
 	if len(order) != 1 || order[0] != "deepinfra" {
 		t.Fatalf("reliability route must remove only Groq, got %v", reliabilityPreferences)
+	}
+}
+
+func TestAdaptProviderRequestCompatibilityDropsGroqFromBF16PriceOrder(t *testing.T) {
+	payload := map[string]any{
+		"tools":           []any{map[string]any{"type": "function"}},
+		"tool_choice":     "auto",
+		"response_format": map[string]any{"type": "json_object"},
+	}
+	preferences := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "",
+		config.ScoredProviderRoutingBF16PriceOrder)
+	adaptProviderRequestCompatibility(payload, preferences)
+	if _, present := payload["response_format"]; !present {
+		t.Fatal("bf16 price order should preserve JSON-object mode")
+	}
+	want := []string{"deepinfra", "amazon-bedrock", "dekallm"}
+	for _, key := range []string{"only", "order"} {
+		got, _ := preferences[key].([]string)
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s = %v, want %v", key, got, want)
+		}
+	}
+	if strings.Join(bf16PriceOrderProviders, ",") != "deepinfra,amazon-bedrock,groq,dekallm" {
+		t.Fatalf("adapter mutated the shared provider list: %v", bf16PriceOrderProviders)
 	}
 }
 
@@ -367,5 +394,41 @@ func TestValidateRequestSchemaRefusedListsEveryOffender(t *testing.T) {
 	if !strings.Contains(err.message, "function_call (use tool_choice instead)") ||
 		!strings.Contains(err.message, "functions (use tools instead)") {
 		t.Fatalf("both offenders must be named: %q", err.message)
+	}
+}
+
+func TestRequestFieldFatesMatchThePublishedContract(t *testing.T) {
+	// The checked-in table miners read (docs/MINER.md renders it). Platform
+	// asserts the same file against endpoints/inference.py, so a fate changed
+	// in only one language fails one of the two suites.
+	raw, err := os.ReadFile("../../../../docs/inference-request-fields.json")
+	if err != nil {
+		t.Fatalf("read contract: %v", err)
+	}
+	var contract struct {
+		Forwarded []string          `json:"forwarded"`
+		Pinned    map[string]string `json:"pinned"`
+		Dropped   map[string]string `json:"dropped"`
+		Refused   map[string]string `json:"refused"`
+	}
+	if err := json.Unmarshal(raw, &contract); err != nil {
+		t.Fatalf("parse contract: %v", err)
+	}
+	for _, fate := range []struct {
+		name string
+		got  map[string]struct{}
+		want []string
+	}{
+		{"forwarded", forwardedRequestFields, contract.Forwarded},
+		{"pinned", pinnedRequestFields, slices.Collect(maps.Keys(contract.Pinned))},
+		{"dropped", droppedRequestFields, slices.Collect(maps.Keys(contract.Dropped))},
+	} {
+		got, want := slices.Sorted(maps.Keys(fate.got)), slices.Sorted(slices.Values(fate.want))
+		if !slices.Equal(got, want) {
+			t.Errorf("%s fields = %v, contract lists %v", fate.name, got, want)
+		}
+	}
+	if !maps.Equal(refusedRequestFields, contract.Refused) {
+		t.Errorf("refused fields = %v, contract lists %v", refusedRequestFields, contract.Refused)
 	}
 }

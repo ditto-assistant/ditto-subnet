@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
+from pathlib import Path
 from typing import get_args
 
 import pytest
@@ -16,6 +18,7 @@ from ditto_screening_protocol.bench_v9 import (
     V9EvidenceBenchVersion,
     V9ModelUseGate,
     V9ScoreGateEvidence,
+    V13ClaimProvenanceGate,
     normalize_v9_score_report_omitempty,
 )
 
@@ -433,3 +436,169 @@ def test_v12_base_evidence_accepts_penalize_scaling() -> None:
     parsed = V9BaseEvidence.model_validate(base)
     assert parsed.effective_composite_micros == 649876
     assert parsed.applied_gate_factor_bps == 8000
+
+
+# ── Bench v13: claim-span provenance + causal gate ─────────────────────────
+
+_MONOREPO_ROOT = Path(__file__).resolve().parents[3]
+_V13_GO_FIXTURE = (
+    _MONOREPO_ROOT
+    / "services/dittobench-api/internal/scoregates/testdata"
+    / "v13_claim_provenance_evidence.json"
+)
+
+
+def _v13_claim_provenance(**overrides: object) -> dict[str, object]:
+    gate: dict[str, object] = {
+        "administered_cases": 10,
+        "eligible_cases": 8,
+        "not_model_emitted_cases": 1,
+        "answer_in_prompt_cases": 1,
+        "flagged_cases": 2,
+        "unattributed_call_cases": 0,
+        "unsettled_cases": 0,
+        "zeroed_cases": 0,
+        "attribution_complete": True,
+        "posture": "shadow",
+        "flagged_bps": 2500,
+        "result": "claim_provenance_flagged",
+        "factor_bps": 10000,
+    }
+    gate.update(overrides)
+    return gate
+
+
+def _v13_gates(**claim_overrides: object) -> dict[str, object]:
+    gates = _v12_gates()
+    gates["bench_version"] = 13
+    gates["claim_provenance"] = _v13_claim_provenance(**claim_overrides)
+    return gates
+
+
+def test_v13_claim_provenance_binds_into_the_signed_digest() -> None:
+    v12 = V9ScoreGateEvidence.model_validate(_v12_gates())
+    v13 = V9ScoreGateEvidence.model_validate(_v13_gates())
+
+    canonical = v13.canonical_bytes()
+    assert b"claim_provenance.flagged_cases=2\n" in canonical
+    assert b"claim_provenance.result=claim_provenance_flagged\n" in canonical
+    assert canonical.endswith(b"claim_provenance.factor_bps=10000\n")
+    assert v13.digest_hex() != v12.digest_hex()
+    # The claim gate is an identity term: it never moves the run factor.
+    assert v13.combined_factor_bps() == 10000
+
+
+def test_v13_score_gates_require_claim_provenance() -> None:
+    stripped = _v13_gates()
+    stripped.pop("claim_provenance")
+    with pytest.raises(ValidationError, match="claim_provenance"):
+        V9ScoreGateEvidence.model_validate(stripped)
+
+
+def test_pre_v13_score_gates_reject_claim_provenance() -> None:
+    gates = _v12_gates()
+    gates["claim_provenance"] = _v13_claim_provenance()
+    with pytest.raises(ValidationError, match="pre-v13"):
+        V9ScoreGateEvidence.model_validate(gates)
+
+
+def test_v13_claim_provenance_matches_the_go_evidence_bit_for_bit() -> None:
+    """The validator signs the Go digest; Platform re-derives it from this model.
+
+    ``scoregates.TestClaimProvenanceEvidenceBitPairedFixture`` writes the Go
+    side (evidence JSON, canonical bytes, digest); a mismatch here means every
+    v13 run fails ingestion with ``score_gates_sha256 does not match``.
+    """
+    fixture = json.loads(_V13_GO_FIXTURE.read_text())
+    evidence = V9ScoreGateEvidence.model_validate(fixture["evidence"])
+    assert evidence.claim_provenance is not None
+    assert evidence.canonical_bytes() == fixture["canonical_bytes"].encode()
+    assert evidence.digest_hex() == fixture["digest_hex"]
+    assert evidence.combined_factor_bps() == fixture["combined_factor_bps"]
+    # Wrapped in a base root the same way Platform ingests it.
+    base = _base()
+    base.update(
+        bench_version=13,
+        score_gates=fixture["evidence"],
+        score_gates_sha256=fixture["digest_hex"],
+    )
+    parsed = V9BaseEvidence.model_validate(base)
+    assert parsed.score_gates.digest_hex() == fixture["digest_hex"]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"flagged_cases": 0}, "union"),
+        ({"flagged_cases": 3}, "union"),
+        ({"flagged_bps": 2000}, "inconsistent"),
+        ({"result": "passed"}, "inconsistent"),
+        ({"zeroed_cases": 1}, "shadow posture"),
+        ({"unattributed_call_cases": 1}, "unattributed"),
+        ({"attribution_complete": False}, "attribution_complete"),
+        ({"factor_bps": 0}, "factor_bps"),
+        ({"eligible_cases": 11}, "exceed administered"),
+    ],
+)
+def test_v13_claim_provenance_derived_fields_cannot_be_forged(
+    overrides: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValidationError, match=message):
+        V13ClaimProvenanceGate.model_validate(_v13_claim_provenance(**overrides))
+
+
+def test_v13_claim_provenance_result_ladder() -> None:
+    unsettled = V13ClaimProvenanceGate.model_validate(
+        _v13_claim_provenance(
+            unsettled_cases=2,
+            unattributed_call_cases=1,
+            attribution_complete=False,
+            result="insufficient_evidence",
+        )
+    )
+    assert unsettled.result == "insufficient_evidence"
+    assert unsettled.factor_bps == 10000
+    # Enforce zeroes settled flags AND the harness-charged unattributed cases.
+    enforced = V13ClaimProvenanceGate.model_validate(
+        _v13_claim_provenance(
+            posture="enforce",
+            unsettled_cases=2,
+            unattributed_call_cases=1,
+            attribution_complete=False,
+            zeroed_cases=3,
+            result="insufficient_evidence",
+        )
+    )
+    assert enforced.zeroed_cases == 3
+    with pytest.raises(ValidationError, match="zeroed"):
+        V13ClaimProvenanceGate.model_validate(
+            _v13_claim_provenance(
+                posture="enforce",
+                unsettled_cases=2,
+                unattributed_call_cases=1,
+                attribution_complete=False,
+                zeroed_cases=4,
+                result="insufficient_evidence",
+            )
+        )
+    empty = V13ClaimProvenanceGate.model_validate(
+        _v13_claim_provenance(
+            eligible_cases=0,
+            not_model_emitted_cases=0,
+            answer_in_prompt_cases=0,
+            flagged_cases=0,
+            flagged_bps=0,
+            result="not_applicable",
+        )
+    )
+    assert empty.result == "not_applicable"
+    clean = V13ClaimProvenanceGate.model_validate(
+        _v13_claim_provenance(
+            not_model_emitted_cases=0,
+            answer_in_prompt_cases=0,
+            flagged_cases=0,
+            flagged_bps=0,
+            result="passed",
+        )
+    )
+    assert clean.result == "passed"

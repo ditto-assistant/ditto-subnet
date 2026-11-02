@@ -54,6 +54,7 @@ from ditto.db.queries.audit import (
     append_audit_entry,
 )
 from ditto.db.queries.score_retests import (
+    REPLACEMENT_TICKET_TTL,
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
     score_retest_queue_positions,
@@ -337,6 +338,89 @@ class TestScoreRetestLockingAndPriority:
             )
             assert promoted is not None
             assert promoted.agent_id == cohort_id
+
+    async def test_promoted_replacement_takes_the_resolved_scoring_ttl(
+        self, session: AsyncSession
+    ) -> None:
+        """#1156: the operator's scoring TTL, not a constant, sets the lease.
+
+        Resuming the promoted replacement later with a different TTL must
+        return the same live deadline: a revision affects NEW leases only.
+        """
+        agent_id = uuid4()
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=agent_id,
+                run_id="queued-replacement",
+                event=EVENT_SCORE_RETEST_QUEUED,
+                request_id=str(uuid4()),
+                name="queued replacement",
+            )
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+                ttl=timedelta(minutes=75),
+            )
+            assert promoted is not None
+            assert promoted.deadline == _NOW + timedelta(minutes=75)
+            requested = await session.scalar(
+                select(ScoreAuditEntry)
+                .where(ScoreAuditEntry.agent_id == agent_id)
+                .order_by(ScoreAuditEntry.seq.desc())
+            )
+            assert requested is not None
+            assert requested.event == EVENT_SCORE_RETEST_REQUESTED
+            assert requested.payload["replacement_deadline"] == (
+                (_NOW + timedelta(minutes=75)).isoformat()
+            )
+
+        later = _NOW + timedelta(minutes=5)
+        async with session.begin():
+            resumed = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=later,
+                supports_version=lambda version: version == 9,
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+                ttl=timedelta(minutes=200),
+            )
+            assert resumed is not None
+            assert resumed.agent_id == agent_id
+            assert resumed.deadline == _NOW + timedelta(minutes=75)
+
+    async def test_promoted_replacement_defaults_to_the_paired_180_minutes(
+        self, session: AsyncSession
+    ) -> None:
+        agent_id = uuid4()
+        async with session.begin():
+            await _seed_contract_retest(
+                session,
+                agent_id=agent_id,
+                run_id="default-replacement",
+                event=EVENT_SCORE_RETEST_QUEUED,
+                request_id=str(uuid4()),
+                name="default replacement",
+            )
+            promoted = await activate_next_score_retest(
+                session,
+                validator_hotkey=_HOTKEY,
+                now=_NOW,
+                supports_version=lambda version: version == 9,
+                required_basis=V9_CONTRACT_RETEST_BASIS,
+                allow_parallel_ordinary=True,
+                allow_parallel_contract_retests=True,
+            )
+            assert promoted is not None
+            assert timedelta(minutes=180) == REPLACEMENT_TICKET_TTL
+            assert promoted.deadline == _NOW + REPLACEMENT_TICKET_TTL
 
     async def test_parallel_ordinary_mode_is_contract_only(
         self, session: AsyncSession

@@ -32,8 +32,13 @@ pub const MIN_SUPPORTED_BENCH_VERSION: u32 = 8;
 /// Inclusive ceiling matching the scorer's advertised set. Bump this when
 /// DittoBench advertises a new version so a submitted image does not 400
 /// every `/run`. Accepting a version is not the same as activating it as
-/// `ACTIVE_BENCH_VERSION`.
-pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 12;
+/// `ACTIVE_BENCH_VERSION`. The public wire contract stays at 9 with additive
+/// optional fields (#1519, option A), so accepting 15 costs a deployed harness
+/// nothing: a scored v13+ run still sends `bench_version: 9`, and 15 is accepted
+/// for local rehearsal and any validator that sends the contract version
+/// directly. `ditto/tests/test_bench_version_pins.py` diffs this ceiling against
+/// the shared `MAX_SUPPORTED_BENCH_VERSION` every other layer derives from.
+pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 15;
 
 pub fn supports_bench_version(version: u32) -> bool {
     (MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION).contains(&version)
@@ -132,6 +137,10 @@ pub struct RunRequest {
     /// memory-only practice may omit it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_endpoint: Option<String>,
+    /// Opt-in operation receipts. Absent on legacy endpoints; never infer
+    /// idempotency merely because the endpoint accepts these wire fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_effect_protocol: Option<String>,
     /// Optional (observed execution): the memory graph this case must be answered from
     /// (multi-graph isolation). Mirrors the `user_id` the haystack was seeded
     /// under; answer only from this user's memory, never leak another user's
@@ -159,7 +168,13 @@ pub struct ToolExecRequest {
     pub args: Value,
     #[serde(default)]
     pub hop: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_protocol: Option<String>,
 }
+
+pub const TOOL_EFFECT_PROTOCOL_V1: &str = "operation-receipt-v1";
 
 /// The mock result the validator returns for a [`ToolExecRequest`] (Go:
 /// `ToolExecResponse`). `result` is the tool output to reason over; `error` is
@@ -172,6 +187,12 @@ pub struct ToolExecResponse {
     pub result: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_state: Option<String>,
+    #[serde(default)]
+    pub replayed: bool,
 }
 
 /// A tool call the harness made (Go: `ObservedToolCall`).
@@ -185,12 +206,24 @@ pub struct ObservedToolCall {
     pub hop: i32,
 }
 
+/// Advisory record of a model-selected call stopped before the tool endpoint.
+/// It cannot grant execution credit; the validator's endpoint ledger is authoritative.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct BlockedToolCall {
+    pub name: String,
+    pub args: Value,
+    pub state: String,
+}
+
 /// What the harness returns for a case (Go: `RunResponse`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub struct RunResponse {
     pub final_text: String,
     pub tool_calls: Vec<ObservedToolCall>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_tool_calls: Vec<BlockedToolCall>,
     pub prompt_tokens: i64,
     pub output_tokens: i64,
     pub latency_ms: i64,
@@ -280,6 +313,7 @@ mod tests {
             assert!(obj.contains_key(key), "missing key {key}");
         }
         assert_eq!(obj["bench_version"], ACTIVE_BENCH_VERSION);
+        assert!(obj.get("tool_effect_protocol").is_none());
         assert!(!obj.contains_key("tool_endpoint"));
         assert!(!obj.contains_key("user_id"));
     }
@@ -351,8 +385,51 @@ mod tests {
         assert!(supports_bench_version(10));
         assert!(supports_bench_version(11));
         assert!(supports_bench_version(12));
-        assert!(!supports_bench_version(7));
-        assert!(!supports_bench_version(13));
+        assert!(supports_bench_version(13));
+        assert!(supports_bench_version(14));
+        assert!(supports_bench_version(15));
+        assert!(!supports_bench_version(MIN_SUPPORTED_BENCH_VERSION - 1));
+        // The next epoch after the ceiling is the canonical unsupported version;
+        // it moves with the constant instead of being retyped each bump.
+        assert!(!supports_bench_version(MAX_SUPPORTED_BENCH_VERSION + 1));
+    }
+
+    #[test]
+    fn v13_run_request_is_additive_on_the_v9_wire() {
+        // Bench v13 keeps publicWireBenchVersion at 9: a v13 run arrives with
+        // bench_version 9 plus richer, still-optional fields (enum schemas on
+        // the wire, a per-seed catalog). A v9-era decoder must accept all of
+        // it unchanged, and a direct 13 must be in range too.
+        let json = r#"{
+            "case_id": "f0e310c2-8c21-42e1-9e85-17d34ca9d51a",
+            "system_prompt": "be helpful",
+            "user_input": "switch me to the midnight look",
+            "tools": [{
+                "name": "set_theme",
+                "description": "Set the app color theme.",
+                "parameters": {"type": "object", "properties": {"theme": {"type": "string",
+                    "enum": ["system", "light", "dark", "midnight", "solarized"]}}, "required": ["theme"]}
+            }, {
+                "name": "nimit_docs_search",
+                "description": "Search Nimit workspace docs. Not a live web search.",
+                "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}
+            }],
+            "bench_version": 9,
+            "tool_endpoint": "http://host.docker.internal:11436/v1/tools/opaque/tool",
+            "inference_base_url": "http://host.docker.internal:11436/v1/inference/cases/opaque"
+        }"#;
+        let req: RunRequest = serde_json::from_str(json).expect("deserialize v13-on-v9 request");
+        assert!(supports_bench_version(req.bench_version));
+        assert_eq!(req.tools.len(), 2);
+        assert_eq!(
+            req.tools[0].parameters["properties"]["theme"]["enum"][3],
+            "midnight"
+        );
+        let direct: RunRequest =
+            serde_json::from_str(&json.replace("\"bench_version\": 9", "\"bench_version\": 13"))
+                .expect("deserialize direct v13 request");
+        assert_eq!(direct.bench_version, 13);
+        assert!(supports_bench_version(direct.bench_version));
     }
 
     #[test]
@@ -363,6 +440,8 @@ mod tests {
             name: "search_web".into(),
             args: serde_json::json!({"query": "x"}),
             hop: 0,
+            operation_id: None,
+            effect_protocol: None,
         };
         let back: ToolExecRequest =
             serde_json::from_str(&serde_json::to_string(&req).expect("ser")).expect("de");
@@ -377,6 +456,21 @@ mod tests {
         )
         .expect("de");
         assert_eq!(err.result, "");
+
+        let versioned: RunRequest = serde_json::from_str(
+            r#"{"case_id":"c2","system_prompt":"","user_input":"","tool_effect_protocol":"operation-receipt-v1"}"#,
+        )
+        .expect("parse advertised effect capability");
+        assert_eq!(
+            versioned.tool_effect_protocol.as_deref(),
+            Some(TOOL_EFFECT_PROTOCOL_V1)
+        );
+        let receipt: ToolExecResponse = serde_json::from_str(
+            r#"{"result":"done","operation_id":"operation-first-0001","effect_state":"applied","replayed":true}"#,
+        )
+        .expect("parse applied receipt");
+        assert_eq!(receipt.effect_state.as_deref(), Some("applied"));
+        assert!(receipt.replayed);
     }
 
     #[test]
@@ -387,6 +481,11 @@ mod tests {
                 name: "search_web".into(),
                 args: serde_json::json!({"query": "x"}),
                 hop: 0,
+            }],
+            blocked_tool_calls: vec![BlockedToolCall {
+                name: "set_theme".into(),
+                args: serde_json::json!({"theme": "dark"}),
+                state: "blocked_before_execution".into(),
             }],
             prompt_tokens: 10,
             output_tokens: 5,
@@ -403,5 +502,6 @@ mod tests {
                 .expect("deserialize response without optional slots");
         assert_eq!(without_optional_slots.answer, None);
         assert_eq!(without_optional_slots.abstain, None);
+        assert!(without_optional_slots.blocked_tool_calls.is_empty());
     }
 }

@@ -58,6 +58,41 @@ _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
 # colon-delimited signing message; mirrors ditto-screener's _INSTANCE_ID_PATTERN.
 _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
 
+
+class ScreeningVerificationReceiptRequest(BaseModel):
+    """Digest-only evidence emitted by the active trusted screener lease.
+
+    This records execution observations, not a policy pass or an authorization
+    to release a source-integrity hold. Runtime receipts remain unverified until
+    the complete v13 decision record is assembled.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    policy_version: Literal[13]
+    check_code: Literal[
+        "archive_sha",
+        "build_image_digest",
+        "health",
+        "ordinary_model_run",
+        "tool_selection_run",
+        "seed_memory_run",
+        "two_user_isolation",
+    ]
+    evidence_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    image_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
+
+    @model_validator(mode="after")
+    def image_binding(self) -> ScreeningVerificationReceiptRequest:
+        if self.check_code == "build_image_digest" and self.image_sha256 is None:
+            raise ValueError("build image receipt requires image SHA")
+        if self.check_code == "archive_sha" and self.image_sha256 is not None:
+            raise ValueError("archive receipt cannot bind an image")
+        return self
+
+
 ScreenerRuntimeState = Literal["polling", "screening", "error", "paused"]
 ScreenerProgressStage = Literal[
     "preparing",
@@ -204,6 +239,7 @@ class ScreenerHeartbeatResponse(BaseModel):
     accepted: bool
     seen_at: datetime
     lease_deadline: datetime | None = None
+    source_fixture_v1_heartbeat_supported: bool = False
 
 
 class ShadowReviewUsage(BaseModel):
@@ -220,8 +256,8 @@ class ShadowReviewUsage(BaseModel):
 # One shadow observation records every provider stage the L2/L3 trajectory
 # used: each analyst turn, the critic, and every adjudicator, including model
 # failover retries. A bounded escalation therefore reports far more than a
-# handful of stages -- observed production runs span 9 to 25. The screener
-# caps this at 50 (_MAX_SHADOW_PROVIDER_STAGES in ditto_screener), and this
+# handful of stages. The screener truncates to the most recent 50 stages
+# (MAX_SHADOW_PROVIDER_STAGES in ditto_screener), and this
 # bound must not be tighter, or the platform silently rejects the telemetry it
 # asked the screener to collect.
 MAX_SHADOW_PROVIDER_STAGES = 50
@@ -269,6 +305,92 @@ class ShadowReviewObservationResponse(BaseModel):
     accepted: bool
 
 
+MAX_PROBE_BATTERY_LEADS = 32
+
+
+class ProbeBatteryLead(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    item_id: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+
+
+class ProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+    verified: bool
+    citations: tuple[Annotated[str, Field(max_length=170)], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewFinding:
+        if len(self.citations) > 4:
+            raise ValueError("probe review finding has too many citations")
+        return self
+
+
+class ProbeReviewSummary(BaseModel):
+    """Bounded report-only reviewer agent result: no claims or transcripts."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: Literal[
+        "complete",
+        "no_verdict",
+        "budget_exhausted",
+        "untracked_spend",
+        "skipped",
+        "timeout",
+        "error",
+    ]
+    verified: bool = False
+    invariants: tuple[Annotated[str, Field(pattern=r"^I[1-8]$")], ...] = ()
+    findings: tuple[ProbeReviewFinding, ...] = ()
+    requests: Annotated[int, Field(ge=0, le=1000)] = 0
+    prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
+    completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
+    cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
+    review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    # Content-free failure label: stage, exception class and HTTP status.
+    error: Annotated[str, Field(pattern=r"^[A-Za-z0-9_:]{1,80}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewSummary:
+        if len(self.findings) > 4 or len(self.invariants) > 8:
+            raise ValueError("probe review summary is too large")
+        return self
+
+
+class ProbeBatteryObservationRequest(BaseModel):
+    """Bounded zero-token probe battery leads for an active attempt.
+
+    Report-only: a lead is an unverified black-box observation and never
+    participates in the signed decision.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    settings_revision: Annotated[int, Field(ge=1)]
+    settings_scope: Annotated[str, Field(pattern=r"^(?:\*|[a-zA-Z0-9._-]{1,63})$")]
+    settings_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    status: Literal["complete", "calibration_failed", "timeout", "error"]
+    encoding: Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")] | None = None
+    seed_first: bool = False
+    items_run: Annotated[int, Field(ge=0, le=128)] = 0
+    probe_count: Annotated[int, Field(ge=0, le=512)] = 0
+    leads: tuple[ProbeBatteryLead, ...] = ()
+    battery_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    review: ProbeReviewSummary | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeBatteryObservationRequest:
+        if len(self.leads) > MAX_PROBE_BATTERY_LEADS:
+            raise ValueError("probe battery has too many leads")
+        return self
+
+
 __all__ = [
     "SCREENING_POLICY_VERSION",
     "ScreenerQueueItem",
@@ -278,6 +400,10 @@ __all__ = [
     "ScreenerHeartbeatResponse",
     "ShadowReviewObservationRequest",
     "ShadowReviewObservationResponse",
+    "ProbeBatteryLead",
+    "ProbeBatteryObservationRequest",
+    "ProbeReviewFinding",
+    "ProbeReviewSummary",
     "ScreenerProgress",
     "ScreenerProgressStage",
     "ScreenerRuntimeState",

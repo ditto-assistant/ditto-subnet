@@ -19,6 +19,11 @@ const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const OPENROUTER_PROVIDER_ROUTE: &str = "azure/eu";
 const MAX_MODEL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_TOOL_CALLS_PER_RESPONSE: usize = 1;
+const MAX_DIRECT_SERIAL_RETRIES: usize = 2;
+const MAX_DIRECT_RATE_LIMIT_RETRIES: usize = 2;
+const DIRECT_SERIAL_CORRECTION: &str = "Protocol correction for local direct practice: \
+the previous response contained multiple tool calls, so none were executed. Return at most one \
+tool call now and wait for its result before choosing another action.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndpointKind {
@@ -177,6 +182,69 @@ impl LunaChatModel {
         Ok(body)
     }
 
+    async fn completion(&self, body: &Value) -> Result<ChatCompletionResponse, Error> {
+        for attempt in 0..=MAX_DIRECT_RATE_LIMIT_RETRIES {
+            let response = self
+                .client
+                .post(self.endpoint.clone())
+                .bearer_auth(&self.bearer)
+                .header("HTTP-Referer", "https://heyditto.ai")
+                .header("X-OpenRouter-Title", "DittoBench Coding")
+                .json(body)
+                .send()
+                .await?;
+            let status = response.status();
+            if let Some(length) = response.content_length() {
+                if length > MAX_MODEL_RESPONSE_BYTES as u64 {
+                    return Err(Error::Model("model response exceeded 8 MiB".to_string()));
+                }
+            }
+            let bytes = response.bytes().await?;
+            if bytes.len() > MAX_MODEL_RESPONSE_BYTES {
+                return Err(Error::Model("model response exceeded 8 MiB".to_string()));
+            }
+            if !status.is_success() {
+                if self.kind == EndpointKind::DirectOpenRouter
+                    && status == reqwest::StatusCode::TOO_MANY_REQUESTS
+                    && attempt < MAX_DIRECT_RATE_LIMIT_RETRIES
+                {
+                    tokio::time::sleep(direct_rate_limit_delay(attempt)).await;
+                    continue;
+                }
+                let detail = String::from_utf8_lossy(&bytes);
+                return Err(Error::Model(format!(
+                    "chat completion returned HTTP {status}: {}",
+                    detail.chars().take(512).collect::<String>()
+                )));
+            }
+            let value: Value = serde_json::from_slice(&bytes)?;
+            if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
+                if self.kind == EndpointKind::DirectOpenRouter
+                    && openrouter_rate_limited(error)
+                    && attempt < MAX_DIRECT_RATE_LIMIT_RETRIES
+                {
+                    tokio::time::sleep(direct_rate_limit_delay(attempt)).await;
+                    continue;
+                }
+                let detail = error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("OpenRouter returned an error envelope");
+                return Err(Error::Model(format!(
+                    "chat completion error envelope: {}",
+                    detail.chars().take(512).collect::<String>()
+                )));
+            }
+            let parsed: ChatCompletionResponse =
+                serde_json::from_value(value).map_err(|error| {
+                    Error::Model(format!("invalid chat completion envelope: {error}"))
+                })?;
+            self.validate_response_identity(&parsed)?;
+            return Ok(parsed);
+        }
+        unreachable!("bounded direct rate-limit retry loop always returns")
+    }
+
     fn validate_response_identity(&self, response: &ChatCompletionResponse) -> Result<(), Error> {
         if !response.model.is_empty() && response.model != LUNA_MODEL {
             return Err(Error::Model(format!(
@@ -248,69 +316,103 @@ impl Model for LunaChatModel {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> ditto_harness::Result<ChatChunk> {
-        let body = self.request_body(messages, tools)?;
-        let response = self
-            .client
-            .post(self.endpoint.clone())
-            .bearer_auth(&self.bearer)
-            .header("HTTP-Referer", "https://heyditto.ai")
-            .header("X-OpenRouter-Title", "DittoBench Coding")
-            .json(&body)
-            .send()
-            .await?;
-        let status = response.status();
-        if let Some(length) = response.content_length() {
-            if length > MAX_MODEL_RESPONSE_BYTES as u64 {
-                return Err(Error::Model("model response exceeded 8 MiB".to_string()));
+        let mut body = self.request_body(messages, tools)?;
+        let mut accumulated_cost: Option<CostedUsage> = None;
+        for retry in 0..=MAX_DIRECT_SERIAL_RETRIES {
+            let parsed = self.completion(&body).await?;
+            merge_costed_usage(&mut accumulated_cost, response_cost(self.kind, &parsed))?;
+            let mut metadata = response_metadata(self.kind, &parsed);
+            let choice =
+                parsed.choices.into_iter().next().ok_or_else(|| {
+                    Error::Model("chat completion returned no choices".to_string())
+                })?;
+            if choice.message.tool_calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
+                if self.kind == EndpointKind::DirectOpenRouter && retry < MAX_DIRECT_SERIAL_RETRIES
+                {
+                    body["messages"]
+                        .as_array_mut()
+                        .ok_or_else(|| Error::Model("model messages are invalid".to_string()))?
+                        .push(json!({"role": "user", "content": DIRECT_SERIAL_CORRECTION}));
+                    continue;
+                }
+                return Err(Error::Model(format!(
+                    "chat completion returned {} tool calls after {retry} serial retries; maximum is {MAX_TOOL_CALLS_PER_RESPONSE}",
+                    choice.message.tool_calls.len()
+                )));
             }
+            let mut tool_calls = parse_tool_calls(choice.message.tool_calls)?;
+            let tool_call = tool_calls.pop_front();
+            if retry > 0 {
+                metadata.insert(
+                    "direct_serial_retries".to_string(),
+                    Value::Number(retry.into()),
+                );
+                if let Some(total) = &accumulated_cost {
+                    if let Some(value) = serde_json::Number::from_f64(total.cost.amount) {
+                        metadata.insert("reported_cost_usd".to_string(), Value::Number(value));
+                    }
+                }
+            }
+            return Ok(ChatChunk {
+                text: choice.message.content.unwrap_or_default(),
+                tool_call,
+                cost: accumulated_cost,
+                metadata: Some(metadata),
+            });
         }
-        let bytes = response.bytes().await?;
-        if bytes.len() > MAX_MODEL_RESPONSE_BYTES {
-            return Err(Error::Model("model response exceeded 8 MiB".to_string()));
-        }
-        if !status.is_success() {
-            let detail = String::from_utf8_lossy(&bytes);
-            return Err(Error::Model(format!(
-                "chat completion returned HTTP {status}: {}",
-                detail.chars().take(512).collect::<String>()
-            )));
-        }
-        let value: Value = serde_json::from_slice(&bytes)?;
-        if let Some(error) = value.get("error").filter(|error| !error.is_null()) {
-            let detail = error
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("OpenRouter returned an error envelope");
-            return Err(Error::Model(format!(
-                "chat completion error envelope: {}",
-                detail.chars().take(512).collect::<String>()
-            )));
-        }
-        let parsed: ChatCompletionResponse = serde_json::from_value(value)
-            .map_err(|error| Error::Model(format!("invalid chat completion envelope: {error}")))?;
-        self.validate_response_identity(&parsed)?;
-        let cost = response_cost(self.kind, &parsed);
-        let metadata = response_metadata(self.kind, &parsed);
-        let choice = parsed
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| Error::Model("chat completion returned no choices".to_string()))?;
-        if choice.message.tool_calls.len() > MAX_TOOL_CALLS_PER_RESPONSE {
-            return Err(Error::Model(format!(
-                "chat completion returned {} tool calls; maximum is {MAX_TOOL_CALLS_PER_RESPONSE}",
-                choice.message.tool_calls.len()
-            )));
-        }
-        let mut tool_calls = parse_tool_calls(choice.message.tool_calls)?;
-        let tool_call = tool_calls.pop_front();
-        Ok(ChatChunk {
-            text: choice.message.content.unwrap_or_default(),
-            tool_call,
-            cost: Some(cost),
-            metadata: Some(metadata),
-        })
+        unreachable!("bounded direct serial retry loop always returns")
     }
+}
+
+fn merge_costed_usage(total: &mut Option<CostedUsage>, next: CostedUsage) -> Result<(), Error> {
+    let Some(current) = total else {
+        *total = Some(next);
+        return Ok(());
+    };
+    if current.usage.provider != next.usage.provider
+        || current.usage.model != next.usage.model
+        || current.cost.currency != next.cost.currency
+    {
+        return Err(Error::Model(
+            "serial retry accounting identity changed".to_string(),
+        ));
+    }
+    current.usage.input_tokens = current
+        .usage
+        .input_tokens
+        .checked_add(next.usage.input_tokens)
+        .ok_or_else(|| Error::Model("serial retry input tokens overflowed".to_string()))?;
+    current.usage.output_tokens = current
+        .usage
+        .output_tokens
+        .checked_add(next.usage.output_tokens)
+        .ok_or_else(|| Error::Model("serial retry output tokens overflowed".to_string()))?;
+    current.usage.total_tokens = current
+        .usage
+        .total_tokens
+        .checked_add(next.usage.total_tokens)
+        .ok_or_else(|| Error::Model("serial retry total tokens overflowed".to_string()))?;
+    current.cost.amount += next.cost.amount;
+    if !current.cost.amount.is_finite() {
+        return Err(Error::Model("serial retry cost overflowed".to_string()));
+    }
+    Ok(())
+}
+
+fn openrouter_rate_limited(error: &Value) -> bool {
+    error.get("code").is_some_and(|code| {
+        code.as_i64() == Some(429) || code.as_str().is_some_and(|value| value == "429")
+    })
+}
+
+#[cfg(not(test))]
+fn direct_rate_limit_delay(attempt: usize) -> Duration {
+    Duration::from_secs(2_u64 << attempt)
+}
+
+#[cfg(test)]
+fn direct_rate_limit_delay(_attempt: usize) -> Duration {
+    Duration::ZERO
 }
 
 fn parse_tool_calls(calls: Vec<OpenAiToolCall>) -> Result<VecDeque<ToolCall>, Error> {
@@ -847,6 +949,32 @@ mod tests {
         (model, requests, server)
     }
 
+    async fn direct_vector_mock(
+        responses: Vec<Value>,
+        max_completion_tokens: u64,
+    ) -> (
+        LunaChatModel,
+        Arc<Mutex<Vec<Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/chat/completions", post(vector_completion))
+            .with_state(VectorCompletionState {
+                responses: Arc::new(Mutex::new(responses.into())),
+                requests: Arc::clone(&requests),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let model = LunaChatModel::direct_openrouter_for_test(
+            &format!("http://{address}/v1"),
+            max_completion_tokens,
+        )
+        .unwrap();
+        (model, requests, server)
+    }
+
     #[test]
     fn shared_miner_vector_matches_system_tools_and_ticket_requests() {
         let vector = miner_inference_vector();
@@ -1171,7 +1299,82 @@ mod tests {
 
         let result = model.next(&messages, &[]).await;
         assert!(matches!(result, Err(Error::Model(message)) if message.contains("maximum is 1")));
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            requests.load(Ordering::SeqCst),
+            MAX_DIRECT_SERIAL_RETRIES + 1
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn direct_multiple_tool_calls_retry_to_one_fresh_decision() {
+        let usage = json!({
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "cost": 0.000_03
+        });
+        let mut multiple = response(LUNA_MODEL, Some(usage.clone()));
+        multiple["choices"][0]["message"]["tool_calls"] =
+            Value::Array((0..2).map(tool_call).collect());
+        let mut serial = response(LUNA_MODEL, Some(usage));
+        serial["choices"][0]["message"]["tool_calls"] = Value::Array(vec![tool_call(7)]);
+        let (model, requests, server) = direct_vector_mock(vec![multiple, serial], 100).await;
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: vec![Content::text("fix")],
+            ..ChatMessage::default()
+        }];
+
+        let result = model.next(&messages, &tool_definitions()).await.unwrap();
+        let call = result.tool_call.unwrap();
+        assert_eq!(call.name, "repo_read_file");
+        assert_eq!(call.args, json!({"path": "file-7"}));
+        let cost = result.cost.unwrap();
+        assert_eq!(cost.usage.input_tokens, 20);
+        assert_eq!(cost.usage.output_tokens, 10);
+        assert_eq!(cost.usage.total_tokens, 30);
+        assert!((cost.cost.amount - 0.000_06).abs() < f64::EPSILON);
+        assert_eq!(result.metadata.unwrap()["direct_serial_retries"], 1);
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].get("parallel_tool_calls").is_none());
+        assert_eq!(
+            requests[1]["messages"].as_array().unwrap().last().unwrap(),
+            &json!({"role": "user", "content": DIRECT_SERIAL_CORRECTION})
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn direct_rate_limit_envelope_retries_before_provider_selection() {
+        let rate_limit = json!({
+            "error": {
+                "message": "temporarily rate-limited upstream",
+                "code": 429
+            }
+        });
+        let completed = response(
+            LUNA_MODEL,
+            Some(json!({
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "cost": 0.000_03
+            })),
+        );
+        let (model, requests, server) = direct_vector_mock(vec![rate_limit, completed], 100).await;
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: vec![Content::text("fix")],
+            ..ChatMessage::default()
+        }];
+
+        let result = model.next(&messages, &tool_definitions()).await.unwrap();
+        assert_eq!(result.text, "done");
+        assert!(result.tool_call.is_none());
+        assert_eq!(result.cost.unwrap().usage.total_tokens, 15);
+        assert_eq!(requests.lock().unwrap().len(), 2);
         server.abort();
     }
 
@@ -1195,6 +1398,58 @@ mod tests {
             result,
             Err(Error::Model(message)) if message.contains("temporarily rate-limited upstream")
         ));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn broker_multiple_tool_calls_fail_closed_without_retry() {
+        let mut payload = response(
+            LUNA_MODEL,
+            Some(json!({
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            })),
+        );
+        payload["choices"][0]["message"]["tool_calls"] =
+            Value::Array((0..2).map(tool_call).collect());
+        let (model, requests, server) = ticket_vector_mock(vec![payload], 100).await;
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: vec![Content::text("fix")],
+            ..ChatMessage::default()
+        }];
+
+        let result = model.next(&messages, &[]).await;
+        assert!(matches!(
+            result,
+            Err(Error::Model(message)) if message.contains("after 0 serial retries")
+        ));
+        assert_eq!(requests.lock().unwrap().len(), 1);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn broker_rate_limit_envelope_is_not_retried() {
+        let (model, requests, server) = ticket_vector_mock(
+            vec![json!({
+                "error": {"message": "temporarily rate-limited upstream", "code": 429}
+            })],
+            100,
+        )
+        .await;
+        let messages = [ChatMessage {
+            role: "user".to_string(),
+            content: vec![Content::text("fix")],
+            ..ChatMessage::default()
+        }];
+
+        let result = model.next(&messages, &[]).await;
+        assert!(matches!(
+            result,
+            Err(Error::Model(message)) if message.contains("temporarily rate-limited upstream")
+        ));
+        assert_eq!(requests.lock().unwrap().len(), 1);
         server.abort();
     }
 

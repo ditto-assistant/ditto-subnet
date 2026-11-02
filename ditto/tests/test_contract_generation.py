@@ -95,6 +95,8 @@ def _run_generator(
             str(out / "validator_contract.json"),
             "--confirmation-out",
             str(out / "confirmation_contract.json"),
+            "--bench-versions-out",
+            str(out / "bench_versions.json"),
             "--miner-out",
             str(out / "miner_contract.json"),
             "--mirror-dir",
@@ -123,7 +125,11 @@ def test_golden_generator_writes_both_monorepo_contract_directories(
 
     out, mirror = _run_generator(monkeypatch, tmp_path, authoritative=True)
 
-    for filename in ("validator_contract.json", "confirmation_contract.json"):
+    for filename in (
+        "validator_contract.json",
+        "confirmation_contract.json",
+        "bench_versions.json",
+    ):
         assert (mirror / filename).read_bytes() == (out / filename).read_bytes()
     # The miner golden has no committed Platform-side copy to keep in step.
     assert (out / "miner_contract.json").exists()

@@ -1,0 +1,21 @@
+---
+# Instance-shaped host vars as google.cloud.gcp_compute hands them to compose
+# (zone already reduced to its short name), one per zone the fleet spans.
+all:
+  hosts:
+    ditto-platform-prod:
+      zone: us-central1-a
+      labels: { env: prod, role: platform-app, managed: terraform }
+      networkInterfaces: [{ networkIP: 10.30.0.3 }]
+    ditto-screener-prod:
+      zone: us-central1-c
+      labels: { env: prod, role: screener, managed: terraform }
+      networkInterfaces: [{ networkIP: 10.30.0.4 }]
+    ditto-screener-fleet-b1:
+      zone: us-central1-b
+      labels: { env: prod, role: screener-fleet, managed: terraform }
+      networkInterfaces: [{ networkIP: 10.30.0.21 }]
+    ditto-screener-fleet-f1:
+      zone: us-central1-f
+      labels: { env: prod, role: screener-fleet, managed: terraform }
+      networkInterfaces: [{ networkIP: 10.30.0.22 }]

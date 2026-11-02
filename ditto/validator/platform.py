@@ -8,8 +8,11 @@ signature. It never touches the platform DB directly.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
-from datetime import UTC, datetime
+import re
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID, uuid4
 
@@ -66,10 +69,34 @@ from ditto.api_models.coding_inference_grants import (
     CodingInferenceRevokeRequest,
     CodingInferenceRevokeResponse,
 )
+from ditto.api_models.generator_ledger import GeneratorLedgerResponse
+from ditto.api_models.generator_round_validator import (
+    GeneratorRoundCaseResult,
+    GeneratorRoundCommitmentJobRequest,
+    GeneratorRoundCommitmentJobResponse,
+    GeneratorRoundCommitmentOutcome,
+    GeneratorRoundCommitmentReportRequest,
+    GeneratorRoundCommitmentReportResponse,
+    GeneratorRoundFailReason,
+    GeneratorRoundFailRequest,
+    GeneratorRoundFailResponse,
+    GeneratorRoundJobRequest,
+    GeneratorRoundJobResponse,
+    GeneratorRoundScoreRequest,
+    GeneratorRoundScoreResponse,
+)
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
 )
+from ditto.api_models.private_dataset import PrivateDatasetRequest
+from ditto.api_models.receipt_diagnostics import (
+    ReceiptDiagnosticObservation,
+    ReceiptDiagnosticReport,
+    SubmitReceiptDiagnostics,
+    diagnostic_signing_message,
+)
+from ditto.api_models.router_ledger import RouterLedgerResponse
 from ditto.api_models.validator import (
     ArtifactResponse,
     FailJobReason,
@@ -97,13 +124,22 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
+from ditto.api_models.weight_receipt import (
+    FinalizedWeightReceipt,
+    SubmitWeightReceiptRequest,
+    SubmitWeightReceiptResponse,
+    weight_receipt_digest,
+    weight_receipt_signing_message,
+)
 from ditto.validator.coding_publication import (
     PreparedCodingPublication,
     PublicationAuthority,
 )
 from ditto.validator.errors import (
     PlatformError,
+    PlatformHeartbeatRequiredError,
     PlatformInfrastructureError,
+    WeightReceiptConflictError,
 )
 from ditto.validator.signing import (
     sign_artifact_request,
@@ -128,6 +164,7 @@ from ditto.validator.signing import (
     sign_ledger_request,
     sign_top5_confirmation_job_request,
     sign_top5_confirmation_score,
+    sign_transcript_request,
     sign_v9_confirmation_artifact_request,
     sign_v9_confirmation_claim,
     sign_v9_confirmation_fail,
@@ -145,6 +182,11 @@ logger = logging.getLogger(__name__)
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
 _SCORING_PREFIX = "/api/v1/scoring"
+# A finished run's signed score is replayed verbatim: Platform accepts an exact
+# retry of an already-consumed ticket and still refuses anything after the lease
+# deadline. Back off long enough to ride out a Platform rollout's 502 window.
+_SCORE_SUBMIT_RETRY_DELAYS = (2.0, 8.0, 20.0, 45.0, 90.0)
+_SCORE_SUBMIT_DEADLINE_MARGIN = timedelta(seconds=30)
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
@@ -272,6 +314,21 @@ def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
     return evidence
 
 
+def _is_transient_platform_status(status_code: int) -> bool:
+    """Request timeout, rate limit, or server error: retry later, blame nobody."""
+    return status_code in (408, 429) or status_code >= 500
+
+
+def _weight_receipt_conflict_code(response: httpx.Response) -> str:
+    """Platform's bounded ``<code>: ...`` 409 category; never echo the rest."""
+    try:
+        message = response.json()["message"]
+    except (ValueError, KeyError, TypeError):
+        return "unknown"
+    code = message.partition(":")[0] if isinstance(message, str) else ""
+    return code if re.fullmatch(r"[a-z_]{1,32}", code) else "unknown"
+
+
 class PlatformClient:
     """HTTP client for one platform base URL."""
 
@@ -287,6 +344,66 @@ class PlatformClient:
             or config.platform_api_url
         ).rstrip("/")
         self._headers = {"X-Validator-Hotkey": config.validator_hotkey}
+
+    async def submit_receipt_diagnostics(
+        self, observation: ReceiptDiagnosticObservation
+    ) -> None:
+        report = ReceiptDiagnosticReport(
+            schema_version=3,
+            validator_hotkey=self._config.validator_hotkey,
+            netuid=self._config.netuid,
+            timestamp=int(datetime.now(UTC).timestamp()),
+            observation=observation,
+        )
+        body = SubmitReceiptDiagnostics(
+            report=report,
+            signature="0x"
+            + bytes(self._keypair.sign(diagnostic_signing_message(report))).hex(),
+        )
+        response = await self._client.post(
+            f"{self._base}{_PREFIX}/receipt-diagnostics",
+            json=body.model_dump(mode="json"),
+            headers=self._headers,
+            timeout=3.0,
+        )
+        if response.status_code not in (200, 404):
+            raise PlatformError(
+                f"receipt diagnostics rejected ({response.status_code})"
+            )
+
+    async def submit_weight_receipt(
+        self, receipt: FinalizedWeightReceipt
+    ) -> SubmitWeightReceiptResponse:
+        """Persist immutable commit provenance and require an exact signed-body ACK."""
+        timestamp = int(datetime.now(UTC).timestamp())
+        signature = self._keypair.sign(
+            weight_receipt_signing_message(receipt, timestamp)
+        )
+        request = SubmitWeightReceiptRequest(
+            receipt=receipt,
+            timestamp=timestamp,
+            signature="0x" + bytes(signature).hex(),
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base}{_PREFIX}/weight-submission-receipt",
+                json=request.model_dump(mode="json"),
+                headers=self._headers,
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError("weight receipt persistence outcome unknown") from exc
+        if response.status_code == 409:
+            raise WeightReceiptConflictError(_weight_receipt_conflict_code(response))
+        if response.status_code != 200:
+            raise PlatformError(f"weight receipt rejected ({response.status_code})")
+        result = SubmitWeightReceiptResponse.model_validate(response.json())
+        if (
+            result.request_id != receipt.request_id
+            or result.attempt_id != receipt.attempt.attempt_id
+            or result.receipt_digest != weight_receipt_digest(receipt)
+        ):
+            raise PlatformError("weight receipt acknowledgement mismatch")
+        return result
 
     async def submit_heartbeat(
         self, request: ValidatorHeartbeatRequest
@@ -337,6 +454,12 @@ class PlatformClient:
             raise PlatformError(f"job request failed: {e}") from e
         if resp.status_code == 204:
             return None
+        if resp.status_code == 428:
+            # The compatibility gate wants a fresh signed heartbeat. Typed so the
+            # worker can refresh once and retry instead of isolating the slot.
+            raise PlatformHeartbeatRequiredError(
+                f"job request rejected (428): {resp.text[:200]}"
+            )
         if resp.status_code != 200:
             raise PlatformError(
                 f"job request rejected ({resp.status_code}): {resp.text[:200]}"
@@ -1641,6 +1764,7 @@ class PlatformClient:
         reason: Literal["execution_failed", "deadline", "cancelled", "infrastructure"],
         failure_class: str | None = None,
         failure_stage: str | None = None,
+        failure_status: int | None = None,
     ) -> V9ConfirmationFailResponse:
         """Close one private v9 lease without touching canonical fail routes."""
         url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/fail"
@@ -1652,6 +1776,7 @@ class PlatformClient:
             reason=reason,
             failure_class=failure_class,
             failure_stage=failure_stage,
+            failure_status=failure_status,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_v9_confirmation_fail(
@@ -1662,6 +1787,7 @@ class PlatformClient:
                 reason=reason,
                 failure_class=failure_class,
                 failure_stage=failure_stage,
+                failure_status=failure_status,
                 nonce=nonce,
                 requested_at=requested_at,
             ),
@@ -1876,6 +2002,178 @@ class PlatformClient:
             )
         return JobResponse.model_validate(resp.json())
 
+    async def request_generator_round_job(
+        self, *, slot_id: str
+    ) -> GeneratorRoundJobResponse | None:
+        """Ask Platform for one generator-round panel run on ``slot_id``.
+
+        ``None`` (HTTP 204) means no round panel run is claimable: no round is
+        running, every panel agent is done or leased, or this validator's
+        scorer lacks the ``generator_rounds`` capability.
+        """
+        payload = GeneratorRoundJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            slot_id=slot_id,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-job"
+        try:
+            resp = await self._client.post(
+                url, headers=self._headers, json=payload.model_dump(mode="json")
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError(f"generator round job request failed: {exc}") from exc
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"generator round job rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundJobResponse.model_validate(resp.json())
+
+    async def submit_generator_round_score(
+        self,
+        job: GeneratorRoundJobResponse,
+        *,
+        run_id: str,
+        results: list[GeneratorRoundCaseResult],
+    ) -> GeneratorRoundScoreResponse:
+        """Post one panel agent's signed per-case round results."""
+        payload = GeneratorRoundScoreRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            round_index=job.round_index,
+            ticket_deadline=job.deadline,
+            dataset_sha256=job.dataset_sha256,
+            run_id=run_id,
+            results=results,
+        )
+        payload.signature = self._keypair.sign(
+            payload.signing_message(job.agent_id)
+        ).hex()
+        url = f"{self._base}{_PREFIX}/agent/{job.agent_id}/generator-round-score"
+        try:
+            resp = await self._client.post(
+                url, headers=self._headers, json=payload.model_dump(mode="json")
+            )
+        except httpx.HTTPError as exc:
+            raise PlatformError(f"generator round submit failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"generator round results rejected ({resp.status_code}): "
+                f"{resp.text[:200]}"
+            )
+        return GeneratorRoundScoreResponse.model_validate(resp.json())
+
+    async def fail_generator_round_job(
+        self,
+        job: GeneratorRoundJobResponse,
+        *,
+        reason: GeneratorRoundFailReason,
+        detail: str | None = None,
+    ) -> GeneratorRoundFailResponse | None:
+        """Best-effort release of a round lease this host could not finish.
+
+        Never raises: an unreleased round lease simply expires, and a round run
+        never charges the agent an attempt either way.
+        """
+        payload = GeneratorRoundFailRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            round_index=job.round_index,
+            ticket_deadline=job.deadline,
+            reason=reason,
+            detail=(detail or None) and detail[:500],
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(
+            payload.signing_message(job.agent_id)
+        ).hex()
+        url = f"{self._base}{_PREFIX}/agent/{job.agent_id}/generator-round-fail"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            logger.warning("generator round release failed: %s", exc)
+            return None
+        if resp.status_code != 200:
+            logger.warning(
+                "generator round release rejected (%s): %s",
+                resp.status_code,
+                resp.text[:200],
+            )
+            return None
+        return GeneratorRoundFailResponse.model_validate(resp.json())
+
+    async def request_generator_round_commitment_job(
+        self,
+    ) -> GeneratorRoundCommitmentJobResponse | None:
+        """Ask Platform whether this validator should publish a round commitment.
+
+        ``None`` (HTTP 204) means nothing needs this validator: no round is
+        waiting for publication, or another validator is elected for it.
+        """
+        payload = GeneratorRoundCommitmentJobRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-commitment-job"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"commitment job request failed: {exc}") from exc
+        if resp.status_code == 204:
+            return None
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"commitment job rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundCommitmentJobResponse.model_validate(resp.json())
+
+    async def report_generator_round_commitment(
+        self,
+        job: GeneratorRoundCommitmentJobResponse,
+        *,
+        outcome: GeneratorRoundCommitmentOutcome,
+        block_number: int | None = None,
+        extrinsic_hash: str | None = None,
+        detail: str | None = None,
+    ) -> GeneratorRoundCommitmentReportResponse:
+        """Post the signed outcome of one elected commitment publication."""
+        payload = GeneratorRoundCommitmentReportRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            round_index=job.round_index,
+            commitment=job.commitment,
+            outcome=outcome,
+            block_number=block_number,
+            extrinsic_hash=extrinsic_hash,
+            detail=(detail or None) and detail[:500],
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+        )
+        payload.signature = self._keypair.sign(payload.signing_message()).hex()
+        url = f"{self._base}{_PREFIX}/generator-round-commitment-report"
+        try:
+            async with asyncio.timeout(30):
+                resp = await self._client.post(
+                    url, headers=self._headers, json=payload.model_dump(mode="json")
+                )
+        except (httpx.HTTPError, TimeoutError) as exc:
+            raise PlatformError(f"commitment report failed: {exc}") from exc
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"commitment report rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return GeneratorRoundCommitmentReportResponse.model_validate(resp.json())
+
     async def get_ledger(self) -> LedgerResponse:
         """Pull the best-score-per-payment-coldkey ledger folded into weights.
 
@@ -1912,22 +2210,35 @@ class PlatformClient:
                 f"ledger rejected ({resp.status_code}): {resp.text[:200]}"
             )
         ledger = LedgerResponse.model_validate(resp.json())
+        # Every row the fold can read must carry its own verifiable quorum
+        # receipts. The protocol-28 provisional incumbent is deliberately kept
+        # out of ``entries`` (it is crowned but never paid), yet it still
+        # decides the champion, tail and score-ceiling cohort, so it is held to
+        # exactly the same proof contract as a payable row.
+        served = (
+            [*ledger.entries, ledger.provisional_incumbent]
+            if ledger.provisional_incumbent is not None
+            else ledger.entries
+        )
+        # Enforce is fail-closed for every confirmation-capable version, the
+        # same population Platform's ranked predicate gates on, not only v9
+        # (#2989). A v13 row served under enforce without a receipt would
+        # otherwise be withheld silently by ``filter_weight_confirmed`` instead
+        # of rejecting a ledger that cannot match the Platform pin.
         if ledger.v9_confirmation_mode == "enforce" and any(
-            entry.bench_version == 9 and entry.v9_confirmation is None
-            for entry in ledger.entries
+            supports_confirmation(entry.bench_version) and entry.v9_confirmation is None
+            for entry in served
         ):
             raise PlatformError(
-                "v9 enforce ledger contained a row without full confirmation"
+                "confirmation enforce ledger contained a row without full confirmation"
             )
         if ledger.v9_confirmation_mode is None and any(
-            entry.v9_confirmation is not None for entry in ledger.entries
+            entry.v9_confirmation is not None for entry in served
         ):
             raise PlatformError(
                 "ledger carried v9 confirmation receipts without enforce marker"
             )
-        invalid = [
-            entry.agent_id for entry in ledger.entries if not verify_ledger_entry(entry)
-        ]
+        invalid = [entry.agent_id for entry in served if not verify_ledger_entry(entry)]
         if invalid:
             sample = ", ".join(str(agent_id) for agent_id in invalid[:3])
             raise PlatformError(
@@ -1935,6 +2246,126 @@ class PlatformClient:
                 f"{len(invalid)} entr{'y' if len(invalid) == 1 else 'ies'}: {sample}"
             )
         return ledger
+
+    async def get_router_ledger(self) -> RouterLedgerResponse:
+        """Pull the shadow router-track ledger the validator folds each epoch.
+
+        The router eval runs on one trusted, offloaded ``dittobench-api`` scorer
+        that publishes a ledger; the platform relays it here behind the same
+        signed proof-of-possession as :meth:`get_ledger` (``GET
+        /scoring/router-ledger``). The validator only reads and folds it, so no
+        provider secret or harness container ever touches a validator.
+
+        The read is best-effort by contract: :class:`PlatformRouterLedgerSource`
+        wraps this and degrades any failure to an empty ledger (zero router
+        emission), so a scorer outage or malformed publish cannot distort the
+        ``put_weights`` fold. In v1 the whole track is shadow
+        (``weight_eligible=False``), so even a served ledger contributes zero.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/router-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"router ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"router ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return RouterLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("router ledger response was invalid") from e
+
+    async def get_generator_ledger(self) -> GeneratorLedgerResponse:
+        """Pull the shadow generator-competition ledger (best-effort).
+
+        Same signed proof-of-possession as :meth:`get_router_ledger`, against
+        ``GET /scoring/generator-ledger``. :class:`PlatformGeneratorLedgerSource`
+        degrades any failure to an empty ledger.
+        """
+        url = f"{self._base}{_SCORING_PREFIX}/generator-ledger"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Ledger-Nonce": str(nonce),
+            "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
+            "X-Validator-Ledger-Signature": sign_ledger_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
+        try:
+            resp = await self._client.get(url, headers=proof_headers)
+        except httpx.HTTPError as e:
+            raise PlatformError(f"generator ledger fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"generator ledger rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            return GeneratorLedgerResponse.model_validate(resp.json())
+        except (ValidationError, ValueError) as e:
+            raise PlatformError("generator ledger response was invalid") from e
+
+    async def get_private_dataset(
+        self, agent_id: UUID, *, dataset_sha256: str, deadline: datetime
+    ) -> bytes:
+        payload = PrivateDatasetRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            dataset_sha256=dataset_sha256,
+            deadline=deadline,
+            nonce=uuid4(),
+            requested_at=datetime.now(UTC),
+            signature="0" * 128,
+        )
+        payload.signature = self._keypair.sign(payload.signing_message(agent_id)).hex()
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/private-dataset"
+        try:
+            async with self._client.stream(
+                "POST", url, headers=self._headers, json=payload.model_dump(mode="json")
+            ) as response:
+                if _is_transient_platform_status(response.status_code):
+                    # A Platform or database blip says nothing about the agent;
+                    # handing it back as scoring_error would spend the miner's
+                    # base attempt and let this slot fail every lease it claims.
+                    raise PlatformInfrastructureError(
+                        f"private dataset download unavailable ({response.status_code})"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"private dataset download rejected ({response.status_code})"
+                    )
+                parts = []
+                total = 0
+                async for chunk in response.aiter_bytes(65536):
+                    total += len(chunk)
+                    if total > 32 << 20:
+                        raise PlatformError("private dataset exceeds size limit")
+                    parts.append(chunk)
+                body = b"".join(parts)
+        except httpx.HTTPError:
+            raise PlatformInfrastructureError(
+                "private dataset transport failed"
+            ) from None
+        if not body or hashlib.sha256(body).hexdigest() != dataset_sha256:
+            raise PlatformError("private dataset digest mismatch")
+        return body
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
         """Get a presigned tarball URL with fresh proof of hotkey ownership."""
@@ -1980,7 +2411,10 @@ class PlatformClient:
         """Report a signed score for ``agent_id``.
 
         A 5xx or transport failure after a finished run is Platform
-        infrastructure. It still parks the attempt; only Backroom may retry.
+        infrastructure. Resending the identical signed report is free and
+        idempotent (Platform accepts an exact retry of a consumed ticket), so
+        it is replayed with backoff while the lease has room. Only a failure
+        that outlasts the retries parks the attempt for Backroom.
         """
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/score"
         payload = SubmitScoreRequest(
@@ -1989,20 +2423,47 @@ class PlatformClient:
             signature=signature,
             report=report,
         )
-        try:
-            resp = await self._client.post(
-                url, json=payload.model_dump(mode="json"), headers=self._headers
+        body = payload.model_dump(mode="json")
+        attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
+            try:
+                resp = await self._client.post(url, json=body, headers=self._headers)
+            except httpx.HTTPError as error:
+                failure: PlatformInfrastructureError = PlatformInfrastructureError(
+                    f"score submit failed: {error}"
+                )
+                failure.__cause__ = error
+            else:
+                if resp.status_code == 200:
+                    return SubmitScoreResponse.model_validate(resp.json())
+                message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
+                if resp.status_code not in {408, 429} and resp.status_code < 500:
+                    raise PlatformError(message)
+                failure = PlatformInfrastructureError(message)
+            if attempt + 1 >= attempts:
+                raise failure
+            delay = _SCORE_SUBMIT_RETRY_DELAYS[attempt]
+            # Like the worker's lease guard, only an aware deadline is comparable.
+            if (
+                ticket_deadline is not None
+                and ticket_deadline.tzinfo is not None
+                and (
+                    datetime.now(UTC) + timedelta(seconds=delay)
+                    >= ticket_deadline - _SCORE_SUBMIT_DEADLINE_MARGIN
+                )
+            ):
+                raise failure
+            logger.warning(
+                "score submit for %s hit Platform infrastructure (%s); "
+                "replaying in %.0fs (attempt %d/%d)",
+                agent_id,
+                failure,
+                delay,
+                attempt + 2,
+                attempts,
             )
-        except httpx.HTTPError as error:
-            raise PlatformInfrastructureError(
-                f"score submit failed: {error}"
-            ) from error
-        if resp.status_code == 200:
-            return SubmitScoreResponse.model_validate(resp.json())
-        message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
-        if resp.status_code in {408, 429} or resp.status_code >= 500:
-            raise PlatformInfrastructureError(message)
-        raise PlatformError(message)
+            await asyncio.sleep(delay)
+        raise AssertionError("score submit retry loop did not return")
 
     async def issue_coding_certification_lease(
         self,
@@ -2560,8 +3021,26 @@ class PlatformClient:
         :class:`PlatformError` on rejection so the caller can log it; callers
         treat failure as best-effort (the score already stands)."""
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/transcript/{run_id}"
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        digest = hashlib.sha256(body).hexdigest()
+        proof_headers = {
+            **self._headers,
+            "X-Validator-Transcript-Sha256": digest,
+            "X-Validator-Transcript-Nonce": str(nonce),
+            "X-Validator-Transcript-Requested-At": requested_at.isoformat(),
+            "X-Validator-Transcript-Signature": sign_transcript_request(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                run_id=run_id,
+                transcript_sha256=digest,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        }
         try:
-            resp = await self._client.put(url, content=body, headers=self._headers)
+            resp = await self._client.put(url, content=body, headers=proof_headers)
         except httpx.HTTPError as e:
             raise PlatformError(f"transcript submit failed: {e}") from e
         if resp.status_code != 200:

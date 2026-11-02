@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -39,7 +40,51 @@ MAX_RETEST_COHORT_SIZE = 25
 # beyond it the band stops meaning "tied" and starts meaning "nearby", and the
 # only thing still bounding the cohort would be the size ceiling.
 MAX_RETEST_ELIGIBILITY_Z = 3.0
+# Tempo-aligned wave pacing (``wave_cadence_tempos``). Twenty-four epochs is
+# about a day of SN118 tempos; beyond it a "wave" stops tracking the chain.
+MAX_WAVE_CADENCE_TEMPOS = 24
+MAX_WAVE_SEEDS_PER_WINDOW = 16
+DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
 DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
+
+
+# The first validator heartbeat protocol whose fold reads ``crown_mode`` and
+# ``crown_incumbent_agent_id`` off the ledger. Exposing the marker to an older
+# fleet would fold two different champions, so it is withheld until every
+# recently-live weight setter reports at least this.
+CROWN_INCUMBENT_PROTOCOL = 27
+
+# The first validator heartbeat protocol whose fold reads
+# ``provisional_incumbent``: a crown incumbent withheld by the terminal-review
+# emission gate keeps the crown and its shares burn. An enforcing gate filters
+# the pool only once every recently-live weight setter reports at least this;
+# an older validator would crown and pay the runner-up instead.
+PROVISIONAL_INCUMBENT_PROTOCOL = 28
+
+# The first validator heartbeat protocol whose fold reads ``crown_gate``: the
+# minimum shared-seed confirmations a challenger needs before the paired
+# comparison may move the crown, and the official standing the crown must keep.
+CROWN_GATE_PROTOCOL = 34
+DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
+DEFAULT_CHAMPION_STANDING_RANK = 3
+# A challenger cannot hold more shared seeds than the continual lane retains.
+MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+
+
+class LedgerPinStatus(BaseModel):
+    """Identity of the epoch-pinned ledger currently served to validators."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    epoch_index: int
+    last_epoch_block: int
+    pinned_block: int
+    pinned_at: datetime
+    bench_version: int
+    ledger_digest: str
+    entry_count: int
+    champion_agent_id: UUID | None = None
+    incumbent_agent_id: UUID | None = None
 
 
 class ContinualRetestSettings(BaseModel):
@@ -57,6 +102,62 @@ class ContinualRetestSettings(BaseModel):
     weight-setting validator reports the protocol that understands the ledger
     marker. There is deliberately no unconditional override: unlike background
     retest planning, a mixed weight fold is a consensus split.
+    """
+
+    statistical_band_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Activate the protocol-29 statistical cap only after operator selection
+    and every recently-live weight setter reports support. The default keeps
+    the historical fold throughout a rolling upgrade."""
+
+    crown_gate_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether the KOTH fold gates the crown on shared-seed evidence (protocol 34).
+
+    ``disabled`` is the pre-34 walk and the exact rollback: any challenger that
+    clears the indifference band takes the crown, including on an unpaired
+    comparison of a newcomer's three-seed canonical against the incumbent's
+    retest-folded score. ``fleet_ready`` serves ``crown_gate`` once every
+    recently-live weight setter reports protocol 34: the crown then moves only
+    on the paired statistic over at least :attr:`min_dethrone_confirmations`
+    shared seeds, and only within the top :attr:`champion_standing_rank`
+    official places. There is deliberately no unconditional override.
+    """
+
+    min_dethrone_confirmations: Annotated[
+        int, Field(ge=2, le=MAX_MIN_DETHRONE_CONFIRMATIONS)
+    ] = DEFAULT_MIN_DETHRONE_CONFIRMATIONS
+    """Shared-seed confirmations a challenger must hold against the champion
+    before it may dethrone. Two is the paired statistic's own floor."""
+
+    champion_standing_rank: Annotated[int, Field(ge=1, le=EMISSION_SET_SIZE)] = (
+        DEFAULT_CHAMPION_STANDING_RANK
+    )
+    """Official places the crown must stay within. A champion that falls below
+    it hands the crown to the best-qualified standing challenger."""
+
+    ledger_pin_mode: Literal["live", "epoch"] = "epoch"
+    """Whether ``GET /scoring/scores`` serves one pinned ledger per chain epoch.
+
+    ``epoch`` (the default) freezes the fold input once per
+    ``SubnetEpochIndex`` so every validator reading during that epoch folds
+    byte-identical entries and markers; a ledger change lands for everyone at
+    the next pin instead of splitting the fleet on who read first. ``live`` is
+    the exact rollback to the time-based read and is a serving change only --
+    the fold itself is untouched by this switch, which is why it needs no
+    fleet-protocol gate.
+    """
+
+    crown_incumbent_mode: Literal["disabled", "fleet_ready"] = "disabled"
+    """Whether the KOTH fold defends the crown from the served incumbent.
+
+    ``disabled`` is the historical fold and the exact rollback: every read
+    re-derives the champion from the earliest lineage anchor, so a senior
+    claimant sitting inside the dethrone band retakes the crown whenever the
+    holder's official lead dips under it. ``fleet_ready`` serves the previous
+    pin's champion (resolved through its owner family) as ``crown_mode:
+    incumbent`` and the fold only moves the crown when a challenger clears the
+    band over that incumbent. Like tie weighting it activates only after every
+    recently-live weight-setting validator reports the protocol that reads the
+    marker, and there is deliberately no unconditional override.
     """
 
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP
@@ -105,6 +206,32 @@ class ContinualRetestSettings(BaseModel):
     """
 
     idle_retests_enabled: bool = False
+
+    wave_cadence_tempos: Annotated[int, Field(ge=0, le=MAX_WAVE_CADENCE_TEMPOS)] = 0
+    """Tempo-aligned waves: open new shared seeds only once per N chain epochs.
+
+    ``0`` (the default, and the exact rollback) is the historical pacing: the
+    next growth seed opens as soon as the previous wave completes, so the board
+    moves whenever validators happen to finish. A positive ``N`` aligns the
+    agent competition to the chain: the epoch grid is cut into windows of ``N``
+    ``SubnetEpochIndex`` values starting at a multiple of ``N`` (the same grid
+    generator rounds use at ``epochs_per_round`` ``N``), and at most
+    :attr:`wave_seeds_per_window` NEW seeds open per window. A seed that is
+    already open keeps being leased until every member has it, and catch-up of
+    recorded coverage is never paced, so a new entrant still converges in one
+    round. Only the introduction of fresh shared seeds waits for the next
+    window. Crown changes therefore land on a tempo-aligned wave cadence, and
+    retest spend is bounded at ``wave_seeds_per_window`` seeds per window.
+    """
+
+    wave_seeds_per_window: Annotated[int, Field(ge=1, le=MAX_WAVE_SEEDS_PER_WINDOW)] = (
+        DEFAULT_WAVE_SEEDS_PER_WINDOW
+    )
+    """New shared seeds a tempo-aligned window may open (ignored at cadence 0).
+
+    Three matches the crown gate's ``min_dethrone_confirmations`` default, so
+    one window can carry a full dethrone case for a challenger."""
+
     rollout_standdown: Literal["off", "capable_validators", "all"] = (
         "capable_validators"
     )
@@ -226,6 +353,18 @@ class EffectiveContinualRetestSettings(BaseModel):
     aggregate_active: bool
     tie_weighting_fleet_ready: bool = False
     tie_weighting_active: bool = False
+    statistical_band_fleet_ready: bool = False
+    statistical_band_active: bool = False
+    statistical_band_required_protocol: int = 29
+    crown_incumbent_fleet_ready: bool = False
+    crown_incumbent_active: bool = False
+    crown_incumbent_required_protocol: int = CROWN_INCUMBENT_PROTOCOL
+    crown_gate_fleet_ready: bool = False
+    crown_gate_active: bool = False
+    crown_gate_required_protocol: int = CROWN_GATE_PROTOCOL
+    ledger_pin: LedgerPinStatus | None = None
+    """The pin validators are folding right now, or ``None`` when no pin has
+    ever been taken (bootstrap) or the mode is ``live``."""
     max_age_seconds: float
     open_rollout_desired_version: int | None = None
     rollout_standdown_active: bool = False

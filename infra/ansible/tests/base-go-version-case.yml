@@ -1,0 +1,19 @@
+---
+# One case of tests/base-go-version.yml: run the real base-role task with a
+# stubbed register and assert the derived version.
+- name: "Detect Go version ({{ go_case.name }})"
+  ansible.builtin.include_role:
+    name: base
+    tasks_from: go_version_fact
+  vars:
+    go_version_check: "{{ go_case.result }}"
+
+- name: "Assert detected Go version ({{ go_case.name }})"
+  ansible.builtin.assert:
+    that:
+      - current_go_version is string
+      - current_go_version == go_case.expected
+    fail_msg: >-
+      {{ go_case.name }}: expected {{ go_case.expected | to_json }},
+      got {{ current_go_version | to_json }}
+    quiet: true

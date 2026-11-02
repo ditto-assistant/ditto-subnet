@@ -119,3 +119,52 @@ def test_collector_rounds_and_caches_for_two_minutes() -> None:
     }
     assert refreshed.collected_at == 1_752_443_321
     assert refreshed.cpu_percent == 95
+
+
+def test_host_specs_describe_fixed_hardware_in_whole_units() -> None:
+    def cpu_count(logical: bool = True) -> int:
+        return 16 if logical else 8
+
+    specs = system_health.collect_host_specs(
+        cpu_count=cpu_count,
+        virtual_memory=lambda: SimpleNamespace(total=64 * 1024**3 + 5),
+        disk_usage=lambda _path: SimpleNamespace(total=500 * 1024**3),
+        machine=lambda: "x86_64",
+    )
+
+    assert specs is not None
+    assert specs.model_dump() == {
+        "cpu_count": 16,
+        "cpu_physical_cores": 8,
+        "memory_total_mib": 65_536,
+        "disk_total_gib": 500,
+        "architecture": "x86_64",
+    }
+
+
+def test_host_specs_probe_failure_is_omitted_not_raised() -> None:
+    def broken() -> Any:
+        raise OSError("no /proc")
+
+    assert system_health.collect_host_specs(virtual_memory=broken) is None
+
+
+def test_collector_probes_host_specs_once_per_process() -> None:
+    probe = Mock(return_value=None)
+    collector = SystemMetricsCollector(host_specs_probe=probe)
+
+    assert collector.host_specs() is None
+    assert collector.host_specs() is None
+    probe.assert_called_once_with()
+
+
+def test_host_specs_unknown_cpu_count_is_omitted_not_one() -> None:
+    assert (
+        system_health.collect_host_specs(
+            cpu_count=lambda **_kwargs: None,
+            virtual_memory=lambda: SimpleNamespace(total=1024**3),
+            disk_usage=lambda _path: SimpleNamespace(total=1024**3),
+            machine=lambda: "x86_64",
+        )
+        is None
+    )

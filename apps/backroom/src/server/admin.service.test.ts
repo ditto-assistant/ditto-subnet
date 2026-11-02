@@ -1,3 +1,5 @@
+import { fetchMinerGithubLink, fetchGithubContributor, fetchClaPolicy, updateClaPolicy, publishClaVersion, fetchGithubRevocationPreflight, revokeMinerGithubLink } from './admin.service'
+import { contributorFixture, claStatusFixture, claControlFixture, claShadowRevisionFixture, claVersionFixture, githubRevocationFixture, revokedGithubFixture } from './contributor.test-fixtures'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
@@ -12,9 +14,13 @@ import {
   fetchScreenedImageRebuild,
   fetchBenchmarkContractMigration,
   fetchScreeningFailureDiagnostic,
+  fetchAdjudicationAttempts,
+  fetchScreeningVerificationReadiness,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
   fetchScreeningFailureSummary,
+  fetchL2ReportCanaryPreflight,
+  scheduleL2ReportCanary,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
   fetchValidatorAssignments,
@@ -42,6 +48,7 @@ import {
   fetchArtifactReleaseControl,
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
+  fetchCompetitionSubmissionTerms,
   updateSubmissionSettings,
   fetchHotkeyBan,
   fetchHotkeyBans,
@@ -59,9 +66,11 @@ import {
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
   setValidatorIssuancePause,
+  setScoringLeaseSettings,
   fetchValidatorFleet,
   fetchValidatorFleetObservability,
   fetchAgentScores,
+  fetchContinualRetestDiagnostic,
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
   fetchOwnerFootprint,
@@ -73,6 +82,10 @@ import {
   setConfirmationBundleSettings,
 } from './admin.service'
 import { deriveRequestId } from '../lib/idempotency'
+import {
+  submissionSettingsConfirmation,
+  updateSubmissionSettingsInputSchema,
+} from '../lib/admin.schemas'
 
 const originalToken = process.env.DITTO_ADMIN_API_TOKEN
 const originalBaseUrl = process.env.DITTO_PLATFORM_API_BASE_URL
@@ -687,6 +700,236 @@ describe('inference route administration', () => {
 })
 
 describe('screening submission admin service', () => {
+  it('reads the exact L2 canary guard snapshot through Platform admin', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const sourceAttemptId = '22222222-2222-4222-8222-222222222222'
+    const snapshot = {
+      authority: 'none',
+      agent_id: agentId,
+      source_attempt_id: sourceAttemptId,
+      agent_artifact_sha256: 'a'.repeat(64),
+      source_attempt_artifact_sha256: null,
+      agent_status: 'evaluating',
+      attempt_policy_version: 13,
+      arrival_bench_version: 13,
+      score_row_count: 2,
+      attempt_agent_id: agentId,
+      legacy_null_attempt_sha256: true,
+      active_canary_id: null,
+      report_only_packet_available: false,
+      guards: [
+        {
+          guard: 'score_row_count',
+          passed: false,
+          current: 2,
+          expected: 1,
+          conflict_detail: 'canary exact-source guard changed: score_row_count',
+          note: null,
+        },
+        {
+          guard: 'attempt_artifact_sha256',
+          passed: false,
+          current: null,
+          expected: 'a'.repeat(64),
+          conflict_detail: 'canary exact-source guard changed: attempt_artifact_sha256',
+          note: 'legacy attempt has no pinned artifact SHA',
+        },
+      ],
+      guards_pass: false,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(snapshot))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchL2ReportCanaryPreflight({ agentId, sourceAttemptId })).resolves.toEqual(snapshot)
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/preflight/${agentId}/${sourceAttemptId}`,
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    const rulingId = '33333333-3333-4333-8333-333333333333'
+    await fetchL2ReportCanaryPreflight({
+      agentId,
+      sourceAttemptId,
+      artifactSha256: 'a'.repeat(64),
+      expectedAgentStatus: 'scored',
+      expectedScoreCount: 0,
+      historicalRulingKind: 'ath_clear',
+      historicalRulingId: rulingId,
+    })
+    const [url] = fetchMock.mock.calls[1] as [string, RequestInit]
+    const parsed = new URL(url)
+    expect(parsed.pathname).toBe(
+      `/api/v1/admin/screener-l2-report-canaries/preflight/${agentId}/${sourceAttemptId}`,
+    )
+    expect(Object.fromEntries(parsed.searchParams)).toEqual({
+      artifact_sha256: 'a'.repeat(64),
+      expected_agent_status: 'scored',
+      expected_score_count: '0',
+      historical_ruling_kind: 'ath_clear',
+      historical_ruling_id: rulingId,
+    })
+
+    await expect(
+      fetchL2ReportCanaryPreflight({
+        agentId,
+        sourceAttemptId,
+        historicalRulingKind: 'ath_clear',
+        historicalRulingId: rulingId,
+      }),
+    ).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps scheduler-matched preflight refusals for ruling and benchmark guards', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '11111111-1111-4111-8111-111111111111'
+    const snapshot = {
+      authority: 'none',
+      agent_id: agentId,
+      source_attempt_id: '22222222-2222-4222-8222-222222222222',
+      agent_artifact_sha256: 'a'.repeat(64),
+      source_attempt_artifact_sha256: null,
+      agent_status: 'scored',
+      attempt_policy_version: 13,
+      arrival_bench_version: null,
+      score_row_count: 1,
+      attempt_agent_id: agentId,
+      legacy_null_attempt_sha256: true,
+      active_canary_id: null,
+      report_only_packet_available: false,
+      guards: [
+        { guard: 'ath_clear_action', passed: false, current: null, expected: null,
+          conflict_detail: 'ATH clear action missing', note: null },
+        { guard: 'source_object_verified', passed: null, current: null, expected: 'a'.repeat(64),
+          conflict_detail: 'current source object differs from ruling', note: 'not judged' },
+        { guard: 'arrival_bench_version', passed: false, current: null, expected: 13,
+          conflict_detail: 'source is not benchmark v13', note: 'arrival benchmark version unavailable' },
+      ],
+      guards_pass: false,
+    }
+    vi.stubGlobal('fetch', vi.fn().mockImplementation(async () => Response.json(snapshot)))
+
+    await expect(
+      fetchL2ReportCanaryPreflight({ agentId, sourceAttemptId: snapshot.source_attempt_id }),
+    ).resolves.toEqual(snapshot)
+    // A snapshot that claims authority is not a preflight this tool accepts.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () => Response.json({ ...snapshot, authority: 'granted' })),
+    )
+    await expect(
+      fetchL2ReportCanaryPreflight({ agentId, sourceAttemptId: snapshot.source_attempt_id }),
+    ).rejects.toThrow()
+  })
+
+  it('forwards an optional canary review posture pin and keeps it in the view', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const input = {
+      requestId: '44444444-4444-4444-8444-444444444444',
+      agentId: '11111111-1111-4111-8111-111111111111',
+      sourceAttemptId: '22222222-2222-4222-8222-222222222222',
+      artifactSha256: 'a'.repeat(64),
+      expectedAgentStatus: 'rejected',
+      expectedScoreCount: 0,
+      targetNodeId: 'subnet-screener-1',
+      reviewLabel: 'known_reject',
+      confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+    }
+    const view = {
+      canary_id: '33333333-3333-4333-8333-333333333333',
+      request_id: input.requestId,
+      agent_id: input.agentId,
+      source_attempt_id: input.sourceAttemptId,
+      artifact_sha256: input.artifactSha256,
+      target_node_id: input.targetNodeId,
+      expected_agent_status: 'rejected',
+      expected_score_count: 0,
+      review_label: 'known_reject',
+      run_mode: 'source_only',
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      review_settings_checksum: 'c'.repeat(64),
+      settings_revision: 141,
+      settings_checksum: 'c'.repeat(64),
+      status: 'leased',
+      claimed_instance_id: 'subnet-screener-1-worker-1',
+      lease_expires_at: '2026-09-29T02:00:00Z',
+      report: null,
+      error_code: null,
+      created_at: '2026-09-29T00:00:00Z',
+      completed_at: null,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(view))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 141 }, 'operator@omniaura.ai'),
+    ).resolves.toMatchObject({
+      review_settings_revision: 141,
+      review_settings_scope: 'l2-report-canary-ctl137',
+      settings_revision: 141,
+    })
+    const [pinnedUrl, pinned] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(pinnedUrl).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
+    )
+    expect(JSON.parse(String(pinned.body))).toMatchObject({ review_settings_revision: 141 })
+
+    // Omitting the pin keeps today's route and request shape: node posture.
+    await scheduleL2ReportCanary(input, 'operator@omniaura.ai')
+    const [unpinnedUrl, unpinned] = fetchMock.mock.calls[1] as [string, RequestInit]
+    expect(unpinnedUrl).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries',
+    )
+    expect(JSON.parse(String(unpinned.body))).not.toHaveProperty('review_settings_revision')
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 0 }, 'operator@omniaura.ai'),
+    ).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it.each([
+    [405, 'Method Not Allowed'],
+    [404, 'Not Found'],
+  ])('refuses a pin that an older Platform cannot bind (%i), without queueing', async (status, message) => {
+    // A Platform build that predates pins has no /pinned route. It answers
+    // 405 or 404 before any handler runs, so nothing is queued; Backroom must
+    // say so and must not fall back to the plain route, which would drop the
+    // pin. The current route never answers 404 itself.
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const input = {
+      requestId: '44444444-4444-4444-8444-444444444444',
+      agentId: '11111111-1111-4111-8111-111111111111',
+      sourceAttemptId: '22222222-2222-4222-8222-222222222222',
+      artifactSha256: 'a'.repeat(64),
+      expectedAgentStatus: 'rejected',
+      expectedScoreCount: 0,
+      targetNodeId: 'subnet-screener-1',
+      reviewLabel: 'known_reject',
+      confirmation: 'QUEUE REPORT ONLY L2 CANARY',
+    }
+    const fetchMock = vi.fn().mockImplementation(async () =>
+      Response.json({ error_code: 3002, message, request_id: 'r' }, { status }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      scheduleL2ReportCanary({ ...input, reviewSettingsRevision: 141 }, 'operator@omniaura.ai'),
+    ).rejects.toThrow(/does not support canary review settings pins yet, so nothing was queued/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-l2-report-canaries/pinned',
+    )
+
+    // The same status on the plain route is not a missing pin capability.
+    await expect(scheduleL2ReportCanary(input, 'operator@omniaura.ai')).rejects.toThrow(
+      message,
+    )
+  })
+
   it('forwards explicit pagination for screening history and disputes', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
@@ -753,6 +996,61 @@ describe('screening submission admin service', () => {
     )
   })
 
+  it('forwards every screening-submission search filter as Platform query params', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ items: [], count: 0, generation: 'all', active_bench_version: 12 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchScreeningSubmissions(10, 20, 'all', {
+      agentName: 'moonlight_v1',
+      agentNamePrefix: 'moon',
+      minerHotkey: '5Hot',
+      minerColdkey: '5Cold',
+      artifactSha256: 'AB'.repeat(32),
+      agentStatus: ['scored', 'banned'],
+      screeningReasonCode: ['docker-build', 'policy-network-egress'],
+      submittedAfter: '2026-07-01T00:00:00Z',
+      submittedBefore: '2026-08-01T00:00:00+00:00',
+    })
+
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-submissions?' +
+        [
+          'generation=all',
+          'limit=10',
+          'offset=20',
+          'agent_name=moonlight_v1',
+          'agent_name_prefix=moon',
+          'miner_hotkey=5Hot',
+          'miner_coldkey=5Cold',
+          `artifact_sha256=${'AB'.repeat(32)}`,
+          'submitted_after=2026-07-01T00%3A00%3A00Z',
+          'submitted_before=2026-08-01T00%3A00%3A00%2B00%3A00',
+          'agent_status=scored',
+          'agent_status=banned',
+          'screening_reason_code=docker-build',
+          'screening_reason_code=policy-network-egress',
+        ].join('&'),
+    )
+  })
+
+  it('rejects malformed screening-submission filters before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { artifactSha256: 'not-hex' }),
+    ).rejects.toThrow()
+    await expect(
+      fetchScreeningSubmissions(10, 0, 'all', { agentStatus: ['nope'] }),
+    ).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('gets one exact submission without requesting artifact data', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
@@ -812,7 +1110,12 @@ describe('screening submission admin service', () => {
         { agentId, attemptId },
         'peyton@omniaura.ai',
       ),
-    ).resolves.toEqual(diagnostic)
+    ).resolves.toEqual({
+      ...diagnostic,
+      l2_review_diagnostic: null,
+      court_diagnostic: null,
+      court_completion_receipt: null,
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/attempts/${attemptId}/failure-diagnostic`,
       expect.objectContaining({
@@ -822,6 +1125,222 @@ describe('screening submission admin service', () => {
         }),
       }),
     )
+  })
+
+  it('reads a bounded text-free L4 cohort without filling missing success telemetry', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const item = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      artifact_sha256: 'ab'.repeat(32),
+      policy_version: 13,
+      manifest_digest: 'cd'.repeat(32),
+      started_at: '2026-09-23T04:00:00Z',
+      finished_at: '2026-09-23T04:03:00Z',
+      attempt_status: 'passed',
+      adjudication_decision: 'clear',
+      review_settings_revision: 4,
+      review_settings_checksum: 'ef'.repeat(32),
+      configured_model: 'z-ai/glm-5.3-flash',
+      configured_timeout_seconds: 600,
+      configured_completion_ceiling: 2400,
+      observed_model: null,
+      observed_provider: null,
+      observed_upstream: null,
+      failure_code: null,
+      elapsed_ms: null,
+      first_tool_call_ms: null,
+      first_tool_observation: null,
+      request_count: null,
+      request_prompt_bytes: null,
+      request_wire_bytes: null,
+      request_event_count: null,
+      prompt_tokens: null,
+      completion_tokens: null,
+    }
+    const payload = { limit: 5, offset: 0, lookback_hours: 24, items: [item] }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchAdjudicationAttempts({ limit: 5, lookbackHours: 24 })).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-adjudication-attempts?limit=5&offset=0&lookback_hours=24',
+      expect.objectContaining({ method: 'GET' }),
+    )
+  })
+
+  it('passes a sanitized court diagnostic through and drops model text', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const court = {
+      error_class: 'ValueError',
+      failure_code: 'stream-no-tool-call',
+      escalation_code: 'adjudicator-failed',
+      timeout_stage: 'response',
+      http_status: null,
+      elapsed_ms: 42,
+      prompt_tokens: 10,
+      completion_tokens: 3,
+      final_tool_call_returned: true,
+      model: 'z-ai/glm-5.3-flash',
+      provider: 'openrouter',
+      request_count: 1,
+      request_attempts: [{
+        ordinal: 1,
+        started_ms: 4,
+        elapsed_ms: 38,
+        stage: 'event',
+        stream_requested: true,
+        prompt_bytes: 923,
+        http_status: 200,
+        headers_ms: 8,
+        first_byte_ms: 11,
+        last_byte_ms: 30,
+        first_event_ms: 13,
+        last_event_ms: 30,
+        event_count: 2,
+        wire_bytes: 650,
+        upstream: 'together',
+      }],
+    }
+    const diagnostic = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'quarantined',
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'quarantined',
+      started_at: '2026-09-22T08:00:00Z',
+      deadline: '2026-09-22T08:10:00Z',
+      finished_at: '2026-09-22T08:06:00Z',
+      reason: 'Submission held for anti-cheat review',
+      reason_code: 'source-review-adjudication-refused',
+      private_failure_detail: null,
+      private_failure_log_tail: null,
+      court_diagnostic: {
+        ...court,
+        exception: 'prompt text that must not be stored',
+        request_attempts: court.request_attempts.map((attempt) => ({
+          ...attempt,
+          prompt: 'source text that must not be stored',
+        })),
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(diagnostic)))
+
+    await expect(
+      fetchScreeningFailureDiagnostic(
+        { agentId, attemptId },
+        'peyton@omniaura.ai',
+      ),
+    ).resolves.toEqual({
+      ...diagnostic,
+      l2_review_diagnostic: null,
+      court_diagnostic: court,
+      court_completion_receipt: null,
+    })
+  })
+
+  it('returns only typed successful L4 completion measurements', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const receipt = {
+      elapsed_ms: 4300,
+      first_tool_call_ms: 2000,
+      first_tool_observation: 'stream_delta',
+      observed_model: 'z-ai/glm-5.3-flash',
+      gateway_provider: 'openrouter',
+      observed_upstream: 'together',
+      request_count: 1,
+      final_request_prompt_bytes: 8000,
+      final_request_wire_bytes: 700,
+      final_request_event_count: 4,
+      prompt_tokens: 200,
+      completion_tokens: 80,
+    }
+    const response = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      agent_status: 'evaluating',
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'passed',
+      started_at: '2026-09-23T04:00:00Z',
+      deadline: '2026-09-23T04:10:00Z',
+      finished_at: '2026-09-23T04:00:04Z',
+      reason: null,
+      reason_code: 'adjudicated-source-review-clear',
+      private_failure_detail: null,
+      private_failure_log_tail: null,
+      court_diagnostic: null,
+      court_completion_receipt: {
+        ...receipt,
+        tool_arguments: 'source text that must not leave Platform',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(response)))
+    await expect(
+      fetchScreeningFailureDiagnostic({ agentId, attemptId }, 'reviewer@example.com'),
+    ).resolves.toEqual({
+      ...response,
+      l2_review_diagnostic: null,
+      court_completion_receipt: receipt,
+    })
+  })
+
+  it('reads exact v13 receipt absence without implying completed verification', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const attemptId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+    const checks = Array.from({ length: 20 }, (_, index) => ({
+      check_code: `check_${index}`,
+      record_status: 'not_recorded',
+      receipt_count: 0,
+    }))
+    const payload = {
+      agent_id: agentId,
+      artifact_sha256: 'ab'.repeat(32),
+      attempt_id: attemptId,
+      policy_version: 13,
+      attempt_status: 'quarantined',
+      verified_image_sha256s: [],
+      verified_image_count: 0,
+      verified_images_truncated: false,
+      checks,
+      private_metamorphic_applicability: 'not_recorded',
+      receipts: [],
+      receipt_count: 0,
+      receipts_truncated: false,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(
+      fetchScreeningVerificationReadiness({ agentId, attemptId }, 'peyton@omniaura.ai'),
+    ).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining(`/screening-submissions/${agentId}/attempts/${attemptId}/verification-readiness`),
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'peyton@omniaura.ai' }),
+      }),
+    )
+    const withPrivatePackage = {
+      ...payload,
+      private_package: {
+        program_status: 'retired',
+        registration_status: 'registered_unverified',
+        prerequisites: [
+          { code: 'target_artifact_commitment', status: 'mechanically_verified' },
+          { code: 'protected_blueprint_bank', status: 'not_observed' },
+        ],
+        clear_authorized: false,
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(withPrivatePackage)))
+    await expect(
+      fetchScreeningVerificationReadiness({ agentId, attemptId }, 'peyton@omniaura.ai'),
+    ).resolves.toEqual(withPrivatePackage)
   })
 
   it('passes the payment coldkey through on a submission read', async () => {
@@ -1150,6 +1669,44 @@ describe('artifact release administration', () => {
     )
   })
 
+  it.each([1, 2, 3])('preserves served gate evidence for diagnostic v%s without inventing it', async (schemaVersion) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const release_gate = {
+      version: 'completed-winner-emission-v1', automatic_confirmation_enabled: false,
+      archive_provider: { configured: true, host: 'api.taostats.io', auth_mode: 'query', credential_configured: true },
+      receipt_diagnostics: [{ report: {
+        schema_version: schemaVersion, validator_hotkey: 'validator', netuid: 118, timestamp: 100,
+        observation: { submission_status: 'accepted', submission_observed_at: 90,
+          recovery_status: 'forwarding_platform_failed', recovery_observed_at: 100,
+          page_receipts: 1, page_finalized: 1, page_forwarded: 0, page_deferred: 1,
+          ...(schemaVersion >= 2 ? { last_validation: { error_count: 1, fields: ['provenance.champion_artifact_sha256:string_pattern_mismatch'] } } : {}),
+          ...(schemaVersion === 3 ? { failure_context: { claimed_schema_version: 1, task_id: 12, claimed_epoch_index: 25017, claimed_commit_block: 9029300, attempt_id: '11111111-1111-4111-8111-111111111111' } } : {}),
+        },
+      }, received_at: '2026-09-18T00:00:00Z', stale: false }],
+      receipt_diagnostics_has_more: false,
+      pending_kings: 2,
+      confirmed_kings: 1,
+      rows_limit: 25,
+      rows_has_more: false,
+      rows: [{
+        agent_id: '11111111-1111-4111-8111-111111111111',
+        artifact_sha256: 'ab'.repeat(32),
+        crowned_at: '2026-09-17T00:00:00Z',
+        weight_confirmed_at: '2026-09-17T00:01:00Z',
+        emission_confirmed_at: '2026-09-17T01:00:00Z',
+        emission_block: 9000000,
+        emission_block_hash: '0x' + '12'.repeat(32),
+        emission_epoch_index: 25000,
+        emission_ledger_digest: '34'.repeat(32),
+      }],
+    }
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json({ ...control, release_gate }))
+      .mockResolvedValueOnce(Response.json(control)))
+    expect((await fetchArtifactReleaseControl()).release_gate).toEqual(release_gate)
+    expect((await fetchArtifactReleaseControl()).release_gate).toBeUndefined()
+  })
+
   it('writes CAS, reason, confirmation, and operator attribution before refreshing', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
     const fetchMock = vi
@@ -1295,7 +1852,12 @@ describe('submission cooldown administration', () => {
       )
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(fetchSubmissionSettingsControl()).resolves.toEqual(control)
+    // An older Platform omits the per-competition fields; reads default them.
+    await expect(fetchSubmissionSettingsControl()).resolves.toEqual({
+      ...control,
+      current: { ...control.current, competition_fees: {} },
+      effective_competition_fees: null,
+    })
     await updateSubmissionSettings('operator@omniaura.ai', {
       expectedRevision: 1,
       cooldownSeconds: 1800,
@@ -1319,6 +1881,181 @@ describe('submission cooldown administration', () => {
         }),
       }),
     )
+  })
+})
+
+describe('per-competition submission fees and terms', () => {
+  const generatorFee = { fee_amount_rao: 500_000_000, fee_required: null }
+  const priced = {
+    current: {
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 200_000_000,
+      competition_fees: { generator: generatorFee },
+      reason: 'price the generator competition',
+      actor: 'operator@omniaura.ai',
+      created_at: '2026-10-26T12:00:00Z',
+    },
+    history: [],
+    effective_competition_fees: [
+      {
+        competition: 'memory',
+        fee_amount_rao: 200_000_000,
+        amount_source: 'default',
+        fee_required: true,
+        required_source: 'always',
+      },
+      {
+        competition: 'generator',
+        fee_amount_rao: 500_000_000,
+        amount_source: 'override',
+        fee_required: true,
+        required_source: 'competition_settings',
+      },
+    ],
+  }
+
+  it('builds the exact phrase for an override map', () => {
+    expect(
+      submissionSettingsConfirmation(3600, 200_000_000, {
+        router: { fee_amount_rao: null, fee_required: null },
+        generator: { fee_amount_rao: 500_000_000, fee_required: null },
+      }),
+    ).toBe(
+      'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT',
+    )
+    expect(
+      submissionSettingsConfirmation(60, 1, { generator: { fee_amount_rao: null, fee_required: false } }),
+    ).toBe('SET SUBMISSION COOLDOWN 60 SECONDS FEE 1 RAO; GENERATOR FEE INHERIT REQUIRED NO')
+    expect(submissionSettingsConfirmation(60, 1, {})).toBe(
+      'SET SUBMISSION COOLDOWN 60 SECONDS FEE 1 RAO; ALL COMPETITIONS INHERIT',
+    )
+    expect(submissionSettingsConfirmation(60, 1)).toBe('SET SUBMISSION COOLDOWN 60 SECONDS FEE 1 RAO')
+    expect(() =>
+      updateSubmissionSettingsInputSchema.parse({
+        expectedRevision: 1,
+        cooldownSeconds: 60,
+        feeAmountRao: 1,
+        competitionFees: { memory: { fee_amount_rao: 5 } },
+        reason: 'price the memory lane',
+        confirmation: 'x',
+      }),
+    ).toThrow()
+  })
+
+  it('sends a generator price and verifies the stored revision carries it', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(priced.current))
+      .mockResolvedValueOnce(Response.json(priced))
+    vi.stubGlobal('fetch', fetchMock)
+    const confirmation =
+      'SET SUBMISSION COOLDOWN 3600 SECONDS FEE 200000000 RAO; GENERATOR FEE 500000000 RAO REQUIRED INHERIT'
+
+    await expect(
+      updateSubmissionSettings('operator@omniaura.ai', {
+        expectedRevision: 1,
+        cooldownSeconds: 3600,
+        feeAmountRao: 200_000_000,
+        competitionFees: { generator: { fee_amount_rao: 500_000_000 } },
+        reason: 'price the generator competition',
+        confirmation,
+      }),
+    ).resolves.toEqual(priced)
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toEqual({
+      expected_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 200_000_000,
+      competition_fees: { generator: generatorFee },
+      reason: 'price the generator competition',
+      actor: 'operator@omniaura.ai',
+      confirmation,
+    })
+  })
+
+  it('refuses to report a price Platform did not store', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const unpriced = {
+      ...priced,
+      current: { ...priced.current, competition_fees: {} },
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(Response.json(unpriced.current))
+        .mockResolvedValueOnce(Response.json(unpriced)),
+    )
+    await expect(
+      updateSubmissionSettings('operator@omniaura.ai', {
+        expectedRevision: 1,
+        cooldownSeconds: 3600,
+        feeAmountRao: 200_000_000,
+        competitionFees: { generator: { fee_amount_rao: 500_000_000 } },
+        reason: 'price the generator competition',
+        confirmation: 'anything',
+      }),
+    ).rejects.toThrow(/predates per-competition fees/)
+  })
+
+  it('reads every competition\'s terms and tolerates an older Platform', async () => {
+    const terms = {
+      competitions: [
+        {
+          competition: 'generator',
+          accepting: true,
+          deliverable: {
+            kind: 'generator_source_archive',
+            format: 'gzip-compressed tar of a Go main module',
+            contract_version: 'dittobench-generator/v1',
+            required_files: ['go.mod'],
+            limits: [
+              {
+                name: 'max_archive_bytes',
+                value: 4194304,
+                unit: 'bytes',
+                source: 'code',
+                reference: 'ditto.generator_archive.MAX_ARCHIVE_BYTES',
+                description: 'the compressed source archive',
+              },
+            ],
+            upload_endpoint: '/api/v1/generator/submissions',
+            signature_payload: 'ditto-generator-v1:{hotkey}',
+            notes: [],
+          },
+          cooldown: {
+            seconds: 3600,
+            scope: 'hotkey',
+            source: 'setting',
+            reference: 'generator_competition.upload_cooldown_seconds',
+          },
+          fee: {
+            required: true,
+            amount_rao: 500_000_000,
+            amount_source: 'override',
+            required_source: 'competition_settings',
+            send_address: '5Fee',
+            asset: 'TAO',
+            settings_revision: 2,
+          },
+          terms_endpoint: '/api/v1/generator/upload-terms',
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(terms))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchCompetitionSubmissionTerms()).resolves.toEqual({ ...terms, note: null })
+    expect(String(fetchMock.mock.calls[0][0])).toContain('/api/v1/public/submission-terms')
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValueOnce(Response.json({ detail: 'Not Found' }, { status: 404 })),
+    )
+    const older = await fetchCompetitionSubmissionTerms()
+    expect(older.competitions).toBeNull()
+    expect(older.note).toMatch(/predates per-competition submission terms/)
   })
 })
 
@@ -1498,6 +2235,7 @@ describe('emission burn administration', () => {
       min_burn_share: 0,
       max_burn_share: 1,
       live_validator_count: 3,
+      rank_shares_served: false,
     },
   })
 
@@ -1597,13 +2335,25 @@ describe('continual retest administration', () => {
   // wave_membership predates #489 and is folding `strict`.
   const readDefaults = {
     tie_weighting_mode: 'disabled' as const,
+    statistical_band_mode: 'disabled' as const,
+    ledger_pin_mode: 'epoch' as const,
+    crown_incumbent_mode: 'disabled' as const,
+    crown_gate_mode: 'disabled' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     wave_membership: 'participants',
     retest_cohort_size: 5,
     retest_eligibility_mode: 'fixed',
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
-  const legacyEquivalent = { ...readDefaults, wave_membership: 'strict' }
+  const legacyEquivalent = {
+    ...readDefaults,
+    wave_membership: 'strict',
+    ledger_pin_mode: 'live' as const,
+  }
   const settings = {
     aggregate_mode: 'fleet_ready',
     idle_retests_enabled: false,
@@ -1624,6 +2374,16 @@ describe('continual retest administration', () => {
       aggregate_active: false,
       tie_weighting_fleet_ready: false,
       tie_weighting_active: false,
+      statistical_band_fleet_ready: false,
+      statistical_band_active: false,
+      statistical_band_required_protocol: 29,
+      crown_incumbent_fleet_ready: false,
+      crown_incumbent_active: false,
+      crown_incumbent_required_protocol: 27,
+      crown_gate_fleet_ready: false,
+      crown_gate_active: false,
+      crown_gate_required_protocol: 34,
+      ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -1636,11 +2396,19 @@ describe('continual retest administration', () => {
   }
   const supportFor = (carried: boolean) => ({
     tie_weighting_mode: carried,
+    statistical_band_mode: carried,
+    ledger_pin_mode: carried,
+    crown_incumbent_mode: carried,
+    crown_gate_mode: carried,
+    min_dethrone_confirmations: carried,
+    champion_standing_rank: carried,
     retest_cohort_size: carried,
     wave_membership: carried,
     retest_eligibility_mode: carried,
     retest_eligibility_z: carried,
     retest_cohort_max_size: carried,
+    wave_cadence_tempos: carried,
+    wave_seeds_per_window: carried,
   })
   // The platform carries every field, so reads and writes both keep them.
   const supported = {
@@ -1654,6 +2422,12 @@ describe('continual retest administration', () => {
     const nextSettings = {
       aggregate_mode: 'enabled',
       tie_weighting_mode: 'disabled' as const,
+      statistical_band_mode: 'disabled' as const,
+      ledger_pin_mode: 'epoch' as const,
+      crown_incumbent_mode: 'disabled' as const,
+      crown_gate_mode: 'disabled' as const,
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: true,
       rollout_standdown: 'all',
       wave_membership: 'participants',
@@ -1661,6 +2435,8 @@ describe('continual retest administration', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     }
     const enabled = {
       ...control,
@@ -1859,6 +2635,7 @@ describe('queue policy administration', () => {
     },
     deferred_source_review: {
       mode: 'off',
+      integrity_double_check_mode: 'off',
       min_cohort_size: 8,
       composite_mad_multiplier: 6,
       axis_mad_multiplier: 6,
@@ -1874,6 +2651,7 @@ describe('queue policy administration', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    lineage_reference_mode: 'same_owner_version',
   }
   const control = {
     current: [],
@@ -2566,6 +3344,63 @@ describe('copy review admin service', () => {
           request_id: derivedRetryId,
           expected_snapshot: snapshot,
           reason: 'Verified validator OOM',
+          acknowledge_provider_outage: false,
+        }),
+      }),
+    )
+
+    // An acknowledged retry into a still-open provider outage says so on the
+    // wire; the platform refuses it otherwise (ditto-subnet#2087).
+    fetchMock.mockResolvedValueOnce(Response.json({ recovery, idempotent: false }))
+    await retryValidation(
+      {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason: 'Provider lane verified healthy',
+        acknowledgeProviderOutage: true,
+      },
+      'operator@example.com',
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/retry`,
+      expect.objectContaining({
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-retry', [
+            agentId,
+            'operator@example.com',
+            'Provider lane verified healthy',
+            snapshot,
+          ]),
+          expected_snapshot: snapshot,
+          reason: 'Provider lane verified healthy',
+          acknowledge_provider_outage: true,
+        }),
+      }),
+    )
+
+    // A distinct route fails closed on old Platform deployments.
+    fetchMock.mockResolvedValueOnce(Response.json({ recovery, idempotent: false }))
+    await retryValidation(
+      {
+        agentId,
+        expectedSnapshot: snapshot,
+        reason: 'Verified compatible host',
+        targetValidatorHotkey: 'validator-3',
+      },
+      'operator@example.com',
+    )
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/validation-retries/${agentId}/retry-targeted`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ 'X-Admin-Actor': 'operator@example.com' }),
+        body: JSON.stringify({
+          request_id: await deriveRequestId('validation-retry', [
+            agentId, 'operator@example.com', 'Verified compatible host', snapshot, 'validator-3',
+          ]),
+          expected_snapshot: snapshot,
+          reason: 'Verified compatible host',
+          acknowledge_provider_outage: false,
+          target_validator_hotkey: 'validator-3',
         }),
       }),
     )
@@ -2855,6 +3690,7 @@ describe('copy review admin service', () => {
       ticket_status: 'scored',
       ticket_deadline: '2026-07-20T04:00:00Z',
       replacement_pending: false,
+      replacement_queued: false,
       replacement_request_id: null,
       replacement_reason: null,
       replacement_actor: null,
@@ -2945,9 +3781,9 @@ describe('copy review admin service', () => {
         queue_position: null,
         replacement_deadline: deadline,
         replacement_allowed: false,
-        blocking_reason: 'replacement score is already pending',
+        blocking_reason: 'replacement ticket is already issued and pending a score',
         queue_allowed: false,
-        queue_blocking_reason: 'replacement score is already queued or pending',
+        queue_blocking_reason: 'replacement ticket is already issued and pending a score',
       }],
       count: 1,
       limit: 50,
@@ -3358,6 +4194,206 @@ describe('production score reads', () => {
   const provisionalAgentId = '22222222-2222-4222-8222-222222222222'
   const supersededAgentId = '33333333-3333-4333-8333-333333333333'
 
+  // The live #2105 shape: a newer generation whose canonical median beats its
+  // owner's 15-seed representative, with no shared-seed evidence of its own.
+  const retestDiagnosticPayload = {
+    generated_at: '2026-09-22T23:51:00Z',
+    agent_id: provisionalAgentId,
+    agent_status: 'scored',
+    active_bench_version: 13,
+    canonical_composite: 0.54072,
+    official_composite: 0.54072,
+    owner_representative_id: topAgentId,
+    family: [
+      {
+        agent_id: provisionalAgentId,
+        canonical_composite: 0.54072,
+        official_composite: 0.54072,
+        representative: false,
+        effective_composite: 0.54072,
+        canonical_sample_count: 3,
+        completed_wave_depth: 0,
+        first_seen: '2026-09-22T22:51:00Z',
+      },
+      {
+        agent_id: topAgentId,
+        canonical_composite: 0.479032,
+        official_composite: 0.5965,
+        representative: true,
+        effective_composite: 0.5965,
+        canonical_sample_count: 3,
+        completed_wave_depth: 15,
+        first_seen: '2026-09-12T23:51:00Z',
+      },
+    ],
+    raw_confirmation_seeds: ['9223372036854775001'],
+    folded_confirmation_seeds: [],
+    in_raw_wave: false,
+    in_emission_set: false,
+    in_retest_cohort: true,
+    is_same_owner_challenger: true,
+    cohort_position: 7,
+    cohort_size: 7,
+    configured_cohort_size: 5,
+    eligibility_mode: 'fixed',
+    eligibility_z: 1.64,
+    configured_max_size: 25,
+    ticket_status_counts: { issued: 1, scored: 2 },
+    active_ticket_count: 1,
+    seed_anchor_champion_id: topAgentId,
+    seed_anchor_block: 123456,
+    seed_anchor_pinned: true,
+    admission_reason: 'same_owner_challenger',
+    ledger_eligible: true,
+    canonical_sample_count: 3,
+    completed_wave_depth: 0,
+    official_sample_count: 3,
+    raw_confirmation_depth: 1,
+    composite_stderr: 0.01,
+    aggregate_mode: 'fleet_ready',
+    wave_membership: 'participants',
+    owner_key: 'owner:gryffindor',
+    representative_canonical_composite: 0.479032,
+    representative_official_composite: 0.5965,
+    representative_margin: 0.05578,
+    representative_selection: 'official_composite',
+    cohort_cutoff: {
+      agent_id: topAgentId,
+      composite: 0.30444,
+      gap: -0.23628,
+      tie_band: 0,
+      within_tie_band: true,
+    },
+    emission_cutoff: {
+      agent_id: topAgentId,
+      composite: 0.30444,
+      gap: -0.23628,
+      tie_band: 0,
+      within_tie_band: true,
+    },
+    claim: {
+      lane_enabled: true,
+      latest_block: 1000,
+      champion_agent_id: topAgentId,
+      champion_crown_block: 900,
+      scheduled_round: false,
+      spare_capacity_window: false,
+      idle_retests_enabled: false,
+      in_catchup_set: true,
+      route_priority: 'catchup',
+      route_position: 2,
+      pending_seed_count: 2,
+      claimable_seed_available: true,
+      live_lease_count: 0,
+      newer_canonical_work_pending: false,
+      least_covered_admitted: true,
+      void_rerun_seed_count: 0,
+      void_rerun_claimable: false,
+      provider_outage_active: false,
+      provider_gate_closed: false,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: null,
+      wave_window_epoch: null,
+      wave_next_window_epoch: null,
+      wave_window_start: null,
+      wave_window_opened_seed_count: null,
+      wave_growth_paused: false,
+      decision: 'claimable',
+    },
+    latest_ticket_status: 'issued',
+    latest_ticket_validator_hotkey: '5Validator1',
+    latest_ticket_updated_at: '2026-09-22T23:40:00Z',
+    latest_ticket_failure_reason: null,
+    terminal_ticket_count: 2,
+    latest_confirmation_composite: 0.5412,
+    latest_confirmation_recorded_at: '2026-09-22T23:45:00Z',
+    retest_samples: [{
+      validator_hotkey: '5HEouuDaDASnWdqDwYtwQATS5z916W9DyDAtK6WyB2jPRReb',
+      seed: '9223372036854775000',
+      composite: 0.651813,
+      run_id: 'fd227604',
+      accepted_at: '2026-09-22T23:45:00Z',
+      grant_id: '33c2b609-0000-4000-8000-000000000000',
+      chat_requests: 3861,
+      failed_requests: 2127,
+      failure_codes: [{ terminal_error_code: 'upstream_http_402', count: 2127 }],
+      void_generation: 0,
+      voided: false,
+    }],
+  }
+
+  it('reads exact retest admission and preserves int63 seed strings', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(retestDiagnosticPayload))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result).toEqual(retestDiagnosticPayload)
+    expect(result.raw_confirmation_seeds).toEqual(['9223372036854775001'])
+    // Suppressed by its owner's deeper evidence while outscoring the cutoff it
+    // sits behind: a structural exclusion, not a score it failed to reach.
+    expect(result.representative_margin).toBeGreaterThan(0)
+    expect(result.cohort_cutoff.gap).toBeLessThan(0)
+    expect(result.claim?.decision).toBe('claimable')
+    // Outstanding work is a count. No seed value may reach the claim payload.
+    expect(JSON.stringify(result.claim)).not.toContain('9223372036854775')
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${provisionalAgentId}/continual-retest-diagnostic`,
+      expect.anything(),
+    )
+  })
+
+  it('reads void re-run debt on an agent outside the cohort', async () => {
+    const payload = {
+      ...retestDiagnosticPayload,
+      in_retest_cohort: false,
+      admission_reason: 'outside_cohort',
+      claim: {
+        ...retestDiagnosticPayload.claim,
+        in_catchup_set: false,
+        route_priority: 'void_rerun',
+        void_rerun_seed_count: 2,
+        void_rerun_claimable: false,
+        provider_outage_active: true,
+        provider_gate_closed: true,
+        decision: 'provider_outage',
+      },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(payload)))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.claim).toMatchObject({
+      route_priority: 'void_rerun',
+      void_rerun_seed_count: 2,
+      provider_outage_active: true,
+      decision: 'provider_outage',
+    })
+  })
+
+  it('still reads a retest diagnostic from a platform without the newer fields', async () => {
+    const { claim, cohort_cutoff, emission_cutoff, ...legacy } = retestDiagnosticPayload
+    void claim
+    void cohort_cutoff
+    void emission_cutoff
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      ...legacy,
+      family: legacy.family.map(({ agent_id, canonical_composite, official_composite, representative }) => ({
+        agent_id, canonical_composite, official_composite, representative,
+      })),
+    })))
+
+    const result = await fetchContinualRetestDiagnostic({ agentId: provisionalAgentId })
+    expect(result.claim).toBeNull()
+    expect(result.cohort_cutoff).toEqual({
+      agent_id: null,
+      composite: null,
+      gap: null,
+      tie_band: null,
+      within_tie_band: null,
+    })
+    expect(result.family[0].completed_wave_depth).toBe(0)
+    expect(result.family[0].first_seen).toBeNull()
+  })
+
   const breakdown = {
     formula:
       '(0.5 * tool_mean + 0.5 * memory_mean) * benchmark_quality_multiplier * token_efficiency_multiplier',
@@ -3525,6 +4561,54 @@ describe('production score reads', () => {
     generated_at: '2026-07-23T00:00:00Z',
   }
 
+  // Bench v13+ rows carry the run-level gate verdict (#1852); aggregates only.
+  function gateEvidence(overrides: Record<string, unknown> = {}) {
+    return {
+      bench_version: 13,
+      posture: 'shadow',
+      catalog_gate: {
+        posture: 'shadow',
+        tool_cases: 2,
+        attributed_cases: 2,
+        catalog_absent_cases: 1,
+        catalog_suppression_rate: 0.5,
+        restraint_without_offer: 1,
+        swallowed_model_call: 1,
+        attribution_coverage_bps: 10000,
+      },
+      claim_provenance: null,
+      twin_post_pass: {
+        posture: 'observe',
+        rule_requested: 'concordant_zero',
+        rule: 'concordant_zero',
+        twin_groups: 1,
+        twin_groups_concordant: 1,
+        counterfactual_pairs: 1,
+        counterfactual_insensitive: 1,
+        cases_affected: 3,
+        cases_affected_share: 0.6,
+      },
+      inference_cost: null,
+      catalog_suppression_rate: 0.5,
+      flagged_case_count: 4,
+      flagged_case_share: 0.75,
+      gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
+      ...overrides,
+    }
+  }
+
+  const gatedAgentScores = {
+    ...agentScores,
+    score_count: 9,
+    scores: [
+      ...agentScores.scores,
+      scoreRow({ validator_hotkey: '5ValA', composite: 0.87, bench_version: 13, seed: 999, run_id: 'run-a13', generated_at: '2026-09-13T00:00:00Z', gate_evidence: gateEvidence() }),
+      scoreRow({ validator_hotkey: '5ValB', composite: 0.88, bench_version: 13, seed: 999, run_id: 'run-b13', generated_at: '2026-09-13T01:00:00Z', gate_evidence: gateEvidence({ flagged_case_count: 1, flagged_case_share: 0.25 }) }),
+      // A v13 row from a scorer that emitted no gate telemetry.
+      scoreRow({ validator_hotkey: '5ValC', composite: 0.86, bench_version: 13, seed: 999, run_id: 'run-c13', generated_at: '2026-09-13T02:00:00Z', gate_evidence: null }),
+    ],
+  }
+
   it('reads the public leaderboard when no admin token is configured', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     const fetchMock = vi.fn().mockResolvedValue(Response.json(leaderboard))
@@ -3553,6 +4637,95 @@ describe('production score reads', () => {
       raw_leader_decision: { required_lead: 0.011, dethrones: false },
       recipients: [{ shared_seed_confirmations: 7 }],
     })
+  })
+
+  // #2079 follow-up: #2098 named the board's scoring and emission versions.
+  // An operator asked why the newer one is not paying needs both, plus
+  // Platform's own sentence for the gates still holding emissions.
+  it('relays the scoring and emission versions with the rollout promotion gates', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const requirement =
+      'Bench v13 scoring is in progress; Bench v12 still controls emissions. ' +
+      'Emission authority moves to v13 only once the first 5 inherited ' +
+      'priority-cohort positions each hold a complete 3-score v13 quorum.'
+    const rolling = {
+      ...leaderboard,
+      current_bench_version: 13,
+      scoring_bench_version: 13,
+      emission_bench_version: 12,
+      active_bench_version: 12,
+      desired_bench_version: 13,
+    }
+    const rollout = {
+      active_version: 12,
+      desired_version: 13,
+      status: 'collecting',
+      promotion_pending: true,
+      promotion_requirement: requirement,
+      priority_cohort_size: 5,
+      priority_cohort_ready_count: 3,
+      ranked_quorum_agents: 2,
+      min_ranked_quorum_agents: 5,
+      members: [],
+    }
+    const fetchMock = vi.fn(async (url: string) =>
+      Response.json(url.endsWith('/api/v1/public/bench/rollout') ? rollout : rolling),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const page = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+
+    expect(page.scoring_bench_version).toBe(13)
+    expect(page.emission_bench_version).toBe(12)
+    expect(page.current_bench_version).toBe(13)
+    expect(page.active_bench_version).toBe(12)
+    expect(page.rollout_promotion).toEqual({
+      active_version: 12,
+      desired_version: 13,
+      status: 'collecting',
+      promotion_pending: true,
+      promotion_requirement: requirement,
+      priority_cohort_size: 5,
+      priority_cohort_ready_count: 3,
+      ranked_quorum_agents: 2,
+      min_ranked_quorum_agents: 5,
+    })
+  })
+
+  it('still reads a board from a Platform that predates these fields', async () => {
+    // One release unit, two non-atomic deploys: an older Platform omits the
+    // #2098 names and the promotion keys, and a rollout read that fails must
+    // not fail the board an operator asked for.
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    const olderRollout = { active_version: 7, desired_version: 7, status: 'inactive' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        Response.json(url.endsWith('/api/v1/public/bench/rollout') ? olderRollout : leaderboard),
+      ),
+    )
+    const page = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+    expect(page.scoring_bench_version).toBeNull()
+    expect(page.emission_bench_version).toBeNull()
+    expect(page.active_bench_version).toBe(7)
+    expect(page.rollout_promotion).toMatchObject({
+      status: 'inactive',
+      promotion_pending: null,
+      promotion_requirement: null,
+      priority_cohort_ready_count: null,
+    })
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.endsWith('/api/v1/public/bench/rollout')
+          ? new Response('upstream unavailable', { status: 503 })
+          : Response.json(leaderboard),
+      ),
+    )
+    const degraded = await fetchScoreLeaderboard({ status: 'all', limit: 2, offset: 0 })
+    expect(degraded.rollout_promotion).toBeNull()
+    expect(degraded.entries).toHaveLength(2)
   })
 
   it('filters provisional entries and forwards a historical bench version', async () => {
@@ -3608,17 +4781,32 @@ describe('production score reads', () => {
     )
     expect(detail).toMatchObject({
       agent_id: topAgentId,
+      selected_bench_version: 7,
+      selected_bench_version_source: 'active',
+      score_count: 3,
+      total_score_count: 6,
       median_composite: 0.957,
+      // The fixture is an older Platform that names no version for its
+      // aggregate, so the v7 median is recomputed here and labeled as such.
+      median_composite_authority: 'per_benchmark_statistic',
       active_bench_version: 7,
       leaderboard: { rank: 1, emission_eligible: true },
     })
-    expect(detail.scores).toHaveLength(6)
-    expect(detail.scores[3]).toMatchObject({
+    expect(detail.scores).toHaveLength(3)
+    expect(detail.scores[0]).toMatchObject({
       validator_hotkey: '5ValA',
       // Seeds are normalised to exact decimal strings, small ones included, so
       // the field has one type regardless of magnitude.
       seed: '424242',
       bench_version: 7,
+    })
+    expect(detail.other_bench_versions).toHaveLength(1)
+    expect(detail.other_bench_versions[0]).toMatchObject({
+      bench_version: 6,
+      score_count: 3,
+      quorum_reached: true,
+      median_composite: 0.91,
+      median_composite_authority: 'per_benchmark_statistic',
     })
   })
 
@@ -3749,6 +4937,14 @@ describe('production score reads', () => {
     // Leaderboard context still answers "provisional where, exactly".
     expect(detail.leaderboard).toMatchObject({ finalized: false, score_count: 1 })
     expect(detail.active_bench_version).toBe(7)
+    expect(detail).toMatchObject({
+      selected_bench_version: 7,
+      selected_bench_version_source: 'active',
+      selected_quorum_reached: false,
+      median_composite_authority: null,
+      total_score_count: 1,
+      other_bench_versions: [],
+    })
   })
 
   it('marks a settled submission finalized on the same field', async () => {
@@ -3765,7 +4961,7 @@ describe('production score reads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(detail.finalized).toBe(true)
     expect(detail.median_composite).toBe(0.957)
-    expect(detail.scores[3]).toMatchObject({ validator_hotkey: '5ValA', run_id: 'run-a7' })
+    expect(detail.scores[0]).toMatchObject({ validator_hotkey: '5ValA', run_id: 'run-a7' })
   })
 
   it('reports a below-quorum submission with no accepted score at all', async () => {
@@ -3835,6 +5031,212 @@ describe('production score reads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  // SN-348. Production agent 842c28de (Sniper) on the v13 board: Platform
+  // returned three v12 rows and three v13 rows with one pooled
+  // median_composite 0.5449585 and score_count 6, and get_agent_scores relayed
+  // both beside active_bench_version 13. The real v13 median is 0.133823.
+  // TeaCUP12 741db8fa answered with the same mixed shape.
+  const sniperAgentId = '842c28de-6b6c-445a-8c3f-cf5492422ef6'
+  const v13Board = {
+    ...leaderboard,
+    current_bench_version: 13,
+    active_bench_version: 13,
+    desired_bench_version: 13,
+  }
+  const sniperV12 = [
+    scoreRow({ validator_hotkey: '5ValA', composite: 0.794293, bench_version: 12, seed: '7211616870656561578', run_id: 'run-a12', signature: 'a1'.repeat(64), transcript_sha256: '12'.repeat(32), generated_at: '2026-10-01T00:00:00Z' }),
+    scoreRow({ validator_hotkey: '5ValB', composite: 0.783237, bench_version: 12, seed: '7211616870656561578', run_id: 'run-b12', signature: 'b1'.repeat(64), transcript_sha256: '13'.repeat(32), generated_at: '2026-10-01T01:00:00Z' }),
+    scoreRow({ validator_hotkey: '5ValC', composite: 0.783373, bench_version: 12, seed: '7211616870656561578', run_id: 'run-c12', signature: 'c1'.repeat(64), transcript_sha256: '14'.repeat(32), generated_at: '2026-10-01T02:00:00Z' }),
+  ]
+  const sniperV13 = [
+    scoreRow({ validator_hotkey: '5ValD', composite: 0.133823, bench_version: 13, seed: '8811366100733494301', run_id: 'run-d13', signature: 'd1'.repeat(64), transcript_sha256: '21'.repeat(32), generated_at: '2026-10-20T00:00:00Z', gate_evidence: gateEvidence() }),
+    scoreRow({ validator_hotkey: '5ValE', composite: 0.036255, bench_version: 13, seed: '8811366100733494301', run_id: 'run-e13', signature: 'e1'.repeat(64), transcript_sha256: '22'.repeat(32), generated_at: '2026-10-20T01:00:00Z', gate_evidence: gateEvidence({ posture: 'enforce' }) }),
+    scoreRow({ validator_hotkey: '5ValF', composite: 0.30668, bench_version: 13, seed: '8811366100733494301', run_id: 'run-f13', signature: 'f1'.repeat(64), transcript_sha256: '23'.repeat(32), generated_at: '2026-10-20T02:00:00Z', gate_evidence: null }),
+  ]
+  // What production Platform served before SN-348: no version for its
+  // aggregate, and an aggregate pooled across both versions.
+  const sniperPooled = {
+    ...agentScores,
+    agent_id: sniperAgentId,
+    score_count: 6,
+    median_composite: 0.5449585,
+    scores: [...sniperV12, ...sniperV13],
+  }
+
+  it('keeps a mixed v12/v13 record apart and reports the active v13 median', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(Response.json(sniperPooled))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    expect(detail).toMatchObject({
+      selected_bench_version: 13,
+      selected_bench_version_source: 'active',
+      active_bench_version: 13,
+      score_count: 3,
+      total_score_count: 6,
+      selected_quorum_reached: true,
+      median_composite: 0.133823,
+      // The pooled 0.5449585 is never reused: it belongs to no benchmark.
+      median_composite_authority: 'per_benchmark_statistic',
+    })
+    expect(detail.scores.map((score) => score.bench_version)).toEqual([13, 13, 13])
+    expect(detail.scores.map((score) => score.run_id)).toEqual(['run-d13', 'run-e13', 'run-f13'])
+    // Every historical row preserved whole in its own group.
+    expect(detail.other_bench_versions).toEqual([
+      expect.objectContaining({
+        bench_version: 12,
+        score_count: 3,
+        quorum_reached: true,
+        median_composite: 0.783373,
+        median_composite_authority: 'per_benchmark_statistic',
+      }),
+    ])
+    const v12 = detail.other_bench_versions[0]!.scores
+    expect(v12.map((score) => score.seed)).toEqual(Array(3).fill('7211616870656561578'))
+    expect(v12.map((score) => score.signature)).toEqual(['a1', 'b1', 'c1'].map((hex) => hex.repeat(64)))
+    expect(v12.map((score) => score.transcript_sha256)).toEqual(['12', '13', '14'].map((hex) => hex.repeat(32)))
+    // The v13 rows keep their exact seeds, signatures, gates and transcripts.
+    expect(detail.scores.map((score) => score.seed)).toEqual(Array(3).fill('8811366100733494301'))
+    expect(detail.scores.map((score) => score.signature)).toEqual(['d1', 'e1', 'f1'].map((hex) => hex.repeat(64)))
+    expect(detail.scores.map((score) => score.gate_evidence?.posture ?? null)).toEqual([
+      'shadow',
+      'enforce',
+      null,
+    ])
+    expect(detail.scores[2]?.transcript_sha256).toBe('23'.repeat(32))
+    expect(detail).not.toHaveProperty('bench_version')
+  })
+
+  it('selects a requested historical bench version and keeps the active one apart', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(Response.json(sniperPooled))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId, benchVersion: 12 })
+
+    expect(detail).toMatchObject({
+      selected_bench_version: 12,
+      selected_bench_version_source: 'requested',
+      active_bench_version: 13,
+      score_count: 3,
+      total_score_count: 6,
+      median_composite: 0.783373,
+      median_composite_authority: 'per_benchmark_statistic',
+    })
+    expect(detail.other_bench_versions.map((group) => group.bench_version)).toEqual([13])
+    expect(detail.other_bench_versions[0]?.median_composite).toBe(0.133823)
+  })
+
+  it('uses Platform\'s own per-version median only for the version Platform names', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(
+        Response.json({
+          ...sniperPooled,
+          bench_version: 13,
+          score_count: 3,
+          total_score_count: 6,
+          median_composite: 0.133823,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    expect(detail).toMatchObject({
+      score_count: 3,
+      total_score_count: 6,
+      median_composite: 0.133823,
+      median_composite_authority: 'platform_ledger',
+    })
+    // Platform asserted nothing about v12, so its median stays a statistic.
+    expect(detail.other_bench_versions[0]).toMatchObject({
+      bench_version: 12,
+      median_composite: 0.783373,
+      median_composite_authority: 'per_benchmark_statistic',
+    })
+  })
+
+  it('averages the two middle composites for an even per-version count', async () => {
+    const fourth = scoreRow({ validator_hotkey: '5ValG', composite: 0.2, bench_version: 13, seed: '8811366100733494301', run_id: 'run-g13' })
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(
+        Response.json({ ...sniperPooled, scores: [...sniperPooled.scores, fourth] }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    // v13 composites 0.036255, 0.133823, 0.2, 0.30668: (0.133823 + 0.2) / 2.
+    expect(detail.score_count).toBe(4)
+    expect(detail.total_score_count).toBe(7)
+    expect(detail.median_composite).toBeCloseTo(0.1669115, 12)
+    expect(detail.median_composite_authority).toBe('per_benchmark_statistic')
+  })
+
+  it('reports no aggregate for a selected version below quorum', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(v13Board))
+      .mockResolvedValueOnce(
+        Response.json({
+          ...sniperPooled,
+          // An SN-348 Platform keeps its aggregate on the finalized v12 era
+          // while v13 is still short of quorum.
+          bench_version: 12,
+          score_count: 3,
+          total_score_count: 5,
+          median_composite: 0.783373,
+          scores: [...sniperV12, ...sniperV13.slice(0, 2)],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: sniperAgentId })
+
+    expect(detail).toMatchObject({
+      finalized: true,
+      selected_bench_version: 13,
+      score_count: 2,
+      total_score_count: 5,
+      selected_quorum_reached: false,
+      // Two scores are not a v13 median, and v12's is not v13's either.
+      median_composite: null,
+      median_composite_authority: null,
+    })
+    expect(detail.scores).toHaveLength(2)
+    expect(detail.other_bench_versions[0]).toMatchObject({
+      bench_version: 12,
+      quorum_reached: true,
+      median_composite: 0.783373,
+      median_composite_authority: 'platform_ledger',
+    })
+  })
+
+  it('counts every version in score history even when Platform scopes its own count', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ ...sniperPooled, bench_version: 13, score_count: 3, total_score_count: 6, median_composite: 0.133823 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const history = await fetchAgentScoreHistory({ agentId: sniperAgentId })
+
+    expect(history.total_score_count).toBe(6)
+    expect(history.versions.map((version) => [version.bench_version, version.median_composite])).toEqual([
+      [12, 0.783373],
+      [13, 0.133823],
+    ])
+  })
+
   it('names the provisional state instead of 404ing a score-history read', async () => {
     const fetchMock = vi
       .fn()
@@ -3899,6 +5301,61 @@ describe('production score reads', () => {
     })
     expect(history.versions[1]?.composite_delta_vs_previous).toBeCloseTo(0.047, 10)
     expect(history.versions[1]?.validators).toEqual(['5ValA', '5ValB', '5ValC'])
+  })
+
+  it('carries the bench v13 gate verdict through get_agent_scores and folds it into history', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(leaderboard))
+      .mockResolvedValueOnce(Response.json(gatedAgentScores))
+      .mockResolvedValueOnce(Response.json(gatedAgentScores))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const detail = await fetchAgentScores({ agentId: topAgentId })
+    // Active v7 is selected; the v13 rows stay whole in their own group.
+    const gated =
+      detail.other_bench_versions.find((group) => group.bench_version === 13)?.scores ?? []
+    expect(gated).toHaveLength(3)
+    expect(gated[0]?.gate_evidence).toMatchObject({
+      posture: 'shadow',
+      flagged_case_share: 0.75,
+      catalog_gate: { catalog_suppression_rate: 0.5, posture: 'shadow' },
+      twin_post_pass: { posture: 'observe', rule: 'concordant_zero' },
+      gate_counts: { answer_in_prompt: 1, restraint_without_offer: 2 },
+    })
+    expect(gated[2]?.gate_evidence).toBeNull()
+    // Pre-v13 rows never carry one.
+    expect(detail.scores.find((score) => score.bench_version === 7)?.gate_evidence).toBeUndefined()
+    // Aggregates only: the per-case notes never cross the Backroom boundary.
+    expect(JSON.stringify(detail)).not.toContain('note_id')
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    const v13 = history.versions.find((version) => version.bench_version === 13)
+    expect(v13).toMatchObject({ score_count: 3, gate_posture: 'shadow' })
+    expect(v13?.median_flagged_case_share).toBeCloseTo(0.5, 10)
+    expect(history.versions.find((version) => version.bench_version === 7)).toMatchObject({
+      gate_posture: null,
+      median_flagged_case_share: null,
+    })
+  })
+
+  it('reports a mixed bench v13 gate posture as null instead of picking one', async () => {
+    const mixed = {
+      ...gatedAgentScores,
+      scores: gatedAgentScores.scores.map((score) =>
+        score.run_id === 'run-b13'
+          ? { ...score, gate_evidence: gateEvidence({ posture: 'enforce', flagged_case_share: 0.25 }) }
+          : score,
+      ),
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(mixed))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const history = await fetchAgentScoreHistory({ agentId: topAgentId })
+    expect(history.versions.find((version) => version.bench_version === 13)).toMatchObject({
+      gate_posture: null,
+      median_flagged_case_share: 0.5,
+    })
   })
 
   // Regression: production agent 454a09ad (lihai) on 2026-07-25. Every seed
@@ -4263,6 +5720,104 @@ describe('validator slot administration', () => {
       ),
     ).rejects.toThrow(/expected 1, current 2/)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('scoring lease administration (#1156)', () => {
+  const input = {
+    expectedRevision: 0,
+    settings: { scoring_ticket_ttl_minutes: 150 },
+    reason: 'v11 completions fit well inside 150 minutes',
+    confirmation: 'APPLY SCORING TICKET TTL 150 MINUTES',
+  }
+
+  const refusal = async (status: number, detail: string) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ detail }, { status }))
+    vi.stubGlobal('fetch', fetchMock)
+    const error = await setScoringLeaseSettings(input, 'operator@omniaura.ai').catch(
+      (cause: unknown) => cause as Error,
+    )
+    // No re-read after a refusal, so a fresh GET is never mistaken for an apply.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    return (error as Error).message
+  }
+
+  it('reserves the re-read advice for a stale or concurrent revision', async () => {
+    const detail =
+      'scoring lease settings changed; refresh before applying (expected 0, current 2)'
+    const message = await refusal(409, detail)
+    expect(message).toContain(detail)
+    expect(message).toContain('re-read get_scoring_lease_settings')
+  })
+
+  it('gives a confirmation refusal confirmation-specific recovery', async () => {
+    const detail = 'confirmation must be exactly APPLY SCORING TICKET TTL 150 MINUTES'
+    const message = await refusal(409, detail)
+    expect(message).toContain(detail)
+    expect(message).toMatch(/confirmation must name the TTL this revision applies/)
+    expect(message).not.toContain('re-read get_scoring_lease_settings')
+  })
+
+  it('gives an input validation refusal input-specific recovery', async () => {
+    for (const detail of [
+      'reason must be at least 8 characters after trimming whitespace',
+      'request validation failed',
+    ]) {
+      const message = await refusal(422, detail)
+      expect(message).toContain(detail)
+      expect(message).toMatch(/revision did not change/)
+      expect(message).not.toContain('re-read get_scoring_lease_settings')
+    }
+  })
+
+  it('refuses whitespace-only audit input before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (const overrides of [
+      { reason: '            ' },
+      { reason: '   short   ' },
+      { confirmation: '   ' },
+    ]) {
+      await expect(
+        setScoringLeaseSettings({ ...input, ...overrides }, 'operator@omniaura.ai'),
+      ).rejects.toThrow()
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('sends a trimmed reason', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ revision: 1 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          current: [],
+          history: [],
+          default: { scoring_ticket_ttl_minutes: 180 },
+          effective: {
+            revision: 1,
+            scope: '*',
+            settings: { scoring_ticket_ttl_minutes: 150 },
+            checksum: 'cd'.repeat(32),
+            source: 'revision',
+            min_scoring_ticket_ttl_minutes: 60,
+            max_scoring_ticket_ttl_minutes: 240,
+            max_age_seconds: 5,
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await setScoringLeaseSettings(
+      { ...input, reason: `   ${input.reason}   ` },
+      'operator@omniaura.ai',
+    )
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(String(init.body)).reason).toBe(input.reason)
   })
 })
 
@@ -4908,5 +6463,368 @@ describe('lease revocation ledger', () => {
       total: 0,
       revocations: [],
     })
+  })
+})
+
+
+describe('verified contributors and CLA rollout', () => {
+  it('rejects malformed recovery IDs before any Platform request', async () => {
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchGithubRevocationPreflight({ linkId: 'not-a-uuid' })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads exact recovery guards and carries the operator on revocation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(githubRevocationFixture))
+      .mockResolvedValueOnce(Response.json(revokedGithubFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    const linkId = contributorFixture.link.link_id
+    expect(await fetchGithubRevocationPreflight({ linkId })).toEqual(githubRevocationFixture)
+    const result = await revokeMinerGithubLink('operator@omniaura.ai', {
+      linkId, reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+      actor: 'untrusted-input@invalid.example',
+    })
+    expect(result).toEqual(revokedGithubFixture)
+    expect(fetchMock.mock.calls[1][0]).toContain(`/admin/github-links/${linkId}/revoke`)
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation,
+    })
+    expect(fetchMock.mock.calls[1][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
+  })
+
+  describe('when the GitHub link revocation outcome is not a plain success', () => {
+    const linkId = contributorFixture.link.link_id
+    const revokeInput = { linkId, reason: 'recover a verified hostile link', confirmation: githubRevocationFixture.confirmation }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+
+    it.each([
+      ['a timeout', () => Promise.reject(new DOMException('timed out', 'TimeoutError'))],
+      ['an already revoked retry', () => envelope('GitHub link is already revoked', 409)],
+    ] as const)('returns its own revocation found by the read-back after %s', async (_name, failure) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockImplementationOnce(failure).mockResolvedValueOnce(Response.json(revokedGithubFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await revokeMinerGithubLink('operator@omniaura.ai', revokeInput)).toEqual(revokedGithubFixture)
+      expect(fetchMock.mock.calls[1][0]).toMatch(new RegExp(`/admin/github-links/${linkId}$`))
+    })
+
+    it('reports a possible revocation that is not visible yet', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('upstream exploded', 502))
+        .mockResolvedValueOnce(Response.json(githubRevocationFixture)))
+      await expect(revokeMinerGithubLink('operator@omniaura.ai', revokeInput))
+        .rejects.toThrow(/revocation may have committed .*Retry revoke_miner_github_link with the same input/)
+    })
+
+    it.each([
+      ['another operator', { ...revokedGithubFixture, operator_revocation: { ...revokedGithubFixture.operator_revocation, actor: 'someone-else@omniaura.ai' } }, 'already revoked by someone-else@omniaura.ai'],
+      ['its miner', { ...revokedGithubFixture, operator_revocation: null }, 'already unlinked by its miner'],
+    ])('fails as not applied when %s revoked it first', async (_name, control, message) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json(control)))
+      await expect(revokeMinerGithubLink('operator@omniaura.ai', revokeInput)).rejects.toThrow(message)
+    })
+
+    it.each([[401], [404], [422]])('fails without a read-back after a %i', async (status) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(envelope('refused', status))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(revokeMinerGithubLink('operator@omniaura.ai', revokeInput)).rejects.toThrow('refused')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it('preserves signed public identity and resolves a numeric account to its hotkey consent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json(claStatusFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchMinerGithubLink({ hotkey: 'fixture' })).toEqual(contributorFixture)
+    expect(await fetchGithubContributor({ githubUserId: 100 })).toEqual({ ...contributorFixture, cla: claStatusFixture, cla_error: null })
+    expect(fetchMock.mock.calls[1][0]).toContain('/public/github-account/100')
+  })
+
+  it('keeps the resolved GitHub identity when only the CLA read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(Response.json(contributorFixture))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 })))
+    const result = await fetchGithubContributor({ githubUserId: 100 })
+    expect(result).toMatchObject({ ...contributorFixture, cla: null })
+    expect(result.cla_error).toBe('Identity resolved, but reading CLA status failed: upstream exploded')
+  })
+
+  it.each([2 ** 53, Number.MAX_VALUE])('rejects an unsafe GitHub id %s instead of looking up a rounded one', async (githubUserId) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchGithubContributor({ githubUserId })).rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('pages policy history and reads adoption without synthesizing consent', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json({ ...claControlFixture, history_limit: 10, history_offset: 10 }))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await fetchClaPolicy({ historyLimit: 10, historyOffset: 10 })).toMatchObject({ unsigned_active_hotkeys: 1, history_limit: 10, history_offset: 10 })
+    expect(fetchMock.mock.calls[0][0]).toContain('history_limit=10&history_offset=10')
+  })
+
+  it('forwards revision, confirmation and the signed-in operator on policy changes', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture)).mockResolvedValueOnce(Response.json(claControlFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .toEqual({ applied: claShadowRevisionFixture, policy: claControlFixture, refresh_error: null })
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ expected_revision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
+  })
+
+  it('reports a committed policy change even when the follow-up read fails', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(claShadowRevisionFixture))
+      .mockResolvedValueOnce(Response.json({ detail: 'upstream exploded' }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const updated = await updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' })
+    expect(updated).toMatchObject({ applied: claShadowRevisionFixture, policy: null })
+    expect(updated.refresh_error).toContain('revision 1 was committed')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('reports nothing applied when Platform refuses the policy write as busy', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json({ error_code: 3000, message: 'CLA policy is busy with in-flight uploads; retry shortly', request_id: null }, { status: 503 }))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow('Nothing was applied: retry with the same expectedRevision.')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails without claiming a possible commit when the policy write is never sent', async () => {
+    delete process.env.DITTO_ADMIN_API_TOKEN
+    delete process.env.DITTO_PLATFORM_ADMIN_TOKEN
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(updateClaPolicy('operator@omniaura.ai', { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }))
+      .rejects.toThrow('not configured')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  describe('when the policy write outcome is not a plain success', () => {
+    const input = { expectedRevision: 0, mode: 'shadow', reason: 'measure consent adoption', confirmation: 'SET CLA GATE SHADOW' }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+    const control = (current: object) => Response.json({ ...claControlFixture, current })
+    const uncertain = [
+      ['a 5xx', () => envelope('upstream exploded', 502)],
+      ['a timeout', () => Promise.reject(new DOMException('timed out', 'TimeoutError'))],
+      ['a lost connection', () => Promise.reject(new TypeError('socket closed after send'))],
+    ] as const
+
+    it.each(uncertain)('returns the revision the read-back finds after %s', async (_name, failure) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockImplementationOnce(failure)
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
+    it.each(uncertain)('reports an unknown outcome with the observed policy after %s', async (_name, failure) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockImplementationOnce(failure).mockResolvedValueOnce(Response.json(claControlFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      const result = await updateClaPolicy('operator@omniaura.ai', input)
+      expect(result).toMatchObject({ applied: null, policy: claControlFixture })
+      expect(result.refresh_error).toContain('may have committed')
+      expect(result.refresh_error).toContain('not visible yet')
+      expect(result.refresh_error).toContain('Retry with the same input')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('fails as not applied when an unreadable 2xx meets a revision by another operator', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
+    it('finds its revision beyond the first history page', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const later = { ...claShadowRevisionFixture, revision: 31, parent_revision: 30, actor: 'someone-else@omniaura.ai' }
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later, history: [later], history_total: 32 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later, history: [claShadowRevisionFixture], history_total: 32 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later }))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
+    })
+
+    it('re-anchors the history page when another revision commits between reads', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const later = (revision: number) => ({ ...claShadowRevisionFixture, revision, parent_revision: revision - 1, actor: 'someone-else@omniaura.ai' })
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(31), history: [later(31)], history_total: 32 }))
+        // Revision 32 commits before the page read, so offset 30 lands on 2.
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32), history: [later(2)], history_total: 33 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32), history: [claShadowRevisionFixture], history_total: 33 }))
+        .mockResolvedValueOnce(Response.json({ ...claControlFixture, current: later(32) }))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock.mock.calls[2][0]).toContain('history_limit=1&history_offset=30')
+      expect(fetchMock.mock.calls[3][0]).toContain('history_limit=1&history_offset=31')
+    })
+
+    it('reports a commit the fallback read finds after the read-back failed', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+    })
+
+    it('fails as not applied when the fallback read finds another operator\'s revision', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
+    it('fails as not applied when another operator wrote the next revision', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' })))
+      await expect(updateClaPolicy('operator@omniaura.ai', input))
+        .rejects.toThrow('Revision 1 was already written by someone-else@omniaura.ai, so this write cannot have applied.')
+    })
+
+    it('returns its own earlier revision when a retry meets the revision guard', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA policy revision changed; refresh before applying', 409))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture))
+        .mockResolvedValueOnce(control(claShadowRevisionFixture)))
+      expect(await updateClaPolicy('operator@omniaura.ai', input)).toMatchObject({ applied: claShadowRevisionFixture, refresh_error: null })
+    })
+
+    it.each([
+      ['a revision guard owned by someone else', envelope('CLA policy revision changed; refresh before applying', 409), 2],
+      ['an auth failure', envelope('bad token', 401), 1],
+      ['a confirmation refusal', envelope('explicit CLA gate confirmation is required', 422), 1],
+    ])('does not report success after %s', async (_name, response, calls) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(response)
+        .mockResolvedValueOnce(control({ ...claShadowRevisionFixture, actor: 'someone-else@omniaura.ai' }))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(updateClaPolicy('operator@omniaura.ai', input)).rejects.toThrow()
+      expect(fetchMock).toHaveBeenCalledTimes(calls)
+    })
+
+    it('reports a probably committed write whose 2xx body is unreadable', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503))
+        .mockResolvedValueOnce(envelope('upstream exploded', 503)))
+      const result = await updateClaPolicy('operator@omniaura.ai', input)
+      expect(result).toMatchObject({ applied: null, policy: null })
+      expect(result.refresh_error).toContain('probably committed')
+      expect(result.refresh_error).toContain('call get_cla_policy')
+    })
+  })
+
+  it('publishes only explicit immutable text metadata with operator attribution', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(claVersionFixture))
+    vi.stubGlobal('fetch', fetchMock)
+    await publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) })
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body)
+    expect(body).toMatchObject({ version: 1, sha256: 'ab'.repeat(32), effective_at: '2026-10-14T00:00:00Z' })
+    expect(body).not.toHaveProperty('actor')
+    expect(fetchMock.mock.calls[0][1].headers['X-Admin-Actor']).toBe('operator@omniaura.ai')
+  })
+
+  describe('when the publish outcome is not a plain success', () => {
+    const publishInput = { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt: '2026-10-14T00:00:00Z', reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }
+    const envelope = (message: string, status: number) => Response.json({ error_code: 3000, message, request_id: null }, { status })
+
+    it('returns the committed version after a timeout or a duplicate retry', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json(claVersionFixture))
+        .mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(Response.json(claVersionFixture))
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+      expect(fetchMock.mock.calls[1][0]).toMatch(/\/api\/v1\/public\/cla\/versions\/1$/)
+      expect(fetchMock).toHaveBeenCalledTimes(4)
+    })
+
+    it('reports a possible commit that is not visible yet', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('upstream exploded', 502))
+        .mockResolvedValueOnce(envelope('CLA version is not published', 404)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow(/may have committed \(upstream exploded; it is not visible yet and may still commit\)\. Retry publish_cla_version with the same input/)
+    })
+
+    it('fails as not applied when the version holds different text after a timeout', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValueOnce(new DOMException('timed out', 'TimeoutError'))
+        .mockResolvedValueOnce(Response.json({ ...claVersionFixture, sha256: 'cd'.repeat(32) })))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow('CLA version 1 is already published with a different digest or effective date, so this write cannot have applied.')
+    })
+
+    it('returns the committed version when the 2xx body is unreadable', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({ unexpected: true }))
+        .mockResolvedValueOnce(Response.json(claVersionFixture)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).resolves.toEqual(claVersionFixture)
+    })
+
+    it('explains a 409 whose read-back fails instead of reporting a plain conflict', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(envelope('rate limited', 429)))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput))
+        .rejects.toThrow('an earlier attempt may already have applied this write')
+    })
+
+    it('keeps a conflicting 409 when the version holds different text', async () => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(envelope('CLA versions must increase and effective dates must not move backwards', 409))
+        .mockResolvedValueOnce(Response.json({ ...claVersionFixture, sha256: 'cd'.repeat(32) })))
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).rejects.toThrow('CLA versions must increase')
+    })
+
+    it.each([
+      [envelope('CLA policy is busy with in-flight uploads; retry shortly', 503), 'Nothing was applied: retry with the same input.'],
+      [envelope('CLA text does not match the supplied digest or exceeds the size limit', 400), 'does not match the supplied digest'],
+    ])('fails without a read-back when nothing was applied (%#)', async (response, message) => {
+      process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+      const fetchMock = vi.fn().mockResolvedValueOnce(response)
+      vi.stubGlobal('fetch', fetchMock)
+      await expect(publishClaVersion('operator@omniaura.ai', publishInput)).rejects.toThrow(message)
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  it.each(['tomorrow', '2026-10-14', '2026-10-14T00:00:00'])('rejects effectiveAt %s before publishing', async (effectiveAt) => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(publishClaVersion('operator@omniaura.ai', { version: 1, sha256: 'ab'.repeat(32), text: 'TEST FIXTURE ONLY. NOT A LEGAL AGREEMENT.', effectiveAt, reason: 'test-only publication transport', confirmation: 'PUBLISH CLA 1 ' + 'ab'.repeat(32) }))
+      .rejects.toThrow()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })

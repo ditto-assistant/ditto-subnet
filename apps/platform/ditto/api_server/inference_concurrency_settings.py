@@ -110,7 +110,27 @@ def apply_settings(
         embedding_global_requests_per_minute=(
             settings.embedding_global_requests_per_minute
         ),
+        **_decision_stamps(settings),
+        scored_provider_routing=settings.scored_provider_routing,
     )
+
+
+def _decision_stamps(settings: InferenceConcurrencySettings) -> dict[str, Any]:
+    """The grant-mint stamps for the decision lane; "not granted" when off."""
+    lane = settings.decision_lane
+    if not lane.enabled or lane.model is None:
+        return {
+            "decision_model": None,
+            "decision_input_microusd_per_mtok": 0,
+            "decision_request_budget": 0,
+            "decision_token_budget": 0,
+        }
+    return {
+        "decision_model": lane.model,
+        "decision_input_microusd_per_mtok": lane.input_microusd_per_mtok,
+        "decision_request_budget": lane.request_budget,
+        "decision_token_budget": lane.token_budget,
+    }
 
 
 @dataclass

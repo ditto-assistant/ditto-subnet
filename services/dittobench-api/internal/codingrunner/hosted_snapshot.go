@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 )
@@ -173,7 +172,11 @@ func compileHostedSnapshot(ctx context.Context, capsule []byte, expectedSHA256 s
 	for name := range entries {
 		paths = append(paths, name)
 	}
-	sort.Strings(paths)
+	// The catalog's visible-snapshot digest is produced in Python Path order
+	// (path segments compared in turn), the same order the manifest uses.
+	slices.SortFunc(paths, func(a, b string) int {
+		return slices.Compare(strings.Split(a, "/"), strings.Split(b, "/"))
+	})
 	identities := make([]struct {
 		Path      string `json:"path"`
 		SHA256    string `json:"sha256"`

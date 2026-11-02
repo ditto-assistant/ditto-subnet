@@ -1,19 +1,35 @@
-"""Private runtime metrics and bounded Go profile capture for Backroom."""
+"""Private runtime metrics, failure taxonomy, and bounded Go profile capture."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.inference_costs import (
+    InferenceGrantCostGroup,
+    InferenceGrantCostSnapshot,
+)
+from ditto.api_models.inference_failure_taxonomy import (
+    ConfirmationFailureGroup,
+    ConfirmationFailureKind,
+    ConfirmationFailureLaneWindow,
+    InferenceFailureGroup,
+    InferenceFailureLaneWindow,
+    InferenceFailureTaxonomy,
+    InferenceGateway,
+    InferenceRateLimitBurst,
+    InferenceRateLimitedTicket,
+    InferenceRouteBasis,
+)
 from ditto.api_models.inference_observability import (
     InferenceLaneCurrent,
     InferenceLaneWindow,
@@ -34,8 +50,22 @@ from ditto.api_server.runtime_profiles import (
     RuntimeProfileStore,
 )
 from ditto.db.models import ProviderOutageCircuit
+from ditto.db.queries.confirmation_failure_taxonomy import (
+    CONFIRMATION_FAILURE_GROUP_LIMIT,
+    CONFIRMATION_FAILURE_WINDOWS_SECONDS,
+    load_confirmation_failure_taxonomy_rows,
+)
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
+)
+from ditto.db.queries.inference_costs import load_inference_grant_costs
+from ditto.db.queries.inference_failure_taxonomy import (
+    FAILURE_GROUP_LIMIT,
+    FAILURE_WINDOWS_SECONDS,
+    RATE_LIMIT_BURST_THRESHOLD,
+    RATE_LIMIT_BURST_WINDOW_SECONDS,
+    load_inference_failure_taxonomy_rows,
+    load_rate_limit_burst_rows,
 )
 from ditto.db.queries.inference_observability import load_inference_runtime_rows
 
@@ -48,6 +78,42 @@ ActorDep = Annotated[
     Header(alias="X-Admin-Actor", max_length=320),
 ]
 CAPTURE_CONFIRMATION = "CAPTURE RUNTIME PROFILE"
+
+
+@router.get(
+    "/admin/inference-grant-costs",
+    response_model=InferenceGrantCostSnapshot,
+)
+async def get_inference_grant_costs(
+    _admin: AdminDep,
+    session: SessionDep,
+    hours: Annotated[int, Query(ge=1, le=744)] = 24,
+) -> InferenceGrantCostSnapshot:
+    """Full recorded cost of grants created in a bounded window, not an invoice."""
+    observed_at = datetime.now(UTC)
+    window_start = observed_at - timedelta(hours=hours)
+    rows = await load_inference_grant_costs(
+        session, window_start=window_start, window_end=observed_at
+    )
+    groups = [InferenceGrantCostGroup.model_validate(dict(row)) for row in rows]
+    unknown = [group for group in groups if group.classification_basis == "unknown"]
+    return InferenceGrantCostSnapshot(
+        observed_at=observed_at,
+        window_start=window_start,
+        window_end=observed_at,
+        groups=groups,
+        total_cost_microusd=sum(
+            group.chat_cost_microusd + group.embedding_cost_microusd for group in groups
+        ),
+        unclassified_cost_microusd=sum(
+            group.chat_cost_microusd + group.embedding_cost_microusd
+            for group in unknown
+        ),
+        grants=sum(group.grants for group in groups),
+        unclassified_grants=sum(group.grants for group in unknown),
+    )
+
+
 _CAPACITY_RE = re.compile(
     r"^ditto_inference_admission_at_capacity_total\{"
     r'lane="([^"]+)",scope="([^"]+)"\} ([0-9.eE+-]+)$'
@@ -136,7 +202,9 @@ async def get_inference_runtime_metrics(
     windows = [
         InferenceLaneWindow(
             window_seconds=int(row["window_seconds"]),
-            request_kind=cast(Literal["chat", "embedding"], str(row["request_kind"])),
+            request_kind=cast(
+                Literal["chat", "embedding", "decision"], str(row["request_kind"])
+            ),
             calls=int(row["calls"]),
             calls_per_second=round(float(row["calls_per_second"]), 4),
             tokens=int(row["tokens"]),
@@ -167,7 +235,7 @@ async def get_inference_runtime_metrics(
     }
     lanes: list[InferenceLaneCurrent] = []
     for row in current_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         if kind == "chat":
             per_ticket = settings.chat_per_ticket_concurrency
             per_validator = settings.chat_per_validator_concurrency
@@ -213,6 +281,228 @@ async def get_inference_runtime_metrics(
             else None
         ),
     )
+
+
+@router.get(
+    "/admin/inference-failure-taxonomy",
+    response_model=InferenceFailureTaxonomy,
+)
+async def get_inference_failure_taxonomy(
+    _admin: AdminDep,
+    session: SessionDep,
+) -> InferenceFailureTaxonomy:
+    """Recent chat/embedding outcomes by model, gateway, route, and error code.
+
+    ``/admin/inference-runtime-metrics`` already reports failures per lane per
+    window; this splits the same bounded windows by the dimensions an upstream
+    rate-limit burst actually moves, and flags a report-only five-minute
+    ``upstream_http_429`` burst per lane with the tickets it touched. Counts
+    and identifiers only.
+    """
+    lane_rows, group_rows = await load_inference_failure_taxonomy_rows(session)
+    settled_by_lane = {
+        (int(row["window_seconds"]), str(row["request_kind"])): int(row["settled"])
+        for row in lane_rows
+    }
+    returned: dict[tuple[int, str], int] = {}
+    totals: dict[tuple[int, str], int] = {}
+    groups: list[InferenceFailureGroup] = []
+    for row in group_rows:
+        key = (int(row["window_seconds"]), str(row["request_kind"]))
+        returned[key] = returned.get(key, 0) + 1
+        totals[key] = int(row["groups_total"])
+        settled = settled_by_lane.get(key, 0)
+        calls = int(row["calls"])
+        groups.append(
+            InferenceFailureGroup(
+                window_seconds=key[0],
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
+                model=str(row["model"]),
+                gateway=cast(InferenceGateway, str(row["gateway"])),
+                upstream_route=row["upstream_route"],
+                route_basis=cast(InferenceRouteBasis, str(row["route_basis"])),
+                terminal_error_code=row["terminal_error_code"],
+                upstream_http_status=row["upstream_http_status"],
+                calls=calls,
+                completed=int(row["completed"]),
+                failed=int(row["failed"]),
+                canceled=int(row["canceled"]),
+                timed_out=int(row["timed_out"]),
+                openrouter_attempts_max=int(row["openrouter_attempts_max"]),
+                share_of_settled_calls=(
+                    round(calls / settled, 4) if settled > 0 else 0.0
+                ),
+            )
+        )
+    lanes: list[InferenceFailureLaneWindow] = []
+    for row in lane_rows:
+        key = (int(row["window_seconds"]), str(row["request_kind"]))
+        settled = int(row["settled"])
+        failed = int(row["failed"])
+        group_total = totals.get(key, 0)
+        group_count = returned.get(key, 0)
+        lanes.append(
+            InferenceFailureLaneWindow(
+                window_seconds=key[0],
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
+                calls=int(row["calls"]),
+                settled=settled,
+                completed=int(row["completed"]),
+                failed=failed,
+                canceled=int(row["canceled"]),
+                in_flight=int(row["in_flight"]),
+                timed_out=int(row["timed_out"]),
+                rate_limited_failures=int(row["rate_limited_failures"]),
+                failure_share=round(failed / settled, 4) if settled > 0 else 0.0,
+                groups_total=group_total,
+                groups_returned=group_count,
+                groups_truncated=group_total > group_count,
+            )
+        )
+    confirmation_lanes, confirmation_groups = await _confirmation_failure_rows(session)
+    return InferenceFailureTaxonomy(
+        observed_at=datetime.now(UTC),
+        window_seconds=list(FAILURE_WINDOWS_SECONDS),
+        group_limit=FAILURE_GROUP_LIMIT,
+        lanes=lanes,
+        groups=groups,
+        rate_limit_bursts=await _rate_limit_bursts(session, lanes),
+        confirmation_window_seconds=list(CONFIRMATION_FAILURE_WINDOWS_SECONDS),
+        confirmation_lanes=confirmation_lanes,
+        confirmation_groups=confirmation_groups,
+    )
+
+
+async def _confirmation_failure_rows(
+    session: AsyncSession,
+) -> tuple[list[ConfirmationFailureLaneWindow], list[ConfirmationFailureGroup]]:
+    """Aggregate the confirmation grants the ordinary taxonomy cannot see.
+
+    ``inference_requests`` and ``confirmation_inference_requests`` are different
+    tables, so a confirmation provider rejection appears in neither ``lanes``
+    nor ``groups`` above however the windows are widened. LongMem lost 83% of
+    its bundles to provider rejections while this endpoint reported
+    ``rate_limited_failures: 0``.
+    """
+    lane_rows, group_rows = await load_confirmation_failure_taxonomy_rows(
+        session, group_limit=CONFIRMATION_FAILURE_GROUP_LIMIT
+    )
+    lanes = [
+        ConfirmationFailureLaneWindow(
+            window_seconds=int(row["window_seconds"]),
+            lane=cast(Literal["reader", "judge", "embedding"], str(row["lane"])),
+            calls=int(row["calls"]),
+            settled=int(row["settled"]),
+            completed=int(row["completed"]),
+            failed=int(row["failed"]),
+            in_flight=int(row["in_flight"]),
+            failed_without_provider=int(row["failed_without_provider"]),
+            failed_without_cost=int(row["failed_without_cost"]),
+            bundles_with_failure=int(row["bundles_with_failure"]),
+            failed_max_duration_ms=int(row["failed_max_duration_ms"]),
+            failed_p50_duration_ms=int(row["failed_p50_duration_ms"]),
+            failure_share=(
+                round(int(row["failed"]) / int(row["settled"]), 4)
+                if int(row["settled"]) > 0
+                else 0.0
+            ),
+        )
+        for row in lane_rows
+    ]
+    groups = [
+        ConfirmationFailureGroup(
+            window_seconds=int(row["window_seconds"]),
+            lane=cast(Literal["reader", "judge", "embedding"], str(row["lane"])),
+            model=str(row["model"]),
+            upstream_provider=(
+                str(row["upstream_provider"])
+                if row["upstream_provider"] is not None
+                else None
+            ),
+            provider_basis=cast(InferenceRouteBasis, str(row["provider_basis"])),
+            status=str(row["status"]),
+            failure_kind=cast(
+                ConfirmationFailureKind | None,
+                str(row["failure_kind"]) if row["failure_kind"] is not None else None,
+            ),
+            upstream_http_status=(
+                int(row["upstream_http_status"])
+                if row["upstream_http_status"] is not None
+                else None
+            ),
+            upstream_error_code=(
+                int(row["upstream_error_code"])
+                if row["upstream_error_code"] is not None
+                else None
+            ),
+            receipt_free=(
+                bool(row["receipt_free"]) if row["receipt_free"] is not None else None
+            ),
+            max_upstream_attempts=int(row["max_upstream_attempts"]),
+            calls=int(row["calls"]),
+            without_cost=int(row["without_cost"]),
+            bundles_affected=int(row["bundles_affected"]),
+            max_duration_ms=int(row["max_duration_ms"]),
+            p50_duration_ms=int(row["p50_duration_ms"]),
+        )
+        for row in group_rows
+    ]
+    return lanes, groups
+
+
+async def _rate_limit_bursts(
+    session: AsyncSession, lanes: list[InferenceFailureLaneWindow]
+) -> list[InferenceRateLimitBurst]:
+    """Five-minute 429 counts against local headroom, with affected tickets."""
+    settings = settings_from_row(
+        await latest_inference_concurrency_settings_revision(session)
+    )
+    limits = {
+        "chat": settings.chat_global_concurrency,
+        "embedding": settings.embedding_global_concurrency,
+    }
+    rate_limited = {
+        lane.request_kind: lane.rate_limited_failures
+        for lane in lanes
+        if lane.window_seconds == RATE_LIMIT_BURST_WINDOW_SECONDS
+    }
+    peak_rows, ticket_rows = await load_rate_limit_burst_rows(session)
+    tickets: dict[str, list[InferenceRateLimitedTicket]] = {}
+    tickets_total: dict[str, int] = {}
+    for row in ticket_rows:
+        kind = str(row["request_kind"])
+        tickets_total[kind] = int(row["tickets_total"])
+        tickets.setdefault(kind, []).append(
+            InferenceRateLimitedTicket(
+                agent_id=row["agent_id"],
+                bench_version=int(row["bench_version"]),
+                validator_hotkey=str(row["validator_hotkey"]),
+                slot_id=str(row["slot_id"]),
+                ticket_deadline=row["ticket_deadline"],
+                rate_limited_failures=int(row["rate_limited_failures"]),
+            )
+        )
+    bursts: list[InferenceRateLimitBurst] = []
+    for row in peak_rows:
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
+        count = rate_limited.get(kind, 0)
+        peak = int(row["peak_global_concurrency"])
+        returned = tickets.get(kind, [])
+        bursts.append(
+            InferenceRateLimitBurst(
+                request_kind=kind,
+                window_seconds=RATE_LIMIT_BURST_WINDOW_SECONDS,
+                rate_limited_failures=count,
+                threshold=RATE_LIMIT_BURST_THRESHOLD,
+                peak_global_concurrency=peak,
+                global_concurrency_limit=limits[kind],
+                active=count >= RATE_LIMIT_BURST_THRESHOLD and peak < limits[kind],
+                tickets_total=tickets_total.get(kind, 0),
+                tickets_truncated=tickets_total.get(kind, 0) > len(returned),
+                tickets=returned,
+            )
+        )
+    return bursts
 
 
 @router.post(

@@ -139,6 +139,7 @@ module "host" {
   network_tags                = [local.name]
   assign_public_ip            = false
   boot_disk_gb                = var.boot_disk_gb
+  deletion_protection         = var.deletion_protection
   service_account_email       = google_service_account.host[0].email
   enable_os_login             = true
   enable_secure_boot          = true
@@ -168,18 +169,19 @@ resource "google_compute_instance_iam_member" "osadmin" {
   member        = each.value
 }
 
-# Bind the IAP instance itself, not a project-wide name-pattern approximation.
-resource "google_iap_tunnel_instance_iam_member" "ssh" {
+# The stack apply service account cannot administer instance-level IAP IAM.
+# IAP TCP conditions expose destination.ip/port, not the Compute resource.name.
+# Bind to the host's actual primary private address; no hostname inference.
+resource "google_project_iam_member" "ssh" {
   for_each = local.operators
   project  = var.project
-  zone     = var.zone
-  instance = module.host[0].hostname
   role     = "roles/iap.tunnelResourceAccessor"
   member   = each.value
+
   condition {
-    title       = "ssh_only"
-    description = "Only SSH to this Platform-owned qualification host."
-    expression  = "destination.port == 22"
+    title       = "only_${replace(local.name, "-", "_")}_ssh"
+    description = "IAP SSH only to the qualification host's private destination IP."
+    expression  = "destination.ip == '${module.host[0].internal_ip}' && destination.port == 22"
   }
 }
 

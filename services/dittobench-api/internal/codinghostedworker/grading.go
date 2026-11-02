@@ -25,7 +25,6 @@ type GradingProfile struct {
 	ImageDigest          string                       `json:"image_digest"`
 	GraderContractSHA256 string                       `json:"grader_contract_sha256"`
 	GraderBundleSHA256   string                       `json:"grader_bundle_sha256"`
-	TestManifestSHA256   string                       `json:"test_manifest_sha256"`
 	ResourcePolicy       codinggrader.ResourcePolicy  `json:"resource_policy"`
 	Build                codinggrader.BuildSpec       `json:"build"`
 	TestGroups           []codinggrader.TestGroupSpec `json:"test_groups"`
@@ -38,7 +37,7 @@ func (p GradingProfile) Validate() error {
 	}
 	return (codinggrader.HostedManifest{GraderContractSHA256: p.GraderContractSHA256,
 		GraderImageDigest: p.ImageDigest, GraderPlatform: "linux/amd64", GraderBundleSHA256: p.GraderBundleSHA256,
-		TestManifestSHA256: p.TestManifestSHA256, ResourcePolicy: p.ResourcePolicy, ExecutionTimeout: p.ExecutionTimeout,
+		ResourcePolicy: p.ResourcePolicy, ExecutionTimeout: p.ExecutionTimeout,
 		Build: p.Build, TestGroups: p.TestGroups}).ValidateExecutionProfile()
 }
 
@@ -66,7 +65,7 @@ func (p GradingProfile) manifest(source codingsource.HostedBinding, sub codingru
 	if p.Schema != "dittobench-coding-hosted-grading-profile-v2" || p.GraderContractSHA256 != codinggrader.HostedGraderContractSHA256() {
 		return codinggrader.HostedManifest{}, ErrAttempt
 	}
-	m := codinggrader.HostedManifest{CodingContractVersion: 2, CaseID: source.AttemptID, VariantID: "hosted-private", VisibleBundleSHA256: sub.VisibleBundleSHA256, BaseTreeSHA256: sub.BaseTreeSHA256, GraderContractSHA256: p.GraderContractSHA256, GraderBundleSHA256: p.GraderBundleSHA256, GraderImageDigest: p.ImageDigest, GraderPlatform: "linux/amd64", TestManifestSHA256: p.TestManifestSHA256, Deadline: source.Deadline, ExecutionTimeout: p.ExecutionTimeout, ResourcePolicy: p.ResourcePolicy, Build: p.Build, TestGroups: p.TestGroups}
+	m := codinggrader.HostedManifest{CodingContractVersion: 2, CaseID: source.AttemptID, VariantID: "hosted-private", VisibleBundleSHA256: sub.VisibleBundleSHA256, BaseTreeSHA256: sub.BaseTreeSHA256, GraderContractSHA256: p.GraderContractSHA256, GraderBundleSHA256: p.GraderBundleSHA256, GraderImageDigest: p.ImageDigest, GraderPlatform: "linux/amd64", Deadline: source.Deadline, ExecutionTimeout: p.ExecutionTimeout, ResourcePolicy: p.ResourcePolicy, Build: p.Build, TestGroups: p.TestGroups}
 	var err error
 	m.ResourceProfileSHA256, err = codinggrader.HostedResourceProfileSHA256(p.ResourcePolicy)
 	if err != nil {

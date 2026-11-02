@@ -269,8 +269,8 @@ async def submit_endorsement(
                 status_code=400,
                 detail=(
                     "endorser is not an entrenched miner family: need a "
-                    "full-benchmark scored submission whose family is at "
-                    f"least {int(ENTRENCHMENT_AGE.days)} days old"
+                    "full-benchmark scored submission uploaded at least "
+                    f"{int(ENTRENCHMENT_AGE.days)} days ago"
                 ),
             )
         try:

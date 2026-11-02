@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from ditto_screener.calibration import classification_metrics
+from scripts.run_l2_calibration import _report_only_audit_cost
 
 
 def test_august_court_fixture_captures_precision_recall_baseline() -> None:
@@ -72,3 +73,34 @@ def test_classification_metrics_rejects_non_binary_gold_label() -> None:
                 }
             ]
         )
+
+
+def test_report_only_cost_includes_paid_turns_before_infra_failure(
+    tmp_path: Path,
+) -> None:
+    audit = tmp_path / "audit.jsonl"
+    audit.write_text(
+        "\n".join(
+            json.dumps(event)
+            for event in (
+                {
+                    "event_type": "report_only_turn_usage",
+                    "recorded_at": 99.0,
+                    "reported_cost_usd": 9.0,
+                },
+                {
+                    "event_type": "report_only_turn_usage",
+                    "recorded_at": 100.0,
+                    "reported_cost_usd": 0.4,
+                },
+                {
+                    "event_type": "report_only_turn_contract_fault",
+                    "recorded_at": 101.0,
+                    "reported_cost_usd": 0.2,
+                },
+            )
+        )
+        + "\n"
+    )
+
+    assert _report_only_audit_cost(audit, started_at=100.0) == pytest.approx(0.6)

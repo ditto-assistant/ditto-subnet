@@ -33,6 +33,7 @@ package scorer
 
 import (
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -135,16 +136,44 @@ func ToolEfficiencyFactorForVersion(perCase []protocol.CaseScore, benchVersion i
 	return toolEfficiencyFactorWith(perCase, legacyEffParams)
 }
 
+// memoryWriteCategory preserves historical whole-case exclusions. Lifecycle
+// writes remain excluded at every version. V13 excluded declarative acknowledgements
+// in full; v14 counts them and exempts only their authorized persistence actions.
+func memoryWriteCategory(category string, benchVersion int) bool {
+	switch category {
+	case gen.QTLifecycleWrite:
+		return true
+	case gen.QTDeclarativeAck:
+		return benchVersion >= protocol.BenchVersionV13 && benchVersion < protocol.BenchVersionV14
+	default:
+		return false
+	}
+}
+
+// declarativeMemoryWrite is the v14 action-scoped exception. A write on a
+// recall, chitchat, or any other memory case remains an over-call.
+func declarativeMemoryWrite(category, name string, benchVersion int) bool {
+	if benchVersion < protocol.BenchVersionV14 || category != gen.QTDeclarativeAck {
+		return false
+	}
+	switch name {
+	case "save_memory", "update_memory", "delete_memory":
+		return true
+	default:
+		return false
+	}
+}
+
 // memoryOverCallFactorWith is MemoryOverCallFactor with an explicit max penalty.
-func memoryOverCallFactorWith(perCase []protocol.CaseScore, maxPenalty float64) float64 {
+func memoryOverCallFactorWith(perCase []protocol.CaseScore, maxPenalty float64, benchVersion int) float64 {
 	observed, overCalled := 0, 0
 	for _, cs := range perCase {
-		if cs.Kind != protocol.KindMemory || !cs.Observed || cs.Category == gen.QTLifecycleWrite {
+		if cs.Kind != protocol.KindMemory || !cs.Observed || memoryWriteCategory(cs.Category, benchVersion) {
 			continue
 		}
 		observed++
 		for _, name := range cs.Called {
-			if !memoryTools[name] {
+			if !memoryTools[name] && !declarativeMemoryWrite(cs.Category, name, benchVersion) {
 				overCalled++
 				break
 			}
@@ -155,6 +184,23 @@ func memoryOverCallFactorWith(perCase []protocol.CaseScore, maxPenalty float64) 
 	}
 	rate := float64(overCalled) / float64(observed)
 	return round6(1.0 - maxPenalty*rate)
+}
+
+// MemoryOverCallFactorForVersion is the memory over-call multiplier exactly as
+// the composite gate for benchVersion applies it: the v7 contract's penalty and
+// category scope from bench_version 7, the historical v3 factor for 3..6. The
+// composite gate itself calls this, so the value published in RunDetails can
+// never drift from the one folded into the composite. ok is false before
+// bench_version 3, whose composite carries no gate at all.
+func MemoryOverCallFactorForVersion(perCase []protocol.CaseScore, benchVersion int) (factor float64, ok bool) {
+	switch {
+	case benchVersion >= protocol.BenchVersionV7:
+		return memoryOverCallFactorWith(perCase, v7MemoryOverCallMaxPenalty, benchVersion), true
+	case benchVersion >= protocol.BenchVersionV3:
+		return MemoryOverCallFactor(perCase), true
+	default:
+		return 1.0, false
+	}
 }
 
 // metamorphicConsistencyFactorWith is MetamorphicConsistencyFactor with an
@@ -220,10 +266,11 @@ func transformAuditFactorWith(perCase []protocol.CaseScore, enforced bool, maxPe
 // new contract, so audit enforcement is part of the contract itself rather
 // than an operator flag; the factor stays a pure function of (dataset,
 // transcript) and any third party reproduces it.
-func compositeGateV7(perCase []protocol.CaseScore) float64 {
+func compositeGateV7(perCase []protocol.CaseScore, benchVersion int) float64 {
+	memoryOverCall, _ := MemoryOverCallFactorForVersion(perCase, benchVersion)
 	bounded := toolEfficiencyFactorWith(perCase, v7EffParams) *
 		metamorphicConsistencyFactorWith(perCase, v7MetamorphicMaxPenalty) *
-		memoryOverCallFactorWith(perCase, v7MemoryOverCallMaxPenalty)
+		memoryOverCall
 	if bounded < v7BoundedGateFloor {
 		bounded = v7BoundedGateFloor
 	}
@@ -281,13 +328,17 @@ func ComposeResultUsageForVersion(benchVersion int, cs protocol.CaseScore, answe
 	if benchVersion < protocol.BenchVersionV7 {
 		return ComposeResultUsageWithDecoy(cs, answer, needleValue, decoyValue)
 	}
+	carries := answerCarriesValue
+	if benchVersion >= protocol.BenchVersionV14 {
+		carries = answerCarriesValueV14
+	}
 	gate := v7ResultUsageMissGate
 	usage := 0.0
 	switch {
-	case decoyValue != "" && answerCarriesValue(answer, decoyValue):
+	case decoyValue != "" && carries(answer, decoyValue):
 		gate = 0.0
 		cs.Notes = append(cs.Notes, "v7: answer carried the decoy value (fished from the wrong tool) — case scored 0")
-	case answerCarriesValue(answer, needleValue):
+	case carries(answer, needleValue):
 		gate = 1.0
 		usage = 1.0
 		cs.Notes = append(cs.Notes, "answer incorporated the served tool result")
@@ -356,6 +407,14 @@ func sameNameMultiset(a, b []protocol.ObservedToolCall) bool {
 // extra-call penalty). Pre-v7 versions are byte-identical to
 // ScoreToolCaseObservedScope.
 func ScoreToolCaseObservedForVersion(c protocol.ToolCase, resp protocol.RunResponse, ok bool, observed []protocol.ObservedToolCall, scope Scope, benchVersion int) protocol.CaseScore {
+	if benchVersion >= protocol.BenchVersionV13 {
+		// v13: claim-aware arguments, alternative outcomes, effect-graded memory
+		// reads, text-graded restraint, forbidden tools (v13.go). The v7..v12
+		// path below is unchanged. From v14 the reply is read as the memory
+		// grader reads it: typographic hyphens folded (#2734) and markdown
+		// rendered to plain text (grade.ReplyAsRead).
+		return scoreToolCaseV13(c, grade.ReplyAsRead(benchVersion, resp), ok, observed)
+	}
 	strict := benchVersion >= protocol.BenchVersionV7
 	if !strict {
 		return ScoreToolCaseObservedScope(c, resp, ok, observed, scope)

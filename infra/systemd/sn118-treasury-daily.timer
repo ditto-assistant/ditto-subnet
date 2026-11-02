@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Omni Aura GM credit once each UTC day
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=sn118-treasury-daily.service
+
+[Install]
+WantedBy=timers.target

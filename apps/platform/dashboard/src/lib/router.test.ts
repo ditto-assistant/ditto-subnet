@@ -46,15 +46,15 @@ describe("PAGES registry", () => {
   it("keeps page titles and wayfinding subtitles explicit", () => {
     expect(PAGES.overview).toEqual({
       title: "Overview",
-      sub: "Subnet snapshot and the full leaderboard · ranked by composite",
+      sub: "Subnet snapshot and the full leaderboard · ranked by official score",
     });
     expect(PAGES.leaderboard).toEqual({
       title: "Leaderboard",
-      sub: "Every scored miner · canonical ranks · sortable by any metric",
+      sub: "Every scored miner · ranked by official score · sortable by any metric",
     });
     expect(PAGES.pipeline).toEqual({
       title: "Submission pipeline",
-      sub: "Every submission from upload to scored · admission, validation, and integrity review",
+      sub: "Every submission from upload to scored · admission, validation, and source review",
     });
     expect(PAGES.operations).toEqual({
       title: "Fleet",
@@ -71,6 +71,10 @@ describe("PAGES registry", () => {
     expect(PAGES.ath).toEqual({
       title: "ATH reviews",
       sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
+    });
+    expect(PAGES.bounties).toEqual({
+      title: "Bounties",
+      sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
     });
     expect(PAGES.benchmark).toEqual({
       title: "Benchmark",
@@ -101,6 +105,8 @@ describe("PAGES registry", () => {
     expect(ENTITY_PAGES.validator).toBe("operations");
     expect(ENTITY_PAGES.screener).toBe("operations");
     expect(PAGE_SCOPED_PARAMS).toEqual([
+      "activity_q",
+      "activity_status",
       "status",
       "downloadable",
       "q",
@@ -108,6 +114,11 @@ describe("PAGES registry", () => {
       "code",
       "login",
       "complete",
+      "ditto",
+      "reason",
+      "attempt",
+      "bounty",
+      "generator",
     ]);
   });
 });

@@ -317,6 +317,43 @@ func TestSeedStoreLockTimeoutPersistsStructuredInfrastructureClassification(t *t
 	}
 }
 
+func TestSeedDeadlineIsNamedButStaysInsideTheOrdinaryAttemptBudget(t *testing.T) {
+	s := &server{store: store.New()}
+	s.store.Create("run", "run_size", store.StatusRunning, 1, 13)
+	s.failV7Seeding("run", "seeding v8 tool routing state failed: ", fmt.Errorf("%w after 15m0s: post /seed: %w", runner.ErrSeedDeadlineExceeded, context.DeadlineExceeded))
+	job, _ := s.store.Get("run")
+	if job.Status != store.StatusFailed || job.Failure == nil ||
+		job.Failure.Kind != "validator_infrastructure" ||
+		job.Failure.Code != "seed_deadline_exceeded" || !job.Failure.Retryable {
+		t.Fatalf("job = %#v", job)
+	}
+	if got := trustedSeedingInfrastructureFailure(fmt.Errorf("post /seed: %w", context.DeadlineExceeded)); got != nil {
+		t.Fatalf("an untyped deadline (run cap or caller) was classified: %#v", got)
+	}
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	validatorSource, err := os.ReadFile(filepath.Join(
+		filepath.Dir(filename), "../../../../ditto/validator/dittobench.py",
+	))
+	if err != nil {
+		t.Fatalf("read validator classifier: %v", err)
+	}
+	source := string(validatorSource)
+	if !strings.Contains(source, `"seed_deadline_exceeded"`) {
+		t.Fatal("Go emitted code is absent from the validator's bounded retry codes")
+	}
+	start := strings.Index(source, "_SANDBOX_INFRASTRUCTURE_CODES = {")
+	end := strings.Index(source[start:], "\n}\n")
+	if start < 0 || end < 0 {
+		t.Fatal("locate the validator no-fault allowlist")
+	}
+	if strings.Contains(source[start:start+end], `"seed_deadline_exceeded"`) {
+		t.Fatal("seed_deadline_exceeded must not be a no-fault code: it would mint a grant and re-lease a slow harness without bound")
+	}
+}
+
 func TestRelayDegradedSince(t *testing.T) {
 	start := relayHealthSnapshot{Requests: 10, Successes: 9, InfrastructureFailures: 1, CallerCancellations: 2, UpstreamAttempts: 12}
 	if err := relayDegradedSince(start, relayHealthSnapshot{Requests: 20, Successes: 19, InfrastructureFailures: 1, CallerCancellations: 3, UpstreamAttempts: 23}); err != nil {
@@ -1123,5 +1160,34 @@ func TestRelayCountersCatchMaskedTwoHundredEmptyHarnessResponse(t *testing.T) {
 	}
 	if err := relayDegradedSince(start, end); err == nil {
 		t.Fatal("masked 200-empty response must not survive relay health validation")
+	}
+}
+
+func TestPreReservation413StaysRequestTooLarge(t *testing.T) {
+	if got := admissionCode(http.StatusRequestEntityTooLarge, ""); got != "request_too_large" {
+		t.Fatalf("413 code = %s", got)
+	}
+	if got := admissionCode(http.StatusBadRequest, "invalid JSON request"); got != "invalid_json" {
+		t.Fatalf("400 code = %s", got)
+	}
+	if got := admissionCode(http.StatusConflict, "inference request is stale"); got != "stale_session" {
+		t.Fatalf("409 code = %s", got)
+	}
+	failure := relayFinalizeFailure(errAgentRequestRejected)
+	if failure.Code != "inference_request_rejected" || failure.Retryable {
+		t.Fatalf("wire class = %+v", failure)
+	}
+	attachAdmissionTaxonomy(failure, map[string]admissionBucket{
+		"request_too_large": {Count: 2, HTTPStatus: 413, First: "a", Last: "b"},
+	})
+	taxonomy, ok := failure.Diagnostics["admission_taxonomy"].(map[string]admissionBucket)
+	if !ok || taxonomy["request_too_large"].Count != 2 {
+		t.Fatalf("taxonomy = %#v", failure.Diagnostics)
+	}
+	delta := admissionSince(nil, map[string]admissionBucket{
+		"request_too_large": {Count: 3, HTTPStatus: 413, First: "a", Last: "c"},
+	})
+	if delta["request_too_large"].Count != 3 || delta["request_too_large"].First != "a" {
+		t.Fatalf("delta = %+v", delta)
 	}
 }

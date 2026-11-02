@@ -10,6 +10,14 @@ resource "google_cloud_run_v2_service" "this" {
   labels              = var.labels
   deletion_protection = var.deletion_protection
 
+  # Keep scale-to-zero explicit at the service level. Cloud Run reports a
+  # zero manual count even in AUTOMATIC mode, so ignore only that inapplicable
+  # API default while retaining ownership of the automatic mode and minimum.
+  scaling {
+    scaling_mode       = "AUTOMATIC"
+    min_instance_count = 0
+  }
+
   template {
     service_account                  = var.service_account_email == "" ? null : var.service_account_email
     timeout                          = "${var.timeout_seconds}s"
@@ -77,6 +85,10 @@ resource "google_cloud_run_v2_service" "this" {
   traffic {
     type    = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
     percent = 100
+  }
+
+  lifecycle {
+    ignore_changes = [scaling[0].manual_instance_count]
   }
 }
 

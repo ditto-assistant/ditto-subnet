@@ -30,12 +30,35 @@ variable "preview_environment" {
   default     = "preview-stack"
 }
 
+variable "bake_environment" {
+  description = "Protected GitHub environment used only by the scheduled preview base image bake."
+  type        = string
+  default     = "preview-bake"
+}
+
+# The actual existing preview state (serial 4, observed Oct 1) contains none
+# of the staged bake SA/compute/WIF resources. Preserve that absence by default.
+variable "enable_preview_bake" {
+  description = "Separately reviewed creation of all three preview bake prerequisites."
+  type        = bool
+  default     = false
+}
+
+variable "enable_collector_custody_backend" {
+  description = "Reviewed exact-object grants to initialize and lock custody state."
+  type        = bool
+  default     = false
+}
+
 variable "snapshot_writer_service_account" {
   description = "Existing main-only deploy identity used by the scheduled sanitizer."
   type        = string
   default     = "github-actions-platform-deploy@ditto-app-dev.iam.gserviceaccount.com"
 }
 
+# Documentation only: nothing consumes this but outputs.tf. The operative knob
+# is the PREVIEW_LEASE_TTL_SECONDS environment variable on the preview-stack
+# GitHub environment, which provision.sh reads.
 variable "lease_ttl_hours" {
   type    = number
   default = 24

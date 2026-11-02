@@ -18,12 +18,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.retry_state import (
+    RecommendedRetryAction,
+    RetryDisposition,
+    RetryState,
+)
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ProviderOutageCircuit,
     Score,
     SubmissionRetirement,
     ValidatorHeartbeat,
@@ -31,9 +36,10 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.provider_outages import provider_outage_active
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
-from ditto.db.queries.tickets import ticket_retry_budget_spent
+from ditto.db.queries.tickets import scoring_retry_ticket, ticket_retry_budget_spent
 from ditto.screener_policy_state import effective_screening_policy_version
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
@@ -49,10 +55,46 @@ AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
         "inference_allowance_exhausted",
         "inference_request_rejected",
         "model_inference_required",
+        # OOM kill at the harness's own published cap on a host with headroom.
+        "harness_oom",
     }
 )
+# A SIGKILL with no OOM flag is no-fault on its first validator: retry once.
+# The same kill on a second validator is the harness's own crash.
+HARNESS_KILLED_137_DETAIL = "harness_killed_137"
+HARNESS_KILLED_137_AGENT_REPEATS = 2
+_ADMISSION_DETAIL_PREFIX = "inference_request_rejected:"
+_AGENT_ADMISSION_DETAIL_CODES = frozenset(
+    {
+        "request_too_large",
+        "invalid_json",
+        "invalid_schema",
+        "model_not_allowed",
+    }
+)
+
+
+def is_agent_attributable_failure_detail(detail: str | None) -> bool:
+    """True for a spent allowance or a classified pre-reservation refusal."""
+    if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS:
+        return True
+    if not isinstance(detail, str) or not detail.startswith(_ADMISSION_DETAIL_PREFIX):
+        return False
+    return (
+        detail.removeprefix(_ADMISSION_DETAIL_PREFIX) in _AGENT_ADMISSION_DETAIL_CODES
+    )
+
+
 AGENT_ATTRIBUTABLE_WITHDRAW_REASON = (
     "exhausted on agent-attributable failures; withdraw rather than retry"
+)
+# Written by ``park_scoring_leases`` when the relay's provider circuit parks a
+# live scoring lease. Infrastructure, never the agent's fault.
+PROVIDER_OUTAGE_PARKED_DETAIL = "provider_outage_parked"
+PROVIDER_OUTAGE_RETRY_BLOCKING_REASON = (
+    "inference provider outage circuit is still open (every scoring lease is "
+    "parked) or a provider-parked slot is inside the recovery quiet window. "
+    "Wait for provider recovery, or retry with acknowledge_provider_outage=true"
 )
 
 
@@ -109,6 +151,10 @@ def resolve_bench_version(
         ticket
         for ticket in all_tickets
         if ticket.status in (TicketStatus.ISSUED, TicketStatus.EXPIRED)
+        # Neither a canary nor a generator-round lease is scoring work, so
+        # neither may pull the agent's retry era toward its version.
+        and ticket.purpose
+        not in (TicketPurpose.BENCHMARK_CANARY, TicketPurpose.GENERATOR_ROUND)
     ]
     if work_tickets:
         return max(
@@ -174,9 +220,34 @@ def is_agent_attributable_exhaustion(
     if any(ticket.status == TicketStatus.ISSUED for ticket in tickets):
         return False
     details = [current_failure_detail(ticket) for ticket in remaining]
-    return bool(details) and all(
-        detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS for detail in details
+    repeated_kill = (
+        sum(detail == HARNESS_KILLED_137_DETAIL for detail in details)
+        >= HARNESS_KILLED_137_AGENT_REPEATS
     )
+    return bool(details) and all(
+        is_agent_attributable_failure_detail(detail)
+        or (repeated_kill and detail == HARNESS_KILLED_137_DETAIL)
+        for detail in details
+    )
+
+
+def agreed_failure_detail(
+    *, scores: list[Score], tickets: list[ValidatorTicket]
+) -> str | None:
+    """The single current ``failure_detail`` every remaining slot reports.
+
+    ``None`` when the causes are mixed, when any is missing or stale, or when
+    there is nothing left to agree. A cause no slot disputes is the only one a
+    public surface may name.
+    """
+    remaining = remaining_exhausted_tickets(scores=scores, tickets=tickets)
+    if not remaining:
+        return None
+    details = {current_failure_detail(ticket) for ticket in remaining}
+    if len(details) != 1:
+        return None
+    detail = next(iter(details))
+    return detail if isinstance(detail, str) else None
 
 
 def dominant_agent_failure_detail(
@@ -190,7 +261,52 @@ def dominant_agent_failure_detail(
     if len(details) != 1:
         return None
     detail = next(iter(details))
-    return detail if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS else None
+    return detail if is_agent_attributable_failure_detail(detail) else None
+
+
+def provider_outage_parked_exhaustion(
+    *, scores: list[Score], tickets: list[ValidatorTicket]
+) -> bool:
+    """Whether a remaining exhausted slot was last parked by the provider circuit."""
+    return any(
+        current_failure_detail(ticket) == PROVIDER_OUTAGE_PARKED_DETAIL
+        for ticket in remaining_exhausted_tickets(scores=scores, tickets=tickets)
+    )
+
+
+def provider_outage_blocks_retry(
+    *,
+    circuit: ProviderOutageCircuit | None,
+    scores: list[Score],
+    tickets: list[ValidatorTicket],
+    now: datetime,
+) -> bool:
+    """Whether a retry grant would restore a slot the outage parks again.
+
+    ``park_scoring_leases`` selects **every** ``ISSUED`` validator ticket while
+    the circuit is open — no filter on purpose, benchmark version, or prior
+    failure cause — and exempts only the one live half-open scoring probe. So a
+    grant made in that window cannot be consumed safely whatever killed the
+    slot before: the first claim the gate admits is that probe, the next
+    provider failure re-parks it, and because the ticket has already spent its
+    one no-fault resume the park charges the operator's new grant. That is the
+    ditto-subnet#2087 loop, and it does not depend on the failure detail being
+    ``provider_outage_parked``.
+
+    There is no safe subset to exempt. Every scoring lease carries an inference
+    grant that ``park_scoring_leases`` revokes, so a version or purpose that
+    made no hosted-inference call would still lose the lease.
+
+    Once closed, only provider-parked exhausted slots wait for the 30-minute
+    quiet window. Unrelated exhausted slots can be granted immediately.
+    """
+    if circuit is None:
+        return False
+    if circuit.state == "open":
+        return True
+    if not provider_outage_parked_exhaustion(scores=scores, tickets=tickets):
+        return False
+    return provider_outage_active(circuit, now=now)
 
 
 def recommended_retry_action(
@@ -198,13 +314,51 @@ def recommended_retry_action(
     scores: list[Score],
     tickets: list[ValidatorTicket],
     recovery_allowed: bool,
+    provider_outage_blocked: bool = False,
 ) -> RecommendedRetryAction | None:
     """Operator next step for a below-quorum row, or ``None`` when none applies."""
     if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
         return "withdraw"
-    if recovery_allowed:
+    if recovery_allowed and not provider_outage_blocked:
         return "retry"
     return None
+
+
+def retry_disposition(
+    *,
+    state: RetryState,
+    scores: list[Score],
+    tickets: list[ValidatorTicket],
+    recovery_allowed: bool,
+) -> RetryDisposition | None:
+    """The miner-facing reading of a parked row, or ``None`` while it advances.
+
+    Only an ``exhausted`` row has a disposition: every other state is still
+    moving on its own, and naming a failure there would be wrong even when a
+    single past lease failed. Exhausted rows split exactly where
+    :func:`recommended_retry_action` already splits them, so the public surface
+    can never disagree with the operator triage it was derived from.
+
+    Fail-closed, and deliberately weak: ``operator_hold`` means only that the
+    platform will not attribute this row to the submission. It is not a claim
+    that the fleet failed. A mixed, unnamed, stale or unactionable cause, and a
+    withdraw verdict with no single publishable code, all land here.
+    """
+    if state != "exhausted":
+        return None
+    action = recommended_retry_action(
+        scores=scores, tickets=tickets, recovery_allowed=recovery_allowed
+    )
+    if action != "withdraw":
+        return "operator_hold"
+    # A withdraw verdict can rest on two different named codes, and a terminal
+    # row has to be able to name the one it is telling the miner to fix. When
+    # the remaining slots disagree there is no code to publish, so the public
+    # reading falls back to the hold rather than asserting a failure it cannot
+    # attribute. The operator surface still reads ``withdraw``.
+    if dominant_agent_failure_detail(scores=scores, tickets=tickets) is None:
+        return "operator_hold"
+    return "terminal_artifact_failure"
 
 
 def recovery_gate(
@@ -216,6 +370,7 @@ def recovery_gate(
     bench_version: int,
     rollout_qualification: bool = False,
     work_available_hotkeys: set[str] | None = None,
+    target_validator_hotkey: str | None = None,
 ) -> tuple[bool, bool, str | None, list[ValidatorTicket]]:
     """Decide whether an operator retry is possible.
 
@@ -283,6 +438,27 @@ def recovery_gate(
         return False, False, "not enough expired tickets to restore quorum", []
     if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
         return False, False, AGENT_ATTRIBUTABLE_WITHDRAW_REASON, []
+    if target_validator_hotkey is not None:
+        if needed != 1:
+            return (
+                False,
+                False,
+                "validator selection requires exactly one missing score",
+                [],
+            )
+        selected = [
+            ticket
+            for ticket in exhausted
+            if ticket.validator_hotkey == target_validator_hotkey
+        ]
+        if not selected:
+            return False, False, "selected validator has no exhausted ticket", []
+        if (
+            work_available_hotkeys is not None
+            and target_validator_hotkey not in work_available_hotkeys
+        ):
+            return False, False, "selected validator is not currently available", []
+        return False, True, None, selected
     return False, True, None, exhausted[:needed]
 
 
@@ -504,6 +680,23 @@ class AgentRetryState:
     automatic_retry_available: bool
     recovery_allowed: bool
     blocking_reason: str | None
+    disposition: RetryDisposition | None
+    """Whether a parked row is waiting on Ditto or has terminally failed."""
+    terminal_failure_code: str | None
+    """The agreed agent-attributable code behind a terminal disposition.
+
+    Set only when :attr:`disposition` is ``terminal_artifact_failure``, and only
+    from :data:`AGENT_ATTRIBUTABLE_FAILURE_DETAILS`, so no free-form validator
+    diagnostic can reach a caller through this field.
+    """
+    hold_failure_code: str | None
+    """The agreed cause behind an ``operator_hold``, when every slot names one.
+
+    This is what separates a hold the platform can attribute to its own fleet
+    from one it simply cannot attribute at all. Null is the ordinary case and
+    means the cause is mixed, unnamed or stale; a caller must not describe a
+    null-code hold as anyone's fault.
+    """
     earliest_retry_after: datetime | None
     scores: list[Score]
     tickets: list[ValidatorTicket]
@@ -564,18 +757,18 @@ async def classify_agent_retry_states(
     tickets_by_agent: dict[UUID, list[ValidatorTicket]] = {}
     for ticket in (
         await session.scalars(
-            select(ValidatorTicket).where(ValidatorTicket.agent_id.in_(id_subq))
+            select(ValidatorTicket).where(
+                ValidatorTicket.agent_id.in_(id_subq),
+                scoring_retry_ticket(),
+            )
         )
     ).all():
         tickets_by_agent.setdefault(ticket.agent_id, []).append(ticket)
     scores_by_agent: dict[UUID, list[Score]] = {}
     for score in (
         await session.scalars(
-            # ``details`` is ~27 kB of per-case answer keys per row and this
-            # triage view never reads it; loading it for hundreds of agents was
-            # a 4.5 s statement in production.
             select(Score)
-            .options(defer(Score.details))
+            .options(defer(Score.details, raiseload=True))
             .where(Score.agent_id.in_(id_subq))
         )
     ).all():
@@ -657,6 +850,12 @@ async def classify_agent_retry_states(
         if state is None:
             continue
         scored_hotkeys = {s.validator_hotkey for s in v_scores}
+        disposition = retry_disposition(
+            state=state,
+            scores=v_scores,
+            tickets=v_tickets,
+            recovery_allowed=allowed,
+        )
         result[agent_id] = AgentRetryState(
             state=state,
             bench_version=bench_version,
@@ -664,6 +863,17 @@ async def classify_agent_retry_states(
             automatic_retry_available=automatic,
             recovery_allowed=allowed,
             blocking_reason=reason,
+            disposition=disposition,
+            terminal_failure_code=(
+                dominant_agent_failure_detail(scores=v_scores, tickets=v_tickets)
+                if disposition == "terminal_artifact_failure"
+                else None
+            ),
+            hold_failure_code=(
+                agreed_failure_detail(scores=v_scores, tickets=v_tickets)
+                if disposition == "operator_hold"
+                else None
+            ),
             # Only a ticket that can still retry has a meaningful "retry at"
             # time; an exhausted ticket's stale cooldown must not read as
             # "coming back soon".

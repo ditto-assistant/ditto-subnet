@@ -1,5 +1,21 @@
 # SN118 quarantine decision rules
 
+## Select the applicable policy first
+
+Read [Policy-version routing](review-bar.md#policy-version-routing) before
+using the release boundaries or false-positive examples below. For policy v13,
+the [published checklist](../../../../workers/screener/docs/policy-v13.md)
+and [opaque-verification companion](../../../../workers/screener/docs/policy-v13-opaque-verification.md)
+govern: evaluate I1–I8, S1–S3, all applicable safe harbors, and mandatory
+verification. The historical v10-v12 calibration below does not override them.
+Refuting a finding does not by itself satisfy v13 CLEAR; missing verification
+follows the published failure-domain and retry/deadline procedure.
+
+Apply the [decision-path checklist](decision-path-review.md) to v13 reviews,
+including finding-backed holds. A refuted lead or one cleared engine does not
+clear other effective paths. The v14 draft does not add current rejection
+grounds or miner evidence requirements.
+
 ## Evidence priority
 
 1. Served runtime dispatch and answer construction.
@@ -128,14 +144,20 @@ Before you reject:
   scheduled policy-v11 rescreen). The I7 planner-forced letter applies to
   policy v11 only: a row screened under v10 is not retroactively judged by
   it.
-- **`bench_version` branching flagged as benchmark fingerprinting.** Behavior
+- **Historical v10-v12 `bench_version` branching flagged as benchmark fingerprinting.**
+  Behavior
   that switches on `bench_version` is a warning sign warranting a second
   look, never an independent reject; require a companion violation on the
-  served path.
+  served path under those historical policies. Under v13, a source-proven
+  substantive evaluation dependency can independently fail I8; published
+  compatibility-only behavior remains permitted.
 - **Single-success duplicate suppression flagged as fabricated trajectory
-  (I6).** Suppressing a repeat of a side-effecting tool after a genuine first
-  successful execution (read-only tools exempt) is production idempotency,
-  not telemetry fabrication.
+  (I6).** Suppressing an exact repeat (same name and canonical arguments) of
+  a side-effecting tool after a genuine first successful execution (read-only
+  tools exempt) is production idempotency, not telemetry fabrication. Under
+  v13 that harbor does not cover refusing a repeat the request asks for, a
+  name-only per-tool cap, or a phrase-gated memo: those are I7/W11 (see
+  `precedents/artemis-v8.md`).
 - **Plain answer normalization flagged as scorer manipulation.** Unicode
   folding, slot-length caps, whitespace/quote trimming, and `ANSWER:` prefix
   stripping of the model's own output are scorer-fidelity gaps, not

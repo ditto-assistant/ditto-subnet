@@ -50,23 +50,29 @@ logger = logging.getLogger(__name__)
 # only signal that an artifact was served without leaving a record.
 AUDIT_WRITE_FAILED = "artifact fetch audit write failed"
 
-RequesterKind = Literal["validator", "screener", "admin", "public"]
+RequesterKind = Literal["validator", "screener", "admin", "public", "miner"]
 
 # Route names, not request paths. Paths carry ids and get reshaped; the question
 # this identifier answers is "which door did the fetcher come through".
+ENDPOINT_MINER_ARTIFACT = "miner_me.my_artifact"
+ENDPOINT_MINER_MCP_ARTIFACT = "miner_mcp.get_my_submission_artifact"
 ENDPOINT_PUBLIC_ARTIFACT = "public.agent_artifact"
 ENDPOINT_VALIDATOR_ARTIFACT = "validator.agent_artifact"
-ENDPOINT_VALIDATOR_CODING_HARNESS = "validator.coding_harness_launch"
-ENDPOINT_VALIDATOR_CODING_CERTIFICATION_HARNESS = (
-    "validator.coding_certification_harness_launch"
-)
+ENDPOINT_VALIDATOR_CONFIRMATION_ARTIFACT = "validator_confirmation.artifact"
 ENDPOINT_SCREENER_ARTIFACT = "screener.agent_artifact"
+ENDPOINT_SCREENER_RUNTIME_SMOKE = "screener.submission_runtime_smoke"
+ENDPOINT_SCREENER_SOURCE_REVIEW = "screener.submission_source_review_source"
+ENDPOINT_SCREENER_FANOUT_SHADOW = "screener.fanout_shadow_source"
+ENDPOINT_SCREENER_REVIEW_LINEAGE = "screener.review_lineage"
 ENDPOINT_ADMIN_SCREENING_ARTIFACT = "admin.get_screening_artifact"
 ENDPOINT_ADMIN_SOURCE_FILES = "admin.list_screening_source_files"
 ENDPOINT_ADMIN_SOURCE_FILE = "admin.read_screening_source_file"
 ENDPOINT_ADMIN_SOURCE_SEARCH = "admin.search_screening_source"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF = "admin.get_copy_review_source_diff"
 ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE = "admin.get_copy_review_source_diff_file"
+ENDPOINT_ADMIN_LINEAGE_DIFF = "admin.get_lineage_source_diff"
+ENDPOINT_ADMIN_LINEAGE_DIFF_FILE = "admin.get_lineage_source_diff_file"
+ENDPOINT_ADMIN_REVIEW_LINEAGE = "admin.get_screening_review_lineage"
 
 
 async def record_artifact_fetch(

@@ -1,7 +1,9 @@
 import base64
 import copy
 import json
+import re
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -32,6 +34,7 @@ from ditto.api_server.endpoints.inference import (
     _bounded_provider_cost,
     _ChatProviderExhausted,
     _complete_chat_with_recovery,
+    _effective_scored_provider_routing,
     _estimated_tokens,
     _exchange_message,
     _locked_confirmation_chat_payload,
@@ -745,7 +748,7 @@ def test_aggregate_route_is_throughput_sorted_and_excludes_unreviewed_routes() -
     ) == {
         "sort": "throughput",
         "ignore": ["coreweave"],
-        "allow_fallbacks": False,
+        "allow_fallbacks": True,
         "data_collection": "deny",
         "zdr": True,
     }
@@ -760,6 +763,37 @@ def test_aggregate_route_is_throughput_sorted_and_excludes_unreviewed_routes() -
     assert _bounded_provider_cost({"usage": {"cost": float("nan")}}) is None
 
 
+def test_bf16_price_order_pins_bf16_providers_and_keeps_privacy() -> None:
+    providers = ["deepinfra", "amazon-bedrock", "groq", "dekallm"]
+    assert _provider_preferences(
+        routing_mode="aggregate_throughput",
+        provider="openrouter",
+        quantization=None,
+        scored_routing="bf16_price_order",
+    ) == {
+        "order": providers,
+        "only": providers,
+        "ignore": ["coreweave"],
+        "allow_fallbacks": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+    # The canary mode is resolved per ticket before this call.
+    assert _effective_scored_provider_routing(
+        "bf16_price_order_canary", "benchmark_canary"
+    ) == ("bf16_price_order")
+    for routing, purpose in (
+        ("bf16_price_order_canary", "continual_retest"),
+        ("bf16_price_order_canary", None),
+        ("throughput", "benchmark_canary"),
+    ):
+        assert _effective_scored_provider_routing(routing, purpose) == "throughput"
+    assert (
+        _effective_scored_provider_routing("bf16_price_order", "canonical_quorum")
+        == "bf16_price_order"
+    )
+
+
 def _recovery_config() -> InferenceProxyConfig:
     return cast(
         InferenceProxyConfig,
@@ -768,6 +802,7 @@ def _recovery_config() -> InferenceProxyConfig:
             upstream_url="https://openrouter.ai/api/v1/chat/completions",
             openrouter_api_key="test-key",
             response_body_bytes=2 << 20,
+            scored_provider_routing="throughput",
         ),
     )
 
@@ -1001,6 +1036,126 @@ def test_confirmation_judge_does_not_gain_gpt_oss_reasoning() -> None:
     assert "reasoning" not in upstream
     assert "max_tokens" not in upstream
     assert upstream["max_completion_tokens"] == 64
+
+
+_SCORER_JUDGE_PROVIDER_GOLDEN = (
+    Path(__file__).resolve().parents[6]
+    / "services/dittobench-api/internal/longmemeval/testdata"
+    / "judge-provider-routing-v1.json"
+)
+
+
+def _together_judge_payload(provider: Any) -> dict[str, Any]:
+    return {
+        "model": "deepseek/deepseek-v4.1-flash",
+        "messages": [{"role": "user", "content": "Is the answer correct?"}],
+        "max_completion_tokens": 64,
+        "provider": provider,
+    }
+
+
+def _together_judge_grant() -> SimpleNamespace:
+    return SimpleNamespace(
+        lane="judge", model="deepseek/deepseek-v4.1-flash", route_provider="together"
+    )
+
+
+def test_scorer_judge_provider_block_passes_the_confirmation_lock() -> None:
+    """The scorer's real judge block must be accepted by the real lock.
+
+    The golden is written by a Go test from ``judgeProviderRouting`` itself, so
+    this is the scorer's exact bytes meeting the proxy that receives them. It is
+    the test that was missing when #3167 added ``zdr`` to that block: the lock
+    compared it for equality with a dict lacking ``zdr`` and 403'd every judge
+    request, failing LongMem confirmation on every bundle (ditto-subnet#3214).
+    """
+    scorer_block = json.loads(_SCORER_JUDGE_PROVIDER_GOLDEN.read_text())
+    assert scorer_block.get("zdr") is True, "golden no longer exercises the zdr case"
+
+    upstream, _ = _locked_confirmation_chat_payload(
+        _together_judge_payload(scorer_block),
+        grant=_together_judge_grant(),
+        max_output_tokens=128,
+    )
+
+    assert upstream["provider"] == {
+        "only": ["together"],
+        "order": ["together"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+
+
+@pytest.mark.parametrize("lane", ["judge", "reader"])
+def test_confirmation_lock_accepts_zdr_absent_or_true_and_always_forces_it(
+    lane: str,
+) -> None:
+    if lane == "judge":
+        grant = _together_judge_grant()
+        base = _together_judge_payload(None)
+        expected = {
+            "only": ["together"],
+            "order": ["together"],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+            "data_collection": "deny",
+        }
+    else:
+        grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
+        base = _confirmation_reader_payload("openai/gpt-oss-20b")
+        expected = dict(base["provider"])
+    for provider in (dict(expected), {**expected, "zdr": True}):
+        upstream, _ = _locked_confirmation_chat_payload(
+            {**base, "provider": provider}, grant=grant, max_output_tokens=128
+        )
+        assert upstream["provider"] == {**expected, "zdr": True}
+
+
+@pytest.mark.parametrize("zdr", [False, None, "true", 1])
+def test_confirmation_lock_refuses_any_zdr_other_than_true(zdr: Any) -> None:
+    """An explicit opt-out is refused rather than silently overridden.
+
+    The outbound block always carries ``zdr: True``. Accepting ``zdr: False``
+    would mean quietly sending the opposite of what the caller asked for.
+    """
+    block = {
+        "only": ["together"],
+        "order": ["together"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": zdr,
+    }
+    with pytest.raises(HTTPException) as raised:
+        _locked_confirmation_chat_payload(
+            _together_judge_payload(block),
+            grant=_together_judge_grant(),
+            max_output_tokens=128,
+        )
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "confirmation route is not permitted"
+
+
+def test_confirmation_lock_still_refuses_an_extra_routing_key_beside_zdr() -> None:
+    """Tolerating ``zdr`` must not loosen the lock for any other key."""
+    block = {
+        "only": ["together"],
+        "order": ["together"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+        "zdr": True,
+        "sort": "price",
+    }
+    with pytest.raises(HTTPException) as raised:
+        _locked_confirmation_chat_payload(
+            _together_judge_payload(block),
+            grant=_together_judge_grant(),
+            max_output_tokens=128,
+        )
+    assert raised.value.status_code == 403
 
 
 def test_caller_reasoning_is_accepted_then_overwritten_with_the_pinned_effort() -> None:
@@ -1585,6 +1740,31 @@ def test_sampling_knobs_the_miner_owns_are_forwarded_unchanged() -> None:
     assert upstream["seed"] == 42
 
 
+def test_developer_message_preserves_trusted_system_and_reaches_v13_broker() -> None:
+    """The v13 broker must see application policy without rewriting host policy."""
+    messages = [
+        {"role": "system", "content": "Trusted validator system prompt"},
+        {"role": "developer", "content": "Agent application policy"},
+        {"role": "user", "content": "Question"},
+        {"role": "developer", "content": "Return a JSON decision"},
+    ]
+    payload = {"model": "openai/gpt-oss-20b", "messages": messages}
+
+    _validate_request_schema(payload)
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256, bench_version=13
+    )
+
+    assert upstream["messages"] == messages
+    assert upstream["messages"][0] == messages[0]
+    assert [message["role"] for message in upstream["messages"]] == [
+        "system",
+        "developer",
+        "user",
+        "developer",
+    ]
+
+
 def test_unsupported_parameter_error_names_every_offending_key() -> None:
     """A miner must be able to discover which field broke the run."""
     with pytest.raises(HTTPException) as refused:
@@ -1711,6 +1891,37 @@ def test_every_field_has_exactly_one_decided_fate() -> None:
         "top_k",
     ):
         assert normal in _FORWARDED_REQUEST_FIELDS, normal
+
+
+def test_request_field_fates_match_the_published_contract() -> None:
+    """The checked-in table miners read is this partition, exactly.
+
+    The model relay asserts the same file against its Go mirror
+    (``TestRequestFieldFatesMatchThePublishedContract``), so a fate changed in
+    only one language fails one of the two suites.
+    """
+    docs = Path(__file__).parents[6] / "docs"
+    contract = json.loads((docs / "inference-request-fields.json").read_text())
+    assert set(contract["forwarded"]) == _FORWARDED_REQUEST_FIELDS
+    assert set(contract["pinned"]) == _PINNED_REQUEST_FIELDS
+    assert set(contract["dropped"]) == _DROPPED_REQUEST_FIELDS
+    assert contract["refused"] == _REFUSED_REQUEST_FIELDS
+    assert set(contract["forwarded_value_limits"]) <= _FORWARDED_REQUEST_FIELDS
+
+    # The miner guide renders the same table. A row that disagrees with it
+    # misinforms miners about which requests fail a scored run.
+    guide = (docs / "MINER.md").read_text()
+    section = guide.split("\n## Inference request contract\n", 1)[1].split("\n## ")[0]
+    rows = [
+        [cell.strip() for cell in line.strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("| ")
+    ]
+    fields = {row[0]: set(re.findall(r"`([^`]+)`", row[1])) for row in rows}
+    for fate in ("forwarded", "pinned", "dropped"):
+        assert fields[fate.capitalize()] == set(contract[fate]), fate
+    refused = {row[0].strip("`"): row[1] for row in rows if row[0].startswith("`")}
+    assert refused == contract["refused"]
 
 
 def test_caller_shape_rejections_do_not_cool_shared_provider_route() -> None:

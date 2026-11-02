@@ -1,6 +1,7 @@
 package grade
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -225,6 +226,22 @@ func TestDeclineKind(t *testing.T) {
 	}
 	if s := Memory(mc, resp("Hmm, probably something common.")); s.Score != 0 {
 		t.Fatalf("non-decline non-answer must score 0: got %v", s.Score)
+	}
+}
+
+func TestModelDeclineProseWithoutWireAbstainAcrossSupportedVersions(t *testing.T) {
+	for version := protocol.BenchVersionV8; version <= protocol.BenchVersionV13; version++ {
+		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
+			mc := protocol.MemoryCase{
+				BenchVersion: version,
+				AnswerKind:   protocol.AnswerDecline,
+			}
+			prose := protocol.RunResponse{FinalText: "I don't have that on record."}
+			flagged := protocol.RunResponse{FinalText: prose.FinalText, Abstain: true}
+			if got := Memory(mc, prose).Score; got != Memory(mc, flagged).Score || got != 1 {
+				t.Fatalf("model decline without wire abstain scored %v; flagged scored %v", got, Memory(mc, flagged).Score)
+			}
+		})
 	}
 }
 

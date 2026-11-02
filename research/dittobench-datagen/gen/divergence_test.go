@@ -16,7 +16,7 @@ import (
 // surface parser really can reach it) and the correct value must differ from it.
 func TestParserDivergenceTrapGrades(t *testing.T) {
 	for seed := int64(1); seed <= 30; seed++ {
-		cases, pairs := buildParserDivergence(seed, 12)
+		cases, pairs := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
 		if len(cases) != 12 || len(pairs) != 12 {
 			t.Fatalf("seed %d: got %d cases / %d pairs, want 12/12", seed, len(cases), len(pairs))
 		}
@@ -97,7 +97,7 @@ func containsMoneyOrNumber(mc protocol.MemoryCase, surface, body string) bool {
 // divergence-type label, and the answer key (QuestionType / ExpectedAnswer /
 // DistractorAnswers) is validator-internal and never part of RunRequest.
 func TestParserDivergenceIsWireOpaque(t *testing.T) {
-	cases, _ := buildParserDivergence(123456789, 12)
+	cases, _ := buildParserDivergenceForVersion(123456789, 12, protocol.BenchVersionV12)
 	banned := []string{"parser-divergence", "canary", "distractor", "surface", "template", "expected_answer", "divergence"}
 	for _, sc := range cases {
 		q := strings.ToLower(sc.Case.Question)
@@ -118,8 +118,8 @@ func TestParserDivergenceIsWireOpaque(t *testing.T) {
 // from the same seed (a prerequisite for the pinned known-vector).
 func TestParserDivergenceDeterministic(t *testing.T) {
 	for _, seed := range []int64{1, 42, 123456789} {
-		a, ap := buildParserDivergence(seed, 12)
-		b, bp := buildParserDivergence(seed, 12)
+		a, ap := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
+		b, bp := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
 		if len(a) != len(b) || len(ap) != len(bp) {
 			t.Fatalf("seed %d: length mismatch", seed)
 		}
@@ -162,4 +162,42 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// TestParserDivergenceV13KeepsTwelveCasesWithMoneyCap: the v13 divergence
+// family keeps the twelve-case full profile with at most three money cases
+// (one hypothetical member per round), stamps the v13 contract version, and
+// the v12 entry point is byte-for-byte the version-explicit v12 form.
+func TestParserDivergenceV13KeepsTwelveCasesWithMoneyCap(t *testing.T) {
+	for seed := int64(1); seed <= 40; seed++ {
+		cases, pairs := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV13)
+		if len(cases) != 12 || len(pairs) != 12 {
+			t.Fatalf("seed %d: %d cases / %d pairs, want 12/12", seed, len(cases), len(pairs))
+		}
+		money := 0
+		for _, sc := range cases {
+			if sc.Case.BenchVersion != protocol.BenchVersionV13 {
+				t.Fatalf("seed %d case %s stamped version %d", seed, sc.Case.ID, sc.Case.BenchVersion)
+			}
+			if sc.Case.AnswerKind == protocol.AnswerMoney {
+				money++
+			}
+		}
+		if money > v13DivergenceMoneyCap {
+			t.Fatalf("seed %d: %d money cases, cap %d", seed, money, v13DivergenceMoneyCap)
+		}
+		v12a, v12p := buildParserDivergence(seed, 12)
+		v12b, v12q := buildParserDivergenceForVersion(seed, 12, protocol.BenchVersionV12)
+		for i := range v12a {
+			if !equalMemoryCase(v12a[i].Case, v12b[i].Case) || v12p[i] != v12q[i] {
+				t.Fatalf("seed %d: v12 divergence output moved under the version-explicit refactor", seed)
+			}
+		}
+	}
+}
+
+func equalMemoryCase(a, b protocol.MemoryCase) bool {
+	return a.ID == b.ID && a.Question == b.Question && a.ExpectedAnswer == b.ExpectedAnswer &&
+		a.AnswerKind == b.AnswerKind && a.BenchVersion == b.BenchVersion &&
+		strings.Join(a.DistractorAnswers, "|") == strings.Join(b.DistractorAnswers, "|")
 }

@@ -34,6 +34,13 @@ attempt_count  >=  MAX_ATTEMPTS_PER_VERSION + manual_retry_grants + infra_retry_
 
 - **Another validator may pick the agent up immediately** — the cap and cooldown
   are per-validator, so a timeout on one validator never blocks the other two.
+- **Generator-round runs never count (SN-334).** A `generator_round` lease
+  shares the `(agent, version, validator)` row but never increments
+  `attempt_count`, and a row it creates starts at `0`. A zero-attempt
+  round-only row reads as no row to issuance, quorum occupancy, and the retry
+  triage views; a live round lease is not scoring work there either. Its
+  expiry or provider-outage park starts no cooldown and mints no no-fault
+  resume, and a scoring lane that reuses the row drops the round's dataset pin.
 - **A benchmark-version bump resets the budget.** Tickets are keyed by
   `bench_version`, so repaired scoring software revisits the artifact with a
   fresh 1-attempt budget on the new version.
@@ -145,6 +152,39 @@ timeout, a Kaniko identity error, a silent expiry, or a missing
 remaining exhausted ticket's **current** `failure_detail` (the one whose
 `failed_at >= issued_at`) is one of the three agent codes does a retry grant
 refuse and point at withdrawal.
+
+The relay-owned provider outage circuit is a separate axis from the failure
+classification above, and it is **provider-wide**. While it is `open`,
+`park_scoring_leases` parks every `ISSUED` validator ticket — no filter on
+purpose, benchmark version, or why the slot failed before — exempting only the
+one live half-open scoring probe. A restored slot therefore cannot be consumed
+safely in that window whatever killed it previously: the first claim the gate
+admits is that probe, the next provider failure re-parks it, and because the
+ticket has already spent its one no-fault resume the park charges the
+operator's new grant (ditto-subnet#2087).
+
+So while the circuit is open, `provider_outage_blocks_retry` is true for
+**every** otherwise-grantable exhausted submission, `recovery_allowed` is
+false, `recommended_action` is null rather than `retry`, `blocking_reason` names
+the open circuit, and the single and batch retry routes refuse the grant unless
+the request carries `acknowledge_provider_outage: true`. There is no safe
+subset to exempt: every scoring lease carries an inference grant that the park
+revokes, so a lease that would have made no hosted-inference call still loses
+its slot.
+
+Both routes report `provider_outage` (`state`, `last_failure_at`,
+`last_error_code`, `failure_count`, and `closed_at`, the last recovery) while
+the circuit is open, and also while it is closed if a remaining exhausted slot
+carries `provider_outage_parked` — there `closed_at` is the evidence for
+granting now.
+
+A closed circuit restores the ordinary `retry` recommendation, and that is a
+**current-state guard, not a healthy-route proof**. The relay reopens the
+circuit on the next qualifying failure: on 2026-09-22 a 16:20 recovery observed
+a closed circuit that pinned embedding 429s reopened at 16:22 and again at
+16:24, exhausting three replacement tickets. Read `closed_at`,
+`last_failure_at`, and `failure_count` together before granting, and expect a
+freshly closed circuit with a high `failure_count` to reopen.
 
 The platform never finalizes an evaluating agent without k=3 validator scores.
 A proven zero-inference run is a **validator-submitted** composite of 0.00, not

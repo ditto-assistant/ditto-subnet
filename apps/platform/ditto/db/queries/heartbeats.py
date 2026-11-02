@@ -249,6 +249,8 @@ async def upsert_validator_heartbeat(
     benchmark_capacity: dict | None = None,
     confirmation_progress: list[dict] | None = None,
     claimed_slots: list[dict] | None = None,
+    weights_fold: dict | None = None,
+    host_specs: dict | None = None,
 ) -> tuple[ValidatorHeartbeat, bool]:
     """Persist only a strictly newer heartbeat; return ``(row, accepted)``."""
     row = await session.scalar(
@@ -276,6 +278,8 @@ async def upsert_validator_heartbeat(
             "stack": stack,
             "stack_health": stack_health,
             "updater_status": updater_status,
+            "weights_fold": weights_fold,
+            "host_specs": host_specs,
             "benchmark_capacity": benchmark_capacity,
             "confirmation_progress": confirmation_progress,
             "claimed_slots": claimed_slots,
@@ -359,6 +363,10 @@ async def upsert_validator_heartbeat(
     row.stack_health = stack_health
     row.confirmation_progress = confirmation_progress
     row.updater_status = updater_status
+    row.weights_fold = weights_fold
+    if host_specs is not None:
+        # Fixed hardware: a later failed probe keeps the last announcement.
+        row.host_specs = host_specs
     try:
         row.benchmark_capacity = _reconcile_capacity_progress(
             row.benchmark_capacity if not is_new else None, benchmark_capacity
@@ -693,6 +701,7 @@ async def upsert_screener_heartbeat(
     review_settings: dict | None,
     host_specs: dict | None,
     release: dict | None = None,
+    replay_process: dict | None = None,
     reported_at: datetime,
     seen_at: datetime,
     signature: str,
@@ -727,11 +736,13 @@ async def upsert_screener_heartbeat(
             "review_settings": review_settings,
             "host_specs": host_specs,
             "release": release,
+            "replay_process": replay_process,
         }
         if screening_progress is not None
         or review_settings is not None
         or host_specs is not None
         or release is not None
+        or replay_process is not None
         else system_metrics
     )
     row.reported_at = reported_at

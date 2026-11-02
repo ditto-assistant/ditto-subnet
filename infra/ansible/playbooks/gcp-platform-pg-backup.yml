@@ -1,0 +1,12 @@
+---
+# Converge only the online backup role. No base/Postgres roles or DB restart.
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_postgres
+
+- name: Converge only the production PostgreSQL backup timer
+  hosts: role_platform_postgres
+  become: true
+  gather_facts: true
+  roles:
+    - postgres_backup

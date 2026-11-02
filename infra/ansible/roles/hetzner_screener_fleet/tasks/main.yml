@@ -13,6 +13,12 @@
       - screener_fleet_debian_cloud_image_sha256 | length == 64
       - screener_fleet_worker_processes | int >= 1
       - screener_fleet_worker_processes | int <= 16
+      - >-
+        not screener_fleet_replay_worker_enabled or
+        (screener_fleet_runtime_enabled and
+         screener_fleet_node_id == 'subnet-screener-2' and
+         screener_fleet_worker_processes | int == 1 and
+         screener_fleet_x509_enabled)
       - screener_fleet_vm_memory_mib | int >= 8192
       - screener_fleet_vm_memory_mib | int <= 12288
     fail_msg: >-
@@ -173,7 +179,7 @@
       - -out
       - "{{ screener_fleet_x509_csr_file }}"
       - -subj
-      - /CN=subnet-screener-1
+      - "/CN={{ screener_fleet_node_id }}"
       - -addext
       - "subjectAltName=URI:{{ screener_fleet_x509_subject }}"
       - -addext
@@ -241,25 +247,6 @@
   changed_when: true
   notify: Restart screener fleet workers
 
-- name: Inspect the fleet-agent environment
-  ansible.builtin.stat:
-    path: "{{ screener_fleet_orchestrator_venv }}/bin/python"
-  register: screener_fleet_agent_environment
-  when: screener_fleet_runtime_enabled
-
-- name: Sync the fleet-agent environment
-  ansible.builtin.command:
-    cmd: /usr/local/bin/uv sync --frozen
-    chdir: "{{ screener_fleet_orchestrator_dir }}"
-  become_user: "{{ screener_fleet_user }}"
-  environment:
-    UV_PROJECT_ENVIRONMENT: "{{ screener_fleet_orchestrator_venv }}"
-  when:
-    - screener_fleet_runtime_enabled
-    - screener_fleet_checkout_result.changed or not screener_fleet_agent_environment.stat.exists
-  changed_when: true
-  notify: Restart screener fleet agent
-
 - name: Expose Debian's rootless Docker launcher on PATH
   ansible.builtin.file:
     src: /usr/share/docker.io/contrib/dockerd-rootless.sh
@@ -281,6 +268,7 @@
     SCREENER_EXECUTOR_USER: "{{ screener_fleet_executor_user }}"
     SCREENER_EXECUTOR_GROUP: "{{ screener_fleet_executor_group }}"
     SCREENER_EXECUTOR_HOME: "{{ screener_fleet_executor_home }}"
+    SCREENER_CACHE_KEEP_STORAGE: "{{ screener_fleet_cache_gc_keep_storage }}"
   changed_when: true
   notify: Restart screener fleet workers
   when: screener_fleet_runtime_enabled
@@ -362,7 +350,6 @@
     - screener_fleet_runtime_enabled
     - not screener_fleet_current_state.stat.exists
   notify:
-    - Restart screener fleet agent
     - Restart screener fleet workers
 
 - name: Download the verified Debian cloud base
@@ -498,9 +485,9 @@
 - name: Require the exact X.509 federation contract
   ansible.builtin.assert:
     that:
-      - screener_fleet_x509_subject == 'spiffe://dittobench.ai/screener/subnet-screener-1'
-      - screener_fleet_x509_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-fleet-x509/providers/subnet-screener-1$')
-      - screener_fleet_x509_service_account_email is regex('^subnet-screener-1@[a-z][a-z0-9-]+\\.iam\\.gserviceaccount\\.com$')
+      - screener_fleet_x509_subject == 'spiffe://dittobench.ai/screener/' + screener_fleet_node_id
+      - screener_fleet_x509_provider is regex('^projects/[0-9]+/locations/global/workloadIdentityPools/screener-fleet-x509/providers/' + screener_fleet_node_id + '$')
+      - screener_fleet_x509_service_account_email is regex('^' + screener_fleet_node_id + '@[a-z][a-z0-9-]+\\.iam\\.gserviceaccount\\.com$')
       - >-
         (('BEGIN CERTIFICATE' in screener_fleet_x509_ca_certificate_pem) and
          ('PRIVATE KEY' not in screener_fleet_x509_ca_certificate_pem) and
@@ -513,7 +500,7 @@
     fail_msg: >-
       Runtime X.509 federation requires the exact Terraform provider output,
       dedicated service account output, public offline-CA certificate, and a
-      signed leaf certificate for subnet-screener-1. No private key belongs in
+      signed leaf certificate for the exact node. No private key belongs in
       inventory, Vault, Terraform, or Git.
   when:
     - screener_fleet_runtime_enabled
@@ -592,7 +579,7 @@
     - screener_fleet_runtime_enabled
     - screener_fleet_x509_enabled
 
-- name: Require the exact subnet-screener-1 URI SAN
+- name: Require the exact node URI SAN
   ansible.builtin.assert:
     that:
       - "('URI:' + screener_fleet_x509_subject) in screener_fleet_x509_san.stdout"
@@ -809,6 +796,27 @@
     - not screener_fleet_source_review_key.stat.exists
   no_log: true
 
+- name: Assert operator source markers are literal-safe for systemd
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_source_marker_patterns is sequence
+      - screener_fleet_source_marker_patterns is not string
+      - screener_fleet_source_marker_patterns | length <= 64
+      - >-
+        screener_fleet_source_marker_patterns
+        | rejectattr('id', 'defined') | list | length == 0
+      - >-
+        screener_fleet_source_marker_patterns
+        | rejectattr('pattern', 'defined') | list | length == 0
+      - >-
+        (screener_fleet_source_marker_patterns | to_json)
+        is not search("['\\\\\n]")
+    fail_msg: >-
+      screener_fleet_source_marker_patterns must be a list of at most 64
+      {id, pattern} entries with no single quote, backslash, or newline.
+    quiet: true
+  when: screener_fleet_runtime_enabled
+
 - name: Render the screener fleet environment
   ansible.builtin.template:
     src: fleet.env.j2
@@ -817,7 +825,6 @@
     group: "{{ screener_fleet_group }}"
     mode: "0600"
   notify:
-    - Restart screener fleet agent
     - Restart screener fleet workers
   when: screener_fleet_runtime_enabled
 
@@ -829,7 +836,6 @@
     group: "{{ screener_fleet_group }}"
     mode: "0600"
     force: false
-  notify: Restart screener fleet agent
   when: screener_fleet_runtime_enabled
 
 - name: Install checksum-pinned Cosign verifier
@@ -853,6 +859,22 @@
     group: root
     mode: "0755"
     force: false
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_auto_update_enabled
+
+- name: Install the fleet drain helper beside the updater
+  ansible.builtin.copy:
+    src: "{{ screener_fleet_checkout }}/scripts/{{ item }}"
+    dest: "{{ screener_fleet_update_state_dir }}/{{ item }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+    force: false
+  loop:
+    - screener-fleet-drain.py
+    - screener-fleet-release-hold.sh
   when:
     - screener_fleet_runtime_enabled
     - screener_fleet_auto_update_enabled
@@ -881,10 +903,30 @@
     mode: "0644"
   loop:
     - { src: ditto-screener-enroll.service.j2, dest: ditto-screener-enroll.service }
-    - { src: ditto-screener-fleet-agent.service.j2, dest: ditto-screener-fleet-agent.service }
     - { src: ditto-screener-worker@.service.j2, dest: ditto-screener-worker@.service }
-  notify: Reload systemd for screener fleet
+  notify:
+    - Reload systemd for screener fleet
+    - Restart screener fleet workers
   when: screener_fleet_runtime_enabled
+
+- name: Inspect the host-generated replay process key
+  ansible.builtin.stat:
+    path: "{{ screener_fleet_replay_process_key_file }}"
+    follow: false
+  register: screener_fleet_replay_process_key_stat
+  when: screener_fleet_replay_worker_enabled
+
+- name: Require an owner-only replay process key before starting node 2
+  ansible.builtin.assert:
+    that:
+      - screener_fleet_replay_process_key_stat.stat.isreg | default(false)
+      - screener_fleet_replay_process_key_stat.stat.pw_name | default('') == screener_fleet_user
+      - screener_fleet_replay_process_key_stat.stat.mode | default('') in ['0400', '0600']
+      - screener_fleet_replay_process_key_stat.stat.size | default(0) == 32
+    fail_msg: >-
+      Generate the 32-byte Ed25519 seed on node 2 as the screener user with
+      mode 0400 or 0600; Ansible must never copy a replay private key.
+  when: screener_fleet_replay_worker_enabled
 
 - name: Enable and run one-time node enrollment
   ansible.builtin.systemd:
@@ -894,11 +936,33 @@
     daemon_reload: true
   when: screener_fleet_runtime_enabled
 
-- name: Enable and start the fleet lane agent
+- name: Inspect the retired fleet lane unit
+  ansible.builtin.stat:
+    path: /etc/systemd/system/ditto-screener-fleet-agent.service
+  register: screener_fleet_retired_lane_unit
+  when: screener_fleet_runtime_enabled
+
+- name: Stop and disable the retired fleet lane agent
   ansible.builtin.systemd:
     name: ditto-screener-fleet-agent
-    enabled: true
-    state: started
+    enabled: false
+    state: stopped
+  when:
+    - screener_fleet_runtime_enabled
+    - screener_fleet_retired_lane_unit.stat.exists
+
+- name: Remove the retired fleet lane unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/ditto-screener-fleet-agent.service
+    state: absent
+  notify: Reload systemd for screener fleet
+  when: screener_fleet_runtime_enabled
+
+- name: Remove retired fleet lane unit overrides
+  ansible.builtin.file:
+    path: /etc/systemd/system/ditto-screener-fleet-agent.service.d
+    state: absent
+  notify: Reload systemd for screener fleet
   when: screener_fleet_runtime_enabled
 
 - name: Stop and disable screening workers above configured capacity
@@ -926,3 +990,6 @@
   when:
     - screener_fleet_runtime_enabled
     - screener_fleet_auto_update_enabled
+
+- name: Converge the persistent screener BuildKit cache timer
+  ansible.builtin.include_tasks: cache_gc.yml

@@ -2,29 +2,48 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from datetime import UTC, datetime
+from typing import Annotated, Any
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.artifact_release_settings import (
     AdminArtifactReleaseSettingsRequest,
     AdminArtifactReleaseSettingsResponse,
+    CatchUpStatus,
+    ReceiptDiagnosticRow,
+    RevealPlanShadowStatus,
+    SourceArchiveProviderStatus,
+    SourceReleaseEligibilityRow,
+    SourceReleaseGateStatus,
 )
 from ditto.api_models.artifact_release_settings import (
     ArtifactReleaseSettingsRevision as RevisionModel,
 )
+from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure, release_confirmation
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.db.models import ArtifactReleaseSettingsRevision
+from ditto.db.models import (
+    Agent,
+    AgentKingship,
+    ArtifactReleaseSettingsRevision,
+    SourceEmissionCollectorCursor,
+    SourceEmissionPayout,
+    SourceEmissionPayoutResolution,
+    ValidatorReceiptDiagnostic,
+    ValidatorWeightReceipt,
+)
 from ditto.db.queries.artifact_release_settings import (
     DEFAULT_ARTIFACT_RELEASE_DISCLOSURE,
     DEFAULT_ARTIFACT_RELEASE_EMBARGO_HOURS,
     latest_artifact_release_settings,
 )
+from ditto.db.queries.king_reign import SOURCE_RELEASE_GATE_VERSION
 
 router = APIRouter(prefix="/admin/artifact-release-settings", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -55,8 +74,33 @@ def _default_revision() -> RevisionModel:
     )
 
 
+def _reveal_plan_shadow(cursor: Any) -> RevealPlanShadowStatus | None:
+    """The collector's shadow summary, or None before the first comparison."""
+    from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
+
+    summary = getattr(cursor, "reveal_plan_shadow", None) if cursor else None
+    if not summary:
+        # No comparison has run: zero counters would read as zero misses.
+        return None
+    return RevealPlanShadowStatus.model_validate({**summary, "mode": _REVEAL_PLAN_MODE})
+
+
+def _catch_up(cursor: Any) -> CatchUpStatus | None:
+    """The collector's catch-up summary, or None before the first planned range."""
+    from ditto.api_server.source_emission_collector import _REVEAL_PLAN_MODE
+
+    summary = getattr(cursor, "catch_up", None) if cursor else None
+    if not summary:
+        return None
+    # A summary names the planner it counts; one written before it did is
+    # labelled with the planner running now.
+    planner = "reveal" if _REVEAL_PLAN_MODE == "primary" else "event"
+    return CatchUpStatus.model_validate({"planner": planner, **summary})
+
+
 @router.get("", response_model=AdminArtifactReleaseSettingsResponse)
 async def get_settings(
+    request: Request,
     _admin: AdminDep,
     session: SessionDep,
 ) -> AdminArtifactReleaseSettingsResponse:
@@ -67,9 +111,151 @@ async def get_settings(
             .limit(100)
         )
     )
+    total, confirmed = (
+        await session.execute(
+            select(
+                func.count(AgentKingship.agent_id),
+                func.count(AgentKingship.emission_confirmed_at),
+            )
+        )
+    ).one()
+    kings = (
+        await session.execute(
+            select(AgentKingship, Agent.sha256)
+            .join(Agent, Agent.agent_id == AgentKingship.agent_id)
+            .order_by(
+                AgentKingship.emission_confirmed_at.desc().nullslast(),
+                AgentKingship.first_crowned_at.desc(),
+                AgentKingship.agent_id,
+            )
+            .limit(25)
+        )
+    ).all()
+    chain = request.app.state.config.chain
+    netuid = chain.netuid
+    # Only expose the host. A configured URL can contain sensitive path/query
+    # data; a malformed URL must not hide the collector's other diagnostics.
+    try:
+        archive_host = urlsplit(chain.archive_rpc_url or "").hostname
+    except ValueError:
+        archive_host = None
+    cursor = await session.get(SourceEmissionCollectorCursor, netuid)
+    last_payout = await session.scalar(
+        select(SourceEmissionPayout)
+        .where(
+            SourceEmissionPayout.netuid == netuid,
+        )
+        .order_by(SourceEmissionPayout.block.desc())
+        .limit(1)
+    )
+    resolution = (
+        await session.get(
+            SourceEmissionPayoutResolution, (netuid, last_payout.block_hash)
+        )
+        if last_payout is not None
+        else None
+    )
+    unresolved = await session.scalar(
+        select(func.count())
+        .select_from(SourceEmissionPayout)
+        .where(
+            SourceEmissionPayout.netuid == netuid,
+            SourceEmissionPayout.terminal.is_(False),
+            ~select(SourceEmissionPayoutResolution.netuid)
+            .where(
+                SourceEmissionPayoutResolution.netuid == SourceEmissionPayout.netuid,
+                SourceEmissionPayoutResolution.block_hash
+                == SourceEmissionPayout.block_hash,
+            )
+            .exists(),
+        )
+    )
+    # Claims not represented in any resolved payout remain pending evidence.
+    receipts = await session.scalar(
+        select(func.count())
+        .select_from(ValidatorWeightReceipt)
+        .where(
+            ValidatorWeightReceipt.netuid == netuid,
+            ~select(SourceEmissionPayoutResolution.netuid)
+            .where(
+                SourceEmissionPayoutResolution.netuid == netuid,
+                SourceEmissionPayoutResolution.proof.op("@>")(
+                    func.jsonb_build_object(
+                        "validators",
+                        func.jsonb_build_array(
+                            func.jsonb_build_object(
+                                "receipt_digest", ValidatorWeightReceipt.receipt_digest
+                            )
+                        ),
+                    )
+                ),
+            )
+            .exists(),
+        )
+    )
+    diagnostic_rows = list(
+        await session.scalars(
+            select(ValidatorReceiptDiagnostic)
+            .where(ValidatorReceiptDiagnostic.netuid == netuid)
+            .order_by(
+                ValidatorReceiptDiagnostic.received_at.desc(),
+                ValidatorReceiptDiagnostic.validator_hotkey,
+            )
+            .limit(65)
+        )
+    )
     return AdminArtifactReleaseSettingsResponse(
         current=_revision(rows[0]) if rows else _default_revision(),
         history=[_revision(row) for row in rows],
+        release_gate=SourceReleaseGateStatus(
+            version=SOURCE_RELEASE_GATE_VERSION,
+            automatic_confirmation_enabled=request.app.state.config.source_emission_confirmation_enabled,
+            archive_provider=SourceArchiveProviderStatus(
+                configured=bool(chain.archive_rpc_url),
+                host=archive_host,
+                auth_mode=chain.archive_rpc_auth_mode,
+                credential_configured=bool(chain.archive_rpc_api_key),
+            ),
+            collector_cursor_block=cursor.block if cursor else None,
+            collector_cursor_hash=cursor.block_hash if cursor else None,
+            collector_runtime_code_hash=cursor.runtime_code_hash if cursor else None,
+            collector_blocked_reason=cursor.last_blocked_reason if cursor else None,
+            reveal_plan_shadow=_reveal_plan_shadow(cursor),
+            catch_up=_catch_up(cursor),
+            last_payout_block=last_payout.block if last_payout else None,
+            last_payout_blocked_reason=last_payout.blocked_reason
+            if last_payout
+            else None,
+            last_payout_attributed=resolution is not None,
+            unresolved_payout_count=int(unresolved or 0),
+            pending_receipt_count=int(receipts or 0),
+            receipt_diagnostics=[
+                ReceiptDiagnosticRow(
+                    report=ReceiptDiagnosticReport.model_validate(row.report),
+                    received_at=row.received_at,
+                    stale=(datetime.now(UTC) - row.received_at).total_seconds() > 300,
+                )
+                for row in diagnostic_rows[:64]
+            ],
+            receipt_diagnostics_has_more=len(diagnostic_rows) > 64,
+            pending_kings=total - confirmed,
+            confirmed_kings=confirmed,
+            rows=[
+                SourceReleaseEligibilityRow(
+                    agent_id=king.agent_id,
+                    artifact_sha256=sha256,
+                    crowned_at=king.first_crowned_at,
+                    weight_confirmed_at=king.weight_confirmed_at,
+                    emission_confirmed_at=king.emission_confirmed_at,
+                    emission_block=king.emission_block,
+                    emission_block_hash=king.emission_block_hash,
+                    emission_epoch_index=king.emission_epoch_index,
+                    emission_ledger_digest=king.emission_ledger_digest,
+                )
+                for king, sha256 in kings
+            ],
+            rows_has_more=total > 25,
+        ),
     )
 
 

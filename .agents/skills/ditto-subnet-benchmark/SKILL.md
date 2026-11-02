@@ -24,6 +24,20 @@ use `$ditto-subnet-preview` and
 [`../ditto-subnet-preview/references/localstack.md`](../ditto-subnet-preview/references/localstack.md).
 Do not treat `uv run ditto practice` or cargo `evaluate` as that path.
 
+## Generator competition
+
+Generators emit challenge packs; each round freezes one bench version for the panel agents
+and grades each column at its pack's declared `grading_bench_version`. Contract:
+[`generator-competition.md`](../../../research/dittobench-datagen/docs/generator-competition.md)
+("Bench contract"); scorer: `services/dittobench-api/docs/challenge-scorer.md`; v15 coupling:
+[`dueling-bench.md`](../../../research/dittobench-datagen/docs/dueling-bench.md).
+
+Every bench version change moves both competitions together — one version number, a
+two-policy support window, rounds switching only behind the validator quorum gate. Before
+touching round contracts, pack policies, or an activation, read
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md) and use
+`$ditto-subnet-bench-version-bump` (step 10 and "Activate (both competitions)").
+
 ## Evidence workflow
 
 1. Identify the exact versioned contract and authoritative implementation before proposing a change.

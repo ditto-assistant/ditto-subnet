@@ -205,6 +205,7 @@ async def live_lease_agent_ids(session: AsyncSession, *, now: datetime) -> set[U
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.deadline > now,
                 ValidatorTicket.purpose != TicketPurpose.CONTINUAL_RETEST,
+                ValidatorTicket.purpose != TicketPurpose.GENERATOR_ROUND,
             )
             .distinct()
         )

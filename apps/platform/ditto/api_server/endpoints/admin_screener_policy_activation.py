@@ -18,10 +18,10 @@ the model cannot see:
   stored revision so two operators (or a stale Backroom tab) cannot schedule
   past each other; the write flushes inside the request transaction so the
   database's unique ``(parent_revision)`` constraint is the final arbiter.
-* **Fail-safe bounds.** ``target_policy_version`` must be at least the floor and
-  at most the version this build implements: scheduling a version no deployed
-  worker implements would fail the whole screening fleet closed at activation
-  time.
+* **Fail-safe bounds.** ``target_policy_version`` must be at least the floor, at
+  most the version this build implements, and no higher than the separately
+  published activation ceiling. Shipping review code is not authority to
+  activate an incomplete policy lifecycle.
 """
 
 from __future__ import annotations
@@ -46,12 +46,15 @@ from ditto.api_models.screener_policy_activation import (
     RestoreScoredScreeningSnapshotRequest,
     RestoreScoredScreeningSnapshotResponse,
     ScheduleScreenerPolicyActivationRequest,
+    ScheduleV13ReviewClockRequest,
     ScoredPolicyRescreenReleaseView,
     ScoredPolicyRescreenView,
     ScoredRescreenState,
     ScreenerFleetPolicyReadinessView,
     ScreenerPolicyActivationRevision,
     ScreenerPolicyActivationView,
+    V13ReviewClockRevision,
+    V13ReviewClockSchedule,
 )
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_models.system_health import fleet_release_from_heartbeat_envelope
@@ -69,6 +72,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreenerReviewSettingsRevision,
     ScreeningAttempt,
+    ScreeningReviewDeadlineActivation,
 )
 from ditto.db.models import (
     ScreenerPolicyActivation as ActivationRow,
@@ -81,7 +85,12 @@ from ditto.db.queries.screener_policy_activation import (
     list_screener_policy_activations,
 )
 from ditto.db.queries.screening import prerequisite_screening_predicates
+from ditto.db.queries.screening_review_deadlines import (
+    FIRST_V13_CLAIM_EVENT,
+    POLICY_V13_DOCUMENT_DIGEST,
+)
 from ditto_screening_protocol import (
+    SCREENING_ACTIVATION_CEILING_POLICY_VERSION,
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
 )
@@ -92,6 +101,130 @@ AdminDep = Annotated[None, Depends(require_admin)]
 
 
 _MAX_SCORED_POLICY_RESCREEN_WINDOW = 4
+_REVIEW_CLOCK_SCHEDULE_LOCK = 29002100
+# The public notice begins only after the write commits and becomes readable.
+# A small publication margin protects the promised full hour across commit and
+# CDN propagation; the public endpoint itself is explicitly no-store.
+_REVIEW_CLOCK_NOTICE = timedelta(hours=1, minutes=5)
+
+
+async def _review_clock_database_now(session: AsyncSession) -> datetime:
+    clock = (
+        func.clock_timestamp()
+        if session.get_bind().dialect.name == "postgresql"
+        else func.current_timestamp()
+    )
+    value = await session.scalar(select(clock))
+    if value is None:
+        raise RuntimeError("review clock database time unavailable")
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _review_clock_revision(
+    row: ScreeningReviewDeadlineActivation, *, now: datetime
+) -> V13ReviewClockRevision:
+    return V13ReviewClockRevision(
+        revision=row.revision,
+        policy_version=row.policy_version,
+        policy_document_digest=row.policy_document_digest,
+        policy_manifest_digest=row.policy_digest,
+        activate_at=row.activate_at,
+        window_seconds=row.window_seconds,
+        start_event=FIRST_V13_CLAIM_EVENT,
+        reason=row.reason,
+        actor=row.actor,
+        created_at=row.created_at,
+        state="due" if row.activate_at <= now else "pending",
+    )
+
+
+async def _review_clock_schedule(session: AsyncSession) -> V13ReviewClockSchedule:
+    rows = list(
+        await session.scalars(
+            select(ScreeningReviewDeadlineActivation)
+            .order_by(ScreeningReviewDeadlineActivation.revision.desc())
+            .limit(100)
+        )
+    )
+    now = datetime.now(UTC)
+    return V13ReviewClockSchedule(
+        current_policy_document_digest=POLICY_V13_DOCUMENT_DIGEST,
+        latest=_review_clock_revision(rows[0], now=now) if rows else None,
+        revisions=[_review_clock_revision(row, now=now) for row in rows],
+    )
+
+
+@router.get("/review-clock", response_model=V13ReviewClockSchedule)
+async def get_v13_review_clock(
+    _admin: AdminDep, session: SessionDep
+) -> V13ReviewClockSchedule:
+    """Read the explicit future schedule; absence means no active cutoff."""
+    return await _review_clock_schedule(session)
+
+
+@router.post("/review-clock", response_model=V13ReviewClockSchedule)
+async def schedule_v13_review_clock(
+    payload: ScheduleV13ReviewClockRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+) -> V13ReviewClockSchedule:
+    """Schedule a future first-claim clock; never backfill existing attempts."""
+    if payload.activate_at.tzinfo is None:
+        raise HTTPException(status_code=422, detail="activate_at requires a timezone")
+    activate_at = payload.activate_at.astimezone(UTC)
+    if payload.policy_document_digest != POLICY_V13_DOCUMENT_DIGEST:
+        raise HTTPException(
+            status_code=409, detail="published v13 policy document digest mismatch"
+        )
+    try:
+        async with session.begin():
+            if session.get_bind().dialect.name == "postgresql":
+                await session.execute(
+                    select(func.pg_advisory_xact_lock(_REVIEW_CLOCK_SCHEDULE_LOCK))
+                )
+            latest = await session.scalar(
+                select(ScreeningReviewDeadlineActivation)
+                .order_by(ScreeningReviewDeadlineActivation.revision.desc())
+                .limit(1)
+            )
+            actual_revision = latest.revision if latest is not None else 0
+            if payload.expected_revision != actual_revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="review clock revision changed; refresh before scheduling",
+                )
+            # Recheck after the lock using DB time. A request delayed while
+            # waiting for that lock must not silently shorten public notice.
+            if (
+                activate_at
+                < await _review_clock_database_now(session) + _REVIEW_CLOCK_NOTICE
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "review clock requires one hour of notice "
+                        "plus a five-minute publication margin"
+                    ),
+                )
+            session.add(
+                ScreeningReviewDeadlineActivation(
+                    policy_version=13,
+                    # The legacy column stores the module-manifest digest.
+                    policy_digest=payload.policy_manifest_digest,
+                    policy_document_digest=payload.policy_document_digest,
+                    activate_at=activate_at,
+                    window_seconds=payload.window_seconds,
+                    reason=payload.reason.strip(),
+                    actor=payload.actor.strip(),
+                )
+            )
+            await session.flush()
+    except IntegrityError as error:
+        raise HTTPException(
+            status_code=409,
+            detail="review clock changed concurrently; refresh before scheduling",
+        ) from error
+    return await _review_clock_schedule(session)
 
 
 def _revision_view(
@@ -150,7 +283,9 @@ async def _fleet_view(session: AsyncSession) -> ScreenerFleetPolicyReadinessView
         # Every fresh worker must be able to claim the target, so the safe
         # ceiling is the smallest builtin; unknown builds make it unknown.
         safe_to_schedule_up_to=(
-            min(builtins) if builtins and not without_release else None
+            min(min(builtins), SCREENING_ACTIVATION_CEILING_POLICY_VERSION)
+            if builtins and not without_release
+            else None
         ),
         lagging_instances=sorted(lagging),
         release_revisions=sorted(revisions),
@@ -591,6 +726,15 @@ async def schedule_activation(
                 f"the version this build implements "
                 f"({SCREENING_POLICY_VERSION}); deploy the build that "
                 "implements it, then schedule the activation"
+            ),
+        )
+    if payload.target_policy_version > SCREENING_ACTIVATION_CEILING_POLICY_VERSION:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"target_policy_version {payload.target_policy_version} is not "
+                "activation-ready; the published activation ceiling is "
+                f"{SCREENING_ACTIVATION_CEILING_POLICY_VERSION}"
             ),
         )
     if payload.canary_only and not payload.rescreen_scored:

@@ -19,6 +19,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -27,7 +28,19 @@ from pathlib import Path
 from typing import Any, ClassVar, Protocol
 from uuid import UUID
 
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
+    SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
+)
+from ditto_screening_protocol.models import (
+    SourceReviewFinding,
+    SourceReviewInvariantDisposition,
+)
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
+    SOURCE_REVIEW_CONFIRMED_VIOLATION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +135,23 @@ class PolicyEvidence:
             raise ValueError("evidence digest must be lowercase SHA-256 hex")
 
 
+def _bounded_reason_evidence(
+    evidence: Sequence[PolicyEvidence],
+    *,
+    reason_code: str | None,
+    limit: int = _MAX_EVIDENCE,
+) -> tuple[PolicyEvidence, ...]:
+    """Retain the deciding observation when bounding an evidence prefix."""
+    bounded = tuple(evidence[:limit])
+    if reason_code is not None and not any(
+        item.code == reason_code for item in bounded
+    ):
+        deciding = next((item for item in evidence if item.code == reason_code), None)
+        if deciding is not None:
+            bounded = (*bounded[:-1], deciding)
+    return bounded
+
+
 @dataclass(frozen=True)
 class ScreeningDecision:
     """Outcome returned by the stable core plus private policy engine."""
@@ -135,10 +165,20 @@ class ScreeningDecision:
     review_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     review_notes: tuple[Mapping[str, object], ...] = ()
+    reason_code: str | None = None
 
     def __post_init__(self) -> None:
-        if self.policy_version != SCREENING_POLICY_VERSION:
-            raise ValueError("decision policy version does not match worker policy")
+        if (
+            self.reason_code is not None
+            and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", self.reason_code) is None
+        ):
+            raise ValueError("decision reason_code must be a bounded protocol code")
+        if not (
+            SCREENING_FLOOR_POLICY_VERSION
+            <= self.policy_version
+            <= SCREENING_POLICY_VERSION
+        ):
+            raise ValueError("decision policy version is unsupported by this worker")
         if len(self.detail) > 3900:
             raise ValueError("decision detail exceeds protocol bound")
         if not _is_sha256(self.manifest_digest):
@@ -240,7 +280,15 @@ class SourceReviewObservation:
     finding: Mapping[str, object] | None = None
     failure_disposition: str = "retryable_infra"
     clearance_certified: bool = False
+    violation_certified: bool = False
+    """An elevated finding whose causal proof is complete and which an
+    independent L3 violation adjudicator confirmed (it could have refuted it).
+    L2 alone, an L3 disagreement, timeout, or missing L3 verdict never set it.
+    At policy v13 a certified breach is a terminal reject, not a held lead."""
     review_audit: Mapping[str, object] | None = None
+    # Structured model submission exposed only by the non-authoritative L2
+    # canary report. It contains no source text or model-authored prose.
+    inconclusive_model_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     """Automated clear/reject on an outcome that would otherwise hold
     (SourceReviewAdjudication shape). ``None`` when the adjudicator is off,
@@ -249,6 +297,68 @@ class SourceReviewObservation:
     """Typed in-progress determinations (SourceReviewNote shape). Recorded
     DURING review so a budget- or fault-terminated attempt still ships the
     evidence it accumulated; at exhaustion they decide the gradient verdict."""
+    failure_subcode: str | None = None
+    """Bounded slug naming why a failed review stopped: the provider's own
+    error code behind ``l3-adjudicator-model-provider-fault``, an incomplete
+    response reason behind ``*-model-response-contract``, or joined clearance
+    gaps. Private diagnostics only; it never changes the outcome."""
+
+
+# Joined clearance-gap subcodes use ``+`` (``models:a+b``); keep them whole.
+_FAILURE_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
+
+
+_INFRA_UNAVAILABLE_DETAIL = "screener error: private policy infrastructure unavailable"
+# Review failures that park as retryable but are not our infrastructure: the
+# reviewer model misbehaved (malformed tool call, unusable response,
+# self-inconsistent verdict, turn timeout), the submitted archive could not be
+# read, or the review outran its lease. They keep their exact reason code and
+# stay on the operator retry; only the private detail stops claiming an
+# infrastructure outage, which sent operators chasing the fleet for a model
+# fault (DrPresident v20, 2026-10-29).
+_MODEL_FAULT_CODE_PREFIXES = (
+    "source-review-model-",
+    "source-review-inconsistent-verdict",
+)
+_ARCHIVE_UNREADABLE_CODE = "source-review-archive-invalid"
+# L2 ran past its deadline: the layer's own ``timeout_seconds`` or the attempt
+# lease, whichever is earlier. The subcode names which one fired.
+_LATE_RESULT_CODE = "l2-late-result"
+
+
+def _retryable_detail(reason_code: str | None) -> str:
+    """Name a parked retryable failure's owner without claiming an outage."""
+    if reason_code is not None and reason_code.startswith(_MODEL_FAULT_CODE_PREFIXES):
+        return "screener error: private source review model fault, not infrastructure"
+    if reason_code == _ARCHIVE_UNREADABLE_CODE:
+        return "screener error: private source review could not read the archive"
+    if reason_code == _LATE_RESULT_CODE:
+        return "screener error: private review ran past its review deadline"
+    return _INFRA_UNAVAILABLE_DETAIL
+
+
+def _failure_subcode_suffix(subcode: str | None) -> str:
+    """Render a failure subcode for the private detail, or nothing if unsafe."""
+    if subcode is None:
+        return ""
+    normalized = subcode.strip().lower()
+    if not _FAILURE_SUBCODE_RE.fullmatch(normalized):
+        return ""
+    return f" (subcode={normalized})"
+
+
+def source_review_low_clearance_allowed(
+    observation: SourceReviewObservation, *, policy_version: int
+) -> bool:
+    """Require a source clearance certificate at every v13 admission path."""
+    return bool(
+        observation.ok
+        and observation.risk_level == "low"
+        and (
+            policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+            or observation.clearance_certified
+        )
+    )
 
 
 ChallengeRunner = Callable[
@@ -272,6 +382,15 @@ class PolicyContext:
     health_elapsed_ms: int
     run_challenge: ChallengeRunner
     review_source: SourceReviewRunner | None = None
+    policy_version: int = SCREENING_POLICY_VERSION
+
+    def __post_init__(self) -> None:
+        if not (
+            SCREENING_FLOOR_POLICY_VERSION
+            <= self.policy_version
+            <= SCREENING_POLICY_VERSION
+        ):
+            raise ValueError("policy context version is unsupported by this worker")
 
 
 @dataclass(frozen=True)
@@ -282,6 +401,7 @@ class ModuleResult:
     review_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     review_notes: tuple[Mapping[str, object], ...] = ()
+    failure_subcode: str | None = None
 
 
 class PolicyModule(Protocol):
@@ -329,18 +449,17 @@ class PolicyManifest:
 
 
 CORE_ONLY_MANIFEST = PolicyManifest(rotation_id="v8-core-build-health-no-run")
+# Preserve the stored Backroom rotation identifiers during the rollout. The
+# manifest digest commits the changed module list; the historical identifier
+# alone must never be treated as proof that an oracle ran.
 DEFAULT_V8_MANIFEST = PolicyManifest(
     rotation_id="v8-luna-source-review-behavioral-oracle",
-    module_specs=(
-        {"kind": "agentic_source_review", "id": "luna-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
-    ),
+    module_specs=({"kind": "agentic_source_review", "id": "luna-source-review"},),
 )
 DEFAULT_L2_MANIFEST = PolicyManifest(
     rotation_id="v8-luna-terra-sol-l2-source-review-behavioral-oracle",
     module_specs=(
         {"kind": "agentic_source_review", "id": "luna-terra-sol-source-review"},
-        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
     ),
 )
 
@@ -366,13 +485,16 @@ def core_decision(
     code: str,
     summary: str,
     detail: str,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> ScreeningDecision:
-    """Build an objective stable-core result under the current policy."""
+    """Build an objective stable-core result under one supported policy."""
     return ScreeningDecision(
         outcome=outcome,
         detail=detail,
         manifest_digest=CORE_ONLY_MANIFEST.digest,
         evidence=(PolicyEvidence("stable-core", code, summary),),
+        policy_version=policy_version,
+        reason_code=code,
     )
 
 
@@ -550,9 +672,65 @@ class SourceFingerprintTriageModule(_BaseModule):
         )
 
 
+# ``adjudicator.ADJUDICATOR_KEY_UNAVAILABLE_CODE``, spelled out here as the
+# sibling ``adjudicator-unavailable`` is: the court's API key file on this node
+# was unusable. The key is read before the archive, so no submission reaches it.
+_COURT_KEY_UNAVAILABLE = "adjudicator-key-unavailable"
+# The reason code for that case. Fleet-owned, so Platform retries it
+# automatically (``INFRA_AUTO_RETRY_REASON_CODES``, #2449); keep it distinct from
+# ``source-review-unavailable``, which an archive the court cannot open or read,
+# or a screen whose source reviewer never started, also produces and which
+# therefore stays on the operator retry.
+SOURCE_REVIEW_KEY_UNAVAILABLE_CODE = SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE
+
+
 def _court_unavailable(adjudication: Mapping[str, object]) -> bool:
-    """True when the court never started: no key file or unreadable archive."""
-    return adjudication.get("escalation_code") == "adjudicator-unavailable"
+    """True when the court never started: no usable key or unreadable archive."""
+    return adjudication.get("escalation_code") in {
+        "adjudicator-unavailable",
+        _COURT_KEY_UNAVAILABLE,
+    }
+
+
+def _court_unavailable_evidence(
+    module_id: str, adjudication: Mapping[str, object]
+) -> PolicyEvidence:
+    """Name a node key failure apart from an archive the court could not open."""
+    if adjudication.get("escalation_code") == _COURT_KEY_UNAVAILABLE:
+        return PolicyEvidence(
+            module_id,
+            SOURCE_REVIEW_KEY_UNAVAILABLE_CODE,
+            "private source-review adjudication key was unavailable on this node",
+        )
+    return PolicyEvidence(
+        module_id,
+        "source-review-unavailable",
+        "private source-review adjudication was unavailable",
+    )
+
+
+_ADJUDICATED_CODE = "source-review-adjudicated"
+_ADJUDICATION_REFUSED_CODE = "source-review-adjudication-refused"
+# Worker evidence on a court-adjudicated hold. Platform derives its stored
+# ``adjudicated-source-review-*`` reason_code later; the worker never emits it.
+HELD_SOURCE_REVIEW_CODES = frozenset({_ADJUDICATED_CODE, _ADJUDICATION_REFUSED_CODE})
+
+
+def is_held_source_review(decision: ScreeningDecision) -> bool:
+    """True for a v13 court reject or refusal hold that keeps its built image.
+
+    The image is supplemental evidence bound to the attempt, never to the
+    agent. A court ``clear`` is excluded: it only stays held pending v13
+    verification or on an image-provenance warning, where the image is the
+    thing in doubt.
+    """
+    return (
+        decision.policy_version == 13
+        and decision.outcome == ScreeningOutcome.QUARANTINE
+        and decision.adjudication is not None
+        and decision.adjudication.get("decision") != "clear"
+        and any(item.code in HELD_SOURCE_REVIEW_CODES for item in decision.evidence)
+    )
 
 
 def _refusal_evidence(
@@ -562,8 +740,17 @@ def _refusal_evidence(
     code = str(adjudication.get("escalation_code") or "court-refused")
     return PolicyEvidence(
         module_id,
-        "source-review-adjudication-refused",
+        _ADJUDICATION_REFUSED_CODE,
         f"automated adjudication refused ({code}); held for operator review",
+    )
+
+
+def _awaiting_v13_verification_evidence(module_id: str) -> PolicyEvidence:
+    """Mark a v13 court clear held until Platform verifies source-only clears."""
+    return PolicyEvidence(
+        module_id,
+        "source-review-awaiting-v13-verification",
+        "source adjudication held pending v13 verification",
     )
 
 
@@ -591,11 +778,25 @@ class AgenticSourceReviewModule(_BaseModule):
             evidence = (
                 PolicyEvidence(
                     self.module_id,
-                    "source-review-adjudicated",
+                    _ADJUDICATED_CODE,
                     "final source-review adjudication completed",
                 ),
             )
             if decision == "clear":
+                if context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION:
+                    # Platform does not yet admit a v13 source-only clear on
+                    # its completion receipt. Transport it as a held
+                    # quarantine so the signed court result reaches review.
+                    return ModuleResult(
+                        ModuleDisposition.QUARANTINE,
+                        (
+                            *evidence,
+                            _awaiting_v13_verification_evidence(self.module_id),
+                        ),
+                        finding=observation.finding,
+                        adjudication=adjudication,
+                        review_notes=review_notes,
+                    )
                 return ModuleResult(
                     ModuleDisposition.CLEAR,
                     evidence,
@@ -615,19 +816,13 @@ class AgenticSourceReviewModule(_BaseModule):
                     review_notes=review_notes,
                 )
             if _court_unavailable(adjudication):
-                # The court could not even start on this node (no key file,
-                # unreadable archive). That is node infrastructure, not a
-                # verdict: let the platform retry within the attempt budget
-                # instead of parking the miner behind a broken worker.
+                # The court could not even start (no usable key on this node,
+                # or an unreadable archive). That is not a verdict. Only the
+                # key case is provably the node's, so only it carries the code
+                # Platform retries automatically.
                 return ModuleResult(
                     ModuleDisposition.RETRYABLE_INFRA,
-                    (
-                        PolicyEvidence(
-                            self.module_id,
-                            "source-review-unavailable",
-                            "private source-review adjudication was unavailable",
-                        ),
-                    ),
+                    (_court_unavailable_evidence(self.module_id, adjudication),),
                     finding=observation.finding,
                     review_notes=review_notes,
                 )
@@ -658,6 +853,7 @@ class AgenticSourceReviewModule(_BaseModule):
                     finding=observation.finding,
                     review_audit=observation.review_audit,
                     review_notes=review_notes,
+                    failure_subcode=observation.failure_subcode,
                 )
             disposition = (
                 ModuleDisposition.INCONCLUSIVE
@@ -673,11 +869,30 @@ class AgenticSourceReviewModule(_BaseModule):
                         "private source review did not produce a usable result",
                     ),
                 ),
+                review_audit=observation.review_audit,
                 review_notes=review_notes,
+                failure_subcode=observation.failure_subcode,
             )
         if observation.risk_level == "low" and set(observation.categories) <= (
             {"none"} | _ADVISORY_SOURCE_CATEGORIES
         ):
+            if not source_review_low_clearance_allowed(
+                observation, policy_version=context.policy_version
+            ):
+                return ModuleResult(
+                    ModuleDisposition.QUARANTINE,
+                    (
+                        PolicyEvidence(
+                            self.module_id,
+                            "source-review-clearance-unproven",
+                            "private source review did not certify low-risk clearance",
+                            observation.finding_digest,
+                        ),
+                    ),
+                    finding=observation.finding,
+                    review_audit=observation.review_audit,
+                    review_notes=review_notes,
+                )
             # Keep the low-risk finding: if another module later quarantines,
             # clean or advisory-only source review is useful operator context.
             # Advisory correctness/build observations are not anti-cheat
@@ -699,7 +914,9 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
                 review_notes=review_notes,
             )
-        code, summary = _source_review_reason(observation.categories)
+        code, summary = _source_review_reason_for(
+            observation, policy_version=context.policy_version
+        )
         return ModuleResult(
             ModuleDisposition.TRIPWIRE,
             (
@@ -819,11 +1036,15 @@ _ORACLE_SYSTEM_PROMPT = (
     "only when it is the right action for the user's request."
 )
 
-# The full production tool catalog by name (dittobench-datagen catalog). The
-# oracle offers the SAME catalog a scored tool case does, so tool count and names
-# are not a tell; a two-tool oracle was trivially separable from scored traffic.
-# Kept in sync with the catalog; a generic query/argument schema is sufficient
-# because the harness only needs the names to declare tools to the model.
+# The full production tool catalog by name (dittobench-datagen
+# catalog.CatalogForVersion(13), seed-free surface). The oracle offers the SAME
+# catalog a scored tool case does, so tool count and names are not a tell; a
+# two-tool oracle was trivially separable from scored traffic. Per-seed coined
+# decoys are advertised only on the scored wire and are deliberately absent
+# here. A generic query/argument schema is sufficient because the harness only
+# needs the names to declare tools to the model.
+# GENERATED by research/dittobench-datagen:
+#   go run ./cmd/catalogmirror -bench-version 13 -format python
 _ORACLE_TOOL_NAMES: tuple[str, ...] = (
     "create_image",
     "edit_image",
@@ -835,18 +1056,13 @@ _ORACLE_TOOL_NAMES: tuple[str, ...] = (
     "search_memories_in_subjects",
     "artifacts",
     "execute_agent_job",
-    "execute_agent_workflow",
-    "get_agent_job_status",
+    "run_code",
+    "search_tools",
     "list_agent_jobs",
     "file_feedback_for_team",
     "set_theme",
-    "set_main_model",
     "set_reasoning_effort",
     "set_chat_tool_preferences",
-    "create_automation",
-    "list_automations",
-    "create_recipe",
-    "apply_recipe",
     "discover_capabilities",
     "save_memory",
     "update_memory",
@@ -856,6 +1072,10 @@ _ORACLE_TOOL_NAMES: tuple[str, ...] = (
     "gmail_send",
     "set_accent_color",
     "set_chat_font",
+    "create_workflow",
+    "list_workflows",
+    "list_schedules",
+    "run_workflow",
 )
 
 
@@ -1092,6 +1312,9 @@ class PolicyEngine:
         review_notes: tuple[Mapping[str, object], ...] = ()
         selected = False
         pass_inconclusive = False
+        selected_reason_code: str | None = None
+        pass_inconclusive_code: str | None = None
+        pass_inconclusive_subcode: str | None = None
         # The mechanical lane does not collect source-review evidence. The
         # selector phase owns that work (source review, fingerprint, and timing
         # tripwires), so skip it entirely. Mechanical failures from the gate's
@@ -1108,6 +1331,14 @@ class PolicyEngine:
                 if terminal is not None:
                     if terminal == ScreeningOutcome.PASS_INCONCLUSIVE:
                         pass_inconclusive = True
+                        pass_inconclusive_code = pass_inconclusive_code or (
+                            result.evidence[0].code
+                            if result.evidence
+                            else "source-review-inconclusive"
+                        )
+                        pass_inconclusive_subcode = (
+                            pass_inconclusive_subcode or result.failure_subcode
+                        )
                         continue
                     return self._decision(
                         terminal,
@@ -1116,8 +1347,30 @@ class PolicyEngine:
                         review_audit=review_audit,
                         adjudication=adjudication,
                         review_notes=review_notes,
+                        policy_version=context.policy_version,
+                        reason_code=(
+                            (
+                                # A v13 court clear is held by the explicit
+                                # verification requirement appended by this module.
+                                result.evidence[-1].code
+                                if result.adjudication is not None
+                                and result.adjudication.get("decision") == "clear"
+                                and context.policy_version
+                                >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                                else result.evidence[0].code
+                            )
+                            if result.evidence
+                            else f"policy-{terminal.value.replace('_', '-')}"
+                        ),
+                        failure_subcode=result.failure_subcode,
                     )
-                selected = selected or result.disposition == ModuleDisposition.TRIPWIRE
+                if result.disposition == ModuleDisposition.TRIPWIRE:
+                    selected = True
+                    selected_reason_code = selected_reason_code or (
+                        result.evidence[0].code
+                        if result.evidence
+                        else "source-finding-held"
+                    )
 
         # Mechanical admission proves that the submitted artifact can be
         # validated, built, started, isolated, and exported. It deliberately
@@ -1127,20 +1380,39 @@ class PolicyEngine:
         # here made an otherwise successful image build "inconclusive" and put
         # it into the full lease backoff before validators could ever score it.
         if build_only:
-            return self._decision(ScreeningOutcome.PASS, evidence, finding)
+            return self._decision(
+                ScreeningOutcome.PASS,
+                evidence,
+                finding,
+                policy_version=context.policy_version,
+            )
 
-        # Challenge-phase modules run on every full review, decoupled from the
-        # selector tripwire. The always-on behavioral oracle lives here so a
-        # harness cannot behave only during a ~5% audit. It still runs for a
-        # qualifying submission's deferred review; mechanical admission above
-        # only establishes that an image is ready for validator scoring.
-        # Targon runtime smoke has no isolated fake-gateway sidecar, so the
-        # oracle is skipped until a screener-to-rental prompt tool exists.
-        challenges = (
-            ()
-            if skip_challenges
-            else tuple(m for m in self.modules if m.phase == "challenge")
+        # A challenge runs only when an operator explicitly includes one in a
+        # private manifest. The built-in admission profiles are source-only;
+        # an absent challenge must not turn a completed source review into an
+        # inconclusive outcome.
+        configured_challenges = tuple(
+            module for module in self.modules if module.phase == "challenge"
         )
+        if skip_challenges and configured_challenges:
+            evidence.append(
+                PolicyEvidence(
+                    "policy-engine",
+                    "challenge-inconclusive",
+                    "explicitly configured behavioral audit was unavailable",
+                )
+            )
+            return self._decision(
+                ScreeningOutcome.INCONCLUSIVE,
+                evidence,
+                finding,
+                review_audit=review_audit,
+                adjudication=adjudication,
+                review_notes=review_notes,
+                policy_version=context.policy_version,
+                reason_code="challenge-inconclusive",
+            )
+        challenges = () if skip_challenges else configured_challenges
         cleared = False
         for module in challenges:
             result = await module.evaluate(context)
@@ -1151,18 +1423,18 @@ class PolicyEngine:
             review_notes = (*review_notes, *result.review_notes)
             terminal = _module_terminal(result.disposition)
             if terminal is not None:
-                # L4 may already have made a signed, evidence-bound clearance
-                # from the retained source-review ledger. A later transport
-                # failure in the auxiliary behavioral oracle has no response or
-                # gateway call to weigh against that verdict, so it must not
-                # park an otherwise-complete review for an operator retry.
+                # Historical policy allowed an evidence-bound source-review L4
+                # clearance to settle an auxiliary oracle transport failure.
+                # Explicit challenge manifests retain their own result; a
+                # source clearance never silently overrides an observed fault.
                 #
-                # Keep this exception narrow: a usable oracle response with
+                # Keep the legacy exception narrow: a usable oracle response with
                 # insufficient calls, a wrong token, or an implausibly fast
                 # answer remains a distinct observation on its normal
                 # inconclusive/quarantine path.
                 if (
-                    terminal == ScreeningOutcome.INCONCLUSIVE
+                    context.policy_version < STRICT_TWO_OUTCOME_POLICY_VERSION
+                    and terminal == ScreeningOutcome.INCONCLUSIVE
                     and isinstance(module, BehavioralOracleModule)
                     and result.evidence
                     and result.evidence[-1].code == "challenge-transport-failure"
@@ -1176,6 +1448,7 @@ class PolicyEngine:
                         review_audit=review_audit,
                         adjudication=adjudication,
                         review_notes=review_notes,
+                        policy_version=context.policy_version,
                     )
                 return self._decision(
                     terminal,
@@ -1184,6 +1457,14 @@ class PolicyEngine:
                     review_audit=review_audit,
                     adjudication=adjudication,
                     review_notes=review_notes,
+                    policy_version=context.policy_version,
+                    reason_code=(
+                        # A pack can record earlier successful challenges; its
+                        # terminal observation is the last record in this module.
+                        result.evidence[-1].code
+                        if result.evidence
+                        else f"challenge-{terminal.value.replace('_', '-')}"
+                    ),
                 )
             cleared = cleared or (
                 module.clears_selection
@@ -1201,9 +1482,8 @@ class PolicyEngine:
                 evidence.append(
                     PolicyEvidence(
                         "policy-engine",
-                        "audit-awaiting-private-challenge",
-                        "tripwire selected quarantine until a private challenge "
-                        "is available",
+                        "source-finding-held",
+                        "source finding held for evidence-bound review",
                     )
                 )
             return self._decision(
@@ -1213,16 +1493,25 @@ class PolicyEngine:
                 review_audit=review_audit,
                 adjudication=adjudication,
                 review_notes=review_notes,
+                policy_version=context.policy_version,
+                reason_code=selected_reason_code,
             )
 
         if pass_inconclusive:
             return self._decision(
-                ScreeningOutcome.PASS_INCONCLUSIVE,
+                (
+                    ScreeningOutcome.INCONCLUSIVE
+                    if context.policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                    else ScreeningOutcome.PASS_INCONCLUSIVE
+                ),
                 evidence,
                 finding,
                 review_audit=review_audit,
                 adjudication=adjudication,
                 review_notes=review_notes,
+                policy_version=context.policy_version,
+                reason_code=pass_inconclusive_code,
+                failure_subcode=pass_inconclusive_subcode,
             )
 
         return self._decision(
@@ -1232,6 +1521,7 @@ class PolicyEngine:
             review_audit=review_audit,
             adjudication=adjudication,
             review_notes=review_notes,
+            policy_version=context.policy_version,
         )
 
     def _decision(
@@ -1243,17 +1533,25 @@ class PolicyEngine:
         review_audit: Mapping[str, object] | None = None,
         adjudication: Mapping[str, object] | None = None,
         review_notes: tuple[Mapping[str, object], ...] = (),
+        policy_version: int = SCREENING_POLICY_VERSION,
+        reason_code: str | None = None,
+        failure_subcode: str | None = None,
     ) -> ScreeningDecision:
-        bounded = tuple(evidence[:_MAX_EVIDENCE])
+        bounded = _bounded_reason_evidence(evidence, reason_code=reason_code)
         detail = ""
         if outcome == ScreeningOutcome.RETRYABLE_INFRA:
-            detail = "screener error: private policy infrastructure unavailable"
+            detail = _retryable_detail(reason_code)
         elif outcome == ScreeningOutcome.QUARANTINE:
             detail = "private policy quarantine pending operator review"
         elif outcome == ScreeningOutcome.INCONCLUSIVE:
             detail = "private policy audit inconclusive"
         elif outcome == ScreeningOutcome.PASS_INCONCLUSIVE:
             detail = "bounded source review inconclusive; admitted for scoring"
+        if detail and outcome != ScreeningOutcome.QUARANTINE:
+            # A parked review otherwise reaches Platform with no hint of why
+            # it stopped, so a deterministic provider rejection and a transient
+            # outage both read as the same opaque code.
+            detail += _failure_subcode_suffix(failure_subcode)
         # An enforced source adjudication may clear its module before a later,
         # independent module selects a different terminal outcome.  In that
         # case the adjudication is no longer the authority for the overall
@@ -1273,18 +1571,28 @@ class PolicyEngine:
             review_audit=review_audit,
             adjudication=adjudication,
             review_notes=review_notes,
+            policy_version=policy_version,
+            reason_code=reason_code,
         )
 
     def malicious_preflight_decision(
-        self, observation: SourceReviewObservation
+        self,
+        observation: SourceReviewObservation,
+        *,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         """Compatibility entrypoint for a high-risk pre-execution lead."""
         if not observation.ok or observation.risk_level != "high":
             raise ValueError("malicious preflight requires a high-risk finding")
-        return self.preexecution_source_decision(observation)
+        return self.preexecution_source_decision(
+            observation, policy_version=policy_version
+        )
 
     def preexecution_source_decision(
-        self, observation: SourceReviewObservation
+        self,
+        observation: SourceReviewObservation,
+        *,
+        policy_version: int = SCREENING_POLICY_VERSION,
     ) -> ScreeningDecision:
         """Fail closed on an unresolved pre-execution lead without rejecting it."""
         adjudication = observation.adjudication
@@ -1297,27 +1605,35 @@ class PolicyEngine:
             if court_decision not in {"clear", "reject"} and _court_unavailable(
                 adjudication
             ):
+                unavailable = _court_unavailable_evidence(
+                    "agentic-preexecution-review", adjudication
+                )
                 return self._decision(
                     ScreeningOutcome.RETRYABLE_INFRA,
-                    (
-                        PolicyEvidence(
-                            "agentic-preexecution-review",
-                            "source-review-unavailable",
-                            "private source-review adjudication was unavailable",
-                        ),
-                    ),
+                    (unavailable,),
                     observation.finding,
                     review_audit=observation.review_audit,
                     review_notes=observation.notes,
+                    policy_version=policy_version,
+                    reason_code=unavailable.code,
                 )
             evidence: tuple[PolicyEvidence, ...] = (
                 PolicyEvidence(
                     "agentic-preexecution-review",
-                    "source-review-adjudicated",
+                    _ADJUDICATED_CODE,
                     "final source-review adjudication completed",
                 ),
             )
-            if court_decision not in {"clear", "reject"}:
+            held_clear = (
+                court_decision == "clear"
+                and policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+            )
+            if held_clear:
+                evidence = (
+                    *evidence,
+                    _awaiting_v13_verification_evidence("agentic-preexecution-review"),
+                )
+            elif court_decision not in {"clear", "reject"}:
                 evidence = (
                     *evidence,
                     _refusal_evidence("agentic-preexecution-review", adjudication),
@@ -1325,7 +1641,7 @@ class PolicyEngine:
             return self._decision(
                 (
                     ScreeningOutcome.PASS
-                    if court_decision == "clear"
+                    if court_decision == "clear" and not held_clear
                     else ScreeningOutcome.QUARANTINE
                 ),
                 evidence,
@@ -1333,6 +1649,10 @@ class PolicyEngine:
                 review_audit=observation.review_audit,
                 adjudication=adjudication,
                 review_notes=observation.notes,
+                policy_version=policy_version,
+                reason_code=(
+                    evidence[-1].code if held_clear else "source-review-adjudicated"
+                ),
             )
         if not observation.ok:
             retryable = observation.failure_disposition == "retryable_infra"
@@ -1341,7 +1661,11 @@ class PolicyEngine:
                 (
                     ScreeningOutcome.RETRYABLE_INFRA
                     if retryable
-                    else ScreeningOutcome.PASS_INCONCLUSIVE
+                    else (
+                        ScreeningOutcome.INCONCLUSIVE
+                        if policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+                        else ScreeningOutcome.PASS_INCONCLUSIVE
+                    )
                     if pass_inconclusive
                     else ScreeningOutcome.INCONCLUSIVE
                 ),
@@ -1350,7 +1674,13 @@ class PolicyEngine:
                         "agentic-preexecution-review",
                         observation.error_code or "source-review-inconclusive",
                         (
-                            "private source review infrastructure was unavailable"
+                            (
+                                "private source review infrastructure was unavailable"
+                                if _retryable_detail(observation.error_code)
+                                == _INFRA_UNAVAILABLE_DETAIL
+                                else "private source review did not produce a "
+                                "usable result"
+                            )
                             if retryable
                             else "private source review could not resolve the lead"
                         ),
@@ -1359,10 +1689,34 @@ class PolicyEngine:
                 observation.finding,
                 review_audit=observation.review_audit,
                 review_notes=observation.notes,
+                policy_version=policy_version,
+                reason_code=observation.error_code or "source-review-inconclusive",
+                failure_subcode=observation.failure_subcode,
+            )
+        if observation.risk_level == "low" and not source_review_low_clearance_allowed(
+            observation, policy_version=policy_version
+        ):
+            return self._decision(
+                ScreeningOutcome.QUARANTINE,
+                (
+                    PolicyEvidence(
+                        "agentic-preexecution-review",
+                        "source-review-clearance-unproven",
+                        "private source review did not certify a low-risk clearance",
+                        observation.finding_digest,
+                    ),
+                ),
+                observation.finding,
+                review_audit=observation.review_audit,
+                review_notes=observation.notes,
+                policy_version=policy_version,
+                reason_code="source-review-clearance-unproven",
             )
         if observation.risk_level not in {"medium", "high"}:
             raise ValueError("pre-execution source decision requires elevated risk")
-        code, summary = _source_review_reason(observation.categories)
+        code, summary = _source_review_reason_for(
+            observation, policy_version=policy_version
+        )
         return self._decision(
             ScreeningOutcome.QUARANTINE,
             (
@@ -1375,6 +1729,8 @@ class PolicyEngine:
             ),
             observation.finding,
             review_notes=observation.notes,
+            policy_version=policy_version,
+            reason_code=code,
         )
 
 
@@ -1385,7 +1741,7 @@ def load_policy_engine(
     manifest_profile: str | None = None,
     rotation_id: str | None = None,
 ) -> PolicyEngine:
-    """Load a strict private manifest, or production v8 Luna source review."""
+    """Load a strict private manifest, or the built-in source review."""
     if manifest_path is None:
         profile = manifest_profile or ("l1_l2" if l2_mode == "enforce" else "l1")
         if profile == "core":
@@ -1408,7 +1764,6 @@ def load_policy_engine(
                         else "luna-source-review"
                     )
                 ),
-                BehavioralOracleModule(module_id="v8-behavioral-oracle"),
             ),
         )
     raw = _read_json(Path(manifest_path), max_bytes=_MAX_MANIFEST_BYTES)
@@ -1451,6 +1806,8 @@ class ReviewJournal:
         context: PolicyContext,
         decision: ScreeningDecision,
     ) -> None:
+        if decision.policy_version != context.policy_version:
+            raise ValueError("review journal policy version mismatch")
         if self._path is None:
             return
         if decision.outcome not in {
@@ -1502,6 +1859,37 @@ def _module_terminal(disposition: ModuleDisposition) -> ScreeningOutcome | None:
     }.get(disposition)
 
 
+CONFIRMED_VIOLATION_CODE = SOURCE_REVIEW_CONFIRMED_VIOLATION
+
+
+def _source_review_reason_for(
+    observation: SourceReviewObservation, *, policy_version: int
+) -> tuple[str, str]:
+    """Name a confirmed v13 breach for Platform's reject, else the held lead."""
+    if (
+        policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+        and observation.violation_certified
+        and _names_invariant_breach(observation.finding)
+    ):
+        return (
+            CONFIRMED_VIOLATION_CODE,
+            "independent L2 and L3 source review confirmed an invariant breach",
+        )
+    return _source_review_reason(observation.categories)
+
+
+def _names_invariant_breach(finding: Mapping[str, object] | None) -> bool:
+    try:
+        parsed = SourceReviewFinding.model_validate(finding)
+    except (TypeError, ValueError):
+        return False
+    assessment = parsed.invariant_assessment
+    return assessment is not None and any(
+        decision.disposition == SourceReviewInvariantDisposition.BREACH
+        for decision in assessment.decisions
+    )
+
+
 def _source_review_reason(categories: Sequence[str]) -> tuple[str, str]:
     category_set = set(categories)
     if category_set & _MALICIOUS_SOURCE_CATEGORIES:
@@ -1527,7 +1915,7 @@ def _source_review_reason(categories: Sequence[str]) -> tuple[str, str]:
         )
     return (
         "source-safety-behavioral-risk",
-        "private source analysis selected a bounded behavioral audit",
+        "private source analysis found a behavioral-integrity risk",
     )
 
 
@@ -1697,6 +2085,7 @@ def _is_sha256(value: str) -> bool:
 __all__ = [
     "CORE_ONLY_MANIFEST",
     "DEFAULT_V8_MANIFEST",
+    "HELD_SOURCE_REVIEW_CODES",
     "ChallengeObservation",
     "PolicyContext",
     "PolicyEngine",
@@ -1707,5 +2096,6 @@ __all__ = [
     "ScreeningDecision",
     "ScreeningOutcome",
     "core_decision",
+    "is_held_source_review",
     "load_policy_engine",
 ]

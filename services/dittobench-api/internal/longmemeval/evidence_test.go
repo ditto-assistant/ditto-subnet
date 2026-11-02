@@ -408,7 +408,7 @@ func TestEvidenceDigestIsCanonicalAcrossProviderInputOrder(t *testing.T) {
 	if got != want {
 		t.Fatalf("provider input order moved digest: got %s want %s", got, want)
 	}
-	const positiveEvidenceDigest = "7194baa74fcd68d6ea3466b95ba2b9f5e995e0138151b57697382f009b4b6197"
+	const positiveEvidenceDigest = "d8796dc8f09802fdd23264d8e3cd387b9f8a294a881722e4fda940c4ebcf53de"
 	if want != positiveEvidenceDigest {
 		t.Fatalf("positive reader/judge evidence bytes drifted: got %s want %s", want, positiveEvidenceDigest)
 	}

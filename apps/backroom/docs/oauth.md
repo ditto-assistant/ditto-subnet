@@ -17,6 +17,7 @@ The Worker requires these server-side bindings:
 - `GOOGLE_CLIENT_SECRET`
 - `SESSION_SECRET` (at least 32 random characters)
 - `BACKROOM_ADMIN_EMAILS` (comma-separated `@omniaura.ai` administrators)
+- `BACKROOM_BLOCKED_EMAILS` (comma-separated identities denied on every request)
 - `DITTO_ADMIN_API_TOKEN` (the Platform admin bearer token)
 
 Google's `hd` request hint is not authorization. The callback verifies the ID
@@ -27,6 +28,11 @@ addresses in `BACKROOM_ADMIN_EMAILS` receive write access. The Platform still
 enforces its admin token on every operation and receives the signed-in email as
 `X-Admin-Actor` for audit attribution.
 
+An address in `BACKROOM_BLOCKED_EMAILS` is denied before its console session or
+MCP scopes are used. The check runs on every request, so adding an address
+revokes already-issued console sessions and makes existing or refresh-derived
+MCP access tokens unusable without waiting for their normal expiry.
+
 Sessions are intentionally bounded to 7 days. Removing an address from
 `BACKROOM_ADMIN_EMAILS` revokes write access on its next request because the
 binding is re-read every time. Disabling or deleting the underlying Google
@@ -36,3 +42,10 @@ the session cookie at the edge when immediate read revocation is required.
 
 Do not add `FIREBASE_API_KEY`, `DITTO_API_BASE_URL`, or the private
 `/api/v5/admin/backroom-access` endpoint to this deployment.
+
+Receipt observers use the exclusive `backroom:treasury:observe` grant described
+in `docs/mcp.md`. It has no ordinary read/write or artifact scopes and can only
+read an exact historical treasury revision or submit a verified receipt. Its
+write-level staff entitlement is checked at consent, issuance, refresh and
+every request against request-local bindings. Ordinary agent grants retain
+their existing consent, narrowing, expiration and revocation behavior.

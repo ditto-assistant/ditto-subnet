@@ -2,10 +2,10 @@
 
 This directory provides two related surfaces. Local `preview up` remains a
 loopback-only mock control and inference fault proxy; it does **not** launch
-Platform, dashboard, Backroom, a chain, scorer, or validator. Pull requests can
-also receive bounded cloud `stack` and `stack-copy` deployments through the
-trusted controller in `.github/workflows/preview-stack.yml`. Neither surface
-publishes a release or `compat-2`.
+Platform, dashboard, Backroom, a chain, scorer, or validator. A maintainer can
+also **dispatch** a bounded cloud `stack` or `stack-copy` deployment for an open
+pull request through `.github/workflows/preview-stack.yml`; nothing provisions a
+VM automatically. Neither surface publishes a release or `compat-2`.
 
 ## Profiles
 
@@ -15,11 +15,53 @@ publishes a release or `compat-2`.
 | `stack` | Isolated-stack requirements, including one localnet validator |
 | `stack-copy` | `stack` requirements plus a sanitized Postgres snapshot |
 
-Cloud stack previews run on credential-empty ephemeral GCE VMs. Eight atomic
-lease objects are the global admission limit: an update reuses its PR's slot, a
-ninth distinct PR fails closed, and close/TTL reconciliation deletes the VM.
-The controller comments dashboard, Platform, and isolated Backroom URLs only
-after readiness succeeds.
+Cloud stack previews run on credential-empty ephemeral GCE VMs, each currently
+an `e2-standard-8` costing roughly $0.28/hour. Eight atomic lease objects are
+the global admission limit: a re-dispatch reuses the slot its PR already holds,
+a ninth distinct PR fails closed. Reconciliation keeps a preview while its PR is
+open, up to an absolute 24-hour lease cap, and deletes it four hours after the
+PR closes or merges. The controller comments dashboard, Platform, and isolated
+Backroom URLs only after readiness succeeds.
+
+### Dispatching a stack preview
+
+Run **Publish stack preview** from the Actions tab on `main`, or:
+
+```bash
+gh workflow run preview-stack.yml -f pr=<number>                 # provision
+gh workflow run preview-stack.yml -f pr=<number> -f action=retire
+```
+
+`profile` defaults to `auto`, which picks `stack-copy` when the PR touches
+`apps/platform/alembic/` and `stack` otherwise; pass it explicitly to override.
+A push does not refresh a running preview -- dispatch again for a newer commit.
+These optional repository variables on the `preview-stack` environment tune the
+fleet without a code change: `GCP_PREVIEW_MACHINE_TYPE` (default
+`e2-standard-8`), `GCP_PREVIEW_DISK_SIZE` (`100GB`), `PREVIEW_LEASE_TTL_SECONDS`
+(`86400`), and `PREVIEW_CLOSED_GRACE_SECONDS` (`14400`; set `0` to retire the
+moment a PR closes).
+
+### The baked base image
+
+A cold VM spends most of its boot installing the Docker toolchain, pulling four
+compose images, and building five more from scratch, so
+`.github/workflows/preview-base-bake.yml` does that work nightly on one
+throwaway VM and captures the result as the `sn118-preview-base` GCE image
+family. Setting `GCP_PREVIEW_IMAGE_FAMILY` and `GCP_PREVIEW_IMAGE_PROJECT` puts
+previews on it; leaving them unset boots stock Ubuntu and is otherwise
+identical, which is what makes the bake optional rather than load-bearing.
+
+The bake VM boots the same `preview/cloud/startup.sh` a preview does -- its
+toolchain guard is exactly what lets a baked image skip apt -- and runs with no
+service account and no scopes, so default-branch build code on that VM has no
+more authority than PR code does on a preview. `preview/cloud/bake.sh` pulls and
+builds; it never starts a container.
+
+One constraint comes with it: a custom image reports `diskSizeGb` equal to the
+disk it was captured from, and a smaller `--boot-disk-size` is rejected
+outright. Keep `GCP_PREVIEW_DISK_SIZE` at or above `PREVIEW_BAKE_DISK_SIZE`
+(default `32GB`). Activation and the remaining knobs are in
+[`infra/terraform/stacks/gcp-preview/README.md`](../infra/terraform/stacks/gcp-preview/README.md).
 
 Backroom is an authenticated write control plane. It is only part of an
 isolated `stack` plan and must never receive production OAuth, session, MCP, or
@@ -98,13 +140,29 @@ API-reported immutable `pages.dev` deployment URL on the PR. The stable Pages
 branch is `pr-<number>`; each update replaces its branch alias while preserving
 exact-SHA deployment metadata. Fork PRs never enter the publisher.
 
-Same-repository PRs selected as `stack` or `stack-copy` use the narrowly
-allowlisted `pull_request_target` controller. It checks out only the default
-branch, re-reads the current PR head, acquires one of eight slots, then starts
-the exact SHA on a separate VM. PR code never runs on the privileged runner.
-The VM identity has no project roles and RFC1918 egress is denied. Close,
-profile changes, failed readiness, and the 24-hour TTL all tear down the VM and
-release its slot.
+A PR that is not dashboard-only never gets a `pages.dev` URL, so the publisher
+leaves one updating comment naming the resolved profiles and the
+`gh workflow run preview-stack.yml` dispatch that would provision what the
+change needs. The same comment covers a repository whose `preview` environment
+has no Pages credentials. It explains policy skips only -- a failed build or
+proof is already a red check -- and it is deleted once a later push does
+publish a URL, so an explanation never sits beside a live preview.
+
+Same-repository PRs get `stack` or `stack-copy` only from a dispatched run of
+the controller. Dispatching requires repository write access; the workflow runs
+on the default branch, refuses any other ref, and no workflow in this repository
+uses `pull_request_target`. The operator supplies only a PR number -- the head
+commit is resolved from the API, so it cannot be pointed at arbitrary code. The
+controller checks out only the default branch, acquires one of eight slots, then
+starts the exact SHA on a separate VM. PR code never runs on the privileged
+runner. The VM identity has no project roles and RFC1918 egress is denied. An
+explicit `action: retire` dispatch, failed readiness, the post-close grace, and
+the 24-hour lease cap all tear down the VM and release its slot.
+
+`.github/workflows/preview-base-bake.yml` is the only other privileged preview
+workflow. It is scheduled and dispatch-only, runs on the default branch under
+its own `preview-bake` environment, touches no PR and no PR code, and creates
+one credential-less VM that it deletes on every exit path.
 
 The preview proxy permits only `GET`/`HEAD` under `/api/v1/public/` and strips
 cookies and authorization. Trusted response headers restrict connections,

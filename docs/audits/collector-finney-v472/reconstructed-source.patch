@@ -1,0 +1,309 @@
+diff --git a/pallets/subtensor/src/coinbase/tao.rs b/pallets/subtensor/src/coinbase/tao.rs
+index d9c7d4359..b95dfd513 100644
+--- a/pallets/subtensor/src/coinbase/tao.rs
++++ b/pallets/subtensor/src/coinbase/tao.rs
+@@ -326,6 +326,84 @@ impl<T: Config> Pallet<T> {
+         id
+     }
+ 
++    /// A distinct, non-signing account per queue entry; unrelated holds/locks on
++    /// the registrant cannot spend or collateralize these funds.
++    pub fn network_registration_escrow_account(lock_id: u32) -> T::AccountId {
++        T::SubtensorPalletId::get().into_sub_account_truncating((*b"rges", lock_id))
++    }
++
++    pub fn escrow_network_registration_cost(
++        coldkey: &T::AccountId,
++        amount: TaoBalance,
++        lock_id: u32,
++    ) -> DispatchResult {
++        ensure!(
++            !NetworkRegistrationEscrow::<T>::contains_key(lock_id),
++            Error::<T>::BalanceWithdrawalError
++        );
++        let escrow = Self::network_registration_escrow_account(lock_id);
++        ensure!(&escrow != coldkey, Error::<T>::CannotUseSystemAccount);
++        let paid =
++            <T as Config>::Currency::transfer(coldkey, &escrow, amount, Preservation::Preserve)?;
++        ensure!(paid == amount, Error::<T>::CannotAffordLockCost);
++        NetworkRegistrationEscrow::<T>::insert(lock_id, (coldkey.clone(), amount));
++        Ok(())
++    }
++
++    /// Pay exactly the snapshotted price. Legacy locks are released only within
++    /// the caller's storage transaction, so a failed payment restores the lock.
++    pub fn pay_network_registration_cost(
++        coldkey: &T::AccountId,
++        netuid: NetUid,
++        amount: TaoBalance,
++        lock_id: Option<u32>,
++    ) -> Result<TaoBalance, DispatchError> {
++        if let Some(id) = lock_id {
++            if let Some((owner, reserved)) = NetworkRegistrationEscrow::<T>::get(id) {
++                ensure!(
++                    owner == *coldkey && reserved == amount,
++                    Error::<T>::BalanceWithdrawalError
++                );
++                let destination =
++                    Self::get_subnet_account_id(netuid).ok_or(Error::<T>::SubnetNotExists)?;
++                let paid = <T as Config>::Currency::transfer(
++                    &Self::network_registration_escrow_account(id),
++                    &destination,
++                    amount,
++                    Preservation::Expendable,
++                )?;
++                ensure!(paid == amount, Error::<T>::CannotAffordLockCost);
++                NetworkRegistrationEscrow::<T>::remove(id);
++                return Ok(paid);
++            }
++            Self::unlock_network_registration_cost(coldkey, id)?;
++        }
++        let paid = Self::transfer_tao_to_subnet(netuid, coldkey, amount)?;
++        ensure!(paid == amount, Error::<T>::CannotAffordLockCost);
++        Ok(paid)
++    }
++
++    #[frame_support::transactional]
++    pub fn refund_network_registration_cost(
++        coldkey: &T::AccountId,
++        lock_id: u32,
++    ) -> DispatchResult {
++        if let Some((owner, amount)) = NetworkRegistrationEscrow::<T>::get(lock_id) {
++            ensure!(owner == *coldkey, Error::<T>::BalanceWithdrawalError);
++            let refunded = <T as Config>::Currency::transfer(
++                &Self::network_registration_escrow_account(lock_id),
++                coldkey,
++                amount,
++                Preservation::Expendable,
++            )?;
++            ensure!(refunded == amount, Error::<T>::BalanceWithdrawalError);
++            NetworkRegistrationEscrow::<T>::remove(lock_id);
++        } else {
++            Self::unlock_network_registration_cost(coldkey, lock_id)?;
++        }
++        Ok(())
++    }
++
+     pub fn lock_network_registration_cost(
+         coldkey: &T::AccountId,
+         amount: BalanceOf<T>,
+diff --git a/pallets/subtensor/src/guards/check_rate_limits.rs b/pallets/subtensor/src/guards/check_rate_limits.rs
+index 4de1e5874..7d380c63d 100644
+--- a/pallets/subtensor/src/guards/check_rate_limits.rs
++++ b/pallets/subtensor/src/guards/check_rate_limits.rs
+@@ -180,7 +180,7 @@ mod tests {
+     };
+     use frame_system::Call as SystemCall;
+     use sp_core::U256;
+-    use sp_runtime::DispatchError;
++    use sp_runtime::{DispatchError, Saturating};
+     use subtensor_runtime_common::{MechId, NetUid, TaoBalance};
+ 
+     fn dispatch_with_ext(call: RuntimeCall, origin: RuntimeOrigin) -> DispatchResultWithPostInfo {
+@@ -371,7 +371,11 @@ mod tests {
+             System::set_block_number(200_u64);
+             SubtensorModule::set_network_last_lock_block(100);
+             let coldkey = U256::from(70);
+-            fund(coldkey, SubtensorModule::get_network_lock_cost().into());
++            fund(
++                coldkey,
++                SubtensorModule::get_network_lock_cost()
++                    .saturating_add(crate::tests::mock::ExistentialDeposit::get()),
++            );
+ 
+             assert_ok!(dispatch_with_ext(
+                 register_network_call(U256::from(71)),
+diff --git a/pallets/subtensor/src/lib.rs b/pallets/subtensor/src/lib.rs
+index 7b5cd9020..f5ccc18ad 100644
+--- a/pallets/subtensor/src/lib.rs
++++ b/pallets/subtensor/src/lib.rs
+@@ -2710,6 +2710,12 @@ pub mod pallet {
+     #[pallet::storage]
+     pub type NetworkRegistrationLockId<T: Config> = StorageValue<_, u32, ValueQuery>;
+ 
++    /// Escrow-backed queue entries. Absence denotes a pre-upgrade balance lock.
++    /// Keep the existing queue encoding unchanged so pending registrations remain decodable.
++    #[pallet::storage]
++    pub type NetworkRegistrationEscrow<T: Config> =
++        StorageMap<_, Identity, u32, (AccountIdOf<T>, TaoBalance), OptionQuery>;
++
+     // =======================================
+     // ==== VotingPower Storage  ====
+     // =======================================
+diff --git a/pallets/subtensor/src/macros/events.rs b/pallets/subtensor/src/macros/events.rs
+index 449f0ad4b..62c1fc2ab 100644
+--- a/pallets/subtensor/src/macros/events.rs
++++ b/pallets/subtensor/src/macros/events.rs
+@@ -879,5 +879,18 @@ mod events {
+             /// Estimated TAO value of the claimant's slices of those rows, left in the fund.
+             forfeited_tao_est: TaoBalance,
+         },
++
++        /// A queued registration failed terminally; its escrow was refunded or
++        /// its pre-upgrade balance lock was released. No subnet was created.
++        NetworkRegistrationCancelled {
++            /// Registrant whose escrow was refunded or legacy lock released.
++            coldkey: T::AccountId,
++            /// Intended subnet owner hotkey.
++            hotkey: T::AccountId,
++            /// Identifier of the cancelled queue entry.
++            lock_id: u32,
++            /// Settlement failure that triggered cancellation.
++            error: DispatchError,
++        },
+     }
+ }
+diff --git a/pallets/subtensor/src/subnets/dissolution.rs b/pallets/subtensor/src/subnets/dissolution.rs
+index 328d6c931..4ea9e6d3e 100644
+--- a/pallets/subtensor/src/subnets/dissolution.rs
++++ b/pallets/subtensor/src/subnets/dissolution.rs
+@@ -1,4 +1,5 @@
+ use super::*;
++use crate::weights::WeightInfo;
+ use frame_support::weights::WeightMeter;
+ use pallet_alpha_assets::AlphaAssetsInterface;
+ use subtensor_runtime_common::{NetUid, clear_prefix_with_meter};
+@@ -1047,9 +1048,9 @@ impl<T: Config> Pallet<T> {
+         let queue = NetworkRegistrationQueue::<T>::get();
+         let mut weight = db_weight.reads(1);
+ 
+-        for (index, info) in queue.iter().enumerate() {
+-            // just complete one registration at a time since on_idle just complete one network dissolve cleanup
+-            // if one registration fails, then try next one. it could be not align with the order of registration in the queue
++        // Bound work to one attempted settlement or cancellation per idle call.
++        // A failed entry must not create partial state or block later entries forever.
++        if let Some(info) = queue.first() {
+             match Self::set_new_network_state(
+                 &info.coldkey,
+                 &info.hotkey,
+@@ -1060,18 +1061,41 @@ impl<T: Config> Pallet<T> {
+                 Some(info.lock_id),
+             ) {
+                 Ok(post_info) => {
+-                    NetworkRegistrationQueue::<T>::mutate(|queue| queue.remove(index));
++                    NetworkRegistrationQueue::<T>::mutate(|queue| queue.remove(0));
+                     weight.saturating_accrue(db_weight.reads_writes(1, 1));
+                     weight.saturating_accrue(post_info.actual_weight.unwrap_or_else(Weight::zero));
+                     return weight;
+                 }
+-                Err(_) => {
++                Err(error) => {
++                    // Settlement is transactional even outside an extrinsic. Charge
++                    // attempted work as well as the refund/queue bookkeeping.
++                    weight.saturating_accrue(<T as Config>::WeightInfo::register_network());
++                    if error.error == Error::<T>::SubnetLimitReached.into() {
++                        return weight;
++                    }
+                     log::error!(
+                         "Failed to set new network state for coldkey: {:?}, hotkey: {:?}",
+                         info.coldkey,
+                         info.hotkey
+                     );
+-                    continue;
++                    // Leave the obligation recorded if refund itself fails. Never
++                    // discard an escrow claim without returning its principal.
++                    let cancelled: DispatchResult =
++                        frame_support::storage::with_storage_layer(|| {
++                            Self::refund_network_registration_cost(&info.coldkey, info.lock_id)?;
++                            NetworkRegistrationQueue::<T>::mutate(|queue| queue.remove(0));
++                            Self::deposit_event(Event::NetworkRegistrationCancelled {
++                                coldkey: info.coldkey.clone(),
++                                hotkey: info.hotkey.clone(),
++                                lock_id: info.lock_id,
++                                error: error.error,
++                            });
++                            Ok(())
++                        });
++                    weight.saturating_accrue(db_weight.reads_writes(5, 4));
++                    if let Err(refund_error) = cancelled {
++                        log::error!("Registration refund failed: {:?}", refund_error);
++                    }
+                 }
+             }
+         }
+diff --git a/pallets/subtensor/src/subnets/subnet.rs b/pallets/subtensor/src/subnets/subnet.rs
+index 613d3a510..293d3cd0e 100644
+--- a/pallets/subtensor/src/subnets/subnet.rs
++++ b/pallets/subtensor/src/subnets/subnet.rs
+@@ -144,6 +144,7 @@ impl<T: Config> Pallet<T> {
+     /// * `BalanceWithdrawalError`          – failed to lock balance.
+     /// * `InvalidIdentity`                 – supplied `identity` failed validation.
+     ///
++    #[frame_support::transactional]
+     pub fn do_register_network(
+         origin: OriginFor<T>,
+         hotkey: &T::AccountId,
+@@ -238,7 +239,7 @@ impl<T: Config> Pallet<T> {
+             let lock_id = NetworkRegistrationLockId::<T>::get();
+             ensure!(lock_id != u32::MAX, Error::<T>::LockIdOverFlow);
+ 
+-            Self::lock_network_registration_cost(&coldkey, lock_amount.into(), lock_id)?;
++            Self::escrow_network_registration_cost(&coldkey, lock_amount, lock_id)?;
+             Self::create_account_if_non_existent(&coldkey, hotkey)?;
+             NetworkRegistrationLockId::<T>::set(lock_id.saturating_add(1));
+ 
+@@ -282,6 +283,7 @@ impl<T: Config> Pallet<T> {
+         .map_err(|e| e.error)
+     }
+ 
++    #[frame_support::transactional]
+     pub fn set_new_network_state(
+         coldkey: &T::AccountId,
+         hotkey: &T::AccountId,
+@@ -323,11 +325,6 @@ impl<T: Config> Pallet<T> {
+             Self::get_next_netuid()
+         };
+ 
+-        // --- 2. Unlock the registration cost if the fund is locked.
+-        if let Some(lock_id) = lock_id {
+-            Self::unlock_network_registration_cost(coldkey, lock_id)?;
+-        }
+-
+         // A netuid identifies a new alpha asset generation after reuse. Clear any
+         // legacy counters defensively before creating that generation; normal
+         // dissolution cleanup performs the same reset after its last recycle.
+@@ -345,10 +342,10 @@ impl<T: Config> Pallet<T> {
+         log::debug!("init_new_network: {netuid_to_register:?}");
+ 
+         let actual_tao_lock_amount =
+-            Self::transfer_tao_to_subnet(netuid_to_register, coldkey, lock_amount.into())?;
++            Self::pay_network_registration_cost(coldkey, netuid_to_register, lock_amount, lock_id)?;
+         // `get_subnet_account_id` + coldkey/subnet balance transfer.
+-        weight.saturating_accrue(db_weight.reads(3));
+-        weight.saturating_accrue(db_weight.writes(2));
++        weight.saturating_accrue(db_weight.reads(4));
++        weight.saturating_accrue(db_weight.writes(3));
+         log::debug!("actual_tao_lock_amount: {actual_tao_lock_amount:?}");
+ 
+         // --- 3. Set the lock amount for use to determine pricing.
+@@ -395,14 +392,9 @@ impl<T: Config> Pallet<T> {
+ 
+         // Keep the locked TAO in the pool instead of recycling the excess.
+         // Size the pool alpha reserve from the total TAO reserve at that same price.
+-        let pool_initial_tao: TaoBalance = Self::get_network_min_lock();
+-        weight.saturating_accrue(db_weight.reads(1));
+-
+-        let total_pool_tao: TaoBalance = if actual_tao_lock_amount >= pool_initial_tao {
+-            actual_tao_lock_amount
+-        } else {
+-            pool_initial_tao
+-        };
++        // Never book a configured floor as liquidity that was not paid. In
++        // particular, the floor can change while a registration is queued.
++        let total_pool_tao = actual_tao_lock_amount;
+ 
+         let total_pool_alpha: AlphaBalance = U64F64::saturating_from_num(total_pool_tao.to_u64())
+             .safe_div(median_subnet_alpha_price)
+diff --git a/runtime/src/lib.rs b/runtime/src/lib.rs
+index 60494dce8..ca4082423 100644
+--- a/runtime/src/lib.rs
++++ b/runtime/src/lib.rs
+@@ -238,7 +238,7 @@ pub const VERSION: RuntimeVersion = RuntimeVersion {
+     //   `spec_version`, and `authoring_version` are the same between Wasm and native.
+     // This value is set to 100 to notify Polkadot-JS App (https://polkadot.js.org/apps) to use
+     //   the compatible custom types.
+-    spec_version: 471,
++    spec_version: 472,
+     impl_version: 1,
+     apis: RUNTIME_API_VERSIONS,
+     transaction_version: 1,

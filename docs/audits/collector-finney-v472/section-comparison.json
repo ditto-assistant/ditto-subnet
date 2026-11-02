@@ -1,0 +1,248 @@
+{
+  "live_expanded_size": 10468647,
+  "rebuilt_expanded_size": 10468652,
+  "live_sections": [
+    {
+      "id": 1,
+      "name": "",
+      "size": 1251,
+      "sha256": "06b1baa61e32d670af48f275124a37c58f62c90fb19c0ada5634f33b649aeb17"
+    },
+    {
+      "id": 2,
+      "name": "",
+      "size": 2199,
+      "sha256": "caaf4bf8e61c4f7a1d3f634d482766f31e1c1d5d0299835950971e663de429c1"
+    },
+    {
+      "id": 3,
+      "name": "",
+      "size": 7801,
+      "sha256": "5d0c6210ffa7498b1878202e0aa1742127cbdd4c0f9e8593a035e4aa7ba8a2f4"
+    },
+    {
+      "id": 4,
+      "name": "",
+      "size": 7,
+      "sha256": "d73a621532649f6ac456e9e6a6e13903df9a59188f199c37ce08dff2cc7b55aa"
+    },
+    {
+      "id": 6,
+      "name": "",
+      "size": 25,
+      "sha256": "ac9eecaded0611cd7f98ea1c81599940d4796431e05612afd7da6fa5821043a8"
+    },
+    {
+      "id": 7,
+      "name": "",
+      "size": 5333,
+      "sha256": "c8bb3ed7a9cf932745b151f1040314a2f0d3a436a304f81cb773d545e6333872"
+    },
+    {
+      "id": 9,
+      "name": "",
+      "size": 4201,
+      "sha256": "e5f658a110a9166e8f8450052425791e1d3d8854433af1318bf057d9ba541fdc"
+    },
+    {
+      "id": 10,
+      "name": "",
+      "size": 8726182,
+      "sha256": "d23d2248a4b2cfdee05c29a599709e8f8c2125071444c2c5a61e462333e08ec2"
+    },
+    {
+      "id": 11,
+      "name": "",
+      "size": 756828,
+      "sha256": "edf6240e244ebd4a459c5a4de42dc6b7be5387ea49dcf8b71a13aa3734b71d4f"
+    },
+    {
+      "id": 0,
+      "name": "name",
+      "size": 964283,
+      "sha256": "349efcacac83e18f4ce83e438cb390181eb0c06767c2945973a9455c10e1eb84"
+    },
+    {
+      "id": 0,
+      "name": "runtime_version",
+      "size": 64,
+      "sha256": "01bf859bae62a6b8d26152c6268895cbfce6ed2204998b0eb163e8a2ad0cfb29"
+    },
+    {
+      "id": 0,
+      "name": "runtime_apis",
+      "size": 313,
+      "sha256": "d0040257c3e2606d1ca167b206f0aba1f72e0d8e7dcca667728da12aa5e684b0"
+    },
+    {
+      "id": 0,
+      "name": "producers",
+      "size": 77,
+      "sha256": "b6ef0164f706cb97de048aa4bc411b0be6ce019b792865adeef307de98bd288b"
+    },
+    {
+      "id": 0,
+      "name": "target_features",
+      "size": 34,
+      "sha256": "b059df39c940a5ef5882ba4e2a2c2000b6d3fb5d0905a3cccfa7731dfa23cfdd"
+    }
+  ],
+  "rebuilt_sections": [
+    {
+      "id": 1,
+      "name": "",
+      "size": 1251,
+      "sha256": "06b1baa61e32d670af48f275124a37c58f62c90fb19c0ada5634f33b649aeb17"
+    },
+    {
+      "id": 2,
+      "name": "",
+      "size": 2199,
+      "sha256": "caaf4bf8e61c4f7a1d3f634d482766f31e1c1d5d0299835950971e663de429c1"
+    },
+    {
+      "id": 3,
+      "name": "",
+      "size": 7801,
+      "sha256": "5d0c6210ffa7498b1878202e0aa1742127cbdd4c0f9e8593a035e4aa7ba8a2f4"
+    },
+    {
+      "id": 4,
+      "name": "",
+      "size": 7,
+      "sha256": "d73a621532649f6ac456e9e6a6e13903df9a59188f199c37ce08dff2cc7b55aa"
+    },
+    {
+      "id": 6,
+      "name": "",
+      "size": 25,
+      "sha256": "ac9eecaded0611cd7f98ea1c81599940d4796431e05612afd7da6fa5821043a8"
+    },
+    {
+      "id": 7,
+      "name": "",
+      "size": 5333,
+      "sha256": "c8bb3ed7a9cf932745b151f1040314a2f0d3a436a304f81cb773d545e6333872"
+    },
+    {
+      "id": 9,
+      "name": "",
+      "size": 4201,
+      "sha256": "e5f658a110a9166e8f8450052425791e1d3d8854433af1318bf057d9ba541fdc"
+    },
+    {
+      "id": 10,
+      "name": "",
+      "size": 8726187,
+      "sha256": "7973bb4586ef04571756cd4d209b6568de0049a72ddfb2882d67e0dfb6875f24"
+    },
+    {
+      "id": 11,
+      "name": "",
+      "size": 756828,
+      "sha256": "edf6240e244ebd4a459c5a4de42dc6b7be5387ea49dcf8b71a13aa3734b71d4f"
+    },
+    {
+      "id": 0,
+      "name": "name",
+      "size": 964283,
+      "sha256": "349efcacac83e18f4ce83e438cb390181eb0c06767c2945973a9455c10e1eb84"
+    },
+    {
+      "id": 0,
+      "name": "runtime_version",
+      "size": 64,
+      "sha256": "01bf859bae62a6b8d26152c6268895cbfce6ed2204998b0eb163e8a2ad0cfb29"
+    },
+    {
+      "id": 0,
+      "name": "runtime_apis",
+      "size": 313,
+      "sha256": "d0040257c3e2606d1ca167b206f0aba1f72e0d8e7dcca667728da12aa5e684b0"
+    },
+    {
+      "id": 0,
+      "name": "producers",
+      "size": 77,
+      "sha256": "b6ef0164f706cb97de048aa4bc411b0be6ce019b792865adeef307de98bd288b"
+    },
+    {
+      "id": 0,
+      "name": "target_features",
+      "size": 34,
+      "sha256": "b059df39c940a5ef5882ba4e2a2c2000b6d3fb5d0905a3cccfa7731dfa23cfdd"
+    }
+  ],
+  "same_sections": [
+    {
+      "id": 1,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 2,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 3,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 4,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 6,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 7,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 9,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 10,
+      "name": "",
+      "identical": false
+    },
+    {
+      "id": 11,
+      "name": "",
+      "identical": true
+    },
+    {
+      "id": 0,
+      "name": "name",
+      "identical": true
+    },
+    {
+      "id": 0,
+      "name": "runtime_version",
+      "identical": true
+    },
+    {
+      "id": 0,
+      "name": "runtime_apis",
+      "identical": true
+    },
+    {
+      "id": 0,
+      "name": "producers",
+      "identical": true
+    },
+    {
+      "id": 0,
+      "name": "target_features",
+      "identical": true
+    }
+  ]
+}

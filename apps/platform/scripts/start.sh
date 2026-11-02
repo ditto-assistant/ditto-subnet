@@ -34,6 +34,7 @@ if [ -f .env.deploy ]; then
   . ./.env.deploy
 fi
 set +a
+. ./scripts/chain-transport.sh
 
 echo "==> syncing dependencies"
 uv sync

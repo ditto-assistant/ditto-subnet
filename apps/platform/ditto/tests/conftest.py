@@ -76,6 +76,58 @@ def pytest_configure(config: pytest.Config) -> None:
     apply_test_env_defaults()
 
 
+# CI installs Chromium only on shard 0, so the real-browser OAuth regression
+# must always land there.
+_FIRST_SHARD_PREFIXES = (
+    "ditto/tests/api_server/endpoints/test_miner_github_browser.py",
+)
+
+
+def _shard_spec() -> tuple[int, int] | None:
+    """``DITTO_TEST_SHARD=<index>/<count>`` selects one CI shard, else all."""
+    raw = os.environ.get("DITTO_TEST_SHARD", "").strip()
+    if not raw:
+        return None
+    index_text, _, count_text = raw.partition("/")
+    try:
+        index, count = int(index_text), int(count_text)
+    except ValueError as exc:
+        message = f"DITTO_TEST_SHARD must be i/N, got {raw!r}"
+        raise pytest.UsageError(message) from exc
+    if count < 1 or not 0 <= index < count:
+        raise pytest.UsageError(f"DITTO_TEST_SHARD out of range: {raw!r}")
+    return index, count
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Keep this shard's round-robin slice of the sorted node IDs.
+
+    Sorting makes the split independent of collection order, and dealing
+    consecutive tests to different shards spreads a slow file across all of
+    them. The CI shards therefore cover the suite exactly once, with no
+    hand-kept file lists to drift out of balance.
+    """
+    spec = _shard_spec()
+    if spec is None:
+        return
+    index, count = spec
+    owners: dict[str, int] = {}
+    position = 0
+    for nodeid in sorted(item.nodeid for item in items):
+        if nodeid.startswith(_FIRST_SHARD_PREFIXES):
+            owners[nodeid] = 0
+        else:
+            owners[nodeid] = position % count
+            position += 1
+    keep = [item for item in items if owners[item.nodeid] == index]
+    dropped = [item for item in items if owners[item.nodeid] != index]
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = keep
+
+
 def _worker_id() -> str:
     """Identity of this xdist worker (``gw0``…), or ``main`` when serial."""
     return os.environ.get("PYTEST_XDIST_WORKER", "main")
@@ -200,6 +252,34 @@ async def engine(worker_database: WorkerDatabase) -> AsyncIterator[AsyncEngine]:
 def session_maker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     """Session factory bound to this test's engine."""
     return async_sessionmaker(engine, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def _reset_screener_policy_globals():
+    """Restore the screener-policy snapshot around every test.
+
+    ``ditto.screener_policy_state`` is process-global module state that the
+    policy-activation resolver publishes to on every ``resolve()`` call, and
+    synchronous query builders read it directly. A test that resolves a
+    scheduled activation (say, the v13 ceiling) without restoring leaves the
+    whole xdist worker requiring v13: every later test seeding a floor-policy
+    agent then fails with "screening policy v10 is below the required v13",
+    whether or not it shares a database with the polluter. The failure only
+    appears when xdist happens to schedule both files on one worker, so it
+    reads as a flake; this makes the isolation structural instead.
+    """
+    from ditto.screener_policy_state import (
+        update_effective_screener_policy,  # noqa: PLC0415
+    )
+    from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION  # noqa: PLC0415
+
+    update_effective_screener_policy(
+        SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
+    )
+    yield
+    update_effective_screener_policy(
+        SCREENING_FLOOR_POLICY_VERSION, rescreen_scored=False
+    )
 
 
 @pytest.fixture

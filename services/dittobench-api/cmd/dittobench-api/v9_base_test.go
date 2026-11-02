@@ -162,6 +162,36 @@ func TestApplyV9BaseEvidencePublishesTypedSignedRoot(t *testing.T) {
 	}
 }
 
+func TestApplyV13BaseEvidenceSurvivesWireRoundTrip(t *testing.T) {
+	report := sampleV9Report()
+	report.Details.BenchVersion = protocol.BenchVersionV13
+	perCase := []protocol.CaseScore{{CaseID: "memory"}}
+	got, err := applyV9BaseEvidence(
+		report, submitRequest{BenchVersion: protocol.BenchVersionV13, TarballSHA256: v9ArtifactSHA},
+		perCase, completeModelTranscripts(perCase, true), completeUsage(1, 1, 100, 20),
+		relayExecutionSummary{Requests: 1, Successes: 1}, v9TranscriptSHA,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded protocol.ScoreReport
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	base := decoded.Details.V9Base
+	if base == nil {
+		t.Fatal("missing v13 base evidence")
+	}
+	digest, err := v9base.DigestHex(*base)
+	if err != nil || digest != decoded.BaseEvidenceSHA256 {
+		t.Fatalf("wire round trip lost signed evidence: digest=%s err=%v", digest, err)
+	}
+}
+
 // Every gated version must turn a proven zero-inference run into the SAME
 // signed, finalizable 0.00. v10/v11 matter as much as v9 here: v10 is saturated
 // at the 0.997012 ceiling, so a zero-inference agent that fails to produce a

@@ -32,6 +32,10 @@ describe("Sidebar routes every section (row 28)", () => {
       "submissions",
       "reviews",
       "ath",
+      "bounties",
+      "generators",
+      "activity",
+      "gamma",
       "benchmark",
     ];
     pages.forEach((page) => {
@@ -73,6 +77,10 @@ describe("Sidebar routes every section (row 28)", () => {
       "Submissions",
       "Sign in",
       "ATH reviews",
+      "Bounties",
+      "Generators",
+      "Admin activity",
+      "Gamma · Beta",
       "Benchmark",
     ]);
     const benchmarkDesc = document.querySelector('.nav-item[data-page="benchmark"] .ni-desc');

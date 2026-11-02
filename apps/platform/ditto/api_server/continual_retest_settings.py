@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from pydantic import ValidationError
 
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_server.koth import CrownGate
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -58,6 +59,37 @@ def tie_weighting_is_active(
     vectors for identical evidence.
     """
     return settings.tie_weighting_mode == "fleet_ready" and fleet_protocol_ready
+
+
+def statistical_band_cap_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Resolve the operator-selected protocol-29 fold only for a ready fleet."""
+    return settings.statistical_band_mode == "fleet_ready" and fleet_protocol_ready
+
+
+def crown_gate_for(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> CrownGate | None:
+    """The protocol-34 crown rules to serve, or ``None`` for the pre-34 walk."""
+    if settings.crown_gate_mode != "fleet_ready" or not fleet_protocol_ready:
+        return None
+    return CrownGate(
+        min_shared_seeds=settings.min_dethrone_confirmations,
+        standing_rank=settings.champion_standing_rank,
+    )
+
+
+def crown_incumbent_is_active(
+    settings: ContinualRetestSettings, *, fleet_protocol_ready: bool
+) -> bool:
+    """Resolve the consensus-safe crown-incumbency marker.
+
+    Same rule as tie weighting: policy cannot override fleet readiness, because
+    a fold-changing ledger field visible to only part of the fleet makes
+    validators submit two different champions for identical evidence.
+    """
+    return settings.crown_incumbent_mode == "fleet_ready" and fleet_protocol_ready
 
 
 def rollout_standdown_reason(

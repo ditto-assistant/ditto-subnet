@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -19,17 +21,14 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     triggers = workflow.get("on", workflow[True])
     dispatch = triggers["workflow_dispatch"]["inputs"]
     assert "profiles" in dispatch
-    assert triggers["pull_request"]["types"] == [
-        "opened",
-        "reopened",
-        "synchronize",
-        "closed",
-    ]
+    assert set(triggers) == {"workflow_dispatch"}
     assert "cheatcodes" in workflow["jobs"]
     assert "dashboard-bundle" in workflow["jobs"]
     assert "dashboard-publish" in workflow["jobs"]
-    assert "uv run pytest ditto/tests/preview -q" in text
-    assert "uv run python -m ditto.preview compose" in text
+    assert "uv run --locked pytest ditto/tests/preview -q" in text
+    assert "uv run --locked python -m ditto.preview compose" in text
+    # An unlocked `uv run` would silently resolve dependencies outside uv.lock.
+    assert "uv run " not in text.replace("uv run --locked ", "")
     assert "pull-requests: read" in text
     assert "gh api --paginate" in text
     assert "ref: ${{ needs.plan.outputs.sha }}" in text
@@ -70,6 +69,10 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     )
     assert publish["with"]["bundle_result"] == "${{ needs.dashboard-bundle.result }}"
     assert publish["with"]["proof_result"] == "${{ needs.cheatcodes.result }}"
+    # The publisher only sees "bundle skipped"; the resolved profiles are the
+    # reason, and they exist only here, so a skip cannot be explained without
+    # forwarding them.
+    assert publish["with"]["profiles"] == "${{ needs.plan.outputs.profiles }}"
     assert publish["with"]["sha"] == "${{ github.event.pull_request.head.sha }}"
     assert publish["secrets"] == {
         "cloudflare_api_token": "${{ secrets.CLOUDFLARE_PREVIEW_API_TOKEN }}"
@@ -77,22 +80,37 @@ def test_preview_workflow_never_publishes_compat_or_prod() -> None:
     assert "inherit" not in publish["secrets"]
 
 
-def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
+def test_stack_preview_controller_is_dispatch_only_and_caps_slots() -> None:
     text = (ROOT / ".github/workflows/preview-stack.yml").read_text()
     workflow = yaml.safe_load(text)
     triggers = workflow.get("on", workflow[True])
-    assert triggers["pull_request_target"]["types"] == [
-        "opened",
-        "reopened",
-        "synchronize",
-        "closed",
-    ]
+    # An 8-vCPU VM costs about $0.28/hour and eight slots about $54/day, so a
+    # preview exists only because a maintainer asked for one.
+    assert set(triggers) == {"workflow_dispatch"}
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"pr", "action", "profile"}
+    assert inputs["pr"]["required"] is True
+    assert inputs["action"]["options"] == ["provision", "retire"]
+    assert inputs["action"]["default"] == "provision"
+    assert inputs["profile"]["options"] == ["auto", "stack", "stack-copy"]
+    assert inputs["profile"]["default"] == "auto"
+    assert "sha" not in inputs
+    assert workflow["concurrency"]["group"] == "stack-preview-${{ inputs.pr }}"
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+
     control = workflow["jobs"]["control"]
     assert control["environment"] == "preview-stack"
+    assert "github.ref == 'refs/heads/main'" in control["if"]
     assert control["steps"][0]["with"]["ref"] == (
         "${{ github.event.repository.default_branch }}"
     )
     assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
+
+    # Nothing an operator types reaches a shell word; it all arrives via env.
+    for step in control["steps"]:
+        assert "${{ inputs." not in step.get("run", "")
+        assert "${{ github.event." not in step.get("run", "")
+
     activation = next(
         step
         for step in control["steps"]
@@ -101,8 +119,44 @@ def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
     assert "GCP_PREVIEW_CONTROLLER_SERVICE_ACCOUNT" in activation["run"]
     assert "GCP_PREVIEW_RUNTIME_SERVICE_ACCOUNT" in activation["run"]
     assert "enabled=$enabled" in activation["run"]
+    # The tuning knobs are optional, so gating activation on them would turn
+    # every unconfigured repository off.
+    for name in (
+        "GCP_PREVIEW_MACHINE_TYPE",
+        "GCP_PREVIEW_DISK_SIZE",
+        "PREVIEW_LEASE_TTL_SECONDS",
+        "GCP_PREVIEW_IMAGE_FAMILY",
+        "GCP_PREVIEW_IMAGE_PROJECT",
+    ):
+        assert name in control["env"]
+        assert name not in activation["run"]
+
+    resolve = next(step for step in control["steps"] if step.get("id") == "resolve")
+    assert '[[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]]' in resolve["run"]
+    assert 'sha="$(jq -r .head.sha <<<"$pr_json")"' in resolve["run"]
+    assert "fork previews are not allowed" in resolve["run"]
+
     provision = (ROOT / "preview/cloud/provision.sh").read_text()
-    assert "for candidate in {0..7}" in provision
+    # Slot selection is two-pass. A single fused loop claims the first free low
+    # slot before it reaches the higher slot this PR already holds, which hands
+    # one PR two VMs; reconcile.sh iterates leases, not instances, so it cannot
+    # see the orphan and it bills for the full TTL.
+    passes = provision.split("for candidate in {0..7}")
+    assert len(passes) == 3
+    assert "--if-generation-match=0" not in passes[1]
+    assert "instances delete" not in passes[1]
+    assert "--if-generation-match=0" in passes[2]
+    # A failed boot surfaces in about a minute rather than after 35 silent ones.
+    assert "get-serial-port-output" in provision
+    startup = (ROOT / "preview/cloud/startup.sh").read_text()
+    assert 'Acquire::ForceIPv4 "true"' in startup
+    assert "for attempt in 1 2 3 4 5" in startup
+    assert "sn118-preview: startup failed" in startup
+    assert "docker.io docker-compose-v2" in startup
+    # A stock-Ubuntu boot must still take the apt path; the guard only skips it
+    # on a baked image where the toolchain is already installed.
+    assert "preview_toolchain_present" in startup
+    assert "if preview_toolchain_present; then" in startup
     assert "all 8 preview slots are active" in provision
     assert "--if-generation-match=0" in provision
     assert '"$uri" >/dev/null 2>&1' in provision
@@ -123,6 +177,90 @@ def test_stack_preview_controller_caps_slots_and_never_runs_pr_code() -> None:
     assert '--env-file "$env_file"' in backroom_entrypoint
     assert "DITTO_ADMIN_API_TOKEN=%s" in backroom_entrypoint
     assert "SESSION_SECRET=%s" in backroom_entrypoint
+
+
+def test_preview_base_bake_is_scheduled_credential_empty_and_prunes() -> None:
+    text = (ROOT / ".github/workflows/preview-base-bake.yml").read_text()
+    workflow = yaml.safe_load(text)
+    triggers = workflow.get("on", workflow[True])
+    # Nightly, because a release commit rewrites the root pyproject/uv.lock and
+    # invalidates the dependency layer that costs the most to rebuild.
+    assert set(triggers) == {"workflow_dispatch"}
+    assert "pull_request" not in triggers
+    assert workflow["concurrency"]["group"] == "preview-base-bake"
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert workflow["permissions"] == {"contents": "read", "id-token": "write"}
+
+    bake = workflow["jobs"]["bake"]
+    # A separate environment from preview-stack, so the bake identity is
+    # unreachable from a preview dispatch. Both must stay pinned to main: the
+    # OIDC subject is environment-scoped, not ref-scoped.
+    assert bake["environment"] == "preview-bake"
+    assert "github.ref == 'refs/heads/main'" in bake["if"]
+    assert bake["steps"][0]["with"]["ref"] == (
+        "${{ github.event.repository.default_branch }}"
+    )
+    assert bake["steps"][0]["with"]["persist-credentials"] is False
+    assert bake["env"]["PREVIEW_BAKE_SHA"] == "${{ github.sha }}"
+    for step in bake["steps"]:
+        assert "${{ inputs." not in step.get("run", "")
+        assert "${{ github.event." not in step.get("run", "")
+
+    activation = next(step for step in bake["steps"] if step.get("id") == "activation")
+    assert "GCP_PREVIEW_BAKE_SERVICE_ACCOUNT" in activation["run"]
+    assert "enabled=$enabled" in activation["run"]
+    for name in (
+        "PREVIEW_BAKE_DISK_SIZE",
+        "PREVIEW_BAKE_MACHINE_TYPE",
+        "PREVIEW_BAKE_KEEP_IMAGES",
+        "GCP_PREVIEW_IMAGE_FAMILY",
+    ):
+        assert name in bake["env"]
+        assert name not in activation["run"]
+
+    controller = (ROOT / "preview/cloud/bake-image.sh").read_text()
+    # The bake VM runs default-branch build code with no identity at all, which
+    # is what keeps the preview subnet's credential-empty property intact and
+    # means this identity needs no actAs grant.
+    assert "--no-service-account" in controller
+    assert "--no-scopes" in controller
+    assert "--service-account" not in controller
+    # Same sentinel provision.sh watches for, so a broken build fails fast.
+    assert "sn118-preview: bake complete" in controller
+    assert "sn118-preview: startup failed" in controller
+    assert "get-serial-port-output" in controller
+    # An 8-vCPU VM must not survive the run, on any exit path.
+    assert "trap cleanup EXIT" in controller
+    assert "instances delete" in controller
+    assert "instances stop" in controller
+    # Shielded VM needs UEFI_COMPATIBLE, and guest OS features are not inherited
+    # from the source disk's image.
+    assert "UEFI_COMPATIBLE" in controller
+    assert "--family " in controller
+    assert "${PREVIEW_BAKE_KEEP_IMAGES:-3}" in controller
+    assert "images delete" in controller
+    # The bake disk is the floor on every preview's --boot-disk-size.
+    assert "${PREVIEW_BAKE_DISK_SIZE:-32GB}" in controller
+    # The prune deletes every image in the family past the retention count, so
+    # the family name cannot be able to name a public one.
+    assert "image family must be sn118-*" in controller
+    assert "--no-standard-images" in controller
+
+    guest = (ROOT / "preview/cloud/bake.sh").read_text()
+    assert "sn118-preview: bake complete" in guest
+    assert "sn118-preview: startup failed" in guest
+    # Warm the pulled images and the built layers, and start nothing.
+    assert "compose pull --quiet postgres minio minio-init gateway" in guest
+    assert "compose build" in guest
+    assert "compose up" not in guest
+    # startup.sh reaches this only through the bake metadata key.
+    startup = (ROOT / "preview/cloud/startup.sh").read_text()
+    assert "preview-bake-sha" in startup
+    assert "exec preview/cloud/bake.sh" in startup
+    assert "preview-bake-sha" in controller
+    # A baked image already carries the default-branch tree, so the PR tarball
+    # must not be unpacked on top of it.
+    assert "rm -rf /opt/sn118-preview" in startup
 
 
 def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
@@ -147,7 +285,8 @@ def test_stack_copy_uses_only_a_sanitized_snapshot_artifact() -> None:
     assert "gcloud compute scp preview/cloud/export-snapshot.sh" in snapshot
     assert 'gcloud compute scp "ditto-pg-platform:${remote_dump}"' in snapshot
     assert "trap cleanup_remote EXIT" in snapshot
-    assert "rm -f '$remote_dump' '$remote_script'" in snapshot
+    assert "sudo rm -f '$remote_dump' '$remote_script'" in snapshot
+    assert 'remote_dump="/var/tmp/sn118-preview-' in snapshot
     assert "head -c 5" in snapshot
     assert 'pg_dump -Fc --no-owner --no-privileges ditto_platform_prod"' not in snapshot
     assert '/proc/1/comm)" = postgres' in sanitizer
@@ -183,6 +322,7 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
         "action",
         "bundle_result",
         "pr",
+        "profiles",
         "proof_result",
         "repo",
         "sha",
@@ -193,10 +333,17 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
             "required": False,
         }
     }
-    assert set(workflow["jobs"]) == {"preflight", "inspect", "publish", "retire"}
+    assert set(workflow["jobs"]) == {
+        "preflight",
+        "inspect",
+        "publish",
+        "explain",
+        "retire",
+    }
     preflight = workflow["jobs"]["preflight"]
     inspect = workflow["jobs"]["inspect"]
     publish = workflow["jobs"]["publish"]
+    explain = workflow["jobs"]["explain"]
     retire = workflow["jobs"]["retire"]
     # Preflight enters the preview environment only to answer "are the Pages
     # credentials configured", so an unconfigured repository skips publication
@@ -235,6 +382,52 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
             f"needs.inspect.outputs.mode == '{mode}' && "
             "needs.preflight.outputs.configured == 'true'"
         )
+    # A silent skip reads as a broken integration, so a policy skip explains
+    # itself on the PR. Explaining needs no credentials and no PR code: no
+    # environment, no checkout, and only the comment scope.
+    assert "environment" not in explain
+    assert explain["permissions"] == {"pull-requests": "write"}
+    assert explain["needs"] == ["inspect", "preflight", "publish"]
+    # Pin the WHOLE condition. `explain` needs `publish`, which is skipped in
+    # exactly the case this feature exists for, so dropping `always()` would
+    # disable it on every policy skip -- and a substring match on the second
+    # clause alone would still pass.
+    assert explain["if"] == "always() && inputs.action != 'closed'"
+    # The script carries no `${{ }}`, so the env block is the only thing
+    # supplying these. Unpinned, deleting a mapping keeps every other
+    # assertion green while `set -u` fails the job on every PR.
+    assert explain["env"]["PREVIEW_PROFILES"] == "${{ inputs.profiles }}"
+    assert explain["env"]["PUBLISH_RESULT"] == "${{ needs.publish.result }}"
+    assert explain["env"]["CONFIGURED"] == "${{ needs.preflight.outputs.configured }}"
+    assert explain["env"]["PREVIEW_PR"] == "${{ inputs.pr }}"
+    assert explain["env"]["PREVIEW_SHA"] == "${{ inputs.sha }}"
+    assert len(explain["steps"]) == 1
+    assert "uses" not in explain["steps"][0]
+    explain_script = explain["steps"][0]["run"]
+    assert "marker='<!-- ditto-dashboard-preview-skipped -->'" in explain_script
+    # The comment must hand over the dispatch that provisions what the change
+    # needs, not merely state that nothing was published.
+    assert "gh workflow run preview-stack.yml -f pr=%s" in explain_script
+    assert "-f action=retire" in explain_script
+    # Resolving to stack because the PR changes stack paths, and resolving to
+    # stack because it changes no dashboard path and selection fails closed,
+    # are different facts. Pin both so the second is never told it touched
+    # runtime code it never went near.
+    assert "changes stack-owned paths as well as the dashboard" in explain_script
+    # Backtick-free substrings: the shell string escapes its own backticks, so
+    # matching on a Markdown-quoted term here would assert the escaping, not
+    # the wording.
+    assert "so there is no dashboard build to publish" in explain_script
+    assert "fails closed rather than guessing" in explain_script
+    # A later dashboard-only push publishes a real URL, so the stale
+    # explanation is removed rather than left to contradict it -- on the
+    # no-body branch specifically, and never at the cost of failing the run.
+    assert 'if [ -z "$body" ]' in explain_script
+    assert "-X DELETE" in explain_script
+    assert "could not remove the stale explanation comment" in explain_script
+    # Nothing a pull request controls reaches a shell word; it arrives via env.
+    assert "${{ inputs." not in explain_script
+    assert "${{ github.event." not in explain_script
     assert "workflow_run:" not in text
     assert "pull_request_target:" not in text
     assert SETUP_NODE in text
@@ -312,3 +505,123 @@ def test_trusted_dashboard_publisher_is_read_only_and_exact_sha() -> None:
     assert sanitized_upload["overwrite"] is True
     assert "pull-requests: write" in text
     assert "environment: prod" not in text
+
+
+def test_reconcile_enforces_a_capped_two_tier_preview_lifetime() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/preview-reconcile.yml").read_text()
+    )
+    triggers = workflow.get("on", workflow[True])
+    # Dispatch-only provisioning leaves this as the only thing that notices a
+    # PR closing, so it has to tick faster than once an hour.
+    assert triggers["schedule"] == [{"cron": "8,23,38,53 * * * *"}]
+    job = workflow["jobs"]["reconcile"]
+    assert job["environment"] == "preview-stack"
+    assert "github.ref == 'refs/heads/main'" in job["if"]
+    assert "PREVIEW_CLOSED_GRACE_SECONDS" in job["env"]
+
+    script = (ROOT / "preview/cloud/reconcile.sh").read_text()
+    assert "${PREVIEW_CLOSED_GRACE_SECONDS:-14400}" in script
+    assert "closed_epoch + grace_seconds" in script
+    # The absolute lease cap is checked before any grace is granted.
+    assert script.index('"$expires" -lt "$now"') < script.index("grace_seconds ))")
+    # Fail closed: an unreadable or missing PR earns no grace.
+    assert "state=missing" in script
+    assert "'.closed_at // empty'" in script
+
+
+def _export_snapshot_env(
+    tmp_path: Path, *, free_kib: int, dump_fails: bool
+) -> dict[str, str]:
+    """Environment that runs export-snapshot.sh against stub sudo/psql/pg_dump/df."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stubs = {
+        # Drop "-u USER" so the stubbed tools run as the test user.
+        "sudo": '[ "$1" = -u ] && shift 2\nexec "$@"\n',
+        "psql": "echo 1073741824\n",
+        "pg_dump": (
+            'for arg; do case "$arg" in --file=*) out="${arg#--file=}";; esac; done\n'
+            'printf PGDMP-partial > "$out"\n' + ("exit 1\n" if dump_fails else "")
+        ),
+        "df": (
+            "echo 'Filesystem 1024-blocks Used Available Capacity Mounted'\n"
+            f"echo 'disk 104857600 0 {free_kib} 0% /'\n"
+        ),
+    }
+    for name, body in stubs.items():
+        stub = bin_dir / name
+        stub.write_text("#!/bin/sh\n" + body)
+        stub.chmod(0o755)
+    (tmp_path / "staging").mkdir()
+    (tmp_path / "legacy").mkdir()
+    return {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "SN118_PREVIEW_STAGING_DIR": str(tmp_path / "staging"),
+        "SN118_PREVIEW_LEGACY_DIR": str(tmp_path / "legacy"),
+    }
+
+
+def _run_export(env: dict[str, str], output: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["sh", str(ROOT / "preview/cloud/export-snapshot.sh"), str(output)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_export_snapshot_reclaims_stale_archives_and_keeps_its_own(
+    tmp_path: Path,
+) -> None:
+    env = _export_snapshot_env(tmp_path, free_kib=50 * 1024 * 1024, dump_fails=False)
+    stale_legacy = tmp_path / "legacy/sn118-preview-1-1.dump"
+    stale_staged = tmp_path / "staging/sn118-preview-2-1.dump"
+    unrelated = tmp_path / "legacy/other.dump"
+    for path in (stale_legacy, stale_staged, unrelated):
+        path.write_text("old")
+    output = tmp_path / "staging/sn118-preview-3-1.dump"
+
+    result = _run_export(env, output)
+
+    assert result.returncode == 0, result.stderr
+    assert output.read_text() == "PGDMP-partial"
+    assert oct(output.stat().st_mode & 0o777) == "0o600"
+    assert not stale_legacy.exists()
+    assert not stale_staged.exists()
+    assert unrelated.exists()
+
+
+def test_export_snapshot_removes_its_partial_archive_on_failure(
+    tmp_path: Path,
+) -> None:
+    env = _export_snapshot_env(tmp_path, free_kib=50 * 1024 * 1024, dump_fails=True)
+    output = tmp_path / "staging/sn118-preview-3-1.dump"
+
+    result = _run_export(env, output)
+
+    assert result.returncode != 0
+    assert not output.exists()
+
+
+def test_export_snapshot_refuses_to_crowd_the_database_disk(tmp_path: Path) -> None:
+    # 100 GiB disk: the 20 GiB reserve plus the 1 GiB database exceeds 15 GiB free.
+    env = _export_snapshot_env(tmp_path, free_kib=15 * 1024 * 1024, dump_fails=False)
+    output = tmp_path / "staging/sn118-preview-3-1.dump"
+
+    result = _run_export(env, output)
+
+    assert result.returncode == 1
+    assert "refusing export" in result.stderr
+    assert not output.exists()
+
+
+def test_export_snapshot_refuses_paths_outside_staging(tmp_path: Path) -> None:
+    env = _export_snapshot_env(tmp_path, free_kib=50 * 1024 * 1024, dump_fails=False)
+
+    result = _run_export(env, tmp_path / "legacy/sn118-preview-3-1.dump")
+
+    assert result.returncode == 2
+    assert "refusing unsafe preview snapshot path" in result.stderr

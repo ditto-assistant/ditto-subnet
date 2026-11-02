@@ -1,0 +1,58 @@
+diff --git a/src/evaluation/evaluate_qa.py b/src/evaluation/evaluate_qa.py
+index 4732f37..84f955f 100644
+--- a/src/evaluation/evaluate_qa.py
++++ b/src/evaluation/evaluate_qa.py
+@@ -12,6 +12,28 @@ model_zoo = {
+     'llama-3.1-70b-instruct': ('meta-llama/Meta-Llama-3.1-70B-Instruct', 'local'),
+     'gpt-4o-mini': ('gpt-4o-mini-2024-07-18', 'openai'),
+     'gpt-4o': ('gpt-4o-2024-08-06', 'openai'),
++    # Ditto fork: the judge SN118 scores with in production. 'openai' here
++    # means "an OpenAI-compatible endpoint from the environment", which is how
++    # the official gpt-4o entry already reaches a proxy via OPENAI_BASE_URL.
++    'deepseek-v4.1-flash': ('deepseek/deepseek-v4.1-flash', 'openai'),
++}
++
++
++# Ditto fork: per-judge completion bound, defaulting to upstream's 10.
++#
++# max_tokens=10 is correct only for a non-reasoning judge -- gpt-4o answers the
++# evaluator prompt in 1-2 tokens. A reasoning judge spends the whole budget on
++# reasoning tokens and returns content="" with finish_reason="length"; the
++# label line below then evaluates `'yes' in ''` as False and scores EVERY
++# question "no". That failure is biased rather than noisy and raises no error
++# anywhere, so it reads as a model that cannot do the task at all.
++#
++# 8192 is set from measurement. Over the 76 probes that truncated
++# deepseek-v4.1-flash at a 1024 bound, re-run at 8192 x3 replicates, the
++# observed completion maximum was 2907 tokens with zero truncations. The bound
++# is a cap, not a charge: mean observed completion is 62 tokens.
++max_tokens_zoo = {
++    'deepseek-v4.1-flash': 8192,
+ }
+ 
+ 
+@@ -106,10 +128,22 @@ if __name__ == '__main__':
+                 ],
+                 'n': 1,
+                 'temperature': 0,
+-                'max_tokens': 10
++                'max_tokens': max_tokens_zoo.get(metric_model_short, 10)
+             }
+             completion = chat_completions_with_backoff(metric_client, **kwargs)
+-            eval_response = completion.choices[0].message.content.strip()
++            # Ditto fork: an empty completion is malformed, not a "no". Upstream
++            # labels it False, which is the silent all-"no" failure described at
++            # max_tokens_zoo. Matches the production runtime, which refuses the
++            # same response with "official LongMemEval judge response is
++            # malformed" and fails the bundle loudly.
++            eval_response = (completion.choices[0].message.content or '').strip()
++            if not eval_response:
++                raise RuntimeError(
++                    'judge returned an empty completion for {} (finish_reason={}); '
++                    'raise max_tokens for this judge rather than scoring it "no"'.format(
++                        entry['question_id'], completion.choices[0].finish_reason
++                    )
++                )
+             label = 'yes' in eval_response.lower()
+             entry['autoeval_label'] = {
+                 'model': metric_model,

@@ -1,0 +1,624 @@
+"""Authenticated immutable commit claims, including same-hotkey artifact reuse."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import bittensor
+import pytest
+from sqlalchemy import delete, func, select
+
+from ditto.api_models.weight_receipt import (
+    FinalizedWeightReceipt,
+    weight_receipt_digest,
+    weight_receipt_signing_message,
+    weight_vector_digest,
+)
+from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.ledger_pin import ledger_digest
+from ditto.chain.models import NeuronInfo
+from ditto.db.models import (
+    LedgerEpochSnapshot,
+    ValidatorWeightReceipt,
+    ValidatorWeightRequest,
+)
+
+pytestmark = pytest.mark.asyncio
+_KEY = bittensor.Keypair.create_from_uri("//Alice")
+_HOTKEY = _KEY.ss58_address
+
+
+def _digest(value):
+    return hashlib.sha256(
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        ).encode()
+    ).hexdigest()
+
+
+async def _setup(app, maker, *, provisional_crown_mode=None):
+    async def db():
+        async with maker() as session:
+            yield session
+
+    async def chain():
+        result = MagicMock()
+        result.get_recent_neurons = AsyncMock(
+            return_value=[
+                NeuronInfo(
+                    hotkey=_HOTKEY,
+                    coldkey="cold",
+                    uid=1,
+                    stake=1000.0,
+                    validator_permit=True,
+                )
+            ]
+        )
+        return result
+
+    app.dependency_overrides[get_session] = db
+    app.dependency_overrides[get_chain_client] = chain
+    agent_id, snapshot_id = uuid4(), uuid4()
+    entries = [
+        {
+            "agent_id": str(agent_id),
+            "sha256": "ab" * 32,
+            "miner_hotkey": "miner",
+            "composite": 0.9,
+            "n": 120,
+            "first_seen": datetime.now(UTC).isoformat(),
+            "run_id": "run",
+            "seed": 1,
+            "validator_hotkey": _HOTKEY,
+            "status": "scored",
+            "bench_version": 13,
+        }
+    ]
+    served = {"burn_share": 0.1}
+    if provisional_crown_mode is not None:
+        # Protocol 28: the champion holds the crown as a provisional incumbent,
+        # served beside the payable entries rather than among them.
+        runner_up = {**entries[0], "agent_id": str(uuid4()), "sha256": "cd" * 32}
+        served = {
+            **served,
+            "crown_mode": provisional_crown_mode,
+            "provisional_incumbent": entries[0],
+        }
+        entries = [runner_up]
+    pin_digest = ledger_digest(entries, served)
+    async with maker() as session, session.begin():
+        session.add(
+            LedgerEpochSnapshot(
+                snapshot_id=snapshot_id,
+                netuid=app.state.config.chain.netuid,
+                epoch_index=123,
+                last_epoch_block=100,
+                pinned_block=101,
+                pinned_block_hash="0x" + "01" * 32,
+                pinned_at=datetime.now(UTC),
+                bench_version=13,
+                entries=entries,
+                context={"served": served},
+                ledger_digest=pin_digest,
+                champion_agent_id=agent_id,
+            )
+        )
+    weights = {"miner": 0.9, "owner": 0.1}
+    provenance = {
+        "ledger_snapshot_id": str(snapshot_id),
+        "epoch_index": 123,
+        "ledger_digest": pin_digest,
+        "champion_agent_id": str(agent_id),
+        "champion_artifact_sha256": "ab" * 32,
+        "bench_version": 13,
+        "vector_digest": weight_vector_digest(weights),
+    }
+    request = {
+        "schema_version": 1,
+        "mechanism_id": 0,
+        "weights": weights,
+        "provenance": provenance,
+    }
+    return dict(
+        **request,
+        request_id=str(uuid4()),
+        task_id=1,
+        request_digest=_digest(request),
+        netuid=app.state.config.chain.netuid,
+        validator_hotkey=_HOTKEY,
+        attempt={
+            "attempt_id": str(uuid4()),
+            "normalized_weights": [[0, 6553], [1, 58982]],
+            "ciphertext_hash": hashlib.blake2b(b"cipher", digest_size=32).hexdigest(),
+            "ciphertext_hex": b"cipher".hex(),
+            "reveal_round": 1234,
+            "version_key": 1,
+            "commit_block": 110,
+            "commit_block_hash": "0x" + "02" * 32,
+            "extrinsic_hash": "0x" + "03" * 32,
+            "extrinsic_index": 2,
+        },
+    )
+
+
+def _signed(raw, *, timestamp=None):
+    model = FinalizedWeightReceipt.model_validate(raw)
+    timestamp = int(datetime.now(UTC).timestamp()) if timestamp is None else timestamp
+    return {
+        "receipt": raw,
+        "timestamp": timestamp,
+        "signature": _KEY.sign(weight_receipt_signing_message(model, timestamp)).hex(),
+    }
+
+
+async def _post(client, body):
+    return await client.post(
+        "/api/v1/validator/weight-submission-receipt",
+        headers={"X-Validator-Hotkey": _HOTKEY},
+        json=body,
+    )
+
+
+async def test_signed_receipt_retry_is_idempotent_and_unknown_fields_ignored(
+    app, client, session_maker
+):
+    raw = await _setup(app, session_maker)
+    first = await _post(client, _signed(raw))
+    assert first.status_code == 200, first.text
+    raw["future_field"] = "not authoritative"
+    raw["attempt"]["future_field"] = "ignored"
+    again = await _post(client, _signed(raw))
+    assert again.status_code == 200, again.text
+    assert first.json() == again.json()
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightReceipt)
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightRequest)
+            )
+            == 1
+        )
+        row = await session.scalar(select(ValidatorWeightReceipt))
+        assert row is not None
+        assert "future_field" not in row.receipt
+
+
+async def test_unsigned_tampering_and_stale_signature_rejected(
+    app, client, session_maker
+):
+    raw = await _setup(app, session_maker)
+    body = _signed(raw)
+    body["receipt"]["attempt"]["commit_block"] += 1
+    response = await _post(client, body)
+    assert response.status_code == 401, response.text
+    response = await _post(client, _signed(raw, timestamp=1))
+    assert response.status_code == 401, response.text
+
+
+async def test_exact_replay_acknowledged_without_mutable_rechecks(
+    app, client, session_maker
+):
+    raw = await _setup(app, session_maker)
+    first = await _post(client, _signed(raw))
+    assert first.status_code == 200, first.text
+    assert first.json()["receipt_digest"] == weight_receipt_digest(
+        FinalizedWeightReceipt.model_validate(raw)
+    )
+    # Pins are append-only; losing this one proves the replay does not
+    # re-run provenance checks against state outside the stored claim.
+    async with session_maker() as session, session.begin():
+        await session.execute(delete(LedgerEpochSnapshot))
+    again = await _post(client, _signed(raw))
+    assert again.status_code == 200, again.text
+    assert again.json() == first.json()
+    forged = _signed(raw)
+    forged["signature"] = "00" * 64
+    assert (await _post(client, forged)).status_code == 401
+    raw["attempt"]["reveal_round"] += 1
+    conflict = await _post(client, _signed(raw))
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["message"].startswith("attempt_rebound: ")
+
+
+async def test_same_job_or_attempt_cannot_be_rebound(app, client, session_maker):
+    raw = await _setup(app, session_maker)
+    first = await _post(client, _signed(raw))
+    assert first.status_code == 200, first.text
+    raw["attempt"]["commit_block"] += 1
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("attempt_rebound: ")
+    raw["attempt"]["attempt_id"] = str(uuid4())
+    raw["task_id"] += 1
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("request_rebound: ")
+
+
+async def test_commit_at_its_ledger_pin_is_rejected(app, client, session_maker):
+    raw = await _setup(app, session_maker)
+    raw["attempt"]["commit_block"] = 101
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("commit_before_pin: ")
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        (
+            "ledger_snapshot_id",
+            "11111111-2222-4333-8444-555555555555",
+            "unknown_ledger_snapshot",
+        ),
+        (
+            "champion_agent_id",
+            "11111111-2222-4333-8444-555555555555",
+            "ledger_pin_mismatch",
+        ),
+        ("champion_artifact_sha256", "ff" * 32, "artifact_pin_mismatch"),
+        ("ledger_digest", "ef" * 32, "ledger_pin_mismatch"),
+    ],
+)
+async def test_same_hotkey_and_vector_cannot_name_another_artifact_or_pin(
+    app, client, session_maker, field, value, code
+):
+    raw = await _setup(app, session_maker)
+    raw["provenance"][field] = value
+    raw["request_digest"] = _digest(
+        {
+            key: raw[key]
+            for key in ("schema_version", "mechanism_id", "weights", "provenance")
+        }
+    )
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith(f"{code}: ")
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightReceipt)
+            )
+            == 0
+        )
+
+
+async def test_a_provisional_incumbent_champion_receipt_is_recorded(
+    app, client, session_maker
+):
+    raw = await _setup(app, session_maker, provisional_crown_mode="incumbent")
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 200, response.text
+
+
+async def test_a_provisional_entry_without_the_crown_marker_names_no_champion(
+    app, client, session_maker
+):
+    raw = await _setup(app, session_maker, provisional_crown_mode=False)
+    response = await _post(client, _signed(raw))
+    assert response.status_code == 409, response.text
+    assert response.json()["message"].startswith("artifact_pin_mismatch: ")
+
+
+@pytest.mark.parametrize("schema_version", [3])
+async def test_relay_diagnostics_authenticated_latest_only(
+    app, client, session_maker, schema_version
+):
+    from ditto.api_models.receipt_diagnostics import (
+        ReceiptDiagnosticObservation,
+        ReceiptDiagnosticReport,
+        SubmitReceiptDiagnostics,
+        diagnostic_signing_message,
+    )
+    from ditto.db.models import ValidatorReceiptDiagnostic
+
+    await _setup(app, session_maker)
+    now = int(datetime.now(UTC).timestamp())
+
+    def signed(timestamp, status="uncertain"):
+        report = ReceiptDiagnosticReport(
+            schema_version=schema_version,
+            validator_hotkey=_HOTKEY,
+            netuid=app.state.config.chain.netuid,
+            timestamp=timestamp,
+            observation=ReceiptDiagnosticObservation(
+                submission_status=status,
+                submission_observed_at=timestamp,
+                recovery_status="validating_claim_failed",
+                last_validation=(
+                    {
+                        "error_count": 1,
+                        "fields": ["root:value_error:service_allocation"],
+                    }
+                    if schema_version >= 2
+                    else None
+                ),
+                failure_context=(
+                    {
+                        "claimed_schema_version": 1,
+                        "task_id": 12,
+                        "claimed_epoch_index": 123,
+                        "claimed_commit_block": 110,
+                        "attempt_id": "11111111-1111-4111-8111-111111111111",
+                    }
+                    if schema_version == 3
+                    else None
+                ),
+            ),
+        )
+        return SubmitReceiptDiagnostics(
+            report=report,
+            signature="0x" + bytes(_KEY.sign(diagnostic_signing_message(report))).hex(),
+        ).model_dump(mode="json")
+
+    async def post(body):
+        return await client.post(
+            "/api/v1/validator/receipt-diagnostics",
+            json=body,
+            headers={"X-Validator-Hotkey": _HOTKEY},
+        )
+
+    body = signed(now)
+    body["report"]["observation"]["submission_status"] = "accepted"
+    assert (await post(body)).status_code == 401
+    assert (await post(signed(1))).status_code == 401
+    if schema_version >= 2:
+        tampered = signed(now)
+        tampered["report"]["observation"]["last_validation"]["fields"] = [
+            "root:value_error:vector_digest"
+        ]
+        assert (await post(tampered)).status_code == 401
+    if schema_version == 3:
+        tampered = signed(now)
+        tampered["report"]["observation"]["failure_context"]["task_id"] += 1
+        assert (await post(tampered)).status_code == 401
+    result = await post(signed(now))
+    assert result.status_code == 200, result.text
+    assert (await post(signed(now - 1, "accepted"))).status_code == 200
+    async with session_maker() as session:
+        row = await session.get(
+            ValidatorReceiptDiagnostic, (app.state.config.chain.netuid, _HOTKEY)
+        )
+        assert row.report["observation"]["submission_status"] == "uncertain"
+        assert row.signed_at == now
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightReceipt)
+            )
+            == 0
+        )
+
+    from dataclasses import replace
+
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    status = await client.get(
+        "/api/v1/admin/artifact-release-settings",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert status.status_code == 200, status.text
+    observation = status.json()["release_gate"]["receipt_diagnostics"][0]
+    assert observation["report"]["validator_hotkey"] == _HOTKEY
+    assert observation["stale"] is False
+    assert observation["report"]["schema_version"] == schema_version
+    assert observation["report"]["observation"]["last_validation"] == (
+        {"error_count": 1, "fields": ["root:value_error:service_allocation"]}
+        if schema_version >= 2
+        else None
+    )
+    assert observation["report"]["observation"].get("failure_context") == (
+        {
+            "claimed_schema_version": 1,
+            "task_id": 12,
+            "claimed_epoch_index": 123,
+            "claimed_commit_block": 110,
+            "attempt_id": "11111111-1111-4111-8111-111111111111",
+        }
+        if schema_version == 3
+        else None
+    )
+    assert status.json()["release_gate"]["confirmed_kings"] == 0
+
+
+async def test_validator_prefixed_receipt_signature_is_accepted(
+    app, client, session_maker
+):
+    """PlatformClient emits 0x-prefixed hex; exercise that exact wire format."""
+    raw = await _setup(app, session_maker)
+    body = _signed(raw)
+    body["signature"] = "0x" + body["signature"]
+    result = await _post(client, body)
+    assert result.status_code == 200, result.text
+    body["receipt"]["attempt"]["commit_block"] += 1
+    assert (await _post(client, body)).status_code == 401
+
+
+async def _setup_enforcing(app, maker, *, empty=True, follower=False):
+    from pathlib import Path
+
+    from ditto_screening_protocol.treasury_approval import (
+        TreasuryPolicyApproval,
+        approval_message,
+    )
+    from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+
+    raw = await _setup(app, maker)
+    path = (
+        Path(__file__).resolve().parents[6]
+        / "packages/ditto-screening-protocol/tests/fixtures"
+        / "treasury_enforcing_pin_v2.json"
+    )
+    pin = EnforcingTreasuryPin.model_validate_json(path.read_text())
+    policy = pin.policy.model_copy(update={"netuid": app.state.config.chain.netuid})
+    approval = TreasuryPolicyApproval(
+        policy=policy, signature="0x" + _KEY.sign(approval_message(policy)).hex()
+    )
+    pin = EnforcingTreasuryPin.model_validate(
+        pin.model_copy(
+            update={
+                "epoch_index": 123,
+                "pinned_block_hash": "0x" + "01" * 32,
+                "policy": policy,
+                "policy_digest": policy.digest,
+                "approval": approval,
+                "identity": pin.identity.model_copy(
+                    update={
+                        "netuid": policy.netuid,
+                        "finalized_block_hash": "0x" + "01" * 32,
+                    }
+                ),
+                "fleet": (
+                    pin.fleet[0].model_copy(
+                        update={
+                            "validator_hotkey": (
+                                bittensor.Keypair.create_from_uri("//Bob").ss58_address
+                                if follower
+                                else _HOTKEY
+                            ),
+                            "approved_policy_digest": policy.digest,
+                        }
+                    ),
+                ),
+            }
+        )
+    )
+    weights = (
+        {policy.collector_hotkey: 0.1, "owner": 0.9}
+        if empty
+        else {policy.collector_hotkey: 0.1, "miner": 0.81, "owner": 0.09}
+    )
+    raw.update(
+        schema_version=2, treasury_pin=pin.model_dump(mode="json"), weights=weights
+    )
+    raw["provenance"]["vector_digest"] = weight_vector_digest(weights)
+    if empty:
+        raw["provenance"].update(champion_agent_id=None, champion_artifact_sha256=None)
+    from uuid import UUID
+
+    async with maker() as session, session.begin():
+        row = await session.get(
+            LedgerEpochSnapshot, UUID(raw["provenance"]["ledger_snapshot_id"])
+        )
+        if empty:
+            row.entries = []
+            row.champion_agent_id = None
+        row.context = {
+            "served": {
+                "burn_share": 1 if empty else 0.1,
+                "treasury_pin": pin.model_dump(mode="json"),
+            }
+        }
+        row.ledger_digest = ledger_digest(row.entries, row.context["served"])
+        raw["provenance"]["ledger_digest"] = row.ledger_digest
+    body = {
+        name: raw[name]
+        for name in (
+            "schema_version",
+            "mechanism_id",
+            "weights",
+            "provenance",
+            "treasury_pin",
+        )
+    }
+    raw["request_digest"] = _digest(body)
+    return raw
+
+
+@pytest.mark.parametrize("empty", [True, False])
+@pytest.mark.parametrize("follower", [True, False])
+async def test_enforcing_receipt_binds_exact_frozen_pin_and_allows_empty_competition(
+    app, client, session_maker, empty, follower
+):
+    raw = await _setup_enforcing(app, session_maker, empty=empty, follower=follower)
+    assert (
+        raw["validator_hotkey"]
+        in [member["validator_hotkey"] for member in raw["treasury_pin"]["fleet"]]
+    ) is not follower
+    first = await _post(client, _signed(raw))
+    assert first.status_code == 200, first.text
+    replay = await _post(client, _signed(raw))
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == first.json()
+    forged = _signed(raw)
+    forged["signature"] = "00" * 64
+    assert (await _post(client, forged)).status_code == 401
+    raw["validator_hotkey"] = bittensor.Keypair.create_from_uri(
+        "//Charlie"
+    ).ss58_address
+    assert (await _post(client, _signed(raw))).status_code == 401
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "no_stored_contract",
+        "changed_stored_pin",
+        "invalid_stored_crypto",
+        "legacy_receipt",
+    ],
+)
+@pytest.mark.parametrize("follower", [True, False])
+async def test_enforcing_receipt_rejects_unbound_or_legacy_contract(
+    app, client, session_maker, fault, follower
+):
+    from uuid import UUID
+
+    raw = await _setup_enforcing(app, session_maker, empty=False, follower=follower)
+    if fault == "legacy_receipt":
+        raw.update(schema_version=1)
+        raw.pop("treasury_pin")
+        raw["request_digest"] = _digest(
+            {
+                name: raw[name]
+                for name in ("schema_version", "mechanism_id", "weights", "provenance")
+            }
+        )
+    else:
+        async with session_maker() as session, session.begin():
+            row = await session.get(
+                LedgerEpochSnapshot, UUID(raw["provenance"]["ledger_snapshot_id"])
+            )
+            served = {**row.context["served"]}
+            if fault == "no_stored_contract":
+                served.pop("treasury_pin")
+            else:
+                p = json.loads(json.dumps(served["treasury_pin"]))
+                if fault == "changed_stored_pin":
+                    p["epoch_index"] += 1
+                else:
+                    p["approval"]["signature"] = "0x" + "00" * 64
+                served["treasury_pin"] = p
+            row.context = {"served": served}
+            row.ledger_digest = ledger_digest(row.entries, served)
+            raw["provenance"]["ledger_digest"] = row.ledger_digest
+        raw["request_digest"] = _digest(
+            {
+                name: raw[name]
+                for name in (
+                    "schema_version",
+                    "mechanism_id",
+                    "weights",
+                    "provenance",
+                    "treasury_pin",
+                )
+            }
+        )
+    result = await _post(client, _signed(raw))
+    assert result.status_code == 409, result.text
+    async with session_maker() as session:
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(ValidatorWeightReceipt)
+            )
+            == 0
+        )

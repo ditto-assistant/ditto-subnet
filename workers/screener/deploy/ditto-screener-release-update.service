@@ -1,0 +1,15 @@
+[Unit]
+Description=Pull and authenticate the latest Ditto screener release
+Documentation=https://github.com/ditto-assistant/ditto-subnet
+After=network-online.target docker.service ditto-screener.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/opt/ditto/screener/src/workers/screener/scripts/pull-screener-release.sh
+TimeoutStartSec=40min
+PrivateTmp=true
+ProtectHome=true

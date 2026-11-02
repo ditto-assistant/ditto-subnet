@@ -134,7 +134,7 @@ func TestPlatformInternalFailureRequiresPlatformTransport(t *testing.T) {
 			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"Reply OK"}]}`))
 			request.RemoteAddr = "192.0.2.31:4321"
 			recorder := httptest.NewRecorder()
-			broker.proxy(recorder, request, session, 0)
+			broker.proxy(recorder, request, session, 0, "")
 			got, err := broker.snapshot(id)
 			if err != nil || got.PlatformInternalFailures != 0 || got.InfrastructureFailures != 1 || recorder.Code != 502 {
 				t.Fatalf("transport misattributed as Platform: snapshot=%+v err=%v status=%d", got, err, recorder.Code)
@@ -180,7 +180,7 @@ func TestPlatformInternalFailureRecordedBeforeErrorBodyCompletes(t *testing.T) {
 	}()
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","messages":[{"role":"user","content":"Reply OK"}]}`)).WithContext(ctx)
 	request.RemoteAddr = "192.0.2.31:4321"
-	go func() { defer close(done); broker.proxy(httptest.NewRecorder(), request, broker.sessions[id], 0) }()
+	go func() { defer close(done); broker.proxy(httptest.NewRecorder(), request, broker.sessions[id], 0, "") }()
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):

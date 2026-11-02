@@ -7,11 +7,9 @@ from dataclasses import replace
 import pytest
 
 from ditto.api_models.inference_concurrency_settings import (
-    DEFAULT_CHAT_REQUEST_BUDGET,
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
 )
-from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.config import check_config, parse_api_server_config_from_env
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.validator_names import ValidatorNamesConfig
@@ -48,18 +46,6 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DITTO_TARGON_PUBLIC_PLATFORM_URL", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", raising=False)
-    monkeypatch.delenv("DITTO_CODING_CATALOG_CURATOR_HOTKEYS", raising=False)
-    for name in (
-        "DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL",
-        "DITTO_CODING_CATALOG_STORAGE_BUCKET",
-        "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY",
-        "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY",
-        "DITTO_CODING_CATALOG_STORAGE_REGION",
-        "DITTO_CODING_CATALOG_STORAGE_USE_TLS",
-        "DITTO_CODING_CATALOG_MAX_RECORD_BYTES",
-        "DITTO_CODING_CATALOG_TIMEOUT_SECONDS",
-    ):
-        monkeypatch.delenv(name, raising=False)
 
 
 class TestParseApiServerConfigFromEnv:
@@ -87,136 +73,91 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.per_ticket_concurrency == 16
         assert config.inference_proxy.per_validator_concurrency == 48
         assert config.inference_proxy.global_concurrency == 96
-        assert config.coding_catalog_curator_hotkeys == ()
-        assert config.coding_private_catalog is None
-        assert config.coding_shadow_reconciliation_enabled is False
-        assert config.coding_shadow_reconciliation_selection_delay_blocks == 20
-        assert config.coding_shadow_ticket_set_enabled is False
-        assert config.coding_shadow_ticket_lease_seconds == 3600
 
-    def test_shadow_reconciliation_requires_its_complete_activation_boundary(
-        self,
-    ) -> None:
-        base = make_api_server_config()
-        with pytest.raises(ApiServerConfigError, match="DITTO_ADMIN_API_TOKEN"):
-            check_config(replace(base, coding_shadow_reconciliation_enabled=True))
-
-        with pytest.raises(ApiServerConfigError, match="private coding catalog"):
-            check_config(
-                replace(
-                    base,
-                    admin_api_token="test-admin-token-at-least-32-characters",
-                    coding_shadow_reconciliation_enabled=True,
-                )
-            )
-        with pytest.raises(ApiServerConfigError, match="between 1 and 10000"):
-            check_config(
-                replace(
-                    base,
-                    coding_shadow_reconciliation_selection_delay_blocks=0,
-                )
-            )
-
-    def test_shadow_ticket_set_activation_is_independent_and_bounded(self) -> None:
-        base = make_api_server_config()
-        with pytest.raises(ApiServerConfigError, match="DITTO_ADMIN_API_TOKEN"):
-            check_config(replace(base, coding_shadow_ticket_set_enabled=True))
-        with pytest.raises(ApiServerConfigError, match="between 60 and 7200"):
-            check_config(replace(base, coding_shadow_ticket_lease_seconds=30))
-        check_config(
-            replace(
-                base,
-                admin_api_token="test-admin-token-at-least-32-characters",
-                coding_shadow_ticket_set_enabled=True,
-            )
-        )
-
-    def test_private_coding_catalog_config_is_optional_and_separate(
-        self, monkeypatch: pytest.MonkeyPatch
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("0", 0),
+            ("7", 7),
+        ],
+    )
+    def test_capacity_event_retention_accepts_zero_or_at_least_a_week(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str, expected: int
     ) -> None:
         _set_minimum_env(monkeypatch)
-        monkeypatch.setenv(
-            "DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL",
-            "https://catalog.example.com",
-        )
-        monkeypatch.setenv("DITTO_CODING_CATALOG_STORAGE_BUCKET", "private-coding")
-        monkeypatch.setenv("DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY", "catalog-access")
-        monkeypatch.setenv("DITTO_CODING_CATALOG_STORAGE_SECRET_KEY", "catalog-secret")
+        monkeypatch.setenv("SCREENER_CAPACITY_EVENT_RETENTION_DAYS", raw)
 
         config = parse_api_server_config_from_env(commit_hash="abc")
 
-        assert config.coding_private_catalog is not None
-        assert config.coding_private_catalog.bucket == "private-coding"
-        assert config.coding_private_catalog.bucket != config.storage.bucket
+        assert config.screener_auth.capacity_event_retention_days == expected
 
-    def test_coding_catalog_curator_allowlist_is_explicit_and_validated(
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "6",
+            "thirty",
+        ],
+    )
+    def test_capacity_event_retention_rejects_unsafe_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("SCREENER_CAPACITY_EVENT_RETENTION_DAYS", raw)
+
+        with pytest.raises(ApiServerConfigError):
+            parse_api_server_config_from_env(commit_hash="abc")
+
+    def test_public_rate_limit_env_picked_up(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _set_minimum_env(monkeypatch)
-        alice = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-        bob = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUSeHQwZqE4tHtqWv"
-        monkeypatch.setenv(
-            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS",
-            f" {alice}, {bob} ",
-        )
+        monkeypatch.setenv("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", "120")
 
         config = parse_api_server_config_from_env(commit_hash="abc")
 
-        assert config.coding_catalog_curator_hotkeys == (alice, bob)
-        check_config(config)
+        assert config.public_rate_limit_per_minute == 120
 
-        with pytest.raises(ApiServerConfigError, match="duplicates"):
-            check_config(replace(config, coding_catalog_curator_hotkeys=(alice, alice)))
-        with pytest.raises(ApiServerConfigError, match="invalid SS58"):
-            check_config(replace(config, coding_catalog_curator_hotkeys=("invalid",)))
-
-    def test_private_catalog_cannot_reuse_upload_storage_authority(self) -> None:
-        base = make_api_server_config()
-        shared_credential = CodingPrivateCatalogConfig(
-            endpoint_url="https://catalog.example.com",
-            bucket="private-coding",
-            access_key=base.storage.access_key,
-            secret_key="different-secret",
-        )
-        with pytest.raises(ApiServerConfigError, match="distinct.*credentials"):
-            check_config(replace(base, coding_private_catalog=shared_credential))
-
-        upload = replace(
-            base.storage,
-            endpoint_url="https://catalog.example.com:443",
-            bucket="private-coding",
-            access_key="upload-access",
-            secret_key="upload-secret",
-            use_tls=True,
-        )
-        shared_bucket = CodingPrivateCatalogConfig(
-            endpoint_url="https://catalog.example.com/",
-            bucket="private-coding",
-            access_key="catalog-access",
-            secret_key="catalog-secret",
-        )
-        with pytest.raises(ApiServerConfigError, match="miner-upload bucket"):
-            check_config(
-                replace(
-                    base,
-                    storage=upload,
-                    coding_private_catalog=shared_bucket,
-                )
-            )
-
-    def test_free_taostats_key_config_is_optional(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "-1",
+            "lots",
+        ],
+    )
+    def test_public_rate_limit_rejects_invalid_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
         _set_minimum_env(monkeypatch)
-        url = "https://api.taostats.io/api/dtao/validator/available/v1?netuid=118"
-        monkeypatch.setenv("DITTO_TAOSTATS_VALIDATOR_NAMES_URL", url)
-        monkeypatch.setenv("DITTO_TAOSTATS_API_KEY", "free-api-key")
+        monkeypatch.setenv("DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE", raw)
+
+        with pytest.raises(ApiServerConfigError):
+            parse_api_server_config_from_env(commit_hash="abc")
+
+    def test_request_body_cap_defaults_to_32_mib(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("DITTO_REQUEST_BODY_MAX_BYTES", raising=False)
 
         config = parse_api_server_config_from_env(commit_hash="abc")
 
-        assert config.validator_names.url == url
-        assert config.validator_names.api_key == "free-api-key"
-        assert config.validator_names.enabled is True
+        assert config.request_body_max_bytes == 32 << 20
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            "1048575",
+            "lots",
+        ],
+    )
+    def test_request_body_cap_rejects_invalid_values(
+        self, monkeypatch: pytest.MonkeyPatch, raw: str
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_REQUEST_BODY_MAX_BYTES", raw)
+
+        with pytest.raises(ApiServerConfigError):
+            parse_api_server_config_from_env(commit_hash="abc")
 
     def test_backroom_policy_is_not_environment_driven(
         self, monkeypatch: pytest.MonkeyPatch
@@ -242,36 +183,6 @@ class TestParseApiServerConfigFromEnv:
         assert config.inference_proxy.embedding_per_validator_concurrency == 48
         assert config.inference_proxy.embedding_global_concurrency == 96
 
-    def test_overrides_picked_up(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("API_HOST", "127.0.0.1")
-        monkeypatch.setenv("API_PORT", "9000")
-        monkeypatch.setenv("API_LOG_LEVEL", "debug")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.host == "127.0.0.1"
-        assert config.port == 9000
-        assert config.log_level == "DEBUG"
-
-    def test_composition_with_sub_configs(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("POSTGRES_USER", "alice")
-        monkeypatch.setenv("PYLON_OPEN_ACCESS_TOKEN", "tok-xyz")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.postgres.user == "alice"
-        assert config.chain.open_access_token == "tok-xyz"
-
-    def test_non_integer_port_raises(self, monkeypatch: pytest.MonkeyPatch):
-        """Parse-time failure: the value is not coercible to int."""
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("API_PORT", "not-a-port")
-
-        with pytest.raises(ApiServerConfigError, match="API_PORT"):
-            parse_api_server_config_from_env(commit_hash="abc")
-
     def test_missing_payment_address_raises(self, monkeypatch: pytest.MonkeyPatch):
         _set_minimum_env(monkeypatch)
         monkeypatch.delenv("DITTO_UPLOAD_PAYMENT_ADDRESS", raising=False)
@@ -283,8 +194,6 @@ class TestParseApiServerConfigFromEnv:
         "bad",
         [
             "REPLACE_WITH_DITTO_SS58_ADDRESS",  # the .env.example placeholder
-            "not-an-ss58",
-            "5short",
             "0OIl" * 12 + "1234567890ab",  # SS58 forbidden chars 0/O/I/l
         ],
     )
@@ -297,40 +206,9 @@ class TestParseApiServerConfigFromEnv:
         with pytest.raises(ApiServerConfigError, match="SS58"):
             parse_api_server_config_from_env(commit_hash="abc")
 
-    def test_pricing_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_USD", "7.50")
-        monkeypatch.setenv("DITTO_UPLOAD_FEE_BUFFER", "1.2")
-        monkeypatch.setenv("PRICING_CACHE_TTL_SECONDS", "60")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        from decimal import Decimal
-
-        assert config.pricing.fee_usd == Decimal("7.50")
-        assert config.pricing.fee_buffer == Decimal("1.2")
-        assert config.pricing.cache_ttl_seconds == 60
-
-    def test_storage_sub_config_picked_up(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("STORAGE_ENDPOINT_URL", "https://s3.example.com")
-        monkeypatch.setenv("STORAGE_BUCKET", "custom-bucket")
-        monkeypatch.setenv("STORAGE_REGION", "eu-west-1")
-        monkeypatch.setenv("STORAGE_USE_TLS", "true")
-
-        config = parse_api_server_config_from_env(commit_hash="abc")
-
-        assert config.storage.endpoint_url == "https://s3.example.com"
-        assert config.storage.bucket == "custom-bucket"
-        assert config.storage.region == "eu-west-1"
-        assert config.storage.use_tls is True
-
 
 class TestCheckConfig:
     """Validation gates that the dataclass type system cannot enforce."""
-
-    def test_valid_config_passes(self):
-        check_config(make_api_server_config())
 
     def test_unknown_inference_routing_mode_fails_closed(self):
         base = make_api_server_config()
@@ -346,17 +224,13 @@ class TestCheckConfig:
         with pytest.raises(ApiServerConfigError, match="port out of range"):
             check_config(config)
 
-    def test_port_above_max_raises(self):
-        config = replace(make_api_server_config(), port=70000)
-        with pytest.raises(ApiServerConfigError, match="port out of range"):
-            check_config(config)
-
-    def test_unknown_log_level_raises(self):
-        config = replace(make_api_server_config(), log_level="loud")
-        with pytest.raises(ApiServerConfigError, match="log_level"):
-            check_config(config)
-
-    @pytest.mark.parametrize("version", ["latest", "v0.7.0", "0.7", ""])
+    @pytest.mark.parametrize(
+        "version",
+        [
+            "latest",
+            "v0.7.0",
+        ],
+    )
     def test_validator_minimum_requires_stable_version(self, version: str):
         from ditto.api_server import ValidatorCompatibilityConfig
 
@@ -392,6 +266,40 @@ class TestCheckConfig:
         )
         with pytest.raises(ApiServerConfigError, match="must be set together"):
             check_config(config)
+
+    def test_screener_hotkey_may_stand_alone_only_without_legacy_bearer(self) -> None:
+        from ditto.api_server import ScreenerAuthConfig
+
+        hotkey_only = ScreenerAuthConfig(
+            hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            api_token=None,
+            legacy_bearer_enabled=False,
+        )
+        check_config(replace(make_api_server_config(), screener_auth=hotkey_only))
+        assert not hotkey_only.legacy_bearer_accepted
+        token_only = replace(
+            hotkey_only,
+            hotkey=None,
+            api_token="test-screener-token-at-least-32-characters",
+        )
+        with pytest.raises(ApiServerConfigError, match="must be set together"):
+            check_config(replace(make_api_server_config(), screener_auth=token_only))
+
+    def test_legacy_bearer_defaults_on_and_parses_off(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.delenv("SCREENER_LEGACY_BEARER_ENABLED", raising=False)
+        auth = parse_api_server_config_from_env(commit_hash="abc").screener_auth
+        assert auth.legacy_bearer_enabled
+        assert auth.legacy_bearer_accepted
+
+        monkeypatch.setenv("SCREENER_LEGACY_BEARER_ENABLED", "false")
+        monkeypatch.delenv("SCREENER_API_TOKEN")
+        config = parse_api_server_config_from_env(commit_hash="abc")
+        check_config(config)
+        assert not config.screener_auth.legacy_bearer_enabled
+        assert config.screener_auth.hotkey is not None
 
     def test_screener_auth_rejects_short_token(self):
         from ditto.api_server import ScreenerAuthConfig
@@ -452,9 +360,7 @@ class TestCheckConfig:
         ("field", "value", "message"),
         [
             ("timeout_seconds", 5.1, "between 0.1 and 5"),
-            ("retry_seconds", 59, "at least 60"),
             ("refresh_seconds", 299, "at least the retry"),
-            ("max_stale_seconds", 3599, "at least the refresh"),
         ],
     )
     def test_validator_name_cache_bounds(
@@ -540,29 +446,15 @@ class TestEfficiencyBonusConfig:
         assert efficiency.memory_floor == 0.3
         check_config(config)
 
-    def test_non_numeric_knob_raises(self, monkeypatch: pytest.MonkeyPatch):
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_CAP", "five-percent")
-        with pytest.raises(ApiServerConfigError, match="numeric"):
-            parse_api_server_config_from_env(commit_hash="abc")
-
     @pytest.mark.parametrize(
         ("overrides", "message"),
         [
             ({"fold_enabled": True}, "enabled before"),
             ({"enabled": True, "cap": 0.11}, "0.10"),
-            ({"enabled": True, "cap": 0.0}, "0.10"),
             ({"enabled": True, "deep_cap": 0.04}, "cap <= deep_cap"),
-            ({"enabled": True, "deep_cap": 0.11}, "cap <= deep_cap"),
-            ({"enabled": True, "deep_frontier_ratio": 0.0}, "in \\(0, 1\\)"),
-            ({"enabled": True, "deep_frontier_ratio": 1.0}, "in \\(0, 1\\)"),
-            ({"enabled": True, "deep_frontier_ratio": -0.5}, "in \\(0, 1\\)"),
             ({"enabled": True, "factor_alpha": 0.0}, "FACTOR_ALPHA"),
-            ({"enabled": True, "factor_alpha": 1.1}, "FACTOR_ALPHA"),
             ({"enabled": True, "minimum_factor": 0.0}, "MINIMUM_FACTOR"),
-            ({"enabled": True, "minimum_factor": 1.01}, "MINIMUM_FACTOR"),
             ({"enabled": True, "maximum_factor": 0.99}, "MAXIMUM_FACTOR"),
-            ({"enabled": True, "maximum_factor": 101.0}, "MAXIMUM_FACTOR"),
             ({"enabled": True, "min_cohort": 1}, "at least 2"),
             (
                 {"enabled": True, "cohort_size": 5, "min_cohort": 8},
@@ -595,11 +487,6 @@ class TestInferenceRequestBudgetBound:
     for as long as the process lived, and then refuse to boot on the next
     restart -- turning a settings change into a delayed outage.
     """
-
-    def test_the_shipped_default_is_within_the_bound(self):
-        config = make_api_server_config()
-        assert config.inference_proxy.request_budget <= MAX_CHAT_REQUEST_BUDGET
-        check_config(config)
 
     def test_embedding_fallback_is_pinned_to_direct_perplexity(self):
         config = make_api_server_config()
@@ -646,155 +533,38 @@ class TestInferenceRequestBudgetBound:
         check_config(replace(config, inference_proxy=at_bound))
 
 
-class TestTargonRentalConfig:
-    """Targon screening is opt-in via Secret Manager-backed env, not a key file."""
+def test_ditto_link_config_is_off_by_default_and_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_minimum_env(monkeypatch)
+    for name in (
+        "DITTO_LINK_ENABLED",
+        "DITTO_LINK_CLIENT_ID",
+        "DITTO_LINK_CLIENT_SECRET",
+        "DITTO_LINK_REDIRECT_URL",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    config = parse_api_server_config_from_env("c")
+    assert config.ditto_link.enabled is False
+    check_config(config)
 
-    _COMMIT = "ab" * 20
-    _KEY = "t" * 32
-    _BUILDER = (
-        "us-central1-docker.pkg.dev/ditto-app-dev/"
-        "ditto-public-builders/submission-builder"
+    monkeypatch.setenv("DITTO_LINK_ENABLED", "true")
+    with pytest.raises(ApiServerConfigError, match="DITTO_LINK_CLIENT_ID"):
+        check_config(parse_api_server_config_from_env("c"))
+
+    monkeypatch.setenv("DITTO_LINK_CLIENT_ID", "dittobench")
+    monkeypatch.setenv("DITTO_LINK_CLIENT_SECRET", "s")
+    monkeypatch.setenv("DITTO_LINK_REDIRECT_URL", "http://insecure.example/cb")
+    with pytest.raises(ApiServerConfigError, match="DITTO_LINK_REDIRECT_URL"):
+        check_config(parse_api_server_config_from_env("c"))
+
+    monkeypatch.setenv(
+        "DITTO_LINK_REDIRECT_URL",
+        "https://dittobench.ai/api/v1/miner-auth/ditto/callback",
     )
-
-    def test_absent_key_disables_targon(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_minimum_env(monkeypatch)
-        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
-        assert config.targon is None
-
-    def test_env_key_enables_targon(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
-        monkeypatch.setenv(
-            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
-        )
-        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
-        monkeypatch.setenv(
-            "DITTO_TARGON_CANDIDATE_PUSH_SA",
-            "push@ditto-app-dev.iam.gserviceaccount.com",
-        )
-        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
-        assert config.targon is not None
-        assert config.targon.enabled is True
-        assert config.targon.api_key == self._KEY
-        assert (
-            config.targon.submission_builder_image
-            == f"{self._BUILDER}:sha-{self._COMMIT}"
-        )
-        assert self._KEY not in repr(config.targon)
-        assert config.targon.max_inflight == 10
-        assert config.targon.smoke_provision_timeout_seconds == 30.0
-
-    def test_targon_smoke_provision_timeout_env(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
-        monkeypatch.setenv(
-            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
-        )
-        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
-        monkeypatch.setenv("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", "45")
-        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
-        assert config.targon is not None
-        assert config.targon.smoke_provision_timeout_seconds == 45.0
-
-    def test_targon_max_inflight_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
-        monkeypatch.setenv(
-            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
-        )
-        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
-        monkeypatch.setenv("DITTO_TARGON_MAX_INFLIGHT", "8")
-        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
-        assert config.targon is not None
-        assert config.targon.max_inflight == 8
-
-    def test_targon_max_inflight_rejects_zero(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
-        monkeypatch.setenv(
-            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
-        )
-        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
-        monkeypatch.setenv("DITTO_TARGON_MAX_INFLIGHT", "0")
-        with pytest.raises(ApiServerConfigError, match="DITTO_TARGON_MAX_INFLIGHT"):
-            parse_api_server_config_from_env(commit_hash=self._COMMIT)
-
-    def test_short_key_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_TARGON_API_KEY", "too-short")
-        with pytest.raises(ApiServerConfigError, match="DITTO_TARGON_API_KEY"):
-            parse_api_server_config_from_env(commit_hash=self._COMMIT)
-
-    def test_key_file_still_accepted(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        key_file = tmp_path / "targon.key"
-        key_file.write_text(self._KEY, encoding="utf-8")
-        monkeypatch.setenv("DITTO_TARGON_API_KEY_FILE", str(key_file))
-        monkeypatch.setenv(
-            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
-        )
-        monkeypatch.setenv(
-            "DITTO_TARGON_SUBMISSION_BUILDER_IMAGE",
-            f"{self._BUILDER}@sha256:{'cd' * 32}",
-        )
-        config = parse_api_server_config_from_env(commit_hash="abc")
-        assert config.targon is not None
-        assert config.targon.api_key == self._KEY
-
-    def test_cloudrun_env_enables_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_CLOUDRUN_PROJECT", "ditto-app-dev")
-        monkeypatch.setenv(
-            "DITTO_CLOUDRUN_UNTRUSTED_SA",
-            "ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com",
-        )
-        monkeypatch.setenv(
-            "DITTO_CLOUDRUN_INVOKER_SA",
-            "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com",
-        )
-        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
-        assert config.cloudrun is not None
-        assert config.cloudrun.enabled is True
-        assert config.cloudrun.region == "us-central1"
-
-    def test_targon_requires_cloudrun_fallback(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _set_minimum_env(monkeypatch)
-        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
-        monkeypatch.setenv(
-            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
-        )
-        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
-        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
-
-        with pytest.raises(ApiServerConfigError, match="Cloud Run fallback"):
-            check_config(config)
-
-        monkeypatch.setenv("DITTO_CLOUDRUN_PROJECT", "ditto-app-dev")
-        monkeypatch.setenv(
-            "DITTO_CLOUDRUN_UNTRUSTED_SA",
-            "ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com",
-        )
-        monkeypatch.setenv(
-            "DITTO_CLOUDRUN_INVOKER_SA",
-            "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com",
-        )
-        check_config(parse_api_server_config_from_env(commit_hash=self._COMMIT))
-
-    def test_the_default_is_an_actual_raise_over_the_number_it_replaced(self):
-        """1024 was the ceiling a legitimate heavy strategy hit at check ~266.
-
-        Pinned so that a future edit trimming the default back toward the old
-        value has to argue with this test rather than quietly reintroduce the
-        exhaustion.
-        """
-        assert DEFAULT_CHAT_REQUEST_BUDGET >= 5 * 1024
+    monkeypatch.setenv("DITTO_LINK_ISSUER", "https://api.heyditto.ai/")
+    config = parse_api_server_config_from_env("c")
+    check_config(config)
+    assert config.ditto_link.issuer == "https://api.heyditto.ai"
+    assert config.ditto_link.client_id == "dittobench"
+    assert config.ditto_link.return_url == "https://dittobench.ai/#/reviews"

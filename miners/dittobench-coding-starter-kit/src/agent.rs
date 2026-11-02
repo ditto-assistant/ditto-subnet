@@ -8,6 +8,7 @@ use std::time::Duration;
 use ditto_harness::{ChatMessage, Content, ContentType, Model, Tool, ToolCallResponse};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use tokio::time::Instant;
 
 use crate::context;
 use crate::memory::RetrievedMemory;
@@ -58,6 +59,20 @@ pub struct AgentOutcome {
     pub workspace_tool_calls: u32,
 }
 
+/// When a run must stop so its degraded report still reaches the validator.
+///
+/// The validator bounds the whole `/coding/run` request by exactly
+/// `wall_time_seconds`, measured from before the request is sent. A timer of
+/// the same length started inside the harness always fires after that, so the
+/// report would never be read. Keep back 5% of the budget (250ms-15s) for the
+/// response to travel back.
+#[must_use]
+pub fn wall_time_deadline(started: Instant, wall_time_seconds: u64) -> Instant {
+    let budget = Duration::from_secs(wall_time_seconds);
+    let reserve = (budget / 20).clamp(Duration::from_millis(250), Duration::from_secs(15));
+    started + budget.saturating_sub(reserve)
+}
+
 pub struct CodingAgent {
     model: Arc<dyn Model>,
     tools: Vec<Arc<dyn Tool>>,
@@ -80,9 +95,24 @@ impl CodingAgent {
         request: &CodingRunRequest,
         memories: &[RetrievedMemory],
     ) -> Result<AgentOutcome, AgentError> {
-        let deadline = Duration::from_secs(request.budgets.wall_time_seconds);
+        let deadline = wall_time_deadline(Instant::now(), request.budgets.wall_time_seconds);
+        self.run_until(request, memories, deadline).await
+    }
+
+    /// Runs one bounded coding case that must finish by `deadline`.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`CodingAgent::run`]; reaching `deadline` returns the degraded
+    /// wall-time report, not an error.
+    pub async fn run_until(
+        &self,
+        request: &CodingRunRequest,
+        memories: &[RetrievedMemory],
+        deadline: Instant,
+    ) -> Result<AgentOutcome, AgentError> {
         let meters = Arc::new(RunMeters::default());
-        if let Ok(result) = tokio::time::timeout(
+        if let Ok(result) = tokio::time::timeout_at(
             deadline,
             self.run_inner(request, memories, Arc::clone(&meters)),
         )

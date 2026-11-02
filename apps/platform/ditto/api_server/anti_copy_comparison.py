@@ -2,18 +2,19 @@
 
 The durable ATH review API calls :func:`compare_anti_copy_pair` after loading two
 ledger rows. The adapter delegates the decision to the score-path gate and emits
-only bounded aggregate evidence and public algorithm provenance. It never returns
-hashes, sketches, source, paths, artifact locations, or credentials, and it has no
-database or storage dependency.
+only bounded aggregate evidence, public algorithm provenance, and each side's
+label-only language inventory. It never returns hashes, sketches, source, paths,
+artifact locations, or credentials, and it has no database or storage dependency.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 from ditto.api_server.fingerprint import (
     _FP_VERSION,
+    _LINE_VERSION,
     _NSH_VERSION,
     _PROMPT_VERSION,
     content_similarity,
@@ -22,13 +23,18 @@ from ditto.api_server.fingerprint import (
 from ditto.api_server.scoring_gate import (
     _DEFAULT_CONTAINMENT_TOL,
     _DEFAULT_JACCARD_TOL,
+    _DEFAULT_LINE_CONTAINMENT_TOL,
+    _DEFAULT_LINE_JACCARD_TOL,
     _DEFAULT_STRUCTURAL_CONTAINMENT_TOL,
     _DEFAULT_STRUCTURAL_JACCARD_TOL,
     _PROMPT_ADVISORY_TOL,
+    _copy_residual_is_padded,
     _fingerprint_versions_incompatible,
+    _line_strength,
     _utc,
     evaluate_duplicate_signals,
 )
+from ditto.api_server.source_languages import stored_language_inventory
 from ditto.db.queries.scores import LedgerRow
 
 ANTI_COPY_ALGORITHM_VERSION = "reference-aware-v2"
@@ -58,6 +64,7 @@ class AntiCopyComparison:
     bulk_eligible: bool
     algorithm_version: str
     lexical_fingerprint_version: int
+    line_fingerprint_version: str
     normalized_source_fingerprint_version: str
     prompt_fingerprint_version: str
     canonical_reference_revision: str
@@ -70,11 +77,18 @@ class AntiCopyComparison:
     exact_byte_match: bool
     normalized_source_match: bool
     lexical: SimilarityEvidence
+    line: SimilarityEvidence
     structural: SimilarityEvidence
     prompt: SimilarityEvidence
     triggered: bool
     triggered_signal: str | None
     current_decision: str
+    # Private language inventory of each side's fingerprinted members: counts by
+    # fixed language label, never paths or content. ``None`` when the row was
+    # fingerprinted before the inventory existed. Provenance only; it does not
+    # feed ``triggered`` or ``current_decision``.
+    candidate_languages: dict[str, Any] | None = None
+    reference_languages: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         """Return JSON-ready primitives without any submitted fingerprint data."""
@@ -213,6 +227,37 @@ def compare_anti_copy_pair(
         containment_threshold=_DEFAULT_CONTAINMENT_TOL,
         decision_role="trigger",
     )
+    # Containment only triggers in the padding direction, exactly as the gate
+    # reads it; a small candidate inside a large reference is not a trigger.
+    lexical = replace(
+        lexical,
+        above_threshold=lexical.applicable
+        and (
+            (lexical.jaccard or 0.0) >= _DEFAULT_JACCARD_TOL
+            or (
+                (lexical.containment or 0.0) >= _DEFAULT_CONTAINMENT_TOL
+                and _copy_residual_is_padded(
+                    candidate.content_fingerprint, reference.content_fingerprint
+                )
+            )
+        ),
+    )
+    # The line sub-sketch triggers the copy rule beside the window channel, so
+    # a module-split copy reads as "line above threshold", not as a lexical
+    # miss that somehow held.
+    line = _similarity(
+        (candidate.content_fingerprint or {}).get("lines"),
+        (reference.content_fingerprint or {}).get("lines"),
+        jaccard_threshold=_DEFAULT_LINE_JACCARD_TOL,
+        containment_threshold=_DEFAULT_LINE_CONTAINMENT_TOL,
+        decision_role="trigger",
+    )
+    line = replace(
+        line,
+        above_threshold=line.applicable
+        and _line_strength(candidate.content_fingerprint, reference.content_fingerprint)
+        >= 1.0,
+    )
     structural = _similarity(
         candidate.structural_fingerprint,
         reference.structural_fingerprint,
@@ -250,6 +295,7 @@ def compare_anti_copy_pair(
         ),
         algorithm_version=ANTI_COPY_ALGORITHM_VERSION,
         lexical_fingerprint_version=_FP_VERSION,
+        line_fingerprint_version=_LINE_VERSION,
         normalized_source_fingerprint_version=f"nsh{_NSH_VERSION}",
         prompt_fingerprint_version=_PROMPT_VERSION,
         canonical_reference_revision=provenance["revision"],
@@ -267,9 +313,12 @@ def compare_anti_copy_pair(
             and candidate.normalized_source_hash == reference.normalized_source_hash
         ),
         lexical=lexical,
+        line=line,
         structural=structural,
         prompt=prompt,
         triggered=decision.held,
         triggered_signal=signal,
         current_decision=current_decision,
+        candidate_languages=stored_language_inventory(candidate.content_fingerprint),
+        reference_languages=stored_language_inventory(reference.content_fingerprint),
     )

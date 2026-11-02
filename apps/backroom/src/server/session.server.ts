@@ -94,7 +94,11 @@ export async function readSession() {
 
   let accessLevel: BackroomSession['accessLevel']
   try {
-    accessLevel = accessLevelForEmail(session.email, process.env.BACKROOM_ADMIN_EMAILS)
+    accessLevel = accessLevelForEmail(
+      session.email,
+      process.env.BACKROOM_ADMIN_EMAILS,
+      process.env.BACKROOM_BLOCKED_EMAILS,
+    )
   } catch {
     clearSessionCookie()
     return null

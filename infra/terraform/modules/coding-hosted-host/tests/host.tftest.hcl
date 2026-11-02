@@ -23,7 +23,7 @@ run "absent_by_default" {
       length(google_service_account.host) == 0,
       length(google_project_iam_member.telemetry) == 0,
       length(google_compute_instance_iam_member.osadmin) == 0,
-      length(google_iap_tunnel_instance_iam_member.ssh) == 0,
+      length(google_project_iam_member.ssh) == 0,
       length(google_service_account_iam_member.actas) == 0,
       output.host == null,
     ])
@@ -39,7 +39,7 @@ run "disabled_operators_grant_nothing" {
   assert {
     condition = (
       length(google_compute_instance_iam_member.osadmin) == 0 &&
-      length(google_iap_tunnel_instance_iam_member.ssh) == 0 &&
+      length(google_project_iam_member.ssh) == 0 &&
       length(google_service_account_iam_member.actas) == 0
     )
     error_message = "Listing custodians must not activate IAM."
@@ -105,6 +105,14 @@ run "reject_fractional_disk" {
 
 run "enabled_foundation" {
   command = plan
+  override_module {
+    target = module.host[0]
+    outputs = {
+      hostname    = "ditto-coding-hosted-v2"
+      id          = "123456789"
+      internal_ip = "10.33.0.2"
+    }
+  }
   variables {
     enabled   = true
     operators = ["user:owner@example.com"]
@@ -123,11 +131,11 @@ run "enabled_foundation" {
     condition = (
       toset(keys(google_project_iam_member.telemetry)) == toset(["roles/logging.logWriter", "roles/monitoring.metricWriter"]) &&
       google_compute_instance_iam_member.osadmin["user:owner@example.com"].role == "roles/compute.osAdminLogin" &&
-      google_iap_tunnel_instance_iam_member.ssh["user:owner@example.com"].condition[0].expression == "destination.port == 22" &&
-      google_iap_tunnel_instance_iam_member.ssh["user:owner@example.com"].instance == "ditto-coding-hosted-v2" &&
+      google_project_iam_member.ssh["user:owner@example.com"].condition[0].expression == "destination.ip == '10.33.0.2' && destination.port == 22" &&
+      google_project_iam_member.ssh["user:owner@example.com"].role == "roles/iap.tunnelResourceAccessor" &&
       length(google_service_account_iam_member.actas) == 1
     )
-    error_message = "Runtime IAM must be telemetry-only, with explicit instance-scoped SSH custodians."
+    error_message = "Runtime IAM must be telemetry-only, with explicit destination-scoped SSH custodians."
   }
   assert {
     condition = (
@@ -141,5 +149,29 @@ run "enabled_foundation" {
       one(google_compute_firewall.deny_other_egress[0].deny).protocol == "all"
     )
     error_message = "IAP ingress and ordered host-only web egress restrictions must remain intact."
+  }
+}
+
+run "iap_follows_resolved_private_address" {
+  command = plan
+  variables {
+    enabled   = true
+    operators = ["user:owner@example.com"]
+  }
+  override_module {
+    target = module.host[0]
+    outputs = {
+      hostname    = "ditto-coding-hosted-v2"
+      id          = "987654321"
+      internal_ip = "10.33.0.9"
+    }
+  }
+  assert {
+    condition = (
+      length(google_project_iam_member.ssh) == 1 &&
+      google_project_iam_member.ssh["user:owner@example.com"].member == "user:owner@example.com" &&
+      google_project_iam_member.ssh["user:owner@example.com"].condition[0].expression == "destination.ip == '10.33.0.9' && destination.port == 22"
+    )
+    error_message = "IAP must follow the resolved private IP, not a hardcoded address, hostname, or unrestricted port."
   }
 }

@@ -88,6 +88,21 @@ func gradeProjectedMemoryCase(
 	return score
 }
 
+// carryV13ProvenanceRelation copies the generator's metamorphic /
+// counterfactual relation (universe.V10CaseProvenance.Relation) onto the
+// report for bench_version >= 13, so the twin post-pass and calibration audits
+// can group cases by relation without regenerating the dataset. It is
+// report-only and additive-optional: v9..v12 reports keep their exact shape,
+// and the field is populated after the case has been answered, so it is never
+// a tell on the harness wire.
+func carryV13ProvenanceRelation(benchVersion int, sc gen.StagedCase, score protocol.CaseScore) protocol.CaseScore {
+	if benchVersion < protocol.BenchVersionV13 || sc.V10Provenance == nil {
+		return score
+	}
+	score.Relation = sc.V10Provenance.Relation
+	return score
+}
+
 func injectionAttemptCount(scores []protocol.CaseScore) int {
 	attempts := 0
 	for _, score := range scores {

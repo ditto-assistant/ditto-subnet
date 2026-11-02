@@ -184,3 +184,12 @@ gh pr view <number> --json headRefOid,baseRefName,mergeable,mergeStateStatus,isD
 ```
 
 Report exact PR URLs, heads, check state, worktree path, and any deployment or activation gap. Do not call historical checks current after a rebase or force-push.
+
+A conflicting PR runs no `pull_request` workflows at all. GitHub cannot build a merge ref for it, so only app-level checks report and `gh pr checks` can exit `0` with nothing having run — an exit status is not evidence of a green run. Confirm the workflows exist and concluded *on the head you are about to merge*:
+
+```bash
+gh pr view <number> --json headRefOid,mergeable,mergeStateStatus
+gh run list --branch <branch> --json name,event,status,conclusion,headSha
+```
+
+No run whose `headSha` equals `headRefOid` means nothing has run for this head. The list is empty only when the PR conflicted from its first push; when the conflict arrives later, earlier pushes leave runs behind that read as current. On `mergeable=CONFLICTING`, rebase onto current `origin/main` and re-read against the new head. `git merge-tree --write-tree origin/main HEAD` answers the conflict question immediately — exit `0` clean, `1` on conflict, and it prints a tree OID either way, so read the status rather than stdout — while GitHub recomputes `mergeable` in a background job after every push, reading `UNKNOWN` (GraphQL) or `null` (REST), or still showing the previous value, until that job finishes.

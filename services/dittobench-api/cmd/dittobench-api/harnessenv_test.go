@@ -164,6 +164,7 @@ func assertExactV9HarnessEnv(t *testing.T, env map[string]string) {
 		"OPENROUTER_BASE_URL": true, "OPENAI_API_KEY": true,
 		"OPENROUTER_API_KEY": true, "DITTOBENCH_MODEL": true,
 		"OLLAMA_BASE_URL": true, "DITTOBENCH_DB": true,
+		"DITTOBENCH_MEMORY_PATH": true,
 	}
 	if len(env) != len(wantKeys) {
 		t.Fatalf("v9 env has %d entries, exact allowlist has %d: %#v", len(env), len(wantKeys), env)
@@ -181,6 +182,11 @@ func assertExactV9HarnessEnv(t *testing.T, env map[string]string) {
 	if env["DITTOBENCH_MODEL"] != llm.HarnessModelForVersion(protocol.BenchVersionV9) {
 		t.Fatalf("v9 locked model = %q", env["DITTOBENCH_MODEL"])
 	}
+	for key, want := range sandboxPersistencePaths {
+		if env[key] != want {
+			t.Fatalf("v9 %s = %q, want %q", key, env[key], want)
+		}
+	}
 }
 
 func TestV8EnvironmentStillPreservesArbitraryCallerKeys(t *testing.T) {
@@ -190,15 +196,43 @@ func TestV8EnvironmentStillPreservesArbitraryCallerKeys(t *testing.T) {
 	}
 }
 
-func TestSandboxRuntimeEnvOnlyLocksWritableDatabase(t *testing.T) {
+func TestSandboxRuntimeEnvOnlyLocksWritablePersistencePaths(t *testing.T) {
 	env := sandboxRuntimeEnv(map[string]string{
-		"DITTOBENCH_DB":      "/app/read-only.db",
-		"OPENROUTER_API_KEY": "practice-key",
+		"DITTOBENCH_DB":          "/app/read-only.db",
+		"DITTOBENCH_MEMORY_PATH": "/app/memory.json",
+		"OPENROUTER_API_KEY":     "practice-key",
 	})
 	if env["DITTOBENCH_DB"] != "/tmp/dittobench.db" {
 		t.Fatalf("sandbox DB path = %q", env["DITTOBENCH_DB"])
 	}
+	if env["DITTOBENCH_MEMORY_PATH"] != "/tmp/dittobench-memory.json" {
+		t.Fatalf("sandbox memory path = %q", env["DITTOBENCH_MEMORY_PATH"])
+	}
 	if env["OPENROUTER_API_KEY"] != "practice-key" {
 		t.Fatal("practice provider environment was unexpectedly changed")
+	}
+}
+
+// A harness that honours either persistence variable must land inside the
+// tmpfs in screening and in scoring alike; a path that only one runtime pins
+// lets the same image pass one and fail the other.
+func TestSandboxPersistencePathsMatchTheScreenerLock(t *testing.T) {
+	want := map[string]string{
+		"DITTOBENCH_DB":          "/tmp/dittobench.db",
+		"DITTOBENCH_MEMORY_PATH": "/tmp/dittobench-memory.json",
+	}
+	if len(sandboxPersistencePaths) != len(want) {
+		t.Fatalf("persistence path table = %v", sandboxPersistencePaths)
+	}
+	for key, value := range want {
+		if sandboxPersistencePaths[key] != value {
+			t.Fatalf("%s = %q, want %q", key, sandboxPersistencePaths[key], value)
+		}
+	}
+	scored := harnessSandboxEnv(nil, protocol.BenchVersionV12)
+	for key, value := range want {
+		if scored[key] != value {
+			t.Fatalf("scored env %s = %q, want %q", key, scored[key], value)
+		}
 	}
 }

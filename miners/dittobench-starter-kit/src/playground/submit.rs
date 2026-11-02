@@ -23,7 +23,7 @@ pub(crate) struct SubmitConfig {
     pub(super) api_url: String,
     /// Git URL of this crate that the validator clones + builds.
     pub(super) git_url: String,
-    /// Git ref of this crate to build.
+    /// Full commit SHA of this crate to build; required for the crate target.
     pub(super) git_ref: String,
     /// Repository-relative Docker context for a monorepo-hosted crate.
     pub(super) git_subdir: String,
@@ -44,7 +44,7 @@ impl SubmitConfig {
             }),
             git_url: std::env::var("DITTOBENCH_CRATE_GIT")
                 .unwrap_or_else(|_| "https://github.com/ditto-assistant/ditto-subnet".to_string()),
-            git_ref: std::env::var("DITTOBENCH_CRATE_REF").unwrap_or_else(|_| "main".to_string()),
+            git_ref: std::env::var("DITTOBENCH_CRATE_REF").unwrap_or_default(),
             git_subdir: std::env::var("DITTOBENCH_CRATE_SUBDIR")
                 .unwrap_or_else(|_| "miners/dittobench-starter-kit".to_string()),
             // Default matches `serve`'s default port (8080).
@@ -71,6 +71,14 @@ fn supports_git_subdir(capabilities: &Value) -> bool {
         .get("features")
         .and_then(Value::as_array)
         .is_some_and(|features| features.iter().any(|feature| feature == "git_subdir"))
+}
+
+fn pinned_git_commit(ref_name: &str) -> bool {
+    ref_name.len() == 40
+        && ref_name.bytes().any(|byte| byte != b'0')
+        && ref_name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 async fn require_git_subdir_capability(state: &AppState) -> Result<(), String> {
@@ -117,6 +125,13 @@ pub(super) async fn submit_start_handler(
     };
     let url = format!("{}/v1/submit", state.submit.api_url.trim_end_matches('/'));
     if req.target == "crate" {
+        if !pinned_git_commit(&state.submit.git_ref) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"error": "set DITTOBENCH_CRATE_REF to a pushed, full 40-character lowercase commit SHA"})),
+            )
+                .into_response();
+        }
         if let Err(error) = require_git_subdir_capability(&state).await {
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -153,21 +168,6 @@ pub(super) async fn submit_start_handler(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::supports_git_subdir;
-    use serde_json::json;
-
-    #[test]
-    fn git_subdir_requires_an_explicit_live_capability() {
-        assert!(supports_git_subdir(&json!({"features": ["git_subdir"]})));
-        assert!(!supports_git_subdir(&json!({"features": []})));
-        assert!(!supports_git_subdir(&json!({
-            "supported_bench_versions": [8, 9]
-        })));
-    }
-}
-
 /// `GET /api/submit/:id`: proxy `GET <DITTOBENCH_API_URL>/v1/runs/:id` and
 /// return the run's JSON (status, stage, progress, partial cases, report).
 pub(super) async fn submit_poll_handler(
@@ -201,5 +201,36 @@ async fn relay_json(resp: reqwest::Response) -> axum::response::Response {
             Json(json!({"error": "non-JSON upstream", "body": text})),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pinned_git_commit, supports_git_subdir};
+    use serde_json::json;
+
+    #[test]
+    fn git_subdir_requires_an_explicit_live_capability() {
+        assert!(supports_git_subdir(&json!({"features": ["git_subdir"]})));
+        assert!(!supports_git_subdir(&json!({"features": []})));
+        assert!(!supports_git_subdir(&json!({
+            "supported_bench_versions": [8, 9]
+        })));
+    }
+
+    #[test]
+    fn crate_build_requires_an_immutable_commit() {
+        assert!(pinned_git_commit(
+            "2d4c8c53c18be3926dfc954c1ea534e327e84f2b"
+        ));
+        for reference in [
+            "",
+            "main",
+            "2d4c8c53",
+            "0000000000000000000000000000000000000000",
+            "2D4C8C53C18BE3926DFC954C1EA534E327E84F2B",
+        ] {
+            assert!(!pinned_git_commit(reference), "{reference}");
+        }
     }
 }

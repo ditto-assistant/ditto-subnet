@@ -1,0 +1,422 @@
+"""Guard: every layer's bench-version pin agrees with the shared derivation.
+
+A ``bench_version`` is an immutable cross-layer contract, and every bump so far
+stranded the new version at exactly one layer that kept an old pin: v10 ran
+ungated on ``== 9`` checks, v11 shipped with the validator's own
+``SUPPORTED_BENCH_VERSIONS`` lagging the scorer (zero capable validators), v12
+was selected for confirmation and then rejected at the transport's
+``Literal[9]``. The rule is floors and one derived constant, never retyped
+enumerations -- but Go, Rust and TypeScript cannot import the Python constant,
+so this test diffs their pins against the committed ``bench_versions.json``
+golden (written by ``scripts/gen_validator_contract.py`` from
+``ditto_screening_protocol.bench_v9``, the one hand-typed alias).
+
+It deliberately reads source text, not build output: the point is to fail on
+the pull request that forgets a layer, before anything is built or deployed.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+
+from ditto.validator.dittobench import SUPPORTED_BENCH_VERSIONS
+from ditto.validator.weights import RECEIPT_CONTRACT_VERSIONS
+from ditto_screening_protocol import bench_v9
+
+ROOT = Path(__file__).resolve().parents[2]
+GOLDEN = ROOT / "ditto/tests/contract/bench_versions.json"
+
+DATAGEN_EPOCH = ROOT / "research/dittobench-datagen/protocol/epoch.go"
+SCOREGATES = ROOT / "services/dittobench-api/internal/scoregates/scoregates.go"
+EFFICIENCY = ROOT / "services/dittobench-api/internal/efficiency/efficiency.go"
+SCORER_MAIN = ROOT / "services/dittobench-api/cmd/dittobench-api/main.go"
+CONFIRMATION_EXECUTOR = (
+    ROOT / "services/dittobench-api/cmd/dittobench-api/confirmation_executor.go"
+)
+RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+PLATFORM_CONTRACTS = ROOT / "apps/platform/ditto/api_models/benchmark_contract.py"
+STARTER_KIT_PROTOCOL = ROOT / "miners/dittobench-starter-kit/src/protocol.rs"
+LOCAL_REHEARSAL = ROOT / "miners/dittobench-starter-kit/scripts/local-rehearsal.py"
+BACKROOM_SCHEMAS = ROOT / "apps/backroom/src/lib/admin.schemas.ts"
+BACKROOM_GENERATED = ROOT / "apps/backroom/src/generated/platform-api.ts"
+DASHBOARD_TYPES = (
+    ROOT / "apps/platform/dashboard/src/types/leaderboard.ts",
+    ROOT / "apps/platform/dashboard/src/types/fleet.ts",
+)
+
+
+def _golden() -> dict:
+    return json.loads(GOLDEN.read_text())
+
+
+def _max_go_version_constant(source: str) -> int:
+    """Highest ``BenchVersionVN = N`` constant declared in a Go file."""
+    pairs = re.findall(r"\bBenchVersionV(\d+)\s*=\s*(\d+)\b", source)
+    assert pairs, "no BenchVersionVN constants found"
+    for suffix, value in pairs:
+        assert suffix == value, f"BenchVersionV{suffix} is defined as {value}"
+    return max(int(value) for _, value in pairs)
+
+
+def _int_set(text: str) -> set[int]:
+    return {int(v) for v in re.findall(r"\d+", text)}
+
+
+# --- the golden itself -------------------------------------------------------
+
+
+def test_golden_is_the_shared_alias_serialized() -> None:
+    golden = _golden()
+    assert golden["confirmation_bench_versions"] == list(
+        bench_v9.CONFIRMATION_BENCH_VERSIONS
+    )
+    assert golden["supported_bench_versions"] == list(bench_v9.SUPPORTED_BENCH_VERSIONS)
+    assert golden["max_supported_bench_version"] == bench_v9.MAX_SUPPORTED_BENCH_VERSION
+    assert (
+        golden["min_executable_bench_version"] == bench_v9.MIN_EXECUTABLE_BENCH_VERSION
+    )
+
+
+def test_supported_set_is_contiguous_and_contains_every_confirmable_epoch() -> None:
+    golden = _golden()
+    supported = golden["supported_bench_versions"]
+    lo, hi = (
+        golden["min_executable_bench_version"],
+        golden["max_supported_bench_version"],
+    )
+    assert supported == list(range(lo, hi + 1))
+    confirmable = golden["confirmation_bench_versions"]
+    assert confirmable == list(range(min(confirmable), hi + 1))
+    assert set(confirmable) <= set(supported)
+
+
+# --- Python layers (imported, so a retyped copy cannot hide) ------------------
+
+
+def test_validator_executable_set_is_the_shared_derivation() -> None:
+    assert SUPPORTED_BENCH_VERSIONS is bench_v9.SUPPORTED_BENCH_VERSIONS
+    assert list(SUPPORTED_BENCH_VERSIONS) == _golden()["supported_bench_versions"]
+
+
+def test_weight_fold_receipt_set_is_the_confirmation_lane_set() -> None:
+    assert set(_golden()["confirmation_bench_versions"]) == RECEIPT_CONTRACT_VERSIONS
+
+
+def test_platform_ships_a_contract_for_exactly_the_supported_ceiling() -> None:
+    source = PLATFORM_CONTRACTS.read_text()
+    shipped = {
+        int(v) for v in re.findall(r"^\s*(\d+): BenchmarkContract\(", source, re.M)
+    }
+    golden = _golden()
+    assert max(shipped) == golden["max_supported_bench_version"], (
+        "apps/platform benchmark_contract.py does not ship the newest supported "
+        "version; the Platform cannot count capable validators for it"
+    )
+    assert set(golden["supported_bench_versions"]) <= shipped
+
+
+# --- Go layers (datagen + scorer) ---------------------------------------------
+
+
+def test_datagen_protocol_declares_the_supported_ceiling() -> None:
+    source = DATAGEN_EPOCH.read_text()
+    ceiling = _golden()["max_supported_bench_version"]
+    assert _max_go_version_constant(source) == ceiling, (
+        "research/dittobench-datagen/protocol/epoch.go lags the shared ceiling; "
+        "the generator cannot reproduce the newest supported version"
+    )
+    assert f"datasetEpochV{ceiling}" in source, "newest version has no dataset epoch"
+
+
+def test_scoregates_upper_bound_is_the_supported_ceiling() -> None:
+    source = SCOREGATES.read_text()
+    ceiling = _golden()["max_supported_bench_version"]
+    assert _max_go_version_constant(source) == ceiling
+    bound = re.search(r"benchVersion\s*<=\s*BenchVersionV(\d+)", source)
+    assert bound is not None, "scoregates.SupportedBenchVersion has no <= upper bound"
+    assert int(bound.group(1)) == ceiling, (
+        "scoregates.SupportedBenchVersion caps below the shared ceiling; the "
+        "scorer would silently reject the newest version's evidence"
+    )
+
+
+def test_efficiency_readiness_uses_the_shared_supported_versions() -> None:
+    source = EFFICIENCY.read_text()
+    start = source.index("func ProductionReadyForVersion(")
+    body = source[start : source.index("\n}\n", start)]
+    assert "protocol.SupportedBenchVersion(benchVersion)" in body
+    assert "benchVersion >= protocol.BenchVersionV8" in body
+
+
+def _scorer_advertised_versions() -> set[int]:
+    source = SCORER_MAIN.read_text()
+    start = source.index("func supportedBenchVersions(")
+    body = source[start : source.index("\n}\n", start)]
+    assert "protocol.SupportedBenchVersions()" in body
+    assert (
+        "version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion"
+        in body
+    )
+    bounds = dict(
+        re.findall(
+            r"advertised(Min|Max)BenchVersion\s*=\s*protocol.BenchVersionV(\d+)", source
+        )
+    )
+    assert set(bounds) == {"Min", "Max"}
+    return {
+        version
+        for version in _golden()["supported_bench_versions"]
+        if int(bounds["Min"]) <= version <= int(bounds["Max"])
+    }
+
+
+def test_scorer_advertises_within_the_validator_executable_set() -> None:
+    """The scorer may lag the ceiling while a contract is unfinished; it must
+    never advertise a version the validator's executable set omits -- that is
+    the exact shape of the v11 zero-capable-validators outage."""
+    advertised = _scorer_advertised_versions()
+    golden = _golden()
+    assert advertised, "scorer advertises nothing"
+    assert min(advertised) == golden["min_executable_bench_version"]
+    assert advertised <= set(golden["supported_bench_versions"]), (
+        f"scorer advertises {sorted(advertised)} but the validator executes only "
+        f"{golden['supported_bench_versions']}"
+    )
+
+
+def test_release_identity_gate_matches_the_scorer_advertisement() -> None:
+    """The deploy identity gate fails closed on the advertised set; it must move
+    with cmd/dittobench-api, not be bumped from memory."""
+    gate = re.search(
+        r"\.supported_bench_versions \| sort == \[([\d, ]+)\]",
+        RELEASE_WORKFLOW.read_text(),
+    )
+    assert gate is not None, "release.yml identity gate not found"
+    assert _int_set(gate.group(1)) == _scorer_advertised_versions()
+
+
+def test_scorer_error_strings_name_the_advertised_set() -> None:
+    """Negotiation errors must derive the same capability set, never duplicate it."""
+    source = SCORER_MAIN.read_text()
+    start = source.index("func requestedBenchVersion(")
+    body = source[start : source.index("\n}\n", start)]
+    assert body.count('supported: %v)", supportedBenchVersions()') == 2
+    assert not re.search(r"supported: [\d, ]+", body)
+
+
+def test_confirmation_subject_epoch_is_a_floor_over_the_scorer_ceiling() -> None:
+    """The Go confirmation lane's bundle/job allow-list must accept every epoch
+    Python ``supports_confirmation`` can issue, or a v13 bundle is selected on
+    the Platform and rejected at ``running_confirmation`` -- the v12 strand.
+
+    The allow-list is a floor (``>= V9 && scoregates.SupportedBenchVersion``),
+    never a ``case 9, 10, 11, 12:`` enumeration. ``ablation.
+    ConfirmationBenchVersionSupported`` ({9, 12}) is deliberately NOT checked
+    here: it is the installed-instrument list (which profiles are shipped), a
+    legitimately enumerated depth upgrade, not the subject-epoch allow-list.
+    """
+    source = CONFIRMATION_EXECUTOR.read_text()
+    start = source.index("func confirmationSubjectEpochSupported(")
+    body = source[start : source.index("\n}\n", start)]
+    assert re.search(r"\bcase\s+\d+(?:\s*,\s*\d+)*\s*:", body) is None, (
+        "confirmationSubjectEpochSupported enumerates subject epochs; it must be "
+        "a floor so the newest confirmable version is not stranded"
+    )
+    assert "scoregates.SupportedBenchVersion(benchVersion)" in body
+    assert re.search(r"benchVersion\s*>=\s*ablation\.BenchVersionV9", body), (
+        "confirmation subject floor is not v9"
+    )
+    golden = _golden()
+    confirmable = golden["confirmation_bench_versions"]
+    # The floor's upper edge is the scorer ceiling; the golden's confirmable set
+    # must sit inside [9, ceiling] or Platform issues what Go refuses.
+    assert min(confirmable) == 9
+    assert max(confirmable) == _max_go_version_constant(SCOREGATES.read_text())
+
+
+# --- starter kit (Rust + rehearsal script) ------------------------------------
+
+
+def test_starter_kit_accepts_exactly_the_supported_range() -> None:
+    source = STARTER_KIT_PROTOCOL.read_text()
+    golden = _golden()
+    ceiling = re.search(r"MAX_SUPPORTED_BENCH_VERSION: u32 = (\d+);", source)
+    floor = re.search(r"MIN_SUPPORTED_BENCH_VERSION: u32 = (\d+);", source)
+    assert ceiling and floor
+    assert int(ceiling.group(1)) == golden["max_supported_bench_version"], (
+        "starter kit protocol.rs would 400 /run for the newest supported version"
+    )
+    assert int(floor.group(1)) == golden["min_executable_bench_version"]
+
+
+def test_local_rehearsal_range_tracks_the_supported_set() -> None:
+    source = LOCAL_REHEARSAL.read_text()
+    golden = _golden()
+    values = {
+        name: int(re.search(rf"^{name} = (\d+)$", source, re.M).group(1))  # type: ignore[union-attr]
+        for name in (
+            "LIVE_SCORING_BENCH_VERSION",
+            "MIN_BENCH_VERSION",
+            "MAX_BENCH_VERSION",
+        )
+    }
+    assert values["MAX_BENCH_VERSION"] == golden["max_supported_bench_version"]
+    assert values["MIN_BENCH_VERSION"] == golden["min_executable_bench_version"]
+    assert values["LIVE_SCORING_BENCH_VERSION"] in golden["supported_bench_versions"]
+
+
+def test_miner_docs_quote_the_rehearsal_live_fallback() -> None:
+    """The mine skill states the live bench; it must match the rehearsal's
+    offline fallback so an activation PR that bumps one bumps the other."""
+    fallback = int(
+        re.search(  # type: ignore[union-attr]
+            r"^LIVE_SCORING_BENCH_VERSION = (\d+)$", LOCAL_REHEARSAL.read_text(), re.M
+        ).group(1)
+    )
+    skill = (ROOT / ".agents/skills/mine/SKILL.md").read_text()
+    quoted = re.search(r"Live scoring is \*\*bench (\d+)\*\*", skill)
+    assert quoted, "mine SKILL.md no longer states 'Live scoring is **bench N**'"
+    assert int(quoted.group(1)) == fallback, (
+        "mine SKILL.md live bench and local-rehearsal.py "
+        "LIVE_SCORING_BENCH_VERSION disagree; bump both on activation"
+    )
+
+
+# --- generator rounds ----------------------------------------------------------
+
+
+def _go_pack_grading_versions() -> tuple[int, list[int]]:
+    """The pack contract's baseline policy and ordered supported policies,
+    resolved from ``challenge/pack.go`` constant names to version numbers."""
+    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
+    consts = {
+        name: int(version)
+        for name, version in re.findall(
+            r"const (GradingBenchVersion\w*) = protocol\.BenchVersionV(\d+)", pack
+        )
+    }
+    assert "GradingBenchVersion" in consts, (
+        "challenge.GradingBenchVersion is no longer a V-constant"
+    )
+    listed = re.search(r"supportedGradingBenchVersions = \[\]int\{([^}]*)\}", pack)
+    assert listed, "challenge.supportedGradingBenchVersions is no longer a literal"
+    names = [name.strip() for name in listed.group(1).split(",") if name.strip()]
+    assert all(name in consts for name in names), names
+    return consts["GradingBenchVersion"], [consts[name] for name in names]
+
+
+def test_generator_round_contracts_match_pack_grading_and_scorer_mode() -> None:
+    """A round freezes a version from ``GENERATOR_ROUND_BENCH_VERSIONS``; the
+    pack contract must grade at it and the scorer's round mode must run it.
+    Widening the tuple without both (or the reverse) strands rounds."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+        LEGACY_ROUND_BENCH_VERSION,
+        LEGACY_SCORER_ROUND_BENCH_VERSIONS,
+    )
+
+    baseline, supported = _go_pack_grading_versions()
+    assert supported == sorted(set(supported)) and supported[0] == baseline
+    assert list(GENERATOR_ROUND_BENCH_VERSIONS) == supported
+    # A scorer that advertises no round versions runs the original mode: the
+    # baseline policy, which every pre-v14 generator emits.
+    assert (baseline,) == LEGACY_SCORER_ROUND_BENCH_VERSIONS
+    assert baseline == LEGACY_ROUND_BENCH_VERSION
+    scorer = (
+        ROOT / "services/dittobench-api/cmd/dittobench-api/generator_round.go"
+    ).read_text()
+    assert "return challenge.SupportsGradingBenchVersion(v)" in scorer, (
+        "generator-round-v1 must run every pack grading policy"
+    )
+    assert not re.search(r"req\.BenchVersion != protocol\.BenchVersionV\d+", scorer), (
+        "generator-round-v1 pins one bench version again"
+    )
+    assert set(GENERATOR_ROUND_BENCH_VERSIONS) <= set(SUPPORTED_BENCH_VERSIONS)
+
+
+def test_every_activatable_bench_version_has_a_generator_pack_version() -> None:
+    """Operator policy (2026-10-27): one number for both competitions. Every
+    bench version a rollout can target from the first generator-round version
+    on -- a shipped Platform benchmark contract, or a version the validator
+    stack supports -- has a pack grading policy of the same number, even when
+    its grader is unchanged. Shipping bench v15 without pack policy 15 (and the
+    round contract that runs it) fails here, before it can be activated."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+    )
+
+    _, pack_versions = _go_pack_grading_versions()
+    first = min(GENERATOR_ROUND_BENCH_VERSIONS)
+    shipped = {
+        int(v)
+        for v in re.findall(
+            r"^\s*(\d+): BenchmarkContract\(", PLATFORM_CONTRACTS.read_text(), re.M
+        )
+    }
+    activatable = {
+        v for v in shipped | set(_golden()["supported_bench_versions"]) if v >= first
+    }
+    missing = sorted(activatable - set(pack_versions))
+    assert not missing, (
+        f"bench version(s) {missing} can be rolled out but have no generator pack "
+        "grading policy: add GradingBenchVersionV<N> to challenge/pack.go "
+        "supportedGradingBenchVersions and N to GENERATOR_ROUND_BENCH_VERSIONS "
+        "(research/dittobench-datagen/docs/tandem-upgrades.md)"
+    )
+    # Versions are consecutive, so the two-version window is always {N-1, N}.
+    assert pack_versions == list(range(first, max(pack_versions) + 1))
+
+
+def test_generator_grading_policy_window_is_two_versions() -> None:
+    """Operator policy (2026-10-27): a round at N accepts packs at N and N-1
+    only. Go and Python must agree on the window."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+        GRADING_POLICY_WINDOW,
+        accepted_grading_versions,
+    )
+
+    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
+    go_window = re.search(r"const GradingPolicyWindow = (\d+)", pack)
+    assert go_window, "challenge.GradingPolicyWindow is no longer a literal"
+    assert int(go_window.group(1)) == GRADING_POLICY_WINDOW == 2
+    for version in GENERATOR_ROUND_BENCH_VERSIONS:
+        accepted = accepted_grading_versions(version)
+        assert accepted[-1] == version
+        assert len(accepted) <= GRADING_POLICY_WINDOW
+        assert all(version - v < GRADING_POLICY_WINDOW for v in accepted)
+
+
+# --- TypeScript mirrors (hand-written and generated) --------------------------
+
+
+def test_backroom_confirmation_schema_enumerates_the_confirmable_epochs() -> None:
+    source = BACKROOM_SCHEMAS.read_text()
+    start = source.index("export const confirmationBenchVersionSchema = z.union([")
+    body = source[start : source.index("])", start)]
+    literals = {int(v) for v in re.findall(r"z\.literal\((\d+)\)", body)}
+    assert literals == set(_golden()["confirmation_bench_versions"])
+
+
+def test_generated_backroom_client_carries_every_confirmable_epoch() -> None:
+    unions = re.findall(
+        r"bench_version: (9 \| (?:\d+ \| )*\d+);", BACKROOM_GENERATED.read_text()
+    )
+    assert unions, "generated client has no bench_version unions; regenerate it"
+    expected = set(_golden()["confirmation_bench_versions"])
+    for union in unions:
+        assert _int_set(union) == expected, (
+            f"platform-api.ts union {union!r} is stale; run "
+            "apps/backroom/scripts/platform-contract/generate.sh"
+        )
+
+
+def test_dashboard_types_mirror_the_confirmable_epochs() -> None:
+    expected = set(_golden()["confirmation_bench_versions"])
+    for path in DASHBOARD_TYPES:
+        unions = re.findall(r"bench_version: ((?:\d+ \| )+\d+);", path.read_text())
+        assert unions, f"{path.name} has no bench_version union"
+        for union in unions:
+            assert _int_set(union) == expected, f"{path.name}: {union!r} is stale"

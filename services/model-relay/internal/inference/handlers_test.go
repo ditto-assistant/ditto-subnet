@@ -71,6 +71,7 @@ func serve(deps *Deps, r *http.Request) *httptest.ResponseRecorder {
 	mux.Handle("POST /api/v1/inference/exchange", handlers.Exchange)
 	mux.Handle("POST /api/v1/inference/chat/completions", handlers.ChatCompletions)
 	mux.Handle("POST /api/v1/inference/embeddings", handlers.Embeddings)
+	mux.Handle("POST /api/v1/inference/decisions", handlers.Decisions)
 	mux.Handle("POST /api/v1/inference/confirmation/chat/completions", handlers.ConfirmationChatCompletions)
 	mux.Handle("POST /api/v1/inference/confirmation/embeddings", handlers.ConfirmationEmbeddings)
 	mux.Handle("POST /api/v1/inference/source-review/provider-event", handlers.SourceReviewProviderEvent)

@@ -34,6 +34,20 @@ const (
 	defaultEmbeddingPerValidatorConcurrency = 48
 	defaultEmbeddingGlobalConcurrency       = 96
 	maxEmbeddingConcurrency                 = 512
+	defaultChatPerTicketRPM                 = 1920
+	defaultChatPerValidatorRPM              = 7680
+	defaultChatGlobalRPM                    = 23040
+	defaultEmbeddingPerTicketRPM            = 10_000
+	defaultEmbeddingPerValidatorRPM         = 40_000
+	defaultEmbeddingGlobalRPM               = 100_000
+	maxRequestsPerMinute                    = 100_000
+	defaultDecisionPerTicketConcurrency     = 8
+	defaultDecisionPerValidatorConcurrency  = 32
+	defaultDecisionGlobalConcurrency        = 64
+	maxDecisionConcurrency                  = 512
+	defaultDecisionPerTicketRPM             = 600
+	defaultDecisionPerValidatorRPM          = 2400
+	defaultDecisionGlobalRPM                = 6000
 	settingsRefreshInterval                 = 5 * time.Second
 )
 
@@ -48,6 +62,104 @@ type concurrencySettings struct {
 	EmbeddingPerTicketConcurrency    int
 	EmbeddingPerValidatorConcurrency int
 	EmbeddingGlobalConcurrency       int
+	ChatPerTicketRPM                 int
+	ChatPerValidatorRPM              int
+	ChatGlobalRPM                    int
+	EmbeddingPerTicketRPM            int
+	EmbeddingPerValidatorRPM         int
+	EmbeddingGlobalRPM               int
+	// Decision is the nested decision_lane object. Enabled is a live kill
+	// switch here; the pinned model, price and walls are read from the grant.
+	Decision decisionLaneSettings
+	// ScoredProviderRouting mirrors scored_provider_routing: which OpenRouter
+	// provider preference the aggregate scored chat route sends.
+	ScoredProviderRouting string
+}
+
+// decisionLaneSettings mirrors DecisionLaneSettings' live fields.
+type decisionLaneSettings struct {
+	Enabled                 bool
+	PerTicketConcurrency    int
+	PerValidatorConcurrency int
+	GlobalConcurrency       int
+	PerTicketRPM            int
+	PerValidatorRPM         int
+	GlobalRPM               int
+}
+
+func defaultDecisionLaneSettings() decisionLaneSettings {
+	return decisionLaneSettings{
+		PerTicketConcurrency:    defaultDecisionPerTicketConcurrency,
+		PerValidatorConcurrency: defaultDecisionPerValidatorConcurrency,
+		GlobalConcurrency:       defaultDecisionGlobalConcurrency,
+		PerTicketRPM:            defaultDecisionPerTicketRPM,
+		PerValidatorRPM:         defaultDecisionPerValidatorRPM,
+		GlobalRPM:               defaultDecisionGlobalRPM,
+	}
+}
+
+// parseDecisionLane validates the nested decision_lane object with the same
+// strict types, bounds and hierarchy as Pydantic. Unknown keys (model, price,
+// budgets: grant-stamped at mint) are ignored.
+func parseDecisionLane(raw json.RawMessage) (decisionLaneSettings, error) {
+	out := defaultDecisionLaneSettings()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return out, err
+	}
+	if rawEnabled, ok := fields["enabled"]; ok {
+		var enabled bool
+		if err := json.Unmarshal(rawEnabled, &enabled); err != nil {
+			return out, errors.New("decision_lane.enabled must be a boolean")
+		}
+		out.Enabled = enabled
+	}
+	if rawModel, ok := fields["model"]; ok && out.Enabled {
+		var model *string
+		if err := json.Unmarshal(rawModel, &model); err != nil || model == nil || *model == "" {
+			return out, errors.New("an enabled decision_lane must pin a model")
+		}
+	} else if out.Enabled {
+		return out, errors.New("an enabled decision_lane must pin a model")
+	}
+	for _, field := range []struct {
+		key  string
+		dst  *int
+		maxv int64
+	}{
+		{"per_ticket_concurrency", &out.PerTicketConcurrency, maxDecisionConcurrency},
+		{"per_validator_concurrency", &out.PerValidatorConcurrency, maxDecisionConcurrency},
+		{"global_concurrency", &out.GlobalConcurrency, maxDecisionConcurrency},
+		{"per_ticket_requests_per_minute", &out.PerTicketRPM, maxRequestsPerMinute},
+		{"per_validator_requests_per_minute", &out.PerValidatorRPM, maxRequestsPerMinute},
+		{"global_requests_per_minute", &out.GlobalRPM, maxRequestsPerMinute},
+	} {
+		rawValue, ok := fields[field.key]
+		if !ok {
+			continue
+		}
+		var num json.Number
+		dec := json.NewDecoder(bytes.NewReader(rawValue))
+		dec.UseNumber()
+		if err := dec.Decode(&num); err != nil {
+			return out, err
+		}
+		n, err := num.Int64()
+		if err != nil {
+			return out, err
+		}
+		if n < 1 || n > field.maxv {
+			return out, errors.New("out of range: decision_lane." + field.key)
+		}
+		*field.dst = int(n)
+	}
+	if out.PerTicketConcurrency > out.PerValidatorConcurrency || out.PerValidatorConcurrency > out.GlobalConcurrency {
+		return out, errors.New("decision concurrency hierarchy violated")
+	}
+	if out.PerTicketRPM > out.PerValidatorRPM || out.PerValidatorRPM > out.GlobalRPM {
+		return out, errors.New("decision requests-per-minute hierarchy violated")
+	}
+	return out, nil
 }
 
 func defaultConcurrencySettings() concurrencySettings {
@@ -60,6 +172,14 @@ func defaultConcurrencySettings() concurrencySettings {
 		EmbeddingPerTicketConcurrency:    defaultEmbeddingPerTicketConcurrency,
 		EmbeddingPerValidatorConcurrency: defaultEmbeddingPerValidatorConcurrency,
 		EmbeddingGlobalConcurrency:       defaultEmbeddingGlobalConcurrency,
+		ChatPerTicketRPM:                 defaultChatPerTicketRPM,
+		ChatPerValidatorRPM:              defaultChatPerValidatorRPM,
+		ChatGlobalRPM:                    defaultChatGlobalRPM,
+		EmbeddingPerTicketRPM:            defaultEmbeddingPerTicketRPM,
+		EmbeddingPerValidatorRPM:         defaultEmbeddingPerValidatorRPM,
+		EmbeddingGlobalRPM:               defaultEmbeddingGlobalRPM,
+		Decision:                         defaultDecisionLaneSettings(),
+		ScoredProviderRouting:            config.ScoredProviderRoutingThroughput,
 	}
 }
 
@@ -126,6 +246,31 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	if err := intField("embedding_global_concurrency", &embeddingGlobal, 1, maxEmbeddingConcurrency); err != nil {
 		return defaultConcurrencySettings(), err
 	}
+	chatTicketRPM, chatValidatorRPM, chatGlobalRPM := int64(out.ChatPerTicketRPM),
+		int64(out.ChatPerValidatorRPM), int64(out.ChatGlobalRPM)
+	embeddingTicketRPM, embeddingValidatorRPM, embeddingGlobalRPM := int64(out.EmbeddingPerTicketRPM),
+		int64(out.EmbeddingPerValidatorRPM), int64(out.EmbeddingGlobalRPM)
+	for _, field := range []struct {
+		key string
+		dst *int64
+	}{
+		{"chat_per_ticket_requests_per_minute", &chatTicketRPM},
+		{"chat_per_validator_requests_per_minute", &chatValidatorRPM},
+		{"chat_global_requests_per_minute", &chatGlobalRPM},
+		{"embedding_per_ticket_requests_per_minute", &embeddingTicketRPM},
+		{"embedding_per_validator_requests_per_minute", &embeddingValidatorRPM},
+		{"embedding_global_requests_per_minute", &embeddingGlobalRPM},
+	} {
+		if err := intField(field.key, field.dst, 1, maxRequestsPerMinute); err != nil {
+			return defaultConcurrencySettings(), err
+		}
+	}
+	if chatTicketRPM > chatValidatorRPM || chatValidatorRPM > chatGlobalRPM {
+		return defaultConcurrencySettings(), errors.New("chat requests-per-minute hierarchy violated")
+	}
+	if embeddingTicketRPM > embeddingValidatorRPM || embeddingValidatorRPM > embeddingGlobalRPM {
+		return defaultConcurrencySettings(), errors.New("embedding requests-per-minute hierarchy violated")
+	}
 	if chatPerTicket > chatPerValidator || chatPerValidator > chatGlobal {
 		return defaultConcurrencySettings(), errors.New("chat concurrency hierarchy violated")
 	}
@@ -138,7 +283,55 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	out.EmbeddingPerTicketConcurrency = int(embeddingPerTicket)
 	out.EmbeddingPerValidatorConcurrency = int(embeddingPerValidator)
 	out.EmbeddingGlobalConcurrency = int(embeddingGlobal)
+	out.ChatPerTicketRPM = int(chatTicketRPM)
+	out.ChatPerValidatorRPM = int(chatValidatorRPM)
+	out.ChatGlobalRPM = int(chatGlobalRPM)
+	out.EmbeddingPerTicketRPM = int(embeddingTicketRPM)
+	out.EmbeddingPerValidatorRPM = int(embeddingValidatorRPM)
+	out.EmbeddingGlobalRPM = int(embeddingGlobalRPM)
+	if rawDecision, ok := raw["decision_lane"]; ok {
+		decision, err := parseDecisionLane(rawDecision)
+		if err != nil {
+			return defaultConcurrencySettings(), err
+		}
+		out.Decision = decision
+	}
+	if rawRouting, ok := raw["scored_provider_routing"]; ok {
+		var routing string
+		if err := json.Unmarshal(rawRouting, &routing); err != nil {
+			return defaultConcurrencySettings(), errors.New("scored_provider_routing must be a string")
+		}
+		out.ScoredProviderRouting = normalizeScoredProviderRouting(routing)
+	}
 	return out, nil
+}
+
+// normalizeScoredProviderRouting maps a stored routing mode onto one this
+// relay knows. A mode written by a newer Platform falls back to throughput,
+// the historical route, instead of failing the whole board and freezing every
+// other admission limit at its last-known-good value.
+func normalizeScoredProviderRouting(routing string) string {
+	switch routing {
+	case config.ScoredProviderRoutingBF16PriceOrder, config.ScoredProviderRoutingBF16Canary:
+		return routing
+	default:
+		return config.ScoredProviderRoutingThroughput
+	}
+}
+
+// effectiveScoredProviderRouting resolves the board mode for one ticket. The
+// canary mode moves only benchmark_canary tickets, so an operator can compare
+// a canary run against accepted scores before moving the fleet.
+func effectiveScoredProviderRouting(routing, ticketPurpose string) string {
+	switch routing {
+	case config.ScoredProviderRoutingBF16PriceOrder:
+		return config.ScoredProviderRoutingBF16PriceOrder
+	case config.ScoredProviderRoutingBF16Canary:
+		if ticketPurpose == ticketPurposeBenchmarkCanary {
+			return config.ScoredProviderRoutingBF16PriceOrder
+		}
+	}
+	return config.ScoredProviderRoutingThroughput
 }
 
 // SettingsResolver owns a last-known-good atomic snapshot of the operator
@@ -218,8 +411,8 @@ func (r *SettingsResolver) startRefresh(ctx context.Context, interval time.Durat
 
 // applySettings overlays the resolved policy onto a fallback config copy
 // (apply_settings). The overlaid chat budgets are inert at admission because
-// grants compare their stamped columns; both chat and embedding concurrency
-// limits are live fields.
+// grants compare their stamped columns; chat and embedding concurrency and
+// requests-per-minute limits are live fields, as on the Platform side.
 func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) config.InferenceProxyConfig {
 	cfg.RequestBudget = int(s.ChatRequestBudget)
 	cfg.TokenBudget = s.ChatTokenBudget
@@ -229,5 +422,19 @@ func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) confi
 	cfg.EmbeddingTicketConcurrency = s.EmbeddingPerTicketConcurrency
 	cfg.EmbeddingValidatorConcurrency = s.EmbeddingPerValidatorConcurrency
 	cfg.EmbeddingGlobalConcurrency = s.EmbeddingGlobalConcurrency
+	cfg.TicketRPM = s.ChatPerTicketRPM
+	cfg.ValidatorRPM = s.ChatPerValidatorRPM
+	cfg.GlobalRPM = s.ChatGlobalRPM
+	cfg.EmbeddingTicketRPM = s.EmbeddingPerTicketRPM
+	cfg.EmbeddingValidatorRPM = s.EmbeddingPerValidatorRPM
+	cfg.EmbeddingGlobalRPM = s.EmbeddingGlobalRPM
+	cfg.DecisionEnabled = s.Decision.Enabled
+	cfg.DecisionTicketConcurrency = s.Decision.PerTicketConcurrency
+	cfg.DecisionValidatorConcurrency = s.Decision.PerValidatorConcurrency
+	cfg.DecisionGlobalConcurrency = s.Decision.GlobalConcurrency
+	cfg.DecisionTicketRPM = s.Decision.PerTicketRPM
+	cfg.DecisionValidatorRPM = s.Decision.PerValidatorRPM
+	cfg.DecisionGlobalRPM = s.Decision.GlobalRPM
+	cfg.ScoredProviderRouting = s.ScoredProviderRouting
 	return cfg
 }

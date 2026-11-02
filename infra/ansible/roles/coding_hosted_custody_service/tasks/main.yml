@@ -1,0 +1,284 @@
+---
+- name: Explain the dormant native custody service install
+  ansible.builtin.debug:
+    msg: Native Coding custody service install is disabled; no unit, proxy or configuration is changed.
+  when: not (coding_hosted_custody_service_enabled | bool)
+
+- name: Install the locked native custody template, proxy and base configuration once
+  when: coding_hosted_custody_service_enabled | bool
+  block:
+    - name: Require the exact host, source, runtime, database and release authorities
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname in groups.get('role_coding_hosted', [])
+          - ansible_facts['hostname'] == 'ditto-coding-hosted-v2'
+          - ansible_facts['architecture'] == 'x86_64'
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['distribution_major_version'] == '13'
+          - coding_hosted_custody_service_source_revision is match('^[0-9a-f]{40}$')
+          - coding_hosted_custody_service_confirmation == 'INSTALL NATIVE CODING CUSTODY SERVICE'
+          - coding_hosted_custody_runtime_revision is match('^[0-9a-f]{40}$')
+          - coding_hosted_custody_postgres_ip is string
+          - coding_hosted_custody_postgres_ip is match('^10[.]30[.]0[.]([2-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-3])$')
+          - coding_hosted_custody_release_id is match('^coding-private-v2-r[1-9][0-9]{0,5}$')
+          - coding_hosted_custody_reader_authority_sha256 is match('^[0-9a-f]{64}$')
+          - coding_hosted_custody_release_inputs is mapping
+          - >-
+            coding_hosted_custody_release_inputs.keys() | sort ==
+            ['curator_public_key', 'payload_authority', 'publication_receipt', 'registration', 'transport_manifest']
+        fail_msg: Require the reviewed source, dedicated host, installed runtime, database IP, release inputs and exact confirmation.
+        quiet: true
+
+    - name: Require absolute controller release inputs with reviewed digests
+      ansible.builtin.assert:
+        that:
+          - item.value.src is string
+          - item.value.src is match('^/')
+          - item.value.sha256 is match('^[0-9a-f]{64}$')
+        fail_msg: Every release input needs an absolute controller path and a reviewed SHA-256.
+        quiet: true
+      loop: "{{ coding_hosted_custody_release_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+
+    - name: Inspect controller release inputs
+      ansible.builtin.stat:
+        path: "{{ item.value.src }}"
+        follow: false
+        get_checksum: true
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      loop: "{{ coding_hosted_custody_release_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      register: coding_hosted_custody_controller_inputs
+
+    - name: Require exact reviewed controller release bytes
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.checksum == item.item.value.sha256
+        fail_msg: A controller release input does not match its reviewed digest.
+        quiet: true
+      loop: "{{ coding_hosted_custody_controller_inputs.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+
+    - name: Inspect host accounts once
+      ansible.builtin.getent:
+        database: passwd
+
+    - name: Require the distinct bootstrapped custodian and qualified worker
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.getent_passwd.get('ditto-coding-custody') is not none
+          - ansible_facts.getent_passwd.get('ditto-coding-hosted') is not none
+          - ansible_facts.getent_passwd['ditto-coding-custody'][4] == '/var/lib/ditto-coding-custody'
+          - ansible_facts.getent_passwd['ditto-coding-custody'][5] == '/usr/sbin/nologin'
+          - ansible_facts.getent_passwd['ditto-coding-custody'][1] | int >= 1000
+          - ansible_facts.getent_passwd['ditto-coding-hosted'][1] | int >= 1000
+          - ansible_facts.getent_passwd['ditto-coding-custody'][1] != ansible_facts.getent_passwd['ditto-coding-hosted'][1]
+        fail_msg: Run the native daemon and custody-key bootstraps before installing the custody service.
+        quiet: true
+
+    - name: Record the custodian and worker identities
+      ansible.builtin.set_fact:
+        coding_hosted_custody_uid: "{{ ansible_facts.getent_passwd['ditto-coding-custody'][1] }}"
+        coding_hosted_worker_uid: "{{ ansible_facts.getent_passwd['ditto-coding-hosted'][1] }}"
+        coding_hosted_custody_release_dir: "/var/lib/ditto-coding-custody/release/{{ coding_hosted_custody_release_id }}"
+
+    - name: Inspect the sealed custody key, receipt and installed runtime
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa.pem
+        - /var/lib/ditto-coding-custody/keys/private-input-rsa-receipt.json
+        - "/opt/ditto-coding-hosted/{{ coding_hosted_custody_runtime_revision }}/bundle-receipt.json"
+      register: coding_hosted_custody_prerequisites
+
+    - name: Require the bootstrapped key and a verified runtime install
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_custody_prerequisites.results[0].stat.isreg | default(false)
+          - coding_hosted_custody_prerequisites.results[0].stat.pw_name == 'ditto-coding-custody'
+          - coding_hosted_custody_prerequisites.results[0].stat.mode == '0600'
+          - coding_hosted_custody_prerequisites.results[1].stat.isreg | default(false)
+          - coding_hosted_custody_prerequisites.results[2].stat.isreg | default(false)
+          - coding_hosted_custody_prerequisites.results[2].stat.uid == 0
+        fail_msg: The custody key bootstrap or runtime revision install is incomplete.
+        quiet: true
+
+    - name: Inspect the runtime interpreter used by custody and the proxy
+      ansible.builtin.stat:
+        path: "/opt/ditto-coding-hosted/{{ coding_hosted_custody_runtime_revision }}/apps/platform/.venv/bin/python"
+        follow: true
+      register: coding_hosted_custody_python
+
+    - name: Require a protected root-owned runtime interpreter
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_custody_python.stat.isreg | default(false)
+          - coding_hosted_custody_python.stat.uid == 0
+          - not coding_hosted_custody_python.stat.wgrp
+          - not coding_hosted_custody_python.stat.woth
+          - coding_hosted_custody_python.stat.executable
+        fail_msg: The installed runtime interpreter is missing or writable.
+        quiet: true
+
+    - name: List custody instances that are still live
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, list-units, --all, --plain, --no-legend, --full, "ditto-coding-custody@*.service"]
+      register: coding_hosted_custody_units
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse to change stable inputs under a live custody instance
+      ansible.builtin.assert:
+        that:
+          - >-
+            coding_hosted_custody_units.stdout is not
+            search('^\\S+\\s+\\S+\\s+(active|activating|deactivating|reloading)\\s', multiline=True)
+        fail_msg: Stop and release the live custody instance before reinstalling.
+        quiet: true
+
+    - name: Create owner-only custody release, run and private directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0700"
+      loop:
+        - /var/lib/ditto-coding-custody/release
+        - "{{ coding_hosted_custody_release_dir }}"
+        - /var/lib/ditto-coding-custody/runs
+        - /var/lib/ditto-coding-custody/private
+
+    - name: Find leftover per-run configuration
+      ansible.builtin.find:
+        paths: /var/lib/ditto-coding-custody/runs
+        file_type: any
+        hidden: true
+      register: coding_hosted_custody_leftover_runs
+
+    - name: Refuse to reinstall over an unreleased run
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_custody_leftover_runs.matched == 0
+        fail_msg: Discard the leftover per-run custody configuration before reinstalling.
+        quiet: true
+
+    - name: Install release inputs as custodian-owned private files without replacing them
+      ansible.builtin.copy:
+        src: "{{ item.value.src }}"
+        dest: "{{ coding_hosted_custody_release_dir }}/{{ coding_hosted_custody_release_names[item.key] }}"
+        owner: ditto-coding-custody
+        group: ditto-coding-custody
+        mode: "0600"
+        force: false
+      loop: "{{ coding_hosted_custody_release_inputs | dict2items }}"
+      loop_control:
+        label: "{{ item.key }}"
+      vars:
+        coding_hosted_custody_release_names:
+          registration: registration.json
+          transport_manifest: transport-manifest.json
+          payload_authority: payload-authority.json
+          publication_receipt: publication-receipt.json
+          curator_public_key: curator-public.pem
+
+    - name: Reinspect installed release inputs without following links
+      ansible.builtin.stat:
+        path: "{{ coding_hosted_custody_release_dir }}/{{ item.name }}"
+        follow: false
+        get_checksum: true
+        checksum_algorithm: sha256
+      loop:
+        - {key: registration, name: registration.json}
+        - {key: transport_manifest, name: transport-manifest.json}
+        - {key: payload_authority, name: payload-authority.json}
+        - {key: publication_receipt, name: publication-receipt.json}
+        - {key: curator_public_key, name: curator-public.pem}
+      loop_control:
+        label: "{{ item.name }}"
+      register: coding_hosted_custody_installed_inputs
+
+    - name: Require exact sealed release inputs, never silently retaining different bytes
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - not item.stat.islnk
+          - item.stat.pw_name == 'ditto-coding-custody'
+          - item.stat.mode == '0600'
+          - item.stat.nlink == 1
+          - item.stat.checksum == coding_hosted_custody_release_inputs[item.item.key].sha256
+        fail_msg: An installed release input differs from its reviewed digest; reconcile explicitly.
+        quiet: true
+      loop: "{{ coding_hosted_custody_installed_inputs.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Create root-only custody configuration and helper directories
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {path: /etc/ditto-coding-custody, mode: "0700"}
+        - {path: /usr/local/lib/ditto-coding-custody, mode: "0755"}
+
+    - name: Install the stable base configuration without a worker identity
+      ansible.builtin.template:
+        src: base.json.j2
+        dest: /etc/ditto-coding-custody/base.json
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Install the fixed per-run lifecycle helper
+      ansible.builtin.copy:
+        src: custody-run.py
+        dest: /usr/local/lib/ditto-coding-custody/custody-run.py
+        owner: root
+        group: root
+        mode: "0444"
+
+    - name: Install the locked custody unit template without enabling or starting it
+      ansible.builtin.template:
+        src: custody@.service.j2
+        dest: /etc/systemd/system/ditto-coding-custody@.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Create the worker-owned private unwrap proxy directory
+      ansible.builtin.file:
+        path: /var/lib/ditto-coding-hosted/custody
+        state: directory
+        owner: ditto-coding-hosted
+        group: ditto-coding-hosted
+        mode: "0700"
+
+    - name: Install the fixed argument-free unwrap proxy for the worker
+      ansible.builtin.template:
+        src: custody-unwrap.sh.j2
+        dest: /var/lib/ditto-coding-hosted/custody/unwrap
+        owner: ditto-coding-hosted
+        group: ditto-coding-hosted
+        mode: "0500"
+
+    - name: Reload unit definitions without enabling or starting custody
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Report the installed custody boundary
+      ansible.builtin.debug:
+        msg: >-
+          Native Coding custody template installed for {{ coding_hosted_custody_release_id }};
+          unit=ditto-coding-custody@<worker>.service; proxy=/var/lib/ditto-coding-hosted/custody/unwrap;
+          shadow_only=true; weight_eligible=false; service_started=false.

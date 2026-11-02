@@ -1,8 +1,12 @@
 name: Reconcile stack previews
 
+# With the stack controller now dispatch-only, this is the only thing that ever
+# notices a PR closing, so the tick interval sets how sharply the post-close
+# grace and the absolute lease cap are enforced. Kept off the hour because
+# GitHub delays crons scheduled at :00 under load.
 on:
   schedule:
-    - cron: "23 * * * *"
+    - cron: "8,23,38,53 * * * *"
   workflow_dispatch: {}
 
 permissions:
@@ -25,6 +29,7 @@ jobs:
       GITHUB_REPOSITORY: ${{ github.repository }}
       GCP_PREVIEW_LEASE_BUCKET: ${{ vars.GCP_PREVIEW_LEASE_BUCKET }}
       GCP_PREVIEW_ZONE: ${{ vars.GCP_PREVIEW_ZONE }}
+      PREVIEW_CLOSED_GRACE_SECONDS: ${{ vars.PREVIEW_CLOSED_GRACE_SECONDS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

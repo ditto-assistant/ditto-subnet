@@ -4,7 +4,7 @@ Glues every other module together. Walk:
 
 1. Load wallet (coldkey + hotkey)
 2. Run tar pre-flight; abort on any real check failing
-3. Sign ``f"{hotkey}:{sha256}"``
+3. Sign a fresh domain-separated upload request
 4. POST /upload/check; abort on a definitive rejection. When the sole
    rejection is 1101 (hotkey not registered), offer to recycle the live
    registration cost, then re-check and continue
@@ -33,7 +33,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from ditto.api_models import (
     EvalPricingResponse,
@@ -43,7 +43,7 @@ from ditto.api_models import (
 )
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.verify import _print_result
-from ditto.miner_cli.confirm import confirm_payment, confirm_registration
+from ditto.miner_cli.confirm import confirm_payment, confirm_registration, prompt_input
 from ditto.miner_cli.errors import (
     ApiResponseError,
     MinerCliError,
@@ -83,6 +83,7 @@ from ditto.miner_cli.preferences import (
 )
 from ditto.miner_cli.registration import quote_registration, submit_registration
 from ditto.miner_cli.signing import sign_upload_payload
+from ditto.miner_cli.submission_terms import show_submission_terms
 from ditto.miner_cli.tar_validator import run_preflight
 from ditto.miner_cli.wallet import load_wallet
 
@@ -91,6 +92,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# The agent lane is the memory competition, priced by the default submission
+# fee; every other competition (generator, ...) quotes its own price.
+MEMORY_COMPETITION = "memory"
+AGENT_UPLOAD_FEE_PURPOSE = "memory competition agent upload fee"
 _BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 _UPLOAD_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0, 30.0, 30.0)
 
@@ -283,6 +288,38 @@ def _run_upload(
         coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
     )
 
+    saved_recovery_candidates: tuple[PendingUploadPayment, ...] | None = None
+    cla_error: str | None = None
+    # Reject ordinary unsigned contributions before packaging or payment.
+    # Recoveries need the artifact digest before the server can recognize an
+    # already accepted contribution; they still pass /check before any fee.
+    # Older Platform releases return 404 while the feature rolls out default-off;
+    # the authoritative upload endpoints still enforce the deployed policy.
+    with ApiClient(base_url=network_api_url) as cla_client:
+        try:
+            consent = cla_client.get_cla_status(hotkey=handle.hotkey_ss58)
+        except (ApiResponseError, ValueError):
+            # An unavailable advisory endpoint must not prevent the server's
+            # authoritative pre-payment policy check below.
+            consent = None
+        if consent is not None and consent.mode == "enforce" and not consent.is_current:
+            # Signing needs only the hotkey's on-chain Owner entry, which every
+            # registered hotkey already has; `ditto cla sign` reports the rare
+            # ownerless hotkey itself, so never suggest a paid registration.
+            cla_error = (
+                "no effective contributor agreement is published; contact "
+                "the operator before uploading"
+                if consent.current is None
+                else "the current contributor agreement is required; run "
+                "`ditto cla sign` before upload"
+            )
+            if explicit_recovery_receipt is None:
+                saved_recovery_candidates = load_pending_payments_for_hotkey(
+                    network=network_name, hotkey=handle.hotkey_ss58
+                )
+            if explicit_recovery_receipt is None and not saved_recovery_candidates:
+                raise MinerCliError(cla_error)
+
     agent_name = args.name
     if agent_name is None:
         agent_name = load_agent_name(network=network_name, hotkey=handle.hotkey_ss58)
@@ -292,7 +329,9 @@ def _run_upload(
                 file=sys.stderr,
             )
         elif sys.stdin.isatty():
-            agent_name = input("Agent name (reuse this for future versions): ").strip()
+            agent_name = prompt_input(
+                "Agent name (reuse this for future versions): "
+            ).strip()
         else:
             raise MinerCliError(
                 "agent name required for the first upload; pass --name. "
@@ -324,9 +363,19 @@ def _run_upload(
     if not preflight.passed:
         raise TarStructureError("pre-flight failed; see report above")
 
-    signature_hex = sign_upload_payload(
-        handle=handle, live_wallet=live_wallet, sha256_hex=preflight.sha256
-    )
+    def _fresh_signature() -> tuple[str, int, UUID]:
+        # Registration waits, payment finality, and upload retries can exceed
+        # the server's five-minute signature window. Sign each HTTP request.
+        timestamp = int(time.time())
+        nonce = uuid4()
+        signature = sign_upload_payload(
+            handle=handle,
+            live_wallet=live_wallet,
+            sha256_hex=preflight.sha256,
+            signature_timestamp=timestamp,
+            signature_nonce=nonce,
+        )
+        return signature, timestamp, nonce
 
     # A finalized receipt is written locally before the first upload attempt.
     # On a later identical command, reuse it automatically instead of sending a
@@ -344,6 +393,11 @@ def _run_upload(
         )
         if receipt is not None:
             receipt_source = "saved"
+        elif cla_error is not None:
+            # Only an exact saved retry is exempt from current consent. A
+            # reassigned credit is a new contribution and would be refused, so
+            # report the consent requirement before any receipt selection.
+            raise MinerCliError(cla_error)
         else:
             candidates = load_pending_payments_for_hotkey(
                 network=network_name,
@@ -360,14 +414,22 @@ def _run_upload(
                 receipt_source = "saved_reassigned"
 
     with ApiClient(base_url=network_api_url) as client:
+        # The deliverable (artifact limits) and the memory competition's fee,
+        # shown before the pre-check reserves a slot or anything is paid.
+        # Informational; Platform enforces every term itself.
+        show_submission_terms(client, MEMORY_COMPETITION)
 
         def _check(candidate_receipt: PaymentReceipt | None):
+            signature, signature_timestamp, signature_nonce = _fresh_signature()
             return client.post_upload_check(
                 UploadCheckRequest(
                     hotkey=handle.hotkey_ss58,
                     sha256=preflight.sha256,
+                    name=agent_name,
                     file_size_bytes=preflight.file_size_bytes,
-                    signature=signature_hex,
+                    signature=signature,
+                    signature_timestamp=signature_timestamp,
+                    signature_nonce=signature_nonce,
                     allow_identical_rescore=allow_identical_rescore,
                     reserve_submission_slot=True,
                     payment_block_hash=(
@@ -387,6 +449,11 @@ def _run_upload(
         except (PaymentAmountMismatchError, PaymentRecoveryExpiredError) as error:
             if receipt is None:
                 raise
+            if cla_error is not None:
+                # Only the exact recovery was exempt from current consent. A
+                # replacement payment is a new contribution, so report the
+                # requirement before asking to pay again.
+                raise MinerCliError(cla_error) from None
             _authorize_replacement_payment(args=args, error=error, receipt=receipt)
             check_response = _check(None)
             if check_response.ok and check_response.admission_token is not None:
@@ -503,6 +570,7 @@ def _run_upload(
                 hotkey_ss58=handle.hotkey_ss58,
                 coldkey_name=handle.coldkey_name,
                 skip=args.yes,
+                purpose=AGENT_UPLOAD_FEE_PURPOSE,
             )
 
             print(
@@ -562,7 +630,7 @@ def _run_upload(
                 hotkey=handle.hotkey_ss58,
                 sha256=preflight.sha256,
                 name=agent_name,
-                signature=signature_hex,
+                sign_request=_fresh_signature,
                 payment=receipt,
                 admission_token=admission_token,
                 allow_identical_rescore=allow_identical_rescore,
@@ -593,7 +661,9 @@ def _run_upload(
             raise
 
     print(result.agent_id)
-    if not clear_pending_payment(
+    # A duplicate race banks the payment without spending it. Keep its receipt
+    # so the next upload can recover that credit instead of sending more TAO.
+    if result.payment_disposition != "reusable_credit" and not clear_pending_payment(
         network=network_name,
         hotkey=handle.hotkey_ss58,
         name=agent_name,
@@ -621,7 +691,9 @@ def _run_upload(
         # payment is banked as a credit. Reporting the ordinary success line
         # here would tell the miner they bought a run they did not.
         print(
-            f"\nno new submission was created: {agent_name} is byte-identical "
+            "\nThe previous submission cannot be resubmitted. "
+            "Please try again after updating.\n"
+            f"no new submission was created: {agent_name} is byte-identical "
             f"to an artifact you already submitted"
             + (
                 f" (agent {result.credit_for_agent_id})"
@@ -744,7 +816,7 @@ def _resolve_netuid() -> int:
     """
     from ditto.miner_cli.commands.attest import DEFAULT_NETUID
 
-    return int(os.environ.get("NETUID", str(DEFAULT_NETUID)))
+    return int(os.environ.get("NETUID") or DEFAULT_NETUID)
 
 
 def _authoritative_netuid(
@@ -998,7 +1070,7 @@ def _offer_owner_link(
         other_hotkey_name=old_hotkey_name,
         key_kind="hotkey",
         other_key_kind="hotkey",
-        netuid=int(os.environ.get("NETUID", str(DEFAULT_NETUID))),
+        netuid=int(os.environ.get("NETUID") or DEFAULT_NETUID),
         yes=True,
         print_only=False,
     )
@@ -1119,7 +1191,7 @@ def _post_upload_with_retries(
     hotkey: str,
     sha256: str,
     name: str,
-    signature: str,
+    sign_request: Callable[[], tuple[str, int, UUID]],
     payment: PaymentReceipt,
     admission_token: UUID,
     allow_identical_rescore: bool = False,
@@ -1127,6 +1199,7 @@ def _post_upload_with_retries(
     """Retry transient post-payment failures with the same proof and archive."""
     for attempt in range(len(_UPLOAD_RETRY_DELAYS_S) + 1):
         try:
+            signature, signature_timestamp, signature_nonce = sign_request()
             with tar_path.open("rb") as tar_fh:
                 return client.post_upload_agent(
                     agent_tar=tar_fh,
@@ -1135,6 +1208,8 @@ def _post_upload_with_retries(
                     sha256=sha256,
                     name=name,
                     signature=signature,
+                    signature_timestamp=signature_timestamp,
+                    signature_nonce=signature_nonce,
                     payment=payment,
                     admission_token=admission_token,
                     allow_identical_rescore=allow_identical_rescore,

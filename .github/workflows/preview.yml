@@ -5,6 +5,8 @@ name: Preview controls
 # emits a static artifact and calls the same-run publisher, which checks out
 # only the default branch before entering the preview environment.
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
     inputs:
@@ -25,9 +27,6 @@ on:
         description: Exact 40-character commit to check out and test
         type: string
         required: false
-  pull_request:
-    types: [opened, reopened, synchronize, closed]
-
 permissions:
   contents: read
   pull-requests: read
@@ -49,7 +48,7 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || inputs.sha || inputs.ref || github.sha }}
 
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Resolve profiles at the checked-out SHA
         id: resolve
@@ -90,12 +89,12 @@ jobs:
 
           [ -n "$profiles" ] || profiles="dashboard"
           if [ "$attach" = true ]; then
-            plan_json="$(uv run python -m ditto.preview compose "$profiles" \
+            plan_json="$(uv run --locked python -m ditto.preview compose "$profiles" \
               --attach-prod-api \
               --ref "${INPUT_REF:-$EVENT_REF}" \
               --sha "$actual_sha")"
           else
-            plan_json="$(uv run python -m ditto.preview compose "$profiles" \
+            plan_json="$(uv run --locked python -m ditto.preview compose "$profiles" \
               --ref "${INPUT_REF:-$EVENT_REF}" \
               --sha "$actual_sha")"
           fi
@@ -114,14 +113,14 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.plan.outputs.sha }}
 
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       - name: Prove overlay cheatcodes
-        run: uv run pytest ditto/tests/preview -q
+        run: uv run --locked pytest ditto/tests/preview -q
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.23.4
 
       - name: Prove the trusted dashboard preview boundary
         run: node --test apps/platform/dashboard/preview/cloudflare-pages-worker.test.mjs
@@ -145,7 +144,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.23.4
           cache: npm
           cache-dependency-path: apps/platform/dashboard/package-lock.json
 
@@ -192,6 +191,7 @@ jobs:
       action: ${{ github.event.action }}
       bundle_result: ${{ needs.dashboard-bundle.result }}
       pr: ${{ github.event.pull_request.number }}
+      profiles: ${{ needs.plan.outputs.profiles }}
       proof_result: ${{ needs.cheatcodes.result }}
       repo: ${{ github.event.pull_request.head.repo.full_name }}
       sha: ${{ github.event.pull_request.head.sha }}

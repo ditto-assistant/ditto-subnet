@@ -18,7 +18,15 @@
         "default": null
       },
       "download_url": {
-        "type": "string"
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "expires_at": {
         "format": "date-time",
@@ -103,13 +111,327 @@
     "required": [
       "agent_id",
       "sha256",
-      "download_url",
       "expires_at"
     ],
     "type": "object"
   },
   "CaseScore": {
+    "$defs": {
+      "CatalogCompletion": {
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ClaimProvenanceEvidence": {
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    },
     "properties": {
+      "allow_extra_tools": {
+        "default": false,
+        "type": "boolean"
+      },
+      "audit_half": {
+        "default": "",
+        "type": "string"
+      },
       "called": {
         "items": {
           "type": "string"
@@ -119,8 +441,30 @@
       "case_id": {
         "type": "string"
       },
+      "catalog": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CatalogEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "category": {
         "type": "string"
+      },
+      "claim_provenance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ClaimProvenanceEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "confidence": {
         "anyOf": [
@@ -144,6 +488,17 @@
           "type": "string"
         },
         "type": "array"
+      },
+      "inference_cost": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceCostEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "injection": {
         "default": false,
@@ -173,6 +528,10 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "relation": {
+        "default": "",
+        "type": "string"
+      },
       "result_usage": {
         "default": 0.0,
         "maximum": 1.0,
@@ -184,6 +543,17 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "tool_provenance": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ToolProvenanceEvidence"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "tool_score": {
         "maximum": 1.0,
         "minimum": 0.0,
@@ -192,6 +562,14 @@
       "twin_group": {
         "default": "",
         "type": "string"
+      },
+      "undelivered": {
+        "default": false,
+        "type": "boolean"
+      },
+      "validator_fault": {
+        "default": false,
+        "type": "boolean"
       }
     },
     "required": [
@@ -200,6 +578,88 @@
       "score",
       "tool_score",
       "latency_ms"
+    ],
+    "type": "object"
+  },
+  "ConfirmationDatasetPin": {
+    "properties": {
+      "anchor_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dataset_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "private_dataset_mode": {
+        "anyOf": [
+          {
+            "const": "platform-private-v1",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "run_size": {
+        "minLength": 1,
+        "type": "string"
+      },
+      "seed": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "seed_block": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_block_hash": {
+        "anyOf": [
+          {
+            "pattern": "^(0x)?[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "seed",
+      "dataset_sha256",
+      "run_size"
     ],
     "type": "object"
   },
@@ -286,6 +746,365 @@
     "required": [
       "agent_id",
       "reopened"
+    ],
+    "type": "object"
+  },
+  "JobResponse": {
+    "$defs": {
+      "BenchmarkRuntimeSettings": {
+        "properties": {
+          "case_concurrency": {
+            "default": 4,
+            "maximum": 64,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "relay_delay_fingerprint_max_ms": {
+            "default": 250,
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relay_delay_fingerprint_min_ms": {
+            "default": 25,
+            "maximum": 5000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "relay_delay_fingerprint_mode": {
+            "default": "off",
+            "enum": [
+              "off",
+              "shadow"
+            ],
+            "type": "string"
+          },
+          "sandbox_memory_limit_mib": {
+            "default": 6144,
+            "maximum": 32768,
+            "minimum": 512,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ConfirmationDatasetPin": {
+        "properties": {
+          "anchor_agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "dataset_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "private_dataset_mode": {
+            "anyOf": [
+              {
+                "const": "platform-private-v1",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "run_size": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "seed": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "seed_block": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "seed_block_hash": {
+            "anyOf": [
+              {
+                "pattern": "^(0x)?[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "seed_index": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "seed",
+          "dataset_sha256",
+          "run_size"
+        ],
+        "type": "object"
+      },
+      "InferenceGrantOffer": {
+        "properties": {
+          "allowed_models": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "minItems": 1,
+            "type": "array"
+          },
+          "exchange_url": {
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "grant_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "profile_revision": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "proxy_url": {
+            "type": "string"
+          },
+          "request_budget": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "token_budget": {
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "grant_id",
+          "exchange_url",
+          "proxy_url",
+          "allowed_models",
+          "request_budget",
+          "token_budget",
+          "expires_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "bench_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "benchmark_runtime": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/BenchmarkRuntimeSettings"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "confirmation_datasets": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationDatasetPin"
+        },
+        "type": "array"
+      },
+      "dataset_seed_block": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dataset_seed_block_hash": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "dataset_sha256": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "inference": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/InferenceGrantOffer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "minimum_screening_policy_version": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "private_dataset_mode": {
+        "anyOf": [
+          {
+            "const": "platform-private-v1",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "requires_screened_image": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "run_size": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "seed_scope": {
+        "default": "agent",
+        "enum": [
+          "agent",
+          "validator"
+        ],
+        "type": "string"
+      },
+      "sha256": {
+        "type": "string"
+      },
+      "slot_id": {
+        "default": "slot-0",
+        "pattern": "^slot-[0-7]$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "agent_id",
+      "miner_hotkey",
+      "sha256",
+      "deadline"
     ],
     "type": "object"
   },
@@ -466,7 +1285,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -994,7 +1816,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -1235,7 +2060,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1328,7 +2154,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1404,7 +2231,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1425,6 +2253,99 @@
           "slice_attribution_complete",
           "dependence_bps",
           "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V13ClaimProvenanceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "answer_in_prompt_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "const": 10000,
+            "type": "integer"
+          },
+          "flagged_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_model_emitted_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required",
+              "claim_provenance_flagged"
+            ],
+            "type": "string"
+          },
+          "unattributed_call_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsettled_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zeroed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "not_model_emitted_cases",
+          "answer_in_prompt_cases",
+          "flagged_cases",
+          "unattributed_call_cases",
+          "unsettled_cases",
+          "zeroed_cases",
+          "attribution_complete",
+          "posture",
+          "flagged_bps",
           "result",
           "factor_bps"
         ],
@@ -1473,7 +2394,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -1517,7 +2439,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -1648,7 +2573,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -1934,7 +2862,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -2011,9 +2940,23 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V13ClaimProvenanceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "inference_latency": {
             "anyOf": [
@@ -2479,7 +3422,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -2767,6 +3713,33 @@
         ],
         "type": "object"
       },
+      "ConfirmationSeedAnchorPin": {
+        "properties": {
+          "anchor_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "anchor_block_hash": {
+            "pattern": "^(0x)?[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "bench_version": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "champion_agent_id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "champion_agent_id",
+          "bench_version",
+          "anchor_block",
+          "anchor_block_hash"
+        ],
+        "type": "object"
+      },
       "ConfirmationUsageTotals": {
         "properties": {
           "input_tokens": {
@@ -2801,6 +3774,104 @@
           "output_tokens",
           "provider_cost_microusd",
           "latency_ms"
+        ],
+        "type": "object"
+      },
+      "CrownGateMarker": {
+        "properties": {
+          "champion_standing_rank": {
+            "maximum": 5,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "min_dethrone_confirmations": {
+            "maximum": 15,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "min_dethrone_confirmations",
+          "champion_standing_rank"
+        ],
+        "type": "object"
+      },
+      "EnforcingTreasuryPin": {
+        "properties": {
+          "allocations": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/TreasuryBucketAllocation"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "approval": {
+            "$ref": "#/$defs/TreasuryPolicyApproval"
+          },
+          "epoch_index": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "first_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fleet": {
+            "items": {
+              "$ref": "#/$defs/TreasuryFleetMember"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array"
+          },
+          "identity": {
+            "$ref": "#/$defs/TreasuryCollectorIdentity"
+          },
+          "mode": {
+            "const": "enforce",
+            "default": "enforce",
+            "type": "string"
+          },
+          "pinned_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pinned_block_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "const": 2,
+            "default": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "epoch_index",
+          "first_block",
+          "pinned_block",
+          "pinned_block_hash",
+          "policy",
+          "policy_digest",
+          "identity",
+          "approval",
+          "fleet"
         ],
         "type": "object"
       },
@@ -3227,7 +4298,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -3407,6 +4481,260 @@
         ],
         "type": "object"
       },
+      "TreasuryBucketAllocation": {
+        "properties": {
+          "allocation_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bucket_id": {
+            "pattern": "^[a-z][a-z0-9_]{1,47}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bucket_id",
+          "allocation_bps"
+        ],
+        "type": "object"
+      },
+      "TreasuryCollectorIdentity": {
+        "properties": {
+          "finalized_block": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "finalized_block_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "netuid": {
+            "const": 118,
+            "default": 118,
+            "type": "integer"
+          },
+          "owner_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "subnet_owner_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "uid": {
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "uid_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "genesis_hash",
+          "finalized_block",
+          "finalized_block_hash",
+          "uid",
+          "hotkey",
+          "owner_coldkey",
+          "uid_hotkey",
+          "subnet_owner_coldkey"
+        ],
+        "type": "object"
+      },
+      "TreasuryEmissionBucket": {
+        "properties": {
+          "allocation_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bucket_id": {
+            "pattern": "^[a-z][a-z0-9_]{1,47}$",
+            "type": "string"
+          },
+          "holding_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "max_allocation_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "min_allocation_bps": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "bucket_id",
+          "allocation_bps",
+          "holding_coldkey"
+        ],
+        "type": "object"
+      },
+      "TreasuryEmissionPolicy": {
+        "properties": {
+          "buckets": {
+            "items": {
+              "$ref": "#/$defs/TreasuryEmissionBucket"
+            },
+            "maxItems": 20,
+            "minItems": 1,
+            "type": "array"
+          },
+          "collector_coldkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "collector_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "genesis_hash": {
+            "pattern": "^0x[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "netuid": {
+            "const": 118,
+            "default": 118,
+            "type": "integer"
+          },
+          "revision": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision",
+          "genesis_hash",
+          "collector_hotkey",
+          "collector_coldkey",
+          "collector_policy_digest",
+          "buckets"
+        ],
+        "type": "object"
+      },
+      "TreasuryFleetMember": {
+        "properties": {
+          "approved_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "protocol_version": {
+            "minimum": 30,
+            "type": "integer"
+          },
+          "treasury_dispatch_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "treasury_pin_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "validator_hotkey": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "treasury_pin_version",
+          "treasury_dispatch_version",
+          "approved_policy_digest",
+          "collector_policy_digest",
+          "validator_hotkey",
+          "protocol_version"
+        ],
+        "type": "object"
+      },
+      "TreasuryLedgerPin": {
+        "properties": {
+          "identity": {
+            "$ref": "#/$defs/TreasuryCollectorIdentity"
+          },
+          "mode": {
+            "const": "shadow",
+            "default": "shadow",
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "version": {
+            "const": 1,
+            "default": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "policy",
+          "policy_digest",
+          "identity"
+        ],
+        "type": "object"
+      },
+      "TreasuryPolicyApproval": {
+        "properties": {
+          "policy": {
+            "$ref": "#/$defs/TreasuryEmissionPolicy"
+          },
+          "signature": {
+            "pattern": "^0x[0-9a-f]{128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "policy",
+          "signature"
+        ],
+        "type": "object"
+      },
       "V12AnswerStuffingGate": {
         "properties": {
           "administered_cases": {
@@ -3468,7 +4796,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3561,7 +4890,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3637,7 +4967,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3658,6 +4989,99 @@
           "slice_attribution_complete",
           "dependence_bps",
           "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V13ClaimProvenanceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "answer_in_prompt_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "const": 10000,
+            "type": "integer"
+          },
+          "flagged_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "not_model_emitted_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "shadow",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required",
+              "claim_provenance_flagged"
+            ],
+            "type": "string"
+          },
+          "unattributed_call_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unsettled_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "zeroed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "not_model_emitted_cases",
+          "answer_in_prompt_cases",
+          "flagged_cases",
+          "unattributed_call_cases",
+          "unsettled_cases",
+          "zeroed_cases",
+          "attribution_complete",
+          "posture",
+          "flagged_bps",
           "result",
           "factor_bps"
         ],
@@ -3706,7 +5130,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -3750,7 +5175,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -3881,7 +5309,10 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
           },
@@ -4167,7 +5598,8 @@
               "not_applicable",
               "latency_implausible",
               "answer_stuffed",
-              "review_required"
+              "review_required",
+              "claim_provenance_flagged"
             ],
             "type": "string"
           },
@@ -4244,9 +5676,23 @@
               9,
               10,
               11,
-              12
+              12,
+              13,
+              14,
+              15
             ],
             "type": "integer"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V13ClaimProvenanceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "inference_latency": {
             "anyOf": [
@@ -4340,6 +5786,12 @@
         "minimum": 0.0,
         "type": "number"
       },
+      "confirmation_seed_anchors": {
+        "items": {
+          "$ref": "#/$defs/ConfirmationSeedAnchorPin"
+        },
+        "type": "array"
+      },
       "continual_retest_cohort_size": {
         "default": 5,
         "minimum": 5,
@@ -4348,6 +5800,41 @@
       "count": {
         "minimum": 0,
         "type": "integer"
+      },
+      "crown_gate": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/CrownGateMarker"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "crown_incumbent_agent_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "crown_mode": {
+        "anyOf": [
+          {
+            "const": "incumbent",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "dethrone_band_mode": {
         "anyOf": [
@@ -4367,6 +5854,18 @@
         },
         "type": "array"
       },
+      "epoch_index": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "generated_at": {
         "anyOf": [
           {
@@ -4379,15 +5878,132 @@
         ],
         "default": null
       },
+      "ledger_digest": {
+        "anyOf": [
+          {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "ledger_snapshot_id": {
+        "anyOf": [
+          {
+            "format": "uuid",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "pinned_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "pinned_block": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "provisional_incumbent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LedgerEntry"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "rank_shares": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "number"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "reward_eligibility_mode": {
+        "anyOf": [
+          {
+            "const": "enforce",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "stale": {
         "default": false,
         "type": "boolean"
+      },
+      "statistical_band_mode": {
+        "anyOf": [
+          {
+            "const": "capped",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "tie_weighting_mode": {
         "anyOf": [
           {
             "const": "pool",
             "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "track_shares_bps": {
+        "additionalProperties": {
+          "type": "integer"
+        },
+        "type": "object"
+      },
+      "treasury_pin": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TreasuryLedgerPin"
+          },
+          {
+            "$ref": "#/$defs/EnforcingTreasuryPin"
           },
           {
             "type": "null"
@@ -4414,10 +6030,55 @@
     ],
     "type": "object"
   },
+  "PrivateDatasetRequest": {
+    "properties": {
+      "dataset_sha256": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "deadline": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "requested_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "signature": {
+        "pattern": "^[0-9a-f]{128}$",
+        "type": "string"
+      },
+      "validator_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "validator_hotkey",
+      "dataset_sha256",
+      "deadline",
+      "nonce",
+      "requested_at",
+      "signature"
+    ],
+    "type": "object"
+  },
   "ScoreReport": {
     "$defs": {
       "CaseScore": {
         "properties": {
+          "allow_extra_tools": {
+            "default": false,
+            "type": "boolean"
+          },
+          "audit_half": {
+            "default": "",
+            "type": "string"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -4427,8 +6088,30 @@
           "case_id": {
             "type": "string"
           },
+          "catalog": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "category": {
             "type": "string"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "confidence": {
             "anyOf": [
@@ -4452,6 +6135,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "injection": {
             "default": false,
@@ -4481,6 +6175,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4492,6 +6190,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "tool_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -4500,6 +6209,14 @@
           "twin_group": {
             "default": "",
             "type": "string"
+          },
+          "undelivered": {
+            "default": false,
+            "type": "boolean"
+          },
+          "validator_fault": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -4509,6 +6226,135 @@
           "tool_score",
           "latency_ms"
         ],
+        "type": "object"
+      },
+      "CatalogCompletion": {
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "CategoryStat": {
@@ -4538,6 +6384,74 @@
         ],
         "type": "object"
       },
+      "ClaimProvenanceEvidence": {
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "CodeFingerprint": {
         "properties": {
           "card": {
@@ -4564,6 +6478,114 @@
           "k",
           "card"
         ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     },
@@ -4740,6 +6762,14 @@
     "$defs": {
       "CaseScore": {
         "properties": {
+          "allow_extra_tools": {
+            "default": false,
+            "type": "boolean"
+          },
+          "audit_half": {
+            "default": "",
+            "type": "string"
+          },
           "called": {
             "items": {
               "type": "string"
@@ -4749,8 +6779,30 @@
           "case_id": {
             "type": "string"
           },
+          "catalog": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CatalogEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "category": {
             "type": "string"
+          },
+          "claim_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ClaimProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "confidence": {
             "anyOf": [
@@ -4774,6 +6826,17 @@
               "type": "string"
             },
             "type": "array"
+          },
+          "inference_cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/InferenceCostEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "injection": {
             "default": false,
@@ -4803,6 +6866,10 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "relation": {
+            "default": "",
+            "type": "string"
+          },
           "result_usage": {
             "default": 0.0,
             "maximum": 1.0,
@@ -4814,6 +6881,17 @@
             "minimum": 0.0,
             "type": "number"
           },
+          "tool_provenance": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ToolProvenanceEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "tool_score": {
             "maximum": 1.0,
             "minimum": 0.0,
@@ -4822,6 +6900,14 @@
           "twin_group": {
             "default": "",
             "type": "string"
+          },
+          "undelivered": {
+            "default": false,
+            "type": "boolean"
+          },
+          "validator_fault": {
+            "default": false,
+            "type": "boolean"
           }
         },
         "required": [
@@ -4831,6 +6917,135 @@
           "tool_score",
           "latency_ms"
         ],
+        "type": "object"
+      },
+      "CatalogCompletion": {
+        "properties": {
+          "after_last_tool_result": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution_source": {
+            "default": "",
+            "type": "string"
+          },
+          "catalog_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "claim_corroborated": {
+            "default": false,
+            "type": "boolean"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "system_span_sha256": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_choice": {
+            "default": "",
+            "type": "string"
+          },
+          "tools_choosable": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CatalogEvidence": {
+        "properties": {
+          "catalog_present": {
+            "default": false,
+            "type": "boolean"
+          },
+          "catalog_present_lower_bound": {
+            "default": false,
+            "type": "boolean"
+          },
+          "claim_attributed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "claim_corroborated_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "items": {
+              "$ref": "#/$defs/CatalogCompletion"
+            },
+            "type": "array"
+          },
+          "completions_after_last_tool_result": {
+            "default": 0,
+            "type": "integer"
+          },
+          "completions_total": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "harness_system_span_sha256": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted_tool_calls": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "overlap_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "overlap_completions_with_catalog": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tool_choice_suppressed_completions": {
+            "default": 0,
+            "type": "integer"
+          },
+          "tools_offered": {
+            "items": {
+              "$ref": "#/$defs/OfferedTool"
+            },
+            "type": "array"
+          }
+        },
         "type": "object"
       },
       "CategoryStat": {
@@ -4860,6 +7075,74 @@
         ],
         "type": "object"
       },
+      "ClaimProvenanceEvidence": {
+        "properties": {
+          "answer_in_prompt": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "claim_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "completions": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "model_emitted": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "posture": {
+            "default": "",
+            "type": "string"
+          },
+          "tool_results": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "unattributed_calls": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "CodeFingerprint": {
         "properties": {
           "card": {
@@ -4885,6 +7168,79 @@
           "v",
           "k",
           "card"
+        ],
+        "type": "object"
+      },
+      "InferenceCostEvidence": {
+        "properties": {
+          "attributed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attribution": {
+            "default": "",
+            "type": "string"
+          },
+          "budget_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "choices_total": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "class": {
+            "default": "",
+            "type": "string"
+          },
+          "completions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "excess_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "default": 10000,
+            "maximum": 10000,
+            "minimum": 6000,
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "reasoning_tokens": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usage_unavailable": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "OfferedTool": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "schema_sha256": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
         ],
         "type": "object"
       },
@@ -5056,6 +7412,41 @@
           "n",
           "generated_at"
         ],
+        "type": "object"
+      },
+      "ToolProvenanceEvidence": {
+        "properties": {
+          "complete": {
+            "default": false,
+            "type": "boolean"
+          },
+          "endpoint_attempts": {
+            "default": 0,
+            "type": "integer"
+          },
+          "findings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "matched": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_emitted": {
+            "default": 0,
+            "type": "integer"
+          },
+          "model_selected_not_executed": {
+            "default": 0,
+            "type": "integer"
+          },
+          "unmatched": {
+            "default": 0,
+            "type": "integer"
+          }
+        },
         "type": "object"
       }
     },
@@ -5365,6 +7756,49 @@
         ],
         "type": "object"
       },
+      "HostSpecs": {
+        "properties": {
+          "architecture": {
+            "pattern": "^[a-zA-Z0-9_.-]{1,32}$",
+            "type": "string"
+          },
+          "cpu_count": {
+            "maximum": 1024,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "cpu_physical_cores": {
+            "anyOf": [
+              {
+                "maximum": 1024,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "disk_total_gib": {
+            "maximum": 1048576,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "memory_total_mib": {
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cpu_count",
+          "memory_total_mib",
+          "disk_total_gib",
+          "architecture"
+        ],
+        "type": "object"
+      },
       "InferenceCalibrationRoute": {
         "properties": {
           "model": {
@@ -5430,8 +7864,80 @@
         },
         "type": "object"
       },
+      "ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 13,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "ScorerBenchmarkCapability": {
         "properties": {
+          "deterministic_v13_datasets": {
+            "default": false,
+            "type": "boolean"
+          },
+          "generator_round_bench_versions": {
+            "anyOf": [
+              {
+                "items": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generator_round_max_cases": {
+            "anyOf": [
+              {
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "generator_rounds": {
+            "default": false,
+            "type": "boolean"
+          },
           "observed_at": {
             "anyOf": [
               {
@@ -5444,10 +7950,25 @@
             ],
             "default": null
           },
+          "private_datasets": {
+            "default": false,
+            "type": "boolean"
+          },
           "probe": {
             "anyOf": [
               {
                 "$ref": "#/$defs/ScorerLivenessProbe"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ScoredRuntimeEnvEvidence"
               },
               {
                 "type": "null"
@@ -5466,6 +7987,10 @@
               }
             ],
             "default": null
+          },
+          "source_free_screened_images": {
+            "default": false,
+            "type": "boolean"
           },
           "source_revision": {
             "anyOf": [
@@ -5494,6 +8019,28 @@
               "type": "integer"
             },
             "type": "array"
+          },
+          "v14_scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V14ScoredRuntimeEnvEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "v15_scored_runtime_env": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V15ScoredRuntimeEnvEvidence"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "v7_calibration": {
             "anyOf": [
@@ -5624,6 +8171,105 @@
         ],
         "type": "object"
       },
+      "TreasuryWeightCapability": {
+        "properties": {
+          "approved_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "collector_policy_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "treasury_dispatch_version": {
+            "const": 2,
+            "type": "integer"
+          },
+          "treasury_pin_version": {
+            "const": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "treasury_pin_version",
+          "treasury_dispatch_version",
+          "approved_policy_digest",
+          "collector_policy_digest"
+        ],
+        "type": "object"
+      },
+      "V14ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 14,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
+      "V15ScoredRuntimeEnvEvidence": {
+        "properties": {
+          "bench_version": {
+            "const": 15,
+            "type": "integer"
+          },
+          "injected_keys": {
+            "items": {
+              "maxLength": 128,
+              "pattern": "^[A-Z][A-Z0-9_]*$",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "scope": {
+            "const": "scorer-injected-env-only",
+            "type": "string"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "source_revision": {
+            "pattern": "^[0-9a-f]{40}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "bench_version",
+          "scope",
+          "source_revision",
+          "injected_keys",
+          "sha256"
+        ],
+        "type": "object"
+      },
       "V7InferenceCalibration": {
         "properties": {
           "manifest_sha256": {
@@ -5661,7 +8307,15 @@
           "require_screened_image": {
             "type": "boolean"
           },
+          "round_commitments": {
+            "default": false,
+            "type": "boolean"
+          },
           "sandbox_egress_restricted": {
+            "type": "boolean"
+          },
+          "sandbox_memory_limit": {
+            "default": false,
             "type": "boolean"
           },
           "scorer_benchmarks": {
@@ -5691,6 +8345,17 @@
           "ticket_inference": {
             "default": false,
             "type": "boolean"
+          },
+          "treasury_weights": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TreasuryWeightCapability"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           }
         },
         "required": [
@@ -6161,6 +8826,59 @@
           "observed_at"
         ],
         "type": "object"
+      },
+      "WeightsFold": {
+        "properties": {
+          "champion_agent_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "epoch_index": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "folded_at": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ledger_digest": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "vector_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "vector_digest",
+          "folded_at"
+        ],
+        "type": "object"
       }
     },
     "properties": {
@@ -6221,6 +8939,17 @@
             },
             "maxItems": 4,
             "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "host_specs": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/HostSpecs"
           },
           {
             "type": "null"
@@ -6303,6 +9032,17 @@
       "validator_hotkey": {
         "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
         "type": "string"
+      },
+      "weights_fold": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/WeightsFold"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       }
     },
     "required": [

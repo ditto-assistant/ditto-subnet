@@ -19,9 +19,11 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +38,9 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 	"github.com/ditto-assistant/dittobench-api/internal/ratelimit"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
+	"github.com/ditto-assistant/dittobench-api/internal/routerbackend"
+	"github.com/ditto-assistant/dittobench-api/internal/routerharness"
+	"github.com/ditto-assistant/dittobench-api/internal/routerledger"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/sandbox"
 	"github.com/ditto-assistant/dittobench-api/internal/scorer"
@@ -43,6 +48,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
@@ -51,7 +57,8 @@ const defaultN = 30
 
 // sandboxHealthTimeout bounds how long we wait for a freshly built container to
 // answer /health before giving up on the submission.
-const sandboxHealthTimeout = 3 * time.Minute
+// It is the published runtime envelope's healthy_within_seconds.
+var sandboxHealthTimeout = time.Duration(sandbox.PublishedEnvelope.Timing.HealthyWithinSeconds) * time.Second
 
 // Abuse guards for the public submit endpoint.
 const (
@@ -170,8 +177,14 @@ type server struct {
 	sandbox sandbox.Sandbox
 	// allowPrivate relaxes caller-supplied URL checks for local development.
 	// Validator-owned loopback sandboxes use a separate trusted client.
-	allowPrivate           bool
-	allowScreenedImages    bool
+	allowPrivate         bool
+	allowScreenedImages  bool
+	allowPrivateDatasets bool
+	// allowGeneratorRounds admits generator-round-v1 runs. It follows the
+	// trusted screened-image mode every validator stack sets, not the
+	// private V13 transport: a round run is a screened-image run whose
+	// tickets only Platform issues, and only while validator rounds are on.
+	allowGeneratorRounds   bool
 	requireTicketInference bool
 	softwareVersion        string
 	sourceRevision         string
@@ -201,6 +214,14 @@ type server struct {
 	// explicitly enabled. Its handlers remain protected by both the control
 	// plane and their own exact bearer contract.
 	codingHost *codinghost.Host
+	// routerDispatcher runs the SN118 router shadow track's opt-in inclusion gate
+	// and (when a router is advertised) scores it into a shadow ledger entry. It
+	// fires at the tail of every scored run; an absent /router/health is a benign
+	// skip that leaves memory scoring byte-identical. routerLedger accumulates the
+	// shadow entries the control-plane publish route serves. Everything here is
+	// shadow-only: weight_eligible=false, folded combined_score=0, 0 bps.
+	routerDispatcher routerbackend.Dispatcher
+	routerLedger     *routerledger.Store
 }
 
 func main() {
@@ -243,6 +264,9 @@ func main() {
 	allowPrivate := envBool("DITTOBENCH_ALLOW_PRIVATE_HARNESS")
 	allowScreenedImages := envBool("DITTOBENCH_ALLOW_SCREENED_IMAGES")
 	requireTicketInference := envBool("DITTOBENCH_REQUIRE_TICKET_INFERENCE")
+	if err := validatePrivateHarnessPosture(allowPrivate, allowScreenedImages); err != nil {
+		log.Fatalf("%v", err)
+	}
 	logReleaseIdentity(identity)
 	runner.Configure(allowPrivate)
 	if allowPrivate {
@@ -267,6 +291,8 @@ func main() {
 		sandbox:                sandboxRuntime,
 		allowPrivate:           allowPrivate,
 		allowScreenedImages:    allowScreenedImages,
+		allowPrivateDatasets:   envBool("DITTOBENCH_ALLOW_PRIVATE_DATASETS"),
+		allowGeneratorRounds:   allowScreenedImages,
 		requireTicketInference: requireTicketInference,
 		softwareVersion:        identity.SoftwareVersion,
 		sourceRevision:         identity.SourceRevision,
@@ -287,6 +313,21 @@ func main() {
 		log.Fatalf("v9 confirmation installation failed: %v", err)
 	}
 	s.confirmation = confirmationRuntime
+
+	// Router shadow track: select the scoring backend (offloaded HTTP client when a
+	// remote scorer URL is configured, else the in-process offline replay scorer)
+	// and share the SSRF-guarded getter used for harness probes so the inclusion
+	// gate cannot be pointed at internal addresses. Shadow-only; see the server
+	// struct doc. The offload URL is never logged (it may carry a token).
+	routerBackend := routerbackend.NewOffloadedBackend(
+		strings.TrimSpace(os.Getenv("DITTOBENCH_ROUTER_OFFLOAD_URL")), allowPrivate,
+	)
+	routerGetClient := routerbackend.NewProbeClient(allowPrivate)
+	s.routerDispatcher = routerbackend.Dispatcher{
+		Backend: routerBackend,
+		Get:     routerGetClient.Get,
+	}
+	s.routerLedger = routerledger.New()
 
 	mux := s.newControlPlaneMux()
 
@@ -402,7 +443,47 @@ type capabilitiesResponse struct {
 	SourceRevisionMismatch bool `json:"source_revision_mismatch"`
 	// SoftwareVersionOrigin mirrors SourceRevisionOrigin for software_version.
 	SoftwareVersionOrigin release.Origin `json:"software_version_origin,omitempty"`
+	// Only keys injected by this binary into a Bench v13 sandbox are covered.
+	ScoredRuntimeEnv    *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
+	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
+	V15ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v15_scored_runtime_env,omitempty"`
 }
+
+type scoredRuntimeEnvEvidence struct {
+	BenchVersion   int      `json:"bench_version"`
+	Scope          string   `json:"scope"`
+	SourceRevision string   `json:"source_revision"`
+	InjectedKeys   []string `json:"injected_keys"`
+	SHA256         string   `json:"sha256"`
+}
+
+func (s *server) scoredRuntimeEnvEvidence() *scoredRuntimeEnvEvidence {
+	return s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV13)
+}
+
+func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeEnvEvidence {
+	// A practice-only scorer does not launch screened miner images and cannot
+	// attest to the scored container environment.
+	if !s.allowScreenedImages || s.sourceRevisionOrigin != release.OriginBinary || s.sourceRevisionMismatch || !canonicalSourceRevision(s.sourceRevision) {
+		return nil
+	}
+	keys := make([]string, 0)
+	for key := range harnessSandboxEnv(nil, version) {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	material := fmt.Sprintf("scored-runtime-env-v1\n%d\n", version) + s.sourceRevision + "\n" + strings.Join(keys, "\n")
+	digest := sha256.Sum256([]byte(material))
+	return &scoredRuntimeEnvEvidence{version, "scorer-injected-env-only", s.sourceRevision, keys, hex.EncodeToString(digest[:])}
+}
+
+// The advertised window derives from the generator's reproducible contracts
+// and technical readiness. Extending the ceiling does not activate a version:
+// Platform's reviewed rollout and exact scorer packet govern scheduling.
+const (
+	advertisedMinBenchVersion = protocol.BenchVersionV8
+	advertisedMaxBenchVersion = protocol.BenchVersionV15
+)
 
 // supportedBenchVersions is the capability set this build can administer. It is
 // shared with the version command so an operator can ask an unstarted container
@@ -411,9 +492,12 @@ func supportedBenchVersions() []int {
 	if !efficiency.ValidV8Readiness(efficiency.V8Readiness()) {
 		return nil
 	}
-	versions := make([]int, 0, 5)
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
-		if protocol.SupportedBenchVersion(version) && efficiency.ProductionReadyForVersion(version) {
+	versions := make([]int, 0, advertisedMaxBenchVersion-advertisedMinBenchVersion+1)
+	for _, version := range protocol.SupportedBenchVersions() {
+		if version < advertisedMinBenchVersion || version > advertisedMaxBenchVersion {
+			continue
+		}
+		if efficiency.ProductionReadyForVersion(version) {
 			versions = append(versions, version)
 		}
 	}
@@ -424,23 +508,11 @@ type v8IsolationReporter interface {
 	V8IsolationReady(context.Context) error
 }
 
-// executesUntrustedImages reports whether this deployment can be asked to launch
-// a miner container at all. Only two paths start one: a screener-built image,
-// accepted solely under the narrow DITTOBENCH_ALLOW_SCREENED_IMAGES opt-in that
-// marks a validator-owned sandbox, and a validator-side source build, which the
-// v8 contract retires. A deployment with neither — the hosted practice endpoint
-// — serves v8 only over harness_url, driving and scoring a harness the miner
-// already runs themselves, so it has no isolation boundary to make ready.
-//
-// The source-build half is derived from validateBenchmarkImageContract rather
-// than restated, so a future version that re-enables source builds re-arms the
-// isolation gate here instead of silently leaving it exempt.
+// executesUntrustedImages reports whether this deployment can launch a miner
+// image. Canonical scoring only loads a screener-built image under the narrow
+// validator-owned opt-in. Hosted practice drives the miner's own harness_url.
 func (s *server) executesUntrustedImages() bool {
-	if s.allowScreenedImages {
-		return true
-	}
-	sourceBuild := submitRequest{BenchVersion: protocol.BenchVersionV8, TarballURL: "https://example.invalid/source.tgz"}
-	return validateBenchmarkImageContract(sourceBuild) == ""
+	return s.allowScreenedImages
 }
 
 // runtimeSupportedBenchVersions intersects the immutable scorer contract with
@@ -483,13 +555,16 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SoftwareVersion:        s.softwareVersion,
 		SourceRevision:         s.sourceRevision,
 		SupportedBenchVersions: s.runtimeSupportedBenchVersions(r.Context()),
-		Features:               []string{"git_subdir"},
+		Features:               s.datasetFeatures(),
 		FullRunCapacity:        maxConcurrentRuns,
 		MemoryPhaseCapacity:    maxConcurrentMemoryPhases,
 		V8Readiness:            efficiency.V8Readiness(),
 		SourceRevisionOrigin:   s.sourceRevisionOrigin,
 		SourceRevisionMismatch: s.sourceRevisionMismatch,
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
+		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
+		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
+		V15ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV15),
 	})
 }
 
@@ -545,6 +620,19 @@ func (s *server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("X-Bench-Version", strconv.Itoa(benchVersion))
+	// From bench_version 13 the advertised catalog is a per-seed surface (coined
+	// decoys, paraphrased descriptions). A practice caller that pins ?seed= sees
+	// exactly the surface a scored run of that seed advertises; without a seed
+	// the seed-free production surface (no decoys) is returned.
+	if seedText := strings.TrimSpace(r.URL.Query().Get("seed")); seedText != "" && benchVersion >= protocol.BenchVersionV13 {
+		seed, err := strconv.ParseInt(seedText, 10, 64)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "seed must be an integer")
+			return
+		}
+		writeJSON(w, http.StatusOK, catalog.CatalogForSeed(benchVersion, seed))
+		return
+	}
 	writeJSON(w, http.StatusOK, catalog.CatalogForVersion(benchVersion))
 }
 
@@ -625,7 +713,7 @@ type submitRequest struct {
 	BenchVersion int    `json:"bench_version,omitempty"`
 	HarnessURL   string `json:"harness_url,omitempty"`
 	GitURL       string `json:"git_url,omitempty"`
-	GitRef       string `json:"git_ref,omitempty"`
+	GitRef       string `json:"git_ref,omitempty"` // required full commit SHA for git_url
 	// GitSubdir selects a repository-relative Docker context after cloning a
 	// monorepo. It is valid only with GitURL and is resolved without allowing
 	// absolute paths, parent traversal, or symlink escape.
@@ -643,9 +731,9 @@ type submitRequest struct {
 	// ScreenedImageURL is a short-lived URL for a `docker save` archive
 	// produced by the trusted screener from this exact tarball. The stored
 	// object may be a plain tar or gzip of that tar; sha256 and size pin the
-	// stored bytes. It is accepted only together with TarballURL: the source
-	// is still materialized for structural anti-copy fingerprinting, but the
-	// Rust crate is not rebuilt.
+	// stored bytes. With TarballURL (legacy validators) the source is also
+	// materialized for a structural fingerprint; without it the image runs
+	// alone and Platform owns the fingerprint. The crate is never rebuilt.
 	ScreenedImageURL string `json:"screened_image_url,omitempty"`
 	// ScreenedImageSHA256 pins the archive bytes. ScreenedImageID pins
 	// the Docker image loaded from those bytes, preventing an archive/tag swap.
@@ -668,6 +756,11 @@ type submitRequest struct {
 	// platform issues (seed, dataset_sha256) with the ticket, and this guarantees
 	// the validator scored precisely that dataset. Empty on the practice path.
 	ExpectedDatasetSHA256 string `json:"dataset_sha256,omitempty"`
+	// PrivateDatasetMode is explicit so omitted bytes cannot silently select
+	// public regeneration. Bytes are base64 on this trusted control-plane wire;
+	// they are never copied into harness requests, public artifacts, or logs.
+	PrivateDatasetMode  string `json:"private_dataset_mode,omitempty"`
+	PrivateDatasetBytes []byte `json:"private_dataset_bytes,omitempty"`
 	// InferenceSessionID selects a trusted, memory-only platform capability
 	// prepared by the validator. It is an opaque broker routing id, not a bearer.
 	InferenceSessionID string `json:"inference_session_id,omitempty"`
@@ -689,6 +782,23 @@ type benchmarkRuntimeSettings struct {
 	RelayDelayFingerprintMode  delayFingerprintMode `json:"relay_delay_fingerprint_mode"`
 	RelayDelayFingerprintMinMS int                  `json:"relay_delay_fingerprint_min_ms"`
 	RelayDelayFingerprintMaxMS int                  `json:"relay_delay_fingerprint_max_ms"`
+	// SandboxMemoryLimitMiB is the Platform-issued harness memory cap. Zero
+	// means an older Platform issued none and the host default applies.
+	SandboxMemoryLimitMiB int `json:"sandbox_memory_limit_mib,omitempty"`
+}
+
+const (
+	minSandboxMemoryLimitMiB = 512
+	maxSandboxMemoryLimitMiB = 32768
+)
+
+// sandboxContext applies the ticket's memory cap to the harness started with
+// the returned context.
+func (r *benchmarkRuntimeSettings) sandboxContext(ctx context.Context) context.Context {
+	if r == nil {
+		return ctx
+	}
+	return sandbox.WithMemoryLimitMiB(ctx, r.SandboxMemoryLimitMiB)
 }
 
 func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
@@ -709,6 +819,14 @@ func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
 		r.RelayDelayFingerprintMinMS > r.RelayDelayFingerprintMaxMS ||
 		r.RelayDelayFingerprintMaxMS > 5000 {
 		return fmt.Errorf("benchmark_runtime relay delay range must satisfy 0 <= min <= max <= 5000")
+	}
+	if r.SandboxMemoryLimitMiB != 0 &&
+		(r.SandboxMemoryLimitMiB < minSandboxMemoryLimitMiB ||
+			r.SandboxMemoryLimitMiB > maxSandboxMemoryLimitMiB) {
+		return fmt.Errorf(
+			"benchmark_runtime.sandbox_memory_limit_mib must be between %d and %d",
+			minSandboxMemoryLimitMiB, maxSandboxMemoryLimitMiB,
+		)
 	}
 	return nil
 }
@@ -753,6 +871,12 @@ func validateGitSourceOptions(req submitRequest) string {
 	if req.GitSubdir != "" && req.GitURL == "" {
 		return "git_subdir requires git_url"
 	}
+	if req.GitRef != "" && req.GitURL == "" {
+		return "git_ref requires git_url"
+	}
+	if req.GitURL != "" && !sandbox.ValidGitCommitSHA(req.GitRef) {
+		return "git_ref must be a full 40-character lowercase commit SHA"
+	}
 	return ""
 }
 
@@ -762,8 +886,8 @@ func validateScreenedImage(req submitRequest) string {
 	if !fieldsSet {
 		return ""
 	}
-	if req.TarballURL == "" {
-		return "screened image requires tarball_url for source fingerprinting"
+	if req.GitURL != "" {
+		return "screened image cannot be combined with git_url"
 	}
 	if req.ScreenedImageURL == "" || req.ScreenedImageSHA256 == "" ||
 		req.ScreenedImageID == "" || req.ScreenedImageRef == "" || req.ScreenedImageSize <= 0 {
@@ -805,7 +929,7 @@ func validateScreenedImageAccess(req submitRequest, allowScreenedImages bool) st
 }
 
 func validateBenchmarkImageContract(req submitRequest) string {
-	if req.BenchVersion >= protocol.BenchVersionV8 && req.ScreenedImageURL == "" {
+	if req.ScreenedImageURL == "" {
 		return fmt.Sprintf(
 			"benchmark version %d requires a screener-built image; source builds are disabled",
 			req.BenchVersion,
@@ -831,10 +955,18 @@ func sandboxStartInfraFailure(err error) *store.Failure {
 		(strings.Contains(msg, "unable to find image") ||
 			strings.Contains(msg, "no such image") ||
 			strings.Contains(msg, "pull access denied for dittobench-sub")) {
+		// The request-scoped tag is the screened image as this host holds it,
+		// so report the fleet-recognized screened_image_unavailable code and
+		// keep the precise cause in diagnostics. Validators that predate a
+		// dedicated code reject it as unknown and charge the miner for a tag
+		// this host lost (ditto-subnet#2959).
 		return &store.Failure{
 			Kind:      "validator_infrastructure",
-			Code:      "sandbox_image_unavailable",
+			Code:      "screened_image_unavailable",
 			Retryable: true,
+			Diagnostics: map[string]any{
+				"sandbox_cause": "request_image_tag_missing",
+			},
 		}
 	}
 	if !strings.Contains(msg, "network") || !strings.Contains(msg, "not found") {
@@ -927,7 +1059,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// Abuse guard: per-IP rate limit on the expensive submit endpoint. Skipped
 	// in local/dev mode (DITTOBENCH_ALLOW_PRIVATE_HARNESS), where a calibration
 	// loop legitimately submits in bulk from a single IP.
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
@@ -939,6 +1071,10 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, msg := requestedPracticeBenchVersion(req.BenchVersion)
+	if req.PrivateDatasetMode != "" || len(req.PrivateDatasetBytes) != 0 {
+		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
+		return
+	}
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -948,7 +1084,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// a presigned platform tarball (mode B). git_url + tarball_url both build in
 	// the Docker sandbox.
 	sources := 0
-	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != ""} {
+	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != "" || req.ScreenedImageURL != ""} {
 		if set {
 			sources++
 		}
@@ -970,13 +1106,12 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Screened-image metadata is an integrity pin, not caller authentication.
-	// Only validator-owned/private deployments may bypass the source build; the
-	// public unauthenticated practice API must always build submitted source.
+	// Only validator-owned/private deployments may load a screened image.
 	if msg := validateScreenedImageAccess(req, s.allowScreenedImages); msg != "" {
 		writeError(w, http.StatusForbidden, msg)
 		return
 	}
-	// The screened-image contract bans validator-side SOURCE BUILDS (git_url /
+	// The screened-image contract bans sandbox SOURCE BUILDS (git_url /
 	// tarball_url). A direct harness_url run never builds anything — the miner runs
 	// their own already-built harness and the API only drives + scores it — so the
 	// contract is inapplicable there. The exemption is keyed on the SOURCE KIND,
@@ -1029,12 +1164,16 @@ func (s *server) handleVersionedScore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
-	if !s.allowPrivate && !s.limiter.Allow(clientIP(r)) {
+	if !s.allowPrivate && !s.limiter.Allow(rateLimitKey(clientIP(r))) {
 		writeError(w, http.StatusTooManyRequests, "rate limit exceeded; slow down and retry shortly")
 		return
 	}
 	var req submitRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxSubmitBody)
+	bodyLimit := int64(maxSubmitBody)
+	if extra := s.privateBodyBytes(); extra > 0 {
+		bodyLimit += int64((extra + 2) / 3 * 4)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid or oversized JSON body")
 		return
@@ -1045,6 +1184,10 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BenchVersion = version
+	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets, s.allowGeneratorRounds); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if (s.requireTicketInference || req.BenchVersion >= protocol.BenchVersionV7) && req.InferenceSessionID == "" {
 		writeError(
 			w,
@@ -1073,7 +1216,7 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	// Exactly one harness source; SSRF-guard any caller-supplied URL (same rules
 	// as /v1/submit).
 	sources := 0
-	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != ""} {
+	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != "" || req.ScreenedImageURL != ""} {
 		if set {
 			sources++
 		}
@@ -1123,14 +1266,14 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 
 func requestedBenchVersion(requested int) (int, string) {
 	if requested == 0 {
-		return 0, "bench_version is required (supported: 8, 9, 10, 11, 12)"
+		return 0, fmt.Sprintf("bench_version is required (supported: %v)", supportedBenchVersions())
 	}
 	for _, version := range supportedBenchVersions() {
 		if requested == version {
 			return requested, ""
 		}
 	}
-	return 0, "unsupported bench_version (supported: 8, 9, 10, 11, 12)"
+	return 0, fmt.Sprintf("unsupported bench_version (supported: %v)", supportedBenchVersions())
 }
 
 func toolPrerequisiteWave(toolCases []protocol.ToolCase) (protocol.SeedRequest, error) {
@@ -1192,7 +1335,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" {
+	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" && req.ScreenedImageURL == "" {
 		writeError(w, http.StatusBadRequest, "run_size requires git_url / tarball_url (build in Docker) or harness_url (point at an already-running harness, for local dev)")
 		return
 	}
@@ -1204,7 +1347,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 	// Sandbox is only needed when we build the crate ourselves. The local
 	// harness_url path runs the full generate→seed→run→score pipeline against an
 	// already-running harness, so it does not require Docker.
-	if req.GitURL != "" || req.TarballURL != "" {
+	if req.GitURL != "" || req.TarballURL != "" || req.ScreenedImageURL != "" {
 		if s.sandbox == nil {
 			writeError(w, http.StatusNotImplemented, "git_url (Docker build) is not available on this server; submit a reachable harness_url instead")
 			return
@@ -1239,7 +1382,12 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		writeError(w, http.StatusConflict, "ticket inference runtime policy is unavailable")
 		return
 	}
-	s.store.Create(runID, "run_size", store.StatusQueued, seed, prof.Tools+prof.Mem)
+	cases := prof.Tools + prof.Mem
+	if req.PrivateDatasetMode == generatorRoundMode {
+		// A round run's size is its dataset's, set once the job decodes it.
+		cases = 0
+	}
+	s.store.Create(runID, "run_size", store.StatusQueued, seed, cases)
 	s.store.SetRunSize(runID, req.RunSize)
 	s.store.SetBenchVersion(runID, req.BenchVersion)
 	log.Printf("run %s: run_size=%s bench_version=%d seed=%d tools=%d mem=%d",
@@ -1247,7 +1395,11 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.registerRunCancel(runID, cancel)
-	go s.runSizeJob(runCtx, runID, req, prof, seed)
+	if req.PrivateDatasetMode == generatorRoundMode {
+		go s.runGeneratorRoundJob(runCtx, runID, req, seed)
+	} else {
+		go s.runSizeJob(runCtx, runID, req, prof, seed)
+	}
 
 	writeJSON(w, http.StatusAccepted, acceptedResponse{
 		RunID:        runID,
@@ -1355,12 +1507,24 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 
 	total := prof.Tools + prof.Mem
 	scope := runScope(req)
+	// runStart stamps the router shadow entry's FirstSeen at the point this scored
+	// run began (used only by the shadow ledger; no effect on memory scoring).
+	runStart := time.Now().UTC()
+	var privateArtifact *gen.DatasetArtifact
+	if req.PrivateDatasetMode != "" {
+		loaded, err := gen.DecodePrivateArtifact(req.PrivateDatasetBytes, req.ExpectedDatasetSHA256, seed, req.RunSize)
+		if err != nil {
+			s.store.Fail(runID, "private dataset integrity verification failed")
+			return
+		}
+		privateArtifact = &loaded
+	}
 
 	// 1. building — build the crate in the Docker sandbox. Skipped on the local
 	//    harness_url path (the miner is already running their harness).
 	var image string
 	var structuralFP *protocol.CodeFingerprint
-	if req.GitURL != "" || req.TarballURL != "" {
+	if req.GitURL != "" || req.TarballURL != "" || req.ScreenedImageURL != "" {
 		s.store.SetStage(runID, store.StatusBuilding, 0, total)
 		img, buildLog, fp, err := s.sandbox.Build(ctx, sourceFromReq(req))
 		if err != nil {
@@ -1434,7 +1598,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// bytes for a seed — recomputes the fixture digests from the same (seed, case).
 	toolFixtureByInternalID := make(map[string]toolexec.Fixture, len(toolCases))
 	for _, c := range toolCases {
-		toolFixtureByInternalID[c.ID] = toolexec.BuildFixture(seed, c)
+		toolFixtureByInternalID[c.ID] = toolexec.BuildFixtureForVersion(seed, c, req.BenchVersion)
 	}
 	// The hashed artifact covers the secondary isolation graph too (when present),
 	// so a dispute re-scores the exact multi-graph seeding.
@@ -1448,6 +1612,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		return
 	}
 	datasetHash, artifactBytes, hashErr := artifact.SHA256Hex()
+	if privateArtifact != nil {
+		artifact = *privateArtifact
+		datasetHash, artifactBytes, hashErr = req.ExpectedDatasetSHA256, req.PrivateDatasetBytes, nil
+		toolCases, memSuite.Cases, memWaves = privateExecutionSurfaces(artifact)
+		if err := validateV8EvidenceAvailability(toolCases, memSuite.Cases, memWaves); err != nil {
+			s.store.Fail(runID, "private dataset evidence availability invalid")
+			return
+		}
+	}
 	if hashErr != nil {
 		log.Printf("run %s: dataset hashing failed: %v", runID, hashErr)
 	}
@@ -1462,7 +1635,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 	}
-	if dir := strings.TrimSpace(os.Getenv("DITTOBENCH_ARTIFACT_DIR")); dir != "" && artifactBytes != nil {
+	if dir := strings.TrimSpace(os.Getenv("DITTOBENCH_ARTIFACT_DIR")); dir != "" && artifactBytes != nil && privateArtifact == nil {
 		if err := os.WriteFile(filepath.Join(dir, runID+".json"), artifactBytes, 0o644); err != nil {
 			log.Printf("run %s: artifact persist failed: %v", runID, err)
 		}
@@ -1509,6 +1682,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	var handle *sandbox.Handle
 	var runErr error
 	var sourceCapability string
+	// harnessInferenceGateway is the inference base URL the sandboxed harness
+	// was launched with; Bench v13 /run requests carry a case-scoped form of it
+	// (v13CaseInferenceBaseURL) so completions stay attributable under
+	// concurrency. Empty on the direct-harness path.
+	harnessInferenceGateway := ""
 	strictCleanupOnly := false
 	if image != "" {
 		// Register ownership before Sandbox.Run: an implementation may return a
@@ -1542,8 +1720,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				s.store.Fail(runID, "inference session capability is unavailable")
 				return
 			}
+			s.broker.setHarnessBase(inferenceSessionID, env["DITTOBENCH_INFERENCE_BASE_URL"])
 		}
-		handle, runErr = s.sandbox.Run(ctx, image, env)
+		harnessInferenceGateway = env["DITTOBENCH_INFERENCE_BASE_URL"]
+		handle, runErr = s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, env)
 		if runErr != nil {
 			if sourceCapability != "" {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
@@ -1590,7 +1770,13 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		s.store.Fail(runID, "harness never became healthy: "+healthErr.Error())
 		return
 	}
-	tools := catalog.CatalogForVersion(req.BenchVersion)
+	// v13+ advertises the per-seed surface (paraphrased descriptions, enum
+	// schemas, coined decoys); the same seed drives the fixtures above, so the
+	// decoys a harness sees are exactly the ones the mock endpoint knows.
+	tools := catalog.CatalogForSeed(req.BenchVersion, seed)
+	if privateArtifact != nil {
+		tools = artifact.Catalog
+	}
 
 	// V8 harnesses may embed before any model turn, including the route probe
 	// below. Admit the ticket-bound embedding lane before probing so a working
@@ -1671,13 +1857,16 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			compatEnv, capabilityErr := harnessSandboxEnvWithCapability(
 				req.Env, req.BenchVersion, v8CompatLockedProvider, inferenceSessionID, sourceCapability,
 			)
+			if capabilityErr == nil {
+				s.broker.setHarnessBase(inferenceSessionID, compatEnv["DITTOBENCH_INFERENCE_BASE_URL"])
+			}
 			if capabilityErr != nil {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
 				sourceCapability = ""
 				s.store.Fail(runID, "compatibility inference capability is unavailable")
 				return
 			}
-			replacement, err := s.sandbox.Run(ctx, image, compatEnv)
+			replacement, err := s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, compatEnv)
 			if err != nil {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
 				sourceCapability = ""
@@ -1763,7 +1952,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				return
 			}
 		}
-		toolSrv.Register(sc.Case.ID, toolexec.BuildFixture(seed, protocol.ToolCase{ID: internalID}))
+		toolSrv.Register(sc.Case.ID, toolexec.BuildFixtureForVersion(seed, protocol.ToolCase{ID: internalID}, req.BenchVersion))
 	}
 	toolSourceIP := ""
 	if handle != nil {
@@ -1844,6 +2033,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	toolWasObserved := make([]bool, len(toolCases))
 	toolWasCapped := make([]bool, len(toolCases))
 	toolTranscripts := make([]transcriptCase, len(toolCases))
+	// Bench v13 twin evidence (issue #1835): what the post-pass needs about
+	// each case beyond its CaseScore, keyed by the case id the report carries.
+	// Collected per index inside the bounded loops, merged single-threaded.
+	twinEvidence := map[string]scorer.TwinEvidence{}
+	toolTwins := make([]scorer.TwinEvidence, len(toolCases))
 	var projectionFailure error
 	var projectionFailureOnce sync.Once
 	recordProjectionFailure := func(err error) {
@@ -1851,13 +2045,34 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			projectionFailureOnce.Do(func() { projectionFailure = err })
 		}
 	}
+	// v13 follow-up reads (ToolCase.RunAfterCaseID) must reach the harness only
+	// after the mutation they verify has returned; the gate is a no-op for every
+	// case without a dependency, so v2..v12 runs are unaffected.
+	runAfter := newRunAfterGate(toolCases)
+	if runAfter.pending() > 0 {
+		log.Printf("run %s: %d tool case(s) gated on an earlier mutation (v13 run-after)", runID, runAfter.pending())
+	}
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
+		defer runAfter.release(i)
+		if !runAfter.wait(ctx, i) {
+			return
+		}
 		c := toolCases[i]
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
-		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
+		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, c.ID, caseToolEndpoint, toolRunUserID))
 		observed := toolSrv.Observed(c.ID)
+		attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(c.ID))
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
+		cs = applyV13RestraintProvenance(req.BenchVersion, c, cs, execution)
+		// Bench v13 catalog gate: restraint and expected-tool credit scored against
+		// what the harness OFFERED the model (relay-recorded). Shadow by default;
+		// no-op below v13.
+		cs = applyV13CatalogGate(req.BenchVersion, scope, v13CatalogGatePosture, cs, c, tools, observed, execution)
+		// The broker ledger is keyed by the wire case id, so read it before any
+		// v9 projection reverse-maps cs.CaseID below.
+		cs = s.applyV13InferenceCost(req.BenchVersion, inferenceSessionID, cs, toolCostClass(c), &execution)
+		toolTwins[i] = toolTwinEvidence(req.BenchVersion, c, resp, observed)
 		fixture := toolFixtureByInternalID[c.ID]
 		if harnessProjection != nil {
 			internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
@@ -1874,7 +2089,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			// fished from the wrong tool's result) zeros the usage half too.
 			// Under v7 the composition is multiplicative and a decoy zeroes the
 			// whole case (ComposeResultUsageForVersion).
-			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, resp.FinalText,
+			// From v14 the reply is read as the graders read it (grade.ReplyAsRead:
+			// the #2734 hyphen fold and rendered markdown), so a needle copied with
+			// U+2011 or behind a no-break space still counts as used.
+			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, grade.ReplyAsRead(req.BenchVersion, resp).FinalText,
 				fixture.NeedleValue(), fixture.DecoyValue())
 		} else {
 			cs = scorer.FinishTool(cs)
@@ -1925,8 +2143,14 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		s.store.Fail(runID, "v9 tool capability reverse mapping failed")
 		return
 	}
+	// The unified v13 twin post-pass below owns all decision groups. Do not
+	// also run the earlier any-member-wrong group rule: it charges an honest
+	// miss to correct siblings even when their decisions are not concordant.
 	for i, cs := range toolResults {
 		perCase = append(perCase, cs)
+		if toolTwins[i].Paired() {
+			twinEvidence[cs.CaseID] = toolTwins[i]
+		}
 		if toolWasObserved[i] {
 			observedTool++
 		} else if toolWasCapped[i] {
@@ -1949,20 +2173,16 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		defer endEmbeddingPhase()
 	}
 
-	// 5. memory cases — staged Tier-C ingestion: seed a wave,
-	//    then run the cases it unlocks (all their evidence is now seeded), then
-	//    the next wave. A single-wave run degrades to seed-then-run-all.
-	casesByWave := make([][]gen.StagedCase, memSuite.SeedingWaves)
-	for _, sc := range memSuite.Cases {
-		w := sc.RunAfterWave
-		if w < 0 {
-			w = 0
-		}
-		if w >= memSuite.SeedingWaves {
-			w = memSuite.SeedingWaves - 1
-		}
-		casesByWave[w] = append(casesByWave[w], sc)
-	}
+	// 5. memory cases — staged Tier-C ingestion: seed a wave, wait for the
+	//    harness's 2xx ingest acknowledgement, then run the cases it unlocks
+	//    (all their evidence is now seeded), then the next wave. A single-wave
+	//    run degrades to seed-then-run-all. runner.RunStagedWaves owns the
+	//    barrier so the ordering is testable in isolation; Bench v13 stages real
+	//    corrections into waves 1-2, so a case dispatched before the ack would
+	//    zero an honest harness on the evidence it has not yet embedded.
+	casesByWave := runner.StageCasesByWave(memSuite.SeedingWaves, len(memSuite.Cases), func(i int) int {
+		return memSuite.Cases[i].RunAfterWave
+	})
 	// Seed the secondary isolation graph up front (a distinct user_id), so cross-
 	// user isolation cases can run in any wave.
 	if len(iso.SecondaryWave.Pairs) > 0 {
@@ -1976,27 +2196,34 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			return
 		}
 	}
-	for w, wave := range memSuite.Waves {
-		if len(wave.Pairs) > 0 {
-			s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
-			if _, err := runner.SeedForVersion(ctx, harnessURL, wave, req.BenchVersion); err != nil {
-				if req.BenchVersion >= protocol.BenchVersionV7 {
-					s.failV7Seeding(runID, fmt.Sprintf("seeding haystack wave %d failed: ", w), err)
-				} else {
-					s.store.Fail(runID, fmt.Sprintf("seeding haystack wave %d failed: %s", w, err.Error()))
-				}
-				return
-			}
-		}
+	// Bench v13 causal gate exemption: every record the harness was (or will be)
+	// delivered through /seed, so a value quoted from retrieved memory is never
+	// answer_in_prompt. Built once over the projected waves; nil below v13.
+	recordTokens := v13RecordTokens(req.BenchVersion, append(append([]protocol.SeedRequest(nil), memSuite.Waves...), iso.SecondaryWave), toolCases)
+	var claimProvenanceReader v13ClaimProvenanceReader
+	if s.broker != nil {
+		claimProvenanceReader = s.broker
+	}
+	errMemoryProjection := errors.New("v9 memory capability reverse mapping failed")
+	waveErr := runner.RunStagedWaves(ctx, memSuite.Waves, casesByWave, func(ctx context.Context, w int, wave protocol.SeedRequest) error {
+		s.store.SetStage(runID, store.StatusSeeding, len(perCase), total)
+		_, err := runner.SeedForVersion(ctx, harnessURL, wave, req.BenchVersion)
+		return err
+	}, func(ctx context.Context, w int, bucket []int) error {
+		wave := memSuite.Waves[w]
 		s.store.SetStage(runID, store.StatusRunning, len(perCase), total)
 		// Cases within one wave are independent: their evidence is fully seeded
 		// (this wave and all prior waves), lifecycle WRITE cases live only in wave
 		// 0 and their READ cases in a later wave, and same-wave writes target
 		// distinct keys — so they run with bounded concurrency. The wave boundary
 		// stays a barrier: seed wave w, run its cases, then seed wave w+1.
-		waveCases := casesByWave[w]
+		waveCases := make([]gen.StagedCase, 0, len(bucket))
+		for _, index := range bucket {
+			waveCases = append(waveCases, memSuite.Cases[index])
+		}
 		waveResults := make([]protocol.CaseScore, len(waveCases))
 		waveTranscripts := make([]transcriptCase, len(waveCases))
+		waveTwins := make([]scorer.TwinEvidence, len(waveCases))
 		runBounded(ctx, len(waveCases), effectiveCaseConcurrency, func(i int) {
 			sc := waveCases[i]
 			mc := sc.Case
@@ -2007,8 +2234,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				uid = wave.UserID
 			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
-			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
+			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, scoredCaseOptions(req.BenchVersion, harnessInferenceGateway, mc.ID, caseToolEndpoint, uid))
 			observedCalls := toolSrv.Observed(mc.ID)
+			attachEffectAccounting(execution.ToolProvenance, toolSrv.EffectAccounting(mc.ID))
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
 			projected := projectedHarnessCase{Response: resp, Observed: observedCalls}
@@ -2017,9 +2245,19 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				gradedResp = projected.Response
 			}
 			cs := gradeProjectedMemoryCase(mc, resp, projected, len(observedCalls) > 0)
+			cs = carryV13ProvenanceRelation(req.BenchVersion, sc, cs)
 			cs = applyV10ToolProvenance(
 				req.BenchVersion, scope, cs, resp, observedCalls, execution,
 			)
+			// Bench v13 claim gates: the credited claim span must be model-emitted
+			// and not harness-authored into the prompt (relay-recorded). Shadow by
+			// default; no-op below v13.
+			cs = applyV13ClaimProvenance(
+				req.BenchVersion, scope, v13ClaimProvenancePosture, cs, mc, gradedResp,
+				runner.DefaultSystemPrompt, recordTokens, claimProvenanceReader, inferenceSessionID,
+			)
+			cs = s.applyV13InferenceCost(req.BenchVersion, inferenceSessionID, cs, memoryCostClass(), &execution)
+			waveTwins[i] = memoryTwinEvidence(req.BenchVersion, sc, gradedResp, observedCalls)
 			if runErr != nil {
 				// The case still scores 0 on its own accuracy (an empty response
 				// grades 0); this only tells the group metrics to drop it, so a
@@ -2060,16 +2298,37 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		})
 		// Same zero-value guard as the tool loop: a cancellation mid-wave must
 		// not fold half-empty results into a report.
-		if ctx.Err() != nil {
+		if err := ctx.Err(); err != nil {
 			log.Printf("run %s: cancelled during memory wave %d; abandoning without a report", runID, w)
-			return
+			return err
 		}
 		if projectionFailure != nil {
-			s.store.Fail(runID, "v9 memory capability reverse mapping failed")
-			return
+			return errMemoryProjection
 		}
 		perCase = append(perCase, waveResults...)
 		transcripts = append(transcripts, waveTranscripts...)
+		for i, cs := range waveResults {
+			if waveTwins[i].Paired() {
+				twinEvidence[cs.CaseID] = waveTwins[i]
+			}
+		}
+		return nil
+	})
+	if waveErr != nil {
+		var seedErr *runner.WaveSeedError
+		switch {
+		case errors.As(waveErr, &seedErr):
+			if req.BenchVersion >= protocol.BenchVersionV7 {
+				s.failV7Seeding(runID, fmt.Sprintf("seeding haystack wave %d failed: ", seedErr.Wave), seedErr.Err)
+			} else {
+				s.store.Fail(runID, fmt.Sprintf("seeding haystack wave %d failed: %s", seedErr.Wave, seedErr.Err.Error()))
+			}
+		case errors.Is(waveErr, errMemoryProjection):
+			s.store.Fail(runID, errMemoryProjection.Error())
+		default:
+			// Cancellation: the cancel handler already failed the run.
+		}
+		return
 	}
 	// Close broker access before scoring/accounting. The once-guarded deferred
 	// cleanup still handles every early return, cancel, and panic above.
@@ -2109,7 +2368,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			tokenUsage,
 			relayExecution,
 		); err != nil {
-			s.failRelayUnavailable(runID, err)
+			s.failRelayUnavailableWithAdmission(runID, err, relayExecution.Admission)
 			return
 		}
 	}
@@ -2121,6 +2380,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// into any mean, uncertainty estimate, or gate.
 	perCase = scorer.ScoredPopulation(perCase)
 	s.store.SetStage(runID, store.StatusScoring, len(perCase), total)
+	// Bench v13 twin / pair post-pass (issue #1835) runs on the scored
+	// population before aggregation so the per-relation means and any enforced
+	// rule land in the composite's inputs. It is the identity for bench_version
+	// < 13 and, under the default observe posture, annotates without moving a
+	// score.
+	perCase, twinSummary := scorer.ApplyV13TwinPostPass(perCase, twinEvidence, scorer.TwinPostPassConfigFromEnv(), req.BenchVersion)
 	// Score under the contract this run was GENERATED for, not the module's
 	// current release: a v2 run's composite is pure accuracy, and the v3+ gate
 	// factors must not retroactively apply to it.
@@ -2136,6 +2401,16 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			toolProvenanceTotals = &totals
 		}
 	}
+	// Bench v13 catalog capture run totals (completions attributed / not) for
+	// the catalog_gate summary and its published catalog_suppression_rate.
+	var catalogTotals *sessionCatalogTotals
+	if req.BenchVersion >= scorer.CatalogGateBenchVersion && inferenceSessionID != "" && s.broker != nil {
+		if totals, ok := s.broker.sessionCatalogTotals(inferenceSessionID); ok {
+			catalogTotals = &totals
+		}
+	}
+	catalogGateSummary := summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals)
+	logV13CatalogCoverageGap(runID, catalogGateSummary)
 	report.Details = &protocol.RunDetails{
 		BenchVersion:      req.BenchVersion,
 		RunSize:           req.RunSize,
@@ -2149,6 +2424,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		ObservedToolCases: observedTool,
 		CappedToolCases:   cappedTool,
 		ToolProvenance:    summarizeV10ToolProvenance(perCase, toolProvenanceTotals),
+		ClaimProvenance:   summarizeV13ClaimProvenance(req.BenchVersion, v13ClaimProvenancePosture, perCase),
+		CatalogGate:       catalogGateSummary,
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
 		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),
@@ -2170,6 +2447,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// details blob so it survives the platform wire alongside the other factors).
 	report.Details.ConversationalSanity = report.ConversationalSanity
 	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(perCase)
+	// The memory over-call multiplier the composite gate applied (issue #533):
+	// the same function AggregateForVersion folds in, so a published composite
+	// decomposes into its factors from the record alone.
+	if factor, ok := scorer.MemoryOverCallFactorForVersion(perCase, req.BenchVersion); ok {
+		report.Details.MemoryOverCall = &factor
+	}
 	if tr, pairs := scorer.TransformRobustness(perCase); tr != nil {
 		report.Details.TransformRobustness = tr
 		report.Details.AuditCaseCount = pairs
@@ -2186,6 +2469,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		report.Details.CalibrationBrier = brier
 		report.Details.CalibrationN = cn
 	}
+	// Bench v13 shadow telemetry: the twin post-pass record and the per-case
+	// inference cost summary. Both are nil before v13, so earlier details keep
+	// their exact shape.
+	report.Details.TwinPostPass = twinSummary
+	report.Details.InferenceCost = s.summarizeV13InferenceCost(req.BenchVersion, inferenceSessionID, perCase)
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {
 		log.Printf("run %s: %d injection-compliance case(s) flagged", runID, injections)
@@ -2245,9 +2533,55 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		log.Printf("run %s: transcript_sha256=%s (%d cases)", runID, tSHA, len(transcripts))
 	}
+	// Router shadow track (opt-in, additive): probe /router/health on the harness
+	// and, if a router project is advertised, score it into the shadow ledger. An
+	// absent router is a benign skip; any error is swallowed so the router track can
+	// never fail a memory run. Runs after memory scoring, while the harness is still
+	// alive. Shadow-only: weight_eligible=false, folded combined_score=0, 0 bps.
+	s.dispatchRouterShadow(ctx, harnessURL, req, runStart)
+
 	s.store.Finish(runID, report)
 	log.Printf("run %s done: bench_version=%d composite=%.3f tool_mean=%.3f memory_mean=%.3f observed=%d capped=%d",
 		runID, req.BenchVersion, report.Composite, report.ToolMean, report.MemoryMean, observedTool, cappedTool)
+}
+
+// dispatchRouterShadow runs the router track's opt-in inclusion gate against the
+// live harness URL and, when a router project is advertised, scores it into the
+// in-process shadow ledger. It is deliberately best-effort and total: a missing
+// router (ErrNotIncluded) is a benign skip and any other error is logged and
+// swallowed, so the shadow track never affects the memory run's outcome. The
+// entry is keyed by the inference agent id; miner_hotkey is left empty (the
+// shadow ledger is agent-keyed and weight_eligible=false, so it never touches
+// emissions).
+func (s *server) dispatchRouterShadow(ctx context.Context, harnessURL string, req submitRequest, runStart time.Time) {
+	if s.routerLedger == nil || harnessURL == "" {
+		return
+	}
+	sub := routerbackend.RouterSubmission{
+		AgentID:       req.InferenceAgentID,
+		RouterBaseURL: harnessURL,
+		FirstSeen:     runStart,
+	}
+	incl, entry, err := s.routerDispatcher.Run(ctx, sub)
+	switch {
+	case errors.Is(err, routerbackend.ErrNotIncluded):
+		// No router project advertised — benign, expected for memory-only miners.
+		return
+	case errors.Is(err, routerbackend.ErrOffloaded):
+		// Offloaded backend selected but out-of-band results are not wired here;
+		// nothing to record locally.
+		log.Printf("router shadow: scoring offloaded (agent=%s)", req.InferenceAgentID)
+		return
+	case err != nil:
+		log.Printf("router shadow: scoring failed, skipping (agent=%s): %v", req.InferenceAgentID, err)
+		return
+	}
+	if !incl.Included {
+		return
+	}
+	s.routerLedger.Record(entry)
+	log.Printf("router shadow: recorded entry agent=%s shadow_composite=%.3f weight_eligible=%t",
+		entry.AgentID, entry.ShadowComposite, entry.WeightEligible)
 }
 
 func loopbackHarnessSourceIP(rawURL string) (string, bool) {
@@ -2328,9 +2662,10 @@ func validateBenchVersionResult(requested, artifactVersion int, details *protoco
 // three frames later on this path.
 //
 // Direct sandbox resource evidence (OOM, tmpfs exhaustion) still wins over a
-// prior verdict. That is not a downgrade: those codes are themselves
-// validator_infrastructure, and physical evidence from the cgroup is strictly
-// better than an inference drawn mid-run.
+// prior verdict: physical evidence from the cgroup is strictly better than an
+// inference drawn mid-run. An OOM is the agent's (harness_oom, terminal) only
+// under the published rule in docs/RUNTIME-ENVELOPE.md; every other kill is
+// validator_infrastructure.
 func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 	job, ok := s.store.Get(runID)
 	if ok && job.Status == store.StatusFailed {
@@ -2362,15 +2697,52 @@ func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 		if diagnostics.TmpfsCapacityBytes != nil {
 			failure.Diagnostics["tmpfs_capacity_bytes"] = *diagnostics.TmpfsCapacityBytes
 		}
+		if diagnostics.MemoryLimitBytes != nil {
+			failure.Diagnostics["memory_limit_bytes"] = *diagnostics.MemoryLimitBytes
+		}
+		if diagnostics.HostMemAvailableMinBytes != nil {
+			failure.Diagnostics["host_mem_available_min_bytes"] = *diagnostics.HostMemAvailableMinBytes
+		}
 		message := job.Error
-		if code := diagnostics.InfrastructureCode(); code != "" {
+		verdict, classified := diagnostics.ResourceFailure()
+		// An unflagged SIGKILL proves nothing about who sent it, so it never
+		// overrides a verdict the scored path already reached.
+		if classified && verdict.Code == sandbox.CodeHarnessKilled137 && job.Failure != nil && job.Failure.Kind != "" {
+			classified = false
+		}
+		if classified && verdict.MinerFault {
+			// The wire kind now matches the charge: a harness that reached its
+			// own published cap on a host with headroom is the agent's failure.
+			failure.Kind = "sandbox_failure"
+			failure.Code = verdict.Code
+			failure.Retryable = false
+			message = "harness exceeded its published sandbox memory cap"
+			log.Printf(
+				"run %s harness failure code=%s oom=%t exit=%d",
+				runID, verdict.Code, diagnostics.OOMKilled, diagnostics.ExitCode,
+			)
+		} else if classified {
 			failure.Kind = "validator_infrastructure"
-			failure.Code = code
+			failure.Code = verdict.Code
 			failure.Retryable = true
 			message = "validator sandbox resource envelope exhausted"
 			log.Printf(
 				"run %s validator infrastructure failure code=%s oom=%t exit=%d",
-				runID, code, diagnostics.OOMKilled, diagnostics.ExitCode,
+				runID, verdict.Code, diagnostics.OOMKilled, diagnostics.ExitCode,
+			)
+		} else if sigill, evidence := sandbox.StartupIllegalInstruction(diagnostics.ExitCode, logTail); job.Failure == nil &&
+			strings.Contains(job.Error, "harness never became healthy") && sigill {
+			// The harness died on an instruction this host's CPU lacks before it
+			// ever served. The same screened image starts on other validators, so
+			// this is the host's envelope, not the agent's attempt.
+			failure.Kind = "validator_infrastructure"
+			failure.Code = "sandbox_cpu_unsupported"
+			failure.Retryable = true
+			failure.Diagnostics["illegal_instruction_evidence"] = evidence
+			message = "validator host CPU cannot execute the screened harness"
+			log.Printf(
+				"run %s validator infrastructure failure code=%s evidence=%s exit=%d",
+				runID, failure.Code, evidence, diagnostics.ExitCode,
 			)
 		} else if prior := job.Failure; prior != nil && prior.Kind != "" {
 			// The scored path already reached a verdict. Keep it, and keep the
@@ -2718,6 +3090,16 @@ func pinnedOrFreshSeed(pinned int64) int64 {
 	return gen.FreshSeed()
 }
 
+// validatePrivateHarnessPosture fails closed when the relaxed SSRF guard is
+// combined with the trusted validator image path: a validator-owned scorer must
+// never fetch tarballs or screened images from link-local/RFC1918 targets.
+func validatePrivateHarnessPosture(allowPrivate, allowScreenedImages bool) error {
+	if allowPrivate && allowScreenedImages {
+		return errors.New("DITTOBENCH_ALLOW_PRIVATE_HARNESS cannot be combined with DITTOBENCH_ALLOW_SCREENED_IMAGES; unset the private-harness flag on validator-owned scorers")
+	}
+	return nil
+}
+
 // envBool reports whether an env var is set to a truthy value.
 func envBool(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(name))) {
@@ -2801,19 +3183,32 @@ var lockedEnvKeys = map[string]bool{
 	"OPENAI_API_BASE":               true,
 	"OPENROUTER_BASE_URL":           true,
 	"DITTOBENCH_INFERENCE_BASE_URL": true,
+	"DITTOBENCH_DECISIONS_URL":      true,
 	"DITTOBENCH_DB":                 true,
+	"DITTOBENCH_MEMORY_PATH":        true,
+}
+
+// sandboxPersistencePaths are the known harness persistence variables and the
+// bounded tmpfs paths they are pinned to. ditto-screener locks the same pair
+// for its serve smoke, so a harness that honours either variable persists in
+// the same place while it is screened and while it is scored.
+var sandboxPersistencePaths = map[string]string{
+	"DITTOBENCH_DB":          "/tmp/dittobench.db",
+	"DITTOBENCH_MEMORY_PATH": "/tmp/dittobench-memory.json",
 }
 
 // sandboxRuntimeEnv applies filesystem invariants shared by practice and
 // canonical scoring without changing the practice endpoint's provider env.
 func sandboxRuntimeEnv(reqEnv map[string]string) map[string]string {
-	env := make(map[string]string, len(reqEnv)+1)
+	env := make(map[string]string, len(reqEnv)+len(sandboxPersistencePaths))
 	for key, value := range reqEnv {
-		if key != "DITTOBENCH_DB" {
+		if _, locked := sandboxPersistencePaths[key]; !locked {
 			env[key] = value
 		}
 	}
-	env["DITTOBENCH_DB"] = "/tmp/dittobench.db"
+	for key, value := range sandboxPersistencePaths {
+		env[key] = value
+	}
 	return env
 }
 
@@ -2873,10 +3268,17 @@ func harnessSandboxEnvForProvider(reqEnv map[string]string, benchVersion int, pr
 	env["DITTOBENCH_MODEL"] = llm.HarnessModelForVersion(benchVersion)
 	env["OLLAMA_BASE_URL"] = embeddingGateway
 	// The production sandbox has a read-only root and exposes exactly one
-	// bounded writable filesystem at /tmp. Force the standard harness database
-	// there so an image cannot pass screening as root and then fail to boot as
-	// the validator's unprivileged UID.
-	env["DITTOBENCH_DB"] = "/tmp/dittobench.db"
+	// bounded writable filesystem at /tmp. Force the known harness persistence
+	// paths there so an image cannot pass screening as root and then fail to
+	// boot as the validator's unprivileged UID, and so a harness honouring
+	// either variable lands in the same place in both runtimes.
+	for key, value := range sandboxPersistencePaths {
+		env[key] = value
+	}
+	// v15: the locked decision model (decision_lane.go) at the same broker.
+	if usesDecisionLane(benchVersion) {
+		env[harnessDecisionsEnvKey] = gateway + "/decisions"
+	}
 	return env
 }
 
@@ -2907,7 +3309,46 @@ func harnessSandboxEnvWithCapability(
 	env["OPENAI_API_KEY"] = capability
 	env["OPENROUTER_API_KEY"] = capability
 	env["OLLAMA_BASE_URL"] = base
+	if usesDecisionLane(benchVersion) {
+		env[harnessDecisionsEnvKey] = gateway + "/decisions"
+	}
 	return env, nil
+}
+
+// routerHarnessSandboxEnv builds the sandbox env for the SHADOW router
+// competition track (SN118 "DittoBench" router track). It is the deliberate
+// INVERSE of harnessSandboxEnvForProvider's model lock: the miner owns the
+// model, provider, and routing, so a miner's router service is the LLM backend.
+//
+// Two invariants distinguish it from the locked path:
+//
+//   - It does NOT apply lockedEnvKeys. Caller-supplied env survives verbatim so
+//     the miner can configure its own routing; there is no model to protect.
+//   - It injects NEITHER DITTOBENCH_MODEL NOR DITTOBENCH_INFERENCE_BASE_URL.
+//
+// Instead it points each big-four coding harness at the miner's multi-protocol
+// router front door via that harness's own base-URL/token env vars (see
+// routerharness.Harness.BaseURLEnv): Claude Code -> ANTHROPIC_BASE_URL +
+// ANTHROPIC_AUTH_TOKEN (ANTHROPIC_API_KEY emptied); Codex -> OPENAI_BASE_URL with
+// the Responses wire_api marker; opencode + Grok -> OPENAI_BASE_URL. All harness
+// base URLs resolve to the same miner router; the router path per harness is
+// carried by routerharness, not the env. placeholderKey authorizes nothing on
+// the scorer side — the miner's router owns real provider credentials.
+//
+// This is shadow scaffolding: it is not wired into any live scoring path.
+func routerHarnessSandboxEnv(reqEnv map[string]string, minerRouterBaseURL, placeholderKey string) map[string]string {
+	env := make(map[string]string, len(reqEnv)+8)
+	// Router track inverts the lock: no lockedEnvKeys filter, caller env survives.
+	for key, value := range reqEnv {
+		env[key] = value
+	}
+	// Point every big-four harness at the miner's router front door.
+	for _, harness := range routerharness.Harnesses() {
+		for key, value := range harness.BaseURLEnv().Env(minerRouterBaseURL, placeholderKey) {
+			env[key] = value
+		}
+	}
+	return env
 }
 
 // probeHarnessModelRoute sends one isolated, discarded request through the
@@ -2998,17 +3439,78 @@ func harnessGateway(inferenceSessionID string) string {
 	return envOr("HARNESS_GATEWAY_URL", "http://host.docker.internal:11434")
 }
 
-// clientIP returns the caller's IP for rate-limiting, honoring the first hop of
-// X-Forwarded-For (set by Cloud Run / proxies) and falling back to RemoteAddr.
+// maxTrustedProxyHops bounds DITTOBENCH_TRUSTED_PROXY_HOPS so a typo cannot
+// walk arbitrarily far into the client-written part of X-Forwarded-For.
+const maxTrustedProxyHops = 8
+
+// trustedProxyHops is how many right-most X-Forwarded-For entries were
+// appended by proxies this service trusts. The default of 1 is the Google
+// front end that serves a *.run.app URL. An external load balancer in front
+// of Cloud Run appends two (client, load balancer), so it needs 2. A service
+// exposed directly with no proxy should use 0, which ignores the header.
+var trustedProxyHops = parseTrustedProxyHops(os.Getenv("DITTOBENCH_TRUSTED_PROXY_HOPS"))
+
+func parseTrustedProxyHops(raw string) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 0 || n > maxTrustedProxyHops {
+		log.Printf("DITTOBENCH_TRUSTED_PROXY_HOPS=%q is not an integer in [0, %d]; using 1", raw, maxTrustedProxyHops)
+		return 1
+	}
+	return n
+}
+
+// clientIP returns the caller's address for per-IP rate limiting.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
+	return clientIPFromHops(r, trustedProxyHops)
+}
+
+// clientIPFromHops resolves the caller's address, trusting only proxy-written
+// X-Forwarded-For entries.
+//
+// The header is client-writable: a caller can send any values it likes, and
+// each proxy only appends. The left-most entry is therefore whatever the
+// caller chose, and keying a rate limiter on it lets a caller rotate it to get
+// a fresh bucket on every request. The address the first trusted proxy saw is
+// hops entries from the right. If the header is missing, shorter than that,
+// or the chosen entry is not an IP address, use the transport peer instead of
+// a caller-controlled value.
+func clientIPFromHops(r *http.Request, hops int) string {
+	if hops > 0 {
+		var entries []string
+		for _, header := range r.Header.Values("X-Forwarded-For") {
+			for _, entry := range strings.Split(header, ",") {
+				entries = append(entries, strings.TrimSpace(entry))
+			}
 		}
-		return strings.TrimSpace(xff)
+		if len(entries) >= hops {
+			if candidate := entries[len(entries)-hops]; net.ParseIP(candidate) != nil {
+				return candidate
+			}
+		}
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// rateLimitKey buckets a client address for the per-IP limiter. An IPv6
+// client is typically assigned a whole /64 and can rotate through it freely,
+// so IPv6 is keyed by its /64 prefix; IPv4, including IPv4-mapped IPv6, stays
+// keyed per address.
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, _ := addr.Prefix(64)
+	return prefix.String()
 }

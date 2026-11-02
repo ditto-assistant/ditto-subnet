@@ -1,8 +1,9 @@
 """Contract and concurrency tests for screener review settings."""
 
+import hashlib
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -12,8 +13,9 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from ditto.api_models.screener_review_settings import policy_manifest_digest
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import ScreenerHeartbeat
+from ditto.db.models import ScreenerHeartbeat, ScreenerNode
 
 pytestmark = pytest.mark.asyncio
 
@@ -203,31 +205,6 @@ async def test_manifest_rotation_preserves_policy_and_requires_exact_confirmatio
     assert denied.status_code == 409
 
 
-async def test_l3_can_be_disabled_without_disabling_l2(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    settings_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, settings_maker)
-    payload = _payload("*", "enforce")
-    assert isinstance(payload["settings"], dict)
-    payload["settings"]["l3_enabled"] = False
-
-    written = await client.post(
-        "/api/v1/admin/screener-review-settings",
-        headers=_ADMIN_HEADERS,
-        json=payload,
-    )
-    assert written.status_code == 200, written.text
-    effective = await client.get(
-        "/api/v1/screener/review-settings?instance_id=ditto-screener-prod",
-        headers=_SCREENER_HEADERS,
-    )
-    assert effective.status_code == 200
-    assert effective.json()["settings"]["mode"] == "enforce"
-    assert effective.json()["settings"]["l3_enabled"] is False
-
-
 async def test_stale_parent_and_duplicate_model_chain_are_rejected(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -324,3 +301,178 @@ async def test_admin_read_is_authenticated_and_history_is_append_only(
         second.json()["revision"],
         first.json()["revision"],
     ]
+
+
+async def test_applied_worker_settings_use_enrolled_node_scope_before_global(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    node_id = "screener-node-1"
+    worker_id = f"{node_id}-worker-2"
+    hotkey = _SCREENER_HEADERS["X-Screener-Hotkey"]
+    global_write = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=_payload("*", "shadow"),
+    )
+    assert global_write.status_code == 200, global_write.text
+    node_write = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=_payload(node_id, "enforce"),
+    )
+    assert node_write.status_code == 200, node_write.text
+    node_revision = node_write.json()
+    settings = node_revision["settings"]
+    now = datetime.now(UTC)
+    async with settings_maker() as session, session.begin():
+        session.add(
+            ScreenerNode(
+                environment="prod",
+                node_id=node_id,
+                provider="test",
+                provider_resource_id="test-screener-node-1",
+                screener_hotkey=hotkey,
+                token_hash=hashlib.sha256(b"test-node-token").hexdigest(),
+                token_expires_at=now + timedelta(hours=1),
+                status="active",
+                capacity=2,
+            )
+        )
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=hotkey,
+                instance_id=worker_id,
+                software_version="0.21.2",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="ab" * 64,
+                system_metrics={
+                    "review_settings": {
+                        "revision": node_revision["revision"],
+                        "scope": node_id,
+                        "mode": "enforce",
+                        "checksum": node_revision["checksum"],
+                        "source": "platform",
+                        "policy_manifest_profile": settings["policy_manifest_profile"],
+                        "policy_manifest_rotation_id": settings[
+                            "policy_manifest_rotation_id"
+                        ],
+                        "policy_manifest_digest": policy_manifest_digest(
+                            settings["policy_manifest_profile"],
+                            settings["policy_manifest_rotation_id"],
+                        ),
+                    }
+                },
+            )
+        )
+    response = await client.get(
+        "/api/v1/admin/screener-review-settings", headers=_ADMIN_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    applied = response.json()["applied_instances"]
+    assert len(applied) == 1
+    assert applied[0]["instance_id"] == worker_id
+    assert applied[0]["expected_scope"] == node_id
+    assert applied[0]["expected_revision"] == node_revision["revision"]
+    assert applied[0]["matches_effective"] is True
+
+
+async def test_canary_posture_scopes_never_resolve_as_worker_posture(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An ``l2-report-canary*`` revision stays bound to scheduled canaries.
+
+    Scheduling refuses a canary scope that already names a node or heartbeat,
+    but a node enrolled later, or a legacy worker configured with such an
+    instance id, must still not pick the experiment up as production posture.
+    """
+    from ditto.api_server.endpoints.screener import (
+        _resolve_effective_review_settings,
+    )
+
+    _install(app, settings_maker)
+    canary_node = "l2-report-canary-node"
+    global_write = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=_payload("*", "shadow"),
+    )
+    assert global_write.status_code == 200, global_write.text
+    global_revision = global_write.json()["revision"]
+    for scope in ("l2-report-canary-ctl", canary_node):
+        canary_write = await client.post(
+            "/api/v1/admin/screener-review-settings",
+            headers=_ADMIN_HEADERS,
+            json=_payload(scope, "enforce"),
+        )
+        assert canary_write.status_code == 200, canary_write.text
+
+    legacy = await client.get(
+        "/api/v1/screener/review-settings?instance_id=l2-report-canary-ctl",
+        headers=_SCREENER_HEADERS,
+    )
+    assert legacy.status_code == 200, legacy.text
+    assert (legacy.json()["scope"], legacy.json()["revision"]) == (
+        "*",
+        global_revision,
+    )
+    async with settings_maker() as session:
+        for instance_id in (canary_node, f"{canary_node}-worker-1"):
+            effective = await _resolve_effective_review_settings(
+                session, instance_id=instance_id, enrolled_node_id=canary_node
+            )
+            assert (effective.scope, effective.revision) == ("*", global_revision)
+
+    # The admin applied-instance view mirrors the worker fetch path.
+    hotkey = _SCREENER_HEADERS["X-Screener-Hotkey"]
+    now = datetime.now(UTC)
+    settings = global_write.json()["settings"]
+    async with settings_maker() as session, session.begin():
+        session.add(
+            ScreenerHeartbeat(
+                screener_hotkey=hotkey,
+                instance_id="l2-report-canary-ctl",
+                software_version="0.330.6",
+                protocol_version=7,
+                policy_version=13,
+                state="polling",
+                first_seen_at=now,
+                reported_at=now,
+                seen_at=now,
+                signature="ab" * 64,
+                system_metrics={
+                    "review_settings": {
+                        "revision": global_revision,
+                        "scope": "*",
+                        "mode": "shadow",
+                        "checksum": global_write.json()["checksum"],
+                        "source": "platform",
+                        "policy_manifest_profile": settings["policy_manifest_profile"],
+                        "policy_manifest_rotation_id": settings[
+                            "policy_manifest_rotation_id"
+                        ],
+                        "policy_manifest_digest": policy_manifest_digest(
+                            settings["policy_manifest_profile"],
+                            settings["policy_manifest_rotation_id"],
+                        ),
+                    }
+                },
+            )
+        )
+    response = await client.get(
+        "/api/v1/admin/screener-review-settings", headers=_ADMIN_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    (applied,) = response.json()["applied_instances"]
+    assert applied["instance_id"] == "l2-report-canary-ctl"
+    assert applied["expected_scope"] == "*"
+    assert applied["matches_effective"] is True

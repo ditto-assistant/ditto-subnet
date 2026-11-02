@@ -8,16 +8,32 @@ never leave the archive through this module.
 
 from __future__ import annotations
 
+import ast
+import contextlib
 import re
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import cast
+
+from ditto_screener.rust_test_items import test_only_item_lines
+from ditto_screener.source_masking import (
+    mask_comments,
+    mask_effect_literals,
+    mask_lead_comments,
+    mask_proven_comments,
+    mask_string_literals,
+)
 
 _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
 _WINDOW_LINES = 18
 _MAX_STATIC_FINDINGS = 16
+_MAX_REVIEW_FINDINGS_PER_KIND = 6
 _COMMAND_EXECUTION_EFFECT = re.compile(
-    r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn)\b"
+    r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn|"
+    r"ProcessBuilder|Process\.(?:run|start|Start)|Runtime(?:\.getRuntime\(\))?\.exec)\b"
+    r"|\b(?:shell_exec|system|popen|exec|eval|execSync)\s*\("
 )
 
 
@@ -68,7 +84,17 @@ class _Fingerprint:
     to source files whose tell is language-specific (e.g. the sync/async answer
     distinction only exists where model calls are awaited). ``scan`` selects the
     comment-masked code view (``"code"``) or the raw view that also sees comments
-    and strings (``"raw"``).
+    and strings (``"raw"``). ``skip_test_items`` blanks Rust items that an
+    attribute affirmatively restricts to the test build (``#[test]``,
+    ``#[cfg(test)]``) before matching, for tells whose honest look-alike is the
+    same text parked in a test-only helper that ``/run`` never reaches.
+
+    ``suppressor_role`` measures suppressors from that role's matched line,
+    within ``suppressor_window`` lines, instead of from the anchor: the honest
+    look-alike of a wide-window shape can be a check on one particular line
+    (a content test beside a length branch). ``file_roles`` names roles that
+    may match anywhere in the file, for a shape whose consumer is routinely
+    refactored into a separate helper of the same module.
     """
 
     kind: str
@@ -79,6 +105,10 @@ class _Fingerprint:
     scan: str = "code"
     languages: frozenset[str] = frozenset()
     min_hits: int = 1
+    skip_test_items: bool = False
+    suppressor_role: str | None = None
+    suppressor_window: int = 0
+    file_roles: frozenset[str] = frozenset()
 
 
 def _words(value: str) -> re.Pattern[str]:
@@ -733,13 +763,36 @@ _STATIC_MALICIOUS_RULES = (
         "cross_user_access",
         "cross-user-host-access",
         (
+            # Cross-user access means another principal's FILESYSTEM location is
+            # reached, so the target role must be a path. The authority of a
+            # remote URL is not one: `"http://host.docker.internal:11434/v1"` is
+            # how a container reaches an injected inference endpoint, and
+            # `/host` inside `//host.docker.internal` matched this role, which
+            # held Sky v1 before any build, runtime-isolation, or tool check ran
+            # (#2099). ``_static_role_search_text`` therefore blanks remote URLs
+            # for this role. `file://` URLs stay visible: those *are* filesystem
+            # locations.
             _Role(
                 "cross-user-path",
                 _words(r"(?:/root(?:/|\b)|/home/|/Users/|/proc/1/root|/host(?:/|\b))"),
             ),
+            # An access EFFECT is an operation, not any identifier that begins
+            # with one of these verbs. A bare `\w*` match made
+            # `pub read_timeout: Duration` -- a declared timeout field, with no
+            # call at all -- the second half of the same false hold. So require
+            # call or macro syntax, which is exactly the bar
+            # `source_causality._READ` already applies to PROVE a cross-user
+            # access sink: the pre-build lead can no longer be raised in a shape
+            # the causal engine could never confirm. `*_timeout` / `*_deadline`
+            # is excluded even in call position, because the builder method
+            # `client.read_timeout(..)` configures a deadline rather than
+            # reading anyone's data.
             _Role(
                 "access-effect",
-                _words(r"\b(?:read|open|scan|walk|glob|copy|write|remove|upload)\w*\b"),
+                _words(
+                    r"\b(?:read|open|scan|walk|glob|copy|write|remove|upload)"
+                    r"(?!\w*(?:timeout|deadline)s?\b)\w*(?:\s*::\s*\w+)*\s*[!(]"
+                ),
             ),
         ),
     ),
@@ -1600,15 +1653,471 @@ _EMULATION_FINGERPRINTS = (
         window=40,
         scan="code",
     ),
+    _Fingerprint(
+        # declarative-preference-turn-directive (policy v13 I5
+        # benchmark_semantic_compiler: aceron_v17/v20/v21, TeaCUP v3/v4,
+        # 2026-09-16): the publicly released keep/declarative-preference
+        # compiler classifies "keep my usual/normal X" as a stated preference,
+        # clears the requested actions, and serves a fixed directive telling the
+        # deciding model that nothing asks for a change ("DECLARATIVE PREFERENCE
+        # TURN", "Nothing in this request asks for a change to be made", "The
+        # request asks to preserve a state, without asking for an immediate
+        # transition"). The classifier alone is shared verbatim with a cleared
+        # fork whose acknowledgement prompt is test-only, so the served effect
+        # anchors the lead: a preference/keep/no-change gate immediately
+        # selecting that no-change prose. Test-only Rust items are skipped.
+        kind="declarative-preference-turn-directive",
+        severity="high",
+        roles=(
+            _Role(
+                "preference-turn-gate",
+                re.compile(
+                    r"\bif\b[^\n{]*?(?:nothing|declarative|preference|preserve|"
+                    r"continuity|keep|candidate|habitual|standing|usual|normal)"
+                    r"|\bif\b[^\n]*Requirement::(?:Candidate|NotNeeded)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "no-change-directive-literal",
+                re.compile(
+                    r"\bnothing in (?:this|the) (?:request|message|turn) asks\b"
+                    r"|\bnot an instruction to (?:change|store|update|act)\b"
+                    r"|\basks? to preserve (?:a|the|an existing) state\b"
+                    r"|\bwithout asking for an immediate "
+                    r"(?:transition|change|settings? change)\b"
+                    r"|\bdid not request an immediate (?:external )?"
+                    r"(?:settings? )?change\b"
+                    r"|\bdeclarative preference turn\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=6,
+        scan="code",
+        skip_test_items=True,
+    ),
+    _Fingerprint(
+        # keep-continuity-capability-rekey (aceron_v21, 2026-09-16): the same
+        # compiler re-keyed from phrase cues to a leading "keep" command plus a
+        # probe of the first candidate tool for a persistent/operational
+        # description or an `effort` property, which escalates the routing to a
+        # required or merely candidate tool turn. The keep command, the
+        # capability probe, and the requirement transition co-occur in one
+        # routing block. A lead: an honest reasoning-effort setter can share
+        # the probe, so the reviewer must trace what the transition serves.
+        kind="keep-continuity-capability-rekey",
+        severity="medium",
+        roles=(
+            _Role(
+                "leading-keep-command",
+                re.compile(
+                    r"\b(?:same_word|fuzzy_word|fuzzy_eq|distance_within|"
+                    r"eq_ignore_ascii_case|starts_with|startswith|startsWith|"
+                    r"HasPrefix|EqualFold)\s*\([^\n]*[\"']keep[\"']"
+                    r"|(?:==|===)\s*[\"']keep[\"']"
+                    r"|[\"']keep[\"']\s*(?:==|===)",
+                ),
+            ),
+            _Role(
+                "persistent-policy-capability-probe",
+                re.compile(
+                    r"\b(?:contains_key|hasOwnProperty|has)\s*\(\s*[\"']effort[\"']"
+                    r"|[\"']effort[\"']\s+in\s+[A-Za-z0-9_.]*"
+                    r"|\.contains\(\s*[\"'](?:persist|operational)[\"']\s*\)"
+                    r"|[\"'](?:persist|operational)[\"']\s+in\s+[A-Za-z0-9_.]*",
+                ),
+            ),
+            _Role(
+                "tool-requirement-escalation",
+                re.compile(
+                    r"\b[A-Za-z]*Requirement::(?:Required|Candidate)\b"
+                    r"|\b(?:tool_)?requirement\s*=\s*[\"'](?:required|candidate)[\"']",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="code",
+        skip_test_items=True,
+    ),
+    # Policy-v13 I7 executor and router shapes (ATH sweep 2026-10-02). Every one
+    # of these passed automated screening and was rejected by an operator. They
+    # are leads: the reviewer must still name a reachable request, the valid
+    # blocked call and its consequence before promoting one.
+    _Fingerprint(
+        # tool-name-execution-cap (dittoreader v7/v9): a counter keyed on the
+        # tool name alone refuses a further call before execution, so a fourth
+        # distinct-argument effect never runs. An exact-repeat stop keyed on
+        # name plus canonical arguments has no name-keyed counter.
+        kind="tool-name-execution-cap",
+        severity="high",
+        roles=(
+            _Role(
+                "name-keyed-counter",
+                re.compile(
+                    r"\b\w*counts?\s*(?:\.get\(\s*&?|\[\s*&?)"
+                    r"(?:name|tool_name|call\.name|call\.function\.name|tool\.name)\b"
+                    r"[^\n]{0,40}(?:>=|>)"
+                    r"|\bMAX_SAME_TOOL\b|\bmax_same_tool\b|\bper_tool_(?:limit|cap)\b"
+                ),
+            ),
+            _Role(
+                "pre-execution-refusal",
+                re.compile(
+                    r"will not run again|not run again|(?:tool )?(?:cap|limit) reached"
+                    r"|answer from the results",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=8,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # successful-duplicate-suppression (Artemis v8, delta v5): a memo of
+        # successful calls returns a cached or synthetic result before the
+        # endpoint, so a separately requested identical effect ("send it twice")
+        # never executes. A model repeat authorizer in the guard is the honest
+        # look-alike (lets_636/637) and drops the lead.
+        kind="successful-duplicate-suppression",
+        severity="medium",
+        roles=(
+            _Role(
+                "success-memo-lookup",
+                re.compile(
+                    r"\b(?:successful|memo|completed_calls|done_calls|success_cache|"
+                    r"seen_calls)\s*(?:\.get\(|\.contains(?:_key)?\(|\[)"
+                    r"|\bin\s+(?:self\.)?(?:done_calls|successful|completed_calls|"
+                    r"seen_calls|memo)\b"
+                    r"|\bprior_success\b"
+                ),
+            ),
+            _Role(
+                "pre-execution-duplicate-refusal",
+                re.compile(
+                    r"not sent again|duplicate suppressed|exact successful duplicate"
+                    r"|not executed again|identical to an earlier successful",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        suppressors=(
+            _Role(
+                "model-repeat-authorizer",
+                re.compile(r"repeat_authori[sz]|authori[sz]e_repeat", re.IGNORECASE),
+            ),
+        ),
+        window=24,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # catalog-retired-after-step (crown-v166): a request-text lifecycle flag
+        # clears the tool definitions after one read and tells the model no
+        # further capability exists, so a second requested read cannot run.
+        kind="catalog-retired-after-step",
+        severity="high",
+        roles=(
+            _Role(
+                "tool-retire",
+                re.compile(
+                    r"\b_?(?:disable|retire|drop|clear|close)_(?:tools|catalog)\s*\("
+                    r"|\b(?:defs|tool_defs|tools_by_name|tool_definitions)\s*\.clear\(\)"
+                ),
+            ),
+            _Role(
+                "single-step-completion",
+                re.compile(
+                    r"\bretire_after_\w+|\bsingle[-_ ]lookup\b"
+                    r"|no further (?:capability|tool)|phase is complete",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=24,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # sticky-capability-veto (Sky v3): one host veto sets a flag that stays
+        # set for the rest of the request and blocks later, unrelated calls.
+        kind="sticky-capability-veto",
+        severity="medium",
+        roles=(
+            _Role(
+                "sticky-decline-flag",
+                re.compile(
+                    r"\b\w+_(?:declined|vetoed|refused|suppressed)\s*=\s*(?:True|true)\b"
+                ),
+            ),
+            _Role(
+                "request-wide-scope",
+                re.compile(
+                    r"rest of the request|remainder of the (?:request|turn)"
+                    r"|records or nowhere|stays? (?:true|set) for",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=90,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # uncertainty-narrows-route (Pentagon45 v1): a classifier prompt resolves
+        # doubt toward a route whose host catalog drops the external tools.
+        kind="uncertainty-narrows-route",
+        severity="medium",
+        roles=(
+            _Role(
+                "uncertain-default-label",
+                re.compile(
+                    r"\bif (?:you are |you're )?"
+                    r"(?:unsure|uncertain|in doubt|not sure)\b"
+                    r"[^\n]{0,40}?\b(?:write|output|return|answer|choose|pick|label|"
+                    r"classify(?: it)? as)\b[^\n]{0,6}?[\"'{]?\s*"
+                    r"(?:records?|read_only|memory|recall|none|no_tools?|lookup)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    _Fingerprint(
+        # tool-argument-grammar-sheet (clear v42): host text appended to a live
+        # tool description prescribes the argument wording the grader matches.
+        kind="tool-argument-grammar-sheet",
+        severity="medium",
+        roles=(
+            _Role(
+                "tool-description-constant",
+                re.compile(
+                    r"\b_?[A-Z0-9_]*(?:TOOL|PARAM|PAIR_ID|CONTENT|ARG)[A-Z0-9_]*"
+                    r"_DESCRIPTION\s*="
+                ),
+            ),
+            _Role(
+                "argument-grammar",
+                re.compile(
+                    r"\bwire grammar\b|\bOUTPUT SHAPE\b|\bnever omit the\b"
+                    r"|must be rewritten|<[a-z ]{2,30}>\s+is(?:/are)?\s+<[a-z ]{2,30}>",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # review-turn-argument-template (lets_635): a host-scheduled per-tool
+        # review turn whose pass test is an exact argument template.
+        kind="review-turn-argument-template",
+        severity="medium",
+        roles=(
+            _Role(
+                "per-tool-review-turn",
+                re.compile(r"\bREVIEW_TURNS\b|\breview_turns?\b"),
+            ),
+            _Role(
+                "argument-template",
+                re.compile(
+                    r"<[^<>\n]{2,40}>\s+is(?:/are)?\s+<[^<>\n]{2,30}>"
+                    r"|\bword for word\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=40,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # self-reported-benchmark-fitting (lets_635): a comment admitting the
+        # wording was selected by probing benchmark outcomes.
+        kind="self-reported-benchmark-fitting",
+        severity="medium",
+        roles=(
+            _Role(
+                "fitting-admission",
+                re.compile(
+                    r"probe[- ]selected|experiments/[A-Za-z0-9_-]+_\d{8}"
+                    r"|over \d+ recorded (?:first )?turns"
+                    r"|\d+(?:\.\d+)?%\s+(?:correct|accuracy|pass(?:ed)?)\s+vs\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    _Fingerprint(
+        # generator-construction-admission (ATH sweep 2026-10-15..18): a comment
+        # or docstring saying the code was fitted to how the benchmark generator
+        # builds its data -- typo-tolerant cues because "the records are
+        # generated with deliberate typos", router examples "generated locally
+        # with the public dataset generator", or a quoted v13 record sentence
+        # ("X used to work at Org"). Probe-tuning admissions stay with
+        # self-reported-benchmark-fitting. The admission is a reason to read
+        # the path, never the charge. The public starter kits describe the
+        # benchmark only in READMEs, which are not scanned, and their source
+        # wording ("the local generator emits", "dataset generation") is not
+        # matched.
+        kind="generator-construction-admission",
+        severity="medium",
+        roles=(
+            _Role(
+                "generator-construction-admission",
+                re.compile(
+                    r"\bgenerated with (?:deliberate |intentional |injected )?typos\b"
+                    r"|\b(?:public |local |benchmark )?dataset generator\b"
+                    r"|\bpractice exams? generated\b"
+                    r"|\brecords are (?:all )?generated\b"
+                    r"|\bthe (?:benchmark |bench |dataset )?generator(?:'s)?"
+                    r" (?:renders|writes|stamps|permutes)\b"
+                    r"|\bgenerator(?:'s)? (?:own )?record sentences\b"
+                    # A comment quoting a v13 record sentence template.
+                    r"|(?:#|//|/\*|^\s*\*)[^\n]*[\"'`\u201c][^\"'`\u201d\n]{0,60}"
+                    r"\b(?:used to work at|back when they were at"
+                    r"|the new work email is|the work email I had saved"
+                    r"|ownership of [^\"'`\u201d\n]{1,40} moved to)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    # Policy-v13 I3/I2 shapes confirmed by L2/L3 on one sibling after the
+    # screener passed the same mechanism on another (ATH sweep 2026-10-15..18).
+    _Fingerprint(
+        # length-cut-draft-fallback (I3): with deliberation on, the first reply
+        # is held as draft 1 and the served output cleared; when the deciding
+        # reply ends with finish_reason "length" the host breaks out without
+        # reading its content and serves draft 1. A nonempty deciding reply,
+        # ANSWER line included, is discarded on length metadata alone. The
+        # cleared sibling keeps the deciding reply whenever it has content and
+        # retries only an empty one. Only a structurally bound empty-content
+        # guard or a preceding content-preserving exit drops the lead; nearby
+        # prose and unrelated content tests cannot establish that guard.
+        kind="length-cut-draft-fallback",
+        severity="medium",
+        roles=(
+            _Role(
+                "length-finish-branch",
+                re.compile(
+                    r"(?i:finish[_ ]?reason|stop[_ ]?reason)[^\n]{0,60}"
+                    r"(?:===?|\bis\b|Some\(|\bin\s*[(\[{])\s*[\"'](?:length|max_tokens)[\"']"
+                    r"|[\"'](?:length|max_tokens)[\"']\s*===?[^\n]{0,30}"
+                    r"(?i:finish[_ ]?reason|stop[_ ]?reason)"
+                    r"|\bFinishReason::Length\b"
+                ),
+            ),
+            _Role(
+                "earlier-draft-holder",
+                re.compile(
+                    r"\b(?:self\.)?(?:draft\w*|first_(?:reply|answer|draft|output)\w*"
+                    r"|initial_(?:reply|draft)\w*)\s*(?::[^=\n]{1,40})?=(?!=)"
+                    r"|\b\w*drafts\s*\.\s*(?:append|push|insert)\s*\("
+                    r"|\b\w*drafts\s*(?::[^=\n]{1,40})?=\s*(?:\[|vec!\[)\s*\w",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "served-output-cleared",
+                re.compile(
+                    r"\b\w*(?:output|served|answer|final_text)\w*\s*=\s*"
+                    r"(?:\"\"|''|String::new\(\)|None|null|nil|undefined)\s*;?\s*$"
+                    r"|\b\w*(?:output|served)\w*\s*\.\s*clear\(\)"
+                    r"|mem::(?:take|replace)\(\s*&mut\s+(?:self\.)?\w*(?:output|served)",
+                ),
+            ),
+            _Role(
+                "draft-served-fallback",
+                re.compile(
+                    r"\b(?!draft)\w*(?:output|served|answer|final_text|reply_text)\w*"
+                    r"\s*(?:\+?=(?!=)|\.push_str\(|\.extend\()\s*&?\s*(?:Some\()?"
+                    r"(?:self\.)?(?:draft\w*|first_(?:reply|answer|draft|output)\w*"
+                    r"|initial_(?:reply|draft)\w*|\w*drafts\s*(?:\[\s*0\s*\]"
+                    r"|\.(?:first|remove|pop|swap_remove)\w*\())"
+                    r"|\.(?:unwrap_or|unwrap_or_else|or)\(\s*(?:\|\|\s*)?&?"
+                    r"(?:draft\w*|first_(?:reply|answer|draft)\w*)"
+                    r"|\bor\s+(?:draft\w*|first_(?:reply|answer|draft)\w*)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=60,
+    ),
+    _Fingerprint(
+        # prompt-only-record-dedupe (I2): records sharing a request identifier
+        # are walked oldest first and a seen-set keyed on a normalized form of
+        # the record's PROMPT keeps the first one, while the rendered record
+        # also carries the stored response. A later record with the same prompt
+        # and a different response never reaches the deciding model. The
+        # rejected sibling had the loop in a helper, the passed one inline, so
+        # the response render counts anywhere in the file. A key that includes
+        # the response or a record id, and retrieval that keeps every selected
+        # record, stay silent.
+        kind="prompt-only-record-dedupe",
+        severity="medium",
+        roles=(
+            _Role(
+                "prompt-derived-key",
+                re.compile(
+                    # Not a key that also carries the response or a record id.
+                    r"^(?![^\n]*(?:\.|\[\s*[\"']|get\(\s*[\"'])"
+                    r"(?:response|assistant\w*|reply|answer|id|\w+_id|uuid)\b)"
+                    r"(?=[^\n]*(?:\.|\[\s*[\"']|get\(\s*[\"'])"
+                    r"(?:prompt|question|user_prompt|user_message)\b)"
+                    r"(?:[^\n]*\b(?:\w*_key|key|k|norm\w*|\w*fingerprint)\s*"
+                    r"(?::[^=\n]{1,40}|:)?(?<![=!<>])=(?!=)(?!\s*lambda\b)"
+                    r"|[^\n]*\b\w*seen\w*\s*\.\s*(?:add|insert|contains|has|"
+                    r"contains_key|get)\s*\("
+                    r"|[^\n]*(?::?=\s*|\bif\s+!?)\w*seen\w*\["
+                    r"|[^\n]*\b\w*seen\w*\[[^\]\n]+\]\s*=(?!=)"
+                    r"|[^\n]*\bin\s+(?:self\.)?\w*seen\w*\b"
+                    r"|[^\n]*\b(?:dedup_by_key|dedup_by|unique_by|uniqBy|distinctBy|"
+                    r"drop_duplicates)\b"
+                    r"|[^\n]*\{[^\n]*:\s*\w+\s+for\b)",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "seen-drop",
+                re.compile(
+                    r"\bin\s+(?:self\.)?\w*seen\w*\b"
+                    r"|\b\w*seen\w*\s*\.\s*(?:add|insert|contains|has|contains_key)\s*\("
+                    # A map lookup or mark, not a counter (`seen[k]++`).
+                    r"|(?::?=\s*|\bif\s+!?)\w*seen\w*\["
+                    r"|\b\w*seen\w*\[[^\]\n]+\]\s*=(?!=)"
+                    r"|\b(?:dedup_by_key|dedup_by|unique_by|uniqBy|distinctBy|"
+                    r"drop_duplicates)\b"
+                    r"|\{[^\n]*(?:\.|\[\s*[\"'])(?:prompt|question)\b[^\n]*:\s*\w+\s+for\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "response-rendered",
+                re.compile(
+                    r"(?:\.|\[\s*[\"']|get\(\s*[\"'])"
+                    r"(?:response|assistant_response|assistant_reply)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=12,
+        file_roles=frozenset({"response-rendered"}),
+    ),
 )
 
 
 def find_source_review_leads(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bounded location-only review leads from readable source files."""
     leads: list[dict[str, object]] = []
-    for path, text in sorted(files, key=lambda item: _path_priority(item[0])):
+    # Within each kind, executable and build files get the first examples.
+    # Docs and data fixtures keep their leads (they can be compiled in or read
+    # as answer tables). Test-named modules count as executable: whether they
+    # are served cannot be proved from source text. Select only after scanning.
+    for path, text in sorted(files, key=lambda item: _lead_path_priority(item[0])):
         lines = text.splitlines()
         if not lines:
             continue
@@ -1616,8 +2125,9 @@ def find_source_review_leads(
         # reading the raw line: a suppressor is a false-positive guard, and a
         # guard that fires too readily costs a missed lead, while a role that
         # fires on prose costs a wrongly quarantined miner. The brief's
-        # asymmetry (prefer false negatives) picks the direction.
-        code_lines = _mask_comments(text).splitlines()
+        # asymmetry (prefer false negatives) picks the direction, which is why
+        # a language without a lexer still has its comment lines blanked here.
+        code_lines = mask_lead_comments(text, path).splitlines()
         code_lines.extend([""] * (len(lines) - len(code_lines)))
         for rule in _RULES:
             if rule.build_files_only and not _is_build_file(path):
@@ -1669,19 +2179,70 @@ def find_source_review_leads(
                         continue
                     seen.add(normalized)
                     leads.append({"kind": rule.kind, "locations": locations})
-                    if len(leads) >= _MAX_LEADS:
-                        return leads
                     if len(seen) >= _MAX_LEADS_PER_RULE_FILE:
                         break
-    return leads
+    return _select_review_findings(leads, _MAX_LEADS, selection_report)
+
+
+def _select_review_findings(
+    findings: list[dict[str, object]],
+    limit: int,
+    report: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    """Spend the output budget only after scanning, by severity and kind.
+
+    Preserve input path priority within each kind, but take one of every kind
+    before a second example. A flooded kind cannot consume another kind's slots.
+    Counts describe candidates after the existing per-rule/file safety bounds.
+    """
+    groups: dict[tuple[int, str], list[dict[str, object]]] = defaultdict(list)
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    for finding in findings:
+        severity = severity_order.get(str(finding.get("severity", "medium")), 1)
+        groups[severity, str(finding["kind"])].append(finding)
+    selected: list[dict[str, object]] = []
+    selected_by_kind: Counter[str] = Counter()
+    for severity in sorted({key[0] for key in groups}):
+        kinds = sorted(kind for level, kind in groups if level == severity)
+        for index in range(_MAX_REVIEW_FINDINGS_PER_KIND):
+            for kind in kinds:
+                candidates = groups[severity, kind]
+                if (
+                    index < len(candidates)
+                    and selected_by_kind[kind] < _MAX_REVIEW_FINDINGS_PER_KIND
+                    and len(selected) < limit
+                ):
+                    selected.append(candidates[index])
+                    selected_by_kind[kind] += 1
+    if report is not None:
+        counts = Counter(str(finding["kind"]) for finding in findings)
+        omitted = counts - selected_by_kind
+        report.update(
+            truncated=bool(omitted),
+            candidate_count=len(findings),
+            selected_count=len(selected),
+            omitted_count=sum(omitted.values()),
+            omitted_by_kind=dict(sorted(omitted.items())),
+            per_kind_limit=_MAX_REVIEW_FINDINGS_PER_KIND,
+            counts_after_per_rule_file_bounds=True,
+        )
+    return selected
 
 
 def find_decisive_malicious_source(
     files: Iterable[tuple[str, str]],
     *,
     explicitly_executable_paths: frozenset[str] = frozenset(),
+    include_test_only: bool = True,
 ) -> list[dict[str, object]]:
-    """Return high-confidence, location-only findings for pre-build quarantine."""
+    """Return high-confidence, location-only findings for pre-build quarantine.
+
+    Rust ``#[cfg(test)]`` items are scanned by default: a build can compile
+    them into the served binary (``rustc --cfg test``, RUSTFLAGS from an ARG,
+    a base image, or a fetched script) without any text that proves it
+    otherwise. Only a proof step that separately masks test-only code may pass
+    ``include_test_only=False``.
+    """
     findings: list[dict[str, object]] = []
     for path, text in sorted(files, key=lambda item: _path_priority(item[0])):
         if path.removeprefix(
@@ -1691,57 +2252,93 @@ def find_decisive_malicious_source(
         lines = text.splitlines()
         if not lines:
             continue
-        # Three views of the same file, each with a different job:
-        #   ``comment_masked`` — comments gone, string literals intact. Target
-        #     roles (paths, secret names) live inside string literals.
-        #   ``executable_lines`` — comments and strings gone. Effect roles must
-        #     be real operations, not words inside a prompt literal.
-        #   ``lines`` — raw, used only to report the location back.
-        comment_masked = _mask_comments(text).splitlines()
-        comment_masked.extend([""] * (len(lines) - len(comment_masked)))
-        executable_lines = _mask_string_literals("\n".join(comment_masked)).splitlines()
-        executable_lines.extend([""] * (len(lines) - len(executable_lines)))
-        for rule in _STATIC_MALICIOUS_RULES:
-            role_hits = {
-                role.name: [
-                    line_number
-                    for line_number, line in enumerate(comment_masked, 1)
-                    if role.pattern.search(
-                        _static_role_search_text(
-                            role.name,
-                            line[:4096],
-                            executable_lines[line_number - 1][:4096],
-                        )
-                    )
-                    and line.strip()
-                ]
-                for role in rule.roles
+        # Opt-in only: blank test-only items before pairing roles, keeping
+        # line positions and adjacent production items.
+        if not include_test_only and path.casefold().endswith(".rs"):
+            test_item_lines = _rust_test_item_lines(
+                mask_comments(text, path).splitlines()
+            )
+            if test_item_lines:
+                text = "\n".join(_blank_lines(lines, test_item_lines))
+        comment_masked_text = mask_comments(text, path)
+        file_findings = _static_findings(path, lines, comment_masked_text)
+        if file_findings and comment_masked_text == text:
+            # No lexer masked this file. Where one lexes a prefix of it, that
+            # prefix is exact, so a comment there cannot carry a finding;
+            # everything after it is still read as code.
+            cited = {
+                location["line"]
+                for finding in file_findings
+                for location in cast(list[dict[str, int]], finding["locations"])
             }
-            if any(not hits for hits in role_hits.values()):
-                continue
-            for anchor in sorted(
-                {line for hits in role_hits.values() for line in hits}
-            ):
-                locations: list[dict[str, object]] = []
-                for role in rule.roles:
-                    nearby = min(
-                        role_hits[role.name],
-                        key=lambda line: (abs(line - anchor), line),
+            proven = mask_proven_comments(text, path, cited)
+            if proven != text:
+                file_findings = _static_findings(path, lines, proven)
+        for finding in file_findings:
+            if finding not in findings:
+                findings.append(finding)
+                if len(findings) >= _MAX_STATIC_FINDINGS:
+                    return findings
+    return findings
+
+
+def _static_findings(
+    path: str, lines: list[str], comment_masked_text: str
+) -> list[dict[str, object]]:
+    """Pair target and effect roles in one file's views.
+
+    ``comment_masked_text`` has comments gone and string literals intact:
+    target roles (paths, secret names) live inside string literals. Its
+    string-masked form drops literals too, since effect roles must be real
+    operations, not words inside a prompt literal. ``lines`` is the raw text,
+    used only to report locations.
+    """
+    findings: list[dict[str, object]] = []
+    comment_masked = comment_masked_text.splitlines()
+    comment_masked.extend([""] * (len(lines) - len(comment_masked)))
+    executable_lines = mask_effect_literals(comment_masked_text, path).splitlines()
+    executable_lines.extend([""] * (len(lines) - len(executable_lines)))
+    command_payload_lines = _command_payload_lines(
+        path, comment_masked, executable_lines
+    )
+    for rule in _STATIC_MALICIOUS_RULES:
+        role_hits = {
+            role.name: [
+                line_number
+                for line_number, line in enumerate(comment_masked, 1)
+                if role.pattern.search(
+                    _static_role_search_text(
+                        role.name,
+                        line[:4096],
+                        executable_lines[line_number - 1][:4096],
+                        command_payload=line_number in command_payload_lines,
                     )
-                    if abs(nearby - anchor) > _WINDOW_LINES:
-                        break
-                    locations.append({"path": path, "line": nearby, "role": role.name})
-                else:
-                    finding: dict[str, object] = {
-                        "category": rule.category,
-                        "kind": rule.kind,
-                        "locations": locations,
-                    }
-                    if finding not in findings:
-                        findings.append(finding)
+                )
+                and line.strip()
+            ]
+            for role in rule.roles
+        }
+        if any(not hits for hits in role_hits.values()):
+            continue
+        for anchor in sorted({line for hits in role_hits.values() for line in hits}):
+            locations: list[dict[str, object]] = []
+            for role in rule.roles:
+                nearby = min(
+                    role_hits[role.name],
+                    key=lambda line: (abs(line - anchor), line),
+                )
+                if abs(nearby - anchor) > _WINDOW_LINES:
                     break
-            if len(findings) >= _MAX_STATIC_FINDINGS:
-                return findings
+                locations.append({"path": path, "line": nearby, "role": role.name})
+            else:
+                finding: dict[str, object] = {
+                    "category": rule.category,
+                    "kind": rule.kind,
+                    "locations": locations,
+                }
+                if finding not in findings:
+                    findings.append(finding)
+                break
     return findings
 
 
@@ -1771,6 +2368,8 @@ def _fingerprint_language(path: str) -> str | None:
 
 def find_benchmark_emulation_fingerprints(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bench-v12 anti-emulation fingerprints as location-only review leads.
 
@@ -1796,21 +2395,63 @@ def find_benchmark_emulation_fingerprints(
         raw_lines = text.splitlines()
         if not raw_lines:
             continue
-        code_lines = _mask_comments(text).splitlines()
+        code_lines = mask_lead_comments(text, path).splitlines()
         code_lines.extend([""] * (len(raw_lines) - len(code_lines)))
+        test_item_lines: frozenset[int] | None = None
         for fingerprint in _EMULATION_FINGERPRINTS:
             if fingerprint.languages and language not in fingerprint.languages:
                 continue
             scan_lines = code_lines if fingerprint.scan == "code" else raw_lines
+            fingerprint_raw_lines = raw_lines
+            if fingerprint.skip_test_items and language == "rust":
+                if test_item_lines is None:
+                    test_item_lines = _rust_test_item_lines(code_lines)
+                if test_item_lines:
+                    scan_lines = _blank_lines(scan_lines, test_item_lines)
+                    fingerprint_raw_lines = _blank_lines(raw_lines, test_item_lines)
             if fingerprint.min_hits > 1:
                 findings.extend(_aggregate_fingerprint(fingerprint, path, scan_lines))
             else:
                 findings.extend(
-                    _cooccurrence_fingerprint(fingerprint, path, scan_lines, raw_lines)
+                    _cooccurrence_fingerprint(
+                        fingerprint, path, scan_lines, fingerprint_raw_lines
+                    )
                 )
-            if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
-                return findings[:_MAX_FINGERPRINT_FINDINGS]
-    return findings
+    selected = _select_review_findings(
+        findings, _MAX_FINGERPRINT_FINDINGS, selection_report
+    )
+    if selection_report is not None:
+        raw_kinds = {
+            item.kind for item in _EMULATION_FINGERPRINTS if item.scan == "raw"
+        }
+        counts = Counter(str(item["kind"]) for item in findings)
+        # One location-only routing lead per saturated raw-scan kind. Comments
+        # and strings can create these matches: saturation is never a verdict.
+        selection_report["saturation_leads"] = [
+            {
+                "kind": "raw-fingerprint-kind-saturation",
+                "saturated_kind": kind,
+                "candidate_count": counts[kind],
+                "locations": next(
+                    item["locations"] for item in findings if item["kind"] == kind
+                ),
+            }
+            for kind in sorted(raw_kinds)
+            if counts[kind] > _MAX_REVIEW_FINDINGS_PER_KIND
+        ]
+    return selected
+
+
+def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:
+    """Backward-compatible alias for the shared Rust test-item boundary."""
+    return test_only_item_lines(code_lines)
+
+
+def _blank_lines(lines: list[str], marked: frozenset[int]) -> list[str]:
+    return [
+        "" if line_number in marked else line
+        for line_number, line in enumerate(lines, 1)
+    ]
 
 
 def _fingerprint_finding(
@@ -1830,6 +2471,12 @@ def _cooccurrence_fingerprint(
     scan_lines: list[str],
     raw_lines: list[str],
 ) -> list[dict[str, object]]:
+    tree = None
+    if fingerprint.kind == "prompt-only-record-dedupe" and path.endswith(
+        (".py", ".pyi")
+    ):
+        with contextlib.suppress(SyntaxError, ValueError, RecursionError):
+            tree = ast.parse("\n".join(scan_lines))
     role_hits = {
         role.name: [
             line_number
@@ -1855,16 +2502,43 @@ def _cooccurrence_fingerprint(
         locations: list[dict[str, object]] = []
         signature: list[tuple[str, int]] = []
         for role in fingerprint.roles:
+            candidates = role_hits[role.name]
+            if (
+                fingerprint.kind == "prompt-only-record-dedupe"
+                and role.name == "response-rendered"
+            ):
+                candidates = [
+                    line
+                    for line in candidates
+                    if _dedupe_response_related(
+                        path, scan_lines, dict(signature), line, tree
+                    )
+                ]
+                if not candidates:
+                    break
             nearby = min(
-                role_hits[role.name],
+                candidates,
                 key=lambda line: (abs(line - anchor), line),
             )
-            if abs(nearby - anchor) > fingerprint.window:
+            if (
+                role.name not in fingerprint.file_roles
+                and abs(nearby - anchor) > fingerprint.window
+            ):
                 break
             signature.append((role.name, nearby))
             locations.append({"path": path, "line": nearby, "role": role.name})
         else:
-            if any(abs(hit - anchor) <= fingerprint.window for hit in suppressor_hits):
+            if fingerprint.suppressor_role is None:
+                center, reach = anchor, fingerprint.window
+            else:
+                center = dict(signature)[fingerprint.suppressor_role]
+                reach = fingerprint.suppressor_window
+            if any(abs(hit - center) <= reach for hit in suppressor_hits):
+                continue
+            if (
+                fingerprint.kind == "length-cut-draft-fallback"
+                and _length_content_guard(path, scan_lines, dict(signature))
+            ):
                 continue
             normalized = tuple(signature)
             if normalized in seen:
@@ -1874,6 +2548,252 @@ def _cooccurrence_fingerprint(
             if len(seen) >= _MAX_FINGERPRINT_PER_RULE_FILE:
                 break
     return findings
+
+
+def _dedupe_response_related(
+    path: str,
+    lines: list[str],
+    roles: dict[str, int],
+    response: int,
+    tree: ast.Module | None,
+) -> bool:
+    """Require one record scope, or an explicit dedupe-helper consumer.
+
+    This is still a routing heuristic, not a claim that a render is reachable.
+    In particular, a random response access elsewhere in a file is no longer
+    enough to complete the three-role fingerprint.
+    """
+    key = roles["prompt-derived-key"]
+    seen = roles["seen-drop"]
+    receiver = r"\b(\w+)\s*(?:\.|\[\s*[\"']|\.get\(\s*[\"'])"
+    prompt = re.search(
+        receiver + r"(?:prompt|question|user_prompt|user_message)\b",
+        lines[key - 1],
+        re.I,
+    )
+    reply = re.search(
+        receiver + r"(?:response|assistant_response|assistant_reply)\b",
+        lines[response - 1],
+        re.I,
+    )
+    if prompt is None or reply is None:
+        return False
+    if path.endswith((".py", ".pyi")):
+        if tree is None:
+            return False
+        functions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+
+        def owner(line: int):
+            return min(
+                (
+                    node
+                    for node in functions
+                    if node.lineno <= line <= (node.end_lineno or node.lineno)
+                ),
+                key=lambda node: (node.end_lineno or node.lineno) - node.lineno,
+                default=None,
+            )
+
+        producer, consumer = owner(key), owner(response)
+        if producer is None or consumer is None or owner(seen) is not producer:
+            return False
+        if producer is consumer:
+            return prompt[1] == reply[1]
+        # A remote render must actually iterate the helper's return value and
+        # read the response from that iteration variable (for or comprehension).
+        for node in ast.walk(consumer):
+            iterators: Iterable[ast.comprehension | ast.For]
+            if isinstance(node, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+                iterators = node.generators
+            elif isinstance(node, ast.For):
+                iterators = [node]
+            else:
+                continue
+            if not node.lineno <= response <= (node.end_lineno or node.lineno):
+                continue
+            if any(
+                isinstance(item.target, ast.Name)
+                and item.target.id == reply[1]
+                and isinstance(item.iter, ast.Call)
+                and isinstance(item.iter.func, ast.Name)
+                and item.iter.func.id == producer.name
+                for item in iterators
+            ):
+                return True
+        return False
+    if prompt[1] != reply[1]:
+        return False
+    # Brace languages: all three roles must share one loop body. Use the
+    # literal-masked view so braces in prompts cannot invent a common scope.
+    executable = mask_effect_literals("\n".join(lines), path).splitlines()
+    stack: list[int] = []
+    loop_scopes: dict[int, tuple[int, ...]] = {}
+    for number, line in enumerate(executable, 1):
+        for char in line:
+            if char == "{":
+                stack.append(number)
+            elif char == "}" and stack:
+                stack.pop()
+        if number in (key, seen, response):
+            loop_scopes[number] = tuple(
+                start for start in stack if re.search(r"\bfor\b", executable[start - 1])
+            )
+    return bool(
+        set(loop_scopes.get(key, ()))
+        & set(loop_scopes.get(seen, ()))
+        & set(loop_scopes.get(response, ()))
+    )
+
+
+def _reply_content(node: ast.expr, receiver: str) -> bool:
+    """Recognize only direct content and its inert empty-string normalization."""
+    if isinstance(node, ast.Attribute):
+        return (
+            node.attr == "content"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == receiver
+        )
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return (
+            len(node.values) == 2
+            and _reply_content(node.values[0], receiver)
+            and isinstance(node.values[1], ast.Constant)
+            and node.values[1].value == ""
+        )
+    return (
+        isinstance(node, ast.Call)
+        and not node.args
+        and not node.keywords
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "strip"
+        and _reply_content(node.func.value, receiver)
+    )
+
+
+def _length_content_guard(path: str, lines: list[str], roles: dict[str, int]) -> bool:
+    """Narrow proven look-alikes, never an arbitrary nearby content mention.
+
+    Unrecognized syntax keeps the routing lead for human review. This is not
+    a general control-flow proof or a policy verdict.
+    """
+    branch = roles["length-finish-branch"]
+    receiver_match = re.search(r"\b(\w+)\.finish_reason\b", lines[branch - 1])
+    if receiver_match is None:
+        return False
+    receiver = receiver_match[1]
+    clear = lines[roles["served-output-cleared"] - 1]
+    output = re.match(r"\s*(\w+)\s*=", clear) or re.search(
+        r"mem::(?:take|replace)\(\s*&mut\s+(\w+)", clear
+    )
+    if output is None:
+        return False
+    if path.endswith((".py", ".pyi")):
+        try:
+            tree = ast.parse("\n".join(lines))
+        except (SyntaxError, ValueError, RecursionError):
+            return False
+        for parent in ast.walk(tree):
+            for _field, children in ast.iter_fields(parent):
+                if not isinstance(children, list):
+                    continue
+                for index, node in enumerate(children):
+                    if not isinstance(node, ast.If) or node.lineno != branch:
+                        continue
+                    # The *entire* length branch is gated by this reply being
+                    # empty. An inner guard on only continue does not qualify.
+                    following = (
+                        children[index + 1] if index + 1 < len(children) else None
+                    )
+                    if (
+                        isinstance(node.test, ast.BoolOp)
+                        and isinstance(node.test.op, ast.And)
+                        and any(
+                            isinstance(term, ast.UnaryOp)
+                            and isinstance(term.op, ast.Not)
+                            and _reply_content(term.operand, receiver)
+                            for term in node.test.values
+                        )
+                        and not node.orelse
+                        and isinstance(following, ast.Assign)
+                        and _reply_content(following.value, receiver)
+                        and any(
+                            isinstance(target, ast.Name) and target.id == output[1]
+                            for target in following.targets
+                        )
+                    ):
+                        return True
+                    if index < 2:
+                        continue
+                    assignment, keep = children[index - 2 : index]
+                    if not (
+                        isinstance(assignment, ast.Assign)
+                        and len(assignment.targets) == 1
+                        and isinstance(assignment.targets[0], ast.Name)
+                        and _reply_content(assignment.value, receiver)
+                        and isinstance(keep, ast.If)
+                        and not keep.orelse
+                        and isinstance(keep.test, ast.Name)
+                        and keep.test.id == assignment.targets[0].id
+                        and len(keep.body) == 2
+                        and isinstance(keep.body[0], ast.Assign)
+                        and isinstance(keep.body[0].value, ast.Name)
+                        and keep.body[0].value.id == keep.test.id
+                        and isinstance(keep.body[1], ast.Break)
+                    ):
+                        continue
+                    # It must preserve the served output, not merely log or
+                    # assign an unrelated variable before breaking.
+                    if output and any(
+                        isinstance(target, ast.Name) and target.id == output[1]
+                        for target in keep.body[0].targets
+                    ):
+                        return True
+        return False
+    if not path.endswith(".rs"):
+        return False
+    # Rust: only a conjunction on the outer length if qualifies. A check in
+    # its body can guard a retry while leaving an unconditional discard below.
+    executable = mask_effect_literals("\n".join(lines), path).splitlines()
+    condition = executable[branch - 1].strip()
+    if (
+        not condition.startswith("if ")
+        or not condition.endswith("{")
+        or "||" in condition
+    ):
+        return False
+    direct = rf"{re.escape(receiver)}\.message\.content(?:\.\w+\(\))*"
+    aliases = [direct]
+    for prior in executable[max(0, branch - 3) : branch - 1]:
+        alias = re.fullmatch(rf"\s*let\s+(\w+)\s*=\s*{direct}\s*;\s*", prior)
+        if alias:
+            aliases.append(re.escape(alias[1]))
+    empty_guard = any(
+        re.search(rf"&&\s*{alias}(?:\.trim\(\))?\.is_empty\(\)\s*\{{$", condition)
+        is not None
+        for alias in aliases
+    )
+    if not empty_guard:
+        return False
+    depth = 0
+    for index in range(branch - 1, len(executable)):
+        depth += executable[index].count("{") - executable[index].count("}")
+        if depth == 0:
+            following_line = next(
+                (line.strip() for line in executable[index + 1 :] if line.strip()), ""
+            )
+            # The nonempty path must retain this reply immediately after the
+            # guarded branch. A following unconditional break is a discard.
+            return (
+                re.fullmatch(
+                    rf"{re.escape(output[1])}\s*=\s*{direct}\s*;", following_line
+                )
+                is not None
+            )
+    return False
 
 
 def _aggregate_fingerprint(
@@ -1894,8 +2814,33 @@ def _aggregate_fingerprint(
     return [_fingerprint_finding(fingerprint, locations)]
 
 
+# Terminates on quotes, whitespace, and the bracket/separator characters that
+# end a URL literal in source, so a real path on the same line stays visible.
+# URL schemes are case-insensitive (RFC 3986 §3.1), so the pattern and the
+# `file://` exemption are too: `FILE://` names a local path exactly as
+# `file://` does, and masking it would blank a real filesystem target.
+_REMOTE_URL = re.compile(
+    r"(?<![\w.])(?!file://)[A-Za-z][A-Za-z0-9+.\-]*://[^\s'\"`,;)\]}>]*",
+    re.IGNORECASE,
+)
+
+
+def mask_remote_urls(line: str) -> str:
+    """Blank `scheme://...` URLs, preserving layout, except `file://` URLs.
+
+    A remote URL's authority and path describe an endpoint, not a filesystem
+    location on this host, so no filesystem-path role may be satisfied by one.
+    `file://` is exempt because a file URL genuinely names a local path.
+    """
+    return _REMOTE_URL.sub(lambda match: " " * len(match.group(0)), line)
+
+
 def _static_role_search_text(
-    role_name: str, source_line: str, executable_line: str
+    role_name: str,
+    source_line: str,
+    executable_line: str,
+    *,
+    command_payload: bool = False,
 ) -> str:
     """Keep dangerous targets visible while requiring effects to be executable.
 
@@ -1904,146 +2849,98 @@ def _static_role_search_text(
     prompt or response literal are inert, however, and must not turn a static
     lead into a 100%-confidence pre-build quarantine. Preserve command payloads
     only when the surrounding line invokes a process-execution API.
+
+    The cross-user path role additionally ignores remote URLs: a network
+    authority is not another user's filesystem location, so an injected
+    inference endpoint must not read as one.
     """
-    if not role_name.endswith("effect") or _COMMAND_EXECUTION_EFFECT.search(
-        source_line
+    if role_name == "cross-user-path":
+        return mask_remote_urls(source_line)
+    if (
+        not role_name.endswith("effect")
+        or command_payload
+        or _COMMAND_EXECUTION_EFFECT.search(executable_line)
     ):
         return source_line
     return executable_line
 
 
-def _mask_comments(text: str) -> str:
-    """Blank comment content while preserving layout, strings, and line count.
+def _command_payload_lines(
+    path: str, source_lines: list[str], executable_lines: list[str]
+) -> set[int]:
+    """Keep nearby literal bindings consumed by a concrete command sink.
 
-    Prose is not behavior. A lead that fires on a comment cites something the
-    compiler never sees, which is how a submission whose *code* refuses to
-    write the graded slot can still be quarantined by three stale sentences
-    describing a design it no longer has.
-
-    The scanner is string-aware in both directions, because the cheap ways to
-    fool a line-prefix heuristic run both ways:
-
-    - ``"https://llm.example/v1"`` must not lose its second half to a ``//``
-      that is inside a string literal;
-    - ``let x = r#"*/"#;`` must not be able to terminate a block comment that
-      was never open, desynchronizing the mask for the rest of the file.
-
-    Rust raw strings (``r"..."``, ``r#"..."#``) and byte strings are handled
-    explicitly. A ``'`` is treated as a character literal only when it closes
-    within the three characters a character literal can span; otherwise it is
-    a lifetime (``&'a str``) and is left alone.
+    Only executable text can identify a sink or variable use: a prompt that
+    mentions ``exec`` must not enable itself. This is bounded local def/use
+    matching, not a complete language dataflow proof. Unmatched source stays
+    available to the source reviewer and ordinary review leads.
     """
-    chars = list(text)
-    length = len(text)
-    index = 0
-    while index < length:
-        char = text[index]
-        # Line comment: blank to end of line, newline preserved.
-        if text.startswith("//", index):
-            end = text.find("\n", index)
-            end = length if end < 0 else end
-            for offset in range(index, end):
-                chars[offset] = " "
-            index = end
-            continue
-        # Block comment: Rust nests them, so track depth. Newlines preserved.
-        if text.startswith("/*", index):
-            depth = 1
-            chars[index] = chars[index + 1] = " "
-            cursor = index + 2
-            while cursor < length and depth:
-                if text.startswith("/*", cursor):
-                    depth += 1
-                    chars[cursor] = chars[cursor + 1] = " "
-                    cursor += 2
-                elif text.startswith("*/", cursor):
-                    depth -= 1
-                    chars[cursor] = chars[cursor + 1] = " "
-                    cursor += 2
-                else:
-                    if text[cursor] != "\n":
-                        chars[cursor] = " "
-                    cursor += 1
-            index = cursor
-            continue
-        # Raw string: no escapes, terminated by the matching hash run.
-        if char in {"r", "b"} or text.startswith("br", index):
-            cursor = index + (2 if text.startswith("br", index) else 1)
-            hashes = 0
-            while cursor < length and text[cursor] == "#":
-                hashes += 1
-                cursor += 1
-            if cursor < length and text[cursor] == '"':
-                terminator = '"' + "#" * hashes
-                end = text.find(terminator, cursor + 1)
-                index = length if end < 0 else end + len(terminator)
+    sinks = {
+        i
+        for i, line in enumerate(executable_lines)
+        if _COMMAND_EXECUTION_EFFECT.search(line)
+    }
+    if path.casefold().endswith(".swift"):
+        # Foundation Process interprets the payload only when the same
+        # process runs a shell/interpreter with its command flag. Ordinary
+        # Process arguments (e.g. echo printing a prompt) remain inert data.
+        for i, line in enumerate(executable_lines):
+            match = re.search(
+                r"\b(?:let|var)\s+(\w+)\s*=\s*(?:Foundation\.)?Process\s*\(", line
+            )
+            if match is None:
                 continue
-        # Ordinary string literal: skip past it untouched, honoring escapes.
-        if char == '"':
-            cursor = index + 1
-            while cursor < length:
-                if text[cursor] == "\\":
-                    cursor += 2
-                    continue
-                if text[cursor] == '"':
-                    cursor += 1
-                    break
-                cursor += 1
-            index = cursor
-            continue
-        # Character literal vs lifetime.
-        if char == "'":
-            for span in (3, 4):
-                if text[index + span - 1 : index + span] == "'":
-                    index += span
-                    break
-            else:
-                index += 1
-            continue
-        index += 1
-    return "".join(chars)
-
-
-def _mask_string_literals(text: str) -> str:
-    """Replace quoted source text with spaces while preserving source layout."""
-    chars = list(text)
-    index = 0
-    quote: str | None = None
-    quote_width = 0
-    escaped = False
-    while index < len(chars):
-        char = chars[index]
-        if quote is None:
-            if char in {'"', "'", "`"}:
-                quote = char
-                quote_width = (
-                    3 if char != "`" and text[index : index + 3] == char * 3 else 1
+            name = re.escape(match[1])
+            end = min(len(executable_lines), i + _WINDOW_LINES + 1)
+            window = range(i + 1, end)
+            if not any(
+                re.search(rf"\b{name}\.run\s*\(", executable_lines[j]) for j in window
+            ):
+                continue
+            if not any(
+                re.search(rf"\b{name}\.executableURL\s*=", executable_lines[j])
+                and re.search(
+                    r'["\']/(?:usr/)?bin/(?:sh|bash|dash|zsh|python[0-9.]*)["\']',
+                    source_lines[j],
                 )
-                for offset in range(quote_width):
-                    chars[index + offset] = " "
-                index += quote_width
-                escaped = False
+                for j in window
+            ):
                 continue
-            index += 1
-            continue
-        if quote_width == 3 and text[index : index + 3] == quote * 3:
-            chars[index : index + 3] = [" ", " ", " "]
-            quote = None
-            quote_width = 0
-            escaped = False
-            index += 3
-            continue
-        if char not in {"\r", "\n"}:
-            chars[index] = " "
-        if escaped:
-            escaped = False
-        elif char == "\\" and quote != "`" and quote_width == 1:
-            escaped = True
-        elif quote_width == 1 and char == quote:
-            quote = None
-            quote_width = 0
-        index += 1
-    return "".join(chars)
+            sinks.update(
+                j
+                for j in window
+                if re.search(rf"\b{name}\.arguments\s*=", executable_lines[j])
+                and re.search(r'["\']-c["\']', source_lines[j])
+            )
+    payload: set[int] = set()
+    assignment = re.compile(r"(?<![\w.])(\w+)\s*(?::\s*[^=\n]+)?\s*=(?!=)")
+    for sink in sinks:
+        # Direct literals passed to a sink are operational payload too.
+        payload.add(sink + 1)
+        for k in range(sink + 1, min(len(executable_lines), sink + _WINDOW_LINES + 1)):
+            if executable_lines[k].strip():
+                break
+            if source_lines[k] != executable_lines[k]:
+                payload.add(k + 1)
+        names = set(re.findall(r"\b[A-Za-z_]\w*\b", executable_lines[sink]))
+        for name in names:
+            for j in range(sink - 1, max(-1, sink - _WINDOW_LINES - 1), -1):
+                bindings = [
+                    m for m in assignment.finditer(executable_lines[j]) if m[1] == name
+                ]
+                if not bindings:
+                    continue
+                # The nearest assignment wins, including an overwrite with
+                # code or a safe literal. Do not revive an older payload.
+                if source_lines[j] != executable_lines[j]:
+                    payload.add(j + 1)
+                    for k in range(j + 1, sink):
+                        if executable_lines[k].strip():
+                            break
+                        if source_lines[k] != executable_lines[k]:
+                            payload.add(k + 1)
+                break
+    return payload
 
 
 def _is_build_file(path: str) -> bool:
@@ -2179,6 +3076,12 @@ def _is_executable_source_path(path: str) -> bool:
     )
 
 
+def _lead_path_priority(path: str) -> tuple[int, int, str]:
+    """Executable and build files before every other file, then path order."""
+    executable = _is_executable_source_path(path) or _is_build_file(path)
+    return (0 if executable else 1, *_path_priority(path))
+
+
 def _path_priority(path: str) -> tuple[int, str]:
     normalized = path.casefold().removeprefix("./")
     if normalized.startswith("src/"):
@@ -2200,16 +3103,15 @@ def source_path_priority(path: str) -> tuple[int, str]:
     return _path_priority(path)
 
 
-def mask_comments(text: str) -> str:
-    """Blank comment content, preserving layout, strings, and line count."""
-    return _mask_comments(text)
-
-
 __all__ = [
     "find_benchmark_emulation_fingerprints",
     "find_decisive_malicious_source",
     "find_source_review_leads",
     "is_executable_source_path",
     "mask_comments",
+    "mask_lead_comments",
+    "mask_proven_comments",
+    "mask_remote_urls",
+    "mask_string_literals",
     "source_path_priority",
 ]

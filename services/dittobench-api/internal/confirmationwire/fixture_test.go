@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 )
 
 func TestCommittedFixtureMatchesProductionEvidence(t *testing.T) {
@@ -44,6 +46,28 @@ func TestCommittedFixtureMatchesProductionEvidence(t *testing.T) {
 				t.Fatal("frozen transport contract labels must not move with the epoch")
 			}
 		})
+	}
+}
+
+func TestBuildFixtureFollowsConfirmationInstrumentFloor(t *testing.T) {
+	t.Parallel()
+	// No committed v13 vector yet (the v12 one already proves the Python wire
+	// converter carries bench_version), but the builder must not fail a v13
+	// instrument closed, and must still refuse the unbuilt v10/v11 epochs and
+	// the first version the scorer does not accept.
+	for _, version := range []int{scoregates.BenchVersionV13, scoregates.BenchVersionV14, scoregates.BenchVersionV15} {
+		fixture, err := BuildFixtureForBenchVersion(version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fixture.LongMemEval.Evidence.BenchVersion != version || fixture.InferenceAblation.Evidence.BenchVersion != version || fixture.EmbeddingAblation.Evidence.BenchVersion != version {
+			t.Fatalf("producer evidence does not carry bench_version %d", version)
+		}
+	}
+	for _, benchVersion := range []int{8, 10, 11, scoregates.BenchVersionV15 + 1} {
+		if _, err := BuildFixtureForBenchVersion(benchVersion); err == nil {
+			t.Fatalf("confirmation fixture accepted bench_version %d", benchVersion)
+		}
 	}
 }
 

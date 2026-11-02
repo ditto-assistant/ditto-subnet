@@ -53,6 +53,16 @@ function statusCopy(state: BenchmarkRolloutControl) {
         tone: 'acid',
       } as const
     }
+    const exhausted = state.retry_diagnostics.filter(
+      (member) => member.blocks_activation && member.state === 'exhausted',
+    )
+    if (exhausted.length > 0) {
+      return {
+        label: `Benchmark v${state.desired_version} needs operator attention`,
+        detail: `${exhausted.map((member) => member.agent_name).join(', ')}: priority scoring attempts exhausted. Inspect validation retry evidence before recovery. Benchmark v${state.active_version} remains authoritative.`,
+        tone: 'red',
+      } as const
+    }
     return {
       label: `Benchmark v${state.desired_version} collecting`,
       detail: `Eligible top-five agents are gathering v${state.desired_version} scores. Benchmark v${state.active_version} remains authoritative until activation.`,
@@ -101,10 +111,15 @@ export function BenchmarkRolloutPanel({
     [selectedTarget, state.contracts],
   )
   const open = state.status === 'collecting' || state.status === 'blocked_ineligible'
-  const priorityReadyCount = state.members.filter(
-    (member) =>
-      member.position <= state.priority_cohort_size && member.score_count >= 3,
-  ).length
+  // Platform's own barrier count wins: it counts a permanently ineligible
+  // leader as satisfied, exactly as the gate does, which `members` (no status)
+  // cannot. The derivation remains for a Platform that predates the field.
+  const priorityReadyCount =
+    state.priority_cohort_ready_count ??
+    state.members.filter(
+      (member) =>
+        member.position <= state.priority_cohort_size && member.score_count >= 3,
+    ).length
   const canSupersede = open && state.active_version !== state.desired_version
   const candidatesDegraded = state.degraded_sections.includes(
     'active_contract_candidates',
@@ -287,6 +302,15 @@ export function BenchmarkRolloutPanel({
               </dd>
             </div>
           </dl>
+
+          {state.promotion_pending && state.promotion_requirement ? (
+            <p
+              className="mt-3 text-xs text-[var(--muted)]"
+              data-testid="rollout-promotion-requirement"
+            >
+              {state.promotion_requirement}
+            </p>
+          ) : null}
 
           <div className="mt-5 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {state.contracts.map((contract) => (

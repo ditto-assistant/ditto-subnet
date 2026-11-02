@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: Dockerfile.pylon
       args:
-        PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:ba6ba5e3e7b32683f90039eb5a37a565d5479f034326b40288869f826f7362c7
+        PYLON_BASE_IMAGE: docker.io/backenddevelopersltd/bittensor-pylon@sha256:d7389e6132dac49cb1acad68184fd6c3759592e2e494afdb732fd8f7a3f6349a
       additional_contexts:
         turbobt: https://github.com/ditto-assistant/turbobt.git?ref=refs/heads/ditto/subscription-id-str&checksum=d36d1a28e761ff9d743bbcc83d091309c4d3599e
     platform: linux/amd64
@@ -38,8 +38,10 @@ services:
       # This repository is SN118; netuid is not an operator setting. Pylon
       # reuses the validator settings for its network, wallet, and hotkey. One
       # PYLON_TOKEN guards both the open-access reads and the identity write.
-      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
-      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      # SUBTENSOR_RPC_URL optionally names a (paid) provider for the same chain;
+      # the public entrypoint refuses handshakes with HTTP 429 under load.
+      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_RPC_URL:-${SUBTENSOR_NETWORK:-finney}}
+      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_RPC_URL:-${SUBTENSOR_NETWORK:-finney}}
       PYLON_OPEN_ACCESS_TOKEN: ${PYLON_TOKEN}
       PYLON_IDENTITIES: '["ditto"]'
       PYLON_ID_DITTO_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
@@ -48,8 +50,18 @@ services:
       PYLON_ID_DITTO_TOKEN: ${PYLON_TOKEN}
       PYLON_DATABASE_PATH: /data/pylon.db
       PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
+      DITTO_TREASURY_WEIGHT_ENFORCEMENT: ${DITTO_TREASURY_WEIGHT_ENFORCEMENT:-false}
+      # Public coldkey-signed Gamma policy only. Default off/empty; both
+      # trusted processes independently verify the same immutable proof.
+      DITTO_TREASURY_SHADOW_APPROVAL_FILE: ${DITTO_TREASURY_SHADOW_APPROVAL_FILE:-}
+      DITTO_TREASURY_APPROVED_POLICY_DIGEST: ${DITTO_TREASURY_APPROVED_POLICY_DIGEST:-}
+      DITTO_TREASURY_COLLECTOR_POLICY_DIGEST: ${DITTO_TREASURY_COLLECTOR_POLICY_DIGEST:-}
     security_opt:
       - no-new-privileges:true
+    secrets:
+      - source: treasury-emission-approval
+        target: treasury-emission-approval.json
+        mode: 0444
     # Pylon runs as root, but operator hotkeys are normally mode 0600 and may
     # be owned by a non-root host user. Restore only the capability needed to
     # traverse/read the read-only wallet mount after dropping all capabilities.
@@ -153,20 +165,23 @@ services:
       DITTOBENCH_SANDBOX_SECCOMP_PROFILE: ${DITTOBENCH_SANDBOX_SECCOMP_PROFILE:-}
       DITTOBENCH_SANDBOX_APPARMOR_PROFILE: ${DITTOBENCH_SANDBOX_APPARMOR_PROFILE:-}
       # Scorer-side run capacity. Rides the same variable as the validator's
-      # advertised slot count so the two can never disagree: the worker fails
-      # closed (claims nothing at all) when the scorer advertises fewer full-run
-      # slots than the worker has configured. The compose default is the
+      # advertised slot count so the two agree once the stack is recreated
+      # together. If the scorer advertises fewer full-run slots than the worker
+      # has configured (a targeted update refreshed only one of them), the worker
+      # claims on the scorer's count and logs a warning. The compose default is the
       # production value; the platform's operator cap decides how many of these
       # slots actually receive tickets.
       DITTOBENCH_MAX_CONCURRENT_RUNS: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
       # LongMemEval runs in a disjoint pool. It defaults to half the ordinary
-      # capacity and never consumes the canonical full-run semaphore.
-      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # capacity and never consumes the canonical full-run semaphore. Left
+      # empty, the scorer and the worker both derive half rounded up (8 -> 4,
+      # 4 -> 2); a fixed 4 would crash-loop a worker sized below 7 slots.
+      DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-}
       # Public release assets opt the scorer into the bounded shadow executor.
       # These are immutable files inside the image, not host mounts, cloud
       # identities, Secret Manager references, or provider credentials.
       DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE: /opt/ditto/confirmation/confirmation_installation_v9_shadow.json
-      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: 62c5daa7326166ade81cea09eb4486bcb0e82f8e8552f2154a8219d16b1ae26c
+      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: a030d095ba74543fd22e0ea905b787bdd857ea9ad2f077cb839d4196b8ad4436
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being
@@ -205,9 +220,16 @@ services:
       DITTOBENCH_CODING_SOURCE_PORT: "11438"
       DITTOBENCH_CODING_SOURCE_PUBLIC_BASE_URL: http://host.docker.internal:11438
       DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY: ${DITTOBENCH_CODING_RUNTIME_IMAGE_REPOSITORY:-}
-      # Authorizes the validator's session prepare/activate/cancel calls. Same
-      # anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the validator.
+      # Authorizes the validator's control-plane calls (everything but
+      # /health). Same anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the
+      # validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
+      # Control-plane auth posture: `shadow` (default) logs what enforcement
+      # would reject and serves the call; `enforce` returns 401 instead. Under
+      # enforce the published default token above counts as unset, so set a
+      # per-host DITTOBENCH_BROKER_CONTROL_TOKEN first or the scorer refuses to
+      # start.
+      DITTOBENCH_CONTROL_AUTH_MODE: ${DITTOBENCH_CONTROL_AUTH_MODE:-shadow}
       # The broker refuses an activation whose proxy_url does not byte-match
       # this value, and treats an unset/malformed value as "refuse everything"
       # (configuredPlatformProxyURL returns "" -> activate always 401s). It
@@ -265,20 +287,22 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "26"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "34"
     restart: unless-stopped
     # Longest live ticket plus five minutes for a signed final report:
-    # 4h confirmation outlives the 180-minute canonical lease. This must
-    # remain above the productive-run cap and aligned with both updater
-    # drain defaults.
+    # 4h confirmation outlives the canonical scoring lease (Backroom
+    # get_scoring_lease_settings, default 180 minutes). Platform refuses a
+    # scoring TTL above this minus five minutes (240). This must remain above
+    # the productive-run cap and aligned with both updater drain defaults.
     stop_grace_period: 245m
     environment:
       NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      SUBTENSOR_RPC_URL: ${SUBTENSOR_RPC_URL:-}
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
       VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS: "3"
-      # Presented as `Authorization: Bearer` on the inference control plane
+      # Presented as `Authorization: Bearer` on the scorer control plane
       # only. Same anchor as the scorer's DITTOBENCH_BROKER_CONTROL_TOKEN; it
       # is never sent to the platform, Pylon, or any other host.
       VALIDATOR_DITTOBENCH_CONTROL_TOKEN: *broker-control-token
@@ -313,6 +337,11 @@ services:
       VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:8000/health
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
+      # Public coldkey-signed Gamma policy only. Default off/empty; both
+      # trusted processes independently verify the same immutable proof.
+      DITTO_TREASURY_SHADOW_APPROVAL_FILE: ${DITTO_TREASURY_SHADOW_APPROVAL_FILE:-}
+      DITTO_TREASURY_APPROVED_POLICY_DIGEST: ${DITTO_TREASURY_APPROVED_POLICY_DIGEST:-}
+      DITTO_TREASURY_COLLECTOR_POLICY_DIGEST: ${DITTO_TREASURY_COLLECTOR_POLICY_DIGEST:-}
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
       VALIDATOR_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}
@@ -320,11 +349,18 @@ services:
       PYLON_IDENTITY_NAME: ditto
       PYLON_TOKEN: ${PYLON_TOKEN}
       VALIDATOR_RUN_SIZE: "full"
+      # Bench v13+ finalized-block CRN binding: what the validator-derived
+      # confirmation lanes do at a binding version while the ledger carries no
+      # pinned reign anchor. "observe" (v13.0 default) logs and derives the
+      # legacy unbound family; "enforce" defers the lane until a pin lands.
+      # A consensus knob: keep the fleet on one value.
+      VALIDATOR_CRN_BLOCK_BINDING_POSTURE: "${VALIDATOR_CRN_BLOCK_BINDING_POSTURE:-observe}"
       VALIDATOR_SWEEP_SECONDS: "30"
       VALIDATOR_EPOCH_SECONDS: "3600"
       VALIDATOR_QUEUE_LIMIT: "50"
       # Heartbeat v10+ advertises every active slot. The scorer independently
-      # publishes the same bound and the worker fails closed on mismatch.
+      # publishes the same bound, and on a mismatch the worker claims on the
+      # smaller of the two.
       #
       # This is the CAPABILITY the host offers, not the concurrency it will run.
       # How many of these slots actually receive tickets is decided by the
@@ -334,7 +370,10 @@ services:
       # here gives the operator room to ramp without shipping a new stack; idle
       # slots only add lightweight polls to each sweep.
       VALIDATOR_BENCHMARK_CAPACITY: ${VALIDATOR_BENCHMARK_CAPACITY:-8}
-      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # Empty derives half of VALIDATOR_BENCHMARK_CAPACITY rounded up, the only
+      # value the worker accepts for the documented smaller hosts. An explicit
+      # value is still validated against that bound.
+      VALIDATOR_LONGMEM_CAPACITY: ${VALIDATOR_LONGMEM_CAPACITY:-}
       # Self-imposed resource ceilings. At or above these the worker stops
       # claiming tickets and reports admission=resource_constrained, while
       # still heartbeating and still finishing what it holds. High on purpose:
@@ -343,6 +382,12 @@ services:
       # because heartbeat host metrics ride a five-point grid.
       VALIDATOR_DISK_PERCENT_CEILING: ${VALIDATOR_DISK_PERCENT_CEILING:-95}
       VALIDATOR_MEMORY_PERCENT_CEILING: ${VALIDATOR_MEMORY_PERCENT_CEILING:-95}
+      # Host-memory admission. The worker claims at most
+      # (host RAM - this reserve) // live harness memory cap slots, so the sum
+      # of harness caps never exceeds what the host can back and an in-cap
+      # harness is never OOM-killed by its neighbours. The default is the
+      # published runtime envelope's (docs/RUNTIME-ENVELOPE.md).
+      VALIDATOR_HOST_MEMORY_RESERVE_MIB: ${VALIDATOR_HOST_MEMORY_RESERVE_MIB:-1024}
       # A pinned CPU is a working benchmark host, not a failing one.
       VALIDATOR_CPU_PERCENT_CEILING: ${VALIDATOR_CPU_PERCENT_CEILING:-0}
       VALIDATOR_INFERENCE_PROXY_REQUIRED: "true"
@@ -357,10 +402,12 @@ services:
       # DITTO_INFERENCE_PUBLIC_BASE_URL.
       VALIDATOR_PLATFORM_INFERENCE_BASE_URL: ${VALIDATOR_PLATFORM_INFERENCE_BASE_URL:-https://dittobench.ai}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
-      # Productive-run cap inside the 180-minute platform ticket. Production
-      # v11 8-wide completions max 60 min; serial successes max 114 min and
-      # historically died at 110/150. 165 minutes stays over that tail; the
-      # 15-minute unchanged-progress watchdog still kills wedges. Keep the
+      # Productive-run cap inside the default 180-minute platform ticket
+      # (Backroom scoring lease TTL). A shorter operator TTL binds instead via
+      # min(cap, lease - report margin). Production v11 8-wide completions
+      # max 60 min; serial successes max 114 min and historically died at
+      # 110/150. 165 minutes stays over that tail; the 15-minute
+      # unchanged-progress watchdog still kills wedges. Keep the default
       # platform ticket TTL above this.
       VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "9900"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
@@ -413,6 +460,9 @@ services:
     cap_drop:
       - ALL
     secrets:
+      - source: treasury-emission-approval
+        target: treasury-emission-approval.json
+        mode: 0444
       - source: coding-executor-validator-ca
         target: coding-executor-validator-ca.pem
         mode: 0400
@@ -445,6 +495,10 @@ volumes:
   validator-update-bootstrap:
 
 secrets:
+  # /dev/null supplies an inert mount on ordinary installations. Operators
+  # install only the public emission_approval object, never custody packets.
+  treasury-emission-approval:
+    file: ${DITTO_TREASURY_APPROVAL_HOST_PATH:-/dev/null}
   coding-executor-validator-ca:
     file: ${VALIDATOR_CODING_EXECUTOR_CA_HOST_PATH:-/dev/null}
   coding-executor-validator-client-cert:

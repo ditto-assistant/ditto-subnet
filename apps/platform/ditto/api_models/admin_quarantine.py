@@ -6,7 +6,14 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    computed_field,
+    model_validator,
+)
 
 from ditto.api_models.screener import (
     ScreenEvidenceItem,
@@ -14,10 +21,107 @@ from ditto.api_models.screener import (
     SourceReviewFinding,
 )
 from ditto.api_models.screener_review_settings import AdminShadowReviewObservation
-from ditto_screening_protocol import SourceReviewNote
+from ditto.api_models.source_review_evidence import StoredSourceReviewEvidence
+from ditto_screening_protocol import (
+    AdjudicationCompletionReceipt,
+    AdjudicationRunDiagnostic,
+    SourceReviewNote,
+)
 
 QuarantineResolution = Literal["release", "rescreen", "reject"]
 DisputeResolution = Literal["release", "uphold"]
+DisputeKind = Literal["screening", "gate_notes"]
+
+ResolutionReasonCode = Literal[
+    "operator-released-quarantine",
+    "operator-rescreened-quarantine",
+    "operator-rejected-quarantine",
+]
+
+# A manual resolution is an operator *ruling* on a quarantine, so it carries a
+# code of its own instead of inheriting the code the reviewed quarantine was
+# opened with. Those are two different facts — "why the screener held this
+# submission" and "what an operator decided about the hold" — and reusing one
+# field for both is how a submission the screener cleared ends up labelled with
+# the code that cleared it. The vocabularies are disjoint by construction: no
+# screening-origin code starts with ``operator-``, so a bare code still says
+# which of the two a reader is holding.
+#
+# Named for the object ruled on, not the outcome, so they cannot collide with
+# ``_OPERATOR_REJECT_REASON_CODE`` (``operator-rejected-screening``) minted by
+# the pre-quarantine ``/screening-submissions/{id}/reject`` route. That
+# route's retry guard treats its own code as proof it already ran, so a shared
+# token would make it report a quarantined submission as its own idempotent
+# retry; the two routes are different actions with different preconditions and
+# stay separately named.
+OPERATOR_RELEASED_QUARANTINE: ResolutionReasonCode = "operator-released-quarantine"
+OPERATOR_RESCREENED_QUARANTINE: ResolutionReasonCode = "operator-rescreened-quarantine"
+OPERATOR_REJECTED_QUARANTINE: ResolutionReasonCode = "operator-rejected-quarantine"
+
+RESOLUTION_REASON_CODES: dict[str, ResolutionReasonCode] = {
+    "release": OPERATOR_RELEASED_QUARANTINE,
+    "rescreen": OPERATOR_RESCREENED_QUARANTINE,
+    "reject": OPERATOR_REJECTED_QUARANTINE,
+}
+
+
+def resolution_reason_code(resolution: str | None) -> ResolutionReasonCode | None:
+    """The operator ruling code a ``resolution`` implies, or ``None``.
+
+    A resolution is a ruling, so its code is a pure function of it and is
+    derived at read time rather than stored — that keeps every row already in
+    the database correct without a migration, and leaves no denormalized copy
+    to drift. ``None`` covers the three "no ruling here" cases a read path must
+    tolerate: an unresolved quarantine, a miner dispute's ``uphold`` (which
+    records no ruling of its own), and any future resolution value this build
+    does not know — an unknown value degrades to "no code" instead of raising.
+    """
+    if resolution is None:
+        return None
+    return RESOLUTION_REASON_CODES.get(resolution)
+
+
+def review_event_resolution_reason_code(
+    event_kind: str, effective_decision: str | None
+) -> ResolutionReasonCode | None:
+    """The operator ruling code of a review event, or ``None``.
+
+    Only a *manual* event can carry an operator basis: an automated
+    ``effective_decision='reject'`` is the screener's own verdict arriving over
+    the signed screening path, and attributing it to an operator would invent a
+    ruling that never happened. The event's stored ``reason_code`` is left
+    alone — it is the screening-origin code the reviewed quarantine carried,
+    snapshotted verbatim.
+    """
+    if event_kind != "manual":
+        return None
+    return resolution_reason_code(effective_decision)
+
+
+# One-to-one with the 19 mandatory checks in docs/policy-v13.md, plus the
+# conditional private package. Presence of a receipt is never a pass verdict.
+MANDATORY_V13_VERIFICATION_CHECKS = (
+    "archive_sha",
+    "build_image_digest",
+    "health",
+    "ordinary_model_run",
+    "tool_selection_run",
+    "seed_memory_run",
+    "two_user_isolation",
+    "system_instruction_retention",
+    "tool_revocation",
+    "successful_duplicate_suppression",
+    "same_tool_different_argument",
+    "catalog_fidelity_reordering",
+    "timeout_delivery_unknown",
+    "fallback_evidence_retention",
+    "response_field_long_answer",
+    "refusal_uncertainty",
+    "token_accounting",
+    "opaque_inventory",
+    "invariants_i1_i8_s1_s3",
+    "private_metamorphic",
+)
 
 
 class AdminQuarantineResolutionEvent(BaseModel):
@@ -25,6 +129,10 @@ class AdminQuarantineResolutionEvent(BaseModel):
     reason: str
     actor: str
     created_at: datetime
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """The operator ruling's own code, derived from ``resolution``: one of the
+    ``operator-*-quarantine`` tokens. Never the screening code of the
+    quarantine this ruling closed."""
 
 
 class AdminQuarantineItem(BaseModel):
@@ -47,7 +155,26 @@ class AdminQuarantineItem(BaseModel):
     policy_version: int
     manifest_digest: str
     finding_digest: str | None
-    reason_code: str
+    screening_reason_code: str
+    """Why the screener held *this submission*: the reason code from the signed
+    verdict that opened the quarantine. Screening-origin provenance, and it
+    survives the hold — a resolved quarantine still reports the code it was
+    opened with. It is **not** the operator's decision; read ``resolution``
+    with ``resolution_reason_code`` for that."""
+
+    @computed_field(deprecated=True)  # type: ignore[prop-decorator]
+    @property
+    def reason_code(self) -> str:
+        """Deprecated alias for ``screening_reason_code``, kept for the rollout.
+
+        Platform and Backroom deploy in parallel from one release, so a Backroom
+        that has not been redeployed still requires this field and would reject
+        every quarantine item if it disappeared. It always carries the same
+        screening-origin code as ``screening_reason_code`` — never the operator's
+        ruling — and is removed once the console reads only the new name.
+        """
+        return self.screening_reason_code
+
     review_audit_digest: str | None = None
     review_audit: ScreenReviewAudit | None = None
     review_notes_digest: str | None = None
@@ -64,14 +191,88 @@ class AdminQuarantineItem(BaseModel):
     resolved_by: str | None
     resolution: QuarantineResolution | None
     resolution_reason: str | None
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """What the operator decided, as a code: ``operator-released-quarantine`` /
+    ``operator-rescreened-quarantine`` / ``operator-rejected-quarantine``.
+    Derived from ``resolution``, so it is present on every resolved quarantine
+    including ones resolved before this field existed. Null while active."""
     resolution_history: list[AdminQuarantineResolutionEvent] = Field(
         default_factory=list
     )
+    agent_status: str | None = None
+    """The exact agent's current status. Null only from an older Platform."""
+    terminal_ghost: bool = False
+    """True for an active row whose exact agent is already ``banned`` or
+    ``rejected``: historical, not an actionable review (ditto-subnet#2038)."""
 
 
 class AdminQuarantineList(BaseModel):
     items: list[AdminQuarantineItem]
     count: int
+    """Every row matching the status filter; the pagination total."""
+    terminal_ghost_count: int = 0
+    """Active rows in ``count`` whose exact agent is already terminal. They are
+    reconciliation work, never actionable review backlog or queue age."""
+    actionable_count: int | None = None
+    """Active rows that still need a screening ruling (``status=active`` or
+    ``all``); null for ``status=resolved``."""
+    oldest_actionable_created_at: datetime | None = None
+    """``created_at`` of the oldest actionable active row; ghosts excluded."""
+
+
+class AdminScreeningReviewEvent(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    event_id: UUID
+    agent_id: UUID
+    attempt_id: UUID
+    quarantine_id: UUID | None
+    resolution_id: UUID | None
+    previous_event_id: UUID | None
+    event_kind: Literal["automated", "manual"]
+    artifact_sha256: str
+    policy_version: int
+    actor: str
+    reviewer_model: str | None
+    outcome: str
+    effective_decision: str
+    screening_reason_code: str | None
+    """Screening-origin code, snapshotted at event time. On an ``automated``
+    event it is the code the screener's verdict carried; on a ``manual`` event
+    it is the code the reviewed quarantine was opened with, inherited verbatim
+    and preserved. On a manual event it therefore describes the lead the
+    operator ruled on, **not** the ruling — see
+    ``resolution_reason_code``."""
+
+    @computed_field(deprecated=True)  # type: ignore[prop-decorator]
+    @property
+    def reason_code(self) -> str | None:
+        """Deprecated alias for ``screening_reason_code``, kept for the rollout.
+
+        Same value, same screening-origin meaning, and lost as soon as the
+        console reads only the new name — see ``AdminQuarantineItem.reason_code``
+        for why the transition needs it.
+        """
+        return self.screening_reason_code
+
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """The operator's own basis, derived from ``effective_decision``. Non-null
+    only on a ``manual`` event: an automated ``reject`` is the screener's
+    verdict arriving over the signed screening path, not an operator ruling."""
+    reason: str | None
+    prior_agent_status: str
+    next_agent_status: str
+    evidence: dict[str, object]
+    created_at: datetime
+
+
+class AdminScreeningReviewEventList(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[AdminScreeningReviewEvent]
+    count: int
+    limit: int
+    offset: int
 
 
 class AdminQuarantineResolveRequest(BaseModel):
@@ -86,10 +287,33 @@ class AdminQuarantineResolveResponse(BaseModel):
     agent_status: str
 
 
+class AdminVerifiedV13ClearReleaseRequest(BaseModel):
+    """Compare-and-swap guards for releasing one held, verified v13 court clear."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=8)]
+    expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    confirmation: Literal["RELEASE VERIFIED V13 COURT CLEAR"]
+
+
+class AdminVerifiedV13ClearReleaseResponse(BaseModel):
+    quarantine: AdminQuarantineItem
+    agent_status: str
+    adjudication_digest: str
+    """The signed court adjudication the release was re-verified against."""
+    idempotent: bool = False
+
+
 class AdminScreeningDisputeItem(BaseModel):
     dispute_id: UUID
     agent_id: UUID
-    quarantine_id: UUID
+    kind: DisputeKind = "screening"
+    """``screening`` appeals a rejected quarantine (release re-evaluates the
+    submission); ``gate_notes`` appeals cited bench v13+ gate notes on a scored
+    submission (either resolution only records the verdict)."""
+    quarantine_id: UUID | None
+    """The appealed quarantine; ``None`` for a ``gate_notes`` dispute."""
     miner_hotkey: str
     agent_name: str
     agent_version: int | None
@@ -102,6 +326,8 @@ class AdminScreeningDisputeItem(BaseModel):
     resolved_by: str | None
     resolution: DisputeResolution | None
     resolution_reason: str | None
+    gate_note_ids: list[str] | None = None
+    """Bench v13+ gate ``note_id`` values the miner contested, if any."""
 
 
 class AdminScreeningDisputeList(BaseModel):
@@ -136,6 +362,44 @@ class AdminScreeningAttempt(BaseModel):
     duplicate_of: UUID | None
     duplicate_name: str | None = None
     duplicate_version: int | None = None
+    lineage_parent_agent_id: UUID | None = Field(
+        default=None,
+        description=(
+            "Reference whose diff and review history scoped this attempt's model "
+            "review (see lineage_reference_kind). Null is an ordinary full review."
+        ),
+    )
+    lineage_scope: Literal["diff", "full"] | None = Field(
+        default=None,
+        description=(
+            "Scope the bound lineage packet selected. Null with a parent means "
+            "the worker never fetched the packet and reviewed in full."
+        ),
+    )
+    lineage_packet_sha256: str | None = Field(
+        default=None, description="Digest of the exact packet the worker received."
+    )
+    lineage_full_review_reasons: list[str] | None = Field(
+        default=None,
+        description=(
+            "Why the bound packet could not carry the reference's review "
+            "(build-surface-changed, diff-too-large, too-many-files-changed, "
+            "opaque-file-changed, source-not-compared, parent-policy-differs, "
+            "no-review-history). Empty for a diff scope; null when no packet "
+            "was bound or it predates this field."
+        ),
+    )
+    lineage_reference_kind: (
+        Literal["same_owner_version", "same_owner", "released_base"] | None
+    ) = Field(
+        default=None,
+        description=(
+            "What the bound reference was: the same hotkey's prior version, "
+            "an earlier upload by the same payment coldkey, or a released, "
+            "already-screened public base. Null when no packet was bound or "
+            "it predates this field."
+        ),
+    )
 
 
 class AdminScreeningFailureDiagnostic(BaseModel):
@@ -158,6 +422,168 @@ class AdminScreeningFailureDiagnostic(BaseModel):
     reason_code: str | None
     private_failure_detail: Annotated[str | None, Field(max_length=4_000)] = None
     private_failure_log_tail: Annotated[str | None, Field(max_length=16_000)] = None
+    l2_review_diagnostic: ScreenReviewAudit | None = None
+    """Digest-verified, fixed-label L2 accounting for this exact attempt."""
+    court_diagnostic: AdjudicationRunDiagnostic | None = None
+    """Sanitized automated-court trace for this attempt. Null when the attempt
+    has no such trace, including rows screened before the field existed."""
+    court_completion_receipt: AdjudicationCompletionReceipt | None = None
+    """Successful L4 timing/attribution only; null for historical completions."""
+
+
+class AdminAdjudicationAttemptTelemetry(BaseModel):
+    """Text-free L4 cohort row; absent telemetry stays absent."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    attempt_id: UUID
+    artifact_sha256: str | None
+    policy_version: int
+    manifest_digest: str
+    started_at: datetime
+    finished_at: datetime | None
+    attempt_status: str
+    adjudication_decision: Literal["clear", "reject", "escalate"]
+    review_settings_revision: int | None
+    review_settings_checksum: str | None
+    configured_model: str | None
+    configured_timeout_seconds: int | None
+    configured_completion_ceiling: int | None
+    observed_model: str | None
+    observed_provider: str | None
+    observed_upstream: str | None
+    failure_code: str | None
+    elapsed_ms: int | None
+    first_tool_call_ms: int | None = None
+    first_tool_observation: Literal["stream_delta", "complete_body"] | None = None
+    request_count: int | None
+    request_prompt_bytes: int | None
+    request_wire_bytes: int | None
+    request_event_count: int | None
+    prompt_tokens: int | None
+    completion_tokens: int | None
+
+
+class AdminAdjudicationAttemptTelemetryList(BaseModel):
+    """Most recent persisted L4 decisions, including clear and reject."""
+
+    items: list[AdminAdjudicationAttemptTelemetry]
+    limit: int
+    offset: int
+    lookback_hours: int
+
+
+class AdminScreeningVerificationReceipt(BaseModel):
+    """Digest-only evidence presence, not a verified policy outcome."""
+
+    receipt_id: UUID
+    check_code: str
+    evidence_sha256: str
+    image_sha256: str | None
+    profile_sha256: str | None
+    challenge_manifest_sha256: str | None
+    worker_hotkey: str
+    created_at: datetime
+
+
+class AdminScreeningVerificationCheck(BaseModel):
+    check_code: str
+    record_status: Literal[
+        "not_recorded", "recorded_unverified", "mechanically_verified"
+    ]
+    receipt_count: int
+
+
+class AdminV13PrivatePrerequisite(BaseModel):
+    code: str
+    status: Literal["not_observed", "recorded_unverified", "mechanically_verified"]
+
+
+class AdminV13PrivatePackageReadiness(BaseModel):
+    """Historical inventory for a retired program; no activation or CLEAR path."""
+
+    program_status: Literal["retired"] = "retired"
+    registration_status: Literal["not_registered", "registered_unverified"]
+    prerequisites: list[AdminV13PrivatePrerequisite] = Field(
+        description="Historical observations, not an activation checklist"
+    )
+    clear_authorized: Literal[False] = False
+
+
+class AdminScreeningVerificationReadiness(BaseModel):
+    """Exact-attempt Platform receipt inventory, never a CLEAR authorization.
+
+    `not_recorded` means there is no matching receipt in this Platform ledger;
+    it does not prove the check never ran in an external system. The trusted
+    screener records archive and built-image mechanical observations. Only
+    those checks can be `mechanically_verified` after Platform recomputes their
+    canonical digest and matches the committed artifact / verified image.
+    Neither status certifies the other 17 checks or private 60-pair package.
+    """
+
+    agent_id: UUID
+    artifact_sha256: str
+    attempt_id: UUID
+    policy_version: int
+    attempt_status: str
+    verified_image_sha256s: list[str] = Field(max_length=16)
+    verified_image_count: int = Field(ge=0)
+    verified_images_truncated: bool
+    checks: list[AdminScreeningVerificationCheck]
+    private_metamorphic_applicability: Literal["not_recorded"] = "not_recorded"
+    private_package: AdminV13PrivatePackageReadiness | None = None
+    source_review: StoredSourceReviewEvidence | None = None
+    receipts: list[AdminScreeningVerificationReceipt]
+    receipt_count: int
+    receipts_truncated: bool
+
+
+class AdminScreeningReviewDeadlineAttempt(BaseModel):
+    """One recorded attempt for the exact current artifact and policy."""
+
+    attempt_id: UUID
+    status: str
+    screener_hotkey: str
+    started_at: datetime
+    finished_at: datetime | None
+    reason_code: str | None
+
+
+class AdminScreeningReviewDeadlineDiagnostic(BaseModel):
+    """Read-only exact-artifact clock evidence, never a finalizer verdict.
+
+    No deployed writer/finalizer is implied by a policy recommendation or a
+    screening lease deadline. Distinct hotkeys are observed identities, not
+    proof of independent workers or a completed retry requirement.
+    """
+
+    agent_id: UUID
+    artifact_sha256: str
+    agent_status: str
+    policy_version: int = Field(ge=0)
+    quarantine_id: UUID | None
+    quarantine_status: str | None
+    quarantine_resolution: str | None
+    quarantine_attempt_id: UUID | None
+    quarantine_artifact_matches: bool | None
+    manifest_digest: str | None
+    deadline_state: Literal["bound", "not_configured"]
+    finalizer_state: Literal["not_configured"] = "not_configured"
+    activation_revision: int | None
+    policy_document_digest: str | None = None
+    activation_actor: str | None
+    activation_reason: str | None
+    activated_at: datetime | None
+    start_event: str | None
+    window_started_at: datetime | None
+    deadline_at: datetime | None
+    recorded_attempts: list[AdminScreeningReviewDeadlineAttempt]
+    observed_worker_hotkeys: list[str]
+    required_retries: None = None
+    independent_worker_count: None = None
+    failure_domain: None = None
+    outstanding_mandatory_checks: None = None
 
 
 class AdminScreeningImageBuild(BaseModel):
@@ -534,6 +960,8 @@ class AdminQuarantineAgentContext(BaseModel):
     submitted_at: datetime
     screening_policy_version: int
     screening_reason: str | None
+    score_count: int | None = None
+    """Current score ledger count; null from an older Platform."""
 
 
 class AdminMinerQuarantineSummary(BaseModel):
@@ -542,10 +970,27 @@ class AdminMinerQuarantineSummary(BaseModel):
     quarantine_id: UUID
     agent_id: UUID
     agent_name: str
-    reason_code: str
+    screening_reason_code: str
+    """Why the screener held that submission. Preserved across the resolution:
+    this is the lead the operator ruled on, not the ruling."""
+
+    @computed_field(deprecated=True)  # type: ignore[prop-decorator]
+    @property
+    def reason_code(self) -> str:
+        """Deprecated alias for ``screening_reason_code``, kept for the rollout.
+
+        Same value, same screening-origin meaning, and lost as soon as the
+        console reads only the new name — see ``AdminQuarantineItem.reason_code``
+        for why the transition needs it.
+        """
+        return self.screening_reason_code
+
     status: Literal["active", "resolved"]
     resolution: QuarantineResolution | None
     resolution_reason: str | None
+    resolution_reason_code: ResolutionReasonCode | None = None
+    """The operator's ruling as a code, derived from ``resolution``. Null while
+    there is no ruling — an active quarantine, or a miner dispute's ``uphold``."""
     created_at: datetime
     resolved_at: datetime | None
 
@@ -653,6 +1098,9 @@ class AdminQuarantineBatchDecision(BaseModel):
     quarantine_id: UUID
     expected_agent_id: UUID
     expected_artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    expected_attempt_id: UUID | None = None
+    expected_score_count: Annotated[int | None, Field(ge=0)] = None
+    """Both guards are required when releasing a parked screening failure."""
     resolution: QuarantineResolution
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3)]
 
@@ -665,6 +1113,22 @@ class AdminQuarantineBatchPreviewRequest(BaseModel):
     ]
 
 
+class AdminQuarantineTerminalRuling(BaseModel):
+    """The exact ruling that holds a quarantine's agent terminal.
+
+    A batch preview signs this into its token, and execution re-derives it
+    under the quarantine and agent row locks; any change refuses the item.
+    """
+
+    agent_status: str
+    artifact_sha256: str
+    ath_review_id: UUID | None = None
+    ath_action_id: UUID | None = None
+    """The specific ATH reject action; null only when the review predates the
+    action ledger (or for the legacy CLI ban, which cites no review)."""
+    ath_resolved_at: datetime | None = None
+
+
 class AdminQuarantineBatchPreviewItem(BaseModel):
     quarantine_id: UUID
     agent_id: UUID | None = None
@@ -674,6 +1138,17 @@ class AdminQuarantineBatchPreviewItem(BaseModel):
     reason: str
     disposition: Literal["ready", "already_applied", "conflict", "not_found"]
     resulting_agent_status: str | None = None
+    public_reason_code: str | None = None
+    public_record_hash: str | None = None
+    terminal_reconciliation: bool = False
+    """True for a quarantine behind an already-terminal agent
+    (ditto-subnet#2038), active or already closed behind that ruling. Only
+    ``reject`` is ready, and only against an identified current ATH reject: it
+    closes the orphan and leaves the terminal agent ruling and public record
+    unchanged. A closed one replays as ``already_applied``."""
+    terminal_ruling: AdminQuarantineTerminalRuling | None = None
+    """The current terminal ruling this decision is fenced to; signed into the
+    preview token and re-checked under lock at execution."""
     message: str
 
 
@@ -695,6 +1170,10 @@ class AdminQuarantineBatchExecuteItem(BaseModel):
     quarantine_id: UUID
     status: Literal["applied", "already_applied", "failed"]
     agent_status: str | None = None
+    terminal_reconciliation: bool = False
+    """True when ``reject`` closed an orphaned quarantine behind an
+    already-terminal agent without changing that agent's ruling."""
+    terminal_ruling: AdminQuarantineTerminalRuling | None = None
     message: str
 
 
@@ -822,12 +1301,22 @@ class AdminBaselineDiffManifest(BaseModel):
     stock_kit_count: int
     custom_file_count: int
     # Lines that are neither baseline code nor kit code at any revision: the
-    # size of the surface a reviewer actually has to read.
+    # size of the surface a reviewer actually has to read. Summed over every
+    # compared file, not only the rows ``files`` returns.
     custom_added_lines: int
     # True when the submission's paths were realigned by stripping one wrapping
     # directory so they line up with the kit layout.
     path_aligned: bool
     truncated: bool
+    # Readable text files the bounded source read skipped (combined text budget
+    # or file cap). They were NOT compared: they appear in no ``files`` row and
+    # no count above, and ``file_count`` covers compared paths only.
+    omitted_file_count: int
+    # The first MAX_OMITTED_PATHS omitted paths, sorted.
+    omitted_paths: list[str]
+    # False whenever anything was omitted: ``custom_added_lines`` is then a
+    # lower bound, never the whole custom surface.
+    custom_added_lines_complete: bool
 
 
 class AdminBaselineDiffFileDetail(BaseModel):
@@ -850,14 +1339,32 @@ class AdminValidatorAssignment(BaseModel):
     deadline: datetime
     bench_version: int
     attempt_count: int
+    """Scoring leases on this row; zero for a lease on a round-only row."""
     score_count: int
     provisional_composite: float | None
     slot_id: str = "slot-0"
-    purpose: Literal["legacy_unclassified", "canonical_quorum", "continual_retest"] = (
-        "legacy_unclassified"
-    )
+    purpose: Literal[
+        "legacy_unclassified",
+        "canonical_quorum",
+        "continual_retest",
+        "benchmark_canary",
+        "generator_round",
+    ] = "legacy_unclassified"
     agent_status: str | None = None
     first_reported_at: datetime | None = None
+    seed: Annotated[
+        str | None,
+        Field(
+            pattern=r"^(0|[1-9][0-9]*)$",
+            description=(
+                "Exact decimal dataset seed this lease runs, as a string so a "
+                "64-bit value survives JSON. For continual_retest it is the "
+                "shared champion-anchored seed, so two leases for one agent "
+                "with the same value are the same paired run. Null when the "
+                "ticket has no seed yet."
+            ),
+        ),
+    ] = None
 
 
 class AdminValidatorAssignmentList(BaseModel):
@@ -900,6 +1407,8 @@ __all__ = [
     "AdminQuarantineResolutionEvent",
     "AdminQuarantineResolveRequest",
     "AdminQuarantineResolveResponse",
+    "AdminVerifiedV13ClearReleaseRequest",
+    "AdminVerifiedV13ClearReleaseResponse",
     "AdminScreeningAttempt",
     "AdminScreeningDisputeItem",
     "AdminScreeningDisputeList",
@@ -907,8 +1416,15 @@ __all__ = [
     "AdminScreeningDisputeResolveResponse",
     "AdminScreeningFailureExample",
     "AdminScreeningFailureDiagnostic",
+    "AdminAdjudicationAttemptTelemetry",
+    "AdminAdjudicationAttemptTelemetryList",
     "AdminScreeningFailureGroup",
     "AdminScreeningFailureSummary",
+    "AdminScreeningVerificationCheck",
+    "AdminScreeningVerificationReadiness",
+    "AdminScreeningReviewDeadlineAttempt",
+    "AdminScreeningReviewDeadlineDiagnostic",
+    "AdminScreeningVerificationReceipt",
     "AdminScreeningSubmission",
     "AdminScreeningSubmissionList",
     "AdminScreeningRescreenRequest",

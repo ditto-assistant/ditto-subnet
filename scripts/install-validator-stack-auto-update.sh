@@ -98,7 +98,7 @@ Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"
 Environment=DITTO_SUBNET_ENV_FILE=$ROOT_DIR/.env
 Environment=DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR=$state_dir
 ExecStart=$ROOT_DIR/scripts/validator-stack-auto-update.sh run
-TimeoutStartSec=10800
+TimeoutStartSec=21600
 TimeoutStopSec=600
 UMask=0077
 NoNewPrivileges=true

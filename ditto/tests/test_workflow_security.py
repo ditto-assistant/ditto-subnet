@@ -8,7 +8,10 @@ FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 PRIVILEGED_TRIGGER = re.compile(
     r"^\s*(pull_request_target|workflow_run|issue_comment|repository_dispatch)\s*:"
 )
-PR_TARGET_ALLOWLIST = {"preview-stack.yml"}
+# Empty on purpose. The stack preview controller was the one approved user of
+# pull_request_target; it is now dispatch-only, so nothing in this repository
+# may fire on a privileged trigger.
+PR_TARGET_ALLOWLIST: frozenset[str] = frozenset()
 
 
 def test_remote_actions_are_pinned_to_full_commit_shas() -> None:
@@ -42,24 +45,37 @@ def test_untrusted_workflows_do_not_use_privileged_triggers() -> None:
             match = PRIVILEGED_TRIGGER.match(line.split("#", 1)[0])
             if not match:
                 continue
-            approved_target = (
-                match.group(1) == "pull_request_target"
-                and workflow.name in PR_TARGET_ALLOWLIST
-            )
-            assert approved_target, (
+            assert workflow.name in PR_TARGET_ALLOWLIST, (
                 f"{workflow.name}:{line_number} uses an unapproved privileged trigger"
             )
 
 
-def test_stack_preview_is_the_narrow_trusted_controller_exception() -> None:
+def test_the_repository_has_no_privileged_trigger_exceptions() -> None:
+    # Re-adding a name above would quietly restore an automatic path to the
+    # cloud credentials, so make that edit fail here and be argued for.
+    assert not PR_TARGET_ALLOWLIST
+
+
+def test_stack_preview_is_operator_dispatched_only() -> None:
     text = (WORKFLOWS / "preview-stack.yml").read_text()
+    assert "workflow_dispatch:" in text
+    assert "pull_request_target:" not in text
+    assert "github.event.pull_request" not in text
     assert "environment: preview-stack" in text
     assert "ref: ${{ github.event.repository.default_branch }}" in text
     assert "persist-credentials: false" in text
-    assert "github.event.pull_request.head.repo.full_name" in text
-    assert "ref: ${{ github.event.pull_request.head.sha }}" not in text
     assert "checkout@" in text
-    assert "PREVIEW_SHA: ${{ github.event.pull_request.head.sha }}" in text
+    # A dispatch can be fired from any ref, and the cloud identity is bound to
+    # the environment rather than to a branch, so the controller must refuse to
+    # run its own modified copy.
+    assert "github.ref == 'refs/heads/main'" in text
+    # The PR number is validated before it reaches any script, and the head
+    # commit is resolved from the API rather than accepted from the operator --
+    # otherwise provision.sh's stale-head check compares an input to itself.
+    assert '[[ "$INPUT_PR" =~ ^[1-9][0-9]*$ ]]' in text
+    assert 'sha="$(jq -r .head.sha <<<"$pr_json")"' in text
+    assert "PREVIEW_SHA: ${{ steps.resolve.outputs.sha }}" in text
+    assert "${{ inputs.sha }}" not in text
 
 
 def test_workflows_do_not_depend_on_blacksmith() -> None:

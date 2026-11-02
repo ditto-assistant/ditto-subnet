@@ -93,6 +93,8 @@ describe('public subnet Backroom boundary', () => {
       expect(source).not.toContain(forbidden)
     }
     expect(source).toContain('BACKROOM_ADMIN_EMAILS')
+    expect(source).toContain('BACKROOM_BLOCKED_EMAILS')
+    expect(sourceFiles.at(-1)).toContain('this.env.BACKROOM_BLOCKED_EMAILS')
     expect(source).toContain('DITTO_PLATFORM_API_BASE_URL')
   })
 

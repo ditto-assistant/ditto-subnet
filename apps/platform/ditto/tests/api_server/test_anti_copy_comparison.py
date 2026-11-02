@@ -162,6 +162,102 @@ def test_independent_residuals_are_clear_despite_structural_overlap() -> None:
     assert result.bulk_eligible is True
 
 
+def test_module_split_copy_reports_the_line_channel_that_held_it() -> None:
+    """A line-triggered hold must not read as a lexical miss that still held."""
+    lines = _fp({f"{i:016x}" for i in range(40)}, version="l1")
+    reference = _row(
+        agent_id=1,
+        miner="reference-miner",
+        first_seen=_NOW,
+        sha256="a" * 64,
+        content={**_fp({f"a{i:015x}" for i in range(12)}), "lines": lines},
+    )
+    candidate = _row(
+        agent_id=2,
+        miner="candidate-miner",
+        first_seen=_NOW + timedelta(seconds=1),
+        sha256="b" * 64,
+        content={**_fp({f"b{i:015x}" for i in range(12)}), "lines": lines},
+        size=500_001,
+    )
+
+    result = compare_anti_copy_pair(candidate=candidate, reference=reference)
+
+    assert result.current_decision == "hold"
+    assert result.lexical.above_threshold is False
+    assert result.line.above_threshold is True
+    assert result.line.jaccard == 1.0
+    assert result.line.decision_role == "trigger"
+    assert result.line_fingerprint_version == "l1"
+    assert '"m"' not in json.dumps(result.to_wire())
+
+
+def test_reverse_direction_line_containment_is_not_a_trigger() -> None:
+    """A small candidate inside a large reference is not padding; no trigger."""
+    small = _fp({f"{i:016x}" for i in range(20)}, version="l1")
+    large = _fp({f"{i:016x}" for i in range(80)}, version="l1")
+
+    def compare(candidate_lines: dict, reference_lines: dict):
+        return compare_anti_copy_pair(
+            candidate=_row(
+                agent_id=2,
+                miner="candidate-miner",
+                first_seen=_NOW + timedelta(seconds=1),
+                sha256="b" * 64,
+                content={
+                    **_fp({f"b{i:015x}" for i in range(12)}),
+                    "lines": candidate_lines,
+                },
+                size=500_001,
+            ),
+            reference=_row(
+                agent_id=1,
+                miner="reference-miner",
+                first_seen=_NOW,
+                sha256="a" * 64,
+                content={
+                    **_fp({f"a{i:015x}" for i in range(12)}),
+                    "lines": reference_lines,
+                },
+            ),
+        )
+
+    subset = compare(small, large)
+    assert subset.line.containment == 1.0
+    assert subset.line.above_threshold is False
+    assert subset.current_decision == "clear"
+    padded = compare(large, small)
+    assert padded.line.above_threshold is True
+    assert padded.current_decision == "hold"
+
+
+def test_reverse_direction_lexical_containment_is_not_a_trigger() -> None:
+    small = {f"{i:016x}" for i in range(20)}
+    large = small | {f"x{i:015x}" for i in range(60)}
+
+    result = compare_anti_copy_pair(
+        candidate=_row(
+            agent_id=2,
+            miner="candidate-miner",
+            first_seen=_NOW + timedelta(seconds=1),
+            sha256="b" * 64,
+            content=_fp(small),
+            size=500_001,
+        ),
+        reference=_row(
+            agent_id=1,
+            miner="reference-miner",
+            first_seen=_NOW,
+            sha256="a" * 64,
+            content=_fp(large),
+        ),
+    )
+
+    assert result.lexical.containment == 1.0
+    assert result.lexical.above_threshold is False
+    assert result.current_decision == "clear"
+
+
 def test_later_reference_is_not_chronology_eligible() -> None:
     values = {f"{i:016x}" for i in range(12)}
     candidate = _row(
@@ -237,3 +333,58 @@ def test_same_coldkey_pair_across_hotkeys_is_explicitly_excluded() -> None:
     assert result.same_miner_excluded is True
     assert result.current_decision == "excluded"
     assert result.exact_byte_match is False
+
+
+def test_comparison_reports_each_side_language_inventory_without_paths() -> None:
+    residual = {f"{i:016x}" for i in range(12)}
+    candidate_content = {
+        **_fp(residual),
+        "languages": {
+            "v": "lang1",
+            "files": {"python": 9, "src/private_module.py": 1},
+            "bytes": {"python": 4096},
+            "excluded_files": 2,
+            "excluded_bytes": 512,
+        },
+    }
+    reference = _row(
+        agent_id=1,
+        miner="reference-miner",
+        first_seen=_NOW,
+        sha256="a" * 64,
+        content=_fp(residual),
+    )
+    candidate = _row(
+        agent_id=2,
+        miner="candidate-miner",
+        first_seen=_NOW + timedelta(seconds=1),
+        sha256="b" * 64,
+        content=candidate_content,
+    )
+
+    result = compare_anti_copy_pair(candidate=candidate, reference=reference)
+    baseline = compare_anti_copy_pair(
+        candidate=_row(
+            agent_id=2,
+            miner="candidate-miner",
+            first_seen=_NOW + timedelta(seconds=1),
+            sha256="b" * 64,
+            content=_fp(residual),
+        ),
+        reference=reference,
+    )
+
+    assert result.candidate_languages == {
+        "version": "lang1",
+        "files": {"python": 9},
+        "bytes": {"python": 4096},
+        "excluded_files": 2,
+        "excluded_bytes": 512,
+    }
+    # A row fingerprinted before the inventory existed reads as not recorded.
+    assert result.reference_languages is None
+    # Provenance only: the decision is identical with or without it.
+    assert result.current_decision == baseline.current_decision == "hold"
+    assert result.triggered_signal == baseline.triggered_signal
+    serialized = json.dumps(result.to_wire())
+    assert "private_module" not in serialized

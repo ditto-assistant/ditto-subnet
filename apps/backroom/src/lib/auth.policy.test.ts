@@ -4,6 +4,7 @@ import {
   isSameOriginRequest,
   isVerifiedOmniauraEmail,
   parseAdminEmails,
+  parseBlockedEmails,
   safeReturnTo,
   SESSION_LIFETIME_MS,
   SESSION_MAX_AGE_SECONDS,
@@ -44,6 +45,15 @@ describe('Backroom roles', () => {
     expect(() => accessLevelForEmail('peyton@example.com', '')).toThrow(
       'This account is not authorized to enter Backroom',
     )
+  })
+
+  it('rejects blocked identities even when they remain Workspace members or admins', () => {
+    const configuredAdmins = 'peyton@omniaura.ai,brian@omniaura.ai'
+    const configuredBlocked = ' BRIAN@OmniAura.ai '
+    expect(parseBlockedEmails(configuredBlocked)).toEqual(new Set(['brian@omniaura.ai']))
+    expect(() =>
+      accessLevelForEmail('brian@omniaura.ai', configuredAdmins, configuredBlocked),
+    ).toThrow('This account is not authorized to enter Backroom')
   })
 })
 

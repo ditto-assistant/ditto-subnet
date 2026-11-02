@@ -2,39 +2,48 @@
 # automatically in local and GitHub Actions plans so an omitted CLI flag cannot
 # silently propose destroying an already-managed optional service.
 
+project               = "ditto-app-dev"
 manage_dns            = true
 enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
+# Permanent dev is stopped to save cost; per-PR previews (preview-stack.yml)
+# replace it. Flip to true to bring ditto-platform-dev/validator-dev back.
+dev_environment_running = false
+# Snapshot metadata only; encrypted-backup custody is in ditto-subnet.
+enable_platform_postgres_snapshot_reader = true
+# Treasury hosts remain physically absent until separately reviewed applies.
+enable_treasury_host         = false
+enable_treasury_planner_host = false
 # Shadow coding remains physically absent until a separately reviewed protected
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
 coding_executor_host_count = 0
-# Native v2 has an independent Platform-owned host and no inherited operators.
-# Keep absent until a reviewed host plan and explicit custodian set are approved.
-enable_coding_hosted_host     = false
-enable_coding_hosted_postgres = false
+# SN-138: the native-v2 host module is removed for reviewed retirement.
+# Retain cold snapshot ditto-coding-hosted-v2-cold-20261009 outside this root.
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.
 validator_hotkey_admin_phase = "absent"
-enable_screener              = true
 # The static ditto-screener-prod pet is retired. Hetzner is primary and the
 # independently managed GCE MIG remains the bounded overflow path.
 enable_screener_prod = false
 
-# The fleet and its secret/IAM phase already exist in production. The
-# Targon-first controller starts with its hostile-runtime capability pinned to
-# NOGO, so real submission demand continues to use the bounded GCE fallback.
+# The fleet and its secret/IAM phase already exist in production. Hetzner is
+# primary, with the independently managed GCE MIG as bounded overflow.
 enable_screener_fleet_secrets       = true
 enable_screener_fleet               = true
 enable_screener_capacity_controller = true
+# Private VM that builds and runs miner generators for the shadow generator
+# competition. Its identity reads only generator-scorer-token-prod.
+enable_generator_scorer = true
 # Rehearsal VM is opt-in through the protected workflow and absent otherwise.
 enable_screener_fleet_dev_host = false
-# The bare-metal X.509 identity is enabled only during a protected apply after
-# its public CA trust anchor has been reviewed and supplied.
-enable_screener_fleet_x509_identity = false
+# The bare-metal X.509 identity is live on subnet-screener-1. Preserve its
+# pool, provider, service account, and one-secret grants on routine plans.
+enable_screener_fleet_x509_identity       = true
+enable_screener_fleet_x509_node2_identity = false
 
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6

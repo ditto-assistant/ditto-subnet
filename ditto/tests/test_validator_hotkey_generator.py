@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "infra/ansible/scripts/generate_validator_hotkey.py"
@@ -359,6 +360,23 @@ def test_production_environment_never_contains_signing_seed_or_coldkey() -> None
     assert "MNEMONIC" not in template
     assert "COLDKEY" not in template
     assert "VALIDATOR_MNEMONIC" not in template
+
+
+def test_production_control_auth_mode_is_rendered_with_a_shadow_default() -> None:
+    template = ENV_TEMPLATE.read_text()
+    tasks = PROD_TASKS.read_text()
+    defaults = yaml.safe_load(
+        (ROOT / "infra/ansible/roles/validator_stack/defaults/main.yml").read_text()
+    )
+
+    assert (
+        "DITTOBENCH_CONTROL_AUTH_MODE={{ validator_stack_control_auth_mode }}"
+        in template
+    )
+    assert defaults["validator_stack_control_auth_mode"] == "shadow"
+    # A typo would silently fall back to shadow inside the scorer; fail the
+    # converge instead.
+    assert "validator_stack_control_auth_mode in ['shadow', 'enforce']" in tasks
 
 
 def test_production_wandb_key_uses_secret_manager_without_terraform_value() -> None:

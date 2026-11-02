@@ -38,10 +38,20 @@ def create_db_engine(config: PostgresConfig | None = None) -> AsyncEngine:
             pool_size=config.pool_min_size,
             max_overflow=max(config.pool_max_size - config.pool_min_size, 0),
             pool_pre_ping=True,
+            # Private datasets and custody material must not become SQL bind
+            # parameters in application diagnostics.
+            hide_parameters=True,
             pool_recycle=3600,
             # command_timeout is asyncpg's per-query timeout. SA's pool_timeout
             # is an unrelated pool-acquisition wait, so route via connect_args.
-            connect_args={"command_timeout": config.command_timeout},
+            # These are latency-bounded control-plane transactions, not batch
+            # analytics. Complex eligibility plans can spend tens of seconds
+            # compiling JIT code for less than a second of executor work.
+            # Scope this to app connections; leave the server default intact.
+            connect_args={
+                "command_timeout": config.command_timeout,
+                "server_settings": {"jit": "off"},
+            },
         )
     except (SQLAlchemyError, OSError) as e:
         target = (

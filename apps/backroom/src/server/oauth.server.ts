@@ -155,7 +155,11 @@ async function createSession(identity: {
     version: 2,
     ...identity,
     name: identity.name || identity.email,
-    accessLevel: accessLevelForEmail(identity.email, process.env.BACKROOM_ADMIN_EMAILS),
+    accessLevel: accessLevelForEmail(
+      identity.email,
+      process.env.BACKROOM_ADMIN_EMAILS,
+      process.env.BACKROOM_BLOCKED_EMAILS,
+    ),
     issuedAt: now,
     expiresAt: now + SESSION_LIFETIME_MS,
   }

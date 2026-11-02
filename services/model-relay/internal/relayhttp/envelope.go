@@ -96,6 +96,7 @@ const (
 const (
 	LaneInference = "inference"
 	LaneEmbedding = "embedding"
+	LaneDecision  = "decision"
 )
 
 // declineWire fixes the (status, code, message-suffix) triple per decline.

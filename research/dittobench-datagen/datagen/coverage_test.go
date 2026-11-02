@@ -40,13 +40,16 @@ func TestFullCatalogCoverage(t *testing.T) {
 	}
 }
 
+// v8 is frozen (TestV8KnownVector); 25 seeds per profile replace the original
+// 100 and still exercise both mutation families.
 func TestV8DestructiveToolsCannotMutateScoredWorldEvidence(t *testing.T) {
+	t.Parallel()
 	seen := map[string]bool{}
 	profiles := []struct {
 		n, scale, worldCases int
 	}{{6, 1, 0}, {48, 2, 57}, {100, 3, 190}}
 	for _, profile := range profiles {
-		for seed := int64(1); seed <= 100; seed++ {
+		for seed := int64(1); seed <= 25; seed++ {
 			world := universe.Generate(seed, profile.scale)
 			plans, err := world.QuestionPlans(profile.worldCases)
 			if err != nil {
@@ -94,6 +97,7 @@ func TestV8DestructiveToolsCannotMutateScoredWorldEvidence(t *testing.T) {
 }
 
 func TestV8CatalogUsesCurrentWorkflowSurface(t *testing.T) {
+	t.Parallel()
 	reachable := map[string]bool{}
 	for seed := int64(1); seed <= 40; seed++ {
 		rotated, err := protocol.RotateSeedForVersion(seed, protocol.BenchVersionV8)

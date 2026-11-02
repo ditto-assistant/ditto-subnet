@@ -56,11 +56,11 @@ describe('ArtifactReleaseControlPanel', () => {
     expect(screen.getByText(/cannot be made private again/)).toBeTruthy()
   })
 
-  it('scopes the release to the leaderboard king only', () => {
+  it('requires completed winner earnings before starting the privacy window', () => {
     render(<ArtifactReleaseControlPanel initialState={initial} readOnly={false} />)
 
-    expect(screen.getByText(/leaderboard king only/)).toBeTruthy()
-    expect(screen.getByText(/No other miner’s source is\s+ever released/)).toBeTruthy()
+    expect(screen.getByText(/earned winner emissions in a completed\s+tempo/)).toBeTruthy()
+    expect(screen.getByText(/positive revealed weights alone does not start the clock/)).toBeTruthy()
     expect(screen.queryByText(/all cleared submissions/)).toBeNull()
   })
 

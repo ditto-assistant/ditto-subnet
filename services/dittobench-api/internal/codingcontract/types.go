@@ -168,11 +168,13 @@ type TestGroupEvidence struct {
 }
 
 type GraderEvidence struct {
-	GraderContractSHA256        string              `json:"grader_contract_sha256"`
-	GraderBundleSHA256          string              `json:"grader_bundle_sha256"`
-	GraderImageDigest           string              `json:"grader_image_digest"`
-	GraderPlatform              string              `json:"grader_platform"`
-	TestManifestSHA256          string              `json:"test_manifest_sha256"`
+	GraderContractSHA256 string `json:"grader_contract_sha256"`
+	GraderBundleSHA256   string `json:"grader_bundle_sha256"`
+	GraderImageDigest    string `json:"grader_image_digest"`
+	GraderPlatform       string `json:"grader_platform"`
+	// Required by v1 Validate and canonical shape. Hosted v2 evidence has no
+	// test-manifest object, requires it empty, and omits the key.
+	TestManifestSHA256          string              `json:"test_manifest_sha256,omitempty"`
 	GraderPlanSHA256            string              `json:"grader_plan_sha256"`
 	ResourceProfileSHA256       string              `json:"resource_profile_sha256"`
 	ExecutionReceiptRootSHA256  string              `json:"execution_receipt_root_sha256"`

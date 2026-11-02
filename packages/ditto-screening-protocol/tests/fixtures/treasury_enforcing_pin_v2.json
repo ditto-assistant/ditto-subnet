@@ -1,0 +1,65 @@
+{
+  "version": 2,
+  "mode": "enforce",
+  "epoch_index": 9,
+  "first_block": 100,
+  "pinned_block": 101,
+  "pinned_block_hash": "0xabababababababababababababababababababababababababababababababab",
+  "policy": {
+    "version": 1,
+    "revision": 1,
+    "genesis_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "netuid": 118,
+    "collector_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "collector_coldkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "collector_policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "buckets": [
+      {
+        "bucket_id": "gamma",
+        "allocation_bps": 1000,
+        "holding_coldkey": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y"
+      }
+    ]
+  },
+  "policy_digest": "971a73f4b35189e3e76848b8eb75c5d42b56d61641c256be87b0507bb89ce5f0",
+  "identity": {
+    "genesis_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "netuid": 118,
+    "finalized_block": 101,
+    "finalized_block_hash": "0xabababababababababababababababababababababababababababababababab",
+    "uid": 0,
+    "hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "owner_coldkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "uid_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+    "subnet_owner_coldkey": "5DAAnrj7VHTznn2AWBemMuyBwZWs6FNFjdyVXUeYum3PTXFy"
+  },
+  "approval": {
+    "policy": {
+      "version": 1,
+      "revision": 1,
+      "genesis_hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "netuid": 118,
+      "collector_hotkey": "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+      "collector_coldkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      "collector_policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "buckets": [
+        {
+          "bucket_id": "gamma",
+          "allocation_bps": 1000,
+          "holding_coldkey": "5FLSigC9HGRKVhB9FiEo4Y3koPsNmBmLJbpXg2mp1hXcS59Y"
+        }
+      ]
+    },
+    "signature": "0x7cf91430ca01e5541eac378a36fdd5127238ff620c06bf6142508d4ae3b7ce0660ffa35930f051721371521762e1096bc3051d9f21b29a083521735891bbc88f"
+  },
+  "fleet": [
+    {
+      "treasury_pin_version": 2,
+      "treasury_dispatch_version": 2,
+      "approved_policy_digest": "971a73f4b35189e3e76848b8eb75c5d42b56d61641c256be87b0507bb89ce5f0",
+      "collector_policy_digest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "validator_hotkey": "5HGjWAeFDfFCWPsjFQdVV2Msvz2XtMktvgocEZcCj68kUMaw",
+      "protocol_version": 30
+    }
+  ]
+}

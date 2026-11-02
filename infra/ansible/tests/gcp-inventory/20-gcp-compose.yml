@@ -1,0 +1,15 @@
+---
+# Replays inventory/gcp.yml's keyed_groups and compose over the instances above;
+# tests/gcp-inventory.yml fails if the two drift apart.
+plugin: ansible.builtin.constructed
+strict: true
+keyed_groups:
+  - key: labels.env
+    prefix: env
+    separator: "_"
+  - key: labels.role
+    prefix: role
+    separator: "_"
+compose:
+  ansible_host: networkInterfaces[0].networkIP
+  gcp_zone: zone

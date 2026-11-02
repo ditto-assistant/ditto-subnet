@@ -19,6 +19,7 @@ from ditto.api_server.fingerprint import (
     _PROMPT_VERSION,
     _extract_string_literals,
     _file_shingles,
+    _line_shingles,
     _normalized_source_shingles,
     _prompt_shingles,
     compute_content_fingerprint,
@@ -26,6 +27,7 @@ from ditto.api_server.fingerprint import (
     compute_normalized_source_hash,
     compute_prompt_fingerprint,
     content_similarity,
+    line_similarity,
 )
 
 # A substantial prompt (>= _PROMPT_MIN_WORDS words) so it qualifies as prompt-like.
@@ -85,6 +87,7 @@ def _install_reference_fixture(
         "lexical": _reference_array(set(_file_shingles(baseline))),
         "normalized": _reference_array(set(_normalized_source_shingles(baseline))),
         "prompt": _reference_array(set(_prompt_shingles(baseline))),
+        "line": _reference_array(set(_line_shingles(baseline))),
     }
     monkeypatch.setattr(
         fingerprint_module, "_reference_shingles", references.__getitem__
@@ -268,6 +271,115 @@ class TestComputeContentFingerprint:
         assert compute_content_fingerprint(gzip.compress(b"plain gzip, no tar")) is None
         assert compute_content_fingerprint(_tar_gz({})) is None
         assert compute_content_fingerprint(_tar_gz({"blank": b"\n  \n\t\n"})) is None
+
+
+class TestLineSubSketch:
+    """The ``lines`` sub-sketch survives a module split that breaks 4-line windows.
+
+    Production 2026-10-03: ira-1 ``4d44841b`` was lets_638 ``8d3208ad`` split
+    from one file into ~30 modules with every call rewritten as
+    ``_mod.name(``. The window channel measured 0.55 / 0.73; exact line
+    Jaccard was 0.908.
+    """
+
+    @staticmethod
+    def _monolith(n: int = 60) -> dict[str, bytes]:
+        body = "\n".join(
+            f"def handler_{i}(payload, context):\n"
+            f"    value = normalize_payload_field(payload, 'field_{i}')\n"
+            f"    return compose_response_for(context, value, weight={i})\n"
+            for i in range(n)
+        )
+        return {"agent.py": body.encode()}
+
+    @staticmethod
+    def _split(n: int = 60, modules: int = 6) -> dict[str, bytes]:
+        files: dict[str, list[str]] = {}
+        for i in range(n):
+            mod = f"pkg/part_{i % modules}.py"
+            lines = files.setdefault(
+                mod,
+                [
+                    "import pkg.normalize as _normalize",
+                    "import pkg.compose as _compose",
+                ],
+            )
+            lines += [
+                f"def handler_{i}(payload, context):",
+                "    # moved from agent.py",
+                f"    value = _normalize.normalize_payload_field(payload, 'field_{i}')",
+                f"    return _compose.compose_response_for(context, value, weight={i})",
+                "",
+            ]
+        return {name: "\n".join(body).encode() for name, body in files.items()}
+
+    def test_module_split_keeps_lines_but_breaks_windows(self) -> None:
+        a = compute_content_fingerprint(_tar_gz(self._monolith()))
+        b = compute_content_fingerprint(_tar_gz(self._split()))
+        assert a is not None and b is not None
+        assert a["lines"]["v"] == "l1" and a["lines"]["corpus"] == a["corpus"]
+        assert _jaccard(a, b) < 0.5
+        jaccard, containment = line_similarity(a, b)
+        assert jaccard == containment == 1.0
+
+    def test_short_and_comment_lines_are_not_shingled(self) -> None:
+        raw = (
+            b"x = 1\n"
+            b"# a long comment line that would otherwise clear the length floor\n"
+            b"// another long comment line that would clear the length floor\n"
+            b"result = compute_the_answer_from(payload, context)\n"
+        )
+        assert len(_line_shingles(raw)) == 1
+
+    def test_code_starting_with_a_comment_token_is_kept(self) -> None:
+        code = [
+            b"#define MAX_BUFFER_LENGTH_FOR_REQUESTS (1024 * 64)",
+            b"#[derive(Debug, Clone, Serialize, Deserialize)]",
+            b"*pointer_to_buffer = compute_the_answer_from(ctx);",
+            b"*leading_args, final_value = split_the_payload(data)",
+            b"--remaining_budget_for_this_request_counter;",
+        ]
+        comments = [
+            b"# a long python comment line that clears the length floor",
+            b"* a long block-comment continuation that clears the floor",
+            b"-- a long sql comment line that clears the length floor ok",
+            b"/* a long block comment opening that clears the floor */",
+        ]
+        for line in code:
+            assert len(_line_shingles(line + b"\n")) == 1, line
+        for line in comments:
+            assert _line_shingles(line + b"\n") == [], line
+
+    def test_line_cap_keeps_the_window_sketch(self, monkeypatch) -> None:
+        # 60 distinct lines make 57 four-line windows: only the line set overflows.
+        monkeypatch.setattr(fingerprint_module, "_MAX_SHINGLES", 58)
+        many_lines = b"\n".join(b"x" * 40 + str(i).encode() for i in range(60))
+        fp = compute_content_fingerprint(_tar_gz({"a.py": many_lines}))
+        assert fp is not None
+        assert fp["card"] > 0
+        assert fp["lines"]["m"] == [] and fp["lines"]["card"] == 0
+
+    def test_qualifier_collapse_keeps_attribute_access_on_values(self) -> None:
+        qualified = b"result = _module.compute_the_answer_from(payload, ctx)\n"
+        bare = b"result = compute_the_answer_from(payload, ctx)\n"
+        method = b"result = payload.compute_the_answer_from(payload, ctx)\n"
+        assert _line_shingles(qualified) == _line_shingles(bare)
+        # A receiver is collapsed too: line identity, not semantics. The window
+        # channel still distinguishes the two.
+        assert _line_shingles(method) == _line_shingles(bare)
+
+    def test_independent_sources_stay_low(self) -> None:
+        a = compute_content_fingerprint(_tar_gz({"a.rs": _rust_file(40, "alpha")}))
+        b = compute_content_fingerprint(_tar_gz({"b.rs": _rust_file(40, "beta")}))
+        jaccard, containment = line_similarity(a, b)
+        assert jaccard < 0.3 and containment < 0.3
+
+    def test_pre_line_fingerprint_is_uncomparable(self) -> None:
+        a = compute_content_fingerprint(_tar_gz(self._monolith()))
+        assert a is not None
+        legacy = {key: value for key, value in a.items() if key != "lines"}
+        assert line_similarity(a, legacy) == (0.0, 0.0)
+        assert content_similarity(a, legacy) == (1.0, 1.0)
 
 
 class TestReferenceAwareFingerprints:

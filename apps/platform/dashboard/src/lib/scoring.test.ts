@@ -39,6 +39,7 @@ import {
   dethroneBandScale,
   dethroneFloor,
   displayComposite,
+  familyMemberDisplayComposite,
   embargoHours,
   foldArrival,
   foldArrivalMs,
@@ -64,6 +65,11 @@ import {
   unrankedKind,
   validatorWeightViews,
   vectorChampion,
+  crownHysteresisState,
+  matchesPinLabel,
+  nextPinVerdict,
+  pinAgreementLabel,
+  pinLabel,
 } from "./scoring";
 import type { CompositeBreakdown } from "../types";
 
@@ -132,6 +138,22 @@ describe("displayComposite", () => {
     expect(displayComposite({ composite: 0.5, official_composite: 0.6 })).toBe(0.6);
     expect(displayComposite({ composite: 0.5 })).toBe(0.5);
     expect(displayComposite({ composite: 0.5, official_composite: null })).toBe(0.5);
+  });
+
+  it("shows a family child's official composite instead of the three-validator median", () => {
+    expect(
+      familyMemberDisplayComposite({
+        canonical_composite: 0.82861,
+        official_composite: 0.786333,
+      }),
+    ).toBe(0.786333);
+    expect(
+      familyMemberDisplayComposite({
+        canonical_composite: 0.82861,
+        official_composite: null,
+      }),
+    ).toBe(0.82861);
+    expect(familyMemberDisplayComposite({ canonical_composite: 0.82861 })).toBe(0.82861);
   });
 
   it("ranks by the settled active-version median mid-rollout", () => {
@@ -458,6 +480,26 @@ describe("rolloutQuorum", () => {
     expect(rolloutQuorum({ priority_cohort_size: 0 }).prioritySize).toBe(5);
     expect(rolloutQuorum(null).cohortSize).toBe(0);
   });
+
+  it("prefers Platform's barrier count, which satisfies an ineligible leader", () => {
+    // Four finished leaders plus one banned leader: the gate is closed, but
+    // `members` carries no status, so the local derivation can only see four.
+    const members = [
+      { position: 1, score_count: 3 },
+      { position: 2, score_count: 3 },
+      { position: 3, score_count: 0 }, // banned; the barrier skips it
+      { position: 4, score_count: 3 },
+      { position: 5, score_count: 3 },
+    ];
+    expect(rolloutQuorum({ priority_cohort_size: 5, members }).priorityReady).toBe(4);
+    expect(
+      rolloutQuorum({ priority_cohort_size: 5, priority_cohort_ready_count: 5, members })
+        .priorityReady,
+    ).toBe(5);
+    // A served zero is a real zero, while null falls back to the derivation.
+    expect(rolloutQuorum({ priority_cohort_ready_count: 0, members }).priorityReady).toBe(0);
+    expect(rolloutQuorum({ priority_cohort_ready_count: null, members }).priorityReady).toBe(4);
+  });
 });
 
 describe("cohortMedian", () => {
@@ -712,6 +754,12 @@ describe("chip thresholds", () => {
       penalized: false,
     });
     expect(tokenPenaltyChipLabel({ token_penalty: null } as CompositeBreakdown)).toBeNull();
+    expect(
+      tokenPenaltyChipLabel({
+        token_penalty: 0,
+        maximum_token_penalty: 0,
+      } as CompositeBreakdown),
+    ).toBeNull();
     expect(tokenPenaltyChipLabel(null)).toBeNull();
   });
 
@@ -799,6 +847,27 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(byKey["Observed token use"]).toBe(
       (120000).toLocaleString() + " / " + (100000).toLocaleString() + " p95 baseline",
     );
+  });
+
+  it("renders the neutral bench v7+ quality-only token record as an unpenalized factor", () => {
+    const neutral = {
+      ...breakdown,
+      final_composite: 0.558,
+      token_penalty: 0,
+      token_efficiency_multiplier: 1,
+      maximum_token_penalty: 0,
+    };
+    expect(compositeEquationText(neutral)).toBe("0.620 × 0.900 × 1.000 = 0.558");
+    const rows = compositeCalculationRows({
+      tool_mean: 0.7,
+      memory_mean: 0.54,
+      bench_version: 9,
+      composite_breakdown: neutral,
+      token_efficiency: { observed_total_tokens: 120000, budget_percentile: 0 },
+    });
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+    expect(byKey["Token efficiency"]).toBe("× 1.000 (−0.0%; max 0%)");
+    expect(byKey["Observed token use"]).toBe((120000).toLocaleString() + " / baseline unavailable");
   });
 
   it("shows the post-continual efficiency fold as separate ranking provenance", () => {
@@ -1225,5 +1294,58 @@ describe("countdownClock", () => {
     expect(countdownClock(180)).toBe("3:00");
     expect(countdownClock(4200)).toBe("1:10:00");
     expect(countdownClock(-5)).toBe("0:00");
+  });
+});
+
+describe("epoch pin helpers", () => {
+  it("reads the incumbency state off the fold, never inferring it", () => {
+    expect(crownHysteresisState(null)).toBe("unknown");
+    expect(crownHysteresisState({})).toBe("unknown");
+    expect(crownHysteresisState({ crown_incumbent_active: true })).toBe("active");
+    expect(
+      crownHysteresisState({
+        crown_incumbent_active: false,
+        crown_incumbent_required_protocol: 27,
+      }),
+    ).toBe("fleet_not_ready");
+  });
+
+  it("reports the next pin verdict from the platform projection", () => {
+    expect(nextPinVerdict({})).toBeNull();
+    expect(
+      nextPinVerdict({
+        ledger_pin: { epoch_index: 1, champion_agent_id: "a" },
+        next_pin_projection: { champion_agent_id: "b", changes_crown: true },
+      }),
+    ).toEqual({ changes: true, championId: "b", pinnedChampionId: "a" });
+  });
+
+  it("formats pin identity and agreement with grouped numbers", () => {
+    expect(pinLabel({ epoch_index: 25028, pinned_block: 9033471 })).toBe(
+      "pin #25,028 · block 9,033,471",
+    );
+    expect(pinLabel(null)).toBe("");
+    expect(pinAgreementLabel({ epoch_index: 25028, matching: 9, total: 11 })).toBe(
+      "9 of 11 validator vectors match pin #25,028",
+    );
+    expect(matchesPinLabel("previous")).toBe("one pin behind");
+    expect(matchesPinLabel("unknown")).toBe("");
+  });
+
+  it("carries the fold report and agreement onto validator weight views", () => {
+    const views = validatorWeightViews({
+      owner_hotkey: null,
+      vectors: [
+        {
+          validator_uid: 1,
+          validator_hotkey: "5" + "A".repeat(47),
+          weights: [{ uid: 9, hotkey: "5" + "B".repeat(47), value: 100 }],
+          matches_pin: "current",
+          fold: { epoch_index: 25028, vector_digest: "ab".repeat(32), folded_at: 1 },
+        },
+      ],
+    });
+    expect(views?.[0]?.matchesPin).toBe("current");
+    expect(views?.[0]?.fold?.epoch_index).toBe(25028);
   });
 });

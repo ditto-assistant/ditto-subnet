@@ -8,3 +8,21 @@
   ansible.builtin.systemd:
     name: postgresql
     state: restarted
+
+- name: reload systemd (postgres)
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+# A running timer keeps its old schedule until restarted; re-arm it after the
+# unit is rewritten (runs after "reload systemd (postgres)", in listen order).
+- name: restart postgres log retention timer
+  ansible.builtin.systemd:
+    name: "{{ postgres_log_gc_unit }}.timer"
+    state: restarted
+    daemon_reload: true
+  register: postgres_log_gc_timer_restart
+  # In check mode the unit was never written, so "not found" is expected here.
+  failed_when:
+    - postgres_log_gc_timer_restart.failed | default(false)
+    - not (ansible_check_mode and 'Could not find' in (postgres_log_gc_timer_restart.msg | default('')))
+  when: postgres_log_gc_enabled | default(false) | bool

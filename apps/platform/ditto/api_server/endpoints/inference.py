@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import dataclasses
 import hashlib
 import json
 import logging
@@ -92,9 +93,13 @@ from ditto.db.queries.inference import (
     begin_inference_request,
     finish_inference_request,
 )
+from ditto.db.queries.inference_admission import (
+    record_inference_admission_rejection,
+)
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 
 if TYPE_CHECKING:
@@ -114,8 +119,6 @@ _PROVIDER_RETRY_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 _PROVIDER_RETRY_AFTER_MAX_SECONDS = 5
 _CONFIRMATION_READER_BACKPRESSURE_MAX_ATTEMPTS = 1
 _CONFIRMATION_READER_BACKPRESSURE_MAX_ELAPSED_SECONDS = 80.0
-_CONFIRMATION_READER_RETRY_AFTER_MAX_SECONDS = 60
-_CONFIRMATION_READER_RETRY_AFTER_DEFAULT_SECONDS = 10
 
 # Bytes per token, for turning a request body into a token estimate.
 #
@@ -244,169 +247,6 @@ def _provider_is_backpressure(response: httpx.Response) -> bool:
     )
 
 
-def _decode_provider_object_strict(response: httpx.Response) -> dict[str, Any] | None:
-    """Decode one provider object while rejecting duplicate keys at any depth."""
-
-    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-        decoded: dict[str, Any] = {}
-        for key, value in pairs:
-            if key in decoded:
-                raise ValueError("duplicate JSON object key")
-            decoded[key] = value
-        return decoded
-
-    def reject_nonfinite_constant(value: str) -> None:
-        raise ValueError(f"non-finite JSON constant: {value}")
-
-    def reject_negative_zero_integer(value: str) -> int:
-        if value.startswith("-") and int(value) == 0:
-            raise ValueError("negative zero integer")
-        return int(value)
-
-    try:
-        payload = json.loads(
-            response.content,
-            object_pairs_hook=reject_duplicate_keys,
-            parse_constant=reject_nonfinite_constant,
-            parse_int=reject_negative_zero_integer,
-        )
-    except ValueError:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _provider_backpressure_is_receipt_free(
-    response: httpx.Response,
-    *,
-    expected_model: str,
-    expected_provider: str,
-) -> bool:
-    """Prove a 429/503 has no completion, usage, cost, or provider receipt."""
-    if response.status_code not in {429, 503}:
-        return False
-    payload = _decode_provider_object_strict(response)
-    if payload is None:
-        return False
-    if set(payload) not in ({"error"}, {"error", "openrouter_metadata"}):
-        return False
-    error = payload.get("error")
-    if not isinstance(error, dict) or set(error) != {"code", "message"}:
-        return False
-    code = error.get("code")
-    message = error.get("message")
-    if (
-        type(code) is not int
-        or code != response.status_code
-        or not isinstance(message, str)
-        or not message.strip()
-    ):
-        return False
-    forbidden = {
-        "id",
-        "generation",
-        "generation_id",
-        "provider",
-        "choices",
-        "usage",
-        "cost",
-        "receipt",
-        "receipt_id",
-        "attempt",
-        "attempts",
-        "selected",
-        "billed",
-        "charged",
-    }
-
-    if "openrouter_metadata" in payload:
-        metadata = payload["openrouter_metadata"]
-        if not _provider_backpressure_metadata_is_pre_provider(
-            metadata,
-            expected_model=expected_model,
-            expected_provider=expected_provider,
-        ):
-            return False
-        payload = {
-            key: value for key, value in payload.items() if key != "openrouter_metadata"
-        }
-
-    def contains_receipt_field(value: Any) -> bool:
-        if isinstance(value, dict):
-            return any(
-                key in forbidden or contains_receipt_field(child)
-                for key, child in value.items()
-            )
-        if isinstance(value, list):
-            return any(contains_receipt_field(child) for child in value)
-        return False
-
-    return not contains_receipt_field(payload)
-
-
-def _provider_backpressure_metadata_is_pre_provider(
-    value: Any,
-    *,
-    expected_model: str,
-    expected_provider: str,
-) -> bool:
-    if not isinstance(value, dict) or set(value) != {
-        "requested",
-        "strategy",
-        "attempt",
-        "endpoints",
-    }:
-        return False
-    if (
-        not isinstance(value["requested"], str)
-        or value["requested"] != expected_model
-        or value["strategy"] != "direct"
-        or type(value["attempt"]) is not int
-        or value["attempt"] != 0
-    ):
-        return False
-    endpoints = value["endpoints"]
-    if not isinstance(endpoints, dict) or set(endpoints) != {"total", "available"}:
-        return False
-    available = endpoints["available"]
-    if (
-        type(endpoints["total"]) is not int
-        or not isinstance(available, list)
-        or not available
-        or endpoints["total"] != len(available)
-    ):
-        return False
-    for endpoint in available:
-        if not isinstance(endpoint, dict) or set(endpoint) != {
-            "provider",
-            "model",
-            "selected",
-        }:
-            return False
-        if (
-            not isinstance(endpoint["provider"], str)
-            or endpoint["provider"].casefold() != expected_provider.casefold()
-            or not isinstance(endpoint["model"], str)
-            or endpoint["model"] != expected_model
-            or type(endpoint["selected"]) is not bool
-            or endpoint["selected"]
-        ):
-            return False
-    return True
-
-
-def _confirmation_reader_backpressure_delay(response: httpx.Response) -> float:
-    raw = response.headers.get("Retry-After", "").strip()
-    try:
-        if not raw or not raw.isascii() or not raw.isdigit():
-            raise ValueError("Retry-After is not ASCII delay-seconds")
-        seconds = int(raw)
-    except ValueError:
-        seconds = _CONFIRMATION_READER_RETRY_AFTER_DEFAULT_SECONDS
-    if seconds <= 0:
-        seconds = _CONFIRMATION_READER_RETRY_AFTER_DEFAULT_SECONDS
-    return float(min(seconds, _CONFIRMATION_READER_RETRY_AFTER_MAX_SECONDS))
-
-
 @dataclass(frozen=True)
 class _ChatCompletionResult:
     raw: bytes
@@ -478,59 +318,6 @@ async def _post_provider_with_retry(
     except httpx.TransportError as error:
         raise _ProviderCallError(attempts=1, timed_out=False) from error
     return _ProviderResult(response=response, attempts=1)
-
-
-def _is_retryable_pre_provider_not_found(
-    response: httpx.Response, *, expected_model: str | None
-) -> bool:
-    """Recognize an unbilled OpenRouter route miss before any provider call."""
-    if response.status_code != 404 or not expected_model:
-        return False
-
-    payload = _decode_provider_object_strict(response)
-    if payload is None:
-        return False
-    error = payload.get("error")
-    error_code = error.get("code") if isinstance(error, dict) else None
-    if (
-        not isinstance(error_code, int)
-        or isinstance(error_code, bool)
-        or error_code != 404
-    ):
-        return False
-    metadata = payload.get("openrouter_metadata")
-    attempt = metadata.get("attempt") if isinstance(metadata, dict) else None
-    if (
-        not isinstance(metadata, dict)
-        or metadata.get("requested") != expected_model
-        or not isinstance(attempt, int)
-        or isinstance(attempt, bool)
-        or attempt != 0
-        or "attempts" in metadata
-    ):
-        return False
-    endpoints = metadata.get("endpoints")
-    available = endpoints.get("available") if isinstance(endpoints, dict) else None
-    if not isinstance(available, list) or not 1 <= len(available) <= 100:
-        return False
-    if any(
-        not isinstance(endpoint, dict) or endpoint.get("selected") is not False
-        for endpoint in available
-    ):
-        return False
-    return not any(
-        field in payload
-        for field in (
-            "id",
-            "generation",
-            "generation_id",
-            "model",
-            "provider",
-            "choices",
-            "usage",
-            "cost",
-        )
-    )
 
 
 async def _post_embedding_provider(
@@ -787,21 +574,47 @@ def _public_provider_response(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# The scored ``bf16_price_order`` route: DeepInfra's bf16 endpoint (the
+# cheapest high-capacity ZDR endpoint) first, then Bedrock and Groq (which
+# carried the throughput route), then DekaLLM's bf16 endpoint, which also serves
+# logprobs. ``only`` pins the same set, so a fallback cannot land on a 4-bit or
+# fp8 endpoint the way the throughput sort can. Mirrored by the Go relay.
+_BF16_PRICE_ORDER_PROVIDERS = ("deepinfra", "amazon-bedrock", "groq", "dekallm")
+
+
+def _effective_scored_provider_routing(routing: str, ticket_purpose: str | None) -> str:
+    """Resolve the board mode for one ticket: canary mode moves only canaries."""
+    if routing == "bf16_price_order":
+        return "bf16_price_order"
+    if routing == "bf16_price_order_canary" and ticket_purpose == "benchmark_canary":
+        return "bf16_price_order"
+    return "throughput"
+
+
 def _provider_preferences(
     *,
     routing_mode: str,
     provider: str,
     quantization: str | None,
+    scored_routing: str = "throughput",
 ) -> dict[str, Any]:
+    if routing_mode == "aggregate_throughput" and scored_routing == "bf16_price_order":
+        return {
+            "order": list(_BF16_PRICE_ORDER_PROVIDERS),
+            "only": list(_BF16_PRICE_ORDER_PROVIDERS),
+            "ignore": ["coreweave"],
+            "allow_fallbacks": True,
+            "data_collection": "deny",
+            "zdr": True,
+        }
     if routing_mode == "aggregate_throughput":
         return {
             # Normal traffic optimizes for the throughput miners actually feel.
             # CoreWeave is excluded because its reviewed route is 4-bit. A
-            # separate bounded recovery phase below deliberately switches
-            # objectives after this fast path has failed.
+            # OpenRouter tries the next eligible provider if the fastest fails.
             "sort": "throughput",
             "ignore": ["coreweave"],
-            "allow_fallbacks": False,
+            "allow_fallbacks": True,
             "data_collection": "deny",
             "zdr": True,
         }
@@ -892,6 +705,7 @@ async def _complete_chat_with_recovery(
         routing_mode=config.routing_mode,
         provider=expected_provider,
         quantization=expected_quantization,
+        scored_routing=config.scored_provider_routing,
     )
     phases.append(
         (
@@ -1381,6 +1195,9 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
             raise HTTPException(status_code=400, detail="invalid message")
         allowed = {
             "system": {"role", "content"},
+            # The v13 broker records developer messages as harness-authored
+            # spans. Keep them distinct from the validator's system prompt.
+            "developer": {"role", "content"},
             "user": {"role", "content"},
             "assistant": {
                 "role",
@@ -1885,7 +1702,11 @@ async def exchange_inference_grant(
                 nonce=payload.nonce,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
-                expires_at=now + _EXCHANGE_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=payload.requested_at,
+                    max_age=_EXCHANGE_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as error:
             raise HTTPException(
@@ -1930,7 +1751,47 @@ async def exchange_inference_grant(
         embedding_request_budget=grant.embedding_request_budget,
         embedding_token_budget=grant.embedding_token_budget,
         max_output_tokens=config.max_output_tokens,
+        decision_model=grant.decision_model,
+        decision_request_budget=(
+            grant.decision_request_budget if grant.decision_model else None
+        ),
+        decision_token_budget=(
+            grant.decision_token_budget if grant.decision_model else None
+        ),
     )
+
+
+async def _remember_admission_rejection(
+    request: Request,
+    *,
+    lane: str,
+    http_status: int,
+    admission_code: str,
+    grant_id: UUID | None,
+    request_bytes: int,
+    byte_limit: int | None,
+) -> None:
+    """Best-effort sanitized row. A telemetry failure must not change the 4xx."""
+    session_maker = getattr(request.app.state, "session_maker", None)
+    if session_maker is None:
+        return
+    import ditto
+
+    try:
+        async with session_maker() as session, session.begin():
+            await record_inference_admission_rejection(
+                session,
+                lane=lane,
+                http_status=http_status,
+                admission_code=admission_code,
+                grant_id=grant_id,
+                validator_hotkey=None,
+                request_bytes=request_bytes,
+                byte_limit=byte_limit,
+                platform_revision=ditto.__version__,
+            )
+    except Exception:
+        logger.exception("inference admission rejection was not recorded")
 
 
 @router.post("/chat/completions")
@@ -1966,23 +1827,81 @@ async def proxy_chat_completions(
         raise HTTPException(status_code=401, detail="invalid inference proof")
     body = await request.body()
     if len(body) > config.request_body_bytes:
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=413,
+            admission_code="request_too_large",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=config.request_body_bytes,
+        )
         raise HTTPException(status_code=413, detail="inference request is too large")
     if abs(datetime.now(UTC) - x_ditto_requested_at.astimezone(UTC)) > _PROXY_MAX_AGE:
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=409,
+            admission_code="stale_session",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=409, detail="inference request is stale")
     try:
         payload = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=400,
+            admission_code="invalid_json",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=400, detail="invalid JSON request") from error
     if not isinstance(payload, dict):
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=400,
+            admission_code="invalid_schema",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(
             status_code=400, detail="inference request must be a JSON object"
         )
     # Every field-level decision, including the streaming refusal, lives in one
     # function now. It used to be split across here and the schema check, which
     # is how the two most common refusals ended up with two different wordings.
-    _validate_request_schema(payload)
+    try:
+        _validate_request_schema(payload)
+    except HTTPException as error:
+        if error.status_code == 400:
+            await _remember_admission_rejection(
+                request,
+                lane="inference",
+                http_status=400,
+                admission_code="invalid_schema",
+                grant_id=x_ditto_grant,
+                request_bytes=len(body),
+                byte_limit=None,
+            )
+        raise
     requested_model = payload.get("model")
     if not isinstance(requested_model, str):
+        await _remember_admission_rejection(
+            request,
+            lane="inference",
+            http_status=403,
+            admission_code="model_not_allowed",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=403, detail="model is not permitted")
     max_tokens = _output_token_limit(payload, config.max_output_tokens)
 
@@ -2053,8 +1972,27 @@ async def proxy_chat_completions(
         # was retried until the run died with hours left on the lease.
         if isinstance(reserved, InferenceDecline):
             raise InferenceDeclinedError(reserved, lane="inference")
+        from sqlalchemy import select
+
+        from ditto.db.models import ValidatorTicket
+
+        ticket_purpose = await session.scalar(
+            select(ValidatorTicket.purpose).where(
+                ValidatorTicket.agent_id == reserved[0].agent_id,
+                ValidatorTicket.bench_version == reserved[0].bench_version,
+                ValidatorTicket.validator_hotkey == reserved[0].validator_hotkey,
+            )
+        )
 
     reserved_grant = reserved[0]
+    live_config = await _resolve_admission_config(request, config)
+    config = dataclasses.replace(
+        config,
+        scored_provider_routing=_effective_scored_provider_routing(
+            live_config.scored_provider_routing,
+            str(ticket_purpose) if ticket_purpose is not None else None,
+        ),
+    )
     upstream_payload = _locked_upstream_payload(
         payload,
         model=model,
@@ -2189,16 +2127,58 @@ async def proxy_embeddings(
         raise HTTPException(status_code=401, detail="invalid inference proof")
     body = await request.body()
     if len(body) > config.embedding_request_body_bytes:
+        await _remember_admission_rejection(
+            request,
+            lane="embedding",
+            http_status=413,
+            admission_code="request_too_large",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=config.embedding_request_body_bytes,
+        )
         raise HTTPException(status_code=413, detail="embedding request is too large")
     if abs(datetime.now(UTC) - x_ditto_requested_at.astimezone(UTC)) > _PROXY_MAX_AGE:
+        await _remember_admission_rejection(
+            request,
+            lane="embedding",
+            http_status=409,
+            admission_code="stale_session",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=409, detail="embedding request is stale")
     try:
         payload = json.loads(body)
     except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        await _remember_admission_rejection(
+            request,
+            lane="embedding",
+            http_status=400,
+            admission_code="invalid_json",
+            grant_id=x_ditto_grant,
+            request_bytes=len(body),
+            byte_limit=None,
+        )
         raise HTTPException(status_code=400, detail="invalid JSON request") from error
-    inputs = _validated_embedding_payload(
-        payload, model=config.embedding_model, dimensions=config.embedding_dimensions
-    )
+    try:
+        inputs = _validated_embedding_payload(
+            payload,
+            model=config.embedding_model,
+            dimensions=config.embedding_dimensions,
+        )
+    except HTTPException as error:
+        if error.status_code == 400:
+            await _remember_admission_rejection(
+                request,
+                lane="embedding",
+                http_status=400,
+                admission_code="invalid_schema",
+                grant_id=x_ditto_grant,
+                request_bytes=len(body),
+                byte_limit=None,
+            )
+        raise
 
     session_maker = request.app.state.session_maker
     # Resolve the operator's concurrency board BEFORE opening the admission
@@ -2443,7 +2423,27 @@ def _locked_confirmation_chat_payload(
             "require_parameters": True,
             "data_collection": "deny",
         }
-    if provider != expected_provider:
+    # ``zdr`` may arrive set to exactly ``True`` or not at all; the comparison
+    # ignores it and the outbound block always carries it. Before this the lock
+    # compared the incoming block with ``expected_provider`` -- which never
+    # contains ``zdr`` -- so a caller that sent the very value this function
+    # then forces was refused. #3167 made the scorer's judge do exactly that,
+    # and every judge request since v0.397.0 was 403'd here before reaching
+    # OpenRouter: the 403 carries no receipt, the judge lane poisons, and the
+    # bundle fails as ``longmem_eval_accounting_judge_meter_unavailable`` with
+    # nothing admitted against the judge grant (ditto-subnet#3214). The scorer
+    # sends it because its judge can also address OpenRouter directly, where
+    # nothing else would add it; accepting it here keeps both routes correct.
+    # ``zdr: False`` and any other value are still refused: tolerating an
+    # explicit opt-out would be silently overridden below, and a lock that
+    # quietly rewrites what a caller asked for is worse than one that refuses.
+    if not isinstance(provider, dict) or provider.get("zdr", True) is not True:
+        raise HTTPException(
+            status_code=403, detail="confirmation route is not permitted"
+        )
+    if {key: value for key, value in provider.items() if key != "zdr"} != (
+        expected_provider
+    ):
         raise HTTPException(
             status_code=403, detail="confirmation route is not permitted"
         )
@@ -2459,7 +2459,9 @@ def _locked_confirmation_chat_payload(
     upstream = dict(without_provider)
     # Same sanitization as the ordinary scoring lane. The reader uses that
     # lane's throughput aggregate; forwarding gpt-oss aliases still hard-400s.
-    # The official judge stays Azure-pinned.
+    # The official judge is pinned to a single ZDR provider (Together);
+    # AtlasCloud and Baidu 404 under the zdr filter, and allow_fallbacks
+    # is false, so a non-ZDR provider would be a dead lane.
     for field in _DROPPED_REQUEST_FIELDS:
         upstream.pop(field, None)
     for field in (

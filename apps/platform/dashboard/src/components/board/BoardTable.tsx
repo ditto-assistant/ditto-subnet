@@ -25,6 +25,7 @@ import {
   crownHeldRowLabel,
   crownHeldRowTip,
   displayComposite,
+  familyMemberDisplayComposite,
   chainWeightLabel,
   errBandBounds,
   foldArrival,
@@ -65,9 +66,11 @@ import {
   ContinualScoreChip,
   EfficiencyBonusChip,
   QualityGateChip,
+  RewardEligibilityChip,
   RankMove,
   RetestSeedChip,
   RolloutChip,
+  RouterShadowChip,
   TokenPenaltyChip,
   V9ConfirmationChip,
 } from "./chips";
@@ -116,7 +119,7 @@ const BOARD_SORT_LABELS: Record<BoardSortKey, string> = {
   rank: "Rank",
   composite: "Score",
   cost: "Average run cost",
-  latency: "Latency",
+  latency: "Median case latency",
   first_seen: "Crown since",
 };
 
@@ -131,8 +134,8 @@ const MOBILE_SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "composite:1", label: "Score · low to high" },
   { value: "cost:1", label: "Avg run cost · low to high" },
   { value: "cost:-1", label: "Avg run cost · high to low" },
-  { value: "latency:1", label: "Latency · fastest first" },
-  { value: "latency:-1", label: "Latency · slowest first" },
+  { value: "latency:1", label: "Median case latency · fastest first" },
+  { value: "latency:-1", label: "Median case latency · slowest first" },
   { value: "first_seen:-1", label: "Crown since · newest first" },
   { value: "first_seen:1", label: "Crown since · oldest first" },
 ];
@@ -192,7 +195,7 @@ const HEADERS: HeaderSpec[] = [
     key: "rank",
     label: "Ranked agent",
     width: "300px",
-    tip: "Score rank and the miner's best-scoring agent. Open either identity for details, or copy the hotkey. Provisional runs remain unranked (–).",
+    tip: "Rank orders by official score: the continual mean of the three quorum scores plus completed retest waves, not the single three-validator canonical composite. Rank is not the crown test; the crown moves only on a head-to-head over shared seeds. Open either identity for details, or copy the hotkey. Provisional runs remain unranked (–).",
   },
   {
     key: null,
@@ -204,7 +207,7 @@ const HEADERS: HeaderSpec[] = [
     key: "composite",
     label: "Scores",
     width: "280px",
-    tip: "Current quality score with tool and memory subscores stacked beneath it. Quality is the primary rank key; when active, the efficiency chip shows the value used only to break exact-quality ties.",
+    tip: "Official score (the rank key) with tool and memory subscores beneath it. The canonical three-validator composite is in the row's tooltip. Quality is the primary rank key; when active, efficiency breaks only exact-quality ties.",
   },
   {
     key: "cost",
@@ -215,10 +218,10 @@ const HEADERS: HeaderSpec[] = [
   },
   {
     key: "latency",
-    label: "Latency",
+    label: "Median case latency",
     class: "num hide-sm",
-    width: "96px",
-    tip: "Median per-case response time for the run, and how many cases were scored (a full benchmark is ~114 cases).",
+    width: "120px",
+    tip: "Median response time per case, not total run time, and how many cases the run scored. Advisory: latency does not enter the score.",
   },
   {
     key: "first_seen",
@@ -269,7 +272,21 @@ function emissionsColTip(store: LeaderboardStore): string {
   );
 }
 
-function Bar(props: { kind: "tool" | "memory" | "longmem"; value: number }): JSX.Element {
+/** A latency cell's tooltip, counted from its own run rather than a fixed
+ * benchmark size. */
+function caseLatencyTip(e: BoardEntry): string {
+  return (
+    fmtMs(e.median_ms as number) +
+    " median per case" +
+    (e.n != null ? " across the run's " + e.n + " scored cases" : "") +
+    ". Advisory: latency does not enter the score."
+  );
+}
+
+function Bar(props: {
+  kind: "tool" | "memory" | "longmem" | "router";
+  value: number;
+}): JSX.Element {
   return (
     <div class="metric">
       <div class="barwrap">
@@ -302,6 +319,19 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     }
   };
   const showsEfficiencyTieBreak = (): boolean => props.entry.efficiency_factor != null;
+  const routerScore = (): number | null | undefined => props.entry.router_shadow_composite;
+  const routerPlaceholder = (): string | null => {
+    if (routerScore() != null) return null;
+    if (props.store.payload()?.router_shadow_mode !== "shadow") return null;
+    switch (props.entry.router_shadow_status) {
+      case "running":
+        return "running";
+      case "queued":
+        return "queued";
+      default:
+        return null;
+    }
+  };
   const band = (): { lo: number; hi: number; width: number } | null =>
     showsCompositeErrBand(props.entry, props.store.settledView())
       ? errBandBounds(value(), props.entry.composite_stderr)
@@ -310,7 +340,15 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     <td class="scores-cell">
       <div class="score-stack">
         <div class="score-stack-row current">
-          <span class="score-stack-label">{showsEfficiencyTieBreak() ? "Quality" : "KOTH"}</span>
+          <span
+            class="score-stack-label"
+            title={
+              "Official score, the rank key. Canonical three-validator composite: " +
+              fxScore(props.entry.composite)
+            }
+          >
+            {showsEfficiencyTieBreak() ? "Quality" : "Official"}
+          </span>
           <div class="metric">
             <div class="barwrap">
               <Show when={band()}>
@@ -356,6 +394,17 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             </Show>
           </div>
         </Show>
+        <Show when={routerScore() != null || routerPlaceholder() != null}>
+          <div class="score-stack-row">
+            <span class="score-stack-label">Router</span>
+            <Show
+              when={routerScore() != null}
+              fallback={<span class="mval muted">{routerPlaceholder()}</span>}
+            >
+              <Bar kind="router" value={routerScore() as number} />
+            </Show>
+          </div>
+        </Show>
         <div class="cline2 score-stack-context">
           <RolloutChip
             entry={props.entry}
@@ -366,9 +415,11 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             entry={props.entry}
             mode={props.store.payload()?.v9_confirmation_mode}
           />
+          <RouterShadowChip entry={props.entry} mode={props.store.payload()?.router_shadow_mode} />
           <ContinualScoreChip entry={props.entry} />
           <EfficiencyBonusChip entry={props.entry} />
           <QualityGateChip entry={props.entry} />
+          <RewardEligibilityChip entry={props.entry} />
           <TokenPenaltyChip entry={props.entry} />
         </div>
       </div>
@@ -543,13 +594,19 @@ function BoardRow(props: {
             </div>
             <span class="winner-identity">
               <span class="winner-name">
-                <MinerAvatar url={e().avatar_url} />
-                <EntityButton
-                  kind="agent"
-                  id={e().agent_id}
-                  label={displayName()}
-                  title="Open this submission"
-                />
+                {/* Picture and name wrap as one unit: the identity line wraps
+                    its chips in a narrow pane (the overview's compact board),
+                    and a bare avatar stranded above its own name reads as a
+                    different row. */}
+                <span class="winner-name-lead">
+                  <MinerAvatar url={e().avatar_url} />
+                  <EntityButton
+                    kind="agent"
+                    id={e().agent_id}
+                    label={displayName()}
+                    title="Open this submission"
+                  />
+                </span>
                 <HandleBadge handle={e().name_handle} />
                 <Show when={kind() === "zero"}>
                   <TipTarget
@@ -658,7 +715,8 @@ function BoardRow(props: {
                     ? "Joint crown"
                     : "Tail") +
                   " · " +
-                  pct(recipient().share_of_miner_pool as number)}
+                  pct(recipient().share_of_miner_pool as number) +
+                  (recipient().paid === false ? " · unpaid" : "")}
               </span>
             )}
           </Show>
@@ -728,11 +786,12 @@ function BoardRow(props: {
           </Show>
         </td>
         <Show when={e().median_ms != null} fallback={<td class="num hide-sm lat muted">–</td>}>
-          <td class="num hide-sm lat">
+          <td class="num hide-sm lat" title={caseLatencyTip(e())}>
             {fmtMs(e().median_ms as number)}
-            <Show when={e().n != null}>
-              <div class="cases">{e().n} cases</div>
-            </Show>
+            <div class="cases">
+              median/case
+              <Show when={e().n != null}> · {e().n} cases</Show>
+            </div>
           </td>
         </Show>
         <td
@@ -768,8 +827,11 @@ function BoardRow(props: {
                   />
                   <span class="submission-version">{agentVersionLabel(member.agent_version)}</span>
                 </span>
-                <span class="family-member-score" title="Canonical three-validator median">
-                  {fxScore(member.canonical_composite)}
+                <span
+                  class="family-member-score"
+                  title="Official composite: the rank key and the crown's estimator. Includes shared retest seeds when the continual mean is active."
+                >
+                  {fxScore(familyMemberDisplayComposite(member))}
                 </span>
                 <Show when={member.submitted_at}>
                   <span class="family-member-submitted" title={"Upload " + member.submitted_at}>
@@ -800,15 +862,22 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
     scored: scored().length,
     provisional: provisional().length,
   });
-  const rows = createMemo(() => {
-    const source =
-      boardTab() === "all" ? all() : boardTab() === "provisional" ? provisional() : scored();
-    return source.slice().sort((a, b) => boardCompare(a, b, store.settledView()));
-  });
+  const tabRows = createMemo(() =>
+    boardTab() === "all" ? all() : boardTab() === "provisional" ? provisional() : scored(),
+  );
+  const rows = createMemo(() =>
+    tabRows()
+      .slice()
+      .sort((a, b) => boardCompare(a, b, store.settledView())),
+  );
   const pageCount = (): number => Math.max(1, Math.ceil(rows().length / boardPageSize));
   createEffect(() => {
     // A deep-linked page past the end (or a page emptied by newly-loaded
     // data) clamps to the last real page; keep the URL honest about landing.
+    // Only against loaded rows: while the payload is loading, or after a
+    // failed poll, rows() is empty and would throw a deep-linked ?page=N back
+    // to page 1 (and drop it from the URL) before the data arrives.
+    if (!store.payload() || store.unavailable()) return;
     if (boardPage() > pageCount()) {
       setBoardPage(pageCount());
       writeBoardPage(false);

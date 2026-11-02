@@ -33,3 +33,12 @@ preview_lease_uri() {
 preview_now_epoch() {
   date -u +%s
 }
+
+# GitHub timestamps are RFC3339 UTC. This only ever runs on the ubuntu-24.04
+# controller runner, so GNU date is available; on a Mac it returns non-zero and
+# the only caller degrades to "no grace", which is the fail-closed direction.
+preview_epoch_from_iso8601() {
+  local value="$1"
+  [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+  date -u -d "$value" +%s 2>/dev/null
+}

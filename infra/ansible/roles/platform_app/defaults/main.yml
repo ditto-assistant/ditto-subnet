@@ -62,6 +62,16 @@ platform_repo_url: "git@github.com:ditto-assistant/ditto-subnet.git"
 platform_owner: "{{ deploy_user | default('deploy') }}"
 platform_group: "{{ deploy_group | default('ditto') }}"
 
+# Official Node LTS artifacts include the October 21, 2026 security fixes.
+# Keep checksums tied to the version; do not fall back to distro Node packages.
+platform_node_version: "24.22.1"
+platform_node_install_dir: /opt/nodejs
+platform_node_arch: "{{ {'x86_64': 'x64', 'aarch64': 'arm64'}[ansible_facts['architecture']] }}"
+platform_node_checksums:
+  x64: 6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6
+  arm64: dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e
+platform_node_distribution: "node-v{{ platform_node_version }}-linux-{{ platform_node_arch }}"
+
 # Python sampling profiler installed as an isolated uv tool. It is not placed
 # in the application environment, so profiling dependencies cannot perturb the
 # API lockfile or import graph.
@@ -95,6 +105,18 @@ platform_inference_relay_ports: []
 # uploads back to Python without disturbing the already-live inference plane.
 platform_upload_admission_relay_enabled: false
 
+# Defense-in-depth limit for unauthenticated Platform reads and uploads. The
+# Python API owns this limiter; when positive, Caddy keeps the two Go upload
+# admission routes on Python as well so they cannot bypass the same setting.
+# Deliberate operator activation only, after sizing for legitimate shared IPs.
+platform_public_rate_limit_per_minute: 0
+
+# Hard cap on a request body before Caddy proxies it. 32 MiB is the default
+# application ceiling and the transcript cap, and it covers the default 20 MiB
+# upload tarball. Raise this together with DITTO_MAX_TARBALL_SIZE_BYTES when
+# that cap, plus multipart framing, exceeds 32 MiB.
+platform_request_body_max_size: 32MiB
+
 # Additional public hostnames served by the same Caddy vhost. Keep aliases in
 # host_vars so each environment explicitly owns its certificate/SNI surface.
 platform_alias_domains: []
@@ -123,6 +145,10 @@ platform_storage_region: auto
 # Host vars pin the live bucket name and the regional cache closest to the
 # Platform VMs. Access keys must start with hip_.
 platform_hippius_endpoint: "https://s3.hippius.com"
+platform_database_backup_reader_enabled: false
+platform_database_backup_secret_project: ditto-subnet
+secret_database_backup_reader_access_key_id: platform-pg-backup-reader-access-key-id
+secret_database_backup_reader_secret_access_key: platform-pg-backup-reader-secret-access-key
 platform_hippius_region: decentralized
 platform_hippius_bucket: ""
 secret_hippius_access_key_id: platform-hippius-access-key-id
@@ -146,92 +172,6 @@ platform_trace_backblaze_required: false
 platform_trace_embedding_vectors: true
 secret_backblaze_key_id: platform-backblaze-key-id
 secret_backblaze_application_key: platform-backblaze-application-key
-
-# Private Coding catalog. This is deliberately a separate read-only S3
-# authority, never the miner-upload or avatar bucket. It remains disabled
-# until an operator creates the private bucket, installs the two secret
-# versions, and explicitly enables it in environment host_vars.
-platform_coding_catalog_enabled: false
-platform_coding_catalog_endpoint: "https://s3.hippius.com"
-platform_coding_catalog_region: decentralized
-platform_coding_catalog_bucket: ""
-platform_coding_catalog_use_tls: true
-platform_coding_catalog_max_record_bytes: 2097152
-platform_coding_catalog_timeout_seconds: 10
-secret_coding_catalog_access_key: platform-coding-catalog-access-key
-secret_coding_catalog_secret_key: platform-coding-catalog-secret-key
-
-# Shadow coding transport and its two caller-driven admin controls. They are
-# deliberately independent: the transport also serves the public capability
-# canary, while reconciliation and k=3 ticket issuance remain explicit admin
-# actions. Every switch ships false; changing a host var and converging is the
-# only way this role can render an active value.
-platform_coding_shadow_enabled: false
-platform_coding_shadow_reconciliation_enabled: false
-platform_coding_shadow_ticket_set_enabled: false
-platform_coding_shadow_selection_delay_blocks: 20
-platform_coding_shadow_ticket_lease_seconds: 3600
-platform_coding_shadow_inference_policy_file: >-
-  {{ platform_checkout_root }}/packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json
-platform_coding_shadow_inference_policy_sha256: "6dd79225817b56ebf155f8344cd5faf752c8dd57802b21d6d2cbbae9cc2ff0b4"
-platform_coding_shadow_inference_exchange_url: >-
-  {{ platform_inference_public_base_url }}/api/v1/validator/coding-shadow/inference-exchange
-platform_coding_shadow_inference_proxy_url: >-
-  {{ platform_inference_public_base_url }}/api/v1/inference/coding/chat/completions
-platform_coding_shadow_inference_revoke_url: >-
-  {{ platform_inference_public_base_url }}/api/v1/validator/coding-shadow/inference-revoke-capability
-
-# Hippius-only sealed Coding evidence custody. Disabled until two dedicated
-# credential versions and the protected probe/public-key files are installed.
-platform_coding_hippius_evidence_enabled: false
-platform_coding_hippius_endpoint: "https://s3.hippius.com"
-platform_coding_hippius_region: decentralized
-platform_coding_hippius_evidence_bucket: ""
-platform_coding_hippius_evidence_timeout_seconds: 20
-platform_coding_hippius_probe_receipt_path: /etc/ditto-platform/coding/hippius-probe.json
-platform_coding_hippius_evidence_wrapping_public_key_path: /etc/ditto-platform/coding/evidence-wrap-public.pem
-platform_coding_hippius_evidence_spool_root: /var/lib/ditto-platform/coding-evidence-spool
-secret_coding_hippius_evidence_access_key: platform-coding-hippius-evidence-access-key
-secret_coding_hippius_evidence_secret_key: platform-coding-hippius-evidence-secret-key
-
-# Protected one-shot Hippius canary helper proxies. This independent gate
-# installs no backend service and is false until three separate service
-# identities expose reviewed local Unix sockets.
-platform_coding_hippius_canary_helpers_enabled: false
-platform_coding_hippius_canary_install_root: /opt/ditto-platform-canary
-platform_coding_hippius_canary_config_root: /etc/ditto-platform/coding/hippius-canary
-platform_coding_hippius_canary_work_root: /var/lib/ditto-platform/coding-canary
-platform_coding_hippius_canary_operator_env_path: /etc/ditto-platform/coding/hippius-canary/operator.env
-platform_coding_hippius_canary_plan_path: /etc/ditto-platform/coding/hippius-canary/plan.json
-platform_coding_hippius_canary_deployed_source_path: "{{ platform_root }}/logs/deployed-source.sha"
-platform_coding_hippius_private_input_manifest_path: /etc/ditto-platform/coding/hippius-canary/private-input-manifest.json
-platform_coding_hippius_private_input_publication_receipt_path: /etc/ditto-platform/coding/hippius-canary/private-input-publication.json
-platform_coding_hippius_curator_public_key_path: /etc/ditto-platform/coding/hippius-canary/curator-public.pem
-platform_coding_hippius_private_input_curator_access_key: ""
-platform_coding_hippius_canary_unwrap_socket: /run/ditto-hippius-canary-unwrap/unwrap.sock
-platform_coding_hippius_canary_authoring_socket: ""
-platform_coding_hippius_canary_grading_socket: ""
-platform_coding_hippius_canary_unwrap_uid: 0
-platform_coding_hippius_canary_authoring_uid: 0
-platform_coding_hippius_canary_grading_uid: 0
-platform_coding_hippius_canary_unwrap_gid: 0
-platform_coding_hippius_canary_authoring_gid: 0
-platform_coding_hippius_canary_grading_gid: 0
-platform_coding_hippius_canary_helper_timeout_seconds: 7200
-
-# Isolated unwrap backend. Installation and socket activation are separate so
-# the service identity can exist before operators install its mode-0400 key and
-# one-shot authority file. Both gates ship false.
-platform_coding_hippius_canary_unwrap_installed: false
-platform_coding_hippius_canary_unwrap_service_enabled: false
-platform_coding_hippius_canary_unwrap_user: ditto-canary-unwrap
-platform_coding_hippius_canary_unwrap_group: ditto-canary-unwrap
-platform_coding_hippius_canary_unwrap_service_path: "{{ platform_coding_hippius_canary_install_root }}/backend/hippius-canary-unwrap-service"
-platform_coding_hippius_canary_unwrap_authority_path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service/authority.json"
-platform_coding_hippius_canary_unwrap_private_key_path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service/private-key.pem"
-platform_coding_hippius_canary_unwrap_service_env_path: "{{ platform_coding_hippius_canary_config_root }}/unwrap-service/service.env"
-platform_coding_hippius_canary_unwrap_openssl_path: /usr/bin/openssl
-platform_coding_hippius_canary_unwrap_socket_timeout_seconds: 30
 
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
@@ -270,31 +210,29 @@ platform_caddy_email: peyton@omniaura.ai
 # Shared Secret Manager secret ids (per-env ones are set in host_vars).
 secret_db_password: platform-db-password
 secret_hmac_secret: platform-storage-hmac-secret
+platform_moderation_audit_enabled: false
+secret_moderation_audit_signing_key: platform-moderation-audit-signing-key
 secret_github_deploy_key: platform-github-deploy-key
 # Shared with trusted internal operator tools. The value already exists in
 # Secret Manager; Terraform only grants this VM's runtime identity read access.
 secret_admin_api_token: ADMIN_API_PASSWORD
+secret_backroom_platform_operator_proof: ""
+# Manual bridge activation is separate from Gamma weights and recurring timers.
+platform_treasury_manual_enabled: false
+platform_treasury_manual_project: sn118-gamma-custody
+platform_treasury_manual_request_topic: sn118-manual-requests
+platform_treasury_manual_report_subscription: sn118-manual-reports
 # Separate bearer used only by the provider-mutating capacity controller.
 secret_screener_controller_api_token: ""
-# Targon Rentals. Empty public URL disables the in-process rental loop.
-secret_targon_api_key: TARGON_API_KEY
-platform_targon_public_url: ""
-platform_targon_submission_builder_image: ""
-platform_targon_org_slug: ditto
-platform_targon_resource: cpu-small
-platform_targon_candidate_push_sa: ""
-platform_targon_candidate_pull_sa: ""
-platform_targon_bootstrap_sa: ""
-platform_targon_source_review_secret: ""
-platform_targon_environment: prod
-platform_targon_max_inflight: 10
-platform_targon_smoke_provision_timeout_seconds: 30
-platform_cloudrun_project: ""
-platform_cloudrun_region: us-central1
-platform_cloudrun_untrusted_sa: ""
-platform_cloudrun_invoker_sa: ""
+# Bearer for the generator competition scorer (generator_scorer role). Empty
+# leaves every /api/v1/generator-scorer endpoint disabled.
+secret_generator_scorer_token: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
+# Re-dispatch a provably receipt-free confirmation 429/503 once instead of
+# parking the whole bundle. Default off: re-sending a frozen scored request
+# changes what the shadow evidence attests, so it is a per-host decision.
+platform_confirmation_backpressure_retry: false
 platform_inference_proxy_enabled: false
 platform_inference_proxy_required: false
 secret_platform_openrouter_key: validator-openrouter-key
@@ -341,7 +279,56 @@ platform_inference_reviewed_calibration_manifest_sha256: "b8c11eff829c4c85b4b1af
 # is the Secret Manager id of the shared bearer token.
 platform_screener_hotkey: ""
 secret_screener_api_token: ""
+# Accept that shared bearer on /screener/*. Rotating per-node tokens are
+# unaffected; stays true until the GCE overflow fleet stops booting with it.
+platform_screener_legacy_bearer_enabled: true
+
+# Comma-separated SS58 hotkeys whose own shadow agents may be isolated and
+# leased to one chosen validator as operator diagnostics (never scored, ranked,
+# or paid). Empty disables isolate_operator_diagnostic and the diagnostic
+# canary path; Platform fails closed. Per-env value lives in host_vars.
+platform_operator_diagnostic_hotkeys: ""
 secret_platform_perplexity_key: "PERPLEXITY_API_KEY"
 
 # Docker apt repo (Debian).
 platform_docker_apt_arch: amd64
+
+# --- Sign in with Ditto (miner hotkey <-> Ditto account) and Ditto Router upstream ---
+# All OFF/empty by default: merging this renders the same behaviour as before.
+# Activation is a host_vars change (see apps/platform/docs/ditto-account-link.md):
+#   1. put the challenge token Ditto issued in platform_ditto_callback_challenge_token,
+#      converge, run `heyditto apps origins verify <app> https://dittobench.ai --confirm`;
+#   2. name the Secret Manager ids and set platform_ditto_link_enabled: true.
+platform_ditto_link_enabled: false
+platform_ditto_link_issuer: "https://api.heyditto.ai"
+platform_ditto_link_client_id: ""
+platform_ditto_link_redirect_url: ""
+platform_ditto_link_return_url: "https://dittobench.ai/#/reviews"
+platform_ditto_callback_challenge_token: ""
+# Secret Manager id holding the DittoBench app's OIDC client secret; empty = not read.
+secret_ditto_link_client_secret: ""
+
+# GitHub contributor identity. Values stay empty/off outside activated hosts.
+platform_github_link_enabled: false
+platform_github_link_client_id: ""
+platform_github_link_redirect_url: ""
+platform_github_link_timeout_seconds: 10
+secret_github_link_client_secret: ""
+# Relay pool -> Ditto Router. The competition lane additionally needs the exact
+# ack the relay demands (memories-off-locked-model); see services/model-relay/README.md.
+platform_ditto_router_upstream_enabled: false
+# The relay validates this as exactly https://<ditto inference host>/v1/chat/completions
+# (router.heyditto.ai once canonical, inference.heyditto.ai as its compatibility host).
+platform_ditto_router_upstream_url: "https://inference.heyditto.ai/v1/chat/completions"
+platform_ditto_router_lanes: ""
+platform_ditto_router_competition_ack: ""
+# Secret Manager id holding the DittoBench endpoint key used by the relay; empty = not read.
+secret_ditto_router_api_key: ""
+
+# Docker's apt signing key (https://download.docker.com/linux/debian/gpg),
+# pinned so a tampered or substituted key file fails closed instead of becoming
+# an apt trust root. Fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88
+# ("Docker Release (CE deb)"). To rotate, verify the new key's fingerprint out of
+# band, then update every copy; infra/ansible/tests/test_docker_apt_key_pin.py
+# keeps them identical.
+docker_apt_key_sha256: "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570"

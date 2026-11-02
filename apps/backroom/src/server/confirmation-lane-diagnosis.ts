@@ -19,6 +19,9 @@ export type ConfirmationLaneTicket = {
   failure_reason: string | null
   failure_class: string | null
   failure_stage: string | null
+  // Older Platforms omit this; undefined means "not reported" and 0 means the
+  // scorer boundary broke before any HTTP status existed. Do not merge them.
+  failure_status?: number | null
   prepare_rejection: string | null
   prepare_rejected_at: string | null
 }
@@ -57,6 +60,9 @@ export type ConfirmationLaneDiagnosisInput = {
   dailyBundleCap: number
   dailyDollarCapMicrousd: number
   profileRevision: string | null
+  // Older Platforms omit these; undefined means "not reported", not "missing".
+  profileInstalled?: boolean
+  installedProfiles?: Array<{ revision: string; checksum: string }>
   fleet: {
     generated_at: string
     active_bench_version: number | null | undefined
@@ -73,12 +79,14 @@ export type ConfirmationLaneDiagnosisInput = {
 
 export type ConfirmationLaneLikelyCauseCode =
   | 'issuance_disabled'
+  | 'profile_not_installed'
   | 'issuance_inactive'
   | 'budget_blocked'
   | 'leftover_validator_v9_identity_pin'
   | 'claim_identity_rejection'
   | 'claim_without_progress'
   | 'execution_after_preparing'
+  | 'scorer_boundary_failure'
   | 'prepare_report_rejected'
   | 'healthy'
   | 'unknown_execution_outage'
@@ -156,6 +164,7 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       row.ticket.failure_stage ?? 'null',
       row.ticket.failure_reason ?? 'null',
       row.ticket.prepare_rejection ?? 'null',
+      row.ticket.failure_status == null ? 'null' : String(row.ticket.failure_status),
     ].join('|')
     const bucket = failureKeys[key] ?? { count: 0, durations: [] }
     bucket.count += 1
@@ -165,12 +174,14 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
 
   const failureHistogram = Object.entries(failureKeys)
     .map(([key, bucket]) => {
-      const [failure_class, failure_stage, failure_reason, prepare_rejection] = key.split('|')
+      const [failure_class, failure_stage, failure_reason, prepare_rejection, failure_status] =
+        key.split('|')
       return {
         failure_class,
         failure_stage,
         failure_reason,
         prepare_rejection,
+        failure_status: failure_status === 'null' ? null : Number(failure_status),
         count: bucket.count,
         median_duration_ms: median(bucket.durations),
       }
@@ -250,6 +261,22 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
   const prepareRejected = failedTickets.filter(
     (row) => row.ticket.prepare_rejection != null && row.ticket.prepare_rejection !== '',
   )
+  // A `longmem_` prefix is sufficient to recognize a forwarded scorer class
+  // without restating the thirteen slugs here: Platform's CHECK constraint is
+  // what admits the value, so anything carrying the prefix in this data came
+  // from that allowlist. Restating them in TypeScript would add a second list
+  // to keep in step with the first and buy nothing.
+  const scorerClassified = failedTickets.filter((row) =>
+    row.ticket.failure_class?.startsWith('longmem_'),
+  )
+  const scorerClassCounts = scorerClassified.reduce<Record<string, number>>((counts, row) => {
+    increment(counts, row.ticket.failure_class ?? 'null')
+    return counts
+  }, {})
+  const dominantScorerClass =
+    Object.entries(scorerClassCounts).sort(
+      (left, right) => right[1] - left[1] || left[0].localeCompare(right[0]),
+    )[0] ?? null
   const staleLeases = leasedTickets.filter(
     (row) => row.age_ms !== null && row.age_ms >= STALE_LEASE_MS,
   )
@@ -257,6 +284,9 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
   const likelyCause = deriveLikelyCause({
     mode: input.mode,
     issuanceActive: input.issuanceActive,
+    profileRevision: input.profileRevision,
+    profileInstalled: input.profileInstalled,
+    installedProfiles: input.installedProfiles ?? [],
     dailyBundleCap: input.dailyBundleCap,
     counts,
     completed: shadow?.completed_bundle_count ?? counts.completed,
@@ -265,6 +295,16 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
     immediateFails: immediateFails.length,
     nonV9Share: share(nonV9Sample.length, sampledBundles.length),
     laterExecutionFails: laterExecutionFails.length,
+    scorerClassified: scorerClassified.length,
+    dominantScorerClass: dominantScorerClass?.[0] ?? null,
+    dominantScorerClassCount: dominantScorerClass?.[1] ?? 0,
+    scorerStatuses: Array.from(
+      new Set(
+        scorerClassified
+          .map((row) => row.ticket.failure_status)
+          .filter((status): status is number => typeof status === 'number'),
+      ),
+    ).sort((left, right) => left - right),
     prepareRejected: prepareRejected.length,
     staleLeases: staleLeases.length,
     leased: counts.leased,
@@ -280,6 +320,8 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       daily_bundle_cap: input.dailyBundleCap,
       daily_dollar_cap_microusd: input.dailyDollarCapMicrousd,
       profile_revision: input.profileRevision,
+      profile_installed: input.profileInstalled ?? null,
+      installed_profiles: input.installedProfiles ?? null,
     },
     budget,
     counts,
@@ -306,6 +348,7 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       slot_id: row.ticket.slot_id,
       failure_class: row.ticket.failure_class,
       failure_stage: row.ticket.failure_stage,
+      failure_status: row.ticket.failure_status ?? null,
       failure_reason: row.ticket.failure_reason,
       prepare_rejection: row.ticket.prepare_rejection,
       prepare_rejected_at: row.ticket.prepare_rejected_at,
@@ -321,6 +364,9 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
 function deriveLikelyCause(input: {
   mode: 'off' | 'shadow' | 'enforce'
   issuanceActive: boolean
+  profileRevision: string | null
+  profileInstalled: boolean | undefined
+  installedProfiles: Array<{ revision: string; checksum: string }>
   dailyBundleCap: number
   counts: Record<ConfirmationLaneState, number>
   completed: number
@@ -329,6 +375,10 @@ function deriveLikelyCause(input: {
   immediateFails: number
   nonV9Share: number
   laterExecutionFails: number
+  scorerClassified: number
+  dominantScorerClass: string | null
+  dominantScorerClassCount: number
+  scorerStatuses: number[]
   prepareRejected: number
   staleLeases: number
   leased: number
@@ -339,6 +389,27 @@ function deriveLikelyCause(input: {
       code: 'issuance_disabled',
       summary: 'Confirmation mode is off, so Platform will not issue LongMem work.',
       evidence: [`mode=${input.mode}`],
+    }
+  }
+  if (input.profileInstalled === false) {
+    // The policy pins a profile this Platform release did not install: every
+    // validator claim returns no work while the mode still reads shadow/enforce.
+    return {
+      code: 'profile_not_installed',
+      summary:
+        'The pinned confirmation profile is not installed in the running Platform release, so no LongMem work can issue. Re-freeze the policy on an installed profile identity.',
+      evidence: [
+        `mode=${input.mode}`,
+        `profile_revision=${input.profileRevision ?? 'null'}`,
+        'profile_installed=false',
+        `installed_profiles=${
+          input.installedProfiles.length === 0
+            ? 'none'
+            : input.installedProfiles
+                .map((profile) => `${profile.revision}@${profile.checksum.slice(0, 8)}`)
+                .join(',')
+        }`,
+      ],
     }
   }
   if (!input.issuanceActive) {
@@ -425,6 +496,26 @@ function deriveLikelyCause(input: {
         `prepare_rejected=${input.prepareRejected}`,
         `later_execution_fails=${input.laterExecutionFails}`,
         `completed=${input.completed}`,
+      ],
+    }
+  }
+  if (
+    input.dominantScorerClass !== null &&
+    share(input.scorerClassified, input.failedSample) >= 0.5
+  ) {
+    // Strictly more specific than execution_after_preparing below, which says
+    // only that execution was reached. The scorer classified these itself, so
+    // the boundary is named rather than inferred -- which is the whole reason
+    // the class is forwarded instead of collapsing into `dittobench`.
+    return {
+      code: 'scorer_boundary_failure',
+      summary: `The scorer classified these failures itself: ${input.dominantScorerClass}. That names the boundary, so no validator host log is needed to localize it.`,
+      evidence: [
+        `dominant_scorer_class=${input.dominantScorerClass}`,
+        `dominant_scorer_class_count=${input.dominantScorerClassCount}`,
+        `scorer_classified=${input.scorerClassified}`,
+        `failed_sample=${input.failedSample}`,
+        `scorer_statuses=${input.scorerStatuses.length === 0 ? 'none' : input.scorerStatuses.join(',')}`,
       ],
     }
   }

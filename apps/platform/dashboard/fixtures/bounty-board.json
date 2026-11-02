@@ -1,0 +1,63 @@
+{
+  "items": [
+    {
+      "bounty_id": "88a035cf-6cab-4993-a0f8-edc71a879363",
+      "repo": "ditto-assistant/ditto-subnet",
+      "issue": 2943,
+      "title": "Fixture: document the contributor flow",
+      "current_revision": 1,
+      "spec_digest": "c52ebee5465316b306440089aee3404ebf83e1dbf66b932d4710e0a455cdcf51",
+      "entry_fee_alpha_rao": 2000000000,
+      "reward_pool_alpha_rao": 100000000000,
+      "delivery_days": 5,
+      "review_days": 7,
+      "reviewer_login": "reviewer-fixture",
+      "funding_mode": "rehearsal",
+      "current_round": 1,
+      "claims_paused": false,
+      "slots": {
+        "open": 3,
+        "held": 0,
+        "claimed": 0,
+        "submitted": 0,
+        "rework": 0,
+        "closed": 0
+      },
+      "reviews_overdue": 0,
+      "awarded_alpha_rao": 0,
+      "published_at": "2026-10-16T01:30:26.554725Z",
+      "updated_at": "2026-10-16T01:30:26.554725Z"
+    },
+    {
+      "bounty_id": "6e3d16e9-d082-4cdd-9da3-1a8abe7ed907",
+      "repo": "ditto-assistant/ditto-subnet",
+      "issue": 2942,
+      "title": "Fixture: build the public bounty board",
+      "current_revision": 1,
+      "spec_digest": "2eabb0e1e1567f84667810cb6f9693975dd180198c52dde62d6b9c966bed10be",
+      "entry_fee_alpha_rao": 2000000000,
+      "reward_pool_alpha_rao": 100000000000,
+      "delivery_days": 5,
+      "review_days": 7,
+      "reviewer_login": "reviewer-fixture",
+      "funding_mode": "rehearsal",
+      "current_round": 1,
+      "claims_paused": false,
+      "slots": {
+        "open": 0,
+        "held": 0,
+        "claimed": 1,
+        "submitted": 0,
+        "rework": 0,
+        "closed": 2
+      },
+      "reviews_overdue": 0,
+      "awarded_alpha_rao": 40000000000,
+      "published_at": "2026-10-16T01:30:25.883445Z",
+      "updated_at": "2026-10-16T01:30:25.883445Z"
+    }
+  ],
+  "total": 2,
+  "limit": 50,
+  "offset": 0
+}

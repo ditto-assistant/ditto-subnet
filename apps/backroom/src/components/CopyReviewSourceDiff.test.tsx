@@ -36,6 +36,8 @@ function manifest(): SourceDiffManifest {
     removed_count: 0,
     renamed_count: 0,
     truncated: false,
+    omitted_file_count: 0,
+    omitted_paths: [],
     files: [
       {
         path: 'src/lib.rs',
@@ -115,6 +117,19 @@ describe('CopyReviewSourceDiff', () => {
     fireEvent.click(await screen.findByText('src/agent.rs'))
 
     await waitFor(() => expect(screen.getByText(/\\u202E/)).toBeTruthy())
+  })
+
+  it('names files the source read skipped instead of classifying them', async () => {
+    vi.mocked(getCopyReviewSourceDiff).mockResolvedValue({
+      ...manifest(),
+      omitted_file_count: 1,
+      omitted_paths: ['assets/big.txt'],
+    })
+    render(<CopyReviewSourceDiff agentId={AGENT_ID} canView={true} />)
+    fireEvent.click(screen.getByRole('button', { name: /load file-by-file diff/i }))
+
+    expect(await screen.findByText(/1 file was past the source read budget/i)).toBeTruthy()
+    expect(screen.getByText('assets/big.txt')).toBeTruthy()
   })
 
   it('does not fetch a file diff for an identical file', async () => {

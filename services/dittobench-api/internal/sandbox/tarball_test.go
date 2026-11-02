@@ -69,6 +69,25 @@ func serve(t *testing.T, body []byte) *httptest.Server {
 // SSRF guard would otherwise refuse.
 func localDocker() *LocalDocker { return &LocalDocker{AllowPrivate: true} }
 
+func TestBuildRequiresScreenedImageBeforeFetchingSource(t *testing.T) {
+	fetches := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fetches++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, _, _, err := NewLocalDocker().Build(context.Background(), Source{
+		TarballURL: server.URL + "/source.tar.gz",
+	})
+	if err == nil || !strings.Contains(err.Error(), "screened image is required") {
+		t.Fatalf("build without screened image returned %v", err)
+	}
+	if fetches != 0 {
+		t.Fatalf("source fetched before rejecting unscreened build: %d requests", fetches)
+	}
+}
+
 func TestFetchTarball_RootDockerfile(t *testing.T) {
 	data := makeTarGz(t, []tentry{
 		{name: "Dockerfile", body: "FROM scratch\n"},

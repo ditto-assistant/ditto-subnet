@@ -98,7 +98,70 @@ from ditto import __version__
 # refreshed canonical revision when available. Older updater-status payloads
 # remain valid and signature-compatible because the additive fields are
 # nullable and omitted from their canonical JSON.
-HEARTBEAT_PROTOCOL_VERSION = 26
+#
+# v27 consumes ``LedgerResponse.crown_mode=incumbent`` and
+# ``crown_incumbent_agent_id``: the KOTH fold opens its champion walk from the
+# previous epoch pin's champion (resolved through its owner family) instead of
+# the earliest lineage anchor, so a senior claimant sitting inside the dethrone
+# band no longer retakes the crown on every read. Every other entry still has
+# to clear the band over the running champion. The heartbeat request and
+# signing bytes are unchanged; this is a capability-negotiation bump. Platform
+# must not expose the marker until every recently-live weight setter reports
+# v27+, because a v26 validator ignores the additive fields and would keep the
+# earliest-lineage walk -- a different champion, and so a different weight
+# vector, on exactly the epochs the marker exists to stabilize.
+#
+# v28 consumes ``LedgerResponse.provisional_incumbent``: under ``crown_mode:
+# incumbent``, an epoch pin whose incumbent's artifact is withheld by the
+# terminal-review emission gate serves that entry separately from the payable
+# ``entries``. The fold adds it to the pool as the crown incumbent, computes
+# champion, tail, tie pooling and the score-ceiling cohort exactly as before,
+# then burns every share it allocated to that entry instead of renormalizing
+# it onto other miners -- the held champion keeps the crown and its slot goes
+# unpaid rather than reassigned. The heartbeat request and signing bytes are
+# unchanged; this is a capability-negotiation bump. Platform must not filter a
+# held incumbent out of the pool until every recently-live weight setter
+# reports v28+, because a v27 validator ignores the additive field and would
+# crown and pay the runner-up instead.
+# v29 consumes ``LedgerResponse.statistical_band_mode=capped``. The marker
+# caps paired tie/cohort comparisons and unpaired dethrone/contested bands at
+# twice the KOTH margin. A v28 validator ignores the additive marker and folds
+# the historical bands, so Platform must withhold it until every recently-live
+# weight setter reports v29+. Heartbeat signing bytes are unchanged.
+# v30 adds signed exact-policy treasury pin/queued-dispatch capability. Only
+# a crypto-approved validator whose actual transport implements both guards
+# advertises it. V1 shadow ledgers retain the historical weight fold.
+# v31 consumes ``LedgerResponse.rank_shares``, the operator-set payout curve for
+# the champion and tail (frozen default 65/14/10/7/4). A v30 validator ignores the
+# additive field and folds the frozen curve, so Platform must withhold it until
+# every recently-live weight setter reports v31+. Heartbeat signing bytes are
+# unchanged.
+# v32 announces ``host_specs``: logical/physical CPUs, total RAM, total root
+# disk, and architecture, probed once per boot (the screener v6 block). Like the
+# weights fold, it changes the signed bytes only when present, so a failed probe
+# signs the v23/v27 domain. Platform must accept v32 before validators adopt it.
+# v33 folds the ``generator`` track as a paying track. A governed
+# ``LedgerResponse.track_shares_bps`` such as ``{memory: 9000, generator: 1000}``
+# pays generator ledger entries Platform marked ``weight_eligible``; a generator
+# share with no eligible entry falls back to memory instead of burning. A v32
+# validator folds the generator track in shadow, so it would burn that share
+# instead: Platform must withhold a map naming a nonzero generator share until
+# every recently-live weight setter reports v33+ (``TRACK_SHARES_PROTOCOL`` in
+# apps/platform/ditto/api_models/track_share_settings.py; the scoring ledger
+# serves ``track_shares_bps`` only to a fully-v33 fleet and refuses a sub-33
+# requester while a split is served or pinned). Until that Platform setting
+# exists and is written, no split is served and v33 folds exactly as v32.
+# Heartbeat signing bytes are unchanged.
+# v34 consumes ``LedgerResponse.crown_gate``: a challenger dethrones only on the
+# paired shared-seed statistic with at least ``min_dethrone_confirmations``
+# seeds shared with the champion, and only an entry inside the top
+# ``champion_standing_rank`` official places may hold or take the crown (an
+# incumbent that falls out hands it to the best-qualified standing entry). A
+# v33 validator ignores the additive marker and keeps the ungated walk -- a
+# different champion, and so a different weight vector -- so Platform must
+# withhold it until every recently-live weight setter reports v34+. Heartbeat
+# signing bytes are unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 34
 
 
 @dataclass(frozen=True)

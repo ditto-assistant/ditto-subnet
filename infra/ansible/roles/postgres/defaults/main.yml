@@ -27,6 +27,61 @@ postgres_databases:
   - ditto_staging_7
   - ditto_staging_8
 
+# --- Logging-collector retention (issue #1745) --------------------------------
+# log_rotation_age / log_rotation_size below only START a new log file; PostgreSQL
+# never deletes one. With one 635 MB file per day and no retention, the collector
+# directory reached 12 GB and filled ditto-pg-platform's 30 GB root filesystem on
+# 2026-09-08, crash-looping the cluster for 5.5 hours.
+#
+# log_truncate_on_rotation is deliberately NOT used: it only truncates on
+# time-based rotation when the new name collides with an existing file, which
+# never happens with a '%Y-%m-%d' log_filename, and it would not reclaim the
+# files already on disk. A systemd timer that rotates AND reclaims is the same
+# shape as screener_cache_gc_* on the screener hosts, so it is reused here.
+#
+# Two explicit bounds, applied in that order by the script:
+#   retention_days — normal policy; matches the 7 days the incident recovery kept;
+#   max_total_mb   — hard ceiling, oldest-first, so a burst cannot outrun the age
+#                    policy. 6144 MB covers ~7 days at the measured 635 MB/day
+#                    with headroom, and is ~6% of the 100 GB boot disk.
+# The live file the collector is writing is never deleted, so the directory is
+# bounded by max_total_mb plus one day's active file.
+postgres_log_gc_enabled: true # false stops and disables the timer
+postgres_log_gc_unit: ditto-postgres-log-gc
+postgres_log_gc_bin: /usr/local/sbin/ditto-postgres-log-gc
+# Must equal log_directory in postgres_tuning (unquoted).
+postgres_log_gc_dir: "{{ ditto_logs | default('/opt/ditto/logs') }}/postgresql"
+# Must match log_filename in postgres_tuning (unquoted). Only files matching this
+# pattern, directly in the directory above, are ever deleted.
+postgres_log_gc_glob: "postgresql-*.log"
+postgres_log_gc_retention_days: 7
+postgres_log_gc_max_total_mb: 6144
+# The collector's live-file map; every path it names is protected. Resolved from
+# the discovered cluster version in tasks/main.yml.
+postgres_log_gc_current_logfiles: ""
+postgres_log_gc_data_dir: /var/lib/postgresql
+postgres_log_gc_on_calendar: hourly # systemd OnCalendar cadence
+postgres_log_gc_randomized_delay: 5min
+# true logs the policy and the full deletion plan but deletes nothing (rehearsal).
+postgres_log_gc_dry_run: false
+
+# --- Attached persistent data disk (DEFAULT OFF, issue #1745) ------------------
+# Terraform attaches ditto-pg-platform-data but nothing formatted or mounted it,
+# so PGDATA, WAL, and the collector logs all share the boot disk. Enabling this
+# mounts the volume only; it never relocates the cluster. See
+# roles/postgres/tasks/data_disk.yml and the release-ops platform-host-disk
+# reference for the offline migration runbook.
+postgres_data_disk_enabled: false
+# GCE exposes an attached disk by its device_name under /dev/disk/by-id. That is
+# stable across reboots; /dev/sdb is not.
+postgres_data_disk_device: /dev/disk/by-id/google-ditto-pg-platform-data
+postgres_data_disk_fstype: ext4
+postgres_data_disk_mountpoint: /opt/ditto/pgdata
+postgres_data_disk_mount_opts: "defaults,noatime,nofail"
+# Second, independent gate: mkfs runs only with this true AND blkid reporting no
+# existing filesystem. An already-formatted disk is never reformatted.
+postgres_data_disk_allow_format: false
+
 postgres_extensions:
   - { name: vector,             schema: public }
   - { name: pg_stat_statements, schema: extensions }

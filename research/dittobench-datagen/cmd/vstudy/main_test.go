@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -161,7 +162,7 @@ func TestParseBenchVersions(t *testing.T) {
 	if !reflect.DeepEqual(got, []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10}) {
 		t.Fatalf("versions=%v, want [8 9 10]", got)
 	}
-	for _, raw := range []string{"", ",", "9,garbage", "13"} {
+	for _, raw := range []string{"", ",", "9,garbage", strconv.Itoa(protocol.NewestSupportedBenchVersion() + 1)} {
 		if _, err := parseBenchVersions(raw); err == nil {
 			t.Errorf("parseBenchVersions(%q) unexpectedly succeeded", raw)
 		}
@@ -200,7 +201,7 @@ func TestV9StudyRunReportsFinalFamilyMix(t *testing.T) {
 	if testing.Short() {
 		t.Skip("generates several full datasets")
 	}
-	result := runVersion(protocol.BenchVersionV9, "full", 1, 3, "")
+	result := runVersion(protocol.BenchVersionV9, "full", 1, 3, "", false)
 	tool := summarizeFamilyMix(result.ToolMixes)
 	memory := summarizeFamilyMix(result.MemoryMixes)
 	if tool.Runs != 3 || len(tool.Families) != 53 || tool.DistinctHistograms < 2 {
@@ -235,7 +236,7 @@ func TestV9StudyRunReportsFinalFamilyMix(t *testing.T) {
 
 func TestV9StudyDoesNotWriteUncalibratedGStudyInput(t *testing.T) {
 	dir := t.TempDir()
-	result := runVersion(protocol.BenchVersionV9, "small", 1, 2, dir)
+	result := runVersion(protocol.BenchVersionV9, "small", 1, 2, dir, false)
 	if len(result.Runs) != 0 || len(result.Cases) != 0 {
 		t.Fatalf("v9 populated uncalibrated score runs: runs=%d cases=%d", len(result.Runs), len(result.Cases))
 	}

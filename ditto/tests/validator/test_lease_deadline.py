@@ -28,7 +28,8 @@ from ditto.validator.dittobench import DittobenchClient
 from ditto.validator.errors import LeaseDeadlineError, ValidatorInfrastructureError
 
 # Production values: the operator's harness cap
-# (VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS) against the platform's _TICKET_TTL.
+# (VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS) against the platform's default scoring
+# ticket TTL. Since #1156 operators revise it from Backroom within 60-240 minutes.
 _HARNESS_CAP_SECONDS = 9900.0
 _TICKET_TTL = timedelta(minutes=180)
 
@@ -48,16 +49,17 @@ class TestRunBudget:
         )
         assert budget == 1800.0 - LEASE_REPORT_MARGIN_SECONDS
 
-    @pytest.mark.parametrize("ttl_minutes", [30, 45, 90, 120, 180, 430])
+    @pytest.mark.parametrize("ttl_minutes", [30, 45, 60, 90, 120, 180, 240, 430])
     def test_the_abort_always_lands_before_the_deadline_with_margin(
         self, ttl_minutes: int
     ) -> None:
         """The latent failure this closes.
 
-        ``_TICKET_TTL`` has already moved 30 -> 45 -> 90 -> 120 -> 180 -> 430
-        and back to 180 minutes. At 30 and 45 minutes a fixed harness cap can
-        outlive a shortened lease, so the harness would still be polling when
-        the ticket died -- guaranteed silent expiry. The budget must leave the
+        The scoring TTL has already moved 30 -> 45 -> 90 -> 120 -> 180 -> 430
+        and back to 180 minutes, and is now a Backroom revision (60-240). At 30
+        and 45 minutes a fixed harness cap can outlive a shortened lease, so the
+        harness would still be polling when the ticket died -- guaranteed silent
+        expiry. The budget must leave the
         reporting margin at every TTL, not just the current one.
         """
         now = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)

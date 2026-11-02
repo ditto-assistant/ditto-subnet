@@ -2,25 +2,12 @@
 - name: Assert required capacity-controller configuration
   ansible.builtin.assert:
     that:
-      - screener_capacity_gcp_bootstrap_service_account | length > 0
-      - screener_capacity_source_review_secret_resource | length > 0
-      - screener_capacity_builder_registry_service_account | length > 0
-      - screener_capacity_candidate_registry_service_account | length > 0
-      - screener_capacity_candidate_registry_writer_service_account | length > 0
-      - screener_capacity_builder_kaniko_image | length > 0
-      - screener_capacity_targon_org_slug | length > 0
       - screener_capacity_global_cap | int > 0
-    fail_msg: "capacity controller bootstrap identity and source-review resource are required"
+    fail_msg: "capacity controller global cap is required"
 
 - name: Verify gcloud is available for ADC and Secret Manager
   ansible.builtin.command: gcloud --version
   changed_when: false
-
-- name: Install trusted registry promotion client
-  ansible.builtin.apt:
-    name: skopeo
-    state: present
-    update_cache: true
 
 - name: Ensure controller directories
   ansible.builtin.file:
@@ -75,14 +62,12 @@
   changed_when: screener_capacity_clone.changed
   notify:
     - restart screener capacity controller
-    - restart trusted image builder
 
 - name: Read provider and controller credentials through the attached identity
   ansible.builtin.command: >-
     gcloud secrets versions access latest
     --secret={{ item.secret }} --project={{ screener_capacity_gce_project }}
   loop:
-    - { name: targon-api-key, secret: "{{ screener_capacity_targon_api_key_secret }}" }
     - { name: platform-controller-token, secret: "{{ screener_capacity_platform_token_secret }}" }
   loop_control:
     label: "{{ item.name }}"
@@ -103,7 +88,22 @@
   no_log: true
   notify:
     - restart screener capacity controller
-    - restart trusted image builder
+
+- name: Stop the retired Targon image builder
+  ansible.builtin.systemd:
+    name: ditto-image-builder
+    enabled: false
+    state: stopped
+  failed_when: false
+
+- name: Remove retired builder unit and provider credential
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/ditto-image-builder.service
+    - "{{ screener_capacity_config_dir }}/targon-api-key"
+  notify: reload systemd for screener capacity
 
 - name: Install capacity-controller systemd unit
   ansible.builtin.template:
@@ -116,27 +116,9 @@
     - reload systemd for screener capacity
     - restart screener capacity controller
 
-- name: Install trusted-image builder systemd unit
-  ansible.builtin.template:
-    src: ditto-image-builder.service.j2
-    dest: "/etc/systemd/system/{{ screener_capacity_builder_unit }}.service"
-    owner: root
-    group: root
-    mode: "0644"
-  notify:
-    - reload systemd for screener capacity
-    - restart trusted image builder
-
 - name: Enable and start the capacity controller
   ansible.builtin.systemd:
     name: "{{ screener_capacity_unit }}"
-    enabled: true
-    state: started
-    daemon_reload: true
-
-- name: Enable and start the trusted image builder
-  ansible.builtin.systemd:
-    name: "{{ screener_capacity_builder_unit }}"
     enabled: true
     state: started
     daemon_reload: true

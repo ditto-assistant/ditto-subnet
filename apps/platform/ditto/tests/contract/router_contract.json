@@ -1,0 +1,267 @@
+{
+  "RouterHarnessResult": {
+    "$defs": {
+      "RouterHarness": {
+        "enum": [
+          "claude_code",
+          "codex",
+          "opencode",
+          "grok"
+        ],
+        "type": "string"
+      }
+    },
+    "properties": {
+      "efficiency": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "floor_pass": {
+        "type": "boolean"
+      },
+      "harness": {
+        "$ref": "#/$defs/RouterHarness"
+      },
+      "operational": {
+        "type": "boolean"
+      },
+      "upstream_token_cost_micros": {
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "harness",
+      "operational",
+      "floor_pass",
+      "efficiency",
+      "upstream_token_cost_micros"
+    ],
+    "type": "object"
+  },
+  "RouterLedgerEntry": {
+    "$defs": {
+      "RouterHarness": {
+        "enum": [
+          "claude_code",
+          "codex",
+          "opencode",
+          "grok"
+        ],
+        "type": "string"
+      },
+      "RouterHarnessResult": {
+        "properties": {
+          "efficiency": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "floor_pass": {
+            "type": "boolean"
+          },
+          "harness": {
+            "$ref": "#/$defs/RouterHarness"
+          },
+          "operational": {
+            "type": "boolean"
+          },
+          "upstream_token_cost_micros": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "harness",
+          "operational",
+          "floor_pass",
+          "efficiency",
+          "upstream_token_cost_micros"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "agent_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "combined_score": {
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "first_seen": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "harnesses": {
+        "items": {
+          "$ref": "#/$defs/RouterHarnessResult"
+        },
+        "type": "array"
+      },
+      "miner_hotkey": {
+        "type": "string"
+      },
+      "router_contract_version": {
+        "const": 1,
+        "type": "integer"
+      },
+      "shadow_composite": {
+        "default": 0.0,
+        "maximum": 1.0,
+        "minimum": 0.0,
+        "type": "number"
+      },
+      "weight_eligible": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "miner_hotkey",
+      "agent_id",
+      "router_contract_version",
+      "weight_eligible",
+      "combined_score",
+      "harnesses",
+      "first_seen"
+    ],
+    "type": "object"
+  },
+  "RouterLedgerResponse": {
+    "$defs": {
+      "RouterHarness": {
+        "enum": [
+          "claude_code",
+          "codex",
+          "opencode",
+          "grok"
+        ],
+        "type": "string"
+      },
+      "RouterHarnessResult": {
+        "properties": {
+          "efficiency": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "floor_pass": {
+            "type": "boolean"
+          },
+          "harness": {
+            "$ref": "#/$defs/RouterHarness"
+          },
+          "operational": {
+            "type": "boolean"
+          },
+          "upstream_token_cost_micros": {
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "harness",
+          "operational",
+          "floor_pass",
+          "efficiency",
+          "upstream_token_cost_micros"
+        ],
+        "type": "object"
+      },
+      "RouterLedgerEntry": {
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "combined_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "first_seen": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "harnesses": {
+            "items": {
+              "$ref": "#/$defs/RouterHarnessResult"
+            },
+            "type": "array"
+          },
+          "miner_hotkey": {
+            "type": "string"
+          },
+          "router_contract_version": {
+            "const": 1,
+            "type": "integer"
+          },
+          "shadow_composite": {
+            "default": 0.0,
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "weight_eligible": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "miner_hotkey",
+          "agent_id",
+          "router_contract_version",
+          "weight_eligible",
+          "combined_score",
+          "harnesses",
+          "first_seen"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "count": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/RouterLedgerEntry"
+        },
+        "type": "array"
+      },
+      "generated_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "router_contract_version": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "stale": {
+        "default": false,
+        "type": "boolean"
+      }
+    },
+    "type": "object"
+  }
+}

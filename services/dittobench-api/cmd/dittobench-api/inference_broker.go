@@ -36,6 +36,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
 )
@@ -174,6 +175,10 @@ type brokerSession struct {
 	confirmationGrants        map[string]brokerConfirmationGrant
 	embeddingGrant            brokerConfirmationGrant
 	inFlight                  int
+	// decisionInFlight and decisionDispatches count the v15 decision lane
+	// (decision_lane.go): calls in flight and signed dispatches this run.
+	decisionInFlight   int
+	decisionDispatches uint64
 	// chatConcurrency is the per-source in-flight chat admission for this
 	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
 	// the run's effective case concurrency so overlapping /run calls are not
@@ -197,7 +202,18 @@ type brokerSession struct {
 	// attribution evidence for the inference trace capture only -- never an
 	// admission or accounting input -- and it is what lets a concurrent v10+
 	// run still tell the relay which cases a call could belong to.
-	runCases map[string]int
+	runCases      map[string]int
+	harnessBase   string
+	urlCases      map[string]string
+	urlCaseTokens map[string]string
+	// caseCosts is the Bench v13 per-case inference cost ledger (issue #1850):
+	// successful completions, sampled choices, and output tokens bound to one
+	// /run case exactly (case-scoped capability route or a serial /run window).
+	// unattributedCost collects the completions that overlapped several
+	// in-flight cases; they are reported at run level, never guessed onto a
+	// case. Shadow evidence: never an admission or accounting input.
+	caseCosts        map[string]brokerCaseCost
+	unattributedCost brokerCaseCost
 	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
 	// case windows, so every ordinary chat completion is admitted at
 	// caseGeneration 0: its model-emitted tool calls are recorded here,
@@ -210,18 +226,43 @@ type brokerSession struct {
 	sessionToolConsumed         uint64
 	sessionToolInvalidEmissions uint64
 	sessionToolCases            map[string]brokerSessionToolLedger
+	// effectOperations binds a V1 retry to one already consumed model emission.
+	// It never authorizes a new effect: the endpoint owns receipt deduplication.
+	effectOperations map[brokerEffectOperationKey]*brokerEffectOperation
 	// Bench v12 answer-stuffing capture. answerIO records, per active case
 	// generation, the ordered bounded/normalized clean-pass model I/O (value
 	// tokens only -- never the answer key or raw prose). answerIOByCaseID holds
 	// the SAME pointers keyed by wire case id so the scorer can read one case's
 	// log post-run. Both are populated only for bench_version>=12, so v9..v11 are
 	// byte-identical and unaffected.
-	answerIO              map[uint64]*caseModelIOLog
-	answerIOByCaseID      map[string]*caseModelIOLog
-	embeddingPhaseStarted bool
-	embeddingPhaseActive  bool
-	embeddingInFlight     int
-	embeddingConcurrency  int
+	answerIO         map[uint64]*caseModelIOLog
+	answerIOByCaseID map[string]*caseModelIOLog
+	// Bench v13 claim-span capture (claim_span_capture.go): per wire case, the
+	// value-token hashes of every harness-authored request span and every
+	// model-emitted completion span the relay attributed to the case, plus the
+	// tool_endpoint results it served the case, and the run-wide completion
+	// counts. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	claimSpanCases        map[string]*brokerClaimSpanLedger
+	claimSpanCompletions  uint64
+	claimSpanUnattributed uint64
+	// claimSpanSessionCompletion is the union of every v13 completion's value
+	// tokens across the whole session (all cases, attributed or not); it exempts
+	// assistant-role prompt spans from the causal gate.
+	claimSpanSessionCompletion scoregates.TokenSet
+	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
+	// harness OFFERED the model on each attributed chat completion, plus the
+	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
+	// byte-identical and unaffected.
+	catalogCases                   map[string]*brokerCatalogLedger
+	catalogCompletions             uint64
+	catalogCompletionsWithCatalog  uint64
+	catalogUnattributedCompletions uint64
+	catalogUnattributedAdmitted    uint64
+	embeddingPhaseStarted          bool
+	embeddingPhaseActive           bool
+	embeddingInFlight              int
+	embeddingConcurrency           int
 	// embeddingQueueChanged wakes calls waiting behind this session's local
 	// lane whenever capacity is released or the phase is revoked. Excess
 	// harness concurrency is queued inside the trusted broker instead of being
@@ -279,6 +320,7 @@ type brokerSession struct {
 	// already fail the run through usageUnavailable; this counter exists so
 	// finalize can name a rejected request instead of a spent grant.
 	agentRequestRejections uint64
+	admission              map[string]admissionBucket
 	// capacityExhaustions counts calls that used up their whole bounded
 	// backpressure wait budget and gave up. Deliberately its own counter AND
 	// deliberately still infrastructure: a saturated lane is a platform
@@ -494,8 +536,9 @@ func (b *inferenceBroker) beginAblationCase(
 	// confirmation session is never a counterfactual even at v12 — otherwise its
 	// embedding ablation lane (below) would be rejected. A confirmation session
 	// runs the paired inference+embedding ablation under the frozen v9-named
-	// contract at any supported confirmation version ({9, 12}); the v9 branch's
-	// admission is unchanged (v9 short-circuits before the confirmation clause).
+	// contract at any supported confirmation instrument version (v9, >= v12 up
+	// to the accepted set); the v9 branch's admission is unchanged (v9
+	// short-circuits before the confirmation clause).
 	counterfactual := session.benchVersion >= ablation.BenchVersionV12 && !session.confirmationSession
 	allowedVersion := session.benchVersion == ablation.BenchVersionV9 || counterfactual ||
 		(session.confirmationSession && ablation.ConfirmationBenchVersionSupported(session.benchVersion))
@@ -585,6 +628,12 @@ type inferenceBroker struct {
 	sleep                 func(context.Context, time.Duration) error
 	relayWait             func(string, bool)
 	terminalAgentFailure  func(string)
+
+	// controlAuthMode mirrors the control plane's DITTOBENCH_CONTROL_AUTH_MODE
+	// so the broker's own check and controlAuth.wrap agree on whether the
+	// published Compose default token still counts as a credential.
+	controlAuthMode       controlAuthMode
+	publicDefaultTokenLog sync.Once
 }
 
 // embeddingBackpressureGate is a validator-wide circuit breaker for the
@@ -763,6 +812,7 @@ type toolRoute struct {
 	provenanceSessionID   string
 	capabilityKey         []byte
 	handler               http.Handler
+	effectProtocolV1      bool
 	slots                 chan struct{}
 }
 
@@ -793,6 +843,21 @@ type brokerSessionToolLedger struct {
 	ToolFindings       uint64
 }
 
+type brokerEffectOperationKey struct {
+	routeID     string
+	caseID      string
+	operationID string
+}
+
+type brokerEffectOperation struct {
+	userID     string
+	name       string
+	argsSHA256 string
+	generation uint64
+	hop        int
+	replays    uint8
+}
+
 // sessionToolProvenanceTotals is the run-level view of the session-wide
 // emission ledger, read once after the last case has returned. Emissions that
 // were never consumed are the run's model_selected_not_executed count: they
@@ -809,6 +874,7 @@ const (
 	toolFindingDuplicateExecution
 	toolFindingCrossCaseReplay
 	toolFindingInvalidModelEmission
+	toolFindingUnsupportedEffectProtocol
 )
 
 // platformGrantDenied marks a platform inference response that declined to
@@ -1060,15 +1126,23 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 		return false
 	}
 	if embedding {
+		// The chat and embedding lanes share one grant status. Once the
+		// harness's own chat spend marks the grant exhausted, the relay refuses
+		// every later embedding with 4102 even though the embedding lane is
+		// untouched (ditto-subnet#2970). Chat evidence that proves that wall
+		// confirms the decline; without it a chat-heavy harness whose later
+		// calls are embeddings was booked as relay infrastructure and re-leased.
 		switch code {
 		case platformDeclineBudgetExhausted:
 			// embeddingRequests increments once per handle, including this call,
 			// before the platform is contacted. It is the reservation lower
 			// bound we have: the 1B-token / 100k-request embedding grant is
 			// not crossed by a body-byte sum the way chat is.
-			return session.embeddingRequests >= session.embeddingRequestBudget
+			return session.embeddingRequests >= session.embeddingRequestBudget ||
+				chatAllowanceSpentLocked(session)
 		case platformDeclineTokenBudgetExhausted:
-			return session.embeddingTokens >= session.embeddingTokenBudget
+			return session.embeddingTokens >= session.embeddingTokenBudget ||
+				chatAllowanceSpentLocked(session)
 		case platformDeclineReservationTooLarge:
 			return false
 		default:
@@ -1091,6 +1165,19 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 	default:
 		return false
 	}
+}
+
+// chatAllowanceSpentLocked reports whether this broker's own chat evidence
+// proves the shared grant was exhausted by the harness: settled receipted
+// tokens at or past the token wall, or completed calls at the request wall.
+// It uses the same settled-only bounds as the chat branch above, never a
+// body-byte ceiling, and requires authenticated chat budgets.
+func chatAllowanceSpentLocked(session *brokerSession) bool {
+	if !sessionHasBudgetEvidenceLocked(session, false) {
+		return false
+	}
+	return session.promptTokens+session.completionTokens >= session.tokenBudget ||
+		session.successes >= session.requestBudget
 }
 
 // platformChatChargeUpperBound mirrors the Platform's tokenizer-independent
@@ -1159,6 +1246,36 @@ const platformRejectionMessageLimit = 400
 // and the agent-fault attribution above are all untouched, and the response
 // shape stays `{"error": ...}` -- only the human-readable value differs. A body
 // this cannot parse falls back to the old wording rather than failing.
+func cloneAdmission(in map[string]admissionBucket) map[string]admissionBucket {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]admissionBucket, len(in))
+	for code, bucket := range in {
+		out[code] = bucket
+	}
+	return out
+}
+
+func (session *brokerSession) noteAdmissionLocked(status int, detail string) {
+	code := admissionCode(status, detail)
+	if code == "" {
+		return
+	}
+	if session.admission == nil {
+		session.admission = map[string]admissionBucket{}
+	}
+	bucket := session.admission[code]
+	bucket.Count++
+	bucket.HTTPStatus = status
+	stamp := time.Now().UTC().Format(time.RFC3339Nano)
+	if bucket.First == "" {
+		bucket.First = stamp
+	}
+	bucket.Last = stamp
+	session.admission[code] = bucket
+}
+
 func platformRejectionMessage(body []byte) string {
 	if len(body) == 0 || len(body) > 64<<10 {
 		return ""
@@ -1271,6 +1388,7 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 		maxSessions:      maxSessions * 2,
 		embeddingSlots:   make(chan struct{}, capacity),
 		controlToken:     strings.TrimSpace(os.Getenv("DITTOBENCH_BROKER_CONTROL_TOKEN")),
+		controlAuthMode:  controlAuthModeFromEnv(os.Getenv("DITTOBENCH_CONTROL_AUTH_MODE")),
 		platformProxyURL: platformProxyURL,
 		platformTransportURL: configuredPlatformTransportURL(
 			os.Getenv("DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL"), platformProxyURL,
@@ -1371,6 +1489,20 @@ func configuredPlatformTransportURL(raw, canonical string) string {
 	return configuredPlatformProxyURL(raw)
 }
 
+// controlAuthorized admits a caller of the inference-session control routes
+// (prepare, activate, activate-confirmation, cancel).
+//
+// Loopback admission is unchanged here: those peers share the scorer's own
+// network namespace, while the validator always arrives from the Compose
+// bridge and must present the bearer. Retiring source-IP trust is a separate
+// rollout decision (see verifyControlCredential in control_auth.go).
+//
+// The published Compose default (insecureDefaultControlToken) is a literal in
+// a public repository, so it is not a secret. It follows the same staged
+// rollout as the control plane: under shadow it is still accepted, because
+// every validator that never set DITTOBENCH_BROKER_CONTROL_TOKEN depends on it,
+// and the first acceptance is logged as a would-reject; under enforce it is
+// treated as "no token configured" and every non-loopback call is refused.
 func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 	ip := net.ParseIP(sourceIP(r.RemoteAddr))
 	if ip != nil && ip.IsLoopback() {
@@ -1380,7 +1512,34 @@ func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 		return false
 	}
 	provided, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) == 1
+	if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) != 1 {
+		return false
+	}
+	if b.controlToken != insecureDefaultControlToken {
+		return true
+	}
+	if b.controlAuthMode == controlAuthEnforce {
+		log.Printf(
+			"inference control auth rejected: %s %s from %s: the published Compose "+
+				"default token is not a credential; set DITTOBENCH_BROKER_CONTROL_TOKEN "+
+				"to a per-host secret",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+		return false
+	}
+	// Once per process: in shadow, controlAuth.wrap already logs every
+	// would-reject verdict for these routes (it treats this same literal as no
+	// credential), so repeating it per request here would only double the noise.
+	b.publicDefaultTokenLog.Do(func() {
+		log.Printf(
+			"inference control auth (shadow, would reject): %s %s from %s: the "+
+				"published Compose default token is not a credential; set "+
+				"DITTOBENCH_BROKER_CONTROL_TOKEN to a per-host secret before "+
+				"DITTOBENCH_CONTROL_AUTH_MODE=enforce",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+	})
+	return true
 }
 
 func (b *inferenceBroker) requireControl(w http.ResponseWriter, r *http.Request) bool {
@@ -1527,6 +1686,10 @@ func (b *inferenceBroker) registerToolRoute(
 		return registeredToolRoute{}, func() {}, err
 	}
 	b.mu.Lock()
+	effectProtocolV1 := false
+	if endpoint, ok := h.(interface{ SupportsToolEffectReceiptsV1() bool }); ok {
+		effectProtocolV1 = endpoint.SupportsToolEffectReceiptsV1()
+	}
 	b.tools[id] = toolRoute{
 		expectedSourceIP:      expectedSourceIP,
 		allowNATFallback:      allowNATFallback && requireCaseCapability,
@@ -1534,6 +1697,7 @@ func (b *inferenceBroker) registerToolRoute(
 		provenanceSessionID:   provenanceSessionID,
 		capabilityKey:         key,
 		handler:               h,
+		effectProtocolV1:      effectProtocolV1,
 		slots:                 make(chan struct{}, sourceConcurrencyFor(caseConcurrency)),
 	}
 	b.mu.Unlock()
@@ -1594,8 +1758,22 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	}
 	if route.provenanceSessionID != "" {
 		var call protocol.ToolExecRequest
-		if json.Unmarshal(requestBody, &call) != nil ||
-			!b.consumeModelToolCall(route.provenanceSessionID, caseID, call) {
+		if json.Unmarshal(requestBody, &call) != nil {
+			writeError(w, http.StatusConflict, "tool provenance unavailable")
+			return
+		}
+		var authorized bool
+		if call.EffectProtocol != "" || call.OperationID != "" {
+			if !route.effectProtocolV1 {
+				b.recordEffectOperationDenial(route.provenanceSessionID, caseID, toolFindingUnsupportedEffectProtocol)
+				writeError(w, http.StatusConflict, "tool effect protocol unavailable")
+				return
+			}
+			authorized = b.authorizeEffectOperationV1(route.provenanceSessionID, r.PathValue("id"), caseID, call)
+		} else {
+			authorized = b.consumeModelToolCall(route.provenanceSessionID, caseID, call)
+		}
+		if !authorized {
 			writeError(w, http.StatusConflict, "tool provenance unavailable")
 			return
 		}
@@ -1603,7 +1781,45 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
 	forwarded.URL.RawQuery = ""
-	route.handler.ServeHTTP(w, forwarded)
+	if !b.claimSpanCaptureEnabledFor(route.provenanceSessionID) {
+		// v9..v12 sessions (and routes with no provenance session) stream the
+		// tool response through untouched: nothing is allocated below v13.
+		route.handler.ServeHTTP(w, forwarded)
+		return
+	}
+	// Bench v13 claim-span capture: the result the validator serves this case is
+	// exempt from the causal answer_in_prompt gate, so book its value tokens on
+	// the case ledger. The recorder is bounded.
+	recorder := &toolResultRecorder{ResponseWriter: w, limit: claimSpanMaxToolResultBytes}
+	route.handler.ServeHTTP(recorder, forwarded)
+	if recorder.status == 0 || recorder.status == http.StatusOK {
+		b.recordClaimSpanToolResult(route.provenanceSessionID, caseID, recorder.body.Bytes())
+	}
+}
+
+// toolResultRecorder mirrors a bounded prefix of a tool_endpoint response body
+// while passing every byte through to the harness unchanged.
+type toolResultRecorder struct {
+	http.ResponseWriter
+	body   bytes.Buffer
+	limit  int
+	status int
+}
+
+func (r *toolResultRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *toolResultRecorder) Write(p []byte) (int, error) {
+	if remaining := r.limit - r.body.Len(); remaining > 0 {
+		if len(p) > remaining {
+			r.body.Write(p[:remaining])
+		} else {
+			r.body.Write(p)
+		}
+	}
+	return r.ResponseWriter.Write(p)
 }
 
 func (r registeredToolRoute) endpoint(baseURL, caseID, userID string) string {
@@ -1697,6 +1913,151 @@ func (b *inferenceBroker) consumeModelToolCall(
 	argsSHA256, argsErr := canonicalToolArguments(call.Args)
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	return consumeModelToolCallLocked(session, caseID, call, argsSHA256, argsErr)
+}
+
+// authorizeEffectOperationV1 permits a bounded retransmission of the exact
+// operation already backed by a model emission. A fresh operation still has to
+// consume a fresh emission. Only the V1 endpoint can prove whether the effect
+// was applied, so this broker binding does not itself grant effect credit.
+func (b *inferenceBroker) authorizeEffectOperationV1(
+	sessionID, routeID, caseID string, call protocol.ToolExecRequest,
+) bool {
+	argsSHA256, err := canonicalToolArguments(call.Args)
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	generation := session.caseIDs[caseID]
+	if generation == 0 {
+		generation = session.activeCaseGeneration
+	}
+	if generation != 0 && session.caseIDs[caseID] == 0 && session.activeCaseID != caseID {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingCrossCaseReplay)
+		return false
+	}
+	if session.benchVersion < protocol.BenchVersionV13 {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingUnsupportedEffectProtocol)
+		return false
+	}
+	if call.EffectProtocol != protocol.ToolEffectProtocolV1 || !validEffectOperationID(call.OperationID) {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingUnsupportedEffectProtocol)
+		return false
+	}
+	if call.Name == "" || err != nil {
+		recordEffectDenialLocked(session, caseID, generation, toolFindingNameArgumentMismatch)
+		return false
+	}
+	key := brokerEffectOperationKey{routeID: routeID, caseID: caseID, operationID: call.OperationID}
+	if prior := session.effectOperations[key]; prior != nil {
+		if prior.userID != call.UserID || prior.name != call.Name ||
+			prior.argsSHA256 != argsSHA256 {
+			recordEffectDenialLocked(session, caseID, generation, toolFindingNameArgumentMismatch)
+			return false
+		}
+		if prior.generation != generation {
+			recordEffectDenialLocked(session, caseID, generation, toolFindingCrossCaseReplay)
+			return false
+		}
+		if prior.replays >= 3 {
+			recordEffectDenialLocked(session, caseID, generation, toolFindingDuplicateExecution)
+			return false
+		}
+		// A transport retry retains its hop. A later model-emitted retry has a
+		// new hop and must consume its own matching emission before the cached
+		// endpoint receipt can be returned without applying the effect again.
+		if prior.hop != call.Hop {
+			if !consumeModelToolCallLocked(session, caseID, call, argsSHA256, nil) {
+				return false
+			}
+			prior.hop = call.Hop
+			prior.replays++
+			return true
+		}
+		prior.replays++
+		if generation != 0 {
+			snapshot := session.caseSnapshots[generation]
+			snapshot.EndpointAttempts++
+			session.caseSnapshots[generation] = snapshot
+		} else {
+			ledger := session.sessionToolCases[caseID]
+			ledger.EndpointAttempts++
+			session.sessionToolCases[caseID] = ledger
+		}
+		return true
+	}
+	if !consumeModelToolCallLocked(session, caseID, call, argsSHA256, nil) {
+		return false
+	}
+	if session.effectOperations == nil {
+		session.effectOperations = make(map[brokerEffectOperationKey]*brokerEffectOperation)
+	}
+	session.effectOperations[key] = &brokerEffectOperation{
+		userID: call.UserID, name: call.Name, argsSHA256: argsSHA256, generation: generation, hop: call.Hop,
+	}
+	return true
+}
+
+func (b *inferenceBroker) recordEffectOperationDenial(sessionID, caseID string, finding uint64) {
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	generation := session.caseIDs[caseID]
+	if generation == 0 {
+		generation = session.activeCaseGeneration
+	}
+	if generation != 0 && session.caseIDs[caseID] == 0 && session.activeCaseID != caseID {
+		finding = toolFindingCrossCaseReplay
+	}
+	recordEffectDenialLocked(session, caseID, generation, finding)
+}
+
+func recordEffectDenialLocked(session *brokerSession, caseID string, generation, finding uint64) {
+	if generation != 0 {
+		snapshot := session.caseSnapshots[generation]
+		snapshot.EndpointAttempts++
+		snapshot.UnmatchedToolCalls++
+		snapshot.ToolFindings |= finding
+		session.caseSnapshots[generation] = snapshot
+		return
+	}
+	if session.sessionToolCases == nil {
+		session.sessionToolCases = make(map[string]brokerSessionToolLedger)
+	}
+	ledger := session.sessionToolCases[caseID]
+	ledger.EndpointAttempts++
+	ledger.UnmatchedToolCalls++
+	ledger.ToolFindings |= finding
+	session.sessionToolCases[caseID] = ledger
+}
+
+func validEffectOperationID(id string) bool {
+	if len(id) < 16 || len(id) > 128 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func consumeModelToolCallLocked(
+	session *brokerSession, caseID string, call protocol.ToolExecRequest,
+	argsSHA256 string, argsErr error,
+) bool {
 	generation := session.caseIDs[caseID]
 	capabilityBound := generation != 0
 	if generation == 0 {
@@ -1741,6 +2102,7 @@ func (b *inferenceBroker) consumeModelToolCall(
 		session.caseToolCalls[generation] = calls
 		snapshot.MatchedToolCalls++
 		session.caseSnapshots[generation] = snapshot
+		recordCatalogToolResultLocked(session, caseID, call.Name)
 		return true
 	}
 	snapshot.UnmatchedToolCalls++
@@ -1842,6 +2204,7 @@ func consumeSessionModelToolCallLocked(
 		candidate.consumed = true
 		session.sessionToolConsumed++
 		ledger.MatchedToolCalls++
+		recordCatalogToolResultLocked(session, caseID, name)
 		return true
 	}
 	ledger.UnmatchedToolCalls++
@@ -2087,7 +2450,7 @@ func (a brokerConfirmationAuthorizer) Authorize(
 	session.mu.Lock()
 	grant, ok := session.confirmationGrants[lane]
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
-	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "")
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "", "")
 	active := session.confirmationSession && session.expiresAt.After(time.Now())
 	session.mu.Unlock()
 	if !ok || !active || request.URL.String() != grant.ProxyURL || len(privateKey) != ed25519.PrivateKeySize {
@@ -2818,6 +3181,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 	session := lease.session
 	rest := "/" + strings.TrimLeft(r.PathValue("rest"), "/")
 	caseGeneration := uint64(0)
+	urlCaseID := ""
 	if strings.HasPrefix(rest, "/cases/") {
 		parts := strings.SplitN(strings.TrimPrefix(rest, "/cases/"), "/", 2)
 		if len(parts) != 2 {
@@ -2826,15 +3190,32 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		session.mu.Lock()
 		caseGeneration = session.caseCapabilities[parts[0]]
+		urlCaseID = session.urlCases[parts[0]]
 		session.mu.Unlock()
-		if caseGeneration == 0 {
+		if caseGeneration == 0 && urlCaseID == "" {
 			writeError(w, http.StatusUnauthorized, "inference case capability unavailable")
 			return
 		}
 		rest = "/" + strings.TrimLeft(parts[1], "/")
 	}
+	// Bench v13 case-scoped inference_base_url: `/run/<case_id>/...` names the
+	// case the completion serves. It is the same advisory claim as
+	// X-Ditto-Case-Id (verified only against the cases in flight; never an
+	// admission, scoring, or accounting input), so a header-less client built
+	// from the per-run URL stays attributable under concurrent /run.
+	if claimedCase, remainder, ok := splitClaimSpanCasePath(rest); ok {
+		rest = remainder
+		if r.Header.Get(harnessCaseHeader) == "" {
+			r = r.Clone(r.Context())
+			r.Header.Set(harnessCaseHeader, claimedCase)
+		}
+	}
 	if rest == "/health" && r.Method == http.MethodGet {
 		b.health(w, session)
+		return
+	}
+	if rest == "/decisions" && r.Method == http.MethodPost {
+		b.handleDecision(w, r, lease)
 		return
 	}
 	// The frozen starter-kit Chutes adapter appends /chat/completions to its
@@ -2845,7 +3226,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "inference route not found")
 		return
 	}
-	b.handleChat(w, r, lease, caseGeneration)
+	b.handleChat(w, r, lease, urlCaseID, caseGeneration)
 }
 
 // handleOpenRouterShim is the HTTPS compatibility door for harnesses that
@@ -2869,11 +3250,11 @@ func (b *inferenceBroker) handleOpenRouterShim(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusUnauthorized, "inference session unavailable")
 		return
 	}
-	b.handleChat(w, r, lease)
+	b.handleChat(w, r, lease, "")
 }
 
 func (b *inferenceBroker) handleChat(
-	w http.ResponseWriter, r *http.Request, lease brokerSourceLease, explicitGeneration ...uint64,
+	w http.ResponseWriter, r *http.Request, lease brokerSourceLease, urlCaseID string, explicitGeneration ...uint64,
 ) {
 	session := lease.session
 	session.mu.Lock()
@@ -2977,7 +3358,7 @@ func (b *inferenceBroker) handleChat(
 		}
 		session.mu.Unlock()
 	}()
-	b.proxy(w, r, session, caseGeneration)
+	b.proxy(w, r, session, caseGeneration, urlCaseID)
 }
 
 type embeddingRequest struct {
@@ -3498,7 +3879,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 		dimensions = embeddingDimensions
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
-	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "")
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "", "")
 	session.mu.Unlock()
 	body, err := json.Marshal(platformEmbeddingRequest{
 		Model: model, Input: inputs,
@@ -3752,6 +4133,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
+		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
 		RecoveryExhaustions:       session.recoveryExhaustions,
@@ -3800,6 +4182,7 @@ func (b *inferenceBroker) proxy(
 	r *http.Request,
 	session *brokerSession,
 	caseGeneration uint64,
+	urlCaseID string,
 ) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, brokerBodyLimit+1))
 	if err != nil || len(body) > brokerBodyLimit {
@@ -3909,7 +4292,16 @@ func (b *inferenceBroker) proxy(
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
-	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader))
+	claimedCaseID := boundedHarnessCaseClaim(r.Header.Get(harnessCaseHeader))
+	traceCtx := traceContextLocked(session, caseGeneration, "", claimedCaseID, urlCaseID)
+	// Bench v13 claim-span capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	claimSpanAttribution := beginClaimSpanCompletionLocked(session, caseGeneration, claimedCaseID)
+	// Bench v13 catalog capture resolves WHICH case this completion serves at
+	// admission, from the same evidence the trace context uses; the booking
+	// itself happens on the success path below. No-op for bench_version<13.
+	catalogAttribution := beginCatalogCompletionLocked(session, caseGeneration, claimedCaseID)
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4020,6 +4412,7 @@ func (b *inferenceBroker) proxy(
 		if atCapacity {
 			session.mu.Lock()
 			session.capacityExhaustions++
+			session.noteAdmissionLocked(responseStatus, "")
 			session.mu.Unlock()
 			return
 		}
@@ -4053,17 +4446,32 @@ func (b *inferenceBroker) proxy(
 		// usageUnavailable is still incremented, unchanged, so the run fails
 		// exactly as before via requireCompleteV7Usage. The new counter is
 		// purely attributive.
-		agentAttributedRejection := trustedChatHandler == nil || preReservationReaderRejection
+		//
+		// A stale refusal is the one 4xx the harness cannot cause. The Platform
+		// compares X-Ditto-Requested-At -- stamped by this broker immediately
+		// before the send -- against its own clock with a 30s window, so it
+		// measures validator clock drift or a stalled upload, never the
+		// harness's bytes. Charging it to the agent spent miners' only attempt
+		// on 5CFtzzb4's intermittent skew; it is infrastructure, and the
+		// unattributed branch already lands on model_relay_unavailable, which
+		// every deployed validator retries without fault.
+		staleRefusal := legacyGateway == "" && trustedChatHandler == nil &&
+			admissionCode(responseStatus, platformRejectionMessage(responseBody)) == "stale_session"
+		agentAttributedRejection := (trustedChatHandler == nil || preReservationReaderRejection) && !staleRefusal
 		session.mu.Lock()
 		session.usageUnavailable++
 		if agentAttributedRejection {
 			session.agentRequestRejections++
+			session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
 			if confirmationCase && preReservationReaderRejection {
 				snapshot := session.caseSnapshots[caseGeneration]
 				snapshot.ReaderAgentRejections++
 				session.caseSnapshots[caseGeneration] = snapshot
 			}
 		} else {
+			if staleRefusal {
+				session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
+			}
 			session.failures++
 		}
 		session.providerLatency += totalLatency
@@ -4080,8 +4488,13 @@ func (b *inferenceBroker) proxy(
 		}
 		if agentAttributedRejection {
 			log.Printf(
-				"run %s: platform rejected the harness's inference request with %d before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
-				runID, responseStatus, rejections, detail,
+				"run %s: platform rejected the harness's inference request with %d (%s) before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
+				runID, responseStatus, admissionCode(responseStatus, detail), rejections, detail,
+			)
+		} else if staleRefusal {
+			log.Printf(
+				"run %s: platform refused the broker's request timestamp as stale (%d) -- validator clock or transport, NOT an agent fault: %s",
+				runID, responseStatus, detail,
 			)
 		} else {
 			log.Printf(
@@ -4149,6 +4562,13 @@ func (b *inferenceBroker) proxy(
 		Usage *struct {
 			PromptTokens     int `json:"prompt_tokens"`
 			CompletionTokens int `json:"completion_tokens"`
+			// Bench v13 cost ledger: OpenRouter folds reasoning tokens into
+			// completion_tokens on the agent-selected reasoning route and
+			// reports them here; the ledger books them separately from the
+			// answer output. Absent on providers/routes without reasoning.
+			CompletionTokensDetails *struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
 		} `json:"usage"`
 	}
 	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
@@ -4181,14 +4601,35 @@ func (b *inferenceBroker) proxy(
 	// input and completion value tokens in call order. `body` is the normalized
 	// model INPUT; `responseBody` is the COMPLETION. No-op for bench_version<12.
 	recordAnswerIOLocked(session, caseGeneration, body, responseBody)
+	// Bench v13 claim-span capture: the harness-authored request spans and the
+	// model-emitted completion spans, as value-token hashes on the attributed
+	// case. No-op for bench_version<13.
+	recordClaimSpanCompletionLocked(session, claimSpanAttribution, body, responseBody)
+	// Bench v13 catalog capture: what the harness OFFERED (request tools[],
+	// tool_choice, system-span digest) paired with what the model CHOSE.
+	// Metadata only; no-op for bench_version<13.
+	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
+	completionTokens, reasoningTokens := uint64(0), uint64(0)
 	if usageOK {
 		session.usageAvailable++
 		session.promptTokens += uint64(decoded.Usage.PromptTokens)
 		session.completionTokens += uint64(decoded.Usage.CompletionTokens)
+		completionTokens = uint64(decoded.Usage.CompletionTokens)
+		if details := decoded.Usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
+			reasoningTokens = uint64(details.ReasoningTokens)
+			if reasoningTokens > completionTokens {
+				reasoningTokens = completionTokens
+			}
+		}
 	} else {
 		session.usageUnavailable++
 	}
+	// Bench v13 cost ledger: book this successful completion's choices and
+	// answer output tokens (reasoning tokens recorded separately) on the case
+	// it can be bound to -- capability route, verified X-Ditto-Case-Id claim,
+	// or serial window. No-op for bench_version<13.
+	recordInferenceCostLocked(session, caseGeneration, claimedCaseID, responseBody, usageOK, completionTokens, reasoningTokens)
 	session.mu.Unlock()
 	if injectedDelay > 0 {
 		// Hold the completed upstream response for the scheduled fingerprint
@@ -4228,7 +4669,7 @@ func (b *inferenceBroker) trustedProbe(ctx context.Context, id string) error {
 	req.RemoteAddr = net.JoinHostPort(session.expectedSourceIP, "1")
 	session.mu.Unlock()
 	recorder := httptest.NewRecorder()
-	b.proxy(recorder, req, session, 0)
+	b.proxy(recorder, req, session, 0, "")
 	if recorder.Code < 200 || recorder.Code >= 300 {
 		return fmt.Errorf("ticket inference probe returned %d", recorder.Code)
 	}
@@ -4272,6 +4713,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
 		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
+		Admission:                 cloneAdmission(session.admission),
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
 		RecoveryExhaustions:       session.recoveryExhaustions,
@@ -4351,7 +4793,7 @@ type traceContext struct {
 	BenchVersion   int      `json:"bench_version,omitempty"`
 	Lane           string   `json:"lane,omitempty"` // confirmation lane when applicable
 	CaseID         string   `json:"case_id,omitempty"`
-	CaseSource     string   `json:"case_source,omitempty"` // window | claim | in_flight
+	CaseSource     string   `json:"case_source,omitempty"` // window | url | claim | in_flight
 	CaseVerified   bool     `json:"case_verified"`
 	ClaimedCaseID  string   `json:"claimed_case_id,omitempty"`
 	CaseGeneration uint64   `json:"case_generation,omitempty"`
@@ -4359,7 +4801,7 @@ type traceContext struct {
 }
 
 // traceContextLocked builds the header value. Caller holds session.mu.
-func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed string) string {
+func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed, urlCase string) string {
 	tc := traceContext{
 		Version:        1,
 		RunID:          session.boundRunID,
@@ -4388,6 +4830,8 @@ func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, cla
 	switch {
 	case caseGeneration != 0 && session.activeCaseGeneration == caseGeneration && session.activeCaseID != "":
 		tc.CaseID, tc.CaseSource, tc.CaseVerified = session.activeCaseID, "window", true
+	case urlCase != "":
+		tc.CaseID, tc.CaseSource, tc.CaseVerified = urlCase, "url", true
 	case claimed != "" && session.runCases[claimed] > 0:
 		tc.CaseID, tc.CaseSource, tc.CaseVerified = claimed, "claim", true
 	case claimed != "":
@@ -4404,18 +4848,15 @@ func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, cla
 	return string(encoded)
 }
 
-// beginRunCase marks caseID in flight on the session for trace attribution.
-// Returns false when the session is unknown (the scorer ignores that: the
-// run proceeds, the traces are merely less attributed).
-func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
+func (b *inferenceBroker) beginRunCase(id, caseID string) (caseURL string, started bool) {
 	if caseID == "" {
-		return false
+		return "", false
 	}
 	b.mu.RLock()
 	session := b.sessions[id]
 	b.mu.RUnlock()
 	if session == nil {
-		return false
+		return "", false
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -4423,10 +4864,33 @@ func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
 		session.runCases = make(map[string]int)
 	}
 	session.runCases[caseID]++
-	return true
+	// Bench v13: a registered case owns a ledger from registration, so a case
+	// whose harness never calls the model settles as an empty, complete ledger
+	// (no_model_completion) rather than reading as "no capture". No-op below v13.
+	if claimSpanCaptureEnabled(session) {
+		ensureClaimSpanLedgerLocked(session, caseID)
+	}
+	// v13 already supplies a claim-bearing route used by provenance capture.
+	// Keep that route intact; opaque URLs below are trace-only.
+	if session.benchVersion >= protocol.BenchVersionV13 {
+		return "", true
+	}
+	token := session.urlCaseTokens[caseID]
+	if token == "" {
+		token = randomCaseToken()
+		if session.urlCases == nil {
+			session.urlCases = make(map[string]string)
+			session.urlCaseTokens = make(map[string]string)
+		}
+		session.urlCases[token] = caseID
+		session.urlCaseTokens[caseID] = token
+	}
+	if session.harnessBase != "" {
+		caseURL = session.harnessBase + "/cases/" + token
+	}
+	return caseURL, true
 }
 
-// endRunCase releases one beginRunCase.
 func (b *inferenceBroker) endRunCase(id, caseID string) {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -4438,9 +4902,37 @@ func (b *inferenceBroker) endRunCase(id, caseID string) {
 	defer session.mu.Unlock()
 	if session.runCases[caseID] <= 1 {
 		delete(session.runCases, caseID)
+		if token := session.urlCaseTokens[caseID]; token != "" {
+			delete(session.urlCases, token)
+			delete(session.urlCaseTokens, caseID)
+		}
 		return
 	}
 	session.runCases[caseID]--
+}
+
+func (b *inferenceBroker) setHarnessBase(id, base string) {
+	base = strings.TrimRight(strings.TrimSpace(base), "/")
+	if base == "" {
+		return
+	}
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	session.harnessBase = base
+	session.mu.Unlock()
+}
+
+func randomCaseToken() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return fmt.Sprintf("t%dx%d", time.Now().UnixNano(), len(raw))
+	}
+	return hex.EncodeToString(raw[:])
 }
 
 func (b *inferenceBroker) beginCaseSnapshot(id string, caseIDs ...string) (uint64, brokerCaseSnapshot, error) {
@@ -4642,6 +5134,7 @@ func toolFindingNames(bits uint64) []string {
 		{toolFindingDuplicateExecution, "duplicate_tool_execution"},
 		{toolFindingCrossCaseReplay, "cross_case_replay"},
 		{toolFindingInvalidModelEmission, "invalid_model_tool_emission"},
+		{toolFindingUnsupportedEffectProtocol, "unsupported_effect_protocol"},
 	} {
 		if bits&finding.bit != 0 {
 			findings = append(findings, finding.name)
@@ -4755,7 +5248,20 @@ func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, 
 	flatEffort := ""
 	if nestedPresent {
 		nested, ok := nestedRaw.(map[string]any)
-		if !ok || len(nested) != 1 {
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning")
+		}
+		// Match Platform's accepted shapes. Repeating the trusted privacy
+		// value is harmless; the normalized body below still owns exclude.
+		_, hasEffort := nested["effort"]
+		excludeRaw, hasExclude := nested["exclude"]
+		switch {
+		case hasEffort && len(nested) == 1:
+		case hasEffort && hasExclude && len(nested) == 2:
+			if exclude, ok := excludeRaw.(bool); !ok || !exclude {
+				return nil, fmt.Errorf("invalid reasoning")
+			}
+		default:
 			return nil, fmt.Errorf("invalid reasoning")
 		}
 		candidate, ok := nested["effort"].(string)

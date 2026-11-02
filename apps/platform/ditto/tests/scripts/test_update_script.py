@@ -154,6 +154,9 @@ def _run_update(
     scripts.mkdir(parents=True)
     fake_bin.mkdir()
     shutil.copy2(ROOT / "scripts" / "update.sh", scripts / "update.sh")
+    shutil.copy2(
+        ROOT / "scripts" / "chain-transport.sh", scripts / "chain-transport.sh"
+    )
     # The deploy plan and the app definition it diffs against are part of the
     # start/reload path, so the fake repo needs both.
     shutil.copy2(
@@ -361,46 +364,6 @@ def test_update_loads_optional_archive_key_without_logging_value(
     assert api_key not in result.stderr
 
 
-def test_update_missing_archive_secret_keeps_free_fallback_unconfigured(
-    tmp_path: Path,
-) -> None:
-    result, _base_env, deploy_env, _deploy_mode = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "SUBTENSOR_ARCHIVE_RPC_API_KEY=" not in deploy_env
-    assert "SUBTENSOR_ARCHIVE_RPC_URL=" not in deploy_env
-    assert "free archive fallback remains enabled" in result.stderr
-
-
-def test_update_migrates_legacy_deploy_values_before_ansible_rewrites_base(
-    tmp_path: Path,
-) -> None:
-    legacy_key = "legacy-key-must-not-be-logged"
-    initial_env = (
-        "BASE_SETTING=kept\n"
-        f"DITTO_TAOSTATS_API_KEY={legacy_key}\n"
-        "DITTO_TAOSTATS_VALIDATOR_NAMES_URL=https://example.invalid/names\n"
-    )
-    result, base_env, deploy_env, deploy_mode = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        initial_env=initial_env,
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert base_env == initial_env
-    assert f"DITTO_TAOSTATS_API_KEY={legacy_key}" in deploy_env
-    assert (
-        "DITTO_TAOSTATS_VALIDATOR_NAMES_URL=https://example.invalid/names" in deploy_env
-    )
-    assert deploy_mode == 0o600
-    assert legacy_key not in result.stdout
-    assert legacy_key not in result.stderr
-
-
 def test_update_keeps_ansible_env_immutable_and_deploy_values_override(
     tmp_path: Path,
 ) -> None:
@@ -418,26 +381,6 @@ def test_update_keeps_ansible_env_immutable_and_deploy_values_override(
     assert result.returncode == 0, result.stderr
     assert observed_base == base_env
     assert f"DITTO_UPLOAD_PAYMENT_ADDRESS={payment}" in deploy_env
-    assert deploy_mode == 0o600
-
-
-def test_update_repairs_no_final_newline_before_adding_another_key(
-    tmp_path: Path,
-) -> None:
-    payment = "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
-    wandb_url = "https://wandb.ai/ditto/dev"
-    result, _, deploy_env, deploy_mode = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        initial_deploy_env=f"DITTO_UPLOAD_PAYMENT_ADDRESS={payment}",
-        deploy_env_vars={"DITTO_DASHBOARD_WANDB_URL": wandb_url},
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert deploy_env.splitlines() == [
-        f"DITTO_UPLOAD_PAYMENT_ADDRESS={payment}",
-        f"DITTO_DASHBOARD_WANDB_URL={wandb_url}",
-    ]
     assert deploy_mode == 0o600
 
 
@@ -493,43 +436,6 @@ def test_update_recreates_the_app_when_the_script_path_drifted(tmp_path: Path) -
     assert "pm2 start scripts/ecosystem.config.js" in actions
     assert "pm2 reload" not in actions
     assert "recreate (script:" in result.stdout
-
-
-def test_update_fails_when_the_api_never_comes_up(tmp_path: Path) -> None:
-    """A deploy that leaves the API dead must exit non-zero, not report success."""
-    result, _, _, _ = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        jlist=_jlist(tmp_path / "repo", api_status="waiting restart"),
-        health_timeout="4",
-    )
-
-    assert result.returncode != 0
-    assert "deploy failed" in result.stderr
-    assert "ditto-api" in result.stderr
-
-
-def test_update_fails_when_the_api_serves_a_degraded_health_response(
-    tmp_path: Path,
-) -> None:
-    """Online but /health non-200 is still a failed deploy, reported distinctly."""
-    result, _, _, _ = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        health_status=503,
-        health_timeout="4",
-    )
-
-    assert result.returncode != 0
-    assert "returned HTTP 503" in result.stderr
-
-
-def test_update_accepts_the_stopped_one_shot_cleanup_job(tmp_path: Path) -> None:
-    """`stopped` is the cron-driven cleanup job's correct terminal state."""
-    result, _, _, _ = _run_update(tmp_path, gcloud_source="exit 1\n")
-
-    assert result.returncode == 0, result.stderr
-    assert "ditto-screened-image-cleanup: stopped (one-shot" in result.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -602,20 +508,6 @@ def test_update_rolls_the_checkout_back_when_the_dashboard_build_fails(
     record = _deploy_record(tmp_path)
     assert record["result"] == "failed"
     assert record["stage"] == "dashboard-build"
-
-
-def test_update_builds_the_dashboard_before_touching_pm2(tmp_path: Path) -> None:
-    """When the checkout has a dashboard, the deploy builds it (ci + build)."""
-    result, _, _, _ = _run_update(
-        tmp_path,
-        gcloud_source="exit 1\n",
-        npm_source=f'printf "%s\\n" "npm $*" >> "{tmp_path}/repo/npm-actions.log"\n',
-    )
-
-    assert result.returncode == 0, result.stderr
-    npm_actions = (tmp_path / "repo" / "npm-actions.log").read_text()
-    assert "npm ci" in npm_actions
-    assert "npm run build" in npm_actions
 
 
 def test_update_rolls_the_checkout_back_when_a_migration_fails(

@@ -41,6 +41,7 @@ type InferenceHandlers struct {
 	Exchange                    http.Handler
 	ChatCompletions             http.Handler
 	Embeddings                  http.Handler
+	Decisions                   http.Handler
 	ConfirmationChatCompletions http.Handler
 	ConfirmationEmbeddings      http.Handler
 	SourceReviewProviderEvent   http.Handler
@@ -105,10 +106,11 @@ func New(cfg *config.Config, logger *slog.Logger, pool *pgxpool.Pool, prober cha
 
 // Handler builds the full middleware stack:
 //
-//	RequestID (outermost) → AuthPassThrough → Recover → SizedGzip → mux
+//	RequestID (outermost) → Recover → SizedGzip → mux
 //
 // mirroring the Python registration order (RequestIDMiddleware outermost,
-// AuthPassThroughMiddleware a literal no-op, SizedGZipMiddleware innermost).
+// SizedGZipMiddleware innermost). There is no auth middleware on either side:
+// every endpoint authenticates itself.
 // The Python PublicCache middleware is deliberately absent: it is inert on
 // every relay route (GET /api/v1/public/* only), so only its pass-through
 // exists here — which is no code at all.
@@ -133,7 +135,6 @@ func (s *Server) Handler() http.Handler {
 	var h http.Handler = mux
 	h = relayhttp.SizedGzipMiddleware(h)
 	h = relayhttp.RecoverMiddleware(s.logger, h)
-	h = relayhttp.AuthPassThroughMiddleware(h)
 	h = relayhttp.RequestIDMiddleware(s.logger, h)
 	return h
 }
@@ -165,6 +166,9 @@ func (s *Server) registerInferenceRoutes(register func(method, path string, h ht
 	}
 	if s.inference.Embeddings != nil {
 		register(http.MethodPost, "/api/v1/inference/embeddings", s.inference.Embeddings)
+	}
+	if s.inference.Decisions != nil {
+		register(http.MethodPost, "/api/v1/inference/decisions", s.inference.Decisions)
 	}
 	if s.inference.ConfirmationChatCompletions != nil {
 		register(http.MethodPost, "/api/v1/inference/confirmation/chat/completions", s.inference.ConfirmationChatCompletions)

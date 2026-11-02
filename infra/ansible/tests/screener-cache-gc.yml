@@ -1,0 +1,126 @@
+---
+# Render the screener BuildKit cache cleanup units from role defaults with no
+# host writes, and prove they stay bounded, tunable, and confined to the
+# rootless executor. Run: ansible-playbook --check -i localhost, tests/screener-cache-gc.yml
+- name: Render and assert the screener cache cleanup units
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    role: ../roles/screener_worker
+    defaults: "{{ lookup('ansible.builtin.file', role ~ '/defaults/main.yml') | from_yaml }}"
+    screener_user: deploy
+    screener_group: ditto
+    screener_executor_unit: ditto-screener-docker
+    screener_executor_group: ditto-builder
+    screener_docker_host: unix:///run/ditto-screener-docker/docker.sock
+    screener_cache_gc_bin: /usr/local/sbin/ditto-screener-cache-gc
+    screener_cache_gc_keep_storage: "{{ defaults.screener_cache_gc_keep_storage }}"
+    screener_cache_gc_min_age: "{{ defaults.screener_cache_gc_min_age }}"
+    screener_executor_home: /var/lib/ditto-screener-docker
+    screener_cache_gc_df_path: "{{ screener_executor_home }}"
+    screener_cache_gc_dry_run: "{{ defaults.screener_cache_gc_dry_run }}"
+    screener_cache_gc_on_calendar: "{{ defaults.screener_cache_gc_on_calendar }}"
+    screener_cache_gc_randomized_delay: "{{ defaults.screener_cache_gc_randomized_delay }}"
+    service: "{{ lookup('ansible.builtin.template', role ~ '/templates/ditto-screener-cache-gc.service.j2') }}"
+    timer: "{{ lookup('ansible.builtin.template', role ~ '/templates/ditto-screener-cache-gc.timer.j2') }}"
+    script: "{{ lookup('ansible.builtin.file', role ~ '/files/ditto-screener-cache-gc.sh') }}"
+    tasks_file: "{{ lookup('ansible.builtin.file', role ~ '/tasks/cache_gc.yml') }}"
+  tasks:
+    - name: Defaults enable a conservative, bounded policy
+      ansible.builtin.assert:
+        that:
+          - defaults.screener_cache_gc_enabled is true
+          - defaults.screener_cache_gc_dry_run is false
+          - defaults.screener_cache_gc_keep_storage == "40GB"
+          - defaults.screener_cache_gc_min_age == "1h"
+          - "'screener_executor_home' in defaults.screener_cache_gc_df_path"
+          - defaults.screener_cache_gc_on_calendar == "hourly"
+
+    - name: Service drives only the rootless executor with the bounded policy
+      ansible.builtin.assert:
+        that:
+          - "'Type=oneshot' in service"
+          - "'Environment=DOCKER_HOST=unix:///run/ditto-screener-docker/docker.sock' in service"
+          - "'Environment=SCREENER_CACHE_GC_KEEP_STORAGE=40GB' in service"
+          - "'Environment=SCREENER_CACHE_GC_MIN_AGE=1h' in service"
+          - "'Environment=SCREENER_CACHE_GC_DRY_RUN=false' in service"
+          - "'ExecStart=/usr/local/sbin/ditto-screener-cache-gc' in service"
+          - "'Environment=SCREENER_CACHE_GC_DF_PATH=/var/lib/ditto-screener-docker' in service"
+          - "'RestrictAddressFamilies=AF_UNIX' in service"
+          - "'Wants=' not in service"
+          - "'User=deploy' in service"
+          - "'SupplementaryGroups=ditto-builder' in service"
+          - "'docker.sock' in service and '/var/run/docker.sock' not in service"
+
+    - name: Timer is persistent and jittered
+      ansible.builtin.assert:
+        that:
+          - "'OnCalendar=hourly' in timer"
+          - "'Persistent=true' in timer"
+          - "'RandomizedDelaySec=5min' in timer"
+          - "'WantedBy=timers.target' in timer"
+
+    - name: Script and tasks never widen the prune
+      ansible.builtin.assert:
+        that:
+          - "'builder prune --force --keep-storage' in script"
+          - "'system prune' not in script"
+          - "'image prune' not in script"
+          - "'volume prune' not in script"
+          - "'--all' not in script"
+          - "'screener_cache_gc_enabled' in tasks_file"
+          - "'daemon_reload: true' in tasks_file"
+
+# Execute the real task file in check mode for both policy states. This proves it
+# parses, evaluates its conditions, and tolerates absent units in check mode. It
+# does NOT prove idempotency or systemd behavior: that needs a real dev host.
+- name: Run cache_gc.yml in check mode with the policy enabled and disabled
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Enabled
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/screener_worker"
+        tasks_from: cache_gc
+      vars:
+        screener_cache_gc_enabled: true
+    - name: Disabled
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/screener_worker"
+        tasks_from: cache_gc
+      vars:
+        screener_cache_gc_enabled: false
+
+# The active Hetzner role maps its persistent full worker's rootless socket and
+# service identity into the same cache-only tasks. Exercise that mapping rather
+# than rendering a second, unrelated copy of the policy.
+- name: Run Hetzner cache wiring in check mode
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Hetzner keeps the daemon and timer budgets aligned
+      ansible.builtin.assert:
+        that:
+          - hetzner_defaults.screener_fleet_cache_gc_keep_storage == "100GB"
+          - "'SCREENER_CACHE_KEEP_STORAGE:' in hetzner_tasks"
+      vars:
+        hetzner_defaults: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/hetzner_screener_fleet/defaults/main.yml') | from_yaml }}"
+        hetzner_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../roles/hetzner_screener_fleet/tasks/main.yml') }}"
+    - name: Active fleet cache timer
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/hetzner_screener_fleet"
+        tasks_from: cache_gc
+      vars:
+        screener_fleet_runtime_enabled: true
+    - name: Rehearsal host leaves the timer disabled
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/hetzner_screener_fleet"
+        tasks_from: cache_gc
+      vars:
+        screener_fleet_runtime_enabled: false

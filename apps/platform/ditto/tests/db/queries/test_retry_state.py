@@ -1,18 +1,22 @@
 """Fail-closed agent-attributable exhaustion classification."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.retry_state import RetryDisposition, RetryState
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
-from ditto.db.models import Agent, ValidatorTicket
+from ditto.db.models import Agent, Score, ValidatorTicket
 from ditto.db.queries.retry_state import (
     AGENT_ATTRIBUTABLE_WITHDRAW_REASON,
+    agreed_failure_detail,
     dominant_agent_failure_detail,
     is_agent_attributable_exhaustion,
     recommended_retry_action,
     recovery_gate,
+    retry_disposition,
 )
 from ditto.db.queries.tickets import MAX_ATTEMPTS_PER_VERSION
 
@@ -49,6 +53,53 @@ def _agent() -> Agent:
     )
 
 
+def test_classified_request_rejection_is_still_not_retried() -> None:
+    tickets = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failure_detail="inference_request_rejected:request_too_large",
+        )
+        for index in range(3)
+    ]
+    assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
+
+
+def test_non_miner_refusals_remain_retryable() -> None:
+    for infrastructure_code in (
+        "stale_session",
+        "grant_not_servable",
+        "grant_rate_denied",
+        "platform_capacity",
+        "provider_failure",
+    ):
+        tickets = [
+            _ticket(
+                validator_hotkey="validator-0",
+                failure_detail="inference_request_rejected:request_too_large",
+            ),
+            _ticket(
+                validator_hotkey="validator-1",
+                failure_detail=f"inference_request_rejected:{infrastructure_code}",
+            ),
+            _ticket(
+                validator_hotkey="validator-2",
+                failure_detail="inference_request_rejected:invalid_schema",
+            ),
+        ]
+        assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is False
+        assert dominant_agent_failure_detail(scores=[], tickets=tickets) is None
+        assert (
+            recommended_retry_action(scores=[], tickets=tickets, recovery_allowed=True)
+            == "retry"
+        )
+        _, allowed, reason, selected = recovery_gate(
+            agent=_agent(), scores=[], tickets=tickets, now=_NOW, bench_version=11
+        )
+        assert allowed is True
+        assert reason is None
+        assert len(selected) == 3
+
+
 def test_named_agent_failures_are_withdraw_not_retry() -> None:
     tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
     assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
@@ -67,6 +118,27 @@ def test_named_agent_failures_are_withdraw_not_retry() -> None:
     assert allowed is False
     assert reason == AGENT_ATTRIBUTABLE_WITHDRAW_REASON
     assert selected == []
+
+
+def test_unflagged_137_is_retried_once_then_the_harnesses() -> None:
+    """A SIGKILL with no OOM flag is no-fault on one validator; the same kill
+    on a second validator is the harness's own crash."""
+    scores = [Score(validator_hotkey="scored-0")]
+    killed = {
+        "failure_reason": "infrastructure",
+        "failure_detail": "harness_killed_137",
+    }
+    once = [
+        _ticket(validator_hotkey="validator-0", **killed),
+        _ticket(
+            validator_hotkey="validator-1",
+            failure_reason="infrastructure",
+            failure_detail="host_memory_pressure",
+        ),
+    ]
+    assert is_agent_attributable_exhaustion(scores=scores, tickets=once) is False
+    twice = [_ticket(validator_hotkey=f"validator-{i}", **killed) for i in range(2)]
+    assert is_agent_attributable_exhaustion(scores=scores, tickets=twice) is True
 
 
 def test_missing_detail_stays_on_the_retry_path() -> None:
@@ -152,3 +224,257 @@ def test_mixed_remaining_set_stays_retryable() -> None:
         bench_version=11,
     )
     assert allowed is True
+
+
+def _disposition(
+    tickets: list[ValidatorTicket], *, state: RetryState = "exhausted"
+) -> RetryDisposition | None:
+    """The disposition a bulk classification would publish for these tickets."""
+    _, allowed, _, _ = recovery_gate(
+        agent=_agent(),
+        scores=[],
+        tickets=tickets,
+        now=_NOW,
+        bench_version=11,
+    )
+    return retry_disposition(
+        state=state,
+        scores=[],
+        tickets=tickets,
+        recovery_allowed=allowed,
+    )
+
+
+def test_named_agent_failures_read_as_a_terminal_artifact_failure() -> None:
+    tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
+    assert _disposition(tickets) == "terminal_artifact_failure"
+
+
+def test_infrastructure_exhaustion_reads_as_an_operator_hold() -> None:
+    tickets = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failure_detail="provider_outage_parked",
+            failure_reason="infrastructure",
+        )
+        for index in range(3)
+    ]
+    assert _disposition(tickets) == "operator_hold"
+
+
+def test_a_mixed_remaining_set_never_blames_the_submission() -> None:
+    tickets = [
+        _ticket(validator_hotkey="validator-0"),
+        _ticket(
+            validator_hotkey="validator-1",
+            failure_detail="invalid screened image archive: Docker manifest",
+        ),
+        _ticket(validator_hotkey="validator-2"),
+    ]
+    assert _disposition(tickets) == "operator_hold"
+
+
+def test_missing_and_stale_details_never_blame_the_submission() -> None:
+    missing = [
+        _ticket(validator_hotkey="validator-0", failure_detail=None, failed_at=None),
+        _ticket(validator_hotkey="validator-1"),
+        _ticket(validator_hotkey="validator-2"),
+    ]
+    stale = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failed_at=_ISSUED - timedelta(minutes=1),
+        )
+        for index in range(3)
+    ]
+    assert _disposition(missing) == "operator_hold"
+    assert _disposition(stale) == "operator_hold"
+
+
+def test_an_unnameable_next_step_still_reads_as_an_operator_hold() -> None:
+    """An exhausted row the gate will not act on is a hold, not a miner failure.
+
+    The gate declines to recommend anything for a submission that is no longer
+    waiting for scores, so ``recommended_retry_action`` is ``None`` even though
+    the leases really did exhaust. Declining to name a remedy is not evidence
+    about the artifact, and the miner-facing reading has to stay on the safe
+    side of that silence.
+    """
+    agent = _agent()
+    agent.status = AgentStatus.SCORED
+    tickets = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failure_detail="provider_outage_parked",
+            failure_reason="infrastructure",
+        )
+        for index in range(3)
+    ]
+    _, allowed, reason, _ = recovery_gate(
+        agent=agent,
+        scores=[],
+        tickets=tickets,
+        now=_NOW,
+        bench_version=11,
+    )
+    assert allowed is False
+    assert reason == "submission is not waiting for validator scores"
+    assert (
+        recommended_retry_action(scores=[], tickets=tickets, recovery_allowed=allowed)
+        is None
+    )
+    assert (
+        retry_disposition(
+            state="exhausted",
+            scores=[],
+            tickets=tickets,
+            recovery_allowed=allowed,
+        )
+        == "operator_hold"
+    )
+
+
+def test_two_different_named_codes_do_not_publish_a_terminal_failure() -> None:
+    """A withdraw verdict the public surface cannot name stays a hold.
+
+    ``is_agent_attributable_exhaustion`` is satisfied by any mix of named agent
+    codes, but a terminal row has to show the code it is telling the miner to
+    fix. When the remaining slots name different ones there is nothing to show,
+    so the public reading falls back rather than asserting a failure it cannot
+    attribute. The operator verdict is unchanged.
+    """
+    tickets = [
+        _ticket(
+            validator_hotkey="validator-0", failure_detail="inference_request_rejected"
+        ),
+        _ticket(
+            validator_hotkey="validator-1",
+            failure_detail="inference_allowance_exhausted",
+        ),
+        _ticket(
+            validator_hotkey="validator-2", failure_detail="model_inference_required"
+        ),
+    ]
+    assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
+    assert (
+        recommended_retry_action(scores=[], tickets=tickets, recovery_allowed=False)
+        == "withdraw"
+    )
+    assert dominant_agent_failure_detail(scores=[], tickets=tickets) is None
+    assert _disposition(tickets) == "operator_hold"
+
+
+def test_an_agreed_cause_is_reported_for_a_hold() -> None:
+    """A hold every slot agrees on can be attributed; a mixed one cannot."""
+    agreed = [
+        _ticket(
+            validator_hotkey=f"validator-{index}",
+            failure_detail="provider_outage_parked",
+            failure_reason="infrastructure",
+        )
+        for index in range(3)
+    ]
+    assert agreed_failure_detail(scores=[], tickets=agreed) == "provider_outage_parked"
+
+    mixed = [
+        _ticket(
+            validator_hotkey="validator-0",
+            failure_detail="provider_outage_parked",
+            failure_reason="infrastructure",
+        ),
+        _ticket(
+            validator_hotkey="validator-1",
+            failure_detail=(
+                "DittobenchError: run deadbeef did not finish within 6600.0s"
+            ),
+            failure_reason="infrastructure",
+        ),
+        _ticket(
+            validator_hotkey="validator-2",
+            failure_detail=None,
+            failed_at=None,
+        ),
+    ]
+    assert agreed_failure_detail(scores=[], tickets=mixed) is None
+    assert _disposition(mixed) == "operator_hold"
+
+
+def test_an_advancing_row_has_no_disposition() -> None:
+    """Only a parked row carries one; a live or cooling lease is still moving."""
+    tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
+    for state in ("running", "retry_available", "cooling_down", "queued"):
+        assert _disposition(tickets, state=state) is None
+
+
+def test_final_quorum_retry_can_select_later_healthy_validator() -> None:
+    scores = [Score(validator_hotkey=f"scored-{i}") for i in range(2)]
+    tickets = [
+        _ticket(
+            validator_hotkey="cpu-incompatible",
+            failure_reason="infrastructure",
+            failure_detail="sandbox_cpu_unsupported",
+            deadline=_FAILED - timedelta(minutes=1),
+        ),
+        _ticket(
+            validator_hotkey="memory-host",
+            failure_reason="sandbox_oom",
+            failure_detail="sandbox_oom",
+        ),
+    ]
+    common: dict[str, Any] = {
+        "agent": _agent(),
+        "scores": scores,
+        "tickets": tickets,
+        "now": _NOW,
+        "bench_version": 11,
+        "work_available_hotkeys": {"cpu-incompatible", "memory-host"},
+    }
+    assert recovery_gate(**common)[3] == [tickets[0]]
+    _, allowed, reason, selected = recovery_gate(
+        **common, target_validator_hotkey="memory-host"
+    )
+    assert allowed and reason is None and selected == [tickets[1]]
+    assert all(ticket.manual_retry_grants == 0 for ticket in tickets)
+
+
+def test_targeted_retry_does_not_bypass_quorum_availability_or_ticket_budget() -> None:
+    scores = [Score(validator_hotkey=f"scored-{i}") for i in range(2)]
+    ticket = _ticket(
+        validator_hotkey="memory-host",
+        failure_reason="sandbox_oom",
+        failure_detail="sandbox_oom",
+    )
+    common: dict[str, Any] = {
+        "agent": _agent(),
+        "scores": scores,
+        "tickets": [ticket],
+        "now": _NOW,
+        "bench_version": 11,
+    }
+    assert recovery_gate(**common, target_validator_hotkey="missing")[1:3] == (
+        False,
+        "selected validator has no exhausted ticket",
+    )
+    assert recovery_gate(
+        **common, target_validator_hotkey="memory-host", work_available_hotkeys=set()
+    )[1:3] == (False, "selected validator is not currently available")
+    assert recovery_gate(
+        **{
+            **common,
+            "scores": [scores[0]],
+            "tickets": [
+                ticket,
+                _ticket(validator_hotkey="other", failure_reason="infrastructure"),
+            ],
+        },
+        target_validator_hotkey="memory-host",
+    )[1:3] == (False, "validator selection requires exactly one missing score")
+    ticket.manual_retry_grants = 1
+    _, allowed, reason, selected = recovery_gate(
+        **common, target_validator_hotkey="memory-host"
+    )
+    assert (
+        not allowed
+        and selected == []
+        and reason == "operator-authorized validator retry is queued"
+    )

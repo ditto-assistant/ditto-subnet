@@ -1,0 +1,234 @@
+---
+# Render the PostgreSQL logging-collector retention units from role defaults with
+# no host writes, and prove the policy is present, bounded, and consistent with
+# the collector settings both Postgres group_vars actually ship.
+# Run: ansible-playbook --check -i localhost, tests/postgres-log-gc.yml
+- name: Render and assert the PostgreSQL log retention units
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    role: ../roles/postgres
+    defaults: "{{ lookup('ansible.builtin.file', role ~ '/defaults/main.yml') | from_yaml }}"
+    platform_vars: "{{ lookup('ansible.builtin.file', '../group_vars/role_platform_postgres.yml') | from_yaml }}"
+    backend_vars: "{{ lookup('ansible.builtin.file', '../group_vars/role_postgres.yml') | from_yaml }}"
+    postgres_log_gc_bin: "{{ defaults.postgres_log_gc_bin }}"
+    # The role default is "{{ ditto_logs }}/postgresql". A file lookup returns it
+    # unsafe (never re-templated), so state the path group_vars/all.yml resolves
+    # it to; the assertion below pins the default to that same directory.
+    ditto_logs: /opt/ditto/logs
+    postgres_log_gc_dir: "{{ ditto_logs }}/postgresql"
+    postgres_log_gc_glob: "{{ defaults.postgres_log_gc_glob }}"
+    postgres_log_gc_retention_days: "{{ defaults.postgres_log_gc_retention_days }}"
+    postgres_log_gc_max_total_mb: "{{ defaults.postgres_log_gc_max_total_mb }}"
+    postgres_log_gc_current_logfiles: /var/lib/postgresql/17/main/current_logfiles
+    postgres_log_gc_data_dir: "{{ defaults.postgres_log_gc_data_dir }}"
+    postgres_log_gc_dry_run: "{{ defaults.postgres_log_gc_dry_run }}"
+    postgres_log_gc_on_calendar: "{{ defaults.postgres_log_gc_on_calendar }}"
+    postgres_log_gc_randomized_delay: "{{ defaults.postgres_log_gc_randomized_delay }}"
+    service: "{{ lookup('ansible.builtin.template', role ~ '/templates/ditto-postgres-log-gc.service.j2') }}"
+    timer: "{{ lookup('ansible.builtin.template', role ~ '/templates/ditto-postgres-log-gc.timer.j2') }}"
+    script: "{{ lookup('ansible.builtin.file', role ~ '/files/ditto-postgres-log-gc.sh') }}"
+    tasks_file: "{{ lookup('ansible.builtin.file', role ~ '/tasks/log_gc.yml') }}"
+    data_disk_tasks: "{{ lookup('ansible.builtin.file', role ~ '/tasks/data_disk.yml') }}"
+    main_tasks: "{{ lookup('ansible.builtin.file', role ~ '/tasks/main.yml') }}"
+  tasks:
+    # The bug in #1745 was an absent bound, so this is the assertion that matters:
+    # retention exists, is on by default, and is bounded on BOTH axes.
+    - name: Defaults enable a bounded, reclaiming retention policy
+      ansible.builtin.assert:
+        that:
+          - defaults.postgres_log_gc_enabled is true
+          - defaults.postgres_log_gc_dry_run is false
+          - defaults.postgres_log_gc_retention_days | int >= 1
+          - defaults.postgres_log_gc_retention_days | int <= 30
+          - defaults.postgres_log_gc_max_total_mb | int >= 256
+          - defaults.postgres_log_gc_max_total_mb | int <= 20480
+          - defaults.postgres_log_gc_on_calendar == "hourly"
+          - defaults.postgres_log_gc_glob == "postgresql-*.log"
+          - defaults.postgres_log_gc_dir is search('ditto_logs')
+          - defaults.postgres_log_gc_dir is search('/postgresql$')
+
+    - name: Retention is wired into the role's main task path
+      ansible.builtin.assert:
+        that:
+          - "'log_gc.yml' in main_tasks"
+          - "'data_disk.yml' in main_tasks"
+          - "'postgres_log_gc_dir' in main_tasks"
+
+    - name: Service applies both bounds as the postgres user, writing only the log directory
+      ansible.builtin.assert:
+        that:
+          - "'Type=oneshot' in service"
+          - "'User=postgres' in service"
+          - "'Environment=POSTGRES_LOG_GC_DIR=/opt/ditto/logs/postgresql' in service"
+          - "'Environment=POSTGRES_LOG_GC_GLOB=postgresql-*.log' in service"
+          - "'Environment=POSTGRES_LOG_GC_RETENTION_DAYS=7' in service"
+          - "'Environment=POSTGRES_LOG_GC_MAX_TOTAL_MB=6144' in service"
+          - >-
+            'Environment=POSTGRES_LOG_GC_CURRENT_LOGFILES=/var/lib/postgresql/17/main/current_logfiles'
+            in service
+          - "'Environment=POSTGRES_LOG_GC_DRY_RUN=false' in service"
+          - "'ExecStart=/usr/local/sbin/ditto-postgres-log-gc' in service"
+          - "'ReadWritePaths=/opt/ditto/logs/postgresql' in service"
+          - "'ProtectSystem=strict' in service"
+          - "'RestrictAddressFamilies=' in service"
+          # After= only: retention must never start or stop the cluster.
+          - "'After=postgresql.service' in service"
+          - "'Wants=' not in service"
+          - "'pg_ctlcluster' not in service"
+
+    - name: Timer is persistent and jittered
+      ansible.builtin.assert:
+        that:
+          - "'OnCalendar=hourly' in timer"
+          - "'Persistent=true' in timer"
+          - "'RandomizedDelaySec=5min' in timer"
+          - "'WantedBy=timers.target' in timer"
+
+    - name: Script reclaims by age and by ceiling and never widens its scope
+      ansible.builtin.assert:
+        that:
+          - "'-maxdepth 1' in script"
+          - "'POSTGRES_LOG_GC_RETENTION_DAYS' in script"
+          - "'POSTGRES_LOG_GC_MAX_TOTAL_MB' in script"
+          - "'protecting live collector file' in script"
+          - "'pg_ctlcluster' not in script"
+          - "'systemctl' not in script"
+          - "'rm -rf' not in script"
+          - "'/var/lib/postgresql' not in script"
+
+    - name: Task file gates on the policy flag and refuses unbounded values
+      ansible.builtin.assert:
+        that:
+          - "'postgres_log_gc_enabled' in tasks_file"
+          - "'daemon_reload: true' in tasks_file"
+          - "'Reject an unbounded PostgreSQL log retention policy' in tasks_file"
+
+    # Both Postgres VMs run the collector; neither may reintroduce an unbounded
+    # directory by overriding the policy or by pointing it at another path.
+    - name: Every Postgres group keeps the collector bounded
+      ansible.builtin.assert:
+        that:
+          - item.vars.postgres_tuning.logging_collector | replace("'", "") == "on"
+          - item.vars.postgres_tuning.log_directory | replace("'", "") == "/opt/ditto/logs/postgresql"
+          - item.vars.postgres_tuning.log_filename | replace("'", "") is match('postgresql-.*\.log')
+          - item.vars.postgres_log_gc_enabled | default(true) is true
+          - item.vars.postgres_log_gc_retention_days | default(7) | int <= 30
+          - item.vars.postgres_log_gc_max_total_mb | default(6144) | int <= 20480
+          # Slow-query logging is diagnostic value, kept deliberately (#1745).
+          - item.vars.postgres_tuning.log_min_duration_statement | int == 500
+        fail_msg: "{{ item.name }} would leave the collector directory unbounded"
+        quiet: true
+      loop:
+        - { name: role_platform_postgres, vars: "{{ platform_vars }}" }
+        - { name: role_postgres, vars: "{{ backend_vars }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    # The 50 GB volume stays unmounted until an operator decides: the migration is
+    # offline. Enabling the mount must not imply mkfs, and must never relocate
+    # PGDATA on its own.
+    - name: The attached data disk stays default-off behind two gates
+      ansible.builtin.assert:
+        that:
+          - defaults.postgres_data_disk_enabled is false
+          - defaults.postgres_data_disk_allow_format is false
+          - platform_vars.postgres_data_disk_enabled is false
+          - "'by-id/google-ditto-pg-platform-data' in defaults.postgres_data_disk_device"
+          - "'nofail' in defaults.postgres_data_disk_mount_opts"
+          - "'force: false' in data_disk_tasks"
+          - "'postgres_data_disk_allow_format' in data_disk_tasks"
+          - "'state: unmounted' not in data_disk_tasks"
+          - "'state: absent' not in data_disk_tasks"
+          # Relocating the cluster is a runbook, not a converge.
+          - "'pg_ctlcluster' not in data_disk_tasks"
+          - "'data_directory' not in data_disk_tasks"
+
+# Execute the real task files in check mode. This proves they parse, evaluate
+# their conditions, and tolerate absent units. It does NOT prove idempotency or
+# systemd behavior: that needs a real dev host.
+- name: Run log_gc.yml in check mode with the policy enabled and disabled
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  vars:
+    postgres_tuning:
+      logging_collector: "'on'"
+      log_directory: "'/opt/ditto/logs/postgresql'"
+      log_filename: "'postgresql-%Y-%m-%d.log'"
+      log_min_duration_statement: 500
+  tasks:
+    - name: Enabled
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/postgres"
+        tasks_from: log_gc
+      vars:
+        postgres_log_gc_enabled: true
+
+    - name: Disabled
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/postgres"
+        tasks_from: log_gc
+      vars:
+        postgres_log_gc_enabled: false
+
+    - name: Data disk disabled is a no-op
+      ansible.builtin.include_role:
+        name: "{{ playbook_dir }}/../roles/postgres"
+        tasks_from: data_disk
+
+    # A retention policy that does not describe the configured collector would
+    # silently reclaim nothing; prove the role refuses it.
+    - name: A drifted retention path is rejected
+      block:
+        - name: Point retention at the wrong directory
+          ansible.builtin.include_role:
+            name: "{{ playbook_dir }}/../roles/postgres"
+            tasks_from: log_gc
+          vars:
+            postgres_log_gc_enabled: true
+            postgres_log_gc_dir: /var/log/postgresql
+        - name: Drift was not rejected
+          ansible.builtin.fail:
+            msg: log_gc.yml accepted a retention directory the collector never writes
+      rescue:
+        - name: Drift rejected as expected
+          ansible.builtin.debug:
+            msg: log_gc.yml rejected a retention directory that does not match log_directory
+
+    - name: An unbounded ceiling is rejected
+      block:
+        - name: Ask for a 200 GB ceiling
+          ansible.builtin.include_role:
+            name: "{{ playbook_dir }}/../roles/postgres"
+            tasks_from: log_gc
+          vars:
+            postgres_log_gc_enabled: true
+            postgres_log_gc_max_total_mb: 204800
+        - name: Unbounded ceiling was not rejected
+          ansible.builtin.fail:
+            msg: log_gc.yml accepted a ceiling larger than the boot disk
+      rescue:
+        - name: Unbounded ceiling rejected as expected
+          ansible.builtin.debug:
+            msg: log_gc.yml rejected an out-of-range size ceiling
+
+    - name: Enabling the data disk without the device present fails closed
+      block:
+        - name: Enable the mount against a device this host does not have
+          ansible.builtin.include_role:
+            name: "{{ playbook_dir }}/../roles/postgres"
+            tasks_from: data_disk
+          vars:
+            postgres_data_disk_enabled: true
+            postgres_data_disk_device: /dev/disk/by-id/google-absent-test-disk
+        - name: Missing device was not rejected
+          ansible.builtin.fail:
+            msg: data_disk.yml proceeded without the attached disk
+      rescue:
+        - name: Missing device rejected as expected
+          ansible.builtin.debug:
+            msg: data_disk.yml refused to format or mount an absent device

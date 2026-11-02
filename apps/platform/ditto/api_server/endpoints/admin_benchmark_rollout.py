@@ -26,6 +26,7 @@ from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import get_dataset_generator, get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
     AGGREGATE_PROVIDER,
@@ -36,6 +37,8 @@ from ditto.api_server.queue_policy_settings import (
     resolve_queue_policy_settings,
 )
 from ditto.db.models import (
+    Agent,
+    BenchmarkRolloutMember,
     InferenceProviderRoute,
     InferenceRoutingPolicy,
     ValidatorHeartbeat,
@@ -51,11 +54,16 @@ from ditto.db.queries.benchmark_rollout import (
     create_rollout_snapshot,
     heartbeat_matches_inference_contract,
     historical_rescore_cohort,
+    open_rollout,
     rollout_for_desired_version,
     rollout_state,
     select_active_bench_version,
     supersede_open_rollout,
 )
+from ditto.db.queries.inference_concurrency_settings import (
+    latest_inference_concurrency_settings_revision,
+)
+from ditto.db.queries.retry_state import classify_agent_retry_states
 
 router = APIRouter(prefix="/admin/benchmark-rollout", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -335,6 +343,38 @@ def _inference_proxy_start_blocker(
     return None
 
 
+DECISION_LANE_MIN_BENCH_VERSION = 15
+"""The first bench version whose scored runs carry the locked decision lane."""
+
+
+async def _decision_lane_start_blocker(
+    session: AsyncSession,
+    desired_version: int,
+    inference_config: InferenceProxyConfig | None,
+) -> str | None:
+    """A v15+ rollout needs the operator's decision lane on with a pinned model.
+
+    v15 scored grants carry the lane (``_decision_grant_stamps``); opening a
+    rollout while the board is off would score the cohort without the lane the
+    contract promises, so the start is refused until the board pins a model.
+    Like the proxy blocker, it applies only where an inference proxy config is
+    bound (the running API), never to a config-free direct call.
+    """
+    if desired_version < DECISION_LANE_MIN_BENCH_VERSION or inference_config is None:
+        return None
+    settings = settings_from_row(
+        await latest_inference_concurrency_settings_revision(session)
+    )
+    lane = settings.decision_lane
+    if not lane.enabled or lane.model is None:
+        return (
+            f"benchmark v{desired_version} rollout requires the decision lane "
+            "enabled with a pinned model (set_inference_concurrency_settings "
+            "decision_lane)"
+        )
+    return None
+
+
 def _require_confirmation(actual: str, *, action: str, version: int) -> None:
     expected = f"{action} BENCHMARK V{version}"
     if actual != expected:
@@ -368,6 +408,7 @@ async def get_rollout_control(
     try:
         async with asyncio.timeout(_remaining(deadline)):
             state = await rollout_state(session)
+            state["retry_diagnostics"] = await rollout_retry_diagnostics(session)
             capability_counts = await capable_validator_counts(
                 session, versions=[contract.version for contract in contracts]
             )
@@ -410,6 +451,10 @@ async def get_rollout_control(
                 config_blocker = _inference_proxy_start_blocker(
                     version, inference_config
                 )
+                if config_blocker is None:
+                    config_blocker = await _decision_lane_start_blocker(
+                        session, version, inference_config
+                    )
                 if config_blocker is not None:
                     blockers.append(config_blocker)
                 else:
@@ -456,6 +501,53 @@ async def get_rollout_control(
         "active_contract_candidates": candidates,
         "degraded_sections": degraded,
     }
+
+
+async def rollout_retry_diagnostics(session: AsyncSession) -> list[dict[str, object]]:
+    """Explain parked cohort work using the same read-only gates as recovery.
+
+    Durable rollout status is not a dispatch diagnosis: collecting can require
+    an operator after fail-once exhaustion. Do not change status, mint grants,
+    or reuse qualification_blockers (which describes screening enrollment).
+    """
+    rollout = await open_rollout(session)
+    if rollout is None:
+        return []
+    rows = (
+        await session.execute(
+            select(Agent, BenchmarkRolloutMember.position)
+            .join(
+                BenchmarkRolloutMember,
+                BenchmarkRolloutMember.agent_id == Agent.agent_id,
+            )
+            .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
+            .order_by(BenchmarkRolloutMember.position)
+        )
+    ).all()
+    states = await classify_agent_retry_states(
+        session,
+        agents=[agent for agent, _position in rows],
+        now=datetime.now(UTC),
+        require_work_available_validator=True,
+        rollout=rollout,
+        canonical_version=rollout.desired_version,
+    )
+    return [
+        {
+            "agent_id": str(agent.agent_id),
+            "agent_name": agent.name,
+            "bench_version": retry.bench_version,
+            "blocks_activation": position <= rollout.priority_cohort_target,
+            "state": retry.state,
+            "score_count": retry.score_count,
+            "recovery_allowed": retry.recovery_allowed,
+            "blocking_reason": retry.blocking_reason,
+            "earliest_retry_after": retry.earliest_retry_after,
+        }
+        for agent, position in rows
+        if (retry := states.get(agent.agent_id)) is not None
+        and retry.bench_version == rollout.desired_version
+    ]
 
 
 @router.get("/{desired_version}")
@@ -679,6 +771,10 @@ async def start_rollout(
         request.app.state.config.inference_proxy if request is not None else None
     )
     config_blocker = _inference_proxy_start_blocker(target, inference_config)
+    if config_blocker is None:
+        config_blocker = await _decision_lane_start_blocker(
+            session, target, inference_config
+        )
     if config_blocker is not None:
         raise HTTPException(status_code=409, detail=config_blocker)
     await _require_rollout_start_capacity(

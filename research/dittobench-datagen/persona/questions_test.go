@@ -437,12 +437,12 @@ func TestInjectionPayloadPerSeed(t *testing.T) {
 // question whose answer is the seeded nonce, whose forbidden value is the bait,
 // and whose nonce varies across seeds (un-cacheable).
 func TestCanaryPresentAndDistinct(t *testing.T) {
+	t.Parallel()
 	nonces := map[string]bool{}
 	for seed := int64(0); seed < 30; seed++ {
 		p := BuildPlan(seed, DefaultOpts())
 		var cq *Question
-		for i := range DeriveQuestions(p) {
-			q := DeriveQuestions(p)[i]
+		for _, q := range DeriveQuestions(p) {
 			if q.Type == QTCanary {
 				cq = &q
 				break

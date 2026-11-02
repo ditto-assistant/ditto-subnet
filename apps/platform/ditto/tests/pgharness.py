@@ -54,10 +54,21 @@ import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
 import asyncpg
+from sqlalchemy import text
+
+from ditto.db.history_guards import (
+    TRUNCATE_GUARDS_SQL,
+    truncate_past_guards,
+    truncate_past_guards_body,
+)
+
+if TYPE_CHECKING:
+    from alembic.config import Config
+    from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
 # ─── Ambient container ───────────────────────────────────────────────────────
 
@@ -322,6 +333,22 @@ def migration_fingerprint() -> str:
     return digest.hexdigest()
 
 
+def _alembic_config() -> Config:
+    """The Alembic config for an in-process run inside a test worker.
+
+    ``configure_logger=False`` keeps ``alembic/env.py`` from calling
+    ``fileConfig``. That call disables every logger already imported, so the
+    worker that built the template would drop the ``ditto.*`` warnings that
+    ``caplog`` tests assert on for the rest of its session.
+    """
+    from alembic.config import Config
+
+    cfg = Config(str(_REPO_ROOT / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
+    cfg.attributes["configure_logger"] = False
+    return cfg
+
+
 def _run_alembic_upgrade(target: Dsn, revision: str = "head") -> None:
     """Apply the real migration chain -- not ``Base.metadata.create_all``.
 
@@ -332,16 +359,12 @@ def _run_alembic_upgrade(target: Dsn, revision: str = "head") -> None:
     ``alembic/env.py`` reads ``POSTGRES_*`` and calls ``asyncio.run`` itself,
     so this must be invoked from synchronous context with no running loop.
     """
-    from alembic.config import Config
-
     from alembic import command
 
     previous = {k: os.environ.get(k) for k in target.env}
     os.environ.update(target.env)
     try:
-        cfg = Config(str(_REPO_ROOT / "alembic.ini"))
-        cfg.set_main_option("script_location", str(_REPO_ROOT / "alembic"))
-        command.upgrade(cfg, revision)
+        command.upgrade(_alembic_config(), revision)
     finally:
         for key, value in previous.items():
             if value is None:
@@ -522,6 +545,34 @@ def drop_worker_database(admin: Dsn, database: str) -> None:
 
 SCHEMA_TABLE = "alembic_version"
 """Never truncated: it records which schema the database is on."""
+TRUNCATE_LOCK_TIMEOUT_MS = 10_000
+"""Bound a fixture truncate stuck behind a straggler's lock."""
+
+
+async def truncate_test_tables(
+    conn: AsyncConnection | AsyncSession, *tables: str
+) -> None:
+    """Reset legacy integration fixtures without weakening runtime guards.
+
+    CASCADE can reach append-only artifact history. Bypass only enabled
+    statement guards, restoring them atomically, on a private worker clone.
+    Identities restart as in the full reset, so a truncated table is fresh.
+    """
+    database = await conn.scalar(text("SELECT current_database()"))
+    if (
+        not isinstance(database, str)
+        or not database.startswith(DB_PREFIX)
+        or database == TEMPLATE_DB
+    ):
+        raise PostgresUnavailable("fixture truncate requires a private test database")
+    if not tables or any(
+        not table.isascii() or not table.isidentifier() or table == SCHEMA_TABLE
+        for table in tables
+    ):
+        raise ValueError("invalid fixture table names")
+    await truncate_past_guards(
+        conn, tables, restart_identity=True, lock_timeout_ms=TRUNCATE_LOCK_TIMEOUT_MS
+    )
 
 
 async def _build_reset_sql(conn: asyncpg.Connection) -> str:
@@ -559,11 +610,15 @@ async def _build_reset_sql(conn: asyncpg.Connection) -> str:
     if not tables:  # pragma: no cover - means the template never migrated
         raise PostgresUnavailable("no public tables found; template is not migrated")
 
-    body = [
-        "  TRUNCATE "
-        + ", ".join(f'public."{name}"' for name in tables)
-        + " RESTART IDENTITY CASCADE;"
-    ]
+    # Owner-only fixture resets bypass enabled statement TRUNCATE guards on
+    # this isolated clone, then restore them in the same atomic DO block.
+    # Normal tests retain every production history guard.
+    guards = await conn.fetch(TRUNCATE_GUARDS_SQL)
+    body = truncate_past_guards_body(
+        tables,
+        [(g["table_name"], g["trigger_name"], g["enable_mode"]) for g in guards],
+        restart_identity=True,
+    )
     for name in tables:
         seed = await conn.fetchval(
             f'SELECT json_agg(t)::text FROM public."{name}" t'  # noqa: S608

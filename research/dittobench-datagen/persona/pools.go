@@ -399,7 +399,45 @@ var starSigns = []string{
 	"Sagittarius", "Capricorn", "Aquarius", "Pisces",
 }
 
+// v14StarSigns keep the sign name but require the word "sign", so "cancer
+// screening" and "a leo is a lion" are not answers.
+var v14StarSigns = []string{
+	"Aries sign", "Taurus sign", "Gemini sign", "Cancer sign", "Leo sign",
+	"Virgo sign", "Libra sign", "Scorpio sign", "Sagittarius sign",
+	"Capricorn sign", "Aquarius sign", "Pisces sign",
+}
+
+// incidentalProse is ordinary English that must not grade as a corrected
+// answer. Published V8-V13 pools stay frozen even when they collide with it.
+var incidentalProse = []string{
+	"let me go check that",
+	"the sage advice helped",
+	"a slate of options",
+	"we saw the coral reef",
+	"amber light at dusk",
+	"that was a plum assignment",
+	"this is a gray area",
+	"they got the green light",
+	"I am feeling blue today",
+	"a brown paper bag",
+	"hazel eyes are common",
+	"the cancer screening clinic",
+	"a leo is just a lion",
+	"I will go if I may",
+	"rust on the gate",
+	"a ruby ring",
+	"the crystal vase",
+	"swift action helped",
+	"julia came to dinner",
+}
+
 var eyeColors = []string{"brown", "blue", "green", "hazel", "gray", "amber"}
+
+// v14EyeColors are multi-word so ordinary prose ("feeling blue", "brown paper",
+// "amber light") cannot satisfy grade.Hit.
+var v14EyeColors = []string{
+	"dark brown", "bright blue", "deep green", "light hazel", "cool gray", "warm amber",
+}
 
 var bloodTypes = []string{
 	"O negative", "A positive", "B positive", "AB negative", "O positive",

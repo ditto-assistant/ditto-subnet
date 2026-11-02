@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from uuid import UUID
+from dataclasses import replace
 
 import pytest
 
-from ditto.validator.config import FINNEY_BURN_HOTKEY, parse_validator_config_from_env
+from ditto.validator.config import parse_validator_config_from_env
 from ditto.validator.errors import ValidatorConfigError
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -35,11 +35,45 @@ class TestKothConfig:
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.top5_max_confirmation_seeds == 15
         assert cfg.miner_emission_share == 1.0
-        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+        assert cfg.burn_hotkey is None  # resolved from registered UID 0 each epoch
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 30
         assert cfg.epoch_seconds == 3600
         assert cfg.dittobench_timeout_seconds == 9900
+
+    def test_liveness_watchdog_stays_under_treasury_freshness(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_LIVENESS_WATCHDOG_SECONDS", raising=False)
+        assert parse_validator_config_from_env().liveness_watchdog_seconds == 600
+        monkeypatch.setenv("VALIDATOR_LIVENESS_WATCHDOG_SECONDS", "0")
+        assert parse_validator_config_from_env().liveness_watchdog_seconds == 0
+        # 15 minutes would let Platform's treasury gate fire before the restart.
+        for invalid in ("900", "60", "nan"):
+            monkeypatch.setenv("VALIDATOR_LIVENESS_WATCHDOG_SECONDS", invalid)
+            with pytest.raises(ValidatorConfigError, match="LIVENESS_WATCHDOG"):
+                parse_validator_config_from_env()
+
+    def test_crn_block_binding_posture_defaults_to_observe(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Owner default for v13.0: every new gate ships observe, never enforce.
+        A missing pin logs and falls back; it does not stall the lanes."""
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", raising=False)
+        assert parse_validator_config_from_env().crn_block_binding_posture == "observe"
+
+    def test_crn_block_binding_posture_is_an_explicit_opt_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", " Enforce ")
+        assert parse_validator_config_from_env().crn_block_binding_posture == "enforce"
+        # A consensus knob never silently falls back to either posture.
+        monkeypatch.setenv("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", "shadow")
+        with pytest.raises(ValidatorConfigError, match="CRN_BLOCK_BINDING_POSTURE"):
+            parse_validator_config_from_env()
 
     def test_env_cannot_override_frozen_knobs(
         self, monkeypatch: pytest.MonkeyPatch
@@ -63,7 +97,7 @@ class TestKothConfig:
         assert cfg.koth_dethrone_z == 1.64
         assert cfg.koth_confirmation_seeds == 3
         assert cfg.miner_emission_share == 1.0
-        assert cfg.burn_hotkey == FINNEY_BURN_HOTKEY
+        assert cfg.burn_hotkey is None
 
     def test_localnet_burns_to_local_owner_validator(
         self, monkeypatch: pytest.MonkeyPatch
@@ -77,12 +111,12 @@ class TestKothConfig:
         "network",
         ["wss://archive.chain.opentensor.ai:443", "wss://finney.example.com/ws"],
     )
-    def test_custom_finney_endpoint_burns_to_fixed_owner(
+    def test_custom_finney_endpoint_resolves_live_owner(
         self, monkeypatch: pytest.MonkeyPatch, network: str
     ) -> None:
         _base_env(monkeypatch)
         monkeypatch.setenv("SUBTENSOR_NETWORK", network)
-        assert parse_validator_config_from_env().burn_hotkey == FINNEY_BURN_HOTKEY
+        assert parse_validator_config_from_env().burn_hotkey is None
 
     @pytest.mark.parametrize(
         "network", ["localhost", "127.0.0.1", "ws://127.0.0.1:9944", "ws://[::1]:9944"]
@@ -133,9 +167,22 @@ class TestLongMemCapacity:
 
         assert parse_validator_config_from_env().longmem_capacity == expected
 
+    @pytest.mark.parametrize("benchmark_capacity", range(1, 9))
+    def test_compose_empty_value_derives_for_every_host_size(
+        self, monkeypatch: pytest.MonkeyPatch, benchmark_capacity: int
+    ) -> None:
+        # docker-compose.yml renders an unset VALIDATOR_LONGMEM_CAPACITY as "".
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_BENCHMARK_CAPACITY", str(benchmark_capacity))
+        monkeypatch.setenv("VALIDATOR_LONGMEM_CAPACITY", "")
+
+        config = parse_validator_config_from_env()
+
+        assert config.longmem_capacity == (benchmark_capacity + 1) // 2
+
     @pytest.mark.parametrize(
         ("benchmark_capacity", "longmem_capacity"),
-        [(1, 2), (2, 2), (8, 5), (8, -1)],
+        [(1, 2), (2, 2), (4, 4), (8, 5), (8, -1)],
     )
     def test_rejects_unsafe_independent_capacity(
         self,
@@ -158,198 +205,6 @@ class TestLongMemCapacity:
         monkeypatch.setenv("VALIDATOR_LONGMEM_CAPACITY", "0")
 
         assert parse_validator_config_from_env().longmem_capacity == 0
-
-
-class TestCodingShadowConfig:
-    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _base_env(monkeypatch)
-        config = parse_validator_config_from_env()
-        assert config.coding_shadow_enabled is False
-        assert config.coding_shadow_run_id is None
-        assert config.coding_executor_remote_enabled is False
-        assert config.coding_executor_connectivity_canary_enabled is False
-        assert config.coding_executor_base_url == ""
-
-    def test_enable_requires_stable_identity_and_control_token(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_ENABLED", "true")
-        with pytest.raises(ValidatorConfigError, match="shadow coding"):
-            parse_validator_config_from_env()
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-shadow-control-token-0000000000000001",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_RUN_ID",
-            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        )
-        config = parse_validator_config_from_env()
-        assert config.coding_shadow_enabled is True
-        assert config.coding_shadow_instance_id == "coding-shadow-primary"
-        assert config.coding_shadow_run_id == UUID(
-            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
-        )
-
-    def test_remote_executor_requires_complete_explicit_profile(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_BASE_URL", "https://10.23.0.10:9443"
-        )
-        with pytest.raises(ValidatorConfigError, match="explicit executor gate"):
-            parse_validator_config_from_env()
-
-        monkeypatch.setenv("VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED", "true")
-        with pytest.raises(ValidatorConfigError, match="enabled coding executor"):
-            parse_validator_config_from_env()
-
-        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_ENABLED", "true")
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_RUN_ID",
-            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-shadow-control-token-0000000000000001",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CA_PATH", "/run/secrets/executor-ca.pem"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH",
-            "/run/secrets/validator-client.pem",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH",
-            "/run/secrets/validator-client-key.pem",
-        )
-        config = parse_validator_config_from_env()
-        assert config.coding_executor_remote_enabled is True
-        assert config.coding_executor_base_url == "https://10.23.0.10:9443"
-        assert config.coding_executor_timeout_seconds == 30.0
-
-    def test_connectivity_canary_is_ticketless_and_exclusive(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED", "true"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_BASE_URL", "https://10.23.0.10:9443"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CA_PATH", "/run/secrets/executor-ca.pem"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH",
-            "/run/secrets/validator-client.pem",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH",
-            "/run/secrets/validator-client-key.pem",
-        )
-        config = parse_validator_config_from_env()
-        assert config.coding_executor_connectivity_canary_enabled is True
-        assert config.coding_executor_remote_enabled is False
-        assert config.coding_shadow_enabled is False
-        assert config.coding_shadow_run_id is None
-
-        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_ENABLED", "true")
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_RUN_ID",
-            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-shadow-control-token-0000000000000001",
-        )
-        with pytest.raises(ValidatorConfigError, match="ticketless and exclusive"):
-            parse_validator_config_from_env()
-
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "http://10.23.0.10:9443",
-            "https://8.8.8.8:9443",
-            "https://192.0.2.1:9443",
-            "https://10.23.0.10:443",
-            "https://executor.internal:9443",
-            "https://10.23.0.10:9443/path",
-        ],
-    )
-    def test_remote_executor_rejects_nonprivate_origin(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_ENABLED", "true")
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_INSTANCE_ID", "coding-shadow-primary"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_SHADOW_RUN_ID",
-            "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-shadow-control-token-0000000000000001",
-        )
-        monkeypatch.setenv("VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED", "true")
-        monkeypatch.setenv("VALIDATOR_CODING_EXECUTOR_BASE_URL", value)
-        monkeypatch.setenv("VALIDATOR_CODING_EXECUTOR_CA_PATH", "/run/ca.pem")
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH", "/run/client.pem"
-        )
-        monkeypatch.setenv(
-            "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH", "/run/client-key.pem"
-        )
-        with pytest.raises(ValidatorConfigError, match="enabled coding executor"):
-            parse_validator_config_from_env()
-
-    @pytest.mark.parametrize(
-        "value",
-        ["not-a-uuid", "00000000-0000-0000-0000-000000000000"],
-    )
-    def test_rejects_invalid_run_fence(
-        self, monkeypatch: pytest.MonkeyPatch, value: str
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_CODING_SHADOW_RUN_ID", value)
-        with pytest.raises(ValidatorConfigError, match="CODING_SHADOW_RUN_ID"):
-            parse_validator_config_from_env()
-
-
-class TestCodingCanaryConfig:
-    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        _base_env(monkeypatch)
-        config = parse_validator_config_from_env()
-        assert config.coding_canary_enabled is False
-
-    def test_enable_requires_control_token(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        _base_env(monkeypatch)
-        monkeypatch.setenv("VALIDATOR_CODING_CANARY_ENABLED", "true")
-        with pytest.raises(ValidatorConfigError, match="coding canary"):
-            parse_validator_config_from_env()
-        monkeypatch.setenv(
-            "VALIDATOR_DITTOBENCH_CONTROL_TOKEN",
-            "coding-canary-control-token-0000000000000001",
-        )
-        config = parse_validator_config_from_env()
-        assert config.coding_canary_enabled is True
 
 
 class TestRequiredConfig:
@@ -418,3 +273,92 @@ class TestCompatibilityEpoch:
         monkeypatch.setenv("VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH", value)
         with pytest.raises(ValidatorConfigError, match="compatibility epoch mismatch"):
             parse_validator_config_from_env()
+
+
+class TestRouterRankSharesValidation:
+    """``__post_init__`` fails loud at boot on a misconfigured router split.
+
+    ``router_rank_shares`` is compiled-only, so we exercise the validation by
+    ``dataclasses.replace``-ing a parsed config (which re-runs ``__post_init__``)
+    rather than via env. The default parsed config must pass."""
+
+    def test_default_router_rank_shares_are_valid(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        assert cfg.router_rank_shares == (0.65, 0.14, 0.10, 0.07, 0.04)
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            (),  # empty
+            (0.6, 0.0),  # zero share
+            (0.6, -0.1),  # negative share
+            (0.6, float("nan")),  # non-finite
+            (float("inf"), 0.4),  # non-finite
+        ],
+    )
+    def test_bad_router_rank_shares_fail_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch, bad: tuple[float, ...]
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(ValidatorConfigError, match="router_rank_shares"):
+            replace(cfg, router_rank_shares=bad)
+
+
+class TestGeneratorEligibilityRequiresTheLedger:
+    def test_eligibility_without_the_ledger_read_fails_at_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        with pytest.raises(ValidatorConfigError, match="generator_ledger_read_enabled"):
+            replace(cfg, generator_ledger_read_enabled=False)
+        replace(
+            cfg, generator_weight_eligible=False, generator_ledger_read_enabled=False
+        )
+
+    def test_protocol_33_ships_the_generator_track_active_and_reading(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        cfg = parse_validator_config_from_env()
+        assert cfg.generator_track_state == "active"
+        assert cfg.generator_weight_eligible is True
+        assert cfg.generator_ledger_read_enabled is True
+        # Inert by construction: the compiled split gives generator nothing.
+        assert cfg.track_shares_bps.get("generator", 0) == 0
+
+    def test_disabling_the_ledger_read_refuses_to_boot(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "false")
+        with pytest.raises(ValidatorConfigError, match="generator_ledger_read_enabled"):
+            parse_validator_config_from_env()
+
+
+class TestRouterLedgerReadFlag:
+    def test_default_is_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.delenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", raising=False)
+        # Default-off keeps the fold byte-identical to v1 (EmptyRouterLedgerSource).
+        assert parse_validator_config_from_env().router_ledger_read_enabled is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "TRUE", "Yes"])
+    def test_truthy_values_enable(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", value)
+        assert parse_validator_config_from_env().router_ledger_read_enabled is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", ""])
+    def test_non_truthy_values_stay_off(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        _base_env(monkeypatch)
+        monkeypatch.setenv("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", value)
+        assert parse_validator_config_from_env().router_ledger_read_enabled is False

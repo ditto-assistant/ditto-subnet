@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -354,6 +355,7 @@ func (h *confirmationLongMemHarness) Run(
 	}
 	defer stopTool()
 	response, runErr := h.harness.Run(ctx, request)
+	h.logReceivedFailureTailLocked(ctx, runErr)
 	snapshot, snapshotErr := h.finishCaseLocked()
 	if snapshotErr != nil {
 		return protocol.RunResponse{}, snapshotErr
@@ -374,6 +376,31 @@ func (h *confirmationLongMemHarness) Run(
 		EmbeddingInFlight:      snapshot.EmbeddingInFlight,
 		EmbeddingCancellations: snapshot.EmbeddingCancellations,
 	})
+}
+
+// logReceivedFailureTailLocked keeps the harness's own explanation of an
+// unjudgeable /run response on the validator host. The case container is
+// stopped by finishCaseLocked immediately afterwards, so this is the only
+// moment its merged stdout+stderr still exists. The tail is bounded and
+// redacted by the sandbox and stays in the local scorer log: it never enters
+// evidence, telemetry, or a Platform report.
+func (h *confirmationLongMemHarness) logReceivedFailureTailLocked(ctx context.Context, runErr error) {
+	var caseFailure *longmemeval.HarnessCaseFailure
+	if runErr == nil || !errors.As(runErr, &caseFailure) || h.current == nil || nilInterface(h.sandbox) {
+		return
+	}
+	tail := strings.TrimSpace(h.sandbox.Logs(ctx, h.current))
+	if tail == "" {
+		log.Printf(
+			"confirmation LongMem harness returned an unjudgeable /run response (kind=%s status=%d); no container log tail",
+			caseFailure.Kind, caseFailure.StatusCode,
+		)
+		return
+	}
+	log.Printf(
+		"confirmation LongMem harness returned an unjudgeable /run response (kind=%s status=%d); container log tail:\n%s",
+		caseFailure.Kind, caseFailure.StatusCode, tail,
+	)
 }
 
 func (h *confirmationLongMemHarness) Close() error {
@@ -789,8 +816,10 @@ func confirmationEmbeddingRouteIsLocal(raw string) bool {
 
 func validateScreenedConfirmationSource(identity confirmationRuntimeIdentity) error {
 	source := identity.Source
+	// The source URL is optional provenance: a source-free validator receives
+	// none, and confirmation never fetches it. The digest stays mandatory.
 	if !canonicalConfirmationSHA256(identity.ArtifactSHA256) || identity.ArtifactSHA256 != source.TarballSHA256 ||
-		strings.TrimSpace(source.TarballURL) == "" || source.GitURL != "" || source.GitRef != "" || source.GitSubdir != "" {
+		source.GitURL != "" || source.GitRef != "" || source.GitSubdir != "" {
 		return errors.New("confirmation source provenance is incomplete")
 	}
 	if !canonicalConfirmationSHA256(source.ScreenedImageSHA256) || strings.TrimSpace(source.ScreenedImageURL) == "" ||
@@ -798,6 +827,9 @@ func validateScreenedConfirmationSource(identity confirmationRuntimeIdentity) er
 		return errors.New("confirmation screened image identity is incomplete")
 	}
 	for _, raw := range []string{source.TarballURL, source.ScreenedImageURL} {
+		if raw == "" {
+			continue // the absent source URL; the image URL is required above
+		}
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 			return errors.New("confirmation artifact URL is invalid")

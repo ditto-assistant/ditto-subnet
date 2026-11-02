@@ -8,8 +8,36 @@ from uuid import UUID
 from ditto_screening_protocol.models import (
     SCREENING_POLICY_VERSION,
     TYPED_OUTCOME_POLICY_VERSION,
+    AdjudicationCompletionReceipt,
     ScreenResultOutcome,
 )
+
+
+def completion_receipt_signing_message(
+    *,
+    screener_hotkey: str,
+    agent_id: UUID,
+    attempt_id: UUID,
+    artifact_sha256: str,
+    adjudication_digest: str,
+    receipt: AdjudicationCompletionReceipt,
+) -> bytes:
+    """Domain-separated signature over exact-artifact L4 telemetry.
+
+    This sidecar leaves the existing verdict digest and signature unchanged.
+    """
+    fields = {
+        "screener_hotkey": screener_hotkey,
+        "agent_id": str(agent_id),
+        "attempt_id": str(attempt_id),
+        "artifact_sha256": artifact_sha256,
+        "adjudication_digest": adjudication_digest,
+        "receipt": receipt.model_dump(mode="json"),
+    }
+    return (
+        "ditto-screen-adjudication-completion:v1:"
+        + json.dumps(fields, sort_keys=True, separators=(",", ":"))
+    ).encode()
 
 
 def verdict_signing_message(

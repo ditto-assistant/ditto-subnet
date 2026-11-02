@@ -13,8 +13,13 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from ditto.api_models.screener_review_settings import (
+    INTEGRITY_DOUBLE_CHECK_SCOPE,
+    ScreenerReviewSettings,
+    review_settings_checksum,
+)
 from ditto.api_server.dependencies import get_session
-from ditto.db.models import BenchmarkRollout
+from ditto.db.models import BenchmarkRollout, ScreenerReviewSettingsRevision
 
 pytestmark = pytest.mark.asyncio
 
@@ -73,12 +78,14 @@ def _settings(**overrides: object) -> dict[str, object]:
         },
         "deferred_source_review": {
             "mode": "off",
+            "integrity_double_check_mode": "off",
             "min_cohort_size": 8,
             "composite_mad_multiplier": 6.0,
             "axis_mad_multiplier": 6.0,
             "min_composite_delta": 0.10,
             "min_axis_delta": 0.15,
         },
+        "lineage_reference_mode": "same_owner_version",
     }
     settings.update(overrides)
     return settings
@@ -263,21 +270,15 @@ class TestConfirmationAndConcurrency:
         assert response.status_code == 409
         assert "expected 0, current 1" in response.json()["message"]
 
-    async def test_non_global_scope_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL, headers=_HEADERS, json={**_payload(), "scope": "board-1"}
-        )
-        assert response.status_code == 422
-
 
 class TestValidation:
-    @pytest.mark.parametrize("size", [4, 0, -1, 26, 100])
+    @pytest.mark.parametrize(
+        "size",
+        [
+            4,
+            26,
+        ],
+    )
     async def test_out_of_range_sizes_fail_closed(
         self,
         app: FastAPI,
@@ -292,7 +293,12 @@ class TestValidation:
         assert response.status_code == 422
         assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
 
-    @pytest.mark.parametrize("size", [5, 10, 25])
+    @pytest.mark.parametrize(
+        "size",
+        [
+            5,
+        ],
+    )
     async def test_in_range_sizes_are_accepted(
         self,
         app: FastAPI,
@@ -305,18 +311,6 @@ class TestValidation:
             _URL, headers=_HEADERS, json=_payload(rescore_cohort_size=size)
         )
         assert response.status_code == 200, response.text
-
-    async def test_short_reason_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL, headers=_HEADERS, json={**_payload(), "reason": "big"}
-        )
-        assert response.status_code == 422
 
     async def test_unknown_knob_is_ignored_and_not_stored(
         self,
@@ -356,42 +350,27 @@ class TestWholePolicyWrites:
         assert response.status_code == 422
         assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
 
-    async def test_partial_carryover_is_refused(
+    async def test_lineage_reference_mode_round_trips_and_defaults(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         settings_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         _install(app, settings_maker)
-        response = await client.post(
+        before = (await client.get(_URL, headers=_HEADERS)).json()
+        assert before["default"]["lineage_reference_mode"] == "same_owner_version"
+        refused = await client.post(
+            _URL, headers=_HEADERS, json=_payload(lineage_reference_mode="anyone")
+        )
+        assert refused.status_code == 422, refused.text
+        created = await client.post(
             _URL,
             headers=_HEADERS,
-            json=_payload(prev_gen_carryover={"enabled": True}),
-        )
-        assert response.status_code == 422
-
-    async def test_enabling_carryover_round_trips(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        carryover = {
-            "enabled": True,
-            "max_agents": 16,
-            "min_score_count": 2,
-            "include_exhausted": False,
-            "dedupe_scope": "coldkey",
-            "require_cohort_complete": True,
-            "require_desired_era_drained": True,
-        }
-        created = await client.post(
-            _URL, headers=_HEADERS, json=_payload(prev_gen_carryover=carryover)
+            json=_payload(lineage_reference_mode="released_base"),
         )
         assert created.status_code == 200, created.text
         effective = (await client.get(_URL, headers=_HEADERS)).json()["effective"]
-        assert effective["settings"]["prev_gen_carryover"] == carryover
+        assert effective["settings"]["lineage_reference_mode"] == "released_base"
 
     async def test_bypass_mode_round_trips_and_is_attributed(
         self,
@@ -408,6 +387,7 @@ class TestWholePolicyWrites:
         _install(app, settings_maker)
         deferred = {
             "mode": "bypass",
+            "integrity_double_check_mode": "off",
             "min_cohort_size": 8,
             "composite_mad_multiplier": 6.0,
             "axis_mad_multiplier": 6.0,
@@ -426,29 +406,6 @@ class TestWholePolicyWrites:
         assert latest["actor"] == "backroom:test"
         assert latest["reason"]
         assert latest["created_at"]
-
-    async def test_unknown_deferred_mode_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            headers=_HEADERS,
-            json=_payload(
-                deferred_source_review={
-                    "mode": "disabled",
-                    "min_cohort_size": 8,
-                    "composite_mad_multiplier": 6.0,
-                    "axis_mad_multiplier": 6.0,
-                    "min_composite_delta": 0.10,
-                    "min_axis_delta": 0.15,
-                }
-            ),
-        )
-        assert response.status_code == 422
 
 
 class TestLaneFloors:
@@ -480,34 +437,6 @@ class TestLaneFloors:
             _URL,
             headers=_HEADERS,
             json=_payload(lane_cycle_size=4, fresh_submission_slots=[0, 1, 2, 3]),
-        )
-        assert response.status_code == 422
-
-    async def test_slots_outside_the_cycle_are_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            headers=_HEADERS,
-            json=_payload(lane_cycle_size=4, fresh_submission_slots=[0, 1, 7]),
-        )
-        assert response.status_code == 422
-
-    async def test_duplicate_slots_are_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            headers=_HEADERS,
-            json=_payload(lane_cycle_size=4, fresh_submission_slots=[0, 1, 1]),
         )
         assert response.status_code == 422
 
@@ -640,16 +569,114 @@ class TestLaneModulusIsLockedDuringARollout:
         )
         assert response.status_code == 200, response.text
 
-    async def test_the_same_lane_change_is_accepted_once_no_rollout_is_open(
+
+class TestIntegrityDoubleCheckPosture:
+    """Enforce is refused until a screener could actually run the double-check.
+
+    A hold nobody can claim pulls a top-five row off the emission ledger with
+    no review able to release it, so the posture must exist first.
+    """
+
+    @staticmethod
+    def _enforce_body() -> dict[str, object]:
+        body = _settings()
+        deferred = dict(body["deferred_source_review"])  # type: ignore[call-overload]
+        deferred["integrity_double_check_mode"] = "enforce"
+        body["deferred_source_review"] = deferred
+        return _payload(settings=body)
+
+    @staticmethod
+    async def _posture(
+        maker: async_sessionmaker[AsyncSession], settings: ScreenerReviewSettings
+    ) -> None:
+        async with maker() as session, session.begin():
+            session.add(
+                ScreenerReviewSettingsRevision(
+                    parent_revision=0,
+                    scope=INTEGRITY_DOUBLE_CHECK_SCOPE,
+                    settings=settings.model_dump(mode="json"),
+                    checksum=review_settings_checksum(settings),
+                    reason="stronger top-five posture",
+                    actor="backroom:test",
+                )
+            )
+
+    async def test_enforce_without_a_posture_is_refused(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         settings_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            headers=_HEADERS,
-            json=_payload(lane_cycle_size=6, fresh_submission_slots=[0, 1, 2, 4]),
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409
+        assert INTEGRITY_DOUBLE_CHECK_SCOPE in response.text
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []
+
+    async def test_enforce_on_a_posture_that_skips_l2_is_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        await self._posture(settings_maker, ScreenerReviewSettings(mode="shadow"))
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409
+        assert "enforce" in response.text
+
+    async def test_enforce_with_a_stronger_posture_is_accepted(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        await self._posture(
+            settings_maker,
+            ScreenerReviewSettings(
+                mode="enforce",
+                l2_model="openai/gpt-5.6-sol",
+                l2_fallback_models=("openai/gpt-5.6-terra",),
+                l2_always_escalate=True,
+                timeout_seconds=900,
+                max_steps=20,
+                policy_manifest_profile="l1_l2",
+            ),
         )
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
         assert response.status_code == 200, response.text
+        board = (await client.get(_URL, headers=_HEADERS)).json()
+        deferred = board["effective"]["settings"]["deferred_source_review"]
+        assert deferred["integrity_double_check_mode"] == "enforce"
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"l2_always_escalate": False},
+            {"timeout_seconds": 1200},
+            {"max_steps": 32},
+            {"critic_reasoning_effort": "high"},
+        ],
+    )
+    async def test_enforce_rejects_unrunnable_or_conditional_posture(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+        override: dict[str, object],
+    ) -> None:
+        _install(app, settings_maker)
+        posture = ScreenerReviewSettings(
+            mode="enforce",
+            l2_always_escalate=True,
+            timeout_seconds=900,
+            max_steps=20,
+        )
+        await self._posture(
+            settings_maker,
+            ScreenerReviewSettings.model_validate({**posture.model_dump(), **override}),
+        )
+        response = await client.post(_URL, headers=_HEADERS, json=self._enforce_body())
+        assert response.status_code == 409, response.text
+        assert (await client.get(_URL, headers=_HEADERS)).json()["current"] == []

@@ -158,6 +158,16 @@ resource "google_secret_manager_secret_iam_member" "validator_prod_wandb_access"
   member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
 }
 
+# The validator reads the chain through the same paid provider as Platform; the
+# public entrypoint refuses handshakes with HTTP 429 under load.
+resource "google_secret_manager_secret_iam_member" "validator_prod_subtensor_rpc_access" {
+  count     = local.validator_prod_count
+  project   = var.project
+  secret_id = google_secret_manager_secret.subtensor_archive_rpc_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
+}
+
 # Custodians can lifecycle-manage the one recovery version without reading its
 # payload, adding a replacement, or destroying it. Only the armed disposable
 # generator can add the first version. Payload access remains exclusive to the

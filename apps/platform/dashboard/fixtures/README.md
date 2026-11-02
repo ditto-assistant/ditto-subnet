@@ -15,6 +15,7 @@ every other payload is verbatim.
 | `leaderboard.json` | `/public/leaderboard` (v7 current; entries[:12]) |
 | `leaderboard-v6.json` | `/public/leaderboard?bench_version=6` (entries[:12]) |
 | `weights.json` | `/public/weights` |
+| `ledger-epochs.json` | `/public/ledger-epochs?limit=24` (pin history; synthetic-shaped until the endpoint ships, keyed to the leaderboard fixture's champion and raw leader) |
 | `validator-names.json` | `/public/validator-names` |
 | `screeners.json` | `/public/screeners` |
 | `bench-glossary.json` | `/public/bench/glossary` |
@@ -30,7 +31,27 @@ every other payload is verbatim.
 | `v9-base-public.json` | Allowlisted `v9_base` projection emitted inside public score rows; pinned to the real endpoint serializer by `test_public.py` |
 | `agent-rejected-summary.json` | `/public/agent/<rejected agent id>/summary` |
 | `agent-rejected-pipeline.json` | `/public/agent/<rejected agent id>/pipeline` |
+| `bounty-board.json` | `/public/bounties` (recorded from a test lifecycle, below) |
+| `bounty-detail.json` | `/public/bounties/<first bounty id>` |
+| `bounty-claims.json` | `/bounties/claims/<claim id>` for every claim the detail names, keyed by claim id |
+| `generator-board.json` | `/generator/board` (captured 2026-10-27 01:29Z, enforce mode, six eligible generators; predates the name/avatar/recent fields, which tests add explicitly) |
+| `generator-rounds.json` | `/generator/rounds` (same capture) |
+| `generator-round-25967.json` | `/generator/rounds/25967`, the newest scored round in that capture |
+| `generator-upload-terms.json` | `/generator/upload-terms` (same capture) |
+| `treasury-allocation.json` | `/public/treasury-allocation` (same capture; predates the SN-350 `emission_split` fields) |
 
-Refresh by re-running the same GETs (see `src/test-fixtures.ts` for the two
-recorded agent ids) and re-applying the entries[:12] trim to both leaderboard
-files.
+The three `bounty-*.json` files are not production captures: build bounties
+start in rehearsal. Platform's
+`ditto/tests/api_server/endpoints/test_bounty_board_fixtures.py` drives real
+bounties through every public state the board renders and requires these files
+to equal its live responses, ids and times aside. Record them again with
+`DITTO_RECORD_BOUNTY_FIXTURES=1` on that test.
+
+Refresh the production captures by re-running the same GETs (see
+`src/test-fixtures.ts` for the two recorded agent ids) and re-applying the
+entries[:12] trim to both leaderboard files.
+
+`leaderboard.json` `emissions.ledger_pin` / `next_pin_projection` / `crown_incumbent_*` and
+`weights.json` `pin_agreement` / per-vector `fold` + `matches_pin` were added by hand for the
+epoch-pin surfaces (#1766, #1767, #1775) and should be replaced by a fresh capture once the
+endpoints are live.

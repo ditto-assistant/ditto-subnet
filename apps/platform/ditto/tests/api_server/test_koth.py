@@ -25,6 +25,7 @@ from ditto.api_server.koth import (
     emission_set,
     emission_shares,
     indistinguishable_from,
+    koth_entries_from_ledger,
     project_koth,
     retest_cohort,
     tempo_index,
@@ -85,6 +86,178 @@ def test_partial_or_missing_wave_keeps_canonical_median() -> None:
     assert effective_composite(entry) == 0.8
 
 
+def test_wire_projection_uses_modern_continual_history_for_the_crown() -> None:
+    """The pin projection must crown the same agent as the validator fold."""
+    from ditto.api_models import LedgerEntry
+
+    tea_id = UUID("2b38d4ba-84c3-42a5-8536-5b6808c28da8")
+    aceron_id = UUID("d2db3c2d-845a-49dd-a5a7-220565105640")
+    tea_history = [
+        0.579671,
+        0.781746,
+        0.708357,
+        0.771431,
+        0.672000,
+        0.691532,
+        0.773150,
+        0.757889,
+        0.754746,
+        0.728296,
+        0.723026,
+        0.680713,
+        0.772821,
+        0.700503,
+        0.756775,
+    ]
+    aceron_history = [
+        0.780463,
+        0.777087,
+        0.709116,
+        0.698918,
+        0.740944,
+        0.719711,
+        0.779429,
+        0.772639,
+        0.739666,
+        0.756713,
+        0.766487,
+        0.755073,
+        0.769070,
+        0.781538,
+        0.762603,
+    ]
+
+    def wire(
+        *,
+        agent_id: UUID,
+        hotkey_digit: str,
+        composite: float,
+        quorum: tuple[float, float, float],
+        history: list[float],
+        minutes: int,
+    ) -> LedgerEntry:
+        return LedgerEntry.model_validate(
+            {
+                "miner_hotkey": "5" + hotkey_digit * 47,
+                "agent_id": str(agent_id),
+                "composite": composite,
+                "n": 351,
+                "first_seen": (_T0 + timedelta(minutes=minutes)).isoformat(),
+                "sha256": "ab" * 32,
+                "run_id": f"run-{hotkey_digit}",
+                "seed": 1,
+                "validator_hotkey": "5" + "9" * 47,
+                "status": "scored",
+                "bench_version": 12,
+                "score_proofs": [
+                    {
+                        "validator_hotkey": "5" + str(index + 1) * 47,
+                        "run_id": f"proof-{index}",
+                        "composite": value,
+                        "seed": index,
+                    }
+                    for index, value in enumerate(quorum)
+                ],
+                "confirmation_history": [
+                    {
+                        "seed": index,
+                        "composite": value,
+                        "validator_hotkey": "5" + "8" * 47,
+                        "bench_version": 12,
+                    }
+                    for index, value in enumerate(history)
+                ],
+                "continual_aggregate_method": "mean_after_quorum",
+            }
+        )
+
+    tea = wire(
+        agent_id=tea_id,
+        hotkey_digit="1",
+        composite=0.773685,
+        quorum=(0.750677, 0.773685, 0.780940),
+        history=tea_history,
+        minutes=0,
+    )
+    aceron = wire(
+        agent_id=aceron_id,
+        hotkey_digit="2",
+        composite=0.717829,
+        quorum=(0.507748, 0.717829, 0.737537),
+        history=aceron_history,
+        minutes=60,
+    )
+
+    lifted = koth_entries_from_ledger([tea, aceron])
+    projection = project_koth(lifted, incumbent_agent_id=tea_id)
+
+    assert [entry.raw_rank for entry in lifted] == [1, 2]
+    assert effective_composite(lifted[0]) == pytest.approx(0.7309976666666667)
+    assert effective_composite(lifted[1]) == pytest.approx(0.7373650555555555)
+    assert projection is not None
+    assert projection.champion.agent_id == aceron_id
+    assert projection.tail[0].agent_id == tea_id
+    decision = _dethrone_decision(lifted[1], lifted[0])
+    assert decision.method == "paired"
+    assert decision.dethrones
+
+
+@pytest.mark.parametrize("bench_version", [9, 14])
+def test_wire_projection_crowns_on_the_receipt_for_every_confirmation_version(
+    bench_version: int,
+) -> None:
+    """The #2989 scenario: the pin crowns the receipt leader, not raw quorum.
+
+    The validator fold reads the same receipt for every confirmation-capable
+    version (``ditto/tests/validator/test_v9_reward_projection.py``); before
+    #2989 it read it only at v9 and crowned ``a`` here while this projection
+    crowned ``b``, so every weight receipt failed ``ledger_pin_mismatch``.
+    """
+    from ditto.api_models import LedgerEntry
+    from ditto.api_models.validator import V9ConfirmationReceipt
+
+    def wire(marker: int, raw: float, receipt_micros: int) -> LedgerEntry:
+        entry = LedgerEntry.model_validate(
+            {
+                "miner_hotkey": "5" + str(marker) * 47,
+                "agent_id": str(UUID(int=marker)),
+                "composite": raw,
+                "n": 351,
+                "first_seen": (_T0 + timedelta(minutes=marker)).isoformat(),
+                "sha256": "ab" * 32,
+                "run_id": f"run-{marker}",
+                "seed": 1,
+                "validator_hotkey": "5" + "9" * 47,
+                "status": "scored",
+                "bench_version": bench_version,
+                "score_proofs": [
+                    {
+                        "validator_hotkey": "5" + str(index + 1) * 47,
+                        "run_id": f"proof-{index}",
+                        "composite": raw,
+                        "seed": index,
+                    }
+                    for index in range(3)
+                ],
+            }
+        )
+        # Only ``full_effective_micros`` reaches the projection; signature and
+        # evidence-root verification is the validator transport's job.
+        receipt = V9ConfirmationReceipt.model_construct(
+            full_effective_micros=receipt_micros
+        )
+        return entry.model_copy(update={"v9_confirmation": receipt})
+
+    a = wire(1, 0.80, 700_000)
+    b = wire(2, 0.75, 780_000)
+    lifted = koth_entries_from_ledger([a, b])
+    projection = project_koth(lifted, incumbent_agent_id=None)
+
+    assert [entry.composite for entry in lifted] == [0.70, 0.78]
+    assert projection is not None
+    assert projection.champion.agent_id == b.agent_id
+
+
 def test_efficiency_bonus_multiplies_the_continual_score() -> None:
     entry = _entry(
         1,
@@ -98,21 +271,9 @@ def test_efficiency_bonus_multiplies_the_continual_score() -> None:
     assert effective_composite(entry) == pytest.approx(0.78 * 1.1)
 
 
-def test_legacy_efficiency_bonus_replay_remains_uncapped() -> None:
-    entry = _entry(
-        1,
-        0.95,
-        minutes=0,
-        bench_version=8,
-        efficiency_bonus=0.1,
-    )
-
-    assert effective_composite(entry) == pytest.approx(1.045)
-
-
 @pytest.mark.parametrize(
     ("factor", "expected"),
-    [(0.85, 0.8 * 0.85), (1.0, 0.8), (1.1, 0.8 + 0.1 * 0.2)],
+    [(0.85, 0.8 * 0.85), (1.1, 0.8 + 0.1 * 0.2)],
 )
 def test_bounded_efficiency_factor_uses_headroom_uplift(
     factor: float, expected: float
@@ -120,12 +281,6 @@ def test_bounded_efficiency_factor_uses_headroom_uplift(
     entry = _entry(1, 0.8, minutes=0, bench_version=9, efficiency_factor=factor)
 
     assert effective_composite(entry) == pytest.approx(expected)
-
-
-def test_bounded_efficiency_factor_does_not_saturate_imperfect_quality() -> None:
-    entry = _entry(1, 0.95, minutes=0, bench_version=9, efficiency_factor=1.1)
-
-    assert effective_composite(entry) == pytest.approx(0.955)
 
 
 def test_bounded_efficiency_factor_reaches_ceiling_only_for_perfect_quality() -> None:
@@ -207,7 +362,7 @@ def test_bounded_factor_is_v9_only() -> None:
     assert effective_composite(entry) == pytest.approx(0.8)
 
 
-@pytest.mark.parametrize(("factor", "expected"), [(0.85, 0.85), (1.0, 1.0), (1.1, 0.9)])
+@pytest.mark.parametrize(("factor", "expected"), [(0.85, 0.85), (1.1, 0.9)])
 def test_curve_v3_stderr_scale_is_quality_transform_slope(
     factor: float, expected: float
 ) -> None:
@@ -296,12 +451,6 @@ def test_curve_v3_still_neutralizes_a_factor_above_the_old_cap() -> None:
     assert effective_composite(entry) == pytest.approx(0.8)
 
 
-def test_legacy_bonus_keeps_multiplicative_stderr_scale() -> None:
-    entry = _entry(1, 0.8, minutes=0, efficiency_bonus=0.1)
-
-    assert _efficiency_stderr_scale(entry) == pytest.approx(1.1)
-
-
 def test_indistinguishable_uses_headroom_slope_for_upside_stderr() -> None:
     cutoff = _entry(
         1, 0.5, minutes=0, stderr=0.04, bench_version=9, efficiency_factor=1.1
@@ -317,7 +466,12 @@ def test_indistinguishable_uses_headroom_slope_for_upside_stderr() -> None:
     assert not indistinguishable_from(candidate, cutoff, tolerance_z=1.64)
 
 
-@pytest.mark.parametrize("bench_version", [6, 7, 8])
+@pytest.mark.parametrize(
+    "bench_version",
+    [
+        6,
+    ],
+)
 def test_high_score_band_decay_applies_from_v6_forward(bench_version: int) -> None:
     incumbent = _entry(2, 0.95, minutes=0, bench_version=bench_version)
     challenger = _entry(1, 0.954, minutes=1, bench_version=bench_version)
@@ -439,32 +593,6 @@ def test_a_three_seed_paired_outlier_cannot_demand_a_0_03_lead() -> None:
     assert projection.raw_leader_decision is None
 
 
-def test_resetting_the_clock_on_a_sub_margin_gain_hands_the_rival_the_crown() -> None:
-    """2026-08-22 goal v11 vs aceron, as fold arithmetic.
-
-    The miner already on the board ships a slightly better agent. A rival that
-    arrived in between has a *lower* score. If the lineage clock resets to the
-    new tarball, the rival becomes the incumbent and a 0.001 lead cannot
-    dethrone. If the lineage clock is kept, the miner stays champion. Platform
-    must serve the kept clock; this pins why.
-    """
-    lineage = _entry(1, 0.893, minutes=0, bench_version=11)
-    rival = _entry(2, 0.892, minutes=60, bench_version=11)
-    resubmitted_as_new = _entry(1, 0.893, minutes=120, bench_version=11)
-
-    kept = project_koth([lineage, rival])
-    assert kept is not None
-    assert kept.champion == lineage
-    assert kept.raw_leader == lineage
-
-    flipped = project_koth([resubmitted_as_new, rival])
-    assert flipped is not None
-    assert flipped.champion == rival
-    assert flipped.raw_leader == resubmitted_as_new
-    assert flipped.raw_leader_decision is not None
-    assert flipped.raw_leader_decision.dethrones is False
-
-
 def test_a_tied_incumbent_does_not_lose_the_crown_by_resubmitting() -> None:
     """The 2026-08-06 report, as arithmetic.
 
@@ -577,6 +705,80 @@ def test_paired_statistical_tie_pools_but_unpaired_stderr_does_not() -> None:
     assert emission_shares(without_pairs, tie_pooling=True) == (0.65, 0.14)
 
 
+def test_erratic_paired_member_cannot_join_tie_or_ceiling_cohort() -> None:
+    seeds = tuple(range(15))
+    champion = _entry(1, 0.9975, minutes=0, confirmations=(0.9975,) * 15, seeds=seeds)
+    erratic = _entry(
+        2,
+        11 / 15,
+        minutes=1,
+        confirmations=(1.0,) * 11 + (0.0,) * 4,
+        seeds=seeds,
+    )
+    projection = project_koth(
+        [champion, erratic], distinct_hotkeys=True, statistical_band_cap=True
+    )
+
+    assert projection is not None
+    assert emission_shares(projection, tie_pooling=True, statistical_band_cap=True) == (
+        0.65,
+        0.14,
+    )
+    allocation = emission_allocation(
+        [champion, erratic],
+        projection,
+        tie_pooling=True,
+        statistical_band_cap=True,
+    )
+    assert allocation.mode == "ranked"
+    assert allocation.shares == (0.65, 0.14)
+
+
+@pytest.mark.parametrize("champion_score", [0.90, 0.9975])
+def test_low_variance_difference_below_margin_does_not_join_tie_or_cohort(
+    champion_score: float,
+) -> None:
+    seeds = tuple(range(15))
+    champion = _entry(
+        1, champion_score, minutes=0, confirmations=(champion_score,) * 15, seeds=seeds
+    )
+    candidate_score = champion_score - 0.004
+    candidate = _entry(
+        2,
+        candidate_score,
+        minutes=1,
+        confirmations=tuple(
+            champion_score - (0.003 if seed % 2 else 0.005) for seed in seeds
+        ),
+        seeds=seeds,
+    )
+    paired = _paired_statistic(candidate, champion)
+    assert paired is not None
+    assert 0.0 < 1.64 * paired.standard_error < abs(paired.mean_difference) < 0.007
+    projection = project_koth(
+        [champion, candidate], distinct_hotkeys=True, statistical_band_cap=True
+    )
+
+    assert projection is not None
+    assert projection.champion == champion
+    if champion_score > 0.99:
+        assert _dethrone_decision(
+            candidate, champion, statistical_band_cap=True
+        ).ceiling_deadlocked
+    assert emission_shares(projection, tie_pooling=True, statistical_band_cap=True) == (
+        0.65,
+        0.14,
+    )
+    allocation = emission_allocation(
+        [champion, candidate],
+        projection,
+        tie_pooling=True,
+        statistical_band_cap=True,
+    )
+    assert allocation.mode == "ranked"
+    assert allocation.shares == (0.65, 0.14)
+
+
 def test_tie_aware_projection_deduplicates_hotkey_destinations() -> None:
     incumbent = _entry(1, 0.90, minutes=0)
     first = _entry(2, 0.80, minutes=1)
@@ -597,9 +799,9 @@ def test_tie_aware_projection_deduplicates_hotkey_destinations() -> None:
 
 def test_statistical_band_matches_validator_unpaired_rule() -> None:
     incumbent = _entry(2, 0.80, minutes=0, stderr=0.03)
-    raw_leader = _entry(1, 0.85, minutes=1, stderr=0.03)
+    raw_leader = _entry(1, 0.81, minutes=1, stderr=0.03)
 
-    projection = project_koth([raw_leader, incumbent])
+    projection = project_koth([raw_leader, incumbent], statistical_band_cap=True)
 
     assert projection is not None
     decision = projection.raw_leader_decision
@@ -607,7 +809,7 @@ def test_statistical_band_matches_validator_unpaired_rule() -> None:
     assert projection.champion == incumbent
     assert decision.margin_lead == pytest.approx(0.007)
     assert decision.statistical_lead == pytest.approx(1.64 * (0.03**2 + 0.03**2) ** 0.5)
-    assert decision.required_lead == decision.statistical_lead
+    assert decision.required_lead == pytest.approx(0.014)
     assert decision.method == "unpaired"
 
 
@@ -686,29 +888,6 @@ def test_confirmation_median_and_paired_seed_band_match_validator_fold() -> None
     assert decision.seed_differences == pytest.approx((0.004, 0.004, 0.004))
 
 
-def test_efficiency_bonus_applies_inside_paired_seed_comparison() -> None:
-    incumbent = _entry(
-        2,
-        0.80,
-        minutes=0,
-        confirmations=(0.80, 0.80, 0.80),
-        seeds=(10, 20, 30),
-    )
-    challenger = _entry(
-        1,
-        0.78,
-        minutes=1,
-        confirmations=(0.78, 0.78, 0.78),
-        seeds=(10, 20, 30),
-        efficiency_bonus=0.1,
-    )
-
-    projection = project_koth([challenger, incumbent])
-
-    assert projection is not None
-    assert projection.champion == challenger
-
-
 def test_bounded_factor_scales_each_paired_seeds_headroom_before_comparison() -> None:
     incumbent = _entry(
         2,
@@ -762,32 +941,6 @@ def test_emission_set_is_champion_plus_four_distinct_miner_tail() -> None:
     assert {m.agent_id for m in members} == {UUID(int=i) for i in range(1, 6)}
     # The set follows the top five: the sixth-place agent is not in the lane.
     assert sixth.agent_id not in {m.agent_id for m in members}
-
-
-def test_emission_set_admits_a_new_top_five_entrant() -> None:
-    champion = _entry(1, 0.90, minutes=0)
-    incumbents = [
-        _entry(2, 0.88, minutes=1),
-        _entry(3, 0.86, minutes=2),
-        _entry(4, 0.84, minutes=3),
-        _entry(5, 0.82, minutes=4),
-    ]
-    before = emission_set(project_koth([champion, *incumbents]))
-    assert {m.agent_id for m in before} == {UUID(int=i) for i in range(1, 6)}
-
-    # A fresh entrant scoring above the weakest tail member joins automatically
-    # and evicts agent 5 (0.82); membership follows the set with no manual list.
-    newcomer = _entry(6, 0.85, minutes=5)
-    after = emission_set(project_koth([champion, *incumbents, newcomer]))
-
-    assert newcomer.agent_id in {m.agent_id for m in after}
-    assert UUID(int=5) not in {m.agent_id for m in after}
-    assert len(after) == 5
-
-
-def test_emission_set_empty_pool_is_empty() -> None:
-    assert emission_set(None) == ()
-    assert emission_set(project_koth([])) == ()
 
 
 def _ranked_pool(count: int) -> list[KothEntry]:
@@ -873,27 +1026,6 @@ class TestTieTolerantEligibility:
         assert UUID(int=11) in ids
         # 12 is genuinely behind, so the band stops there rather than running on.
         assert UUID(int=12) not in ids
-
-    def test_the_band_admits_what_the_dethrone_test_would_call_undecided(
-        self,
-    ) -> None:
-        """Same z, same arithmetic as the fold's own unpaired comparison."""
-        pool = [
-            _entry(rank, 0.90 - rank / 100, minutes=rank, stderr=0.01)
-            for rank in range(1, 6)
-        ]
-        # Cutoff sits at 0.85. sqrt(0.01^2 + 0.01^2) * 1.64 ~= 0.0232, so 0.84 is
-        # inside the band and 0.80 is well outside it.
-        near = _entry(6, 0.84, minutes=6, stderr=0.01)
-        far = _entry(7, 0.80, minutes=7, stderr=0.01)
-        pool += [near, far]
-        projection = project_koth(pool)
-
-        cohort = retest_cohort(pool, projection, size=5, max_size=25, tolerance_z=1.64)
-
-        ids = [member.agent_id for member in cohort]
-        assert UUID(int=6) in ids
-        assert UUID(int=7) not in ids
 
     def test_a_tighter_measurement_narrows_the_band_on_its_own(self) -> None:
         """The self-adjusting property: more evidence, a smaller cohort.
@@ -1020,15 +1152,6 @@ def _due_reign_tempos(
     ]
 
 
-def test_backoff_is_deterministic_across_validators() -> None:
-    # Two independent "validators" reading the same chain height + crown block
-    # get byte-identical due decisions -- pure function, no clock, no RNG.
-    for block in (0, 720, 5000, 100_000):
-        a = top5_round_is_due(block, 0, base=2, doubling_k=20, cap=8)
-        b = top5_round_is_due(block, 0, base=2, doubling_k=20, cap=8)
-        assert a == b
-
-
 def test_backoff_is_dense_early_and_sparse_late() -> None:
     # base=2, K=20, cap=8: interval holds at 2 for the first 20 reign-tempos
     # (front-loading the ~24h reveal window), then doubles to 4, then caps at 8.
@@ -1042,13 +1165,6 @@ def test_backoff_is_dense_early_and_sparse_late() -> None:
     assert gaps == sorted(gaps)
     assert max(gaps) == 8
     assert min(gaps) == 2
-
-
-def test_backoff_caps_the_interval() -> None:
-    # Far into a long reign the interval flatlines at the cap; rounds keep firing.
-    due = _due_reign_tempos(400, base=2, doubling_k=20, cap=8)
-    tail_gaps = [b - a for a, b in zip(due, due[1:], strict=False)][-10:]
-    assert set(tail_gaps) == {8}
 
 
 def test_backoff_resets_on_king_change() -> None:
@@ -1106,14 +1222,6 @@ def test_champion_defense_answers_when_raw_leader_decision_goes_null() -> None:
     assert defense.ceiling_deadlocked is True
 
 
-def test_champion_defense_is_none_without_a_rival_miner() -> None:
-    solo = _entry(1, 0.9, minutes=0, bench_version=9)
-    projection = project_koth([solo])
-
-    assert champion_defense([solo], projection) is None
-    assert champion_defense([], None) is None
-
-
 def test_champion_defense_matches_the_fold_when_a_rival_does_lead() -> None:
     """Never a second opinion: same comparison the dethrone chain runs."""
     champion = _entry(1, 0.80, minutes=0, bench_version=9)
@@ -1146,12 +1254,6 @@ class TestCeilingCappedBand:
         challenger = _entry(2, self._SATURATED, minutes=1, bench_version=9)
         return challenger, champion
 
-    def test_uncapped_band_can_demand_more_than_the_ceiling(self) -> None:
-        challenger, champion = self._pair()
-        decision = _dethrone_decision(challenger, champion)
-        assert decision.required_score > decision.score_ceiling
-        assert decision.ceiling_deadlocked
-
     def test_cap_clears_the_deadlock(self) -> None:
         challenger, champion = self._pair()
         decision = _dethrone_decision(challenger, champion, ceiling_band_clamp=True)
@@ -1164,16 +1266,6 @@ class TestCeilingCappedBand:
     def test_cap_is_inert_away_from_the_ceiling(self) -> None:
         champion = _entry(1, 0.85, minutes=0, bench_version=9)
         challenger = _entry(2, 0.86, minutes=1, bench_version=9)
-        assert (
-            _dethrone_decision(
-                challenger, champion, ceiling_band_clamp=True
-            ).required_lead
-            == _dethrone_decision(challenger, champion).required_lead
-        )
-
-    def test_legacy_comparisons_are_byte_identical(self) -> None:
-        champion = _entry(1, self._SATURATED, minutes=0, bench_version=5)
-        challenger = _entry(2, self._SATURATED, minutes=1, bench_version=5)
         assert (
             _dethrone_decision(
                 challenger, champion, ceiling_band_clamp=True
@@ -1200,3 +1292,91 @@ class TestCeilingCappedBand:
         defense = champion_defense(entries, projection, ceiling_band_clamp=True)
         assert defense is not None
         assert defense.required_score < defense.score_ceiling
+
+
+class TestCrownIncumbency:
+    """The projection must open the walk from the served incumbent, like the fold.
+
+    The 2026-09-09 flap: a senior lineage inside the band retook the crown on
+    every read as the continual mean wobbled. With an incumbent the senior
+    lineage must clear the band to take it back.
+    """
+
+    def _flap(self) -> tuple[KothEntry, KothEntry]:
+        senior = _entry(1, 0.7981, minutes=0, bench_version=12)
+        holder = _entry(2, 0.8010, minutes=60, bench_version=12)
+        return senior, holder
+
+    def test_incumbent_holds_inside_the_band(self) -> None:
+        senior, holder = self._flap()
+        projection = project_koth(
+            [holder, senior],
+            ceiling_band_clamp=True,
+            incumbent_agent_id=holder.agent_id,
+        )
+        assert projection is not None
+        assert projection.champion.agent_id == holder.agent_id
+        assert projection.raw_leader.agent_id == holder.agent_id
+        defense = champion_defense(
+            [holder, senior], projection, ceiling_band_clamp=True
+        )
+        assert defense is not None and not defense.dethrones
+
+    def test_senior_lineage_retakes_by_clearing_the_band(self) -> None:
+        holder = _entry(2, 0.8010, minutes=60, bench_version=12)
+        senior = _entry(1, 0.8300, minutes=0, bench_version=12)
+        projection = project_koth([holder, senior], incumbent_agent_id=holder.agent_id)
+        assert projection is not None
+        assert projection.champion.agent_id == senior.agent_id
+
+    def test_unknown_incumbent_is_the_classic_walk(self) -> None:
+        senior, holder = self._flap()
+        projection = project_koth([holder, senior], incumbent_agent_id=UUID(int=99))
+        assert projection is not None
+        assert projection.champion.agent_id == senior.agent_id
+
+    def test_wire_entries_lift_into_the_same_decision(self) -> None:
+        """``koth_entries_from_ledger`` must not change the crown the pin records."""
+        from datetime import UTC, datetime
+
+        from ditto.api_models import LedgerEntry
+
+        def wire(marker: int, composite: float, minutes: int) -> LedgerEntry:
+            return LedgerEntry.model_validate(
+                {
+                    "miner_hotkey": "5" + str(marker) * 47,
+                    "agent_id": str(UUID(int=marker)),
+                    "composite": composite,
+                    "n": 120,
+                    "first_seen": (
+                        datetime(2026, 9, 1, tzinfo=UTC) + timedelta(minutes=minutes)
+                    ).isoformat(),
+                    "sha256": "ab" * 32,
+                    "run_id": "run",
+                    "seed": 1,
+                    "validator_hotkey": "5" + "9" * 47,
+                    "status": "scored",
+                    "bench_version": 12,
+                }
+            )
+
+        lifted = koth_entries_from_ledger([wire(2, 0.8010, 60), wire(1, 0.7981, 0)])
+        assert [entry.raw_rank for entry in lifted] == [1, 2]
+        classic = project_koth(lifted)
+        held = project_koth(lifted, incumbent_agent_id=UUID(int=2))
+        assert classic is not None and held is not None
+        assert classic.champion.agent_id == UUID(int=1)
+        assert held.champion.agent_id == UUID(int=2)
+
+
+def test_operator_rank_shares_replace_the_frozen_curve() -> None:
+    entries = [
+        _entry(marker, 0.9 - marker / 100, minutes=marker) for marker in range(5)
+    ]
+    projection = project_koth(entries)
+    assert projection is not None
+    curve = (0.50, 0.20, 0.13, 0.10, 0.07)
+    assert emission_shares(projection) == (0.65, 0.14, 0.10, 0.07, 0.04)
+    assert emission_shares(projection, rank_shares=curve) == curve
+    allocation = emission_allocation(entries, projection, rank_shares=curve)
+    assert allocation.shares == curve

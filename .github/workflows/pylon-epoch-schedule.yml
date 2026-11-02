@@ -1,0 +1,29 @@
+name: Pylon stateful epoch integration
+
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Check epoch inputs and pinned-source refusals
+        run: uv run --locked pytest -q ditto/tests/test_pylon_epoch_schedule.py
+      - name: Build the exact Pylon adapter
+        run: >-
+          docker buildx build --load --platform linux/amd64 -f Dockerfile.pylon
+          --build-context 'turbobt=https://github.com/ditto-assistant/turbobt.git?ref=refs/heads/ditto/subscription-id-str&checksum=d36d1a28e761ff9d743bbcc83d091309c4d3599e'
+          -t ditto-pylon:epoch-test .
+      - name: Exercise encryption and persisted tasks without chain access
+        run: bash scripts/test-pylon-epoch-schedule.sh ditto-pylon:epoch-test

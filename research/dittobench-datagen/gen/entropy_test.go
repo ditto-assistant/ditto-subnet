@@ -17,6 +17,7 @@ import (
 // The declarative WRITE turn is the highest-risk family (it is the direct analog of
 // the v4 durable-write cue list), so it carries the strictest floor.
 func TestV5FamilySurfaceEntropy(t *testing.T) {
+	t.Parallel()
 	// question_type -> set of distinct rendered surfaces across many seeds. For the
 	// declarative WRITE (which has no question), collect the seeded /run prompt.
 	surfaces := map[string]map[string]struct{}{}

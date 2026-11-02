@@ -2,21 +2,14 @@
 # Federated screener capacity controller.
 #
 # Platform is the control plane and audit store; this private VM is the single
-# provider mutator. It tries capability-gated Targon Rentals first, then resizes
-# the GCE MIG for the residual demand. Provider and controller credentials are
-# read from Secret Manager at converge time and remain mode-0600 files.
+# provider mutator. It resizes the GCE MIG for residual Hetzner-fleet demand.
+# Its controller credential is read from Secret Manager at converge time.
 ###############################################################################
 
 variable "enable_screener_capacity_controller" {
-  description = "Create the private Targon-first screener capacity controller VM and its least-privilege identities."
+  description = "Create the private GCE fallback capacity controller VM and its least-privilege identity."
   type        = bool
   default     = false
-}
-
-variable "targon_api_key_secret_id" {
-  description = "Existing Secret Manager secret containing the Targon API key. Terraform reads metadata only, never a secret version."
-  type        = string
-  default     = "TARGON_API_KEY"
 }
 
 locals {
@@ -42,15 +35,6 @@ resource "google_secret_manager_secret" "screener_controller_api_token" {
   lifecycle {
     prevent_destroy = true
   }
-}
-
-# The user's existing provider credential. This data source resolves only the
-# secret resource metadata; no version payload enters Terraform state or logs.
-# Platform owns Targon rentals, so the lookup is independent of the leftover
-# capacity-controller VM.
-data "google_secret_manager_secret" "targon_api_key" {
-  project   = var.project
-  secret_id = var.targon_api_key_secret_id
 }
 
 resource "google_service_account" "screener_capacity_controller" {
@@ -84,28 +68,6 @@ resource "google_secret_manager_secret_iam_member" "screener_controller_token_pl
   secret_id = google_secret_manager_secret.screener_controller_api_token[0].secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${local.platform_api_sa_email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "targon_api_key_controller_access" {
-  count     = local.screener_capacity_controller_count
-  project   = var.project
-  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "targon_api_key_platform_access" {
-  project   = var.project
-  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.platform_api_sa_email}"
-}
-
-resource "google_secret_manager_secret_iam_member" "targon_api_key_runtime_access" {
-  project   = var.project
-  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
-  role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${local.run_sa_email}"
 }
 
 resource "google_secret_manager_secret_iam_member" "screener_bootstrap_source_review_access" {
@@ -240,11 +202,6 @@ output "screener_capacity_controller_sa_email" {
 output "screener_worker_bootstrap_sa_email" {
   description = "Identity used only for 30-minute federated worker bootstrap tokens."
   value       = google_service_account.screener_worker_bootstrap.email
-}
-
-moved {
-  from = data.google_secret_manager_secret.targon_api_key[0]
-  to   = data.google_secret_manager_secret.targon_api_key
 }
 
 moved {

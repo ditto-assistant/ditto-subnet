@@ -114,46 +114,16 @@ tr[data-activity-i]:focus-visible {
    theme tokens, so it reads as ink-on-paper in the light themes and as faint
    light rules over the night ground in dark. */
 body {
-  /* The landing board has no sidebar, so its 16% wash origin would sit
-     behind our 240px rail. Offset by the rail width to put it 16% into the
-     content column instead; below 960px the rail becomes a top bar and the
-     raw 16% is right again. */
-  --wash-x: calc(240px + 16%);
-  background:
-    linear-gradient(
-        90deg,
-        color-mix(in oklch, var(--text) var(--grid-rule-v), transparent) 1px,
-        transparent 1px
-      )
-      0 0 / 4.5rem 4.5rem,
-    linear-gradient(
-        0deg,
-        color-mix(in oklch, var(--text) var(--grid-rule-h), transparent) 1px,
-        transparent 1px
-      )
-      0 0 / 4.5rem 4.5rem,
-    radial-gradient(
-      circle at var(--wash-x) 62%,
-      color-mix(in oklch, var(--good) 20%, transparent),
-      transparent 30rem
-    ),
-    radial-gradient(
-      circle at 90% 60%,
-      color-mix(in oklch, var(--gold) 28%, transparent),
-      transparent 30rem
-    ),
-    var(--bg);
+  /* Flat canvas: the brand kit asks for quiet, flat backgrounds. */
+  background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
   font-size: 15px;
   line-height: 1.55;
+  /* Ditto Display ships 400/600/800 upright only; never fake a face. */
+  font-synthesis: none;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
-}
-@media (max-width: 960px) {
-  body {
-    --wash-x: 16%;
-  }
 }
 
 .sr-only {

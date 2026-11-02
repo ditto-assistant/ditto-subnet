@@ -1,0 +1,19 @@
+{
+  "ditto": {
+    "netuid": 118,
+    "block_hash": "0xca7aa7a326779eb1570dbcc21f0a40a3525cba2d09271bc58ab88592cbd6a42e",
+    "tao_rao": 6394334606861,
+    "alpha_rao": 862003973679115,
+    "fee_bps": 0
+  },
+  "gm": {
+    "netuid": 28,
+    "block_hash": "0xca7aa7a326779eb1570dbcc21f0a40a3525cba2d09271bc58ab88592cbd6a42e",
+    "tao_rao": 23125094774575,
+    "alpha_rao": 1035343187444650,
+    "fee_bps": 0
+  },
+  "source_alpha_rao": 1000000000,
+  "max_source_alpha_rao": 1000000000,
+  "max_impact_bps": 50
+}

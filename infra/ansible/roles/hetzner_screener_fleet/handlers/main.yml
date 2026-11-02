@@ -3,11 +3,6 @@
   ansible.builtin.systemd:
     daemon_reload: true
 
-- name: Restart screener fleet agent
-  ansible.builtin.systemd:
-    name: ditto-screener-fleet-agent
-    state: restarted
-
 - name: Restart screener fleet workers
   ansible.builtin.systemd:
     name: "ditto-screener-worker@{{ item }}"

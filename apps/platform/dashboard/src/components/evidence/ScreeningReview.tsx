@@ -13,14 +13,16 @@ export function ScreeningReview(props: { attempt: ScreeningAttempt }): JSX.Eleme
   const finding = () => props.attempt.review_finding || null;
   const evidence = () =>
     Array.isArray(props.attempt.review_evidence) ? props.attempt.review_evidence : [];
+  const notes = () => props.attempt.review_notes || [];
+  const decisions = () => finding()?.invariant_assessment?.decisions || [];
   const confidence = () => {
     const f = finding();
     return f && Number.isFinite(Number(f.confidence))
       ? Math.round(Number(f.confidence) * 100) + "% confidence"
-      : "Verified finding";
+      : "Review history";
   };
   return (
-    <Show when={finding() || evidence().length}>
+    <Show when={finding() || evidence().length || notes().length}>
       <section class="screening-review" aria-label="Detailed screening rejection">
         <div class="screening-review-head">
           <h5 class="screening-review-title">Why this submission was rejected</h5>
@@ -65,6 +67,63 @@ export function ScreeningReview(props: { attempt: ScreeningAttempt }): JSX.Eleme
                 {(item) => (
                   <li>
                     <b>{screeningReviewCategoryLabel(item.code)}.</b> {item.summary}
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </Show>
+        <Show when={decisions().length}>
+          <div class="screening-review-block">
+            <h6>Policy checks</h6>
+            <ul class="screening-review-list">
+              <For each={decisions()}>
+                {(decision) => (
+                  <li>
+                    <b>
+                      {decision.invariant.replaceAll("_", " ")} · {decision.disposition}.
+                    </b>{" "}
+                    {decision.summary}
+                    <For each={decision.evidence_indices}>
+                      {(index) => (
+                        <Show when={finding()?.locations?.[index]}>
+                          {(location) => (
+                            <code>
+                              {" "}
+                              {location().path}:{location().line}
+                            </code>
+                          )}
+                        </Show>
+                      )}
+                    </For>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </Show>
+        <Show when={notes().length}>
+          <div class="screening-review-block">
+            <h6>Review observations</h6>
+            <p>
+              Working observations recorded during review, not separate rejection findings. The
+              final reason above explains the decision.
+            </p>
+            <ul class="screening-review-list">
+              <For each={notes()}>
+                {(note) => (
+                  <li>
+                    <b>
+                      {note.stage.toUpperCase()} · {note.kind}.
+                    </b>{" "}
+                    {note.summary}
+                    <Show when={note.path}>
+                      <code>
+                        {" "}
+                        {note.path}
+                        <Show when={note.line}>:{note.line}</Show>
+                      </code>
+                    </Show>
                   </li>
                 )}
               </For>

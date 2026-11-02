@@ -5,6 +5,7 @@ import hashlib
 import ipaddress
 import json
 import os
+import re
 import runpy
 import stat
 import subprocess
@@ -24,8 +25,12 @@ def require(condition):
         raise ValueError("native connectivity policy rejected")
 
 
-def pairs(items, *, candidate=False, dns=False):
-    require(type(items) is list and len(items) <= (2 if candidate or dns else 32))
+def pairs(items, *, candidate=False, dns=False, rollout=False):
+    require(
+        type(items) is list
+        and len(items)
+        <= (8 if candidate and rollout else 2 if candidate or dns else 32)
+    )
     result = []
     for item in items:
         require(type(item) is dict and set(item) == {"address", "port"})
@@ -80,7 +85,13 @@ def policy(config, uid, now):
             "candidate_tcp",
         }
     )
-    require(config["schema"] == "dittobench-coding-hosted-connectivity-v2")
+    require(
+        config["schema"]
+        in {
+            "dittobench-coding-hosted-connectivity-v2",
+            "dittobench-coding-hosted-connectivity-v3",
+        }
+    )
     require(config["shadow_only"] is True and config["weight_eligible"] is False)
     require(type(config["trusted_loopback_tcp"]) is bool)
     issued, expires = config["issued_at_unix"], config["expires_at_unix"]
@@ -89,7 +100,9 @@ def policy(config, uid, now):
     require(expires - issued <= 86400 and expires < 2**32)
     tcp = pairs(config["trusted_tcp"])
     dns = pairs(config["trusted_dns"], dns=True)
-    candidate = pairs(config["candidate_tcp"], candidate=True)
+    candidate = pairs(
+        config["candidate_tcp"], candidate=True, rollout=config["schema"].endswith("v3")
+    )
     require(tcp and candidate)
     daemon = f"user.slice/user-{uid}.slice/user@{uid}.service"
     encoded = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
@@ -230,7 +243,12 @@ def execute(payload, *, check=False):
 
 
 def main(argv):
-    require(argv in (["validate"], ["install"], ["revoke"]))
+    rollout = (
+        len(argv) == 2
+        and argv[0] == "install-rollout"
+        and re.fullmatch(r"[0-9a-f]{64}", argv[1]) is not None
+    )
+    require(rollout or argv in (["validate"], ["install"], ["revoke"]))
     require(os.geteuid() == 0)
     root_path(HOST_POLICY)
     host = runpy.run_path(str(HOST_POLICY))
@@ -247,6 +265,17 @@ def main(argv):
     execute(deny)
     try:
         config = configuration()
+        require(type(config) is dict)
+        if rollout:
+            require(config.get("schema") == "dittobench-coding-hosted-connectivity-v3")
+            require(
+                hashlib.sha256(
+                    json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+                ).hexdigest()
+                == argv[1]
+            )
+        else:
+            require(config.get("schema") == "dittobench-coding-hosted-connectivity-v2")
         compiled = policy(config, uid, int(time.time()))
         execute(compiled, check=True)
         require(worker_cgroup() == inode)

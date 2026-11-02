@@ -18,13 +18,15 @@ from ditto_screener.config import ScreenerConfig
 
 ReviewModel = Literal[
     "openai/gpt-5.6-terra",
+    "openai/gpt-6-sol",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
 ]
-SourceReviewModel = Literal["openai/gpt-5.6-luna"]
+SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]
+FanoutShadowModel = Literal["z-ai/glm-5.3-flash"]
 
-_MAX_SHADOW_PROVIDER_STAGES = 50
+MAX_SHADOW_PROVIDER_STAGES = 50
 
 
 class ShadowReviewUsage(BaseModel):
@@ -65,12 +67,91 @@ class ShadowReviewObservationRequest(BaseModel):
         if len(self.categories) > 8:
             raise ValueError("shadow review has too many categories")
         if (
-            len(self.response_models) > _MAX_SHADOW_PROVIDER_STAGES
-            or len(self.response_providers) > _MAX_SHADOW_PROVIDER_STAGES
+            len(self.response_models) > MAX_SHADOW_PROVIDER_STAGES
+            or len(self.response_providers) > MAX_SHADOW_PROVIDER_STAGES
         ):
             raise ValueError("shadow review has too many provider stages")
         if self.disposition in {"safe", "violation"} and self.risk_level is None:
             raise ValueError("decisive shadow review requires a risk level")
+        return self
+
+
+class ProbeBatteryLead(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    item_id: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+
+
+class ProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+    verified: bool
+    citations: tuple[Annotated[str, Field(max_length=170)], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewFinding:
+        if len(self.citations) > 4:
+            raise ValueError("probe review finding has too many citations")
+        return self
+
+
+class ProbeReviewSummary(BaseModel):
+    """Bounded report-only reviewer agent result: no claims or transcripts."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    status: Literal[
+        "complete",
+        "no_verdict",
+        "budget_exhausted",
+        "untracked_spend",
+        "skipped",
+        "timeout",
+        "error",
+    ]
+    verified: bool = False
+    invariants: tuple[Annotated[str, Field(pattern=r"^I[1-8]$")], ...] = ()
+    findings: tuple[ProbeReviewFinding, ...] = ()
+    requests: Annotated[int, Field(ge=0, le=1000)] = 0
+    prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
+    completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
+    cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
+    review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    # Content-free failure label: stage, exception class and HTTP status.
+    error: Annotated[str, Field(pattern=r"^[A-Za-z0-9_:]{1,80}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewSummary:
+        if len(self.findings) > 4 or len(self.invariants) > 8:
+            raise ValueError("probe review summary is too large")
+        return self
+
+
+class ProbeBatteryObservationRequest(BaseModel):
+    """Bounded report-only probe battery leads for one active attempt."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    settings_revision: Annotated[int, Field(ge=1)]
+    settings_scope: Annotated[str, Field(pattern=r"^(?:\*|[a-zA-Z0-9._-]{1,63})$")]
+    settings_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    status: Literal["complete", "calibration_failed", "timeout", "error"]
+    encoding: Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")] | None = None
+    seed_first: bool = False
+    items_run: Annotated[int, Field(ge=0, le=128)] = 0
+    probe_count: Annotated[int, Field(ge=0, le=512)] = 0
+    leads: tuple[ProbeBatteryLead, ...] = ()
+    battery_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    review: ProbeReviewSummary | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeBatteryObservationRequest:
+        if len(self.leads) > 32:
+            raise ValueError("probe battery has too many leads")
         return self
 
 
@@ -87,9 +168,9 @@ class ReviewSettings(BaseModel):
     l2_model: ReviewModel
     l2_fallback_models: tuple[ReviewModel, ...]
     l3_enabled: bool = True
-    l3_model: Literal["openai/gpt-5.6-sol"]
-    timeout_seconds: Annotated[int, Field(ge=30, le=900)]
-    max_steps: Annotated[int, Field(ge=1, le=20)]
+    l3_model: Literal["openai/gpt-5.6-sol", "openai/gpt-6-sol"]
+    timeout_seconds: Annotated[int, Field(ge=30, le=1_800)]
+    max_steps: Annotated[int, Field(ge=1, le=256)]
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
@@ -109,13 +190,43 @@ class ReviewSettings(BaseModel):
     # 128 and always carry the field explicitly.
     adjudicator_max_steps: Annotated[int, Field(ge=1, le=1_024)] = 24
     adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
-    max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
-    max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
+    adjudicator_max_completion_tokens: Annotated[
+        int | None, Field(ge=1_000, le=128_000)
+    ] = None
+    fanout_shadow_mode: Literal["off", "shadow"] = "off"
+    fanout_shadow_image_source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] = (
+        "0" * 40
+    )
+    fanout_shadow_model: FanoutShadowModel = "z-ai/glm-5.3-flash"
+    fanout_shadow_concurrency: Annotated[int, Field(ge=1, le=4)] = 2
+    fanout_shadow_max_steps: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_groups: Annotated[int, Field(ge=1, le=8)] = 4
+    fanout_shadow_max_requests: Annotated[int, Field(ge=1, le=64)] = 40
+    fanout_shadow_max_total_tokens: Annotated[int, Field(ge=10_000, le=2_000_000)] = (
+        1_500_000
+    )
+    fanout_shadow_timeout_seconds: Annotated[int, Field(ge=60, le=1_800)] = 900
+    fanout_shadow_max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 3.0
+    fanout_shadow_daily_cost_usd: Annotated[float, Field(gt=0, le=100)] = 20.0
+    fanout_shadow_global_concurrency: Literal[1] = 1
+    fanout_shadow_reserved_targon_slots: Annotated[int, Field(ge=1, le=4)] = 1
+    # Report-only zero-token probe battery against the gate's built image.
+    probe_battery_mode: Literal["off", "shadow"] = "off"
+    probe_battery_timeout_seconds: Annotated[int, Field(ge=30, le=600)] = 120
+    # Report-only probe reviewer agent after the battery (needs the battery on
+    # and a node-local Router key). Per-artifact cost and wall-time caps.
+    probe_review_mode: Literal["off", "shadow"] = "off"
+    probe_review_timeout_seconds: Annotated[int, Field(ge=120, le=900)] = 420
+    probe_review_max_cost_usd: Annotated[float, Field(gt=0, le=5)] = 1.0
+    # Aggregate effective input: uncached tokens plus 10% of cached tokens.
+    max_input_tokens: Annotated[int, Field(ge=1, le=5_000_000)]
+    max_output_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
-    max_cost_usd: Annotated[float, Field(gt=0, le=10)]
-    critic_reasoning_effort: Literal["low", "medium"]
+    max_cost_usd: Annotated[float, Field(gt=0, le=25)]
+    critic_reasoning_effort: Literal["low", "medium", "high"]
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)]
     audit_retention_days: Annotated[int, Field(ge=1, le=365)]
+    l2_always_escalate: bool = False
     policy_manifest_profile: Literal["core", "l1", "l1_l2"] = "l1"
     policy_manifest_rotation_id: Annotated[
         str, Field(pattern=r"^[a-zA-Z0-9._-]{1,80}$")
@@ -147,11 +258,26 @@ class ReviewSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_chain(self) -> ReviewSettings:
+        if self.probe_review_mode == "shadow" and self.probe_battery_mode != "shadow":
+            # Same rule Platform enforces: the reviewer starts from the battery.
+            raise ValueError("the probe reviewer requires the probe battery")
         chain = (self.l2_model, *self.l2_fallback_models)
         if len(chain) != len(set(chain)):
             raise ValueError("L2 model chain must not contain duplicates")
         if self.max_completion_tokens > self.max_output_tokens:
             raise ValueError("completion budget must not exceed output budget")
+        if (
+            self.adjudicator_max_completion_tokens is not None
+            and self.adjudicator_max_completion_tokens > self.max_output_tokens
+        ):
+            raise ValueError(
+                "adjudicator completion budget must not exceed output budget"
+            )
+        if (
+            self.fanout_shadow_mode == "shadow"
+            and self.fanout_shadow_image_source_sha == "0" * 40
+        ):
+            raise ValueError("shadow mode requires an exact trusted image source SHA")
         return self
 
 
@@ -171,7 +297,45 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "adjudicator_model",
     "adjudicator_max_steps",
     "adjudicator_timeout_seconds",
+    "fanout_shadow_mode",
+    "fanout_shadow_image_source_sha",
+    "fanout_shadow_model",
+    "fanout_shadow_concurrency",
+    "fanout_shadow_max_steps",
+    "fanout_shadow_max_groups",
+    "fanout_shadow_max_requests",
+    "fanout_shadow_max_total_tokens",
+    "fanout_shadow_timeout_seconds",
+    "fanout_shadow_max_cost_usd",
+    "fanout_shadow_daily_cost_usd",
+    "fanout_shadow_global_concurrency",
+    "fanout_shadow_reserved_targon_slots",
+    "l2_always_escalate",
+    "adjudicator_max_completion_tokens",
 )
+# Hashed only while the battery is enabled, so they sit outside the
+# introduction-ordered replay above.
+_PROBE_BATTERY_FIELDS: tuple[str, ...] = (
+    "probe_battery_mode",
+    "probe_battery_timeout_seconds",
+)
+_PROBE_REVIEW_FIELDS: tuple[str, ...] = (
+    "probe_review_mode",
+    "probe_review_timeout_seconds",
+    "probe_review_max_cost_usd",
+)
+
+
+def _inactive_probe_fields(settings: ReviewSettings) -> tuple[str, ...]:
+    """Probe controls Platform leaves out of the checksum while they are off."""
+    fields: tuple[str, ...] = ()
+    if settings.probe_battery_mode == "off":
+        fields += _PROBE_BATTERY_FIELDS
+    if settings.probe_review_mode == "off":
+        fields += _PROBE_REVIEW_FIELDS
+    return fields
+
+
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
 }
@@ -192,6 +356,55 @@ class EffectiveReviewSettings(BaseModel):
         payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() == self.checksum:
             return self
+        inactive_probe = _inactive_probe_fields(self.settings)
+        if inactive_probe:
+            # Platform hashes an inactive battery or reviewer in the shape that
+            # predates it, so every existing revision keeps verifying; every
+            # legacy shape below is derived from this probe-free payload.
+            for name in inactive_probe:
+                current.pop(name)
+            payload = json.dumps(
+                current, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(payload).hexdigest() == self.checksum:
+                return self
+        if self.settings.adjudicator_max_completion_tokens is None:
+            # Platform omits an inherited cap from the checksum so existing
+            # immutable revisions keep verifying across a rolling deploy.
+            current.pop("adjudicator_max_completion_tokens")
+            payload = json.dumps(
+                current, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(payload).hexdigest() == self.checksum:
+                return self
+
+        # Platform deliberately hashes an inactive fan-out block in the legacy
+        # shape. Old native workers ignore these new response fields, so this
+        # keeps an off revision valid throughout the rolling Platform/worker
+        # deploy. Enabling shadow mode restores full-field checksum binding and
+        # therefore requires the upgraded worker release.
+        if self.settings.fanout_shadow_mode == "off":
+            inactive = dict(current)
+            for name in _POST_CHECKSUM_FIELDS[
+                _POST_CHECKSUM_FIELDS.index(
+                    "fanout_shadow_mode"
+                ) : _POST_CHECKSUM_FIELDS.index("fanout_shadow_reserved_targon_slots")
+                + 1
+            ]:
+                inactive.pop(name, None)
+            shapes = [inactive]
+            # Platform also omits a default ``l2_always_escalate`` so workers
+            # that predate the control keep verifying every normal posture.
+            if not self.settings.l2_always_escalate:
+                shapes.append(
+                    {k: v for k, v in inactive.items() if k != "l2_always_escalate"}
+                )
+            for shape in shapes:
+                candidate = json.dumps(
+                    shape, sort_keys=True, separators=(",", ":")
+                ).encode()
+                if hashlib.sha256(candidate).hexdigest() == self.checksum:
+                    return self
 
         # A revision minted before a control existed cannot carry that key in
         # the canonical JSON its immutable checksum was taken over, so replay
@@ -249,6 +462,7 @@ class EffectiveReviewSettings(BaseModel):
             adjudicator_model=value.adjudicator_model,
             adjudicator_max_steps=value.adjudicator_max_steps,
             adjudicator_timeout_seconds=float(value.adjudicator_timeout_seconds),
+            adjudicator_max_completion_tokens=(value.adjudicator_max_completion_tokens),
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
             l2_max_completion_tokens=value.max_completion_tokens,
@@ -256,6 +470,9 @@ class EffectiveReviewSettings(BaseModel):
             l2_critic_reasoning_effort=value.critic_reasoning_effort,
             l2_cache_ttl_seconds=float(value.cache_ttl_seconds),
             l2_audit_retention_days=value.audit_retention_days,
+            # A posture can require escalation but never disable an env that
+            # already escalates every review on that worker.
+            l2_always_escalate=config.l2_always_escalate or value.l2_always_escalate,
         )
 
 
@@ -323,6 +540,9 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "adjudicator_model": config.adjudicator_model,
             "adjudicator_max_steps": config.adjudicator_max_steps,
             "adjudicator_timeout_seconds": int(config.adjudicator_timeout_seconds),
+            "adjudicator_max_completion_tokens": (
+                config.adjudicator_max_completion_tokens
+            ),
             "max_input_tokens": config.l2_max_input_tokens,
             "max_output_tokens": config.l2_max_output_tokens,
             "max_completion_tokens": config.l2_max_completion_tokens,
@@ -336,9 +556,13 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "policy_manifest_rotation_id": "policy-v10-bootstrap",
         }
     )
-    payload = json.dumps(
-        settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode()
+    canonical = settings.model_dump(mode="json")
+    if settings.adjudicator_max_completion_tokens is None:
+        canonical.pop("adjudicator_max_completion_tokens")
+    # Same shape Platform hashes for an inactive battery or reviewer.
+    for name in _inactive_probe_fields(settings):
+        canonical.pop(name)
+    payload = json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode()
     return EffectiveReviewSettings(
         revision=0,
         scope="bootstrap",

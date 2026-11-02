@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { setResponseHeader } from '@tanstack/react-start/server'
 import { z } from 'zod'
 import {
+  screeningSubmissionFiltersSchema,
   startBenchmarkRolloutInputSchema,
   supersedeBenchmarkRolloutInputSchema,
   selectActiveBenchmarkInputSchema,
@@ -47,6 +48,7 @@ import {
   setInferenceConcurrencySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   setValidatorIssuancePauseInputSchema,
+  setScoringLeaseSettingsInputSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingPolicyInputSchema,
   setConfirmationBundleSettingsInputSchema,
@@ -106,6 +108,7 @@ import {
   releaseValidatorScoreRetest,
   fetchScreenerReviewControl,
   fetchScreenerCapacity,
+  readScreeningInfraRetries,
   retryTrustedImageBuild as retryTrustedImageBuildService,
   updateScreenerProviderSettings as updateScreenerProviderSettingsService,
   updateScreenerNodeChannelSettings as updateScreenerNodeChannelSettingsService,
@@ -130,6 +133,8 @@ import {
   setInferenceConcurrencySettings as setInferenceConcurrencySettingsService,
   setValidatorSlotSettings as setValidatorSlotSettingsService,
   setValidatorIssuancePause as setValidatorIssuancePauseService,
+  fetchScoringLeaseSettings,
+  setScoringLeaseSettings as setScoringLeaseSettingsService,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings as setConfirmationBundleSettingsService,
   fetchConfirmationBundles,
@@ -305,6 +310,14 @@ export const getScreenerCapacity = createServerFn({ method: 'GET' })
     return fetchScreenerCapacity()
   })
 
+export const getScreeningInfraRetries = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return readScreeningInfraRetries()
+  })
+
 export const retryTrustedImageBuild = createServerFn({ method: 'POST' })
   .middleware([writeAuthMiddleware, sameOriginMiddleware])
   .validator(retryTrustedImageBuildInputSchema)
@@ -435,6 +448,25 @@ export const updateValidatorIssuancePause = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return setValidatorIssuancePauseService(data, context.session.email)
+  })
+
+// Scoring lease clocks (#1156). Separate from the slot policy read so either
+// board can load on its own on the validator-slots page.
+export const getScoringLeaseSettings = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchScoringLeaseSettings()
+  })
+
+export const updateScoringLeaseSettings = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setScoringLeaseSettingsInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return setScoringLeaseSettingsService(data, context.session.email)
   })
 
 export const getInferenceConcurrencySettings = createServerFn({ method: 'GET' })
@@ -584,7 +616,7 @@ export const openAthReview = createServerFn({ method: 'POST' })
 export const listScreeningSubmissions = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .validator(
-    z.object({
+    screeningSubmissionFiltersSchema.extend({
       generation: z.enum(['active', 'all']).default('active'),
       limit: z.number().int().min(1).max(200).default(50),
       offset: z.number().int().min(0).default(0),
@@ -593,7 +625,8 @@ export const listScreeningSubmissions = createServerFn({ method: 'GET' })
   .handler(({ data }) => {
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
-    return fetchScreeningSubmissions(data.limit, data.offset, data.generation)
+    const { generation, limit, offset, ...filters } = data
+    return fetchScreeningSubmissions(limit, offset, generation, filters)
   })
 
 export const getScreeningArtifact = createServerFn({ method: 'GET' })

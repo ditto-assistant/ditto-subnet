@@ -221,6 +221,32 @@ class TestInsertAgentHappyPath:
         ).scalar_one()
         assert row.status == AgentStatus.UPLOADED
 
+    async def test_shadow_defaults_to_false(self, session: AsyncSession):
+        """An ordinary upload is not shadowed -- the schema default is false."""
+        kwargs = _make_kwargs()
+        async with session.begin():
+            await insert_agent(session, **kwargs)  # type: ignore[arg-type]
+
+        row = (
+            await session.execute(
+                select(Agent).where(Agent.agent_id == kwargs["agent_id"])
+            )
+        ).scalar_one()
+        assert row.shadow is False
+
+    async def test_shadow_opt_in_is_persisted(self, session: AsyncSession):
+        """A caller can opt a submission into shadow mode at insert time."""
+        kwargs = _make_kwargs(shadow=True)
+        async with session.begin():
+            await insert_agent(session, **kwargs)  # type: ignore[arg-type]
+
+        row = (
+            await session.execute(
+                select(Agent).where(Agent.agent_id == kwargs["agent_id"])
+            )
+        ).scalar_one()
+        assert row.shadow is True
+
 
 class TestSubmissionCooldown:
     async def test_rejects_until_one_hour_after_latest_submission(

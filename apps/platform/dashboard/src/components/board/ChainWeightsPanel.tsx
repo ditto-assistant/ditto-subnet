@@ -9,7 +9,7 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { agentName, pct, relDuration, shortKey } from "../../lib/format";
-import { validatorWeightViews } from "../../lib/scoring";
+import { matchesPinLabel, pinAgreementLabel, validatorWeightViews } from "../../lib/scoring";
 import type { ValidatorWeightEntry, ValidatorWeightView } from "../../lib/scoring";
 import { EntityButton } from "../ui/EntityButton";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
@@ -65,6 +65,11 @@ export function ChainWeightsPanel(props: { store: LeaderboardStore }): JSX.Eleme
           <Show when={snapshot()?.stale}>
             <span class="chain-weights-stale">stale</span>
           </Show>
+          <Show when={snapshot()?.pin_agreement}>
+            {(agreement) => (
+              <span class="chain-weights-agreement">{pinAgreementLabel(agreement())}</span>
+            )}
+          </Show>
           <span class="chain-weights-caret" aria-hidden="true">
             {open() ? "▴" : "▾"}
           </span>
@@ -102,6 +107,19 @@ export function ChainWeightsPanel(props: { store: LeaderboardStore }): JSX.Eleme
                   </Show>
                   <Show when={view.validatorUid != null}>
                     <span class="chain-vector-uid">UID {view.validatorUid}</span>
+                  </Show>
+                  <Show when={view.matchesPin && view.matchesPin !== "unknown"}>
+                    <span
+                      class={"pin-badge chain-vector-pin " + view.matchesPin}
+                      title={
+                        view.fold?.epoch_index != null
+                          ? "This validator reported folding pin #" +
+                            Number(view.fold.epoch_index).toLocaleString()
+                          : "This validator does not report which pin it folded."
+                      }
+                    >
+                      {matchesPinLabel(view.matchesPin)}
+                    </span>
                   </Show>
                 </span>
                 <span class="chain-vector-weights">

@@ -59,6 +59,12 @@ var ErrSeedStoreLockTimeout = errors.New("seed store lock timeout")
 
 const seedStoreLockTimeoutMessage = "seed exceeded 600s, aborted to release the store lock"
 
+// ErrSeedDeadlineExceeded marks a /seed call that ran out its own
+// seedTimeoutFor deadline while the caller's context was still live. It is
+// typed here, where the deadline is owned, so a run cancellation or an outer
+// run cap expiring mid-seed can never be mistaken for it.
+var ErrSeedDeadlineExceeded = errors.New("seed deadline exceeded")
+
 // envDuration reads a Go duration from key, returning def when unset, empty,
 // unparseable, or non-positive.
 func envDuration(key string, def time.Duration) time.Duration {
@@ -189,8 +195,9 @@ func Seed(ctx context.Context, harnessURL string, req protocol.SeedRequest) (pro
 // SeedForVersion is Seed with the bench version's deadline envelope. The wire
 // bytes are identical to Seed for every version — only the client-side timeout
 // differs (v7 haystacks are much larger).
-func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedRequest, benchVersion int) (protocol.SeedResponse, error) {
-	ctx, cancel := context.WithTimeout(ctx, seedTimeoutFor(benchVersion))
+func SeedForVersion(parent context.Context, harnessURL string, req protocol.SeedRequest, benchVersion int) (protocol.SeedResponse, error) {
+	timeout := seedTimeoutFor(benchVersion)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 
 	buf, err := marshalSeedRequest(req, benchVersion)
@@ -205,13 +212,13 @@ func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedReq
 
 	httpResp, err := clientFor(ctx).Do(httpReq)
 	if err != nil {
-		return protocol.SeedResponse{}, fmt.Errorf("post /seed: %w", err)
+		return protocol.SeedResponse{}, seedDeadlineError(parent, ctx, timeout, fmt.Errorf("post /seed: %w", err))
 	}
 	defer httpResp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20))
 	if err != nil {
-		return protocol.SeedResponse{}, fmt.Errorf("read /seed body: %w", err)
+		return protocol.SeedResponse{}, seedDeadlineError(parent, ctx, timeout, fmt.Errorf("read /seed body: %w", err))
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
 		var payload struct {
@@ -229,6 +236,24 @@ func SeedForVersion(ctx context.Context, harnessURL string, req protocol.SeedReq
 		return protocol.SeedResponse{}, fmt.Errorf("decode /seed response: %w", err)
 	}
 	return out, nil
+}
+
+// seedDeadlineError types err as ErrSeedDeadlineExceeded when the /seed
+// call's own deadline is what stopped it: ctx expired while parent did not,
+// and ctx's deadline is strictly earlier than parent's. With equal deadlines
+// WithTimeout arms a separate child timer that can fire before the parent's
+// sets parent.Err(), and that expiry belongs to the caller, not to /seed.
+// Any other transport failure is returned unchanged.
+func seedDeadlineError(parent, ctx context.Context, timeout time.Duration, err error) error {
+	if parent.Err() != nil || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return err
+	}
+	if parentDeadline, ok := parent.Deadline(); ok {
+		if seedDeadline, _ := ctx.Deadline(); !seedDeadline.Before(parentDeadline) {
+			return err
+		}
+	}
+	return fmt.Errorf("%w after %s: %w", ErrSeedDeadlineExceeded, timeout, err)
 }
 
 // marshalSeedRequest keeps every historical request byte-identical while V9
@@ -261,11 +286,23 @@ func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, err
 // non-memory tool calls through (so the validator observes the trajectory), and
 // the user_id the case's memory graph was seeded under (multi-graph isolation).
 // The zero value reproduces self-report behavior (no endpoint, default user).
+// InferenceBaseURL, when set, is a validator-minted case-scoped broker URL sent
+// as inference_base_url for this case only. A harness that uses it makes its
+// model calls attributable to the case; one that ignores it keeps the
+// process-wide URL. Below v13 the opaque URL is revoked when the case ends;
+// v13 retains its claim-bearing /run/<case_id> route for provenance capture.
+// Build the model client per case, never share one case URL across cases.
 type CaseOptions struct {
-	ToolEndpoint string
-	UserID       string
-	BenchVersion int
+	ToolEndpoint     string
+	UserID           string
+	BenchVersion     int
+	InferenceBaseURL string
 }
+
+// DefaultSystemPrompt is the validator-authored system prompt every /run
+// carries. It is exported so the Bench v13 causal gate can exempt its tokens:
+// the harness did not author it.
+const DefaultSystemPrompt = "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request."
 
 // AttemptTelemetry is validator-observed execution evidence for one HTTP
 // attempt. It deliberately records a bounded outcome class rather than the raw
@@ -290,6 +327,11 @@ type CaseExecution struct {
 	ModelInferenceObserved   bool                             `json:"model_inference_observed,omitempty"`
 	ModelAttributionComplete bool                             `json:"model_attribution_complete,omitempty"`
 	ToolProvenance           *protocol.ToolProvenanceEvidence `json:"tool_provenance,omitempty"`
+	// Catalog is the Bench v13 relay record of what the harness OFFERED the model
+	// for this case (tools[] names and schema digests, tool_choice, model-emitted
+	// calls, system-span digests, completion counts). Metadata only; nil before
+	// Bench v13 so every earlier transcript is byte-identical.
+	Catalog *protocol.CatalogEvidence `json:"catalog,omitempty"`
 	// RelayInjectedDelayMs is the total delay-fingerprint hold the trusted
 	// relay imposed inside this case's window; RelayDelayConsistent reports
 	// whether the case's wall time can contain it (nil = unmeasured). Shadow
@@ -361,6 +403,12 @@ type CaseExecution struct {
 	// is a last-resort safety net, never expected to fire on normal full-context
 	// use.
 	AnswerStuffReviewRequired bool `json:"answer_stuff_review_required,omitempty"`
+	// InferenceCost (bench_version 13) is the trusted broker's per-case
+	// inference cost record and shadow cost factor for this case (issue #1850):
+	// successful completions, sampled choices, output tokens, the published
+	// class budget, and the factor the rule WOULD apply. Reported only; never
+	// multiplied into a score in v13.0. nil before Bench v13.
+	InferenceCost *protocol.InferenceCostEvidence `json:"inference_cost,omitempty"`
 }
 
 // RunCase POSTs one tool OR memory case to <harnessURL>/run. For a tool case,
@@ -401,12 +449,15 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 	wireBenchVersion := harnessWireBenchVersion(opts.BenchVersion)
 	reqBody := protocol.RunRequest{
 		CaseID:       c.ID,
-		SystemPrompt: "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request.",
+		SystemPrompt: DefaultSystemPrompt,
 		UserInput:    c.Prompt,
 		Tools:        tools,
 		BenchVersion: wireBenchVersion,
 		ToolEndpoint: opts.ToolEndpoint,
 		UserID:       opts.UserID,
+		// Case-scoped relay route; omitted when empty so direct-harness request
+		// bytes are unchanged.
+		InferenceBaseURL: opts.InferenceBaseURL,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {
@@ -434,6 +485,18 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 // contract advertises (miners/dittobench-starter-kit/PROTOCOL.md). Every scorer
 // revision above it is validator-owned: it changes the dataset, projection, and
 // grader, but never what a harness must advertise or branch on.
+//
+// Bench v13 wire-version decision (issue #1519, option A -- Owner decision,
+// default taken): the wire STAYS pinned at v9. Every harness-visible v13
+// addition (enum schemas, coined decoys, wave-0 corrections, tools_offered)
+// ships as an additive OPTIONAL field on the existing v9 shapes, and every
+// grader-only v13 field is stripped (json:"-") before /run. The alternative, a
+// bump to 13 with a compatibility window, fails every deployed harness closed:
+// the starter kit range-checks MIN..=MAX_SUPPORTED_BENCH_VERSION
+// (miners/dittobench-starter-kit/src/protocol.rs), so an unreleased 13 on the
+// wire 400s before a single case runs and turns negotiation into a difficulty
+// signal. Revisit only with a starter-kit release >= 2 weeks ahead of
+// activation. Recorded in services/dittobench-api/PROTOCOL.md as well.
 const publicWireBenchVersion = protocol.BenchVersionV9
 
 func harnessWireBenchVersion(benchVersion int) int {

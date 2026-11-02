@@ -423,6 +423,7 @@ set -a
 . ./.env
 . ./.env.deploy
 set +a
+. ./scripts/chain-transport.sh
 
 deploy_stage="infra"
 # Ensure the Docker infra this host needs is up (Pylon on a deployed host; the

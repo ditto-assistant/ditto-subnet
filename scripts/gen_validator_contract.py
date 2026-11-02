@@ -55,6 +55,10 @@ _PLATFORM_CONTRACT_DIR = (
 _DEFAULT_OUT = _CONTRACT_DIR / "validator_contract.json"
 _DEFAULT_MINER_OUT = _CONTRACT_DIR / "miner_contract.json"
 _DEFAULT_CONFIRMATION_OUT = _CONTRACT_DIR / "confirmation_contract.json"
+_DEFAULT_ROUTER_OUT = _CONTRACT_DIR / "router_contract.json"
+_DEFAULT_GENERATOR_ROUND_OUT = _CONTRACT_DIR / "generator_round_contract.json"
+
+_DEFAULT_BENCH_VERSIONS_OUT = _CONTRACT_DIR / "bench_versions.json"
 
 
 def _load_contract_schema() -> ModuleType:
@@ -107,10 +111,26 @@ def main() -> None:
         help="destination private v9 confirmation contract golden",
     )
     parser.add_argument(
+        "--bench-versions-out",
+        type=Path,
+        default=_DEFAULT_BENCH_VERSIONS_OUT,
+        help=(
+            "destination for the cross-layer supported bench-version set that "
+            "ditto/tests/test_bench_version_pins.py diffs against the Go, Rust "
+            "and TypeScript pins"
+        ),
+    )
+    parser.add_argument(
         "--miner-out",
         type=Path,
         default=_DEFAULT_MINER_OUT,
         help="destination miner golden path (default: the committed one)",
+    )
+    parser.add_argument(
+        "--router-out",
+        type=Path,
+        default=_DEFAULT_ROUTER_OUT,
+        help="destination shadow router-ledger contract golden",
     )
     parser.add_argument(
         "--mirror-dir",
@@ -153,23 +173,32 @@ def main() -> None:
     plan: list[tuple[str, Path, list[Path]]] = [
         ("validator", args.out, []),
         ("confirmation", args.confirmation_out, []),
+        ("router", args.router_out, []),
+        ("bench_versions", args.bench_versions_out, []),
         ("miner", args.miner_out, []),
+        ("generator_round", _DEFAULT_GENERATOR_ROUND_OUT, []),
     ]
     if mirror_dir is not None:
         plan[0][2].append(mirror_dir / "validator_contract.json")
         plan[1][2].append(mirror_dir / "confirmation_contract.json")
+        plan[2][2].append(mirror_dir / "router_contract.json")
+        plan[3][2].append(mirror_dir / "bench_versions.json")
+        plan[5][2].append(mirror_dir / "generator_round_contract.json")
 
     compute = {
         "validator": schema.compute_contract,
         "confirmation": schema.compute_confirmation_contract,
+        "router": schema.compute_router_contract,
+        "bench_versions": schema.compute_bench_versions,
         "miner": schema.compute_miner_contract,
+        "generator_round": schema.compute_generator_round_contract,
     }
     for kind, out, mirrors in plan:
         contract = compute[kind]()
         payload = json.dumps(contract, indent=2, sort_keys=True) + "\n"
         for destination in (out, *mirrors):
             destination.write_text(payload)
-            print(f"wrote {len(contract)} model(s) to {destination}")
+            print(f"wrote {len(contract)} {kind} entr(y/ies) to {destination}")
 
 
 if __name__ == "__main__":

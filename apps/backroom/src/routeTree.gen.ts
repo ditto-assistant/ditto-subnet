@@ -23,6 +23,7 @@ import { Route as AuthenticatedScoreOutliersRouteImport } from './routes/_authen
 import { Route as AuthenticatedMinerFeesRouteImport } from './routes/_authenticated/miner-fees'
 import { Route as AuthenticatedInferenceRoutingRouteImport } from './routes/_authenticated/inference-routing'
 import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/_authenticated/inference-concurrency'
+import { Route as AuthenticatedGammaRouteImport } from './routes/_authenticated/gamma'
 import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
 import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
 import { Route as AuthenticatedConfirmationBundlesRouteImport } from './routes/_authenticated/confirmation-bundles'
@@ -111,6 +112,11 @@ const AuthenticatedInferenceConcurrencyRoute =
     path: '/inference-concurrency',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedGammaRoute = AuthenticatedGammaRouteImport.update({
+  id: '/gamma',
+  path: '/gamma',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedCopyReviewRoute = AuthenticatedCopyReviewRouteImport.update({
   id: '/copy-review',
   path: '/copy-review',
@@ -180,6 +186,7 @@ export interface FileRoutesByFullPath {
   '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
+  '/gamma': typeof AuthenticatedGammaRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
   '/inference-routing': typeof AuthenticatedInferenceRoutingRoute
   '/miner-fees': typeof AuthenticatedMinerFeesRoute
@@ -205,6 +212,7 @@ export interface FileRoutesByTo {
   '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
+  '/gamma': typeof AuthenticatedGammaRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
   '/inference-routing': typeof AuthenticatedInferenceRoutingRoute
   '/miner-fees': typeof AuthenticatedMinerFeesRoute
@@ -231,6 +239,7 @@ export interface FileRoutesById {
   '/_authenticated/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/_authenticated/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/_authenticated/copy-review': typeof AuthenticatedCopyReviewRoute
+  '/_authenticated/gamma': typeof AuthenticatedGammaRoute
   '/_authenticated/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
   '/_authenticated/inference-routing': typeof AuthenticatedInferenceRoutingRoute
   '/_authenticated/miner-fees': typeof AuthenticatedMinerFeesRoute
@@ -258,6 +267,7 @@ export interface FileRouteTypes {
     | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
+    | '/gamma'
     | '/inference-concurrency'
     | '/inference-routing'
     | '/miner-fees'
@@ -283,6 +293,7 @@ export interface FileRouteTypes {
     | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
+    | '/gamma'
     | '/inference-concurrency'
     | '/inference-routing'
     | '/miner-fees'
@@ -308,6 +319,7 @@ export interface FileRouteTypes {
     | '/_authenticated/confirmation-bundles'
     | '/_authenticated/continual-retests'
     | '/_authenticated/copy-review'
+    | '/_authenticated/gamma'
     | '/_authenticated/inference-concurrency'
     | '/_authenticated/inference-routing'
     | '/_authenticated/miner-fees'
@@ -432,6 +444,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedInferenceConcurrencyRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/gamma': {
+      id: '/_authenticated/gamma'
+      path: '/gamma'
+      fullPath: '/gamma'
+      preLoaderRoute: typeof AuthenticatedGammaRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/copy-review': {
       id: '/_authenticated/copy-review'
       path: '/copy-review'
@@ -534,6 +553,7 @@ interface AuthenticatedRouteChildren {
   AuthenticatedConfirmationBundlesRoute: typeof AuthenticatedConfirmationBundlesRoute
   AuthenticatedContinualRetestsRoute: typeof AuthenticatedContinualRetestsRoute
   AuthenticatedCopyReviewRoute: typeof AuthenticatedCopyReviewRoute
+  AuthenticatedGammaRoute: typeof AuthenticatedGammaRoute
   AuthenticatedInferenceConcurrencyRoute: typeof AuthenticatedInferenceConcurrencyRoute
   AuthenticatedInferenceRoutingRoute: typeof AuthenticatedInferenceRoutingRoute
   AuthenticatedMinerFeesRoute: typeof AuthenticatedMinerFeesRoute
@@ -553,6 +573,7 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedConfirmationBundlesRoute: AuthenticatedConfirmationBundlesRoute,
   AuthenticatedContinualRetestsRoute: AuthenticatedContinualRetestsRoute,
   AuthenticatedCopyReviewRoute: AuthenticatedCopyReviewRoute,
+  AuthenticatedGammaRoute: AuthenticatedGammaRoute,
   AuthenticatedInferenceConcurrencyRoute:
     AuthenticatedInferenceConcurrencyRoute,
   AuthenticatedInferenceRoutingRoute: AuthenticatedInferenceRoutingRoute,

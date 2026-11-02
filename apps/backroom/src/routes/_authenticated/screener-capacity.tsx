@@ -2,17 +2,26 @@ import { createFileRoute } from '@tanstack/react-router'
 import { AlertTriangle, ServerCog } from 'lucide-react'
 import { PageHeader } from '../../components/PageHeader'
 import { ScreenerCapacityPanel } from '../../components/ScreenerCapacityPanel'
-import { getScreenerCapacity } from '../../server/admin.functions'
+import { ScreeningInfraRetryPanel } from '../../components/ScreeningInfraRetryPanel'
+import { getScreenerCapacity, getScreeningInfraRetries } from '../../server/admin.functions'
 
 export const Route = createFileRoute('/_authenticated/screener-capacity')({
-  loader: () => getScreenerCapacity(),
+  // The retry read reports its own failure (readScreeningInfraRetries never
+  // throws) so it cannot take the capacity page down or hide why it is missing.
+  loader: async () => {
+    const [capacity, infraRetries] = await Promise.all([
+      getScreenerCapacity(),
+      getScreeningInfraRetries(),
+    ])
+    return { capacity, infraRetries }
+  },
   pendingComponent: Pending,
   errorComponent: ErrorState,
   component: ScreenerCapacityPage,
 })
 
 function ScreenerCapacityPage() {
-  const initialState = Route.useLoaderData()
+  const { capacity: initialState, infraRetries } = Route.useLoaderData()
   const { user } = Route.useRouteContext()
   return (
     <div>
@@ -31,6 +40,7 @@ function ScreenerCapacityPage() {
         initialState={initialState}
         readOnly={user.accessLevel === 'read'}
       />
+      <ScreeningInfraRetryPanel initialState={infraRetries} />
     </div>
   )
 }

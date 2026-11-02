@@ -37,6 +37,7 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
+from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
@@ -66,6 +67,7 @@ from ditto.api_server.endpoints.validator import (
     _artifact_key,
     _assert_validator_permitted,
     _screened_image_key,
+    _validator_scores_source_free,
 )
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.validator_slot_settings import (
@@ -80,6 +82,10 @@ from ditto.db.models import (
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
     ConfirmationBundleTicket,
+)
+from ditto.db.queries.artifact_fetch_audit import (
+    ENDPOINT_VALIDATOR_CONFIRMATION_ARTIFACT,
+    record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_attempt_lock import lock_confirmation_attempt
@@ -103,6 +109,7 @@ from ditto.db.queries.confirmation_ticket_recovery import (
 from ditto.db.queries.validator_auth import (
     ValidatorRequestReplayError,
     consume_validator_nonce,
+    nonce_expires_at,
 )
 from ditto.db.queries.validator_slot_occupancy import (
     live_v9_confirmation_slot_ticket,
@@ -238,6 +245,7 @@ def v9_confirmation_fail_signing_message(
     requested_at: datetime,
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
 ) -> bytes:
     """Bind one hand-back, and its diagnostics when the reporter sent any.
 
@@ -246,12 +254,21 @@ def v9_confirmation_fail_signing_message(
     the allowlisted class and stage into the signature so a persisted diagnostic
     is exactly what the reporter signed — an unsigned advisory field could be
     forged or stripped by anything on the path, and this one is read by
-    operators deciding whether to spend the next bounded canary.
+    operators deciding whether to spend the next bounded canary. v3 adds the
+    scorer's bounded status alongside a scorer-forwarded class.
+
+    The version is chosen by what the reporter actually sent, never by what it
+    is capable of sending, so all three remain simultaneously valid during a
+    rolling fleet upgrade. Platform rebuilds the same string from the fields it
+    received: a stripped status downgrades the rebuild to v2 and fails the
+    signature rather than silently persisting a diagnostic nobody signed.
     """
     if requested_at.tzinfo is None:
         raise ValueError("confirmation failure timestamp must include a timezone")
     if (failure_class is None) != (failure_stage is None):
         raise ValueError("confirmation failure class and stage must travel together")
+    if failure_status is not None and failure_class is None:
+        raise ValueError("confirmation failure status requires a failure class")
     requested = (
         requested_at.astimezone(UTC)
         .isoformat(timespec="microseconds")
@@ -262,10 +279,16 @@ def v9_confirmation_fail_signing_message(
             "validator-v9-confirmation-fail:v1:"
             f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
         ).encode()
+    if failure_status is None:
+        return (
+            "validator-v9-confirmation-fail:v2:"
+            f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
+            f"{failure_class}:{failure_stage}:{nonce}:{requested}"
+        ).encode()
     return (
-        "validator-v9-confirmation-fail:v2:"
+        "validator-v9-confirmation-fail:v3:"
         f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
-        f"{failure_class}:{failure_stage}:{nonce}:{requested}"
+        f"{failure_class}:{failure_stage}:{failure_status}:{nonce}:{requested}"
     ).encode()
 
 
@@ -465,7 +488,11 @@ async def request_v9_confirmation_job(
                     nonce=payload.nonce,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    expires_at=now + _JOB_REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=payload.requested_at,
+                        max_age=_JOB_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError as error:
                 raise HTTPException(
@@ -773,7 +800,11 @@ async def get_v9_confirmation_artifact(
                 nonce=x_confirmation_nonce,
                 validator_hotkey=x_validator_hotkey,
                 now=now,
-                expires_at=now + _JOB_REQUEST_MAX_AGE,
+                expires_at=nonce_expires_at(
+                    now=now,
+                    requested_at=x_confirmation_requested_at,
+                    max_age=_JOB_REQUEST_MAX_AGE,
+                ),
             )
         except ValidatorRequestReplayError as error:
             raise HTTPException(
@@ -803,16 +834,43 @@ async def get_v9_confirmation_artifact(
                 status_code=409,
                 detail="confirmation artifact does not match its base subject",
             )
-    url = await storage.presigned_get_url(
-        key=_artifact_key(agent.agent_id),
-        expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
-    )
+        source_free = await _validator_scores_source_free(
+            session, validator_hotkey=x_validator_hotkey
+        )
+        ticket_id = ticket.ticket_id
     image_url = None
     if agent.screened_image_sha256 and agent.screened_image_upload_id:
         image_url = await storage.presigned_get_url(
             key=_screened_image_key(agent.agent_id, agent.screened_image_upload_id),
             expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
         )
+    # Confirmation runs only the screened image; the source URL is provenance
+    # that source-free scorers no longer need.
+    url = (
+        None
+        if source_free and image_url is not None
+        else await storage.presigned_get_url(
+            key=_artifact_key(agent.agent_id),
+            expires_in=int(_ARTIFACT_URL_TTL.total_seconds()),
+        )
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent.agent_id,
+        endpoint=ENDPOINT_VALIDATOR_CONFIRMATION_ARTIFACT,
+        requester_kind="validator",
+        requester_id=x_validator_hotkey,
+        lease_id=ticket_id,
+        bench_version=bundle.bench_version,
+        artifact_sha256=agent.sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(
+            request,
+            served_source=url is not None,
+            served_screened_image=image_url is not None,
+            bundle_id=str(bundle_id),
+        ),
+    )
     return ArtifactResponse(
         agent_id=agent.agent_id,
         sha256=agent.sha256,
@@ -898,7 +956,11 @@ async def prepare_v9_confirmation_report(
                     nonce=payload.nonce,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    expires_at=now + _JOB_REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=payload.requested_at,
+                        max_age=_JOB_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError as error:
                 raise HTTPException(
@@ -1026,6 +1088,7 @@ async def fail_v9_confirmation_job(
         requested_at=payload.requested_at,
         failure_class=payload.failure_class,
         failure_stage=payload.failure_stage,
+        failure_status=payload.failure_status,
     )
     if not verify_signature(
         signer=payload.validator_hotkey,
@@ -1051,7 +1114,11 @@ async def fail_v9_confirmation_job(
                     nonce=payload.nonce,
                     validator_hotkey=payload.validator_hotkey,
                     now=now,
-                    expires_at=now + _JOB_REQUEST_MAX_AGE,
+                    expires_at=nonce_expires_at(
+                        now=now,
+                        requested_at=payload.requested_at,
+                        max_age=_JOB_REQUEST_MAX_AGE,
+                    ),
                 )
             except ValidatorRequestReplayError as error:
                 raise HTTPException(
@@ -1107,6 +1174,7 @@ async def fail_v9_confirmation_job(
                 # outside one validator's host logs.
                 ticket.failure_class = payload.failure_class
                 ticket.failure_stage = payload.failure_stage
+                ticket.failure_status = payload.failure_status
             return V9ConfirmationFailResponse(
                 bundle_id=bundle_id,
                 ticket_id=ticket.ticket_id,

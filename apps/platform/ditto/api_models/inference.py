@@ -86,6 +86,17 @@ class InferenceExchangeResponse(BaseModel):
     max_output_tokens: Annotated[int, Field(ge=1)] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # Decision-lane evidence, present only when the grant was minted with the
+    # lane on. Absent otherwise, so a lane-off exchange is byte-identical.
+    decision_model: Annotated[str, Field(min_length=1, max_length=128)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    decision_request_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    decision_token_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("expires_at")
     @classmethod

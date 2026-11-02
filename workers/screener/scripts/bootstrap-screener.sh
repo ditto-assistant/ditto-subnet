@@ -7,14 +7,12 @@ set -euo pipefail
 # terraform/envs/gcp-platform/files/screener-fleet-startup.sh.tpl), which has
 # already cloned this repository (read-only deploy key from Secret Manager) and
 # exports the configuration below. Runs as root, is idempotent (marker file),
-# and finishes by handing off to scripts/update-screener.sh — the same
-# exact-commit updater the deploy workflow uses — so the definition of
-# "healthy worker" lives in exactly one place.
+# and finishes by handing off to scripts/update-screener.sh. Subsequent signed
+# releases are pulled by the host-local release timer, so the definition of a
+# healthy worker still lives in exactly one place.
 #
-# Pet-VM parity: the layout it produces (/opt/ditto/screener, deploy:ditto,
-# screener.env, systemd unit) is byte-compatible with the hand-provisioned
-# ditto-screener-prod host, which is what makes the label-driven deploy
-# workflow able to treat pet and fleet instances identically.
+# The layout remains compatible with the retired pet VM, but release delivery
+# is now outbound and host-owned rather than label discovery plus inbound SSH.
 #
 # GOLDEN-IMAGE BAKE MODE (SCREENER_BAKE_ONLY=1): runs ONLY the slow,
 # secret-free provisioning — base packages, Docker, the IMDS guard, uv, the
@@ -77,10 +75,9 @@ if [[ "$SCREENER_BAKE_ONLY" != "1" ]]; then
     echo "already bootstrapped ($MARKER exists)"
     exit 0
   fi
-  # Hold the deploy lock across the whole mutating body so a scheduled deploy
-  # (update-screener.sh over SSH) landing mid-bootstrap serializes behind it
-  # instead of racing the checkout / env / unit. We pass the held flag down to
-  # the updater we invoke so it does not try to re-acquire (and deadlock).
+  # Hold the deploy lock across the whole mutating body so the local pull timer
+  # cannot race the checkout / env / unit. We pass the held flag down to the
+  # updater we invoke so it does not try to re-acquire (and deadlock).
   exec {lock_fd}>"$LOCK_FILE"
   if ! flock -w 2400 "$lock_fd"; then
     echo "could not acquire deploy lock ($LOCK_FILE) within 40m" >&2
@@ -92,11 +89,32 @@ export DEBIAN_FRONTEND=noninteractive
 
 # --- Base packages + Docker engine (the gate shells out to `docker`) ---------
 apt-get update -qq
-apt-get install -y -qq git curl ca-certificates gnupg openssl
+apt-get install -y -qq git curl ca-certificates gnupg openssl util-linux
+
+# The GCE overflow worker consumes the same keyless-signed release descriptor
+# as the Hetzner fleet. Pin the verifier bytes so first boot does not trust a
+# mutable installer or require a GitHub-hosted push deployment.
+if ! command -v cosign >/dev/null; then
+  cosign_tmp="$(mktemp)"
+  curl -fsSL \
+    https://github.com/sigstore/cosign/releases/download/v3.0.6/cosign-linux-amd64 \
+    -o "$cosign_tmp"
+  echo "c956e5dfcac53d52bcf058360d579472f0c1d2d9b69f55209e256fe7783f4c74  $cosign_tmp" \
+    | sha256sum --check
+  install -o root -g root -m 0755 "$cosign_tmp" /usr/local/bin/cosign
+  rm -f "$cosign_tmp"
+fi
 
 if ! command -v docker >/dev/null; then
-  install -m 0644 /dev/null /usr/share/keyrings/docker.asc
-  curl -fsSL https://download.docker.com/linux/debian/gpg >/usr/share/keyrings/docker.asc
+  # Pin the apt trust root the same way as the cosign and uv bytes above: a
+  # substituted key file must fail closed, not become a trusted signer.
+  # Fingerprint 9DC8 5822 9FC7 DD38 854A E2D8 8D81 803C 0EBF CD88.
+  docker_key_tmp="$(mktemp)"
+  curl -fsSL https://download.docker.com/linux/debian/gpg -o "$docker_key_tmp"
+  echo "1500c1f56fa9e26b9b8f42452a553675796ade0807cdce11975eb98170b3a570  $docker_key_tmp" \
+    | sha256sum --check
+  install -o root -g root -m 0644 "$docker_key_tmp" /usr/share/keyrings/docker.asc
+  rm -f "$docker_key_tmp"
   . /etc/os-release
   echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" \
     >/etc/apt/sources.list.d/docker.list
@@ -318,11 +336,9 @@ SCREENER_BUILD_MEMORY=2g
 # Language-neutral image builds get a larger but still bounded compiler/linker
 # envelope. The built harness keeps the validator-compatible runtime limits.
 SCREENER_IMAGE_BUILD_MEMORY=8g
-SCREENER_REMOTE_BUILD_MODE=off
 # GCE MIG instances are whole-screen overflow capacity. They build and smoke
 # locally immediately; they do not enqueue work back onto the Hetzner node and
 # wait before doing the same build themselves.
-SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS=1500
 SCREENER_PIDS_LIMIT=512
 SCREENER_DOCKER_HOST=$rootless_host
 DOCKER_HOST=$rootless_host
@@ -344,11 +360,23 @@ unset mnemonic api_token
 target_sha="$(runuser -u "$SCREENER_USER" -- git -C "$checkout" rev-parse HEAD)"
 test "$target_sha" = "$SCREENER_EXPECTED_SHA"
 
-SCREENER_EXPECTED_SHA="$target_sha" \
+  SCREENER_EXPECTED_SHA="$target_sha" \
   SCREENER_GCP_PROJECT="$SCREENER_GCP_PROJECT" \
   SCREENER_REPOSITORY_URL="$SCREENER_REPOSITORY_URL" \
   SCREENER_DEPLOY_LOCK_HELD=1 \
   bash "$source_dir/scripts/update-screener.sh"
+
+# Releases advance a signed GHCR discovery channel. Each live GCE overflow
+# worker pulls that channel itself; a fleet at size zero performs no work and
+# needs no GitHub Actions discovery or SSH reconciliation job.
+install -o root -g root -m 0644 \
+  "$source_dir/deploy/ditto-screener-release-update.service" \
+  /etc/systemd/system/ditto-screener-release-update.service
+install -o root -g root -m 0644 \
+  "$source_dir/deploy/ditto-screener-release-update.timer" \
+  /etc/systemd/system/ditto-screener-release-update.timer
+systemctl daemon-reload
+systemctl enable --now ditto-screener-release-update.timer
 
 touch "$MARKER"
 echo "bootstrap complete: $(hostname) at $target_sha"

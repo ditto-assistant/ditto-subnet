@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from datetime import UTC, datetime, timedelta
@@ -20,16 +19,26 @@ from ditto.api_models.screener_review_settings import (
     AppliedScreenerReviewSettings,
     ScreenerPolicyManifestView,
     ScreenerReviewSettings,
+    is_l2_report_canary_scope,
     policy_manifest_digest,
+    review_settings_checksum,
 )
 from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettingsRevision as RevisionModel,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
-from ditto.api_server.shadow_review import shadow_review_observation
+from ditto.api_server.screener_node_identity import (
+    is_enrolled_node_heartbeat_instance,
+)
+from ditto.api_server.shadow_review import (
+    probe_battery_observation,
+    shadow_review_observation,
+)
 from ditto.db.models import (
     ScreenerHeartbeat,
+    ScreenerNode,
+    ScreenerProbeBattery,
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
 )
@@ -43,10 +52,7 @@ _APPLIED_FRESHNESS = timedelta(minutes=5)
 
 
 def _checksum(settings: ScreenerReviewSettings) -> str:
-    encoded = json.dumps(
-        settings.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    ).encode()
-    return hashlib.sha256(encoded).hexdigest()
+    return review_settings_checksum(settings)
 
 
 def _revision(row: ScreenerReviewSettingsRevision) -> RevisionModel:
@@ -83,11 +89,20 @@ def _policy_manifest(
 
 
 def _effective_row(
-    current_by_scope: dict[str, ScreenerReviewSettingsRevision], instance_id: str
+    current_by_scope: dict[str, ScreenerReviewSettingsRevision],
+    instance_id: str,
+    *,
+    node_id: str | None = None,
 ) -> ScreenerReviewSettingsRevision | None:
-    exact = current_by_scope.get(instance_id)
-    if exact is not None and exact.settings.get("mode") != "inherit":
-        return exact
+    # Match the screener fetch path: worker, enrolled node, then global. A
+    # canary-only scope is never a worker's posture, whatever the worker is
+    # called.
+    for scope in (instance_id, node_id):
+        if scope is None or is_l2_report_canary_scope(scope):
+            continue
+        row = current_by_scope.get(scope)
+        if row is not None and row.settings.get("mode") != "inherit":
+            return row
     return current_by_scope.get("*")
 
 
@@ -117,6 +132,12 @@ async def get_settings(
     )
     applied: list[AppliedScreenerReviewSettings] = []
     heartbeats = list(await session.scalars(select(ScreenerHeartbeat)))
+    nodes_by_hotkey = {
+        node.screener_hotkey: node
+        for node in await session.scalars(
+            select(ScreenerNode).where(ScreenerNode.status.in_(("active", "draining")))
+        )
+    }
     for heartbeat in heartbeats:
         envelope = heartbeat.system_metrics
         raw = envelope.get("review_settings") if isinstance(envelope, dict) else None
@@ -126,7 +147,18 @@ async def get_settings(
             status = ScreenerReviewSettingsStatus.model_validate(raw)
         except ValueError:
             continue
-        expected = _effective_row(current_by_scope, heartbeat.instance_id)
+        node = nodes_by_hotkey.get(heartbeat.screener_hotkey)
+        node_id = (
+            node.node_id
+            if node is not None
+            and is_enrolled_node_heartbeat_instance(
+                node_id=node.node_id, instance_id=heartbeat.instance_id
+            )
+            else None
+        )
+        expected = _effective_row(
+            current_by_scope, heartbeat.instance_id, node_id=node_id
+        )
         if expected is None:
             default_settings = ScreenerReviewSettings()
             expected_revision = 0
@@ -186,12 +218,22 @@ async def get_settings(
             .limit(100)
         )
     )
+    battery_rows = list(
+        await session.scalars(
+            select(ScreenerProbeBattery)
+            .order_by(ScreenerProbeBattery.created_at.desc())
+            .limit(100)
+        )
+    )
     return AdminScreenerReviewSettingsResponse(
         current=[_revision(row) for row in current_by_scope.values()],
         history=[_revision(row) for row in rows[:200]],
         known_instances=instances,
         applied_instances=sorted(applied, key=lambda item: item.instance_id),
         shadow_observations=[shadow_review_observation(row) for row in shadow_rows],
+        probe_battery_observations=[
+            probe_battery_observation(row) for row in battery_rows
+        ],
         policy_manifests=[_policy_manifest(row) for row in rows[:200]],
     )
 

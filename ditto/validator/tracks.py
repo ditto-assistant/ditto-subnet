@@ -1,0 +1,393 @@
+"""Scalable, retirable competition-track registry for the SN118 weight fold.
+
+The subnet is splitting from a single competition into several independent ones
+(memory, coding, router, generator — with room for more). The chain accepts
+exactly **one** weight vector per validator, so "independent tracks" is realized
+by folding each track separately and blending the results by per-track emission
+share into one
+``put_weights`` (see :func:`ditto.validator.weights.blend_track_weights`).
+
+This module owns only the *static* description of the tracks — their id, state,
+basis-point share, weight eligibility, and pure fold function — plus the
+validation that keeps the split coherent (eligible shares sum to at most
+``BASIS_POINT_SCALE``). Per-epoch data (the memory ledger, the published router
+ledger) is threaded through :class:`TrackFoldInputs` at fold time, so a track's
+``fold`` stays a pure function and adding a track is a registration, not an edit
+to the fold pipeline.
+
+Lifecycle (mirrors the ``RolloutMode`` ladder in ``internal/scoregates`` and the
+``StrEnum`` style of ``coding_failure.CodingFailureStage``):
+
+- ``SHADOW`` — folded and logged, contributes **0 bps** regardless of configured
+  share (used to observe a new track before it touches emissions).
+- ``ACTIVE`` — pays its configured share.
+- ``RETIRING`` — still pays (draining) but takes no new work.
+- ``RETIRED`` — contributes **0 bps**; kept for provenance.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import TYPE_CHECKING
+from uuid import UUID
+
+from ditto.validator.config import BASIS_POINT_SCALE
+from ditto.validator.weights import (
+    CrownGate,
+    compute_generator_weights,
+    compute_router_weights,
+    compute_weights,
+    reassign_unclaimed_shares,
+)
+
+if TYPE_CHECKING:
+    from ditto.api_models.generator_ledger import GeneratorLedgerEntry
+    from ditto.api_models.router_ledger import RouterLedgerEntry
+    from ditto.api_models.validator import LedgerEntry
+
+logger = logging.getLogger(__name__)
+
+# ``BASIS_POINT_SCALE`` (10000) lives in ``config`` as the single source shared
+# with ``weights.blend_track_weights``; re-exported here for the registry API and
+# to match the Go scorer's ``scoregates.BasisPointScale``. Keeping the split in
+# integer bps (not floats) means every validator folds identical byte-for-byte
+# shares with no rounding disagreement.
+
+TRACK_MEMORY = "memory"
+TRACK_CODING = "coding"
+TRACK_ROUTER = "router"
+TRACK_GENERATOR = "generator"
+
+
+class TrackState(StrEnum):
+    SHADOW = "shadow"
+    ACTIVE = "active"
+    RETIRING = "retiring"
+    RETIRED = "retired"
+
+
+# States that draw emissions when also ``weight_eligible``. RETIRING still pays
+# while it drains; SHADOW/RETIRED never do.
+_PAYING_STATES = frozenset({TrackState.ACTIVE, TrackState.RETIRING})
+
+
+@dataclass(frozen=True)
+class MemoryFoldParams:
+    """The exact ``compute_weights`` arguments the memory track folds with.
+
+    Carried per epoch (resolved from the ledger + config) so the memory fold
+    stays a pure function of :class:`TrackFoldInputs`.
+    """
+
+    margin: float
+    tail_size: int
+    rank_shares: tuple[float, ...]
+    dethrone_z: float = 0.0
+    tie_pooling: bool = False
+    ceiling_band_clamp: bool = False
+    statistical_band_cap: bool = False
+    incumbent_agent_id: UUID | None = None
+    unpaid_agent_id: UUID | None = None
+    crown_gate: CrownGate | None = None
+
+
+@dataclass(frozen=True)
+class TrackFoldInputs:
+    """Per-epoch data threaded to every track's fold.
+
+    A track reads only the fields it needs; empty inputs fold to ``{}`` (which
+    contributes zero emissions), which is exactly the shadow / no-data case.
+    """
+
+    memory_entries: Sequence[LedgerEntry] = ()
+    memory_params: MemoryFoldParams | None = None
+    router_entries: Sequence[RouterLedgerEntry] = ()
+    router_rank_shares: tuple[float, ...] = ()
+    generator_entries: Sequence[GeneratorLedgerEntry] = ()
+    generator_rank_shares: tuple[float, ...] = ()
+
+
+TrackFold = Callable[[TrackFoldInputs], dict[str, float]]
+
+
+def memory_fold(inputs: TrackFoldInputs) -> dict[str, float]:
+    """Fold the memory track via the **current** ``compute_weights`` unchanged.
+
+    A single-track memory registry must reproduce today's weight vector
+    byte-for-byte — this closure is the regression guard.
+    """
+    params = inputs.memory_params
+    if params is None:
+        return {}
+    return compute_weights(
+        inputs.memory_entries,
+        margin=params.margin,
+        tail_size=params.tail_size,
+        rank_shares=params.rank_shares,
+        dethrone_z=params.dethrone_z,
+        tie_pooling=params.tie_pooling,
+        ceiling_band_clamp=params.ceiling_band_clamp,
+        statistical_band_cap=params.statistical_band_cap,
+        incumbent_agent_id=params.incumbent_agent_id,
+        unpaid_agent_id=params.unpaid_agent_id,
+        crown_gate=params.crown_gate,
+    )
+
+
+def router_fold(inputs: TrackFoldInputs) -> dict[str, float]:
+    """Fold the router track: rank floor-clearing miners by combined score."""
+    return compute_router_weights(
+        inputs.router_entries, rank_shares=inputs.router_rank_shares
+    )
+
+
+def generator_fold(inputs: TrackFoldInputs) -> dict[str, float]:
+    """Fold the generator track: rank hotkeys by latest fresh run score."""
+    return compute_generator_weights(
+        inputs.generator_entries, rank_shares=inputs.generator_rank_shares
+    )
+
+
+def reserved_fold(_inputs: TrackFoldInputs) -> dict[str, float]:
+    """A reserved slot that another owner fills later (e.g. the coding track)."""
+    return {}
+
+
+@dataclass(frozen=True)
+class Track:
+    """Static description of one competition track."""
+
+    track_id: str
+    name: str
+    state: TrackState
+    emission_share_bps: int
+    weight_eligible: bool
+    fold: TrackFold = field(repr=False, default=reserved_fold)
+    unclaimed_share_to: str | None = None
+    """Track that receives this track's share when it folds no payable miner.
+
+    ``None`` (memory, coding, router) keeps the original rule: an empty
+    eligible track's bps burn through
+    :func:`~ditto.validator.weights.track_allocated_share`. The generator track
+    names memory, so a governed generator share with no weight-eligible
+    generator pays agent miners instead of shorting them, and that state folds
+    byte-identically to the memory-only vector. See
+    :func:`~ditto.validator.weights.reassign_unclaimed_shares`."""
+
+    def __post_init__(self) -> None:
+        if not self.track_id:
+            raise ValueError("track_id must be non-empty")
+        if not isinstance(self.state, TrackState):
+            raise ValueError("track state must be a TrackState")
+        if not 0 <= self.emission_share_bps <= BASIS_POINT_SCALE:
+            raise ValueError(
+                f"track {self.track_id!r} emission_share_bps out of range: "
+                f"{self.emission_share_bps}"
+            )
+
+    def draws_emission(self) -> bool:
+        """Whether this track pays this epoch (paying state and eligible)."""
+        return self.weight_eligible and self.state in _PAYING_STATES
+
+    def effective_bps(self) -> int:
+        """Configured bps if paying, else 0 (shadow/retired never pay)."""
+        return self.emission_share_bps if self.draws_emission() else 0
+
+
+@dataclass(frozen=True)
+class TrackRegistry:
+    """Ordered set of tracks with a coherent, capped emission split."""
+
+    tracks: tuple[Track, ...]
+
+    def __post_init__(self) -> None:
+        seen: set[str] = set()
+        for track in self.tracks:
+            if track.track_id in seen:
+                raise ValueError(f"duplicate track id: {track.track_id!r}")
+            seen.add(track.track_id)
+        total = sum(track.effective_bps() for track in self.tracks)
+        if total > BASIS_POINT_SCALE:
+            raise ValueError(
+                f"eligible track emission shares exceed {BASIS_POINT_SCALE} bps: "
+                f"{total}"
+            )
+
+    def get(self, track_id: str) -> Track | None:
+        for track in self.tracks:
+            if track.track_id == track_id:
+                return track
+        return None
+
+    def active_eligible(self) -> tuple[Track, ...]:
+        """Tracks that pay this epoch, in registration order."""
+        return tuple(track for track in self.tracks if track.draws_emission())
+
+    def total_active_bps(self) -> int:
+        return sum(track.effective_bps() for track in self.tracks)
+
+    def shares_bps(self) -> dict[str, int]:
+        """``{track_id: effective_bps}`` for the paying tracks."""
+        return {
+            track.track_id: track.effective_bps() for track in self.active_eligible()
+        }
+
+    def claimed_shares_bps(
+        self, vectors: Mapping[str, Mapping[str, float]]
+    ) -> dict[str, int]:
+        """The paying split after empty tracks hand their share to a fallback.
+
+        :meth:`shares_bps` with each paying track that folded no payable miner
+        and declares :attr:`Track.unclaimed_share_to` merged into that track.
+        This is the split the blend and the allocated-share cap use.
+        """
+        return reassign_unclaimed_shares(
+            self.shares_bps(),
+            vectors,
+            fallbacks={
+                track.track_id: track.unclaimed_share_to
+                for track in self.active_eligible()
+                if track.unclaimed_share_to is not None
+            },
+        )
+
+
+def _build_registry(
+    *,
+    track_shares_bps: Mapping[str, int],
+    router_state: TrackState,
+    router_weight_eligible: bool,
+    coding_state: TrackState,
+    coding_weight_eligible: bool,
+    generator_state: TrackState,
+    generator_weight_eligible: bool,
+) -> TrackRegistry:
+    return TrackRegistry(
+        (
+            Track(
+                track_id=TRACK_MEMORY,
+                name="Memory",
+                state=TrackState.ACTIVE,
+                emission_share_bps=track_shares_bps.get(
+                    TRACK_MEMORY, BASIS_POINT_SCALE
+                ),
+                weight_eligible=True,
+                fold=memory_fold,
+            ),
+            Track(
+                track_id=TRACK_CODING,
+                name="Coding",
+                state=coding_state,
+                emission_share_bps=track_shares_bps.get(TRACK_CODING, 0),
+                weight_eligible=coding_weight_eligible,
+                fold=reserved_fold,
+            ),
+            Track(
+                track_id=TRACK_ROUTER,
+                name="Router",
+                state=router_state,
+                emission_share_bps=track_shares_bps.get(TRACK_ROUTER, 0),
+                weight_eligible=router_weight_eligible,
+                fold=router_fold,
+            ),
+            Track(
+                track_id=TRACK_GENERATOR,
+                name="Generator",
+                state=generator_state,
+                emission_share_bps=track_shares_bps.get(TRACK_GENERATOR, 0),
+                weight_eligible=generator_weight_eligible,
+                fold=generator_fold,
+                unclaimed_share_to=TRACK_MEMORY,
+            ),
+        )
+    )
+
+
+# The compiled safe split: memory owns the whole pool, coding and router earn
+# nothing. Identical in spirit to ``resolve_track_shares``'s fallback — the fold
+# must always produce a registry, never crash the consensus ``put_weights`` path.
+_SAFE_TRACK_SHARES_BPS = {
+    TRACK_MEMORY: BASIS_POINT_SCALE,
+    TRACK_CODING: 0,
+    TRACK_ROUTER: 0,
+    TRACK_GENERATOR: 0,
+}
+
+
+def build_default_registry(
+    *,
+    track_shares_bps: Mapping[str, int],
+    router_state: TrackState = TrackState.SHADOW,
+    router_weight_eligible: bool = False,
+    coding_state: TrackState = TrackState.SHADOW,
+    coding_weight_eligible: bool = False,
+    generator_state: TrackState = TrackState.SHADOW,
+    generator_weight_eligible: bool = False,
+) -> TrackRegistry:
+    """The shipped four-track registry.
+
+    Memory is ``ACTIVE`` and eligible (the existing competition); coding,
+    router, and generator default to ``SHADOW`` / not-eligible here so a bare
+    registry touches no emissions. The validator config promotes the generator
+    track (protocol 33); it still pays only a governed share, only to
+    weight-eligible ledger entries, and hands an unclaimed share to memory. The
+    per-track bps come from the resolved ``track_shares_bps`` (compiled fallback
+    or, later, the platform governance field).
+
+    ``resolve_track_shares`` already rejects a malformed whole map, but a
+    *well-formed partial* map (e.g. governance sets ``router`` eligible without
+    lowering ``memory`` from the default ``BASIS_POINT_SCALE``) can still push the
+    eligible sum over the cap and make :meth:`TrackRegistry.__post_init__` raise.
+    That raise is on the consensus ``put_weights`` path, so it must never escape:
+    on a cap violation we log and rebuild with the compiled safe split (memory
+    100%, coding/router 0) so the fold degrades to today's memory-only behavior
+    rather than dying (memory included).
+    """
+    try:
+        return _build_registry(
+            track_shares_bps=track_shares_bps,
+            router_state=router_state,
+            router_weight_eligible=router_weight_eligible,
+            coding_state=coding_state,
+            coding_weight_eligible=coding_weight_eligible,
+            generator_state=generator_state,
+            generator_weight_eligible=generator_weight_eligible,
+        )
+    except ValueError:
+        logger.warning(
+            "track_shares_bps %r yields an over-cap eligible split; "
+            "falling back to the memory-only safe split",
+            dict(track_shares_bps),
+            exc_info=True,
+        )
+        return _build_registry(
+            track_shares_bps=_SAFE_TRACK_SHARES_BPS,
+            router_state=router_state,
+            router_weight_eligible=router_weight_eligible,
+            coding_state=coding_state,
+            coding_weight_eligible=coding_weight_eligible,
+            generator_state=generator_state,
+            generator_weight_eligible=generator_weight_eligible,
+        )
+
+
+__all__ = [
+    "BASIS_POINT_SCALE",
+    "TRACK_CODING",
+    "TRACK_GENERATOR",
+    "TRACK_MEMORY",
+    "TRACK_ROUTER",
+    "MemoryFoldParams",
+    "Track",
+    "TrackFoldInputs",
+    "TrackRegistry",
+    "TrackState",
+    "build_default_registry",
+    "generator_fold",
+    "memory_fold",
+    "reserved_fold",
+    "router_fold",
+]

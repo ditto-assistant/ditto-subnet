@@ -47,9 +47,9 @@
   margin: 0;
   font-family: var(--display);
   font-size: 21px;
-  font-weight: 400;
+  font-weight: 800;
   line-height: 1.1;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.025em;
 }
 .harness-comparison-lead {
   max-width: 72ch;
@@ -419,7 +419,7 @@
 .timeline-data-details > summary {
   width: fit-content;
   color: var(--text);
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 .timeline-data-table-wrap {
@@ -440,8 +440,7 @@
 }
 .timeline-data-table th {
   color: var(--text-faint);
-  font-weight: 700;
-  text-transform: uppercase;
+  font-weight: 600;
 }
 .timeline-data-table td:last-child,
 .timeline-data-table th:last-child {
@@ -458,7 +457,7 @@
 .harness-comparison-method > summary {
   width: fit-content;
   color: var(--text);
-  font-weight: 700;
+  font-weight: 600;
   cursor: pointer;
 }
 .harness-comparison-method > summary:hover {
@@ -481,7 +480,7 @@
 .harness-comparison-method a {
   flex: none;
   color: var(--accent);
-  font-weight: 700;
+  font-weight: 600;
   white-space: nowrap;
 }
 .harness-comparison-evidence-links {
@@ -793,6 +792,8 @@
   align-items: center;
   gap: 10px;
   font-family: var(--display);
+  letter-spacing: -0.025em;
+  font-weight: 800;
   font-size: 28px;
   line-height: 1.1;
   min-width: 0;
@@ -812,6 +813,7 @@
   display: inline-flex;
   align-items: baseline;
   font-family: var(--display);
+  font-weight: 600;
   font-size: 40px;
   line-height: 1;
   font-variant-numeric: tabular-nums;
@@ -829,7 +831,7 @@
 }
 .champion-meta b {
   color: var(--text);
-  font-weight: 700;
+  font-weight: 600;
 }
 /* The held-crown note: rendered only while the champion is not raw #1, so
    the box itself explains the standing readers trip over most. */
@@ -878,6 +880,7 @@
   margin: 0;
   min-width: 0;
   font-family: var(--display);
+  font-weight: 600;
   font-size: 21px;
   line-height: 1.1;
   font-variant-numeric: tabular-nums;

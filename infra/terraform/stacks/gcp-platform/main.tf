@@ -32,8 +32,8 @@ locals {
   # larger class: upload fingerprinting is GIL-bound in-process CPU and the
   # shared-core e2-medium saturated under the 2026-07-16 miner upload storm.
   app_envs = {
-    dev  = { hostname = "ditto-platform-dev", domain = var.api_domain_dev, size = "app-small" }
-    prod = { hostname = "ditto-platform-prod", domain = var.api_domain_prod, size = "app-standard" }
+    dev  = { hostname = "ditto-platform-dev", domain = var.api_domain_dev, size = "app-small", running = var.dev_environment_running }
+    prod = { hostname = "ditto-platform-prod", domain = var.api_domain_prod, size = "app-standard", running = true }
   }
 
   # Secrets the platform runtime SA reads at converge/deploy time (see the
@@ -45,10 +45,13 @@ locals {
   platform_secret_ids = concat(
     [
       "ADMIN_API_PASSWORD",
+      google_secret_manager_secret.backroom_platform_operator_proof.secret_id,
       google_secret_manager_secret.db_password.secret_id,
       google_secret_manager_secret.hmac_secret.secret_id,
+      google_secret_manager_secret.moderation_audit_signing_key.secret_id,
       google_secret_manager_secret.github_deploy_key.secret_id,
       google_secret_manager_secret.taostats_api_key.secret_id,
+      google_secret_manager_secret.subtensor_archive_rpc_api_key.secret_id,
       google_secret_manager_secret.hippius_access_key_id.secret_id,
       google_secret_manager_secret.hippius_secret_access_key.secret_id,
       google_secret_manager_secret.backblaze_key_id.secret_id,
@@ -107,7 +110,35 @@ module "pg_vm" {
   data_disk_gb          = var.pg_data_disk_gb
   assign_public_ip      = false
   service_account_email = var.vm_service_account_email
-  labels                = { env = local.env_label, role = "platform-postgres", managed = "terraform" }
+  # Use the policy's known name so the optional attachment count is plan-time
+  # known on the first apply (the newly-created policy's id is still unknown).
+  boot_disk_snapshot_policy = google_compute_resource_policy.platform_postgres_daily.name
+  labels                    = { env = local.env_label, role = "platform-postgres", managed = "terraform" }
+}
+
+resource "google_compute_resource_policy" "platform_postgres_daily" {
+  project = var.project
+  name    = "ditto-pg-platform-daily"
+  region  = var.region
+  snapshot_schedule_policy {
+    schedule {
+      daily_schedule {
+        days_in_cycle = 1
+        start_time    = "06:00"
+      }
+    }
+    retention_policy {
+      max_retention_days    = 14
+      on_source_disk_delete = "KEEP_AUTO_SNAPSHOTS"
+    }
+    snapshot_properties {
+      storage_locations = ["us"]
+      # Crash-consistent: PGDATA and WAL share the boot disk, so PostgreSQL
+      # replays WAL on recovery as it would after a power loss. No guest restart.
+      guest_flush = false
+      labels      = { role = "platform-postgres", managed = "terraform" }
+    }
+  }
 }
 
 # --- App VMs: one per deploy env (public IP for HTTP ingress + direct egress). ---
@@ -126,6 +157,7 @@ module "app" {
   boot_disk_gb          = var.app_boot_disk_gb
   service_account_email = var.platform_dedicated_identity_attached ? local.platform_api_sa_email : local.run_sa_email
   labels                = { env = each.key, role = "platform-app", managed = "terraform" }
+  desired_status        = each.value.running ? "RUNNING" : "TERMINATED"
 }
 
 # --- Agent-tarball object storage: one GCS bucket per env (S3 interop). ---
@@ -156,9 +188,9 @@ resource "google_storage_bucket" "agents" {
     }
   }
 
-  # Attempt-scoped Targon outputs are temporary transport objects. Normal GCE
-  # import deletes them immediately; this bounds the presigned-PUT race where a
-  # canceled builder finishes uploading after the screener's cleanup request.
+  # Retain cleanup for historical attempt-scoped remote build objects. This
+  # bounds late uploads from a canceled builder without affecting completed
+  # artifact objects.
   lifecycle_rule {
     condition {
       age            = 1
@@ -284,6 +316,16 @@ resource "google_secret_manager_secret" "hmac_secret" {
   }
 }
 
+# Empty container only: an operator adds the Ed25519 seed version outside
+# Terraform state before enabling signed moderation audit on the app hosts.
+resource "google_secret_manager_secret" "moderation_audit_signing_key" {
+  project   = var.project
+  secret_id = "platform-moderation-audit-signing-key"
+  replication {
+    auto {}
+  }
+}
+
 resource "google_secret_manager_secret_version" "hmac_secret" {
   secret      = google_secret_manager_secret.hmac_secret.id
   secret_data = google_storage_hmac_key.platform.secret
@@ -341,6 +383,21 @@ resource "google_secret_manager_secret" "taostats_api_key" {
 import {
   to = google_secret_manager_secret.taostats_api_key
   id = "projects/${var.project}/secrets/platform-taostats-api-key"
+}
+
+# Optional Finney archive credential. Container and runtime access only: the
+# operator adds the selected provider key as a version after a reviewed apply.
+# Never put provider credentials in Terraform state. Creating this container
+# does not select an archive provider or change source-release policy.
+resource "google_secret_manager_secret" "subtensor_archive_rpc_api_key" {
+  project   = var.project
+  secret_id = "platform-subtensor-archive-rpc-api-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Optional Hippius S3 credentials for miner profile pictures. CONTAINER ONLY:
@@ -469,6 +526,16 @@ resource "google_secret_manager_secret" "coding_evidence_secret_key" {
   }
 }
 
+import {
+  to = google_secret_manager_secret.coding_evidence_access_key
+  id = "projects/${var.project}/secrets/platform-coding-hippius-evidence-access-key"
+}
+
+import {
+  to = google_secret_manager_secret.coding_evidence_secret_key
+  id = "projects/${var.project}/secrets/platform-coding-hippius-evidence-secret-key"
+}
+
 # Operators may create these containers out of band when adding the first
 # version. Adopt them on the next gcp-platform apply.
 import {
@@ -508,6 +575,20 @@ resource "google_secret_manager_secret" "backblaze_application_key" {
   }
 }
 
+# Value is installed separately after operator approval. Platform reads it only
+# when the matching Ansible host variable is enabled; Backroom receives the
+# same value as an encrypted Worker binding through its activation script.
+resource "google_secret_manager_secret" "backroom_platform_operator_proof" {
+  project   = var.project
+  secret_id = "backroom-platform-operator-proof"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
 # Let the runtime SA read every platform secret above.
 resource "google_secret_manager_secret_iam_member" "platform_access" {
   for_each  = toset(local.platform_secret_ids)
@@ -532,8 +613,9 @@ resource "google_secret_manager_secret_iam_member" "platform_api_access" {
 # freshly-created VM attribute. Here for_each keys off var.manage_dns (a known
 # bool), so the record SET is known at plan and only the `content` (the IP) is
 # deferred to apply.
+# A stopped VM releases its ephemeral IP, so a stopped env has no record.
 resource "cloudflare_record" "api" {
-  for_each = var.manage_dns ? local.app_envs : {}
+  for_each = var.manage_dns ? { for env, app in local.app_envs : env => app if app.running } : {}
 
   zone_id = var.cloudflare_zone_id
   name    = each.value.domain

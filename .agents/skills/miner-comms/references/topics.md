@@ -33,6 +33,16 @@ the tail to finish catch-up. See
 
 Shares are 65 / 14 / 10 / 7 / 4 for champion plus four tail slots.
 
+Once the protocol-34 crown gate is active (`emissions.crown_rules.active`),
+a challenger needs at least `min_dethrone_confirmations` (default 3)
+shared-seed confirmations against the King before the paired comparison can
+move the crown, and the King must stay in the top `champion_standing_rank`
+(default 3) official places. Read `emissions.challengers[]` for the miner's
+exact status: `needs_confirmations` (wait for the lane), `dueling` (enough
+seeds, not enough paired lead; `lead_needed` says how much), or
+`outside_standing`. A higher canonical composite with zero shared seeds is
+not a dethrone. See [crown churn precedent](../../backroom-review/references/precedents/october-30-crown-churn-shared-seed-gate.md).
+
 ## "Seeds" on the public board
 
 Quorum is **three validators** on the submission's own dataset seed. That
@@ -46,6 +56,28 @@ is 8. **13 is not a cap** — it is current depth.
 A new champion starts a new seed family, so the crown often shows 1 seed
 while a tail that already sat in the set shows a larger count. That is the
 lane working, not stuck seeding.
+
+## "My newer version scores higher but the old one holds my slot"
+
+One owner gets one emission slot, and the representative is chosen on the
+**official continual composite** — the quorum median plus one score per
+fold-eligible shared seed — not on the three-validator median alone. A
+predecessor with a deep confirmation history can therefore out-rank a newer
+generation whose canonical median is higher and whose shared-seed depth is
+zero.
+
+Investigate before replying: `get_continual_retest_diagnostic` on the exact
+newer UUID returns both composites with their sample counts, the same-owner
+representative and the margin that selected it, whether the UUID is in the raw
+wave / folded emission set / resolved retest cohort, the cutoff and tie-band
+comparison, and whether a validator can claim it now (`claim.decision`,
+`claim.route_priority`).
+
+`admission_reason: same_owner_challenger` means the newer generation is
+admitted to the retest cohort for catch-up and is earning the shared seeds it
+needs — it is not taking a second slot. A **negative** `cohort_cutoff.gap` on a
+row that is still out of the cohort means the exclusion is owner suppression,
+not a score it failed to reach. Do not promise a promotion or a retest ETA.
 
 ## Owner-link vs new hotkey
 

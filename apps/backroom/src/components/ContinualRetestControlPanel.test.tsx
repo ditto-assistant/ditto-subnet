@@ -21,6 +21,12 @@ vi.mock('../server/admin.functions', () => ({
 const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   aggregate_mode: 'fleet_ready',
   tie_weighting_mode: 'disabled',
+  statistical_band_mode: 'disabled',
+  ledger_pin_mode: 'epoch',
+  crown_incumbent_mode: 'disabled',
+  crown_gate_mode: 'disabled',
+  min_dethrone_confirmations: 3,
+  champion_standing_rank: 3,
   idle_retests_enabled: false,
   rollout_standdown: 'capable_validators',
   wave_membership: 'participants',
@@ -28,6 +34,8 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   retest_eligibility_mode: 'fixed',
   retest_eligibility_z: 1.64,
   retest_cohort_max_size: 25,
+  wave_cadence_tempos: 0,
+  wave_seeds_per_window: 3,
 }
 
 function control(
@@ -47,6 +55,16 @@ function control(
       aggregate_active: true,
       tie_weighting_fleet_ready: true,
       tie_weighting_active: false,
+      statistical_band_fleet_ready: false,
+      statistical_band_active: false,
+      statistical_band_required_protocol: 29,
+      crown_incumbent_fleet_ready: false,
+      crown_incumbent_active: false,
+      crown_incumbent_required_protocol: 27,
+      crown_gate_fleet_ready: false,
+      crown_gate_active: false,
+      crown_gate_required_protocol: 34,
+      ledger_pin: null,
       max_age_seconds: 5,
       open_rollout_desired_version: null,
       rollout_standdown_active: false,
@@ -59,11 +77,19 @@ function control(
     },
     field_support: {
       tie_weighting_mode: true,
+      statistical_band_mode: true,
+      ledger_pin_mode: true,
+      crown_incumbent_mode: true,
+      crown_gate_mode: true,
+      min_dethrone_confirmations: true,
+      champion_standing_rank: true,
       retest_cohort_size: true,
       wave_membership: true,
       retest_eligibility_mode: true,
       retest_eligibility_z: true,
       retest_cohort_max_size: true,
+      wave_cadence_tempos: true,
+      wave_seeds_per_window: true,
     },
     cohort_sizing_supported: true,
   }
@@ -142,6 +168,29 @@ describe('ContinualRetestControlPanel', () => {
         reason: 'pause all rescoring for the v7 rollout window',
         confirmation: CONTINUAL_RETEST_CONFIRMATION,
       },
+    })
+  })
+
+  it('labels the statistical cap separately and applies only its mode', async () => {
+    render(<ContinualRetestControlPanel initialState={control()} readOnly={false} />)
+
+    const cap = screen.getByRole('button', { name: /Cap statistical bands \(fleet ready\)/ })
+    expect(screen.getByRole('button', { name: /Legacy statistical bands \(rollback\)/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Pool ties \+ ceiling crown/ })).toBeTruthy()
+    fireEvent.click(cap)
+    fireEvent.change(screen.getByLabelText(/Operator reason/), {
+      target: { value: 'enable the reviewed statistical cap after protocol readiness' },
+    })
+    fireEvent.change(screen.getByLabelText(new RegExp(CONTINUAL_RETEST_CONFIRMATION)), {
+      target: { value: CONTINUAL_RETEST_CONFIRMATION },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Apply policy' }))
+
+    await waitFor(() => expect(updateContinualRetestSettings).toHaveBeenCalledTimes(1))
+    expect(updateContinualRetestSettings.mock.calls[0][0].data.settings).toEqual({
+      ...SETTINGS,
+      statistical_band_mode: 'fleet_ready',
+      tie_weighting_mode: 'disabled',
     })
   })
 
@@ -267,6 +316,12 @@ describe('ContinualRetestControlPanel', () => {
     expect(updateContinualRetestSettings.mock.calls[0][0].data.settings).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      statistical_band_mode: 'disabled',
+      ledger_pin_mode: 'live',
+      crown_incumbent_mode: 'disabled',
+      crown_gate_mode: 'disabled',
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: false,
       rollout_standdown: 'all',
       wave_membership: 'strict',
@@ -274,6 +329,8 @@ describe('ContinualRetestControlPanel', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 

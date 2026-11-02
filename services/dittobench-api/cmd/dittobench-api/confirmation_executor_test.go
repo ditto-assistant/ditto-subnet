@@ -18,6 +18,7 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
+	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
@@ -448,13 +449,42 @@ func TestConfirmationExecutionFailurePreservesFirstReviewedStageAndCause(t *test
 }
 
 func TestConfirmationExecutionDiagnosticDoesNotDeriveFromPrivateErrorText(t *testing.T) {
+	// The property under test is that the diagnostic comes from the reviewed
+	// stage vocabulary and NEVER from the wrapped error's text. The class is now
+	// the stage rather than "unclassified" -- the stage is a literal this binary
+	// declares at its own failure points, not anything the error carries -- so
+	// assert that the private words cannot appear anywhere in the diagnostic
+	// while the stage itself still does.
 	err := wrapConfirmationExecutionFailure(
 		"dimension_execution",
 		errors.New("private submitted response credential-material"),
 	)
 	class, status := confirmationExecutionDiagnostic(err)
+	if class != "longmem_exec_dimension_execution" {
+		t.Fatalf("diagnostic class = %q, want longmem_exec_dimension_execution", class)
+	}
+	if status != 0 {
+		t.Fatalf("diagnostic status = %d, want 0", status)
+	}
+	for _, forbidden := range []string{"private", "submitted", "credential-material"} {
+		if strings.Contains(class, forbidden) {
+			t.Fatalf("diagnostic class %q derived from private error text %q", class, forbidden)
+		}
+	}
+}
+
+func TestConfirmationExecutionDiagnosticIsUnclassifiedForAnUndeclaredStage(t *testing.T) {
+	// The fail-closed half of the same rule: a stage outside the reviewed map
+	// must not reach the wire, because Platform and the validator share a signed
+	// allowlist and would reject an unknown slug at exactly the moment a failure
+	// is being reported.
+	err := wrapConfirmationExecutionFailure(
+		"a_stage_nobody_declared",
+		errors.New("private submitted response credential-material"),
+	)
+	class, status := confirmationExecutionDiagnostic(err)
 	if class != "unclassified" || status != 0 {
-		t.Fatalf("diagnostic = %q, %d", class, status)
+		t.Fatalf("diagnostic = %q, %d; want unclassified, 0", class, status)
 	}
 }
 
@@ -610,17 +640,64 @@ func TestTrustedConfirmationReadinessPublishesOnlyValidatedInstallation(t *testi
 
 func TestConfirmationSubjectEpochAllowListTracksEvidenceStack(t *testing.T) {
 	t.Parallel()
+	// A >= v9 floor bounded by the scorer's accepted set: every version
+	// scoregates accepts is a confirmable subject, and the first one it does not
+	// accept yet is refused.
+	unaccepted := scoregates.BenchVersionV15 + 1
 	for version, want := range map[int]bool{
-		8: false, 9: true, 10: true, 11: true, 12: true, 13: false, 0: false,
+		8: false, 9: true, 10: true, 11: true, 12: true, 13: true, 14: true, 15: true, unaccepted: false, 0: false,
 	} {
 		if got := confirmationSubjectEpochSupported(version); got != want {
 			t.Fatalf("confirmationSubjectEpochSupported(%d) = %v, want %v", version, got, want)
 		}
 	}
-	// The instrument allow-list stays {9, 12}. A live v11 *subject* must not
-	// require a v11 *profile*.
+	// The instrument allow-list is v9 plus >= v12 within the accepted set. A
+	// live v11 *subject* must not require a v11 *profile*, and v13 is an
+	// installable profile epoch without being required for a v13 subject.
 	if confirmationBenchVersionSupported(11) {
 		t.Fatal("instrument allow-list must not treat bench 11 as an installable profile")
+	}
+	if !confirmationBenchVersionSupported(13) || confirmationBenchVersionSupported(unaccepted) {
+		t.Fatal("instrument allow-list must accept v13 and refuse the first unaccepted version")
+	}
+}
+
+func TestTrustedConfirmationExecuteAcceptsV13SubjectAgainstV9Instrument(t *testing.T) {
+	t.Parallel()
+	profile, raw := validInstalledConfirmationProfile(t)
+	request := validTrustedConfirmationRequest(t, raw, profile)
+	request.BenchVersion = scoregates.BenchVersionV13
+	acquired := 0
+	executor := installTrustedExecutor(t, raw, confirmationRuntimeFactoryFunc(func(context.Context, confirmationRuntimeIdentity) (*confirmationRuntime, error) {
+		acquired++
+		return validConfirmationRuntime(), nil
+	}))
+	executor.coordinate = func(
+		context.Context, confirmationExecutionRequest, confirmationExecutionProfileWire, *confirmationRuntime,
+	) (confirmationExecutionResult, error) {
+		return confirmationExecutionResult{
+			LongMemEval:                  json.RawMessage(`{"ok":"longmem"}`),
+			InferenceAblation:            json.RawMessage(`{"ok":"inference"}`),
+			EmbeddingAblation:            json.RawMessage(`{"ok":"embedding"}`),
+			AblationCoordinatorLatencyMS: 1,
+		}, nil
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), request.Deadline)
+	defer cancel()
+	if _, err := executor.Execute(ctx, request); err != nil {
+		t.Fatalf("v9 instrument rejected a v13 subject: %v", err)
+	}
+	if acquired != 1 {
+		t.Fatalf("acquisitions = %d, want 1", acquired)
+	}
+	// The first version the scorer does not accept yet still fails closed at
+	// the request validator, before any runtime is acquired.
+	request.BenchVersion = scoregates.BenchVersionV15 + 1
+	if _, err := executor.Execute(ctx, request); err == nil {
+		t.Fatal("unaccepted subject epoch passed the confirmation request validator")
+	}
+	if acquired != 1 {
+		t.Fatalf("acquisitions after refused epoch = %d, want 1", acquired)
 	}
 }
 
@@ -1064,6 +1141,36 @@ func TestConfirmationDimensionWrapperAndWireDigestAreStrict(t *testing.T) {
 	const want = "36599e33c74c75d8f426df4682a5a2b8d7d0d1796f3d12467315f9955acb88b5"
 	if got != want {
 		t.Fatalf("wire digest = %s, want %s", got, want)
+	}
+	// Diagnostics are an unsigned side channel: they must neither move the
+	// digest nor appear on the wire when there were no received failures.
+	plain, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain), "longmem_diagnostics") {
+		t.Fatalf("empty diagnostics serialized: %s", plain)
+	}
+	result.LongMemDiagnostics = &longmemeval.ExecutionDiagnostics{
+		ReceivedFailures:                     48,
+		ReceivedFailureKinds:                 map[string]int{"http_status_503": 48},
+		ReceivedFailureReaderAttempts:        196,
+		ReceivedFailureReaderAgentRejections: 196,
+		ReceivedFailureEmbeddingDispatches:   48,
+	}
+	withDiagnostics, err := confirmationWireSHA256(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withDiagnostics != want {
+		t.Fatalf("diagnostics changed the wire digest: %s", withDiagnostics)
+	}
+	annotated, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(annotated), `"longmem_diagnostics":{"received_failures":48,"received_failure_kinds":{"http_status_503":48},"received_failure_reader_attempts":196,"received_failure_reader_agent_rejections":196,"received_failure_embedding_dispatches":48}`) {
+		t.Fatalf("diagnostics wire = %s", annotated)
 	}
 	for _, hostile := range []string{
 		`{"go_evidence_sha256":"` + digest + `","latency_ms":19,"evidence":{"value":7},"extra":true}`,

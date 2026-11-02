@@ -88,7 +88,8 @@ class V9ConfirmationScorerRequest(BaseModel):
     agent_id: UUID
     slot_id: LongMemSlotId
     inference_session_id: Annotated[str, Field(min_length=16, max_length=128)]
-    artifact_url: Annotated[str, Field(min_length=1)]
+    # Absent for a source-free scorer; confirmation never fetches source.
+    artifact_url: Annotated[str | None, Field(min_length=1)] = None
     artifact_sha256: Sha256
     screened_image_url: Annotated[str, Field(min_length=1)]
     screened_image_sha256: Sha256
@@ -115,6 +116,26 @@ class V9ConfirmationScorerRequest(BaseModel):
         return value
 
 
+class V9ConfirmationLongMemDiagnostics(BaseModel):
+    """Scorer-owned, allowlisted context about received LongMem case failures.
+
+    Present only when at least one selected case's ``/run`` response was
+    received but unjudgeable. It is not evidence: it is outside the native wire
+    digest and the signed root, carries no bodies, identities, or exception
+    text, and only feeds validator logs and telemetry.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    received_failures: Annotated[int, Field(ge=0)]
+    received_failure_kinds: dict[str, Annotated[int, Field(ge=0)]] = Field(
+        default_factory=dict
+    )
+    received_failure_reader_attempts: Annotated[int, Field(ge=0)] = 0
+    received_failure_reader_agent_rejections: Annotated[int, Field(ge=0)] = 0
+    received_failure_embedding_dispatches: Annotated[int, Field(ge=0)] = 0
+
+
 class V9ConfirmationScorerResult(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
@@ -123,6 +144,7 @@ class V9ConfirmationScorerResult(BaseModel):
     embedding_ablation: V9ConfirmationRawDimension
     ablation_coordinator_latency_ms: Annotated[int, Field(gt=0)]
     evidence_sha256: Sha256
+    longmem_diagnostics: V9ConfirmationLongMemDiagnostics | None = None
 
 
 __all__ = [
@@ -140,6 +162,7 @@ __all__ = [
     "V9ConfirmationFailRequest",
     "V9ConfirmationFailResponse",
     "V9ConfirmationJobResponse",
+    "V9ConfirmationLongMemDiagnostics",
     "V9ConfirmationPrepareRequest",
     "V9ConfirmationPreparedReport",
     "V9ConfirmationRawDimension",

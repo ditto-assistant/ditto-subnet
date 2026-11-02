@@ -3,6 +3,11 @@ import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, PauseCircle, RefreshCw, RotateCw } from 'lucide-react'
 import {
   CONTINUAL_RETEST_CONFIRMATION,
+  DEFAULT_CHAMPION_STANDING_RANK,
+  DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+  DEFAULT_WAVE_SEEDS_PER_WINDOW,
+  EMISSION_SET_SIZE,
+  MAX_MIN_DETHRONE_CONFIRMATIONS,
   type ContinualRetestSettingsControl,
 } from '../lib/admin.schemas'
 import {
@@ -12,6 +17,10 @@ import {
 
 type AggregateMode = 'disabled' | 'fleet_ready' | 'enabled'
 type TieWeightingMode = 'disabled' | 'fleet_ready'
+type StatisticalBandMode = 'disabled' | 'fleet_ready'
+type LedgerPinMode = 'live' | 'epoch'
+type CrownIncumbentMode = 'disabled' | 'fleet_ready'
+type CrownGateMode = 'disabled' | 'fleet_ready'
 type RolloutStanddown = 'off' | 'capable_validators' | 'all'
 type WaveMembership = 'strict' | 'participants' | 'per_agent'
 type EligibilityMode = 'fixed' | 'statistical'
@@ -49,6 +58,76 @@ const tieWeightingModes: Array<{
     value: 'disabled',
     label: 'Fixed rank shares (rollback)',
     detail: 'Keep 65/14/10/7/4 even when secondary ordering is the only separator.',
+  },
+]
+
+const statisticalBandModes: Array<{
+  value: StatisticalBandMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Cap statistical bands (fleet ready)',
+    detail:
+      'After protocol 29 fleet readiness, cap paired tie and unpaired dethrone uncertainty at twice the KOTH margin on the next epoch pin.',
+  },
+  {
+    value: 'disabled',
+    label: 'Legacy statistical bands (rollback)',
+    detail: 'Keep the pre-protocol-29 statistical band rule.',
+  },
+]
+
+const ledgerPinModes: Array<{ value: LedgerPinMode; label: string; detail: string }> = [
+  {
+    value: 'epoch',
+    label: 'Pin once per chain epoch',
+    detail:
+      'Freeze the validator ledger once per SubnetEpochIndex so every validator folds byte-identical entries and markers; a ledger change lands for the whole fleet at the next pin.',
+  },
+  {
+    value: 'live',
+    label: 'Live time-based read (rollback)',
+    detail:
+      'Serve the ledger as it stands on every poll. Validators reading on opposite sides of a ledger change fold different pools for one Yuma fold.',
+  },
+]
+
+const crownIncumbentModes: Array<{
+  value: CrownIncumbentMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Defend the crown from the incumbent',
+    detail:
+      'Start the champion walk from the previous pin\u2019s champion (resolved through its owner family). A senior lineage inside the dethrone band no longer retakes the crown on every read; a challenger still must clear the band.',
+  },
+  {
+    value: 'disabled',
+    label: 'Earliest-lineage walk (rollback)',
+    detail: 'Re-derive the champion from the earliest first_seen on every read, as before.',
+  },
+]
+
+const crownGateModes: Array<{
+  value: CrownGateMode
+  label: string
+  detail: string
+}> = [
+  {
+    value: 'fleet_ready',
+    label: 'Gate the crown on shared seeds',
+    detail:
+      'A challenger takes the crown only on the paired comparison over at least the minimum shared-seed confirmations, and only inside the top official places. An incumbent that falls below them hands the crown to the best-qualified challenger.',
+  },
+  {
+    value: 'disabled',
+    label: 'Ungated walk (rollback)',
+    detail:
+      'Any challenger that clears the indifference band takes the crown, even an unretested newcomer with no shared seeds.',
   },
 ]
 
@@ -143,6 +222,24 @@ export function ContinualRetestControlPanel({
   const [tieWeightingMode, setTieWeightingMode] = useState<TieWeightingMode>(
     initialState.effective.settings.tie_weighting_mode,
   )
+  const [statisticalBandMode, setStatisticalBandMode] = useState<StatisticalBandMode>(
+    initialState.effective.settings.statistical_band_mode,
+  )
+  const [ledgerPinMode, setLedgerPinMode] = useState<LedgerPinMode>(
+    initialState.effective.settings.ledger_pin_mode,
+  )
+  const [crownIncumbentMode, setCrownIncumbentMode] = useState<CrownIncumbentMode>(
+    initialState.effective.settings.crown_incumbent_mode,
+  )
+  const [crownGateMode, setCrownGateMode] = useState<CrownGateMode>(
+    initialState.effective.settings.crown_gate_mode,
+  )
+  const [minConfirmations, setMinConfirmations] = useState(
+    String(initialState.effective.settings.min_dethrone_confirmations),
+  )
+  const [standingRank, setStandingRank] = useState(
+    String(initialState.effective.settings.champion_standing_rank),
+  )
   const [idleRetests, setIdleRetests] = useState(
     initialState.effective.settings.idle_retests_enabled,
   )
@@ -176,6 +273,23 @@ export function ContinualRetestControlPanel({
   const cohortSizingSupported = state.field_support.retest_cohort_size
   const membershipSupported = state.field_support.wave_membership
   const tieWeightingSupported = state.field_support.tie_weighting_mode
+  const statisticalBandSupported = state.field_support.statistical_band_mode
+  const ledgerPinSupported = state.field_support.ledger_pin_mode
+  const crownIncumbentSupported = state.field_support.crown_incumbent_mode
+  const crownGateSupported =
+    state.field_support.crown_gate_mode &&
+    state.field_support.min_dethrone_confirmations &&
+    state.field_support.champion_standing_rank
+  const parsedMinConfirmations = Number(minConfirmations)
+  const minConfirmationsValid =
+    Number.isInteger(parsedMinConfirmations) &&
+    parsedMinConfirmations >= 2 &&
+    parsedMinConfirmations <= MAX_MIN_DETHRONE_CONFIRMATIONS
+  const parsedStandingRank = Number(standingRank)
+  const standingRankValid =
+    Number.isInteger(parsedStandingRank) &&
+    parsedStandingRank >= 1 &&
+    parsedStandingRank <= EMISSION_SET_SIZE
   const eligibilitySupported =
     state.field_support.retest_eligibility_mode &&
     state.field_support.retest_eligibility_z &&
@@ -213,6 +327,17 @@ export function ContinualRetestControlPanel({
     mode !== effective.settings.aggregate_mode ||
     (tieWeightingSupported &&
       tieWeightingMode !== effective.settings.tie_weighting_mode) ||
+    (statisticalBandSupported &&
+      statisticalBandMode !== effective.settings.statistical_band_mode) ||
+    (ledgerPinSupported && ledgerPinMode !== effective.settings.ledger_pin_mode) ||
+    (crownIncumbentSupported &&
+      crownIncumbentMode !== effective.settings.crown_incumbent_mode) ||
+    (crownGateSupported &&
+      (crownGateMode !== effective.settings.crown_gate_mode ||
+        (minConfirmationsValid &&
+          parsedMinConfirmations !== effective.settings.min_dethrone_confirmations) ||
+        (standingRankValid &&
+          parsedStandingRank !== effective.settings.champion_standing_rank))) ||
     idleRetests !== effective.settings.idle_retests_enabled ||
     standdown !== effective.settings.rollout_standdown ||
     (cohortSizingSupported &&
@@ -229,6 +354,7 @@ export function ContinualRetestControlPanel({
     changed &&
     (cohortSizeValid || !cohortSizingSupported) &&
     (!eligibilitySupported || (eligibilityZValid && cohortMaxSizeValid)) &&
+    (!crownGateSupported || (minConfirmationsValid && standingRankValid)) &&
     !ceilingBelowCohort &&
     reason.trim().length >= 8 &&
     confirmation === CONTINUAL_RETEST_CONFIRMATION
@@ -236,6 +362,12 @@ export function ContinualRetestControlPanel({
   function reset(next = state) {
     setMode(next.effective.settings.aggregate_mode)
     setTieWeightingMode(next.effective.settings.tie_weighting_mode)
+    setStatisticalBandMode(next.effective.settings.statistical_band_mode)
+    setLedgerPinMode(next.effective.settings.ledger_pin_mode)
+    setCrownIncumbentMode(next.effective.settings.crown_incumbent_mode)
+    setCrownGateMode(next.effective.settings.crown_gate_mode)
+    setMinConfirmations(String(next.effective.settings.min_dethrone_confirmations))
+    setStandingRank(String(next.effective.settings.champion_standing_rank))
     setIdleRetests(next.effective.settings.idle_retests_enabled)
     setStanddown(next.effective.settings.rollout_standdown)
     setCohortSize(String(next.effective.settings.retest_cohort_size))
@@ -278,6 +410,18 @@ export function ContinualRetestControlPanel({
           settings: {
             aggregate_mode: mode,
             tie_weighting_mode: tieWeightingSupported ? tieWeightingMode : 'disabled',
+            statistical_band_mode: state.field_support.statistical_band_mode
+              ? statisticalBandMode
+              : 'disabled',
+            ledger_pin_mode: ledgerPinSupported ? ledgerPinMode : 'live',
+            crown_incumbent_mode: crownIncumbentSupported ? crownIncumbentMode : 'disabled',
+            crown_gate_mode: crownGateSupported ? crownGateMode : 'disabled',
+            min_dethrone_confirmations: crownGateSupported
+              ? parsedMinConfirmations
+              : DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+            champion_standing_rank: crownGateSupported
+              ? parsedStandingRank
+              : DEFAULT_CHAMPION_STANDING_RANK,
             idle_retests_enabled: idleRetests,
             rollout_standdown: standdown,
             retest_cohort_size: cohortSizingSupported ? parsedCohortSize : floor,
@@ -287,6 +431,14 @@ export function ContinualRetestControlPanel({
               ? parsedEligibilityZ
               : effective.settings.retest_eligibility_z,
             retest_cohort_max_size: eligibilitySupported ? parsedCohortMaxSize : ceiling,
+            // Tempo-aligned wave pacing is written through Backroom MCP; this
+            // page carries the live values forward unchanged.
+            wave_cadence_tempos: state.field_support.wave_cadence_tempos
+              ? effective.settings.wave_cadence_tempos
+              : 0,
+            wave_seeds_per_window: state.field_support.wave_seeds_per_window
+              ? effective.settings.wave_seeds_per_window
+              : DEFAULT_WAVE_SEEDS_PER_WINDOW,
           },
           reason,
           confirmation,
@@ -338,6 +490,8 @@ export function ContinualRetestControlPanel({
           <div><dt className="text-[var(--muted)]">Fleet gate</dt><dd className="mt-1 font-semibold">{effective.fleet_protocol_ready ? 'Ready' : 'Not ready'}</dd></div>
           <div><dt className="text-[var(--muted)]">Aggregate fold</dt><dd className="mt-1 font-semibold">{effective.aggregate_active ? 'Active' : 'Inactive'}</dd></div>
           <div><dt className="text-[var(--muted)]">Tie + ceiling payout</dt><dd className="mt-1 font-semibold">{effective.tie_weighting_active ? 'Active' : effective.settings.tie_weighting_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
+          <div><dt className="text-[var(--muted)]">Crown gate</dt><dd className="mt-1 font-semibold">{effective.crown_gate_active ? `Active · ${effective.settings.min_dethrone_confirmations} seeds · top ${effective.settings.champion_standing_rank}` : effective.settings.crown_gate_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
+          <div><dt className="text-[var(--muted)]">Statistical cap</dt><dd className="mt-1 font-semibold">{effective.statistical_band_active ? 'Active' : effective.settings.statistical_band_mode === 'fleet_ready' ? 'Waiting for fleet' : 'Disabled'}</dd></div>
           <div>
             <dt className="text-[var(--muted)]">Retest lane</dt>
             <dd
@@ -404,6 +558,35 @@ export function ContinualRetestControlPanel({
         </div>
 
         <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+          <h3 className="text-xs font-semibold text-[var(--muted-strong)]">KOTH statistical band cap</h3>
+          <p className="mt-1 text-[11px] leading-4 text-[var(--muted)]">
+            Caps tie-pooling and unpaired dethrone uncertainty at twice the KOTH margin.
+            Fleet ready waits for every recently-live weight setter to report protocol{' '}
+            {effective.statistical_band_required_protocol}; the next epoch pin activates the fold.
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {statisticalBandModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !statisticalBandSupported}
+                onClick={() => setStatisticalBandMode(item.value)}
+                className={`min-h-16 rounded-lg border p-3 text-left disabled:opacity-45 ${
+                  statisticalBandMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
           <h3 className="text-xs font-semibold text-[var(--muted-strong)]">
             How tied emission slots pay
           </h3>
@@ -449,6 +632,157 @@ export function ContinualRetestControlPanel({
               <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--amber)]" />
               The revision may be saved now, but the ledger remains on fixed shares until every
               recently-live weight setter reports protocol 20.
+            </p>
+          ) : null}
+        </div>
+
+        <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] p-4">
+          <h3 className="text-xs font-semibold text-[var(--muted-strong)]">
+            What validators fold each epoch
+          </h3>
+          <p className="mt-1 max-w-[76ch] text-[11px] leading-4 text-[var(--muted)]">
+            The pin is a serving change: it fixes which ledger the fleet folds for a chain epoch
+            without touching the fold. Incumbency is a fold change and waits for every live weight
+            setter to report protocol {effective.crown_incumbent_required_protocol}.
+            {effective.ledger_pin ? (
+              <>
+                {' '}
+                Current pin: epoch <code>{effective.ledger_pin.epoch_index}</code> at block{' '}
+                <code>{effective.ledger_pin.pinned_block}</code>, {effective.ledger_pin.entry_count}{' '}
+                entries, digest <code>{effective.ledger_pin.ledger_digest.slice(0, 12)}</code>.
+              </>
+            ) : (
+              ' No pin has been taken yet.'
+            )}
+          </p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {ledgerPinModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !ledgerPinSupported}
+                onClick={() => setLedgerPinMode(item.value)}
+                className={`min-h-24 rounded-lg border p-4 text-left disabled:opacity-45 ${
+                  ledgerPinMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {crownIncumbentModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !crownIncumbentSupported}
+                onClick={() => setCrownIncumbentMode(item.value)}
+                className={`min-h-24 rounded-lg border p-4 text-left disabled:opacity-45 ${
+                  crownIncumbentMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+          {!ledgerPinSupported || !crownIncumbentSupported ? (
+            <p className="mt-3 flex gap-2 text-xs leading-5 text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                The platform serving this page predates the epoch pin or crown incumbency. The
+                live read and the earliest-lineage walk remain in effect until a build carrying{' '}
+                <code>ledger_pin_mode</code> and <code>crown_incumbent_mode</code> is deployed.
+              </span>
+            </p>
+          ) : null}
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {crownGateModes.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                disabled={readOnly || loading || !crownGateSupported}
+                onClick={() => setCrownGateMode(item.value)}
+                className={`min-h-24 rounded-lg border p-4 text-left disabled:opacity-45 ${
+                  crownGateMode === item.value
+                    ? 'border-[var(--amber)]/40 bg-[var(--amber-dim)]'
+                    : 'border-[var(--line)] bg-[var(--panel)] hover:border-[var(--line-strong)]'
+                }`}
+              >
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className="mt-1 block text-[11px] leading-4 text-[var(--muted)]">
+                  {item.detail}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <label className="block text-xs text-[var(--muted-strong)]">
+              Shared-seed confirmations to dethrone (2&ndash;{MAX_MIN_DETHRONE_CONFIRMATIONS})
+              <input
+                type="number"
+                inputMode="numeric"
+                min={2}
+                max={MAX_MIN_DETHRONE_CONFIRMATIONS}
+                step={1}
+                value={minConfirmations}
+                disabled={readOnly || loading || !crownGateSupported}
+                onChange={(event) => setMinConfirmations(event.target.value)}
+                aria-invalid={!minConfirmationsValid}
+                className="mt-1 w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm disabled:opacity-45"
+              />
+            </label>
+            <label className="block text-xs text-[var(--muted-strong)]">
+              Official places the King must hold (1&ndash;{EMISSION_SET_SIZE})
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={EMISSION_SET_SIZE}
+                step={1}
+                value={standingRank}
+                disabled={readOnly || loading || !crownGateSupported}
+                onChange={(event) => setStandingRank(event.target.value)}
+                aria-invalid={!standingRankValid}
+                className="mt-1 w-full rounded-md border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm disabled:opacity-45"
+              />
+            </label>
+          </div>
+          {!crownGateSupported ? (
+            <p className="mt-3 flex gap-2 text-xs leading-5 text-[var(--amber)]">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>
+                The platform serving this page predates the crown gate. The ungated walk remains
+                in effect until a build carrying <code>crown_gate_mode</code> is deployed.
+              </span>
+            </p>
+          ) : null}
+          {crownGateSupported &&
+          crownGateMode === 'fleet_ready' &&
+          !effective.crown_gate_fleet_ready ? (
+            <p className="mt-3 flex gap-2 text-xs leading-5 text-[var(--muted-strong)]">
+              <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--amber)]" />
+              The revision may be saved now, but the fold keeps the ungated walk until every
+              recently-live weight setter reports protocol {effective.crown_gate_required_protocol}.
+            </p>
+          ) : null}
+          {crownIncumbentSupported &&
+          crownIncumbentMode === 'fleet_ready' &&
+          !effective.crown_incumbent_fleet_ready ? (
+            <p className="mt-3 flex gap-2 text-xs leading-5 text-[var(--muted-strong)]">
+              <PauseCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--amber)]" />
+              The revision may be saved now, but the fold keeps the earliest-lineage walk until
+              every recently-live weight setter reports protocol{' '}
+              {effective.crown_incumbent_required_protocol}.
             </p>
           ) : null}
         </div>

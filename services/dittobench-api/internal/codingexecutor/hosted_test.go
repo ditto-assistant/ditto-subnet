@@ -14,6 +14,7 @@ func hostedConfig(t *testing.T) Config {
 	config := testConfig(t)
 	config.Manifest.CodingContractVersion = 2
 	config.Manifest.GraderContractSHA256 = codinggrader.HostedGraderContractSHA256()
+	config.Manifest.TestManifestSHA256 = ""
 	config.Manifest.ResourceProfileSHA256, _ = codinggrader.HostedResourceProfileSHA256(config.Manifest.ResourcePolicy)
 	config.Manifest.TestGroups = []codinggrader.TestGroupSpec{
 		{Group: "hidden", Command: codingrunner.CommandSpec{ID: "hidden", Argv: []string{trustedTestDriverName, "hidden.json"}, Timeout: time.Second}, ExpectedTotal: 2},

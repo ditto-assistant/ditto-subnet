@@ -7,6 +7,19 @@
   vars_files:
     - ../group_vars/role_platform_postgres.yml
   tasks:
+    - name: Prove retired production intent admits no native host
+      ansible.builtin.assert:
+        that:
+          - coding_hosted_postgres_enabled is false
+          - coding_hosted_postgres_client_ip == '10.33.0.2'
+          - "base_ufw_extra_rules == [{'port': '5432', 'src': '10.30.0.0/24', 'comment': 'Postgres from platform subnet'}]"
+          - "postgres_hba_hosts == [{'database': 'all', 'user': 'ditto', 'address': '10.30.0.0/24', 'method': 'scram-sha-256'}]"
+
+    - name: Select the disabled rollback fixture
+      ansible.builtin.set_fact:
+        coding_hosted_postgres_enabled: false
+        coding_hosted_postgres_client_ip: ''
+
     - name: Prove disabled admission preserves both existing allowlists exactly
       ansible.builtin.assert:
         that:

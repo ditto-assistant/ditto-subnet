@@ -4,7 +4,6 @@
 # rehearsal VM.
 gcp_project: ditto-app-dev
 gcp_region: us-central1
-gcp_zone: us-central1-a
 
 ansible_user: "{{ lookup('env', 'GCP_OSLOGIN_USER') | default('', true) }}"
 ansible_ssh_common_args: >-

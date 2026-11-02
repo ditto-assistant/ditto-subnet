@@ -189,6 +189,13 @@ func NewTestPGPool(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatalf("testutil: connect test database: %v", err)
 	}
+	// pg_dump is schema-only. Reproduce the Alembic default-off policy seed
+	// so gate tests exercise the same initial state as a migrated deployment.
+	if _, err := pool.Exec(ctx, `INSERT INTO cla_settings_revisions
+		(revision, parent_revision, mode, actor, reason, created_at)
+		VALUES (0, 0, 'off', 'migration', 'default-off fixture', now())`); err != nil {
+		t.Fatalf("testutil: seed CLA rollout policy: %v", err)
+	}
 	t.Cleanup(pool.Close)
 	return pool
 }

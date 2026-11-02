@@ -1,0 +1,35 @@
+[
+  {"round": 25955, "column": "c4", "family": "public-default", "status": "trivial", "panel_size": 5, "solvers": 5, "solver_owners": 5, "count": 32, "source": "public default starter kit"},
+  {"round": 25963, "column": "c4", "family": "public-default", "status": "trivial", "panel_size": 5, "solvers": 5, "solver_owners": 5, "count": 29, "source": "public default starter kit"},
+  {"round": 25963, "column": "c4", "family": "public-default", "status": "duplicate", "panel_size": 5, "count": 3, "source": "public default starter kit"},
+  {"round": 25946, "column": "c4", "family": "public-default", "status": "trivial", "panel_size": 5, "solvers": 5, "solver_owners": 5, "count": 15, "source": "public default starter kit"},
+  {"round": 25946, "column": "c4", "family": "public-default", "status": "duplicate", "panel_size": 5, "count": 1, "source": "public default starter kit"},
+
+  {"round": 25955, "column": "c2", "family": "needle-and-as-of-columns", "status": "trivial", "panel_size": 5, "solvers": 5, "solver_owners": 5, "count": 29, "source": "generator G"},
+  {"round": 25955, "column": "c2", "family": "needle-and-as-of-columns", "status": "discriminating", "panel_size": 5, "count": 2, "source": "generator G"},
+  {"round": 25963, "column": "c3", "family": "needle-and-as-of-columns", "status": "trivial", "panel_size": 5, "solvers": 5, "solver_owners": 5, "count": 30, "source": "generator G"},
+  {"round": 25963, "column": "c3", "family": "needle-and-as-of-columns", "status": "discriminating", "panel_size": 5, "count": 2, "source": "generator G"},
+
+  {"round": 25955, "column": "c3", "family": "conditional", "panel_size": 5, "solvers": 0, "solver_owners": 0, "count": 3, "source": "generator C"},
+  {"round": 25963, "column": "c1", "family": "conditional", "panel_size": 5, "solvers": 0, "solver_owners": 0, "count": 3, "source": "generator C"},
+  {"round": 25946, "family": "conditional", "panel_size": 5, "solvers": 3, "solver_owners": 3, "source": "generator C"},
+
+  {"round": 25955, "column": "c3", "family": "alias-reroute", "panel_size": 5, "solvers": 0, "solver_owners": 0, "count": 2, "source": "generator C"},
+  {"round": 25955, "column": "c3", "family": "alias-reroute", "panel_size": 5, "solvers": 1, "solver_owners": 1, "source": "generator C"},
+  {"round": 25963, "column": "c1", "family": "alias-reroute", "panel_size": 5, "solvers": 0, "solver_owners": 0, "source": "generator C"},
+  {"round": 25963, "column": "c1", "family": "alias-reroute", "panel_size": 5, "solvers": 1, "solver_owners": 1, "source": "generator C"},
+
+  {"round": 25955, "column": "c1", "family": "owner-alias-email", "panel_size": 5, "solvers": 0, "solver_owners": 0, "count": 3, "source": "generator D"},
+  {"round": 25955, "column": "c1", "family": "owner-alias-email", "case_id": "owner-alias-email-05", "panel_size": 5, "solvers": 2, "solver_owners": 2, "source": "generator D"},
+  {"round": 25960, "family": "owner-alias-email", "case_id": "owner-alias-email-05", "panel_size": 5, "solvers": 2, "solver_owners": 2, "source": "generator D"},
+  {"round": 25963, "family": "owner-alias-email", "case_id": "owner-alias-email-05", "panel_size": 5, "solvers": 2, "solver_owners": 2, "source": "generator D"},
+
+  {"round": 25946, "column": "c1", "family": "revert-to-original", "case_id": "revert-to-original-00", "panel_size": 5, "solvers": 2, "solver_owners": 2, "source": "generator D"},
+  {"round": 25955, "family": "revert-to-original", "status": "trivial", "panel_size": 5, "solvers": 5, "solver_owners": 5, "count": 2, "source": "generator D"},
+  {"round": 25963, "column": "c2", "family": "revert-to-original", "case_id": "revert-to-original-01", "panel_size": 5, "solvers": 3, "solver_owners": 3, "source": "generator D"},
+
+  {"round": 25946, "column": "c3", "family": "revised-cheapest", "case_id": "revised-cheapest-2", "panel_size": 5, "solvers": 1, "solver_owners": 1, "source": "generator C"},
+  {"round": 25955, "column": "c3", "family": "revised-cheapest", "case_id": "revised-cheapest-16", "panel_size": 5, "solvers": 2, "solver_owners": 2, "source": "generator C"},
+  {"round": 25955, "column": "c3", "family": "revised-cheapest", "case_id": "revised-cheapest-30", "panel_size": 5, "solvers": 1, "solver_owners": 1, "source": "generator C"},
+  {"round": 25963, "column": "c1", "family": "revised-cheapest", "case_id": "revised-cheapest-28", "panel_size": 5, "solvers": 3, "solver_owners": 3, "source": "generator C"}
+]

@@ -716,6 +716,34 @@ func TestGradeSeparatesRepairInfrastructureControlAndIntegrityFailures(t *testin
 	}
 }
 
+func TestRejectedBuildReceiptKeepsItsControlPlaneCode(t *testing.T) {
+	submission, visible, limits := frozenFixture(t)
+	manifest, graderBundle := graderFixture(t, submission, limits)
+	for name, buildRun := range map[string]BuildRun{
+		"receipt claims failure": {ReturnCode: 1, Completed: true},
+		"receipt claims success": {ReturnCode: 0, Completed: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			executor := passingExecutor(manifest)
+			executor.buildRun = buildRun
+			executor.corruptReceipt = true
+			result := Grade(t.Context(), manifest, submission, bytes.NewReader(visible), bytes.NewReader(graderBundle), executor)
+			code := "<nil>"
+			if result.FailureCode != nil {
+				code = *result.FailureCode
+			}
+			if result.TerminalDomain != codingcontract.DomainControlPlaneIntegrity || code != "grader_build_receipt" {
+				t.Fatalf("domain=%s code=%s, want control_plane_integrity/grader_build_receipt",
+					result.TerminalDomain, code)
+			}
+			if result.Evidence.Build.Passed || result.Evidence.ExecutionReceiptCount != 0 {
+				t.Fatalf("rejected receipt reached evidence: build passed=%v receipts=%d",
+					result.Evidence.Build.Passed, result.Evidence.ExecutionReceiptCount)
+			}
+		})
+	}
+}
+
 func TestGraderManifestRejectsNoncanonicalAuthority(t *testing.T) {
 	submission, _, limits := frozenFixture(t)
 	base, _ := graderFixture(t, submission, limits)

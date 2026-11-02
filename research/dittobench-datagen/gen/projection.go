@@ -273,6 +273,16 @@ func BuildHarnessProjection(seed int64, blindingKey []byte, benchVersion int, to
 		textReplacers[user] = strings.NewReplacer(args...)
 	}
 	projectText := func(user, value string) string { return textReplacers[normalizedUser(user)].Replace(value) }
+	projectValues := func(user string, values []string) []string {
+		if len(values) == 0 {
+			return values
+		}
+		out := make([]string, len(values))
+		for i, value := range values {
+			out[i] = projectText(user, value)
+		}
+		return out
+	}
 
 	projectPair := func(user string, pair protocol.MemoryPair) protocol.MemoryPair {
 		out := pair
@@ -312,6 +322,33 @@ func BuildHarnessProjection(seed int64, blindingKey []byte, benchVersion int, to
 		}
 		return out
 	}
+	projectClaims := func(user string, claims map[string]protocol.Claim) map[string]protocol.Claim {
+		if len(claims) == 0 {
+			return claims
+		}
+		out := make(map[string]protocol.Claim, len(claims))
+		for key, claim := range claims {
+			values := map[string]string{"expected": claim.Expected}
+			for i, accept := range claim.Accept {
+				values[fmt.Sprintf("accept:%d", i)] = accept
+			}
+			for i, forbidden := range claim.Forbidden {
+				values[fmt.Sprintf("forbidden:%d", i)] = forbidden
+			}
+			projected := projectArgs(user, values)
+			claim.Expected = projected["expected"]
+			claim.Accept = make([]string, len(claim.Accept))
+			for i := range claim.Accept {
+				claim.Accept[i] = projected[fmt.Sprintf("accept:%d", i)]
+			}
+			claim.Forbidden = make([]string, len(claim.Forbidden))
+			for i := range claim.Forbidden {
+				claim.Forbidden[i] = projected[fmt.Sprintf("forbidden:%d", i)]
+			}
+			out[key] = claim
+		}
+		return out
+	}
 
 	p.ToolCases = make([]protocol.ToolCase, len(toolCases))
 	for i, c := range toolCases {
@@ -323,15 +360,47 @@ func BuildHarnessProjection(seed int64, blindingKey []byte, benchVersion int, to
 			out.PrerequisitePairs[j] = projectPair(PrimaryUser, out.PrerequisitePairs[j])
 		}
 		out.PrerequisitePairs = permuteSessionBlocks(prf, "tool-prerequisites/"+c.ID, out.PrerequisitePairs)
-		out.ExpectedTools = append([]protocol.ToolSpec(nil), c.ExpectedTools...)
-		for j := range out.ExpectedTools {
-			out.ExpectedTools[j].RequiredArgs = projectArgs(PrimaryUser, out.ExpectedTools[j].RequiredArgs)
+		projectSpecs := func(specs []protocol.ToolSpec) []protocol.ToolSpec {
+			specs = append([]protocol.ToolSpec(nil), specs...)
+			for j := range specs {
+				specs[j].RequiredArgs = projectArgs(PrimaryUser, specs[j].RequiredArgs)
+				specs[j].RequiredArgClaims = projectClaims(PrimaryUser, specs[j].RequiredArgClaims)
+			}
+			return specs
+		}
+		out.ExpectedTools = projectSpecs(c.ExpectedTools)
+		// v13 grader-only fields ride the same alias map as RequiredArgs: a
+		// pair-id claim, an alternative outcome's pair id, or a follow-up
+		// read's link to its mutation must name the WIRE identity the grader
+		// will observe. Every field is empty below v13, so this is a no-op for
+		// the frozen contracts.
+		if len(c.AlternativeExpectedTools) > 0 {
+			out.AlternativeExpectedTools = make([][]protocol.ToolSpec, len(c.AlternativeExpectedTools))
+			for j, alternative := range c.AlternativeExpectedTools {
+				out.AlternativeExpectedTools[j] = projectSpecs(alternative)
+			}
+		}
+		if c.EffectAnswer != "" {
+			out.EffectAnswer = projectArgs(PrimaryUser, map[string]string{"v": c.EffectAnswer})["v"]
+		}
+		out.EffectForbidden = projectValues(PrimaryUser, c.EffectForbidden)
+		if c.RunAfterCaseID != "" {
+			out.RunAfterCaseID = caseAlias[c.RunAfterCaseID]
+		}
+		if c.Restraint != nil {
+			restraint := *c.Restraint
+			restraint.Accept = projectValues(PrimaryUser, c.Restraint.Accept)
+			restraint.Grounding = projectValues(PrimaryUser, c.Restraint.Grounding)
+			out.Restraint = &restraint
 		}
 		p.ToolCases[i] = out
 	}
 	sort.SliceStable(p.ToolCases, func(i, j int) bool {
 		return digestLess(prf.digest("tool-order", p.caseToInternal[p.ToolCases[i].ID]), prf.digest("tool-order", p.caseToInternal[p.ToolCases[j].ID]))
 	})
+	if benchVersion >= protocol.BenchVersionV13 {
+		p.ToolCases = V13ArrangeToolOrder(p.ToolCases)
+	}
 	for _, c := range p.ToolCases {
 		p.Manifest.ToolCaseOrder = append(p.Manifest.ToolCaseOrder, p.caseToInternal[c.ID])
 	}

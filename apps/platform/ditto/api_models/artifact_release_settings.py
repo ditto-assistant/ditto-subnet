@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from typing import Annotated
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ditto.api_models.receipt_diagnostics import ReceiptDiagnosticReport
 from ditto.api_models.source_disclosure import SourceDisclosure
+from ditto.chain.models import ArchiveRpcAuthMode
 
 
 class ArtifactReleaseSettingsRevision(BaseModel):
@@ -26,11 +29,139 @@ class ArtifactReleaseSettingsRevision(BaseModel):
     created_at: datetime | None
 
 
+class SourceReleaseEligibilityRow(BaseModel):
+    """Bounded receipt metadata, without raw validator payloads or source."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    agent_id: UUID
+    artifact_sha256: str
+    crowned_at: datetime
+    weight_confirmed_at: datetime | None
+    emission_confirmed_at: datetime | None
+    emission_block: int | None
+    emission_block_hash: str | None
+    emission_epoch_index: int | None
+    emission_ledger_digest: str | None
+
+
+class ReceiptDiagnosticRow(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    report: ReceiptDiagnosticReport
+    received_at: datetime
+    stale: bool
+
+
+class SourceArchiveProviderStatus(BaseModel):
+    """Served configuration only; never a URL, credential, or health claim."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    configured: bool
+    host: str | None
+    auth_mode: ArchiveRpcAuthMode
+    credential_configured: bool
+
+
+class RevealPlanShadowMiss(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    first_block: int
+    last_block: int
+    blocks: list[int] = Field(default_factory=list, max_length=720)
+
+
+class RevealPlanShadowStatus(BaseModel):
+    """Running check of the reveal-anchored range planner, before it is trusted.
+
+    ``agreed`` ranges planned every block the full reader acted on; ``missed``
+    ranges did not (a correctness failure: do not promote); ``fallback``
+    ranges asked for the full scan; ``error`` ranges could not be planned.
+    ``calls`` / ``blocks`` is its chain cost per block; the event planner makes
+    at least one call per block.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    mode: str
+    ranges: int = 0
+    agreed: int = 0
+    missed: int = 0
+    fallback: int = 0
+    error: int = 0
+    blocks: int = 0
+    calls: int = 0
+    last_range: list[int] | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    recent_misses: list[RevealPlanShadowMiss] = Field(
+        default_factory=list, max_length=5
+    )
+    updated_at: datetime | None = None
+
+
+class CatchUpStatus(BaseModel):
+    """How the collector replays deep catch-up ranges with ``planner``.
+
+    ``sparse`` ranges read ``blocks_read`` blocks in full and committed
+    ``blocks_skipped`` as quiet; ``full_scan`` ranges fell back to the per-block
+    scan, counted by the planner's reason in ``full_scan_reasons``; ``error``
+    ranges could not be planned (``last_error``). A fallback costs throughput,
+    never correctness. The counts cover ``planner`` only: switching planner
+    starts a new summary. Each planning attempt counts, so a range retried
+    after an error counts again.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    planner: str
+    ranges: int = 0
+    sparse: int = 0
+    full_scan: int = 0
+    error: int = 0
+    blocks_read: int = 0
+    blocks_skipped: int = 0
+    full_scan_reasons: dict[str, int] = Field(default_factory=dict)
+    last_range: list[int] | None = None
+    last_outcome: str | None = None
+    last_error: str | None = None
+    updated_at: datetime | None = None
+
+
+class SourceReleaseGateStatus(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    version: str
+    automatic_confirmation_enabled: bool = False
+    archive_provider: SourceArchiveProviderStatus | None = None
+    collector_cursor_block: int | None = None
+    collector_cursor_hash: str | None = None
+    collector_runtime_code_hash: str | None = None
+    collector_blocked_reason: str | None = None
+    reveal_plan_shadow: RevealPlanShadowStatus | None = None
+    catch_up: CatchUpStatus | None = None
+    last_payout_block: int | None = None
+    last_payout_blocked_reason: str | None = None
+    last_payout_attributed: bool = False
+    unresolved_payout_count: int = 0
+    pending_receipt_count: int = 0
+    receipt_diagnostics: list[ReceiptDiagnosticRow] = Field(
+        default_factory=list, max_length=64
+    )
+    receipt_diagnostics_has_more: bool = False
+    pending_kings: int
+    confirmed_kings: int
+    rows: Annotated[list[SourceReleaseEligibilityRow], Field(max_length=25)]
+    rows_limit: int = 25
+    rows_has_more: bool
+
+
 class AdminArtifactReleaseSettingsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: ArtifactReleaseSettingsRevision
     history: list[ArtifactReleaseSettingsRevision]
+    release_gate: SourceReleaseGateStatus
 
 
 class AdminArtifactReleaseSettingsRequest(BaseModel):

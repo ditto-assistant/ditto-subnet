@@ -57,6 +57,7 @@ SET bearer_digest = sqlc.arg(bearer_digest)::text,
     expires_at = sqlc.arg(expires_at)::timestamptz,
     active_requests = 0,
     embedding_active_requests = 0,
+    decision_active_requests = 0,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid;
 
@@ -91,6 +92,13 @@ SET embedding_active_requests = sqlc.arg(embedding_active_requests)::integer,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid;
 
+-- name: SetGrantDecisionActiveRequests :exec
+-- Decision-lane twin of SetGrantChatActiveRequests.
+UPDATE inference_grants
+SET decision_active_requests = sqlc.arg(decision_active_requests)::integer,
+    updated_at = sqlc.arg(now)::timestamptz
+WHERE grant_id = sqlc.arg(grant_id)::uuid;
+
 -- name: IncrementGrantChatAdmission :exec
 -- Admission bookkeeping after the request row INSERT: one more chat request
 -- admitted and in flight. Grant row is locked by the caller.
@@ -105,6 +113,14 @@ WHERE grant_id = sqlc.arg(grant_id)::uuid;
 UPDATE inference_grants
 SET embedding_request_count = embedding_request_count + 1,
     embedding_active_requests = embedding_active_requests + 1,
+    updated_at = sqlc.arg(now)::timestamptz
+WHERE grant_id = sqlc.arg(grant_id)::uuid;
+
+-- name: IncrementGrantDecisionAdmission :exec
+-- Decision-lane twin of IncrementGrantChatAdmission.
+UPDATE inference_grants
+SET decision_request_count = decision_request_count + 1,
+    decision_active_requests = decision_active_requests + 1,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid;
 
@@ -132,6 +148,19 @@ UPDATE inference_grants
 SET embedding_active_requests = sqlc.arg(embedding_active_requests)::integer,
     embedding_tokens = embedding_tokens + sqlc.arg(embedding_tokens)::bigint,
     embedding_cost_microusd = embedding_cost_microusd + sqlc.arg(embedding_cost_microusd)::bigint,
+    updated_at = sqlc.arg(now)::timestamptz
+WHERE grant_id = sqlc.arg(grant_id)::uuid
+RETURNING *;
+
+-- name: ApplyGrantDecisionSettlement :one
+-- Decision-lane settle accounting. decision_cost_microusd is LEDGER cost
+-- (receipted input tokens x the grant-stamped price), never the provider
+-- bill, so a per-run dollar ceiling can sum it with the other lanes. No
+-- exhaustion rule: a spent decision wall must not take chat down with it.
+UPDATE inference_grants
+SET decision_active_requests = sqlc.arg(decision_active_requests)::integer,
+    decision_tokens = decision_tokens + sqlc.arg(decision_tokens)::bigint,
+    decision_cost_microusd = decision_cost_microusd + sqlc.arg(decision_cost_microusd)::bigint,
     updated_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 RETURNING *;

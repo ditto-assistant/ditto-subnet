@@ -5,30 +5,48 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from contextlib import asynccontextmanager, nullcontext
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import quote, urlsplit
 
 from ditto.chain.errors import (
     ChainAuthError,
     ChainConnectionError,
+    ChainEmissionReceiptUnavailable,
+    ChainError,
     ChainTimeoutError,
+    ChainTreasuryActivationReadError,
+    ChainTreasuryReadTimeoutError,
     ExtrinsicNotFoundError,
 )
+from ditto.chain.header_rpc import header_substrate
 from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
     ChainEpoch,
+    ChainMinerEarning,
+    ChainMinerEmissionReceipt,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
+    EpochSchedule,
     ExtrinsicInfo,
     NeuronInfo,
 )
+from ditto.chain.treasury_read_trace import TreasuryReadTrace
+from ditto.chain.treasury_runtime_cache import TreasuryRuntimeCache
+from ditto_screening_protocol.treasury import TreasuryEmissionPolicy, TreasuryLedgerPin
+from ditto_screening_protocol.treasury_identity import read_finalized_collector_pin
 
 if TYPE_CHECKING:
     from types import TracebackType
 
     from pylon_client.artanis import AsyncPylonClient
+
+    from ditto.api_models.treasury_ingress import TreasuryReceiptSelector
+    from ditto.api_models.treasury_movement import TreasuryMovementSelector
+    from ditto.chain.runtime_interface_report import RuntimeInterfaceReport
+    from ditto.chain.treasury_receipts import TreasuryChainProof
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +88,66 @@ _BLOCKS_SINCE_STEP_STORAGE = "BlocksSinceLastStep"
 _COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
 _REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
 _WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
+# Stateful epoch scheduler storage, keyed by netuid; the pinned ledger's clock.
+_LAST_EPOCH_BLOCK_STORAGE = "LastEpochBlock"
+_PENDING_EPOCH_AT_STORAGE = "PendingEpochAt"
+_SUBNET_EPOCH_INDEX_STORAGE = "SubnetEpochIndex"
+
+
+def _treasury_substrate(
+    url: str, *, runtime_cache: TreasuryRuntimeCache | None = None
+) -> Any:
+    """Bind SDK startup metadata and treasury reads to one finalized snapshot.
+
+    The SDK otherwise starts metadata initialization at the best head before
+    our finalized reads arrive, which can initialize the same runtime twice.
+    This snapshot belongs only to this connection. Storage, identity, and
+    permissions are still queried anew, at their explicitly supplied hashes.
+    """
+    from async_substrate_interface import AsyncSubstrateInterface
+
+    class FinalizedTreasurySubstrate(AsyncSubstrateInterface):
+        def __init__(self) -> None:
+            super().__init__(url=url)
+            self._treasury_finalized_head: str | None = None
+
+        async def get_chain_head(self) -> str:
+            return await self.get_chain_finalised_head()
+
+        async def get_chain_finalised_head(self) -> str:
+            if self._treasury_finalized_head is None:
+                self._treasury_finalized_head = await super().get_chain_finalised_head()
+            return self._treasury_finalized_head
+
+        async def get_runtime_for_version(
+            self, runtime_version: int, block_hash: str | None = None
+        ) -> Any:
+            if runtime_cache is None:
+                return await super().get_runtime_for_version(
+                    runtime_version, block_hash
+                )
+            # init_runtime has freshly resolved the applicable specVersion at
+            # this connection's finalized snapshot, using the SDK's parent-state
+            # upgrade boundary. Genesis is also read on this new connection.
+            genesis = await self.get_block_hash(0)
+            if not isinstance(genesis, str) or not genesis:
+                raise ChainConnectionError("treasury runtime genesis unavailable")
+            load = super().get_runtime_for_version
+            runtime = await runtime_cache.get(
+                url,
+                genesis,
+                runtime_version,
+                lambda: load(runtime_version, block_hash),
+            )
+            # The SDK's block mappings and last_used remain connection-local.
+            self.runtime_cache.add_item(
+                runtime=runtime,
+                block_hash=block_hash,
+                runtime_version=runtime_version,
+            )
+            return runtime
+
+    return FinalizedTreasurySubstrate()
 
 
 class ChainClient:
@@ -112,6 +190,27 @@ class ChainClient:
         self._recent_neurons_cache: dict[int, tuple[float, tuple[NeuronInfo, ...]]] = {}
         self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
         self._clock = time.monotonic
+
+    def _new_treasury_substrate(
+        self, *, archive: bool = False, url: str | None = None
+    ) -> Any:
+        cache = getattr(self, "_treasury_runtime_cache", None)
+        if cache is None:
+            cache = self._treasury_runtime_cache = TreasuryRuntimeCache()
+        # Use the same configured/archive transport order as finalized receipt
+        # reads. The public live entrypoint can refuse websocket handshakes with
+        # HTTP 429 while these existing providers still serve current finalized
+        # identity and permission evidence. This selects transport only: each
+        # request retains its exact-hash reads, genesis/identity validation and
+        # existing eight-second windows; no observed authority is cached.
+        # Epoch scheduling passes each provider of its own failover order.
+        if url is None:
+            url = (
+                self._historical_substrate_urls()[0]
+                if archive
+                else self._live_substrate_urls()[0]
+            )
+        return _treasury_substrate(url, runtime_cache=cache)
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
@@ -309,39 +408,316 @@ class ChainClient:
         Payment proofs carry both identifiers because Pylon reads extrinsics by
         number while historical events and storage are read by hash. Callers
         must bind the pair before combining those two data sources.
-        """
-        from async_substrate_interface import AsyncSubstrateInterface
 
-        try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
-                block_hash = await substrate.get_block_hash(block_number)
-        except TimeoutError as e:
-            raise ChainTimeoutError(f"get_block_hash({block_number}) timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_block_hash({block_number}) failed: {self._safe_rpc_error(e)}"
-            ) from e
-        if not block_hash:
+        Tries the archive providers before the public live entrypoint, which
+        refuses websocket handshakes with HTTP 429 under load; every upload
+        payment proof passes through here, so one rate-limited endpoint must
+        not 503 every upload. Not-found is reported only when every provider
+        answered and none knows the height.
+        """
+        failures: list[tuple[str, Exception]] = []
+        urls = tuple(
+            dict.fromkeys((*self._historical_substrate_urls(), self._substrate_url()))
+        )
+        for url in urls:
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    header_substrate(url) as substrate,
+                ):
+                    block_hash = await substrate.get_block_hash(block_number)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "block hash read failed provider=%s block=%s error=%s",
+                    provider,
+                    block_number,
+                    self._safe_rpc_error(error),
+                )
+                continue
+            if block_hash:
+                return str(block_hash).lower()
+
+        if not failures:
             raise ExtrinsicNotFoundError(
                 f"no block hash found for block number {block_number}"
             )
-        return str(block_hash).lower()
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if all(isinstance(error, TimeoutError) for _, error in failures):
+            raise ChainTimeoutError(
+                f"get_block_hash({block_number}) timed out: {summary}"
+            )
+        raise ChainConnectionError(f"get_block_hash({block_number}) failed: {summary}")
+
+    @asynccontextmanager
+    async def _treasury_reader(self, *, setters: bool = False):
+        trace = TreasuryReadTrace(setters=setters)
+        try:
+            async with (
+                asyncio.timeout(8),
+                self._new_treasury_substrate(archive=True) as substrate,
+            ):
+                trace.client = substrate
+                yield trace
+                trace.step = "connection_close"
+        except TimeoutError as error:
+            raise ChainTreasuryReadTimeoutError(trace.step) from error
+
+    async def get_treasury_collector_pin(
+        self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
+    ) -> TreasuryLedgerPin:
+        """Read finalized shadow evidence only; never access a wallet or signer."""
+        try:
+            async with self._treasury_reader() as substrate:
+                return await read_finalized_collector_pin(
+                    substrate,
+                    policy,
+                    first_block=first_block,
+                    pinned_block=pinned_block,
+                )
+        except ValueError:
+            raise
+        except ChainTreasuryReadTimeoutError:
+            raise
+        except TimeoutError as error:
+            raise ChainTimeoutError(
+                "finalized treasury identity read timed out"
+            ) from error
+        except Exception as error:
+            raise ChainConnectionError(
+                "finalized treasury identity unavailable"
+            ) from error
+
+    async def get_treasury_weight_setters(
+        self, policy: TreasuryEmissionPolicy, *, block_hash: str
+    ) -> tuple[str, ...]:
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_weight_setters,
+        )
+
+        async with self._treasury_reader(setters=True) as substrate:
+            return await read_finalized_weight_setters(
+                substrate, policy, block_hash=block_hash
+            )
+
+    async def get_treasury_dispatch_observation(self, policy: TreasuryEmissionPolicy):
+        from ditto_screening_protocol.treasury_identity import (
+            read_treasury_dispatch_observation,
+        )
+
+        async with self._treasury_reader() as substrate:
+            return await read_treasury_dispatch_observation(substrate, policy)
+
+    async def get_treasury_managed_weight_setters(
+        self,
+        policy: TreasuryEmissionPolicy,
+        *,
+        block_hash: str,
+        managed_hotkeys: tuple[str, ...],
+    ):
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_managed_weight_setters,
+        )
+
+        async with self._treasury_reader(setters=True) as substrate:
+            return await read_finalized_managed_weight_setters(
+                substrate,
+                policy,
+                block_hash=block_hash,
+                managed_hotkeys=managed_hotkeys,
+            )
+
+    async def get_treasury_activation_observation(self, policy: TreasuryEmissionPolicy):
+        observed, keys, _ = await self._treasury_activation_observation(policy)
+        return observed, keys
+
+    async def get_treasury_managed_activation_observation(
+        self, policy: TreasuryEmissionPolicy, *, managed_hotkeys: tuple[str, ...]
+    ):
+        from ditto_screening_protocol.treasury_identity import (
+            TreasuryManagedSetterObservation,
+        )
+
+        observed, keys, count = await self._treasury_activation_observation(
+            policy, managed_hotkeys=managed_hotkeys
+        )
+        return observed, TreasuryManagedSetterObservation(
+            block_hash=observed.finalized_block_hash,
+            hotkeys=keys,
+            permitted_count=count,
+        )
+
+    async def _treasury_activation_observation(
+        self,
+        policy: TreasuryEmissionPolicy,
+        *,
+        managed_hotkeys: tuple[str, ...] | None = None,
+    ):
+        """One request-local connection and exact hash; two unchanged read windows."""
+        from ditto_screening_protocol.treasury_identity import (
+            read_finalized_managed_weight_setters,
+            read_finalized_weight_setters,
+            read_treasury_dispatch_observation,
+        )
+
+        trace = TreasuryReadTrace()
+        stage: Literal["identity", "setter_roster"] = "identity"
+        try:
+            async with (
+                asyncio.timeout(8) as deadline,
+                self._new_treasury_substrate(archive=True) as substrate,
+            ):
+                trace.client = substrate
+                observed = await read_treasury_dispatch_observation(trace, policy)
+                # Validate the same policy binding before any authorization read.
+                TreasuryLedgerPin(
+                    policy=policy,
+                    policy_digest=policy.digest,
+                    identity=observed.identity,
+                )
+                now = asyncio.get_running_loop().time()
+                expires = deadline.when()
+                # A synchronous decode may have crossed the first deadline
+                # before its cancellation callback could run. Never renew an
+                # already elapsed identity window into authorization reads.
+                if expires is not None and now >= expires:
+                    raise TimeoutError()
+                stage = "setter_roster"
+                trace.setters = True
+                # The old path opened a second SDK connection with its own
+                # eight-second deadline. Keep that window, but reuse only this
+                # request's exact-hash metadata/transport, never permissions.
+                deadline.reschedule(now + 8)
+                if managed_hotkeys is None:
+                    keys = await read_finalized_weight_setters(
+                        trace, policy, block_hash=observed.finalized_block_hash
+                    )
+                    count = len(keys)
+                else:
+                    proof = await read_finalized_managed_weight_setters(
+                        trace,
+                        policy,
+                        block_hash=observed.finalized_block_hash,
+                        managed_hotkeys=managed_hotkeys,
+                    )
+                    keys, count = proof.hotkeys, proof.permitted_count
+                trace.step = "connection_close"
+                return observed, keys, count
+        except TimeoutError as error:
+            raise ChainTreasuryActivationReadError(
+                stage, ChainTreasuryReadTimeoutError(trace.step)
+            ) from error
+        except Exception as error:
+            raise ChainTreasuryActivationReadError(stage, error) from error
+
+    async def get_treasury_receipt_proof(
+        self,
+        selector: TreasuryReceiptSelector | TreasuryMovementSelector,
+        policy: TreasuryEmissionPolicy,
+        *,
+        sender: str,
+        recipient: str,
+        asset: str,
+        recipient_hotkey: str | None,
+        pinned_block: int,
+        pinned_block_hash: str,
+        pinned_uid: int,
+    ) -> TreasuryChainProof:
+        """Canonical finalized receipt, with existing archive fallback and no signer."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.errors import (
+            ChainTreasuryReceiptUnavailable,
+            TreasuryReceiptReadProgress,
+        )
+        from ditto.chain.treasury_receipts import read_treasury_chain_proof
+
+        attempts = 0
+        progress = TreasuryReceiptReadProgress()
+        timed_out = False
+        for url in self._historical_substrate_urls():
+            attempts += 1
+            progress = TreasuryReceiptReadProgress()
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    AsyncSubstrateInterface(url=url) as substrate,
+                ):
+                    proof = await read_treasury_chain_proof(
+                        substrate,
+                        selector,
+                        policy,
+                        sender=sender,
+                        recipient=recipient,
+                        asset=asset,
+                        recipient_hotkey=recipient_hotkey,
+                        pinned_block=pinned_block,
+                        pinned_block_hash=pinned_block_hash,
+                        pinned_uid=pinned_uid,
+                        progress=progress,
+                    )
+                    progress.phase = "connection_close"
+                return proof
+            except ValueError:
+                # Complete data contradicting the claim is not provider failure.
+                raise
+            except Exception as error:
+                timed_out = timed_out or isinstance(error, TimeoutError)
+                # Provider addresses/credentials and raw exceptions stay private.
+                continue
+        raise ChainTreasuryReceiptUnavailable(
+            progress.phase, attempts, timed_out=timed_out
+        )
+
+    async def get_runtime_interface_report(
+        self, block: int | None = None
+    ) -> RuntimeInterfaceReport:
+        """Compare one runtime's consumed interfaces with audits; reads only."""
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        from ditto.chain.runtime_interface_report import (
+            read_runtime_interface_report,
+        )
+
+        failures: list[str] = []
+        for url in self._historical_substrate_urls():
+            try:
+                async with (
+                    asyncio.timeout(self._config.archive_rpc_timeout_seconds),
+                    AsyncSubstrateInterface(url=url) as substrate,
+                ):
+                    return await read_runtime_interface_report(substrate, block=block)
+            except ValueError:
+                raise
+            except Exception as error:
+                failures.append(self._safe_rpc_error(error)[:200])
+        raise ChainConnectionError(
+            "runtime interface report unavailable: " + "; ".join(failures)
+        )
 
     async def get_finalized_block(self) -> BlockInfo:
         """Return the current finalized chain block from Substrate."""
 
-        from async_substrate_interface import AsyncSubstrateInterface
-
-        try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
-                block_hash = await substrate.get_chain_finalised_head()
-                block_number = await substrate.get_block_number(block_hash)
-        except TimeoutError as e:
-            raise ChainTimeoutError("get_finalized_block() timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_finalized_block() failed: {self._safe_rpc_error(e)}"
-            ) from e
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            try:
+                async with header_substrate(url) as substrate:
+                    block_hash = await substrate.get_chain_finalised_head()
+                    block_number = await substrate.get_block_number(block_hash)
+                break
+            except TimeoutError as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainTimeoutError("get_finalized_block() timed out") from e
+            except Exception as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainConnectionError(
+                    f"get_finalized_block() failed: {self._safe_rpc_error(e)}"
+                ) from e
         if not block_hash or block_number is None:
             raise ExtrinsicNotFoundError("finalized chain head is unavailable")
         return BlockInfo(number=int(block_number), hash=str(block_hash).lower())
@@ -353,28 +729,44 @@ class ChainClient:
             raise ExtrinsicNotFoundError(
                 f"finalized block number {block_number} is invalid"
             )
-        from async_substrate_interface import AsyncSubstrateInterface
-
-        try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
-                finalized_hash = await substrate.get_chain_finalised_head()
-                finalized_number = await substrate.get_block_number(finalized_hash)
-                if finalized_number is None or block_number > int(finalized_number):
-                    raise ExtrinsicNotFoundError(
-                        f"block {block_number} is not finalized"
-                    )
-                block_hash = await substrate.get_block_hash(block_number)
-        except (ExtrinsicNotFoundError, ChainTimeoutError, ChainConnectionError):
-            raise
-        except TimeoutError as e:
-            raise ChainTimeoutError(
-                f"get_finalized_block_hash({block_number}) timed out"
-            ) from e
-        except Exception as e:
-            raise ChainConnectionError(
-                "get_finalized_block_hash"
-                f"({block_number}) failed: {self._safe_rpc_error(e)}"
-            ) from e
+        urls = self._live_substrate_urls()
+        not_finalized: ExtrinsicNotFoundError | None = None
+        for index, url in enumerate(urls):
+            try:
+                async with header_substrate(url) as substrate:
+                    finalized_hash = await substrate.get_chain_finalised_head()
+                    finalized_number = await substrate.get_block_number(finalized_hash)
+                    if finalized_number is None or block_number > int(finalized_number):
+                        raise ExtrinsicNotFoundError(
+                            f"block {block_number} is not finalized"
+                        )
+                    block_hash = await substrate.get_block_hash(block_number)
+                break
+            except ExtrinsicNotFoundError as e:
+                # A lagging provider may not have finalized this height yet.
+                not_finalized = e
+                if index + 1 < len(urls):
+                    continue
+                raise
+            except (ChainTimeoutError, ChainConnectionError):
+                raise
+            except TimeoutError as e:
+                if index + 1 < len(urls):
+                    continue
+                if not_finalized is not None:
+                    raise not_finalized from e
+                raise ChainTimeoutError(
+                    f"get_finalized_block_hash({block_number}) timed out"
+                ) from e
+            except Exception as e:
+                if index + 1 < len(urls):
+                    continue
+                if not_finalized is not None:
+                    raise not_finalized from e
+                raise ChainConnectionError(
+                    "get_finalized_block_hash"
+                    f"({block_number}) failed: {self._safe_rpc_error(e)}"
+                ) from e
         if not block_hash:
             raise ExtrinsicNotFoundError(
                 f"no finalized block hash found for block number {block_number}"
@@ -429,53 +821,62 @@ class ChainClient:
         """
         from async_substrate_interface import AsyncSubstrateInterface
 
-        try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
-                block_hash = await substrate.get_chain_head()
-                header = await substrate.get_block_header(block_hash=block_hash)
-                block = _block_number_from_header(header)
-                weight_map = await substrate.query_map(
-                    module=_SUBTENSOR_MODULE,
-                    storage_function=_WEIGHTS_STORAGE,
-                    params=[netuid],
-                    block_hash=block_hash,
-                    fully_exhaust=True,
-                )
-                key_map = await substrate.query_map(
-                    module=_SUBTENSOR_MODULE,
-                    storage_function=_KEYS_STORAGE,
-                    params=[netuid],
-                    block_hash=block_hash,
-                    fully_exhaust=True,
-                )
-                owner_result = await substrate.query(
-                    module=_SUBTENSOR_MODULE,
-                    storage_function=_SUBNET_OWNER_HOTKEY_STORAGE,
-                    params=[netuid],
-                    block_hash=block_hash,
-                )
-                raw_weights = [
-                    (int(uid), value or []) async for uid, value in weight_map
-                ]
-                hotkeys = {
-                    int(uid): str(hotkey) async for uid, hotkey in key_map if hotkey
-                }
-                owner_hotkey_value = _unwrap_substrate_value(owner_result)
-                # Same connection, same block hash: the tempo position a reader
-                # sees therefore belongs to the very matrix beside it, and the
-                # extra reads cost one round trip each on a socket the matrix
-                # read already paid to open. Both are decoration on the matrix,
-                # so neither may fail the call -- see :meth:`_read_epoch`.
-                epoch = await self._read_epoch(substrate, netuid, block, block_hash)
-                block_timestamp = await self._read_block_timestamp(
-                    substrate, block_hash
-                )
-        except TimeoutError as e:
-            raise ChainTimeoutError(f"get_weights(netuid={netuid}) timed out") from e
-        except Exception as e:
-            raise ChainConnectionError(
-                f"get_weights(netuid={netuid}) failed: {e}"
-            ) from e
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            try:
+                async with AsyncSubstrateInterface(url=url) as substrate:
+                    block_hash = await substrate.get_chain_head()
+                    header = await substrate.get_block_header(block_hash=block_hash)
+                    block = _block_number_from_header(header)
+                    weight_map = await substrate.query_map(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_WEIGHTS_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                        fully_exhaust=True,
+                    )
+                    key_map = await substrate.query_map(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_KEYS_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                        fully_exhaust=True,
+                    )
+                    owner_result = await substrate.query(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=_SUBNET_OWNER_HOTKEY_STORAGE,
+                        params=[netuid],
+                        block_hash=block_hash,
+                    )
+                    raw_weights = [
+                        (int(uid), value or []) async for uid, value in weight_map
+                    ]
+                    hotkeys = {
+                        int(uid): str(hotkey) async for uid, hotkey in key_map if hotkey
+                    }
+                    owner_hotkey_value = _unwrap_substrate_value(owner_result)
+                    # Same connection, same block hash: the tempo position a reader
+                    # sees therefore belongs to the very matrix beside it, and the
+                    # extra reads cost one round trip each on a socket the matrix
+                    # read already paid to open. Both are decoration on the matrix,
+                    # so neither may fail the call -- see :meth:`_read_epoch`.
+                    epoch = await self._read_epoch(substrate, netuid, block, block_hash)
+                    block_timestamp = await self._read_block_timestamp(
+                        substrate, block_hash
+                    )
+                break
+            except TimeoutError as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainTimeoutError(
+                    f"get_weights(netuid={netuid}) timed out"
+                ) from e
+            except Exception as e:
+                if index + 1 < len(urls):
+                    continue
+                raise ChainConnectionError(
+                    f"get_weights(netuid={netuid}) failed: {e}"
+                ) from e
 
         vectors = []
         for validator_uid, raw_vector in raw_weights:
@@ -506,6 +907,484 @@ class ChainClient:
             vectors=tuple(vectors),
             epoch=epoch,
             block_timestamp=block_timestamp,
+        )
+
+    async def get_miner_emission_receipt(
+        self,
+        netuid: int,
+        *,
+        target_hotkeys: frozenset[str] | None = None,
+        payout_block: int | None = None,
+        allow_initialization_reveals: bool = False,
+        substrate: Any | None = None,
+    ) -> ChainMinerEmissionReceipt:
+        """Read one finalized successful miner distribution, or fail closed.
+
+        Positive weights are only inputs. The runtime's miner-incentive event
+        proves server emission was calculated; successful mechanism completion
+        proves distribution ran. Owner and associated hotkeys are excluded
+        because that incentive is recycled/burned. Other miner incentive is
+        credited to stake or collateral (including an auto-stake destination).
+
+        The event is emitted during initialization. Read identities and weights
+        at its parent block and reject matrix changes by default. The collector
+        can opt into independently verified initialization reveals: the audited
+        reader must prove every write precedes the payout and is attributable.
+        Only those rows may differ, and their post-block vectors are consumed.
+        Later or unexplained writes remain ambiguous and are never accepted.
+        ``target_hotkeys`` bounds historical timestamp reads to validators whose
+        vectors affect pending submissions; all vectors/update blocks remain.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        # Reuse the collector's archive provider for every read of this proof.
+        # The caller owns an injected transport; do not close it here.
+        context = (
+            nullcontext(substrate)
+            if substrate is not None
+            else AsyncSubstrateInterface(url=self._live_substrate_urls()[0])
+        )
+        try:
+            async with context as substrate:
+                finalized_hash = await substrate.get_chain_finalised_head()
+                finalized = _block_number_from_header(
+                    await substrate.get_block_header(block_hash=finalized_hash)
+                )
+
+                async def read(name: str, at: str, params: list[Any]) -> Any:
+                    return _unwrap_substrate_value(
+                        await substrate.query(
+                            module=_SUBTENSOR_MODULE,
+                            storage_function=name,
+                            params=params,
+                            block_hash=at,
+                        )
+                    )
+
+                block = (
+                    _receipt_uint(payout_block)
+                    if payout_block is not None
+                    else _receipt_uint(
+                        await read(_LAST_STEP_STORAGE, finalized_hash, [netuid])
+                    )
+                )
+                if not 0 < block <= finalized:
+                    raise ValueError("no finalized successful distribution")
+                block_hash = await substrate.get_block_hash(block)
+                parent_hash = await substrate.get_block_hash(block - 1)
+                if not block_hash or not parent_hash:
+                    raise ValueError("missing distribution block hashes")
+                for at in (parent_hash, block_hash):
+                    if (
+                        _receipt_uint(await read("MechanismCountCurrent", at, [netuid]))
+                        != 1
+                    ):
+                        raise ValueError("unsupported multi-mechanism emission")
+                previous = _receipt_uint(
+                    await read(_LAST_STEP_STORAGE, parent_hash, [netuid])
+                )
+                if (
+                    previous >= block
+                    or _receipt_uint(
+                        await read(_LAST_STEP_STORAGE, block_hash, [netuid])
+                    )
+                    != block
+                ):
+                    raise ValueError("invalid successful distribution boundary")
+                epoch_index = _receipt_uint(
+                    await read(_SUBNET_EPOCH_INDEX_STORAGE, block_hash, [netuid])
+                )
+                owner = await read("SubnetOwner", parent_hash, [netuid])
+                owner_hotkey = await read(
+                    _SUBNET_OWNER_HOTKEY_STORAGE, parent_hash, [netuid]
+                )
+                owned = await read("OwnedHotkeys", parent_hash, [owner])
+                if (
+                    not isinstance(owner, str)
+                    or not owner
+                    or not isinstance(owner_hotkey, str)
+                    or not owner_hotkey
+                ):
+                    raise ValueError("missing subnet ownership")
+                if not isinstance(owned, list) or any(
+                    not isinstance(h, str) for h in owned
+                ):
+                    raise ValueError("invalid owner-associated hotkeys")
+                # Ownership can change in initialization before distribution,
+                # while extrinsics can change it afterwards. Neither endpoint
+                # alone identifies the burned recipients on a transition block.
+                new_owner = await read("SubnetOwner", block_hash, [netuid])
+                new_owner_hotkey = await read(
+                    _SUBNET_OWNER_HOTKEY_STORAGE, block_hash, [netuid]
+                )
+                new_owned = await read("OwnedHotkeys", block_hash, [owner])
+                if (
+                    not isinstance(new_owner, str)
+                    or not new_owner
+                    or not isinstance(new_owner_hotkey, str)
+                    or not new_owner_hotkey
+                    or not isinstance(new_owned, list)
+                    or any(not isinstance(h, str) for h in new_owned)
+                ):
+                    raise ValueError("missing post-distribution ownership")
+                if (new_owner, new_owner_hotkey, new_owned) != (
+                    owner,
+                    owner_hotkey,
+                    owned,
+                ):
+                    raise ChainEmissionReceiptUnavailable(
+                        "subnet ownership changed during distribution block"
+                    )
+                excluded = {*owned, owner_hotkey}
+
+                async def mapping(name: str, at: str) -> list[tuple[Any, Any]]:
+                    result = await substrate.query_map(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=name,
+                        params=[netuid],
+                        block_hash=at,
+                        fully_exhaust=True,
+                    )
+                    return [(k, v) async for k, v in result]
+
+                key_rows = await mapping(_KEYS_STORAGE, parent_hash)
+                hotkeys: dict[int, str] = {}
+                for uid_raw, hotkey in key_rows:
+                    uid = _receipt_uint(uid_raw)
+                    if uid in hotkeys or not isinstance(hotkey, str) or not hotkey:
+                        raise ValueError("invalid UID mapping")
+                    hotkeys[uid] = hotkey
+                if len(set(hotkeys.values())) != len(hotkeys):
+                    raise ValueError("duplicate registered hotkey")
+                reveal_uids: set[int] = set()
+                if allow_initialization_reveals:
+                    from ditto.chain.source_emission_verifier import (
+                        read_source_emission_block,
+                    )
+
+                    source_block = await read_source_emission_block(
+                        substrate, netuid=netuid, block=block
+                    )
+                    if (
+                        source_block.block_hash != block_hash
+                        or source_block.reset_reason
+                        or not source_block.payout_initialization_reveals
+                    ):
+                        raise ChainEmissionReceiptUnavailable(
+                            "initialization reveals are not proven before payout"
+                        )
+                    revealed_hotkeys = {
+                        item.validator_hotkey for item in source_block.updates
+                    }
+                    reveal_uids = {
+                        uid
+                        for uid, hotkey in hotkeys.items()
+                        if hotkey in revealed_hotkeys
+                    }
+                    if len(reveal_uids) != len(source_block.updates):
+                        raise ValueError("incomplete revealed validator mapping")
+
+                raw_weights = await mapping(_WEIGHTS_STORAGE, parent_hash)
+                new_weights = await mapping(_WEIGHTS_STORAGE, block_hash)
+                if raw_weights != new_weights:
+                    # A malformed/empty archive response is not evidence of an
+                    # immutable transition: retain the block for another provider.
+                    for rows in (raw_weights, new_weights):
+                        if not rows or len({uid for uid, _ in rows}) != len(rows):
+                            raise ValueError("incomplete distribution weight matrix")
+                        for uid, vector in rows:
+                            if _receipt_uint(uid) not in hotkeys or not isinstance(
+                                vector, list
+                            ):
+                                raise ValueError("invalid distribution weight matrix")
+                            for pair in vector:
+                                if (
+                                    not isinstance(pair, (list, tuple))
+                                    or len(pair) != 2
+                                ):
+                                    raise ValueError("invalid distribution weight pair")
+                                if (
+                                    _receipt_uint(pair[0]) not in hotkeys
+                                    or _receipt_uint(pair[1]) > 65535
+                                ):
+                                    raise ValueError(
+                                        "invalid distribution weight value"
+                                    )
+                    old_rows, new_rows = dict(raw_weights), dict(new_weights)
+                    if any(
+                        old_rows.get(uid) != new_rows.get(uid)
+                        and uid not in reveal_uids
+                        for uid in old_rows.keys() | new_rows.keys()
+                    ):
+                        raise ChainEmissionReceiptUnavailable(
+                            "weights changed during distribution block"
+                        )
+                if reveal_uids:
+                    raw_weights = new_weights
+                updates = await read("LastUpdate", parent_hash, [netuid])
+                new_updates = await read("LastUpdate", block_hash, [netuid])
+                if any(
+                    not isinstance(values, list)
+                    or len(values) != len(hotkeys)
+                    or any(
+                        isinstance(v, bool) or not isinstance(v, int) or v < 0
+                        for v in values
+                    )
+                    for values in (updates, new_updates)
+                ):
+                    raise ValueError("invalid validator update arrays")
+                if any(
+                    old != new and uid not in reveal_uids
+                    for uid, (old, new) in enumerate(
+                        zip(updates, new_updates, strict=True)
+                    )
+                ):
+                    raise ChainEmissionReceiptUnavailable(
+                        "weight updates changed during distribution block"
+                    )
+                if reveal_uids:
+                    updates = new_updates
+                events = _unwrap_substrate_value(
+                    await substrate.query(
+                        module=_SYSTEM_MODULE,
+                        storage_function="Events",
+                        block_hash=block_hash,
+                    )
+                )
+                if not isinstance(events, list) or any(
+                    not isinstance(e, dict) for e in events
+                ):
+                    raise ValueError("invalid emission events")
+                amounts = None
+                for event in events:
+                    if (
+                        event.get("module_id") != _SUBTENSOR_MODULE
+                        or event.get("event_id") != "IncentiveAlphaEmittedToMiners"
+                    ):
+                        continue
+                    payload = event.get("event")
+                    attrs = (
+                        payload.get("attributes") if isinstance(payload, dict) else None
+                    )
+                    if not isinstance(attrs, dict) or set(attrs) != {
+                        "netuid",
+                        "emissions",
+                    }:
+                        raise ValueError("unsupported miner emission event schema")
+                    if _receipt_uint(attrs["netuid"]) != netuid:
+                        continue
+                    if amounts is not None or event.get("phase") != "Initialization":
+                        raise ValueError("ambiguous miner emission event")
+                    amounts = attrs["emissions"]
+                if not isinstance(amounts, list) or set(hotkeys) != set(
+                    range(len(amounts))
+                ):
+                    raise ValueError("missing emission event or incomplete UID mapping")
+                earnings = tuple(
+                    ChainMinerEarning(uid, hotkeys[uid], _receipt_uint(amount))
+                    for uid, amount in enumerate(amounts)
+                    if _receipt_uint(amount) > 0 and hotkeys[uid] not in excluded
+                )
+                vectors: list[ChainWeightVector] = []
+                last_updates: list[tuple[int, int]] = []
+                timestamps: list[tuple[int, int]] = []
+                timestamp_cache: dict[int, int] = {}
+                seen: set[int] = set()
+                for uid_raw, raw_vector in raw_weights:
+                    uid = _receipt_uint(uid_raw)
+                    if (
+                        uid in seen
+                        or uid not in hotkeys
+                        or not isinstance(raw_vector, list)
+                    ):
+                        raise ValueError("invalid validator matrix")
+                    seen.add(uid)
+                    weights: list[ChainWeight] = []
+                    destinations: set[int] = set()
+                    for item in raw_vector:
+                        if not isinstance(item, (list, tuple)) or len(item) != 2:
+                            raise ValueError("invalid validator weight")
+                        target, value = (_receipt_uint(v) for v in item)
+                        if (
+                            target not in hotkeys
+                            or target in destinations
+                            or value > 65535
+                        ):
+                            raise ValueError("invalid validator weight destination")
+                        destinations.add(target)
+                        if value:
+                            weights.append(ChainWeight(target, hotkeys[target], value))
+                    if not weights:
+                        continue
+                    update = _receipt_uint(updates[uid])
+                    if not (
+                        0 < update < block or update == block and uid in reveal_uids
+                    ):
+                        raise ValueError("invalid validator update block")
+                    vectors.append(ChainWeightVector(uid, hotkeys[uid], tuple(weights)))
+                    last_updates.append((uid, update))
+                    if target_hotkeys is not None and not any(
+                        weight.hotkey in target_hotkeys for weight in weights
+                    ):
+                        continue
+                    if update not in timestamp_cache:
+                        update_hash = await substrate.get_block_hash(update)
+                        timestamp = await self._read_block_timestamp(
+                            substrate, update_hash
+                        )
+                        if timestamp is None and update_hash:
+                            # Old, still-revealed vectors can outlive live-node
+                            # state retention. The existing provider fallback
+                            # bounds each archive request and keeps secrets safe.
+                            timestamp = await self.get_block_timestamp(update_hash)
+                        if timestamp is None or timestamp <= 0:
+                            raise ValueError("missing validator update timestamp")
+                        timestamp_cache[update] = timestamp
+                    timestamps.append((uid, timestamp_cache[update]))
+                timestamp = await self._read_block_timestamp(substrate, block_hash)
+                if (
+                    timestamp is None
+                    or timestamp <= 0
+                    or any(t > timestamp for _, t in timestamps)
+                ):
+                    raise ValueError("invalid distribution timestamp")
+                return ChainMinerEmissionReceipt(
+                    netuid,
+                    block,
+                    str(block_hash),
+                    timestamp,
+                    epoch_index,
+                    previous,
+                    owner_hotkey,
+                    earnings,
+                    tuple(vectors),
+                    tuple(last_updates),
+                    tuple(timestamps),
+                )
+        except ChainEmissionReceiptUnavailable:
+            raise
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_miner_emission_receipt({netuid}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_miner_emission_receipt({netuid}) failed: "
+                f"{self._safe_rpc_error(e)}"
+            ) from e
+
+    async def read_epoch_schedule(self, netuid: int) -> EpochSchedule:
+        """Read the subnet's stateful epoch position at one finalized head.
+
+        Five storage reads at one block hash -- ``LastEpochBlock``,
+        ``PendingEpochAt``, ``SubnetEpochIndex``, ``Tempo`` and
+        ``BlocksSinceLastStep`` -- plus the block's own timestamp. This is the
+        identity the epoch-pinned ledger keys on. SDK startup metadata and all
+        six storage queries share one request-local finalized hash; another
+        invocation obtains a new finalized head. Unlike :meth:`_read_epoch`
+        it fails loud: a pin taken against a half-read schedule would be worse
+        than no pin. It deliberately does not read the timelocked commit map
+        (``read_weight_diagnostics`` does; that is a diagnostic, not a clock).
+
+        Every ledger response is gated on this read, so it tries the archive
+        providers before the public live entrypoint, which refuses websocket
+        handshakes with HTTP 429 under load. Each provider reads its own
+        finalized head; nothing is mixed across providers.
+        """
+        failures: list[tuple[str, Exception]] = []
+        urls = tuple(
+            dict.fromkeys((*self._historical_substrate_urls(), self._substrate_url()))
+        )
+        for url in urls:
+            provider = urlsplit(url).hostname or "configured archive"
+            try:
+                async with asyncio.timeout(self._config.archive_rpc_timeout_seconds):
+                    return await self._read_epoch_schedule_from(url, netuid)
+            except Exception as error:
+                failures.append((provider, error))
+                logger.warning(
+                    "epoch schedule read failed provider=%s error=%s",
+                    provider,
+                    self._safe_rpc_error(error),
+                )
+        summary = "; ".join(
+            f"{provider}: {self._safe_rpc_error(error)}" for provider, error in failures
+        )
+        if all(
+            isinstance(error, (TimeoutError, ChainTimeoutError))
+            for _, error in failures
+        ):
+            raise ChainTimeoutError(
+                f"read_epoch_schedule({netuid}) timed out: {summary}"
+            )
+        # One provider's typed refusal (a rejected archive key) still fails over;
+        # only a type every provider agreed on reaches the caller unchanged. Each
+        # provider's failure is already logged above.
+        last = failures[-1][1]
+        if isinstance(last, ChainError) and all(
+            type(error) is type(last) for _, error in failures
+        ):
+            raise last
+        raise ChainConnectionError(f"read_epoch_schedule({netuid}) failed: {summary}")
+
+    async def _read_epoch_schedule_from(self, url: str, netuid: int) -> EpochSchedule:
+        """Read one provider's epoch schedule at its own finalized head."""
+        from ditto.chain.weight_diagnostics import predict_next_epoch_block
+
+        async with self._new_treasury_substrate(url=url) as substrate:
+            block_hash = await substrate.get_chain_finalised_head()
+            header = await substrate.get_block_header(block_hash=block_hash)
+            block = _block_number_from_header(header)
+
+            async def read(name: str) -> int | None:
+                return _as_int(
+                    await substrate.query(
+                        module=_SUBTENSOR_MODULE,
+                        storage_function=name,
+                        params=[netuid],
+                        block_hash=block_hash,
+                    )
+                )
+
+            last_epoch, pending_at, index, tempo, since = await asyncio.gather(
+                read(_LAST_EPOCH_BLOCK_STORAGE),
+                read(_PENDING_EPOCH_AT_STORAGE),
+                read(_SUBNET_EPOCH_INDEX_STORAGE),
+                read(_TEMPO_STORAGE),
+                read(_BLOCKS_SINCE_STEP_STORAGE),
+            )
+            block_timestamp = await self._read_block_timestamp(substrate, block_hash)
+        if (
+            last_epoch is None
+            or pending_at is None
+            or index is None
+            or tempo is None
+            or since is None
+            or not tempo
+            or last_epoch > block
+        ):
+            raise ChainConnectionError(
+                f"epoch schedule for netuid={netuid} is unusable "
+                f"(last_epoch={last_epoch} pending={pending_at} index={index} "
+                f"tempo={tempo} since={since} block={block})"
+            )
+        return EpochSchedule(
+            netuid=netuid,
+            subnet_epoch_index=index,
+            last_epoch_block=last_epoch,
+            pending_epoch_at=pending_at,
+            tempo=tempo,
+            blocks_since_last_step=since,
+            block=block,
+            block_hash=str(block_hash),
+            block_timestamp=block_timestamp,
+            next_epoch_block=predict_next_epoch_block(
+                last_epoch_block=last_epoch,
+                pending_epoch_at=pending_at,
+                tempo=tempo,
+                blocks_since_last_step=since,
+                current_block=block,
+            ),
         )
 
     async def _read_epoch(
@@ -820,6 +1699,21 @@ class ChainClient:
             return _LOCAL_WS_URL
         return network
 
+    def _live_substrate_urls(self) -> tuple[str, ...]:
+        """Return the paid provider first, then the network's live entrypoint.
+
+        The public Finney entrypoint refuses websocket handshakes with HTTP 429
+        under load, so every live read prefers the configured paid node and
+        keeps the entrypoint only as a fallback. ``subtensor_network`` stays
+        the network identity; this chooses transport only.
+        """
+        urls: list[str] = []
+        configured_url = self._configured_archive_url()
+        if configured_url:
+            urls.append(configured_url)
+        urls.append(self._substrate_url())
+        return tuple(dict.fromkeys(urls))
+
     def _configured_archive_url(self) -> str | None:
         """Return the configured provider URL with its credential attached."""
         url = self._config.archive_rpc_url
@@ -996,3 +1890,11 @@ def _as_int(result: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _receipt_uint(value: Any) -> int:
+    """Reject lossy/coerced evidence: SCALE integer storage must decode as int."""
+    value = _unwrap_substrate_value(value)
+    if type(value) is not int or value < 0:
+        raise ValueError("invalid unsigned emission evidence integer")
+    return value

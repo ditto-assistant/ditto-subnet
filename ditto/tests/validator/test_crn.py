@@ -15,7 +15,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
-from ditto.validator.crn import confirmation_seeds, crn_seed
+import pytest
+
+from ditto.validator.crn import (
+    CRN_BLOCK_BINDING_MIN_BENCH_VERSION,
+    confirmation_seeds,
+    crn_block_binding_active,
+    crn_seed,
+)
 from ditto.validator.worker import ValidatorWorker
 
 _INT63_MAX = (1 << 63) - 1
@@ -159,3 +166,84 @@ class TestRescoreSweepUsesCommonSeed:
         assert seed_sets[0] == tuple(expected)
         assert len(set(expected)) == 3
         assert expected[0] == crn_seed([str(champ), str(r1)], version=9)
+
+
+# Known vectors. The legacy (unbound) values were captured from the derivation
+# BEFORE block binding landed and must never move: they are the seed families
+# every v<=12 reign was confirmed on. The bound values pin the v13+ encoding so
+# the platform mirror (apps/platform/ditto/tests/api_server/test_crn.py carries
+# the identical table) cannot drift from this file.
+_CHAMPION = "550e8400-e29b-41d4-a716-446655440000"
+_BLOCK_HASH = "0x" + "ab" * 32
+_LEGACY_VECTORS = {
+    (("a", "b"), 3, 0): 8501849424598278624,
+    (("a", "b"), 3, 2): 5718795657813926813,
+    (("",), 0, 0): 2921998849593980123,
+    ((_CHAMPION,), 12, 0): 7629001111604106833,
+    ((_CHAMPION,), 12, 1): 5791690032916641678,
+    ((_CHAMPION,), 12, 2): 2218791399408279363,
+    ((_CHAMPION,), 13, 0): 3147062871295850865,
+}
+_BOUND_VECTORS = {
+    ((_CHAMPION,), 13, 0): 89674146298908029,
+    ((_CHAMPION,), 13, 1): 13997399428938499,
+    ((_CHAMPION,), 13, 2): 822610508492091013,
+    (("a", "b"), 3, 0): 1945832075495936339,
+}
+
+
+class TestBlockBinding:
+    def test_legacy_vectors_are_byte_identical(self) -> None:
+        for (ids, version, k), expected in _LEGACY_VECTORS.items():
+            assert crn_seed(ids, version=version, k=k) == expected
+            # ``block_hash=None`` IS the legacy encoding, not a near miss of it.
+            assert crn_seed(ids, version=version, k=k, block_hash=None) == expected
+
+    def test_bound_vectors(self) -> None:
+        for (ids, version, k), expected in _BOUND_VECTORS.items():
+            assert (
+                crn_seed(ids, version=version, k=k, block_hash=_BLOCK_HASH) == expected
+            )
+
+    def test_bound_seed_differs_from_legacy_seed(self) -> None:
+        for (ids, version, k), expected in _BOUND_VECTORS.items():
+            assert crn_seed(ids, version=version, k=k) != expected
+
+    def test_block_hash_is_normalized(self) -> None:
+        bound = crn_seed([_CHAMPION], version=13, block_hash=_BLOCK_HASH)
+        assert crn_seed([_CHAMPION], version=13, block_hash="AB" * 32) == bound
+        assert (
+            crn_seed([_CHAMPION], version=13, block_hash="  0xAB" + "ab" * 31) == bound
+        )
+
+    def test_different_block_rotates_the_family(self) -> None:
+        assert crn_seed([_CHAMPION], version=13, block_hash="ab" * 32) != crn_seed(
+            [_CHAMPION], version=13, block_hash="cd" * 32
+        )
+
+    def test_empty_block_hash_is_refused(self) -> None:
+        with pytest.raises(ValueError):
+            crn_seed([_CHAMPION], version=13, block_hash="0x")
+
+    def test_bound_seeds_stay_json_clean_int63(self) -> None:
+        for s in confirmation_seeds(
+            [_CHAMPION], version=13, count=15, block_hash=_BLOCK_HASH
+        ):
+            assert isinstance(s, int)
+            assert 0 <= s <= _INT63_MAX
+
+    def test_confirmation_seeds_thread_the_binding(self) -> None:
+        bound = confirmation_seeds(
+            [_CHAMPION], version=13, count=3, block_hash=_BLOCK_HASH
+        )
+        assert bound == [_BOUND_VECTORS[((_CHAMPION,), 13, k)] for k in range(3)]
+        assert confirmation_seeds([_CHAMPION], version=13, count=3) == [
+            crn_seed([_CHAMPION], version=13, k=k) for k in range(3)
+        ]
+
+    def test_binding_floor_is_a_floor_not_an_enumeration(self) -> None:
+        assert CRN_BLOCK_BINDING_MIN_BENCH_VERSION == 13
+        assert not crn_block_binding_active(12)
+        assert crn_block_binding_active(13)
+        assert crn_block_binding_active(14)
+        assert crn_block_binding_active(99)

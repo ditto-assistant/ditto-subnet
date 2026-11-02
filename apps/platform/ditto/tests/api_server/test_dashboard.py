@@ -102,7 +102,7 @@ def fake_dist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (assets / "index-Ab12Cd34.js").write_text(
         'console.log("ditto dashboard bundle");\n', encoding="utf-8"
     )
-    (assets / "paperditto-512.png").write_bytes(_FAKE_PNG)
+    (assets / "dittobench-og.png").write_bytes(_FAKE_PNG)
     monkeypatch.setattr(factory, "_DASHBOARD_DIST", dist)
     monkeypatch.setattr(factory, "_DASHBOARD_FILE", dist / "index.html")
     monkeypatch.setattr(factory, "_DASHBOARD_ASSETS", assets)
@@ -127,6 +127,40 @@ async def _get(app: FastAPI, path: str) -> httpx.Response:
 
 @pytest.mark.usefixtures("fake_dist")
 class TestDashboard:
+    async def test_gamma_direct_load_and_refresh_serve_dashboard(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        transport = ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            first = await client.get("/gamma")
+            refreshed = await client.get("/gamma")
+            conditional = await client.get(
+                "/gamma", headers={"If-None-Match": first.headers.get("etag", "")}
+            )
+        for response in (first, refreshed):
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith("text/html")
+            assert '<div id="root">' in response.text
+        assert conditional.status_code == 304
+        assert conditional.content == b""
+
+    async def test_a_bounty_deep_link_serves_the_dashboard(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        response = await _get(
+            app, "/bounties?bounty=00000000-0000-4000-8000-000000000000"
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert '<div id="root">' in response.text
+
+    async def test_generators_direct_load_serves_the_dashboard(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        response = await _get(app, "/generators")
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/html")
+        assert '<div id="root">' in response.text
+
     async def test_served_at_root_with_injected_wandb_url(self) -> None:
         url = "https://wandb.ai/ditto/ditto-sn118"
         app = create_api_server(
@@ -277,7 +311,7 @@ class TestDashboardAssets:
         # public/ passthrough files (the og:image PNG) keep their names, so
         # they only get a day.
         app = create_api_server(make_api_server_config(dashboard_enabled=True))
-        resp = await _get(app, "/assets/paperditto-512.png")
+        resp = await _get(app, "/assets/dittobench-og.png")
         assert resp.status_code == 200
         assert resp.headers["content-type"] == "image/png"
         assert resp.headers["Cache-Control"] == "public, max-age=86400"

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -20,7 +20,7 @@ from uuid import UUID, uuid4
 import bittensor
 import httpx
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
@@ -30,9 +30,13 @@ from sqlalchemy.ext.asyncio import (
 import ditto.api_server.endpoints.scoring as scoring_mod
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
+from ditto.api_models.validator import CrownGateMarker, LedgerResponse
+from ditto.api_server import validator_request_outcomes
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_VALIDATOR_AUTH
-from ditto.chain.models import NeuronInfo
+from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
+from ditto.chain.errors import ChainConnectionError
+from ditto.chain.models import EpochSchedule, NeuronInfo
 from ditto.db.models import (
     Agent,
     BenchmarkRollout,
@@ -46,10 +50,15 @@ from ditto.db.queries.confirmation_scores import (
 )
 from ditto.db.queries.score_ranking import EfficiencyFactorRequesterNotReady
 from ditto.db.queries.scores import upsert_score
+from ditto.db.queries.validator_auth import VALIDATOR_NONCE_EXPIRY_MARGIN
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
 _BOB = bittensor.Keypair.create_from_uri("//Bob")
 _VALIDATOR_HOTKEY = _KEYPAIR.ss58_address
+# SS58-shaped witnesses that sort below and above every fixture hotkey, so the
+# fixture validator stays the lower-median row of a full quorum.
+_QUORUM_WITNESSES = ("5" + "1" * 47, "5" + "z" * 47)
+
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 _AUTH_HEADER = {"X-Validator-Hotkey": _VALIDATOR_HOTKEY}
@@ -60,6 +69,60 @@ _AUTH_HEADER = {"X-Validator-Hotkey": _VALIDATOR_HOTKEY}
 # and the activated rollout that makes it the answer to "which version is
 # authoritative" is planted below.
 _BENCH_VERSION = 7
+
+
+@pytest.mark.asyncio
+async def test_protocol_28_requester_cannot_read_capped_pin() -> None:
+    now = datetime.now(UTC)
+    heartbeat_get = AsyncMock(
+        return_value=SimpleNamespace(protocol_version=28, seen_at=now)
+    )
+    session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
+    ledger = LedgerResponse(entries=[], count=0, statistical_band_mode="capped")
+
+    with pytest.raises(HTTPException) as rejected:
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+    assert rejected.value.status_code == 428
+
+    heartbeat_get.return_value.protocol_version = 29
+    assert (
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+        is ledger
+    )
+
+
+@pytest.mark.asyncio
+async def test_protocol_33_requester_cannot_read_gated_pin() -> None:
+    now = datetime.now(UTC)
+    heartbeat_get = AsyncMock(
+        return_value=SimpleNamespace(protocol_version=33, seen_at=now)
+    )
+    session = cast(AsyncSession, SimpleNamespace(get=heartbeat_get))
+    ledger = LedgerResponse(
+        entries=[],
+        count=0,
+        crown_gate=CrownGateMarker(
+            min_dethrone_confirmations=3, champion_standing_rank=3
+        ),
+    )
+
+    with pytest.raises(HTTPException) as rejected:
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+    assert rejected.value.status_code == 428
+
+    heartbeat_get.return_value.protocol_version = 34
+    assert (
+        await scoring_mod._require_statistical_cap_requester(
+            session, _VALIDATOR_HOTKEY, ledger, now=now
+        )
+        is ledger
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -183,25 +246,268 @@ def test_v9_score_proof_publishes_signature_bound_base_evidence_digest() -> None
     assert proof.base_evidence_sha256 == "ef" * 32
 
 
-def test_v8_score_proof_omits_v9_base_evidence_field() -> None:
-    proof = scoring_mod._score_proof(
-        cast(
-            Score,
-            SimpleNamespace(
-                validator_hotkey=_VALIDATOR_HOTKEY,
-                run_id="run-v8",
-                composite=0.75,
-                seed=42,
-                bench_version=8,
-                signature="ab" * 64,
-                details={
-                    "ticket_deadline": "2026-08-08T12:00:00+00:00",
-                    "transcript_sha256": "cd" * 32,
-                },
-            ),
-        )
+async def test_failed_registration_read_is_not_an_empty_metagraph() -> None:
+    hotkey = "5" + "A" * 47
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(
+            get_recent_neurons=AsyncMock(side_effect=RuntimeError("rpc down"))
+        ),
     )
-    assert proof.base_evidence_sha256 is None
+
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert await scoring_mod._registered_miner_hotkeys(SimpleNamespace()) is None
+
+    state.chain.get_recent_neurons = AsyncMock(
+        return_value=[SimpleNamespace(hotkey=hotkey), SimpleNamespace(hotkey="")]
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) == {hotkey}
+
+    state.chain.get_recent_neurons = AsyncMock(return_value=[])
+    assert await scoring_mod._registered_miner_hotkeys(state) == set()
+
+
+async def test_boolean_netuid_does_not_read_another_subnet() -> None:
+    called = False
+
+    async def _read(_netuid: object) -> list[object]:
+        nonlocal called
+        called = True
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=True)),
+        chain=SimpleNamespace(get_recent_neurons=_read),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+    assert called is False
+
+
+async def test_stalled_registration_read_stays_score_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scoring_mod, "_REGISTRATION_LOOKUP_TIMEOUT_SECONDS", 0.05)
+
+    async def _hang(_netuid: int) -> list[object]:
+        await asyncio.Event().wait()
+        return []
+
+    state = SimpleNamespace(
+        config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+        chain=SimpleNamespace(get_recent_neurons=_hang),
+    )
+    assert await scoring_mod._registered_miner_hotkeys(state) is None
+
+
+async def test_withheld_pool_keeps_the_registered_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registered_hotkey = "5" + "B" * 47
+    retired = SimpleNamespace(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    registered = SimpleNamespace(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        eligible=True,
+        v9_confirmation=None,
+    )
+    chosen: list[list[Any]] = []
+    real = scoring_mod.dedupe_owner_rows
+
+    def _observe(rows: Any, **kwargs: Any) -> list[Any]:
+        picked = real(rows, **kwargs)
+        chosen.append(picked)
+        return []
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    monkeypatch.setattr(scoring_mod, "dedupe_owner_rows", _observe)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _collapse(rows: list[Any]) -> None:
+        await scoring_mod._ledger_entries(
+            cast(Any, MagicMock()),
+            rows,
+            canonical_version=9,
+            continual_mean_active=False,
+            efficiency_config=cast(Any, SimpleNamespace()),
+            now=datetime(2026, 6, 1, tzinfo=UTC),
+            requesting_validator_hotkey=None,
+            emit=lambda _row: True,
+            registered_hotkeys={registered_hotkey},
+        )
+
+    await _collapse([retired, registered])
+    assert [row.agent_id for row in chosen[0]] == [registered.agent_id]
+
+    chosen.clear()
+    await _collapse([retired])
+    assert chosen[0] == []
+
+
+async def test_pin_passes_registration_into_the_withheld_pool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ditto.api_models.burn_settings import BurnSettings
+    from ditto.api_models.emission_eligibility import EmissionEligibilitySettings
+    from ditto.api_server.config import EfficiencyBonusConfig
+    from ditto.api_server.emission_eligibility import ResolvedEligibilityPolicy
+
+    @dataclass(frozen=True)
+    class _Row:
+        agent_id: UUID
+        miner_hotkey: str
+        first_seen: datetime
+        composite: float
+        bench_version: int
+        emission_owner_root: str
+        crown_first_seen: datetime
+        n: int = 20
+        sha256: str = "ab" * 32
+        size_bytes: int = 1
+        run_id: str = "run"
+        seed: int = 1
+        validator_hotkey: str = "5" + "V" * 47
+        signature: str | None = None
+        status: AgentStatus = AgentStatus.SCORED
+        eligible: bool = True
+        v9_confirmation: dict[str, int] | None = None
+        details: dict[str, object] | None = None
+
+        @property
+        def fold_first_seen(self) -> datetime:
+            return self.crown_first_seen or self.first_seen
+
+    registered_hotkey = "5" + "B" * 47
+    retired = _Row(
+        agent_id=UUID("1" * 32),
+        miner_hotkey="5" + "A" * 47,
+        first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+        composite=0.95,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        crown_first_seen=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    registered = _Row(
+        agent_id=UUID("2" * 32),
+        miner_hotkey=registered_hotkey,
+        first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+        composite=0.80,
+        bench_version=9,
+        emission_owner_root="coldkey:owner-a",
+        crown_first_seen=datetime(2026, 1, 4, tzinfo=UTC),
+    )
+
+    async def _ledger(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return [retired, registered]
+
+    async def _empty(*_args: Any, **_kwargs: Any) -> dict[Any, Any]:
+        return {}
+
+    async def _false(*_args: Any, **_kwargs: Any) -> bool:
+        return False
+
+    async def _none(*_args: Any, **_kwargs: Any) -> list[Any]:
+        return []
+
+    async def _no_adjustments(
+        *_args: Any, **_kwargs: Any
+    ) -> tuple[dict[Any, Any], dict[Any, Any], dict[Any, Any]]:
+        return {}, {}, {}
+
+    class _Gate:
+        window_start = datetime(2026, 6, 1, tzinfo=UTC)
+        records: dict[UUID, Any] = {}
+        withheld: tuple[object, ...] = ()
+
+        def withholds(self, _agent_id: UUID) -> bool:
+            return True
+
+        def filter_rows(self, rows: list[Any]) -> list[Any]:
+            del rows
+            return []
+
+    def _evaluate(*_args: Any, **_kwargs: Any) -> _Gate:
+        return _Gate()
+
+    monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _ledger)
+    monkeypatch.setattr(scoring_mod, "v9_confirmation_enforcement_active", _false)
+    monkeypatch.setattr(scoring_mod, "load_review_postures", _empty)
+    monkeypatch.setattr(scoring_mod, "evaluate_ledger", _evaluate)
+    monkeypatch.setattr(scoring_mod, "list_reign_seed_anchors", _none)
+    monkeypatch.setattr(scoring_mod, "quorum_composites", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_history_by_agent", _empty)
+    monkeypatch.setattr(scoring_mod, "confirmation_composites_by_seed", _empty)
+    monkeypatch.setattr(scoring_mod, "quorum_ledger_proof_rows", _empty)
+    monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", _no_adjustments)
+
+    async def _rehearsal(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    monkeypatch.setattr(scoring_mod, "_record_eligibility_rehearsal", _rehearsal)
+
+    session = MagicMock()
+    session.in_transaction.return_value = False
+    now = datetime(2026, 6, 1, tzinfo=UTC)
+    snapshot = await scoring_mod.materialize_ledger_snapshot(
+        SimpleNamespace(
+            config=SimpleNamespace(chain=SimpleNamespace(netuid=118)),
+            chain=SimpleNamespace(
+                get_recent_neurons=AsyncMock(
+                    return_value=[SimpleNamespace(hotkey=registered_hotkey)]
+                )
+            ),
+        ),
+        cast(Any, session),
+        context=scoring_mod._LedgerContext(
+            policy=scoring_mod._LedgerPolicy(
+                efficiency=EfficiencyBonusConfig(enabled=False),
+                continual_retest=ContinualRetestSettings(
+                    crown_incumbent_mode="fleet_ready"
+                ),
+                burn=BurnSettings(),
+                reward_eligibility=ResolvedEligibilityPolicy(
+                    settings=EmissionEligibilitySettings(enforcement="enforce"),
+                ),
+            ),
+            active_bench_version=9,
+            continual_fleet_ready=False,
+            tie_weighting_fleet_ready=False,
+            factor_fleet_ready=False,
+            crown_incumbent_fleet_ready=True,
+            reward_eligibility_fleet_ready=True,
+        ),
+        now=now,
+        requesting_validator_hotkey=None,
+    )
+
+    assert snapshot.entries == []
+    assert snapshot.withheld_entries is not None
+    assert [entry.agent_id for entry in snapshot.withheld_entries] == [
+        registered.agent_id
+    ]
 
 
 async def _seed_scored(
@@ -225,74 +531,30 @@ async def _seed_scored(
         )
         s.add(agent)
         await s.flush()
-        await upsert_score(
-            s,
-            agent_id=agent.agent_id,
-            validator_hotkey=_VALIDATOR_HOTKEY,
-            bench_version=_BENCH_VERSION,
-            run_id="run_1",
-            seed=42,
-            composite=composite,
-            tool_mean=composite,
-            memory_mean=composite,
-            median_ms=500,
-            n=n,
-            generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
-            signature="ab" * 64,
-            details={
-                "ticket_deadline": "2026-06-08T13:00:00+00:00",
-                "transcript_sha256": "cd" * 32,
-            },
-        )
+        # A full quorum: authority ledger reads omit sub-quorum rows.
+        for quorum_hotkey in (_VALIDATOR_HOTKEY, *_QUORUM_WITNESSES):
+            await upsert_score(
+                s,
+                agent_id=agent.agent_id,
+                validator_hotkey=quorum_hotkey,
+                bench_version=_BENCH_VERSION,
+                run_id="run_1",
+                seed=42,
+                composite=composite,
+                tool_mean=composite,
+                memory_mean=composite,
+                median_ms=500,
+                n=n,
+                generated_at=datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC),
+                signature="ab" * 64,
+                details={
+                    "ticket_deadline": "2026-06-08T13:00:00+00:00",
+                    "transcript_sha256": "cd" * 32,
+                },
+            )
 
 
 class TestScoringLedger:
-    async def test_first_seen_on_the_wire_is_the_lineage_anchor(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """The one field the champion fold anchors on must be the lineage's.
-
-        Every validator folds this payload byte for byte, so this is where the
-        rule actually takes effect: a miner that resubmits while tied at the top
-        keeps the arrival time it earned, and does not hand its rival the
-        incumbency by shipping an improvement. The owner-family resolution behind
-        it is covered in ``tests/db/queries/test_scores.py``.
-
-        0.8999 sits inside the crown-anchor improvement floor (the dethrone
-        margin). A 0.010 jump is outside that floor and must not keep this
-        clock -- that is the planted-low-score case.
-        """
-        from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
-
-        arrived = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
-        resubmitted = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
-        await _seed_scored(
-            session_maker,
-            miner=_MINER,
-            composite=0.8999,
-            created_at=arrived,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        await _seed_scored(
-            session_maker,
-            miner=_MINER,
-            composite=0.900,
-            created_at=resubmitted,
-            n=MIN_ELIGIBLE_CASES,
-        )
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-
-        assert resp.status_code == 200
-        (entry,) = resp.json()["entries"]
-        assert entry["composite"] == pytest.approx(0.900)
-        assert datetime.fromisoformat(entry["first_seen"]) == arrived
-
     async def test_a_sub_dethrone_improvement_keeps_the_lineage_anchor_on_the_wire(
         self,
         app: FastAPI,
@@ -403,9 +665,10 @@ class TestScoringLedger:
         assert body["entries"][0]["bench_version"] == _BENCH_VERSION
         # No fleet capability evidence means the additive contract fails closed.
         assert body["entries"][0]["continual_aggregate_method"] is None
+        # Every quorum receipt rides the wire, ordered like the lower median.
         assert body["entries"][0]["score_proofs"] == [
             {
-                "validator_hotkey": _VALIDATOR_HOTKEY,
+                "validator_hotkey": hotkey,
                 "run_id": "run_1",
                 "composite": 0.9,
                 "seed": 42,
@@ -414,12 +677,17 @@ class TestScoringLedger:
                 "transcript_sha256": "cd" * 32,
                 "signature": "ab" * 64,
             }
+            for hotkey in (
+                _QUORUM_WITNESSES[0],
+                _VALIDATOR_HOTKEY,
+                _QUORUM_WITNESSES[1],
+            )
         ]
         # n rides the wire so the validator's eligibility floor can bite (a run
         # below MIN_ELIGIBLE_CASES is dropped from the fold rather than shadowing
         # a real full run.
         assert body["entries"][0]["n"] == 20
-        assert len(body["entries"][0]["score_proofs"]) == 1
+        assert body["entries"][0]["validator_hotkey"] == _VALIDATOR_HOTKEY
 
     async def test_absent_heartbeat_does_not_block_ledger_without_factor_candidates(
         self,
@@ -466,6 +734,8 @@ class TestScoringLedger:
             )
         )
         monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
+        tally = validator_request_outcomes.RequestOutcomeTally()
+        monkeypatch.setattr(validator_request_outcomes, "REQUEST_OUTCOMES", tally)
         _install_db(app, session_maker)
         _install_chain(app)
 
@@ -476,45 +746,10 @@ class TestScoringLedger:
             "a fresh validator heartbeat is required before serving "
             "bounded efficiency factors"
         )
-        assert resolver.await_args is not None
-        assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
-            _VALIDATOR_HOTKEY
-        )
-
-    async def test_fresh_protocol_18_requester_receives_factor_neutral_ledger(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
-        now = datetime.now(UTC)
-        async with session_maker() as session, session.begin():
-            session.add(
-                ValidatorHeartbeat(
-                    validator_hotkey=_VALIDATOR_HOTKEY,
-                    software_version="0.28.0",
-                    protocol_version=18,
-                    code_digest="ab" * 32,
-                    state="idle",
-                    reported_at=now,
-                    seen_at=now,
-                    signature="cd" * 64,
-                )
-            )
-
-        # The shared resolver owns requester/global readiness. Its neutral result
-        # represents the broad fleet minimum seeing this fresh protocol-18 row.
-        resolver = AsyncMock(return_value=({}, {}, {}))
-        monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
-        _install_db(app, session_maker)
-        _install_chain(app)
-
-        response = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-
-        assert response.status_code == 200
-        assert response.json()["entries"][0]["efficiency_factor"] is None
+        # Backroom sees why this validator could not fold weights.
+        [row] = tally.snapshot(_VALIDATOR_HOTKEY)["validators"]
+        assert (row["lane"], row["last_outcome"]) == ("scoring_ledger", "http_428")
+        assert "fresh validator heartbeat" in row["outcomes"][0]["last_detail"]
         assert resolver.await_args is not None
         assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
             _VALIDATOR_HOTKEY
@@ -637,24 +872,124 @@ class TestScoringLedger:
         assert ready.status_code == 200
         assert ready.json()["tie_weighting_mode"] == "pool"
 
-    async def test_empty_ledger(
+    async def test_statistical_band_marker_requires_operator_and_protocol_29(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=29,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
         _install_db(app, session_maker)
         _install_chain(app)
-        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["entries"] == []
-        assert body["count"] == 0
-        assert body["active_bench_version"] == _BENCH_VERSION
-        # A fresh read is never stale.
-        assert body["stale"] is False
-        assert body["age_seconds"] == 0
-        assert body["generated_at"] is not None
+        app.state.session_maker = session_maker
+
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json().get("statistical_band_mode") is None
+
+        settings = ContinualRetestSettings(
+            statistical_band_mode="fleet_ready"
+        ).model_dump(mode="json")
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="prepare statistical band cap",
+                    actor="operator@example.com",
+                )
+            )
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 28
+        app.state.continual_retest_settings.invalidate()
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("statistical_band_mode") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 29
+        app.state.continual_retest_settings.invalidate()
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["statistical_band_mode"] == "capped"
+
+    async def test_crown_gate_requires_operator_and_protocol_34(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A v33 weight setter would walk the crown ungated: never serve it then."""
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.414.0",
+                    protocol_version=33,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=ContinualRetestSettings(
+                        crown_gate_mode="fleet_ready"
+                    ).model_dump(mode="json"),
+                    checksum="ab" * 32,
+                    reason="gate the crown on shared seeds",
+                    actor="operator@example.com",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("crown_gate") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 34
+        app.state.continual_retest_settings.invalidate()
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["crown_gate"] == {
+            "min_dethrone_confirmations": 3,
+            "champion_standing_rank": 3,
+        }
 
     async def test_missing_auth_returns_401(
         self,
@@ -707,6 +1042,49 @@ class TestScoringLedger:
         replay = await client.get("/api/v1/scoring/scores", headers=headers)
         assert first.status_code == 200
         assert replay.status_code == 409
+
+    async def test_future_dated_ledger_nonce_survives_the_janitor(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # A stamp at the future edge stays acceptable until requested_at +
+        # MAX_AGE. Sweep just after a wrongly anchored expiry (receipt +
+        # MAX_AGE + margin). That deletes a nonce stored from ``now`` and
+        # leaves one stored from ``requested_at``. The replay is still inside
+        # the signature window, so only the surviving row answers 409.
+        receipt = datetime(2026, 10, 16, 12, tzinfo=UTC)
+        clock = {"now": receipt}
+
+        class _Clock(datetime):
+            @classmethod
+            def now(cls, _tz: object = None) -> _Clock:
+                return cls.fromtimestamp(clock["now"].timestamp(), UTC)
+
+        monkeypatch.setattr(scoring_mod, "datetime", _Clock)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        requested_at = receipt + scoring_mod._LEDGER_REQUEST_MAX_AGE
+        headers = _ledger_headers(requested_at=requested_at)
+
+        first = await client.get("/api/v1/scoring/scores", headers=headers)
+        assert first.status_code == 200, first.text
+
+        clock["now"] = (
+            receipt
+            + scoring_mod._LEDGER_REQUEST_MAX_AGE
+            + VALIDATOR_NONCE_EXPIRY_MARGIN
+            + timedelta(seconds=1)
+        )
+        deleted = await ValidatorNonceJanitor(session_maker=session_maker).sweep(
+            now=clock["now"]
+        )
+        assert deleted == 0
+        replay = await client.get("/api/v1/scoring/scores", headers=headers)
+        assert replay.status_code == 409
+        assert "already been used" in replay.json()["message"]
 
     # The offset, not the timestamp. Parametrize arguments are evaluated once
     # at collection time, so a literal `datetime.now(UTC) + timedelta(minutes=3)`
@@ -764,6 +1142,288 @@ class TestScoringLedger:
         resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert resp.status_code == 401
         assert resp.json()["error_code"] == ERROR_CODE_VALIDATOR_AUTH
+
+
+def _schedule(epoch_index: int, *, block: int) -> EpochSchedule:
+    """SN118's real shape: tempo 360, boundary two blocks before ``block``."""
+    return EpochSchedule(
+        netuid=118,
+        subnet_epoch_index=epoch_index,
+        last_epoch_block=block - 2,
+        pending_epoch_at=0,
+        tempo=360,
+        blocks_since_last_step=2,
+        block=block,
+        block_hash="0x" + "ab" * 32,
+        block_timestamp=1_789_000_000,
+        next_epoch_block=block - 2 + 360,
+    )
+
+
+def _install_epoch_chain(app: FastAPI, schedule: EpochSchedule | None) -> AsyncMock:
+    """The pin reads the chain through app.state, not the request dependency."""
+    read = (
+        AsyncMock(return_value=schedule)
+        if schedule is not None
+        else AsyncMock(side_effect=ChainConnectionError("archive node down"))
+    )
+    app.state.chain = SimpleNamespace(read_epoch_schedule=read)
+    return read
+
+
+class TestEpochPinnedLedger:
+    """One frozen ledger per chain epoch; every validator gets the same bytes."""
+
+    async def test_two_validators_in_one_epoch_receive_identical_pinned_bytes(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200, first.text
+        body = first.json()
+        assert body["epoch_index"] == 25_028
+        assert body["pinned_block"] == 9_033_471
+        assert body["stale"] is False
+        assert len(body["ledger_digest"]) == 64
+        assert body.get("crown_mode") is None
+        assert "crown_incumbent_agent_id" not in body
+        assert [entry["miner_hotkey"] for entry in body["entries"]] == [_MINER]
+
+        # A ledger change inside the epoch is invisible until the next pin ...
+        await _seed_scored(
+            session_maker,
+            miner="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            composite=0.95,
+        )
+        second = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert second.status_code == 200
+        assert second.json()["entries"] == body["entries"]
+        assert second.json()["ledger_digest"] == body["ledger_digest"]
+        # ... and the cached pin is served without another chain read per call.
+        assert read.await_count == 2  # one schedule read per request, no rebuild
+
+        # The next chain epoch takes a fresh pin that carries the change.
+        read.return_value = _schedule(25_029, block=9_033_831)
+        third = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert third.status_code == 200
+        assert third.json()["epoch_index"] == 25_029
+        assert len(third.json()["entries"]) == 2
+        assert third.json()["ledger_digest"] != body["ledger_digest"]
+
+    async def test_unreadable_chain_serves_the_previous_pin_flagged_stale(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        pinned = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert pinned.status_code == 200 and pinned.json()["epoch_index"] == 25_028
+
+        _install_epoch_chain(app, None)
+        fallback = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert fallback.status_code == 200
+        body = fallback.json()
+        assert body["epoch_index"] == 25_028
+        assert body["stale"] is True
+        assert body["ledger_digest"] == pinned.json()["ledger_digest"]
+        # Every validator gets that same answer, never a live read for some.
+        again = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert again.json()["ledger_digest"] == body["ledger_digest"]
+
+    async def test_no_pin_yet_falls_through_to_the_live_read(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        _install_epoch_chain(app, None)
+        live = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert live.status_code == 200
+        body = live.json()
+        assert "epoch_index" not in body
+        assert "ledger_digest" not in body
+        assert body["stale"] is False
+        assert [entry["miner_hotkey"] for entry in body["entries"]] == [_MINER]
+
+    async def test_live_mode_bypasses_the_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        settings = ContinualRetestSettings(ledger_pin_mode="live").model_dump(
+            mode="json"
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="roll the ledger back to the live read",
+                    actor="operator@example.com",
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        live = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert live.status_code == 200
+        assert "epoch_index" not in live.json()
+        read.assert_not_awaited()
+
+    async def test_policy_flip_lands_at_the_next_pin_not_mid_epoch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        initial = app.state.config.efficiency_bonus
+        resolve = AsyncMock(return_value=initial)
+        monkeypatch.setattr(app.state.efficiency_settings, "resolve", resolve)
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200
+        resolve.return_value = replace(initial, cap=initial.cap + 0.01)
+        same_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert same_epoch.json()["ledger_digest"] == first.json()["ledger_digest"]
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        next_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert next_epoch.json()["epoch_index"] == 25_029
+        # The context stored on the new pin reflects the flipped policy.
+        async with session_maker() as session:
+            from ditto.db.queries.ledger_epochs import get_pin
+
+            pin = await get_pin(session, netuid=118, epoch_index=25_029)
+        assert pin is not None
+        assert pin.champion_agent_id is not None
+
+
+class TestCrownIncumbencyMarker:
+    """The marker rides the pin and is withheld until protocol 27 is fleet-wide."""
+
+    async def _enable(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+        *,
+        protocol_version: int,
+    ) -> None:
+        now = datetime.now(UTC)
+        settings = ContinualRetestSettings(
+            crown_incumbent_mode="fleet_ready"
+        ).model_dump(mode="json")
+        async with session_maker() as session, session.begin():
+            session.add(
+                ContinualRetestSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings=settings,
+                    checksum="ab" * 32,
+                    reason="defend the crown from the served incumbent",
+                    actor="operator@example.com",
+                )
+            )
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.250.0",
+                    protocol_version=protocol_version,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+
+    async def test_marker_requires_protocol_27_fleet_and_a_previous_pin(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        await self._enable(app, session_maker, protocol_version=26)
+        read = _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200, mixed.text
+        assert mixed.json().get("crown_mode") is None
+        assert "crown_incumbent_agent_id" not in mixed.json()
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 27
+        app.state.continual_retest_settings.invalidate()
+        # The pin already taken this epoch stays as frozen: no marker mid-epoch.
+        same_epoch = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert same_epoch.json().get("crown_mode") is None
+
+        read.return_value = _schedule(25_029, block=9_033_831)
+        armed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        body = armed.json()
+        assert body["epoch_index"] == 25_029
+        assert body["crown_mode"] == "incumbent"
+        # The previous pin's champion, resolved into this pool, is the incumbent.
+        assert body["crown_incumbent_agent_id"] == body["entries"][0]["agent_id"]
+
+    async def test_first_pin_under_the_marker_has_no_incumbent_to_serve(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        await self._enable(app, session_maker, protocol_version=27)
+        _install_epoch_chain(app, _schedule(25_028, block=9_033_471))
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        body = first.json()
+        assert body["epoch_index"] == 25_028
+        # Bootstrap: the fleet is ready but no previous pin exists, so the fold
+        # runs the classic walk this epoch. The id is never served alone.
+        assert body["crown_mode"] == "incumbent"
+        assert "crown_incumbent_agent_id" not in body
 
 
 class TestScoringLiveness:
@@ -1202,21 +1862,22 @@ class TestScoringLedgerConfirmationHistory:
                 )
             )
             await s.flush()
-            await upsert_score(
-                s,
-                agent_id=aid,
-                validator_hotkey=_VALIDATOR_HOTKEY,
-                bench_version=_BENCH_VERSION,
-                run_id="run_1",
-                seed=42,
-                composite=0.9,
-                tool_mean=0.9,
-                memory_mean=0.9,
-                median_ms=500,
-                n=20,
-                generated_at=datetime(2026, 6, 8, tzinfo=UTC),
-                signature="ab" * 64,
-            )
+            for quorum_hotkey in (_VALIDATOR_HOTKEY, *_QUORUM_WITNESSES):
+                await upsert_score(
+                    s,
+                    agent_id=aid,
+                    validator_hotkey=quorum_hotkey,
+                    bench_version=_BENCH_VERSION,
+                    run_id="run_1",
+                    seed=42,
+                    composite=0.9,
+                    tool_mean=0.9,
+                    memory_mean=0.9,
+                    median_ms=500,
+                    n=20,
+                    generated_at=datetime(2026, 6, 8, tzinfo=UTC),
+                    signature="ab" * 64,
+                )
             # Two validators on seed 100, one on seed 200, all on the active era.
             await append_confirmation_scores(
                 s,
@@ -1335,3 +1996,421 @@ class TestLedgerBurnShare:
         assert stale.status_code == 200
         assert stale.json()["stale"] is True
         assert stale.json()["burn_share"] == 0.5
+
+
+class TestLedgerConfirmationSeedAnchors:
+    """Bench v13+ pinned reign anchors ride the ledger to the whole fleet.
+
+    Every validator's ``reign_seed_planning`` / ``version_seed_planning`` keys
+    off this field, so a bug here (an unpinned row leaking, the snapshot
+    dropping the tuple) would silently defer every validator-derived lane.
+    """
+
+    @staticmethod
+    async def _seed_anchor(
+        maker: async_sessionmaker[AsyncSession],
+        *,
+        name: str,
+        bench_version: int,
+        ready_block: int,
+        block_hash: str | None,
+    ) -> UUID:
+        from ditto.api_server.crn import CRN_ANCHOR_BLOCK_DELTA
+        from ditto.db.models import ConfirmationSeedAnchor
+
+        agent_id = uuid4()
+        async with maker() as s, s.begin():
+            s.add(
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=f"5Anchor{name}",
+                    name=name,
+                    sha256=f"{len(name):02d}" * 32,
+                    size_bytes=524288,
+                    status=AgentStatus.SCORED,
+                    created_at=datetime.now(UTC),
+                )
+            )
+            await s.flush()
+            s.add(
+                ConfirmationSeedAnchor(
+                    champion_agent_id=agent_id,
+                    bench_version=bench_version,
+                    ready_block=ready_block,
+                    anchor_block=ready_block + CRN_ANCHOR_BLOCK_DELTA,
+                    anchor_block_hash=block_hash,
+                    pinned_at=datetime.now(UTC) if block_hash else None,
+                )
+            )
+        return agent_id
+
+    async def _seed_reigns(
+        self, maker: async_sessionmaker[AsyncSession]
+    ) -> tuple[UUID, UUID]:
+        """Two pinned reigns of the active version (younger first, to prove the
+        order is by anchor block), one waiting reign, one other-version reign."""
+        later = await self._seed_anchor(
+            maker,
+            name="later",
+            bench_version=_BENCH_VERSION,
+            ready_block=500,
+            block_hash="0x" + "cd" * 32,
+        )
+        earlier = await self._seed_anchor(
+            maker,
+            name="earlier",
+            bench_version=_BENCH_VERSION,
+            ready_block=100,
+            block_hash="0x" + "ab" * 32,
+        )
+        await self._seed_anchor(
+            maker,
+            name="waiting",
+            bench_version=_BENCH_VERSION,
+            ready_block=1,
+            block_hash=None,
+        )
+        await self._seed_anchor(
+            maker,
+            name="other",
+            bench_version=_BENCH_VERSION + 1,
+            ready_block=2,
+            block_hash="0x" + "ef" * 32,
+        )
+        return earlier, later
+
+    async def test_pinned_anchors_of_the_active_version_are_served_oldest_first(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from ditto.api_server import crn as crn_mod
+        from ditto.api_server.crn import CRN_ANCHOR_BLOCK_DELTA
+
+        # The fixture era is v7; the floor is read at call time.
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        earlier, later = await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200, resp.text
+        # Pinned rows of the active version only, oldest anchor block first: no
+        # waiting row (it would carry an empty hash), no other-version row.
+        assert resp.json()["confirmation_seed_anchors"] == [
+            {
+                "champion_agent_id": str(earlier),
+                "bench_version": _BENCH_VERSION,
+                "anchor_block": 100 + CRN_ANCHOR_BLOCK_DELTA,
+                "anchor_block_hash": "0x" + "ab" * 32,
+            },
+            {
+                "champion_agent_id": str(later),
+                "bench_version": _BENCH_VERSION,
+                "anchor_block": 500 + CRN_ANCHOR_BLOCK_DELTA,
+                "anchor_block_hash": "0x" + "cd" * 32,
+            },
+        ]
+
+    async def test_stale_snapshot_replays_the_pinned_anchors(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Pins are chain facts fixed once per reign: the last-known-good path
+        must replay them, or an outage would defer every bound lane fleet-wide."""
+        from ditto.api_server import crn as crn_mod
+
+        monkeypatch.setattr(
+            crn_mod, "CRN_BLOCK_BINDING_MIN_BENCH_VERSION", _BENCH_VERSION
+        )
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        earlier, later = await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        ok = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ok.status_code == 200, ok.text
+        fresh_anchors = ok.json()["confirmation_seed_anchors"]
+        assert [a["champion_agent_id"] for a in fresh_anchors] == [
+            str(earlier),
+            str(later),
+        ]
+
+        app.state.ledger_snapshot.generated_at -= timedelta(
+            seconds=scoring_mod._FRESH_SNAPSHOT_SECONDS + 1
+        )
+
+        async def _boom(_session: object, **_kwargs: object) -> list:
+            raise OperationalError("SELECT ...", {}, Exception("db down"))
+
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _boom)
+        stale = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert stale.status_code == 200, stale.text
+        assert stale.json()["stale"] is True
+        assert stale.json()["confirmation_seed_anchors"] == fresh_anchors
+
+    async def test_below_the_binding_floor_no_anchor_is_served(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Legacy versions plan the unbound family; a pinned row (which the lane
+        never creates below the floor) must not reach them either."""
+        from ditto.api_server import crn as crn_mod
+
+        assert _BENCH_VERSION < crn_mod.CRN_BLOCK_BINDING_MIN_BENCH_VERSION
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        await self._seed_reigns(session_maker)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["confirmation_seed_anchors"] == []
+
+
+class TestLedgerRankShares:
+    """The operator payout curve rides the ledger only to a protocol-31 fleet."""
+
+    async def test_curve_is_withheld_until_every_weight_setter_reports_v31(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.db.models import BurnSettingsRevision
+
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=30,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.burn_settings.invalidate()
+
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json().get("rank_shares") is None
+
+        async with session_maker() as session, session.begin():
+            session.add(
+                BurnSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "burn_share": 0.0,
+                        "rank_shares": [0.5, 0.2, 0.13, 0.1, 0.07],
+                    },
+                    checksum="ab" * 32,
+                    reason="flatter payout curve",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.burn_settings.invalidate()
+
+        # A v30 weight setter would ignore the field and fold the frozen curve.
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json().get("rank_shares") is None
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 31
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["rank_shares"] == [0.5, 0.2, 0.13, 0.1, 0.07]
+
+    @pytest.mark.parametrize(
+        ("protocol", "refused"), [(None, True), (30, True), (31, False)]
+    )
+    async def test_a_pinned_curve_refuses_a_sub_31_requester(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        protocol: int | None,
+        refused: bool,
+    ) -> None:
+        """A v30 rejoiner mid-epoch must not fold the frozen curve beside v31."""
+        from fastapi import HTTPException
+
+        from ditto.api_models.validator import LedgerResponse
+        from ditto.api_server.endpoints.scoring import (
+            _require_statistical_cap_requester,
+        )
+
+        now = datetime.now(UTC)
+        if protocol is not None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        software_version="0.55.0",
+                        protocol_version=protocol,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                )
+        ledger = LedgerResponse(
+            entries=[], count=0, rank_shares=[0.5, 0.2, 0.13, 0.1, 0.07]
+        )
+        async with session_maker() as session:
+            if refused:
+                with pytest.raises(HTTPException) as caught:
+                    await _require_statistical_cap_requester(
+                        session, _VALIDATOR_HOTKEY, ledger, now=now
+                    )
+                assert caught.value.status_code == 428
+                assert "protocol 31" in str(caught.value.detail)
+            else:
+                served = await _require_statistical_cap_requester(
+                    session, _VALIDATOR_HOTKEY, ledger, now=now
+                )
+                assert served.rank_shares == [0.5, 0.2, 0.13, 0.1, 0.07]
+
+
+class TestLedgerTrackShares:
+    """The governed track split rides the ledger only to a protocol-33 fleet."""
+
+    async def test_split_is_unset_by_default_and_withheld_until_v33(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        from ditto.db.models import TrackShareSettingsRevision
+
+        await _seed_scored(session_maker, miner=_MINER, composite=0.9)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.55.0",
+                    protocol_version=33,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                    capabilities=_scorer_capabilities(now, versions=[_BENCH_VERSION]),
+                )
+            )
+        _install_db(app, session_maker)
+        _install_chain(app)
+        app.state.session_maker = session_maker
+        app.state.track_share_settings.invalidate()
+
+        # Unset: the field is empty even to a v33 fleet, so validators fold
+        # their compiled memory-only split byte for byte.
+        default = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert default.status_code == 200
+        assert default.json()["track_shares_bps"] == {}
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 32
+            session.add(
+                TrackShareSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={"track_shares_bps": {"memory": 9000, "generator": 1000}},
+                    checksum="ab" * 32,
+                    reason="pay the generator competition",
+                    actor="operator@example.com",
+                )
+            )
+        app.state.track_share_settings.invalidate()
+
+        # A v32 weight setter folds the generator in shadow and would burn it.
+        mixed = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert mixed.status_code == 200
+        assert mixed.json()["track_shares_bps"] == {}
+
+        async with session_maker() as session, session.begin():
+            heartbeat = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert heartbeat is not None
+            heartbeat.protocol_version = 33
+
+        ready = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert ready.status_code == 200
+        assert ready.json()["track_shares_bps"] == {"memory": 9000, "generator": 1000}
+
+    @pytest.mark.parametrize(
+        ("protocol", "refused"), [(None, True), (32, True), (33, False)]
+    )
+    async def test_a_served_split_refuses_a_sub_33_requester(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+        protocol: int | None,
+        refused: bool,
+    ) -> None:
+        from fastapi import HTTPException
+
+        from ditto.api_models.validator import LedgerResponse
+        from ditto.api_server.endpoints.scoring import (
+            _require_statistical_cap_requester,
+        )
+
+        now = datetime.now(UTC)
+        if protocol is not None:
+            async with session_maker() as session, session.begin():
+                session.add(
+                    ValidatorHeartbeat(
+                        validator_hotkey=_VALIDATOR_HOTKEY,
+                        software_version="0.55.0",
+                        protocol_version=protocol,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                )
+        split = {"memory": 9000, "generator": 1000}
+        ledger = LedgerResponse(entries=[], count=0, track_shares_bps=split)
+        async with session_maker() as session:
+            if refused:
+                with pytest.raises(HTTPException) as caught:
+                    await _require_statistical_cap_requester(
+                        session, _VALIDATOR_HOTKEY, ledger, now=now
+                    )
+                assert caught.value.status_code == 428
+                assert "protocol 33" in str(caught.value.detail)
+            else:
+                served = await _require_statistical_cap_requester(
+                    session, _VALIDATOR_HOTKEY, ledger, now=now
+                )
+                assert served.track_shares_bps == split

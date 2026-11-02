@@ -63,7 +63,7 @@ const quarantine: ScreeningQuarantine = {
   policy_version: 6,
   manifest_digest: 'b'.repeat(64),
   finding_digest: 'c'.repeat(64),
-  reason_code: 'suspicious_source',
+  screening_reason_code: 'suspicious_source',
   evidence: [
     {
       module_id: 'luna-source-review',
@@ -90,6 +90,9 @@ const quarantine: ScreeningQuarantine = {
   resolved_by: null,
   resolution: null,
   resolution_reason: null,
+  resolution_reason_code: null,
+  agent_status: 'quarantined',
+  terminal_ghost: false,
 }
 
 const quarantineContext: ScreeningQuarantineContext = {
@@ -120,6 +123,11 @@ const quarantineContext: ScreeningQuarantineContext = {
       duplicate_of: null,
       duplicate_name: null,
       duplicate_version: null,
+      lineage_parent_agent_id: null,
+      lineage_scope: null,
+      lineage_packet_sha256: null,
+      lineage_full_review_reasons: null,
+      lineage_reference_kind: null,
     },
   ],
   miner: {
@@ -135,10 +143,11 @@ const quarantineContext: ScreeningQuarantineContext = {
         quarantine_id: '44444444-4444-4444-8444-444444444444',
         agent_id: '55555555-5555-4555-8555-555555555555',
         agent_name: 'Review agent v1',
-        reason_code: 'behavioral-oracle-wrong-answer',
+        screening_reason_code: 'behavioral-oracle-wrong-answer',
         status: 'resolved',
         resolution: 'reject',
         resolution_reason: 'Static answer table confirmed',
+        resolution_reason_code: 'operator-rejected-quarantine',
         created_at: '2026-07-10T10:00:00Z',
         resolved_at: '2026-07-11T10:00:00Z',
       },
@@ -256,6 +265,11 @@ const submission: ScreeningSubmission = {
       duplicate_of: '77777777-7777-4777-8777-777777777777',
       duplicate_name: 'Jackie',
       duplicate_version: 2,
+      lineage_parent_agent_id: null,
+      lineage_scope: null,
+      lineage_packet_sha256: null,
+      lineage_full_review_reasons: null,
+      lineage_reference_kind: null,
     },
   ],
 }
@@ -263,6 +277,7 @@ const submission: ScreeningSubmission = {
 const dispute: ScreeningDispute = {
   dispute_id: '88888888-8888-4888-8888-888888888888',
   agent_id: quarantine.agent_id,
+  kind: 'screening',
   quarantine_id: quarantine.quarantine_id,
   miner_hotkey: quarantine.miner_hotkey,
   agent_name: 'Disputed agent',
@@ -430,6 +445,9 @@ describe('ScreeningQuarantinePanel', () => {
     vi.mocked(listScreeningQuarantines).mockResolvedValue({
       items: [newer, older],
       count: 2,
+      terminal_ghost_count: 0,
+      actionable_count: 2,
+      oldest_actionable_created_at: null,
     })
     fireEvent.change(sort, { target: { value: 'newest' } })
 
@@ -441,6 +459,30 @@ describe('ScreeningQuarantinePanel', () => {
     expect(vi.mocked(listScreeningQuarantines)).toHaveBeenCalledWith({
       data: { status: 'active', sort: 'newest' },
     })
+  })
+
+  it('labels a quarantine behind a terminal agent as reconciliation, not a decision', () => {
+    // ditto-subnet#2038: the exact agent is already banned under an ATH
+    // ruling, so the active row must not read as an actionable review.
+    const ghost = {
+      ...quarantine,
+      quarantine_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+      agent_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      agent_name: 'Banned agent',
+      agent_status: 'banned',
+      terminal_ghost: true,
+    }
+    render(
+      <ScreeningQuarantinePanel
+        initialItems={[quarantine, ghost]}
+        initialSubmissions={[submission]}
+        quarantineCount={1}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('Agent banned · reconcile')).toBeTruthy()
+    expect(screen.getAllByText('Needs decision')).toHaveLength(1)
   })
 
   it('puts the source download in the active review workspace', () => {
@@ -458,6 +500,32 @@ describe('ScreeningQuarantinePanel', () => {
     expect(screen.getByRole('textbox', { name: 'Miner-visible reason' })).toBeTruthy()
     expect(screen.getByText(/Do not include private evidence or secrets/)).toBeTruthy()
     expect(screen.queryByText('All screening outcomes')).toBeNull()
+  })
+
+  it('offers manual approval for a parked failure with fresh attempt and score guards', async () => {
+    const parked: ScreeningQuarantine = {
+      ...quarantine, status: 'resolved', resolution: 'rescreen', agent_status: 'screening_failed',
+    }
+    vi.mocked(getScreeningQuarantineContext).mockResolvedValue({
+      ...quarantineContext, quarantine: parked,
+      agent: { ...quarantineContext.agent, agent_status: 'screening_failed', score_count: 1 },
+      attempts: [{ ...quarantineContext.attempts[0], status: 'expired' }],
+    })
+    vi.mocked(previewScreeningQuarantineDecisions).mockRejectedValue(new Error('test preview reached'))
+    render(<ScreeningQuarantinePanel initialItems={[parked]} initialSubmissions={[submission]} readOnly={false} />)
+    expect(screen.getByText('Approve after manual source review')).toBeTruthy()
+    expect(screen.queryByLabelText('Rescreen with current rules')).toBeNull()
+    fireEvent.change(screen.getByRole('textbox', { name: 'Miner-visible reason' }), {
+      target: { value: 'Manually reviewed seed notes and original evidence retention' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Preview release' }))
+    await waitFor(() => expect(previewScreeningQuarantineDecisions).toHaveBeenCalledWith({
+      data: { decisions: [{
+        quarantineId: quarantine.quarantine_id, expectedAgentId: quarantine.agent_id,
+        expectedArtifactSha256: quarantine.artifact_sha256, expectedAttemptId: quarantine.attempt_id,
+        expectedScoreCount: 1, resolution: 'release', reason: 'Manually reviewed seed notes and original evidence retention',
+      }] },
+    }))
   })
 
   it('previews a per-item batch before executing it', async () => {
@@ -483,6 +551,10 @@ describe('ScreeningQuarantinePanel', () => {
         reason: 'Re-run both artifacts against the current screening policy',
         disposition: 'ready' as const,
         resulting_agent_status: 'screening_failed',
+        public_reason_code: 'operator_rescreen',
+        public_record_hash: 'ab'.repeat(32),
+        terminal_reconciliation: false,
+        terminal_ruling: null,
         message: 'will set submission status to screening_failed',
       })),
     })
@@ -491,13 +563,21 @@ describe('ScreeningQuarantinePanel', () => {
         quarantine_id: item.quarantine_id,
         status: 'applied' as const,
         agent_status: 'screening_failed',
+        terminal_reconciliation: false,
+        terminal_ruling: null,
         message: 'decision applied and audit event recorded',
       })),
       applied_count: 2,
       already_applied_count: 0,
       failed_count: 0,
     })
-    vi.mocked(listScreeningQuarantines).mockResolvedValue({ items: [], count: 0 })
+    vi.mocked(listScreeningQuarantines).mockResolvedValue({
+      items: [],
+      count: 0,
+      terminal_ghost_count: 0,
+      actionable_count: 0,
+      oldest_actionable_created_at: null,
+    })
 
     render(
       <ScreeningQuarantinePanel
@@ -520,6 +600,7 @@ describe('ScreeningQuarantinePanel', () => {
     expect(executeScreeningQuarantineDecisions).not.toHaveBeenCalled()
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(screen.getByText(/Preview only/)).toBeTruthy()
+    expect(screen.getAllByText(/Public audit operator_rescreen/).length).toBe(2)
 
     fireEvent.click(
       screen.getByRole('button', { name: 'Confirm and execute reviewed decisions' }),
@@ -623,6 +704,37 @@ describe('ScreeningQuarantinePanel', () => {
       screen.getByText('Deterministic shortcut bypasses the general provider path.'),
     ).toBeTruthy()
     expect(screen.getByText('src/main.rs:42')).toBeTruthy()
+  })
+
+  it('labels the screening origin and the operator ruling as separate codes', () => {
+    const resolved: ScreeningQuarantine = {
+      ...quarantine,
+      status: 'resolved',
+      resolved_at: '2026-07-15T09:00:00Z',
+      resolved_by: 'backroom:reviewer@example.com',
+      resolution: 'reject',
+      resolution_reason: 'Static answer table confirmed',
+      // A code the screener emits with a CLEAR disposition. Unlabelled beside
+      // the `reject` badge it read as the reason for the rejection, so the
+      // panel now says which code is the lead and which is the ruling.
+      screening_reason_code: 'behavioral-oracle-passed',
+      resolution_reason_code: 'operator-rejected-quarantine',
+    }
+    render(
+      <ScreeningQuarantinePanel
+        initialItems={[resolved]}
+        initialSubmissions={[submission]}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText(/Held for behavioral oracle passed/)).toBeTruthy()
+    expect(screen.getByText(/Ruled operator rejected quarantine/)).toBeTruthy()
+    // No bare code survives, and each one is present under its own label — the
+    // absence check alone would also pass if the panel dropped the code.
+    expect(screen.queryByText(/^behavioral oracle passed$/)).toBeNull()
+    expect(screen.getByText('Screening lead: behavioral oracle passed')).toBeTruthy()
+    expect(screen.getByText('Operator ruling: operator rejected quarantine')).toBeTruthy()
   })
 
   it('expands and collapses long quarantine summaries', () => {

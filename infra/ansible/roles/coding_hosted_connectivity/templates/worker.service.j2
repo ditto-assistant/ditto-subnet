@@ -1,5 +1,5 @@
 [Unit]
-Description=One approved private shadow Coding attempt
+Description=Approved private shadow Coding {{ 'cohort' if coding_hosted_worker_mode == 'rollout' else 'attempt' }}
 Requires=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
 After=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
 BindsTo=ditto-coding-hosted-egress.service user@{{ coding_hosted_uid }}.service
@@ -12,11 +12,16 @@ Slice=system.slice
 Delegate=no
 UMask=0077
 WorkingDirectory=/var/lib/ditto-coding-hosted
+{% if coding_hosted_worker_mode == 'rollout' %}
+ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py install-rollout {{ coding_hosted_rollout_connectivity_sha256 }}
+ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 {{ coding_hosted_worker_python }} -B -I -m ditto.coding_bounded_rollout --bounded-shadow-once --config {{ coding_hosted_worker_config }} --approval-sha256 {{ coding_hosted_rollout_approval_sha256 }} --connectivity-sha256 {{ coding_hosted_rollout_connectivity_sha256 }}
+{% else %}
 ExecStartPre=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py install
 ExecStart=/usr/bin/env -i PATH=/usr/bin:/bin LANG=C.UTF-8 LC_ALL=C.UTF-8 {{ coding_hosted_worker_python }} -I -m ditto.coding_hosted_worker --private-shadow-once --config {{ coding_hosted_worker_config }}
+{% endif %}
 ExecStopPost=+/usr/bin/python3 -I /usr/local/lib/ditto-coding-hosted/connectivity-policy.py revoke
 Restart=no
-KillMode=control-group
+KillMode={{ 'mixed' if coding_hosted_worker_mode == 'rollout' else 'control-group' }}
 TimeoutStartSec=60
 TimeoutStopSec=35min
 NoNewPrivileges=yes

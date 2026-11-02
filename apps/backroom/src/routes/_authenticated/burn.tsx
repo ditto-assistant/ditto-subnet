@@ -18,12 +18,12 @@ function BurnPage() {
     <div>
       <PageHeader
         label="SN118 emissions"
-        title="Emission burn"
+        title="Emissions & burn"
         description="Set the share of miner emission validators route to the subnet owner's burn hotkey — no validator release. The remainder is normalized across the eligible miner weights, so the burn scales the competitive vector without re-ordering it. Every change is an append-only revision recording who set it and why."
         aside={
           <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]">
             <Flame className="h-3.5 w-3.5 text-[var(--amber)]" />
-            Moves TAO
+            Changes burn weights
           </div>
         }
       />

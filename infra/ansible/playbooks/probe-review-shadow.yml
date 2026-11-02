@@ -1,0 +1,112 @@
+---
+# Install only the report-only probe reviewer capability on an already-converged
+# fleet (workers/screener/docs/probe-review-shadow.md). No host/VM/chain
+# configuration changes. Activate through a Backroom review-settings revision
+# (probe_battery_mode + probe_review_mode: shadow) for the exact worker scope.
+- name: Install the probe reviewer key capability on the primary screener
+  hosts: screener_partition
+  become: true
+  gather_facts: false
+  vars_files:
+    - ../roles/hetzner_screener_fleet/defaults/main.yml
+  tasks:
+    # vars_files override play vars. The materializer is re-rendered whole, so
+    # keep every capability the host already has (the conversation key) on.
+    - name: Select the existing federation and capabilities plus the reviewer key
+      ansible.builtin.set_fact:
+        screener_fleet_conversation_enabled: true
+        screener_fleet_probe_review_enabled: true
+        screener_fleet_x509_enabled: true
+
+    - name: Verify the materializer resolves only writable secret destinations
+      ansible.builtin.assert:
+        that:
+          - screener_fleet_probe_review_enabled | bool
+          - screener_fleet_x509_enabled | bool
+          - screener_fleet_source_review_key_file == screener_fleet_secrets_dir + '/source-review-api-key'
+          - screener_fleet_conversation_key_file == screener_fleet_secrets_dir + '/conversation-openrouter-key'
+          - screener_fleet_probe_review_key_file == screener_fleet_secrets_dir + '/probe-review-router-key'
+
+    - name: Check whether the conversation capability is already installed
+      ansible.builtin.stat:
+        path: /etc/systemd/system/ditto-screener-worker@.service.d/conversation.conf
+      register: conversation_dropin
+
+    - name: Check whether the conversation key is already materialized
+      ansible.builtin.stat:
+        path: "{{ screener_fleet_conversation_key_file }}"
+      register: conversation_key
+
+    - name: Check whether the host already uses the X.509 federation
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ screener_fleet_x509_credential_file }}"
+        - "{{ screener_fleet_source_review_key_file }}"
+      register: x509_state
+
+    - name: Refuse to change any capability the host does not already have
+      ansible.builtin.assert:
+        that:
+          - conversation_dropin.stat.exists
+          - conversation_key.stat.exists
+          - x509_state.results | map(attribute='stat.exists') | min
+        fail_msg: >-
+          This playbook re-renders the materializer with X.509 federation and the
+          conversation key on; converge the full role instead on a host that
+          lacks conversation.conf, the conversation key, or the X.509 identity.
+
+    - name: Install the bounded secret materializer
+      ansible.builtin.template:
+        src: ../roles/hetzner_screener_fleet/templates/materialize-source-review-secret.sh.j2
+        dest: /usr/local/sbin/ditto-screener-source-review-secret
+        owner: root
+        group: root
+        mode: "0755"
+        validate: /bin/bash -n %s
+
+    - name: Install the secret materializer service
+      ansible.builtin.template:
+        src: ../roles/hetzner_screener_fleet/templates/ditto-screener-source-review-secret.service.j2
+        dest: /etc/systemd/system/ditto-screener-source-review-secret.service
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Materialize through the existing exact-subject federation
+      ansible.builtin.systemd:
+        name: ditto-screener-source-review-secret.service
+        state: restarted
+        daemon_reload: true
+      no_log: true
+
+    - name: Verify the reviewer key file is worker-owned and private
+      ansible.builtin.stat:
+        path: "{{ screener_fleet_probe_review_key_file }}"
+      register: probe_review_key
+      no_log: true
+
+    - name: Require a non-empty mode-0400 reviewer key
+      ansible.builtin.assert:
+        that:
+          - probe_review_key.stat.exists
+          - probe_review_key.stat.size > 0
+          - probe_review_key.stat.mode == '0400'
+          - probe_review_key.stat.pw_name == screener_fleet_user
+        quiet: true
+      when: not ansible_check_mode
+
+    - name: Install the reviewer capability without replacing existing worker limits
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/ditto-screener-worker@.service.d/probe-review.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Service]
+          # Report-only probe reviewer; Backroom probe_review_mode is the kill switch.
+          Environment=SCREENER_PROBE_REVIEW_KEY_FILE={{ screener_fleet_probe_review_key_file }}
+
+    - name: Reload systemd (the release updater restarts workers onto the drop-in)
+      ansible.builtin.systemd:
+        daemon_reload: true

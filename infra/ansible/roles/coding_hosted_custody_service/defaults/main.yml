@@ -1,0 +1,12 @@
+---
+coding_hosted_custody_service_enabled: false
+coding_hosted_custody_service_confirmation: ""
+coding_hosted_custody_service_source_revision: ""
+# Installed coding_hosted_runtime revision whose interpreter and package serve custody.
+coding_hosted_custody_runtime_revision: ""
+# Exact Platform PostgreSQL private IP from the reviewed coding_hosted_postgres_access output.
+coding_hosted_custody_postgres_ip: ""
+# Registered private-v2 release inputs, each a controller path plus reviewed SHA-256.
+coding_hosted_custody_release_id: ""
+coding_hosted_custody_reader_authority_sha256: ""
+coding_hosted_custody_release_inputs: {}

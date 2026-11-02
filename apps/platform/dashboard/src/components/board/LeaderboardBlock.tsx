@@ -25,11 +25,12 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
-  crownChampionScoreLabel,
   crownChallengerScoreLabel,
+  crownChampionScoreLabel,
   crownComparisonNote,
   crownContest,
   crownDifferenceText,
+  crownHysteresisState,
   crownScaleNote,
   crownSeedDiffsText,
   crownThresholdLabel,
@@ -40,12 +41,16 @@ import {
   efficiencyBoardStatus,
   isEligible,
   isFinalized,
+  nextPinVerdict,
+  pinAgreementLabel,
+  pinLabel,
   rolloutQuorum,
   signedScore,
 } from "../../lib/scoring";
 import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
 import { EntityButton } from "../ui/EntityButton";
+import { CrownDuel } from "./CrownDuel";
 import { BoardTable } from "./BoardTable";
 import {
   leaderboardVersionView,
@@ -457,30 +462,36 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                                     </div>
                                   </Show>
                                 </dl>
-                                <div class="koth-standing-detail">
-                                  {crownDifferenceText(held()) + ". " + crownWhyHigh(held())}
-                                </div>
-                                <Show when={held().seedDifferences}>
-                                  {(diffs) => (
-                                    <div class="koth-standing-diffs">
-                                      {crownSeedDiffsText(diffs())}
-                                    </div>
-                                  )}
-                                </Show>
+                                <details class="fold koth-standing-fold">
+                                  <summary>How the crown is decided</summary>
+                                  <div class="koth-standing-detail">
+                                    {crownDifferenceText(held()) + ". " + crownWhyHigh(held())}
+                                  </div>
+                                  <Show when={held().seedDifferences}>
+                                    {(diffs) => (
+                                      <div class="koth-standing-diffs">
+                                        {crownSeedDiffsText(diffs())}
+                                      </div>
+                                    )}
+                                  </Show>
+                                </details>
                               </>
                             )}
                           </Show>
-                          <div class="koth-standing-detail">
-                            <Show when={heldContest()}>
-                              {(held) => (
-                                <>
-                                  {crownScaleNote(current().leader, held(), store.settledView()) +
-                                    " "}
-                                </>
-                              )}
-                            </Show>
-                            {crownComparisonNote(current().decision.method)}
-                          </div>
+                          <details class="fold koth-standing-fold">
+                            <summary>Why the Score column is not the crown test</summary>
+                            <div class="koth-standing-detail">
+                              <Show when={heldContest()}>
+                                {(held) => (
+                                  <>
+                                    {crownScaleNote(current().leader, held(), store.settledView()) +
+                                      " "}
+                                  </>
+                                )}
+                              </Show>
+                              {crownComparisonNote(current().decision.method)}
+                            </div>
+                          </details>
                         </>
                       );
                     }}
@@ -632,6 +643,33 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     );
   };
 
+  // The pin line: which frozen ledger the fleet folds, whether the next pin
+  // moves the crown (the platform's own projection, never re-derived here),
+  // and whether the fold defends the crown from the incumbent. Every number
+  // and protocol floor comes off the fold.
+  const pinShown = (): boolean => Boolean(emissions()?.ledger_pin) && !store.unavailable();
+  const nextPin = createMemo(() => nextPinVerdict(emissions()));
+  const nameOf = (agentId: string | null): string => {
+    if (!agentId) return "an unidentified agent";
+    const entry = entriesByAgent().get(String(agentId));
+    return entry ? agentName(entry.agent_name) : shortKey(agentId);
+  };
+  const hysteresisText = (): string => {
+    const e = emissions();
+    switch (crownHysteresisState(e)) {
+      case "active":
+        return "The crown is defended from the previous pin's champion: a senior lineage inside the band does not retake it, a challenger must clear the band.";
+      case "fleet_not_ready":
+        return (
+          "Crown incumbency waits for every live weight setter to report protocol " +
+          (e?.crown_incumbent_required_protocol ?? "—") +
+          "; until then the fold re-derives the champion from the earliest lineage on every read."
+        );
+      default:
+        return "";
+    }
+  };
+
   // "Beat this to contend." Published as a floor, explicitly, and never as a
   // sufficient number: only the margin term is knowable before a challenger
   // is scored (lib/scoring.dethroneFloor — never inline math).
@@ -745,9 +783,22 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                       <EntityButton kind="agent" id={entry().agent_id} label={championName()} />
                     )}
                   </Show>
-                  {" (" + championRank() + ") receives "}
-                  {pct(championShare() as number)}
-                  {" of the miner pool."}
+                  <Show
+                    when={championRecipient()?.paid === false}
+                    fallback={
+                      <>
+                        {" (" + championRank() + ") receives "}
+                        {pct(championShare() as number)}
+                        {" of the miner pool."}
+                      </>
+                    }
+                  >
+                    {/* A provisional incumbent keeps the crown while its review
+                        is open; its slot burns rather than moving to anyone. */}
+                    {" (" + championRank() + ") holds the crown provisionally: its "}
+                    {pct(championShare() as number)}
+                    {" of the miner pool is unpaid while its review is open."}
+                  </Show>
                   <Show when={sharedSeedNote(championRecipient())}>
                     {(note) => (
                       <>
@@ -773,6 +824,28 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
         {/* The dethrone-math explainer collapses behind a disclosure so the
             table stays near the top; it only exists when there is a fold to
             explain. */}
+        <div class="emissions-next-pin" id="emissions-next-pin" classList={{ show: pinShown() }}>
+          <Show when={emissions()?.ledger_pin}>
+            {(pin) => (
+              <>
+                <span class="emission-badge pin">Pinned</span>
+                {" Validators are folding " + pinLabel(pin()) + "."}
+                <Show when={nextPin()}>
+                  {(verdict) => (
+                    <>
+                      {" Next pin: "}
+                      <Show when={verdict().changes} fallback={<b>crown holds</b>}>
+                        <b class="beat">{"crown moves to " + nameOf(verdict().championId)}</b>
+                      </Show>
+                      {"."}
+                    </>
+                  )}
+                </Show>
+                {" " + hysteresisText()}
+              </>
+            )}
+          </Show>
+        </div>
         <details class="emissions-why" id="emissions-why" hidden={!emissions()}>
           <summary>How the crown is decided</summary>
           <div class="emissions-reason" id="emissions-reason">
@@ -818,6 +891,7 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
                       {(e) => <EntityButton kind="agent" id={e().agent_id} label={label()} />}
                     </Show>{" "}
                     {pct(recipient.share_of_miner_pool as number)}
+                    {recipient.paid === false ? " unpaid" : ""}
                     <Show when={note()}>
                       {(n) => (
                         <>
@@ -836,6 +910,13 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
       <div class="chain-observation" id="chain-observation" classList={{ show: chainShown() }}>
         <span class="chain-badge">On chain</span>
         <span id="chain-observation-copy">{chainCopy()}</span>
+        <Show when={store.chainWeights()?.pin_agreement}>
+          {(agreement) => (
+            <span class="chain-weights-agreement" id="chain-pin-agreement">
+              {pinAgreementLabel(agreement()) + "."}
+            </span>
+          )}
+        </Show>
       </div>
     </div>
   );
@@ -917,15 +998,34 @@ function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
   const strip = createMemo(() => rolloutStripState(store.rollout()));
   const quorum = createMemo(() => rolloutQuorum(store.rollout()));
 
+  // The two halves are named with #2098's board fields: `scoring_bench_version`
+  // (what is being collected) and `emission_bench_version` (the ledger pin).
+  // Only the authoritative board speaks for the rollout, because a historical
+  // view pins an old scoring version that nothing is collecting. The rollout
+  // payload's own versions stand in when the board has not loaded or predates
+  // those fields.
+  const headVersions = (): { scoring: number; emission: number } | null => {
+    const s = strip();
+    if (!s) return null;
+    const board = store.payload();
+    const authoritative = board?.selection_mode !== "historical";
+    return {
+      scoring: (authoritative && Number(board?.scoring_bench_version)) || s.desired,
+      emission: Number(board?.emission_bench_version) || s.active,
+    };
+  };
   const headHint = (): string => {
     const s = strip();
-    if (!s) return "";
+    const v = headVersions();
+    if (!s || !v) return "";
     return s.rolling
-      ? "v" + s.active + " drives validator weights · v" + s.desired + " is rolling out"
+      ? "v" + v.scoring + " scoring in progress · v" + v.emission + " controls emissions"
       : s.collecting
-        ? "v" + s.active + " drives validator weights · inherited cohort scoring continues"
-        : "v" + s.active + " drives validator weights";
+        ? "v" + v.emission + " controls emissions · inherited cohort scoring continues"
+        : "v" + v.emission + " controls emissions";
   };
+  /** Platform's sentence for the gates still holding emissions, or "". */
+  const promotionRequirement = (): string => String(store.rollout()?.promotion_requirement || "");
 
   type Progress = { count: [number, number] | null; text: string; note: string };
   const progress = createMemo<Progress | null>(() => {
@@ -936,7 +1036,10 @@ function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
     if (s.collecting && !state?.priority_complete) {
       return {
         count: [q.priorityReady, q.prioritySize],
-        text: " inherited leaders have complete v" + s.desired + " quorums.",
+        text:
+          " inherited leaders have complete v" +
+          s.desired +
+          " quorums. This priority-cohort quorum is the first gate emissions wait on.",
         note:
           "The first five from the prior benchmark are a fleet-wide barrier. Validators that have already scored every " +
           "eligible leader intentionally idle until the other validators finish them; rank 6 and later cannot skip ahead.",
@@ -1039,6 +1142,13 @@ function RolloutStrip(props: { store: LeaderboardStore }): JSX.Element {
       <div class="rollout-note" id="rollout-note">
         {progress()?.note ?? ""}
       </div>
+      {/* Served, not re-derived: the gates are implemented in Platform, so the
+          public answer to "why have emissions not moved" is Platform's own. */}
+      <Show when={promotionRequirement()}>
+        <div class="rollout-note" id="rollout-promotion">
+          {promotionRequirement()}
+        </div>
+      </Show>
     </div>
   );
 }
@@ -1077,6 +1187,10 @@ function LeaderboardNotice(props: { store: LeaderboardStore }): JSX.Element {
     else if (!historicalView && d.v9_confirmation_mode === "enforce")
       notices.push(
         "<strong>LongMemEval enforcement is active.</strong> Only agents with qualified full confirmation evidence can rank or receive emissions.",
+      );
+    if (!historicalView && d.router_shadow_mode === "shadow")
+      notices.push(
+        "<strong>Router shadow is active.</strong> Replay-based router efficiency is being measured per agent and shown as a shadow score. Shadow results do not change rankings or emissions.",
       );
     if (provisional.length)
       notices.push(
@@ -1191,6 +1305,9 @@ export function LeaderboardBlock(props: { mode: "overview" | "page" }): JSX.Elem
       </div>
       <VersionSwitch store={store} />
       <KothStandingCallout store={store} />
+      {/* The King and the challengers dueling it. The overview masthead
+          already names the King, so that mount shows only the duels. */}
+      <CrownDuel store={store} showKing={props.mode !== "overview"} />
       <BoardTable store={store} />
       {/* Post-table context: emissions, rollout, and standing notices sit
           below the board so the table starts at the top of the Leaderboard

@@ -140,13 +140,24 @@ def test_disposable_guest_base_survives_libvirt_ownership_changes() -> None:
     assert 'mode: "0644"' in tasks
 
 
-def test_infra_workflow_keeps_x509_identity_opt_in() -> None:
+def test_infra_workflow_preserves_live_x509_identity() -> None:
     workflow = yaml.safe_load(INFRA_WORKFLOW.read_text())
     input_config = workflow[True]["workflow_dispatch"]["inputs"][
         "screener_fleet_x509_identity_enabled"
     ]
 
-    assert input_config["default"] is False
+    assert input_config["default"] is True
+    prod_intent = (
+        ROOT / "infra/terraform/stacks/gcp-platform/prod.auto.tfvars"
+    ).read_text()
+    assert re.search(
+        r"^enable_screener_fleet_x509_identity\s*=\s*true$", prod_intent, re.MULTILINE
+    )
+    assert re.search(
+        r"^enable_screener_fleet_x509_node2_identity\s*=\s*false$",
+        prod_intent,
+        re.MULTILINE,
+    )
     text = INFRA_WORKFLOW.read_text()
     assert "SCREENER_FLEET_X509_CA_CERTIFICATE_PEM" in text
     assert "enable_screener_fleet_x509_identity" in text
@@ -166,3 +177,89 @@ def test_ditto_inference_review_key_is_a_separate_secret_with_its_own_grant() ->
     assert 'secret_id = "validator-openrouter-key"' in terraform
     # Terraform never writes a version; the operator supplies the key material.
     assert "google_secret_manager_secret_version" not in terraform
+    # The bare-metal secret agent is the x509 service account, not the GCE worker
+    # account, so it needs its own grant on the Ditto secret.
+    x509 = TERRAFORM.read_text()
+    assert (
+        'resource "google_secret_manager_secret_iam_member" '
+        '"screener_fleet_x509_ditto_inference_review"' in x509
+    )
+    review_grants = dict(
+        re.findall(
+            r'resource "google_secret_manager_secret_iam_member" "([^"]+)" \{(.*?)\n\}',
+            x509,
+            flags=re.DOTALL,
+        )
+    )
+    assert (
+        'secret_id = "screener-review-ditto-inference-key"'
+        in review_grants["screener_fleet_x509_ditto_inference_review"]
+    )
+    assert (
+        "member    = google_service_account.screener_fleet_x509[0].member"
+        in review_grants["screener_fleet_x509_ditto_inference_review"]
+    )
+    assert (
+        'secret_id = "screener-review-ditto-inference-key"'
+        in review_grants["screener_fleet_x509_node2_review"]
+    )
+    assert (
+        "member    = google_service_account.screener_fleet_x509_node2[0].member"
+        in review_grants["screener_fleet_x509_node2_review"]
+    )
+    assert (
+        'secret_id = "validator-openrouter-key"'
+        not in review_grants["screener_fleet_x509_node2_review"]
+    )
+    assert "google_secret_manager_secret.screener_review_ditto_inference_key" in x509
+
+
+def test_second_screener_has_distinct_default_off_x509_identity() -> None:
+    terraform = TERRAFORM.read_text()
+
+    assert 'variable "enable_screener_fleet_x509_node2_identity"' in terraform
+    assert (
+        "screener_fleet_x509_node2_subject = "
+        '"spiffe://dittobench.ai/screener/subnet-screener-2"'
+    ) in terraform
+    assert (
+        "trimspace(var.screener_fleet_x509_node2_ca_certificate_pem) != "
+        "trimspace(var.screener_fleet_x509_ca_certificate_pem)"
+    ) in terraform
+    assert 'workload_identity_pool_provider_id = "subnet-screener-2"' in terraform
+    assert 'account_id   = "subnet-screener-2"' in terraform
+    assert (
+        'attribute_condition = "assertion.san.uri == '
+        "'${local.screener_fleet_x509_node2_subject}'\""
+    ) in terraform
+
+
+def test_hetzner_fleet_defaults_match_the_live_review_gateway() -> None:
+    """subnet-screener-1 reviews through OpenRouter again since 2026-10-02 (host
+    edit); the checked-in defaults must render the same values or the next
+    converge silently flips the node to a gateway whose key does not match."""
+    import yaml
+
+    role = ROOT / "infra/ansible/roles/hetzner_screener_fleet"
+    defaults = yaml.safe_load((role / "defaults/main.yml").read_text())
+    assert defaults["screener_fleet_review_inference_provider"] == "openrouter"
+    assert defaults["screener_fleet_source_review_secret_id"] == (
+        "validator-openrouter-key"
+    )
+    example = yaml.safe_load(
+        (ROOT / "infra/ansible/inventory/hetzner-screener.example.yml").read_text()
+    )
+    host = example["all"]["children"]["role_hetzner_screener"]["hosts"][
+        "subnet-screener-1"
+    ]
+    assert host["screener_fleet_review_inference_provider"] == "openrouter"
+    assert host["screener_fleet_source_review_secret_id"] == (
+        "validator-openrouter-key"
+    )
+    # The fleet env template must still carry the provider to the worker.
+    env = (role / "templates/fleet.env.j2").read_text()
+    provider_line = (
+        "SCREENER_REVIEW_INFERENCE_PROVIDER="
+        "{{ screener_fleet_review_inference_provider }}"
+    )
+    assert provider_line in env

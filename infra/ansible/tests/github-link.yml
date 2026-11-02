@@ -1,0 +1,112 @@
+---
+- name: Prove scoped GitHub activation preserves other integrations
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    platform_github_link_enabled: true
+    platform_github_link_client_id: fixture_client
+    platform_github_link_redirect_url: https://example.test/api/v1/miner-auth/github/callback
+    secret_github_link_client_secret: fixture-secret-id
+    gcp_project: fixture-project
+  tasks:
+    - name: Create isolated fixture directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: github_fixture
+
+    - name: Exercise activation and rollback
+      block:
+        - name: Install a fixture-only Secret Manager consumer
+          ansible.builtin.copy:
+            dest: "{{ github_fixture.path }}/gcloud"
+            content: "#!/bin/sh\nprintf '%s' fixture_secret\n"
+            mode: "0700"
+
+        - name: Seed unrelated production-like settings
+          ansible.builtin.copy:
+            dest: "{{ github_fixture.path }}/.env"
+            content: "POSTGRES_HOST=keep-db\nDATA_PIPELINE_URL=https://keep.example\nDITTO_LINK_ENABLED=true\n"
+            mode: "0600"
+
+        - name: Activate GitHub linking
+          ansible.builtin.include_role:
+            name: platform_app
+            tasks_from: github-link.yml
+
+        - name: Read the fixture environment
+          ansible.builtin.slurp:
+            src: "{{ github_fixture.path }}/.env"
+          register: activated
+
+        - name: Verify activation preserves existing values and permissions
+          ansible.builtin.assert:
+            that:
+              - "(activated.content | b64decode).startswith('POSTGRES_HOST=keep-db\nDATA_PIPELINE_URL=https://keep.example\nDITTO_LINK_ENABLED=true\n')"
+              - "'GITHUB_LINK_ENABLED=true' in (activated.content | b64decode)"
+              - "'GITHUB_LINK_CLIENT_SECRET=fixture_secret' in (activated.content | b64decode)"
+              - "platform_github_link_env.stat.mode == '0600'"
+
+        - name: Converge the same configuration a second time
+          ansible.builtin.include_role:
+            name: platform_app
+            tasks_from: github-link.yml
+
+        - name: Require idempotence
+          ansible.builtin.assert:
+            that: not platform_github_link_update.changed
+
+        - name: Reject incomplete activation before changing the environment
+          block:
+            - name: Attempt activation without a client id
+              ansible.builtin.include_role:
+                name: platform_app
+                tasks_from: github-link.yml
+              vars:
+                platform_github_link_client_id: ""
+            - name: Fail if invalid activation succeeded
+              ansible.builtin.fail:
+                msg: Invalid activation unexpectedly succeeded
+          rescue:
+            - name: Require the configuration preflight to be the failure
+              ansible.builtin.assert:
+                that: ansible_failed_task.name == 'Validate GitHub linking configuration before reading secrets'
+
+        - name: Read environment after rejected activation
+          ansible.builtin.slurp:
+            src: "{{ github_fixture.path }}/.env"
+          register: rejected
+
+        - name: Require failed activation to leave the file unchanged
+          ansible.builtin.assert:
+            that: rejected.content == activated.content
+
+        - name: Roll back to disabled without retaining the credential
+          ansible.builtin.include_role:
+            name: platform_app
+            tasks_from: github-link.yml
+          vars:
+            platform_github_link_enabled: false
+            secret_github_link_client_secret: ""
+
+        - name: Read rolled-back fixture
+          ansible.builtin.slurp:
+            src: "{{ github_fixture.path }}/.env"
+          register: disabled
+
+        - name: Verify rollback and single-block replacement
+          ansible.builtin.assert:
+            that:
+              - "'GITHUB_LINK_ENABLED=false' in (disabled.content | b64decode)"
+              - "'GITHUB_LINK_CLIENT_SECRET=\n' in (disabled.content | b64decode)"
+              - "'fixture_secret' not in (disabled.content | b64decode)"
+              - "(disabled.content | b64decode).count('GITHUB_LINK_ENABLED=') == 1"
+      vars:
+        platform_root: "{{ github_fixture.path }}"
+      environment:
+        PATH: "{{ github_fixture.path }}:{{ lookup('env', 'PATH') }}"
+      always:
+        - name: Remove only this test's fixture directory
+          ansible.builtin.file:
+            path: "{{ github_fixture.path }}"
+            state: absent

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from ipaddress import ip_address, ip_network
 from urllib.parse import urlsplit
@@ -23,6 +23,7 @@ from ditto.validator.resource_gate import (
     parse_resource_ceilings_from_env,
 )
 from ditto.validator.update_control import VALIDATOR_COMPATIBILITY_EPOCH
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 # --- Frozen consensus constants (KOTH + ATH gate) ---
 # NOT env-tunable: every validator must fold the public ledger with byte-identical
@@ -73,11 +74,36 @@ TOP5_MAX_COHORT_SIZE = 25
 # platform so the whole fleet folds the same number without agreeing about
 # clocks -- see ``weights.resolve_miner_emission_share``. Releasing everything is
 # the right fallback precisely because it is what the subnet did before the field
-# existed, so an omission is never a change. The burn hotkey is retained in
-# either case as the safe idle vector: with no eligible miners the whole vector
-# still routes to burn rather than zeroing the chain.
+# existed, so an omission is never a change. The burn destination is resolved
+# from on-chain SubnetOwnerHotkey and the current subnet metagraph at each
+# weight epoch, including the idle vector. UID 0 alone is not an owner signal.
 MINER_EMISSION_SHARE = 1.0
-FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118 UID 0
+
+# --- Competition-track emission split (scalable, retirable registry) ---
+# The subnet is splitting from a single competition into several independent
+# ones (memory, coding, router -- with room for more). The chain accepts exactly
+# one weight vector per validator, so each track folds separately and the
+# results are blended by per-track share into one ``put_weights`` (see
+# ``weights.blend_track_weights`` / ``tracks.TrackRegistry``). Keeping the split
+# in integer basis points -- not floats -- means every validator folds identical
+# byte-for-byte shares with no rounding disagreement; matches the Go scorer's
+# ``scoregates.BasisPointScale``.
+BASIS_POINT_SCALE = 10_000
+# Compiled fallback split. v1 ships memory at the full pool with coding and
+# router at 0 bps (shadow), so a single-track registry reproduces today's fold
+# byte-for-byte. The platform ``LedgerResponse.track_shares_bps`` field may later
+# override this the same way ``burn_share`` overrides ``MINER_EMISSION_SHARE``
+# (see ``weights.resolve_track_shares``); a missing or malformed field folds back
+# to exactly this dict. The eligible sum must never exceed ``BASIS_POINT_SCALE``.
+# The generator track is active from protocol 33 but absent here, so it folds at
+# 0 bps until Platform governance serves it a share.
+TRACK_SHARES_BPS = {"memory": BASIS_POINT_SCALE, "coding": 0, "router": 0}
+# Router track rank shares: the relative emission slice each ranked router miner
+# receives (champion first). Only ratios matter -- ``blend_track_weights``
+# normalizes the router vector to the track's bps share -- so these need not sum
+# to one. Inert while the router track is SHADOW / not weight-eligible.
+ROUTER_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
+GENERATOR_RANK_SHARES = (0.40, 0.25, 0.15, 0.12, 0.08)
 _CODING_EXECUTOR_PRIVATE_NETWORKS = tuple(
     ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")
 )
@@ -325,6 +351,24 @@ class ValidatorConfig:
     like ``koth_margin`` (every validator must run the same K to derive the same
     seed set). ``1`` reproduces the single-seed pre-P4 sweep, byte-identical."""
 
+    crn_block_binding_posture: str
+    """How the validator-derived confirmation lanes (version-bump re-score
+    sweep, contested dethrone) behave at a **binding** bench version
+    (``crn_block_binding_active``) when the ledger carries no pinned
+    finalized-block anchor for the reign they would hash:
+
+    * ``observe`` (default, v13.0): log the missing pin and fall back to the
+      legacy unbound family, exactly as every version below the floor derives.
+      A Platform pin gap can then never stall the lanes.
+    * ``enforce``: defer the lane until a pin lands. An unbound family at a
+      binding version is one a miner could have precomputed from public ids.
+
+    A **consensus knob** like ``koth_confirmation_seeds``: validators on
+    different postures derive different seed sets for the same ledger. Read
+    from ``VALIDATOR_CRN_BLOCK_BINDING_POSTURE``. The pin *mismatch* refusal
+    (a bound seed that does not re-derive) is not a posture; it always
+    refuses."""
+
     top5_max_confirmation_seeds: int
     """Hard ceiling on the variance-sized continual shared-seed target."""
 
@@ -346,9 +390,9 @@ class ValidatorConfig:
     ledger's ``burn_share``; this is what the fold uses when that field is absent
     or invalid."""
 
-    burn_hotkey: str
-    """Owner-associated hotkey whose miner incentive Subtensor burns. Used for
-    the idle vector (no eligible miners) and for any residual share below 1.0."""
+    burn_hotkey: str | None
+    """Local-network burn target, or None to resolve the registered owner each
+    epoch on Finney. Never submit with an unresolved production destination."""
 
     min_stake_tao: float
     """Minimum stake (TAO) this validator expects on its own hotkey before it
@@ -385,6 +429,11 @@ class ValidatorConfig:
 
     http_timeout_seconds: float
     """Per-request timeout for platform + dittobench HTTP calls."""
+
+    treasury_approval_file: str | None = None
+    treasury_approved_policy_digest: str | None = None
+    treasury_collector_policy_digest: str | None = None
+    """Default-absent public proof and two immutable deployment pins; no signer."""
 
     scorer_require_binary_provenance: bool = False
     """Whether the pinned scorer revision must prove its identity from its binary.
@@ -446,6 +495,123 @@ class ValidatorConfig:
     coding_canary_poll_seconds: float = 10.0
     """Idle polling interval for the public certification canary worker."""
 
+    liveness_watchdog_seconds: float = 600.0
+    """Exit the worker (code 70) after this long without a heartbeat attempt.
+
+    Docker's ``restart: unless-stopped`` then recovers it. Keep this well under
+    Platform's 15-minute treasury fleet freshness. ``0`` disables the watchdog.
+    See :mod:`ditto.validator.liveness`."""
+
+    # --- Competition-track split (scalable, retirable registry) ---
+    track_shares_bps: dict[str, int] = field(
+        default_factory=lambda: dict(TRACK_SHARES_BPS)
+    )
+    """Compiled fallback per-track emission split in basis points. The live split
+    comes from the platform ledger's ``track_shares_bps``; this is what the fold
+    uses when that field is absent or invalid (see
+    ``weights.resolve_track_shares``). v1 ships memory at the full pool, coding
+    and router at 0 — a single-track registry that reproduces today's fold
+    byte-for-byte. Not env-tunable: a per-validator override would fork
+    consensus, so the split moves only by shipping a release or by the
+    platform serving the field to the whole fleet at once."""
+
+    router_track_state: str = "shadow"
+    """Lifecycle state of the router track (``shadow``/``active``/``retiring``/
+    ``retired``). ``shadow`` (v1) folds and logs a router vector every cycle but
+    contributes zero emission; promotion flips this to ``active``. Compiled-only
+    for consensus safety."""
+
+    router_weight_eligible: bool = False
+    """Whether the router track may contribute emissions. ``False`` throughout the
+    shadow rollout — nothing the router folds touches the chain until this and
+    ``router_track_state`` are promoted together."""
+
+    router_rank_shares: tuple[float, ...] = ROUTER_RANK_SHARES
+    """Relative emission slice per ranked router miner (champion first). Only
+    ratios matter — ``blend_track_weights`` normalizes the router vector to the
+    track's bps share — so these need not sum to one. Inert while the router
+    track is shadow / not eligible."""
+
+    router_ledger_read_enabled: bool = False
+    """Whether the worker reads the published router ledger from the platform.
+
+    ``False`` (default) keeps the worker on :class:`EmptyRouterLedgerSource`, so
+    the fold is byte-identical to folding no router track at all — the safe v1
+    shadow default. Setting ``VALIDATOR_ROUTER_LEDGER_READ_ENABLED=true`` swaps in
+    :class:`PlatformRouterLedgerSource`, which reads the shadow ledger the
+    offloaded scorer publishes (via ``GET /scoring/router-ledger``) and folds it.
+    This flips *reading* on only; the track stays shadow
+    (``router_weight_eligible=False``), so a read ledger still contributes zero
+    emission. It is intentionally env-tunable — unlike the consensus-critical
+    ``router_track_state`` — because turning the read on changes no chain output,
+    only which ledger the (already zero-weighted) router fold logs and measures."""
+
+    generator_track_state: str = "active"
+    """Lifecycle state of the generator-competition track. Compiled-only for
+    consensus safety, like ``router_track_state``.
+
+    ``active`` since protocol 33. That alone pays nothing: the track's share
+    comes from the platform-governed ``track_shares_bps`` and the compiled
+    default gives it 0 bps, and the fold pays only ledger entries Platform
+    marked ``weight_eligible`` (which it does only under generator settings
+    ``mode=enforce``). A generator share with no eligible entry falls back to
+    the memory track (see ``Track.unclaimed_share_to``), so until an operator
+    both serves a share and enforces the ledger the vector is byte-identical to
+    the memory-only fold."""
+
+    generator_weight_eligible: bool = True
+    """Whether the generator track may contribute emissions. Promoted with
+    ``generator_track_state`` in protocol 33; inert until Platform serves a
+    nonzero generator share and weight-eligible ledger entries."""
+
+    generator_rank_shares: tuple[float, ...] = GENERATOR_RANK_SHARES
+    """Relative emission slice per ranked generator miner (best first). Flatter
+    than the agent curve: discriminating cases are a shared good, and several
+    generators finding different blind spots is the goal. Inert while shadow."""
+
+    generator_ledger_read_enabled: bool = True
+    """Whether the worker reads the generator ledger from the platform
+    (``VALIDATOR_GENERATOR_LEDGER_READ_ENABLED``, default on since protocol 33).
+    Required while the track is weight-eligible: a validator that does not read
+    the ledger would fold an empty generator vector and pay a governed
+    generator share to memory while the rest of the fleet pays generators."""
+
+    def __post_init__(self) -> None:
+        """Fail loud at boot on a genuinely misconfigured router split.
+
+        ``compute_router_weights`` degrades malformed ``router_rank_shares`` to an
+        empty vector at fold time (fail-closed on the consensus path, never a
+        crash), which would silently zero the router track. To keep a real
+        misconfiguration from hiding behind that runtime backstop, reject an
+        empty or non-finite/≤0 share here — a boot-time ``ValidatorConfigError``
+        is visible, a silently-inert track is not."""
+        if not self.router_rank_shares:
+            raise ValidatorConfigError("router_rank_shares must be non-empty")
+        if any(
+            not math.isfinite(share) or share <= 0.0
+            for share in self.router_rank_shares
+        ):
+            raise ValidatorConfigError(
+                "router_rank_shares must contain only finite positive values, got "
+                f"{self.router_rank_shares!r}"
+            )
+        if not self.generator_rank_shares or any(
+            not math.isfinite(share) or share <= 0.0
+            for share in self.generator_rank_shares
+        ):
+            raise ValidatorConfigError(
+                "generator_rank_shares must be non-empty finite positive values, "
+                f"got {self.generator_rank_shares!r}"
+            )
+        if self.generator_weight_eligible and not self.generator_ledger_read_enabled:
+            # Eligibility without the ledger read would fold an empty ledger
+            # and pay a governed generator share to memory while the rest of
+            # the fleet pays generators: a consensus split, so refuse to boot.
+            raise ValidatorConfigError(
+                "generator_weight_eligible requires generator_ledger_read_enabled; "
+                "unset VALIDATOR_GENERATOR_LEDGER_READ_ENABLED (default true)"
+            )
+
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
         return bool(self.wallet_name and self.wallet_hotkey)
@@ -455,6 +621,24 @@ def _require(name: str, value: str) -> str:
     if not value:
         raise ValidatorConfigError(f"{name} is required")
     return value
+
+
+CRN_BLOCK_BINDING_POSTURES: frozenset[str] = frozenset({"observe", "enforce"})
+"""Accepted ``VALIDATOR_CRN_BLOCK_BINDING_POSTURE`` values."""
+
+
+def _parse_crn_block_binding_posture() -> str:
+    """``observe`` unless the operator explicitly opts the validator into
+    ``enforce``; anything else is a typed configuration error, not a silent
+    fallback to either posture."""
+    raw = os.environ.get("VALIDATOR_CRN_BLOCK_BINDING_POSTURE", "observe")
+    posture = raw.strip().lower()
+    if posture not in CRN_BLOCK_BINDING_POSTURES:
+        raise ValidatorConfigError(
+            "VALIDATOR_CRN_BLOCK_BINDING_POSTURE must be one of "
+            f"{sorted(CRN_BLOCK_BINDING_POSTURES)}, got {raw!r}"
+        )
+    return posture
 
 
 def _parse_float(name: str, default: str) -> float:
@@ -527,6 +711,15 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "VALIDATOR_STACK_HEALTH_CACHE_SECONDS must be in [0, 3600]"
         )
+    liveness_watchdog_seconds = _parse_float(
+        "VALIDATOR_LIVENESS_WATCHDOG_SECONDS", "600"
+    )
+    if not math.isfinite(liveness_watchdog_seconds) or not (
+        liveness_watchdog_seconds == 0 or 120 <= liveness_watchdog_seconds <= 840
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_LIVENESS_WATCHDOG_SECONDS must be 0 (disabled) or in [120, 840]"
+        )
     capabilities_timeout_seconds = _parse_float(
         "VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS", "3"
     )
@@ -557,13 +750,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         "VALIDATOR_HOTKEY", os.environ.get("VALIDATOR_HOTKEY", "")
     )
     subtensor_network = os.environ.get("SUBTENSOR_NETWORK", "finney")
-    # Finney SN118 has a fixed owner hotkey at UID 0. Production validators may
-    # use a named network or a custom non-loopback endpoint, so only explicit
-    # local aliases/endpoints self-target the local owner validator.
+    # Production owner hotkeys can rotate. Verify the chain's owner hotkey is in
+    # the metagraph used to filter registered miners. Only explicit local aliases
+    # or loopback endpoints self-target the local owner validator.
     burn_hotkey = (
-        validator_hotkey
-        if _is_local_subtensor_network(subtensor_network)
-        else FINNEY_BURN_HOTKEY
+        validator_hotkey if _is_local_subtensor_network(subtensor_network) else None
     )
 
     # All KOTH + ATH mechanism values are frozen (the KOTH_* module constants),
@@ -579,8 +770,11 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         os.environ.get("VALIDATOR_PLATFORM_API_URL", "http://localhost:8000"),
     )
     benchmark_capacity = int(os.environ.get("VALIDATOR_BENCHMARK_CAPACITY", "1"))
-    longmem_capacity = int(
-        os.environ.get("VALIDATOR_LONGMEM_CAPACITY", str((benchmark_capacity + 1) // 2))
+    # Compose passes an empty value when the operator sets none; treat it like
+    # unset so a host sized below 7 slots derives a capacity it can accept.
+    longmem_raw = os.environ.get("VALIDATOR_LONGMEM_CAPACITY", "").strip()
+    longmem_capacity = (
+        int(longmem_raw) if longmem_raw else (benchmark_capacity + 1) // 2
     )
     coding_shadow_enabled = (
         os.environ.get("VALIDATOR_CODING_SHADOW_ENABLED", "false").lower() in _truthy
@@ -648,6 +842,18 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         else 10.0
     )
     config = ValidatorConfig(
+        treasury_approval_file=os.environ.get(
+            "DITTO_TREASURY_SHADOW_APPROVAL_FILE", ""
+        ).strip()
+        or None,
+        treasury_approved_policy_digest=os.environ.get(
+            "DITTO_TREASURY_APPROVED_POLICY_DIGEST", ""
+        ).strip()
+        or None,
+        treasury_collector_policy_digest=os.environ.get(
+            "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST", ""
+        ).strip()
+        or None,
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
             os.environ.get("VALIDATOR_PLATFORM_INFERENCE_BASE_URL", "").strip()
@@ -673,6 +879,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         pylon_probe_url=os.environ.get("VALIDATOR_PYLON_PROBE_URL", ""),
         stack_probe_timeout_seconds=stack_probe_timeout_seconds,
         stack_health_cache_seconds=stack_health_cache_seconds,
+        liveness_watchdog_seconds=liveness_watchdog_seconds,
         validator_hotkey=validator_hotkey,
         wallet_name=os.environ.get("VALIDATOR_WALLET_NAME") or None,
         wallet_hotkey=os.environ.get("VALIDATOR_WALLET_HOTKEY") or None,
@@ -686,6 +893,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         koth_rank_shares=KOTH_RANK_SHARES,
         koth_dethrone_z=KOTH_DETHRONE_Z,
         koth_confirmation_seeds=KOTH_CONFIRMATION_SEEDS,
+        crn_block_binding_posture=_parse_crn_block_binding_posture(),
         top5_max_confirmation_seeds=TOP5_MAX_CONFIRMATION_SEEDS,
         top5_catch_up_rate=TOP5_CATCH_UP_RATE,
         top5_max_cohort_size=TOP5_MAX_COHORT_SIZE,
@@ -699,7 +907,10 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")
         ),
         dittobench_timeout_seconds=float(
-            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "9900")
+            os.environ.get(
+                "VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS",
+                str(runtime_envelope().run_wall_seconds),
+            )
         ),
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")
@@ -720,6 +931,14 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         coding_executor_timeout_seconds=coding_executor_timeout_seconds,
         coding_canary_enabled=coding_canary_enabled,
         coding_canary_poll_seconds=coding_canary_poll_seconds,
+        router_ledger_read_enabled=(
+            os.environ.get("VALIDATOR_ROUTER_LEDGER_READ_ENABLED", "false").lower()
+            in _truthy
+        ),
+        generator_ledger_read_enabled=(
+            os.environ.get("VALIDATOR_GENERATOR_LEDGER_READ_ENABLED", "true").lower()
+            in _truthy
+        ),
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(

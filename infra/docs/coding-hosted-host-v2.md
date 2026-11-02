@@ -1,10 +1,17 @@
 # Platform-owned native-v2 qualification host
 
-This is a dormant host foundation, not a deployed worker or an approved private
-execution environment. `enable_coding_hosted_host = false` in both the variable
-default and reviewed production intent creates no native-v2 VM, network, NAT,
-service account, or operator grant. The legacy `coding_executor_host_count = 0`
-and all existing Coding gates remain unchanged.
+This is a qualification-host foundation, not a deployed worker or an approved
+private execution environment. The reusable module's `enabled` input remains
+false by default. The production root no longer invokes that module or accepts
+its former activation inputs: a reviewed retirement plan removes its native-v2
+VM, boot disk, network, NAT, service account and operator grants. The legacy
+`coding_executor_host_count = 0` and all execution gates remain unchanged.
+The cold snapshot is outside Terraform and must be preserved.
+
+The infrastructure operator designation is not approval of any artifact, key
+operation, infrastructure plan or private execution. Artifact approval must
+independently review the builder's exact source/provenance and hashes before
+installation.
 
 The [native-v2 trust decision](../../docs/coding-platform-private-execution-v2.md)
 places private execution under Platform custody. The old k=3 executor cohort
@@ -24,11 +31,31 @@ the native launcher's socket checks to make the old role fit.
 - A dedicated telemetry-only service account. No provider, storage, registry,
   PostgreSQL, Secret Manager, signing or key-custody permission is granted.
 - Explicit `user:email` Platform custodians through instance-scoped OS Login
-  and IAP SSH (port 22 only), plus actAs on this otherwise-empty runtime identity.
-  `coding_hosted_operators` defaults empty and enabling without it fails. No
-  project-wide compute viewer or tunnel grant is added; operators need existing
-  approved discovery permissions. Existing broader project/org grants must also
-  be audited before approval; this module does not revoke inherited access.
+  and destination-IP-scoped IAP SSH (port 22 only), plus actAs on this
+  otherwise-empty runtime identity.
+  The module's `operators` input defaults empty and enabling without it fails. No
+  project-wide compute viewer or unconditional tunnel grant is added; operators
+  need existing approved discovery permissions. Existing broader project/org
+  grants must also be audited before approval; this module does not revoke
+  inherited access.
+
+The project-level IAP binding uses `destination.ip` from the host module's primary
+private address and `destination.port == 22`, following
+[Google's TCP forwarding conditions](https://docs.cloud.google.com/iap/docs/using-tcp-forwarding).
+Do not match a Compute hostname through `resource.name`: IAP tunnel instances
+are not listed as supporting that attribute in the
+[IAM attribute reference](https://docs.cloud.google.com/iam/docs/conditions-attribute-reference#resource-name).
+The previous hostname condition was followed by a live IAP `4033: not authorized`
+even with valid user authentication and the host's OS Login grant.
+
+This is an IP/port restriction, not an instance-ID or VPC attestation. Before
+applying it, verify that the destination IP identifies only this intended VM
+across the project's networks; retain that uniqueness as infrastructure changes.
+If the address is reused, reassigned or the host is replaced, review the binding
+again. Do not broaden it to a subnet or port-only condition. Successful mocked
+plans do not prove effective IAM or a working tunnel: after a separately approved
+apply, test the nominated operator's actual IAP SSH access before host installation
+or qualification.
 
 The host may download provisioning packages over HTTP(S) through NAT scoped to
 its subnet. Higher-priority egress rules deny RFC1918 and link-local destinations;
@@ -42,8 +69,8 @@ by this module.
 
 ## Activation and retention
 
-Prepare a separate reviewed change to production intent with the enable flag
-and exact approved custodian set. Use the existing protected `gcp-platform`
+Review the production-intent change and its exact nominated custodian before
+merging. Then use the existing protected `gcp-platform`
 plan/apply workflow and review the saved plan for unrelated drift, replacements,
 IAM, network changes and cost. Do not use an out-of-band CLI create, a targeted
 apply that omits safeguards, or a new workflow bypass. This PR does not dispatch
@@ -55,6 +82,70 @@ to false is not a safe cleanup or rollback once state/images/evidence exist:
 reconcile retained material, plan a separately authorized decommission, and
 preserve private tombstones/evidence. Do not disable deletion protection or
 remove state as an automatic recovery step.
+
+## October 2026 retirement preparation (SN-138)
+
+The idle host was stopped and a regional encrypted cold snapshot retained.
+Snapshot `ditto-coding-hosted-v2-cold-20261009` (ID
+`5016213937203751656`) was restored to a temporary 200 GiB disk and booted on
+the same trusted VM with its existing IAP, network and Shielded VM settings.
+The restored RSA-3072 key matched the public SPKI fingerprint and receipt,
+passed an in-place OAEP-SHA256 round trip, and rejected tampered ciphertext.
+No private PEM was exported. No worker, custody instance or coding container
+was running. This demonstrates restored boot and synthetic RSA recovery;
+historical Hippius corpus decryption and offline curator-media recovery remain
+unverified. The evidence belongs in
+[the recovery report](https://omniaura-team.atlassian.net/wiki/spaces/INFRA/pages/15728641)
+and [SN-138](https://omniaura-team.atlassian.net/browse/SN-138), not in Git.
+
+Retirement has two separately reviewed protected plan/apply phases:
+
+1. Production intent sets `coding_hosted_deletion_protection = false`.
+   All other compute callers retain the default `true`. The host module,
+   its networking, IAM, boot disk and Terraform `prevent_destroy` remain.
+   Review the saved plan for an in-place protection update only; do not apply
+   unrelated drift, a replacement, or a VM start.
+2. After that apply is verified, remove the entire root host module invocation
+   in a separate change and saved plan. Explicitly destroy only its retained
+   host resources, private PostgreSQL path and dedicated networking/IAM;
+   preserve the cold snapshot and unrelated PostgreSQL VM/data. Removing the
+   module configuration also removes its lifecycle destruction guard, so
+   setting an enable flag to false is not a substitute for this review.
+
+The first-phase source change is inactive until its exact saved plan is
+approved and applied through `infra-plan-apply.yml`. A subsequent unrelated
+apply of this root will also see the protection change: review that coupling.
+Keep the original disk attached and stopped until the destruction phase.
+Restore its original boot attachment/auto-delete setting after the drill,
+and delete the disposable restore disk only after the retained original and
+snapshot are rechecked. The full recovery ticket remains open for its
+independent corpus and curator-media criteria.
+
+Phase one was applied through protected workflow run
+[`37975185695`](https://github.com/ditto-assistant/ditto-subnet/actions/runs/37975185695)
+at main `b9ffad6fbe51d0f4e9e7e91468927df6b1856301`. The reviewed saved plan
+contained exactly one in-place deletion-protection update; GCP subsequently
+reported the host still stopped with deletion protection false.
+
+The removal change implements phase two by removing the entire root invocation
+with null host/access outputs (omitted from Terraform state). Use the protected
+workflow with `targets=module.coding_hosted_host`, then inspect every planned
+action: only deletion of resources under that exact module is permitted. The
+200 GiB boot disk is an auto-delete attachment of the VM and is removed with it.
+The retained snapshot, Platform PostgreSQL VM/disks, Platform VPC and unrelated
+root drift must not be changed. The full root plan currently includes unrelated
+screener, IAM and secret changes and is not approved for this retirement.
+
+The PostgreSQL guest admission flag is disabled for future convergence. Terraform
+removes both peerings and the exact-host cloud firewall exception. This retirement
+does not converge or restart PostgreSQL: any old guest UFW/HBA row remains a
+separate exact-rule cleanup, with no live network path from the retired host.
+
+After apply, verify the module has no resources in state; the VM, original boot
+disk and dedicated network/IAM resources are absent; and the snapshot is READY.
+Compare PostgreSQL instance and disk identities with their pre-apply inventory.
+Recovery requires restoring a new disk from the retained snapshot and a new
+reviewed host/network/custody plan; reverting source alone does not restore data.
 
 ## Required next layers
 

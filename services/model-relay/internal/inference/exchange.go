@@ -119,6 +119,11 @@ type exchangeResponse struct {
 	EmbeddingRequestBudget int32   `json:"embedding_request_budget"`
 	EmbeddingTokenBudget   int64   `json:"embedding_token_budget"`
 	MaxOutputTokens        int     `json:"max_output_tokens"`
+	// Decision-lane evidence, present only on a grant minted with the lane on,
+	// so a lane-off exchange is byte-identical to the pre-lane response.
+	DecisionModel         *string `json:"decision_model,omitempty"`
+	DecisionRequestBudget *int32  `json:"decision_request_budget,omitempty"`
+	DecisionTokenBudget   *int64  `json:"decision_token_budget,omitempty"`
 }
 
 // devBypassPermit mirrors _dev_bypass_permit: only when the flag is truthy
@@ -206,7 +211,7 @@ func (d *Deps) handleExchange(w http.ResponseWriter, r *http.Request) {
 		Nonce:           pgUUID(payload.nonce),
 		ValidatorHotkey: payload.validatorHotkey,
 		UsedAt:          pgTime(now),
-		ExpiresAt:       pgTime(now.Add(exchangeMaxAge)),
+		ExpiresAt:       pgTime(nonceExpiresAt(now, payload.requestedAt, exchangeMaxAge)),
 	}); err != nil {
 		_ = sp.Rollback(ctx)
 		if isUniqueViolation(err) {
@@ -269,6 +274,11 @@ func (d *Deps) handleExchange(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resp.Model = &models[0]
+	}
+	if activated.DecisionModel.Valid {
+		resp.DecisionModel = &activated.DecisionModel.String
+		resp.DecisionRequestBudget = &activated.DecisionRequestBudget
+		resp.DecisionTokenBudget = &activated.DecisionTokenBudget
 	}
 	out, err := compactJSON(resp)
 	if err != nil {
@@ -381,8 +391,25 @@ func (d *Deps) activateInferenceGrant(ctx context.Context, q *postgres.Queries,
 	grant.ExpiresAt = pgTime(ticket.Deadline.Time)
 	grant.ActiveRequests = 0
 	grant.EmbeddingActiveRequests = 0
+	grant.DecisionActiveRequests = 0
 	grant.UpdatedAt = pgTime(now)
 	return &grant, bearer, nil
+}
+
+// nonceExpiryMargin matches VALIDATOR_NONCE_EXPIRY_MARGIN. It covers clock
+// skew of one default janitor sweep between the process that stored the nonce
+// and the process that deletes it.
+const nonceExpiryMargin = 60 * time.Second
+
+// nonceExpiresAt keeps a consumed nonce until the signed request is no longer
+// acceptable. A future requestedAt stays valid until requestedAt+maxAge, so
+// now+maxAge would drop the guard while the signature still verifies.
+func nonceExpiresAt(now, requestedAt time.Time, maxAge time.Duration) time.Time {
+	anchor := now
+	if requestedAt.After(now) {
+		anchor = requestedAt
+	}
+	return anchor.Add(maxAge).Add(nonceExpiryMargin)
 }
 
 func absDuration(d time.Duration) time.Duration {

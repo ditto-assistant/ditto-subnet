@@ -1,8 +1,21 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { describe, expect, expectTypeOf, it } from 'vitest'
 import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
+  SCREENING_SUBMISSION_AGENT_STATUSES,
+  competitionFeesInputSchema,
+  submissionSettingsRevisionSchema,
+  retryValidationInputSchema,
+  reinstatementRetryBudgetSchema,
+  scoringLeaseConfirmation,
+  scoringLeaseSettingsControlSchema,
+  setScoringLeaseSettingsInputSchema,
+  emissionEligibilityControlSchema,
   auditReasonSchema,
+  baselineDiffManifestSchema,
+  sourceDiffManifestSchema,
   CEILING_DISABLED,
   platformSupportsRetestCohortSize,
   parseContinualRetestSettingsControl,
@@ -14,10 +27,24 @@ import {
   validatorFleetSchema,
   copyReviewListSchema,
   openAthReviewInputSchema,
+  ATH_RULINGS_CONFIRMATION,
+  athRulingSchema,
+  athRulingPreviewItemSchema,
+  athRulingStepSchema,
+  athRulingExecuteItemSchema,
+  athRulingsPreviewResponseSchema,
+  athRulingsExecuteResponseSchema,
+  athRulingsUploadResponseSchema,
+  athRulingsBoardProjectionSchema,
+  previewAthRulingsBatchInputSchema,
+  executeAthRulingsBatchInputSchema,
   resolveCopyReviewInputSchema,
   resolveScreeningQuarantineInputSchema,
   screeningDisputeListSchema,
+  screeningDisputeSchema,
   screeningQuarantineListSchema,
+  screeningReviewEventListSchema,
+  minerQuarantineSummarySchema,
   screeningQuarantineBatchExecuteInputSchema,
   screeningQuarantineBatchPreviewInputSchema,
   screeningArtifactSchema,
@@ -26,6 +53,9 @@ import {
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
   screenerReviewSettingsSchema,
+  l2ReportCanaryViewSchema,
+  screenReviewAuditSchema,
+  screeningFailureDiagnosticSchema,
   applyScreenerReviewSettingsInputSchema,
   efficiencyBonusConfirmation,
   efficiencyBonusSettingsControlSchema,
@@ -37,6 +67,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
   inferenceConcurrencySettingsSchema,
+  DEFAULT_DECISION_LANE_SETTINGS,
   INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_CONCURRENCY,
   MAX_CHAT_REQUEST_BUDGET,
@@ -52,6 +83,8 @@ import {
   setQueuePolicySettingsInputSchema,
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
+  validatorCapacityEntrySchema,
+  benchmarkRolloutQualificationDetailSchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
   setValidatorIssuancePauseInputSchema,
@@ -77,6 +110,11 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  screenerFleetReleaseSchema,
+  screeningInfraRetryViewSchema,
+  screenerNodeChannelSettingsConfirmation,
+  screenerNodeChannelSettingsControlSchema,
+  setScreenerNodeChannelSettingsInputSchema,
   screenerProviderSettingsConfirmation,
   screenerProviderSettingsSchema,
   authorizeConfirmationBundleRetestInputSchema,
@@ -90,6 +128,11 @@ import {
   queueValidatorScoreRetestsInputSchema,
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
+  validatorFleetObservabilityMemberSchema,
+  setTrackShareSettingsInputSchema,
+  emissionAllocationConfirmation,
+  setEmissionAllocationInputSchema,
+  trackSharesConfirmation,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -125,10 +168,15 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_request_budget: MAX_CHAT_REQUEST_BUDGET + 1,
@@ -151,10 +199,15 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
@@ -177,12 +230,17 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'shadow' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
     expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
     expect(MAX_REQUESTS_PER_MINUTE).toBe(100_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       embedding_global_concurrency: 513,
@@ -206,6 +264,7 @@ describe('admin API schemas', () => {
       relay_delay_fingerprint_mode: 'off',
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
+      sandbox_memory_limit_mib: 6144,
     })
     expect(() =>
       setInferenceConcurrencySettingsInputSchema.parse({
@@ -215,6 +274,38 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       }),
     ).toThrow(/benchmark_runtime/)
+  })
+
+  it('keeps scored provider routing optional on writes and rejects unknown modes', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: 25_000_000,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
+      embedding_per_ticket_concurrency: 12,
+      embedding_per_validator_concurrency: 48,
+      embedding_global_concurrency: 96,
+      ...INFERENCE_RPM,
+      benchmark_runtime: {
+        case_concurrency: 4,
+        relay_delay_fingerprint_mode: 'off' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
+      },
+    }
+    const write = (extra: Record<string, unknown>) =>
+      setInferenceConcurrencySettingsInputSchema.parse({
+        expectedRevision: 0,
+        settings: { ...settings, ...extra },
+        reason: 'canary the bf16 price order',
+        confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
+      })
+    expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
+      .scored_provider_routing).toBe('bf16_price_order_canary')
+    expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()
   })
 
   it('requires exact confirmation for v9 contract retests only', () => {
@@ -277,6 +368,30 @@ describe('admin API schemas', () => {
     })
     expect(parsed.items[0].observed_revision).toBeNull()
     expect(parsed.required_rollout_mode).toBe('enforce')
+  })
+
+  it('reports the capacity event retention window and null when pruning is off', () => {
+    const base = { snapshot: null, nodes: [], events: [] }
+    expect(screenerCapacityViewSchema.parse({ ...base, event_retention_days: 30 }).event_retention_days).toBe(30)
+    expect(screenerCapacityViewSchema.parse({ ...base, event_retention_days: null }).event_retention_days).toBeNull()
+    expect(screenerCapacityViewSchema.parse(base).event_retention_days).toBeNull()
+  })
+
+  it('reports the shared screener bearer posture and null from older Platforms', () => {
+    const base = { snapshot: null, nodes: [], events: [] }
+    expect(screenerCapacityViewSchema.parse({ ...base, legacy_bearer_accepted: false }).legacy_bearer_accepted).toBe(false)
+    expect(screenerCapacityViewSchema.parse(base).legacy_bearer_accepted).toBeNull()
+  })
+
+  it('preserves the signed fixture capability and defaults older releases to false', () => {
+    const release = {
+      builtin_policy_version: 13,
+      revision: 'a'.repeat(40),
+      version: 'v0.330.16',
+      activated_at: 1_800_000_000,
+    }
+    expect(screenerFleetReleaseSchema.parse({ ...release, source_fixture_v1: true }).source_fixture_v1).toBe(true)
+    expect(screenerFleetReleaseSchema.parse(release).source_fixture_v1).toBe(false)
   })
 
   it('preserves the fenced multi-provider capacity contract', () => {
@@ -433,6 +548,86 @@ describe('admin API schemas', () => {
     )
   })
 
+  it('names production admission closure in the node concurrency confirmation', () => {
+    const settings = {
+      screening_concurrency: 0,
+      sandbox_slots: 4,
+      build_concurrency: 4,
+      runtime_concurrency: 4,
+      source_review_concurrency: 4,
+      canary_concurrency: 1,
+    }
+
+    expect(screenerNodeChannelSettingsConfirmation('subnet-screener-1', settings)).toBe(
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=0 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=1 CLOSE PRODUCTION ADMISSION',
+    )
+    expect(
+      screenerNodeChannelSettingsConfirmation('subnet-screener-1', {
+        ...settings,
+        screening_concurrency: 4,
+        canary_concurrency: 0,
+      }),
+    ).toBe(
+      'APPLY SCREENER NODE subnet-screener-1 SCREENING=4 SANDBOX=4 BUILD=4 RUNTIME=4 SOURCE_REVIEW=4 CANARY=0',
+    )
+  })
+
+  it('reads a pre-canary node revision with the Platform default but writes all six limits', () => {
+    const legacy = {
+      screening_concurrency: 2,
+      sandbox_slots: 2,
+      build_concurrency: 2,
+      runtime_concurrency: 2,
+      source_review_concurrency: 2,
+    }
+    const revision = {
+      environment: 'prod',
+      node_id: 'subnet-screener-1',
+      revision: 3,
+      parent_revision: 2,
+      settings: legacy,
+      reason: 'Open two production lanes on the primary',
+      actor: 'operator@example.com',
+      created_at: null,
+    }
+    const control = screenerNodeChannelSettingsControlSchema.parse({
+      current: revision,
+      history: [revision],
+      usage: {
+        screening_active: 1,
+        sandbox_active: 0,
+        build_active: 0,
+        runtime_active: 0,
+        source_review_active: 0,
+      },
+    })
+    expect(control.current.settings.canary_concurrency).toBe(1)
+    expect(control.usage?.canary_active).toBe(0)
+    expect(control.usage?.canary_queued).toBe(0)
+
+    const write = {
+      nodeId: 'subnet-screener-1',
+      expectedRevision: 3,
+      reason: 'Reserve both production lanes on the primary',
+      confirmation: 'unused',
+    }
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({ ...write, settings: legacy }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.safeParse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 9 },
+      }).success,
+    ).toBe(false)
+    expect(
+      setScreenerNodeChannelSettingsInputSchema.parse({
+        ...write,
+        settings: { ...legacy, canary_concurrency: 0 },
+      }).settings.canary_concurrency,
+    ).toBe(0)
+  })
+
   it('parses aggregate inference controls and rejects unsafe operator input', () => {
     const inventory = inferenceRoutingInventorySchema.parse({
       routing_mode: 'adaptive',
@@ -520,7 +715,7 @@ describe('admin API schemas', () => {
           policy_version: 7,
           manifest_digest: 'manifest',
           finding_digest: 'finding',
-          reason_code: 'source_review_suspicious',
+          screening_reason_code: 'source_review_suspicious',
           status: 'active',
           created_at: '2026-07-14T12:00:00Z',
           resolved_at: null,
@@ -532,6 +727,95 @@ describe('admin API schemas', () => {
     })
     expect(result.items[0].policy_version).toBe(7)
     expect(result.items[0].agent_version).toBeNull()
+  })
+
+  it('coalesces the deprecated reason_code alias across a rolling deploy', () => {
+    // Platform and Backroom deploy in parallel from one release, so for one
+    // release the screening-origin code has two possible names on the wire:
+    // Platform-first sends only the old one, Backroom-first sees both. The
+    // console must read the code either way and must never see the alias as a
+    // second field it could mistake for the operator's ruling.
+    const quarantineItem = {
+      quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+      miner_hotkey: '5Miner',
+      agent_name: 'memory-agent',
+      artifact_sha256: 'artifact',
+      policy_version: 7,
+      manifest_digest: 'manifest',
+      finding_digest: 'finding',
+      status: 'active',
+      created_at: '2026-07-14T12:00:00Z',
+      resolved_at: null,
+      resolved_by: null,
+      resolution: null,
+      resolution_reason: null,
+    }
+    const platformFirst = screeningQuarantineListSchema.parse({
+      count: 1,
+      items: [{ ...quarantineItem, reason_code: 'behavioral-oracle-passed' }],
+    }).items[0]
+    const backroomFirst = screeningQuarantineListSchema.parse({
+      count: 1,
+      items: [
+        {
+          ...quarantineItem,
+          screening_reason_code: 'behavioral-oracle-passed',
+          reason_code: 'stale-alias',
+        },
+      ],
+    }).items[0]
+
+    expect(platformFirst.screening_reason_code).toBe('behavioral-oracle-passed')
+    expect(backroomFirst.screening_reason_code).toBe('behavioral-oracle-passed')
+    expect('reason_code' in platformFirst).toBe(false)
+
+    expect(
+      screeningReviewEventListSchema.parse({
+        items: [
+          {
+            event_id: '5b1a5f6c-4a2f-4b4f-9d2c-1f0b2c3d4e5f',
+            agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+            attempt_id: '20236f60-c143-43b0-b03e-2cbe51f281d8',
+            quarantine_id: null,
+            resolution_id: null,
+            previous_event_id: null,
+            event_kind: 'automated',
+            artifact_sha256: 'a'.repeat(64),
+            policy_version: 7,
+            actor: 'screener',
+            reviewer_model: null,
+            outcome: 'reject',
+            effective_decision: 'reject',
+            reason_code: 'behavioral-oracle-passed',
+            reason: null,
+            prior_agent_status: 'screening',
+            next_agent_status: 'screening_failed',
+            evidence: {},
+            created_at: '2026-07-14T12:00:00Z',
+          },
+        ],
+        count: 1,
+        limit: 50,
+        offset: 0,
+      }).items[0].screening_reason_code,
+    ).toBe('behavioral-oracle-passed')
+
+    expect(
+      minerQuarantineSummarySchema.parse({
+        quarantine_id: 'e3bb1518-530f-42d7-a50b-b21ac9853798',
+        agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+        agent_name: 'memory-agent',
+        reason_code: 'behavioral-oracle-passed',
+        status: 'resolved',
+        resolution: 'reject',
+        resolution_reason: 'Static answer table confirmed',
+        resolution_reason_code: 'operator-rejected-quarantine',
+        created_at: '2026-07-14T12:00:00Z',
+        resolved_at: '2026-07-15T09:00:00Z',
+      }).screening_reason_code,
+    ).toBe('behavioral-oracle-passed')
   })
 
   it('requires an auditable quarantine resolution reason', () => {
@@ -598,6 +882,43 @@ describe('admin API schemas', () => {
 
     expect(result.items[0].message).toContain('generic routing')
     expect(result.items[0].original_reason).toContain('benchmark-specific')
+    // A pre-v13 row carries no kind: it is a screening dispute.
+    expect(result.items[0].kind).toBe('screening')
+  })
+
+  it('parses a bench v13 gate-notes dispute, which has no quarantine', () => {
+    const result = screeningDisputeListSchema.parse({
+      count: 1,
+      items: [
+        {
+          dispute_id: '44444444-4444-4444-8444-444444444445',
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          kind: 'gate_notes',
+          quarantine_id: null,
+          miner_hotkey: '5Miner',
+          agent_name: 'memory-agent',
+          agent_version: 3,
+          artifact_sha256: 'ab'.repeat(32),
+          message: 'The twin_concordant marker fired on twins the seeded history answers identically.',
+          status: 'pending',
+          created_at: '2026-09-13T12:00:00Z',
+          original_reason: null,
+          resolved_at: null,
+          resolved_by: null,
+          resolution: null,
+          resolution_reason: null,
+          gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+        },
+      ],
+    })
+
+    expect(result.items[0]).toMatchObject({
+      kind: 'gate_notes',
+      quarantine_id: null,
+      original_reason: null,
+      gate_note_ids: ['0123456789abcdef', 'fedcba9876543210'],
+    })
+    expect(() => screeningDisputeSchema.parse({ ...result.items[0], kind: 'appeal' })).toThrow()
   })
 
   it('parses rejected screening history and short-lived artifact access', () => {
@@ -675,6 +996,8 @@ describe('admin API schemas', () => {
     })
     expect(assignments.items[0].score_count).toBe(2)
     expect(assignments.items[0].provisional_composite).toBe(1.25)
+    // A platform that predates the field reads as "no seed", not a guess.
+    expect(assignments.items[0].seed).toBeNull()
     expect(() =>
       releaseValidatorAssignmentInputSchema.parse({
         agentId: assignments.items[0].agent_id,
@@ -683,6 +1006,67 @@ describe('admin API schemas', () => {
         reason: 'short',
       }),
     ).toThrow()
+  })
+
+  it('keeps a continual retest lease seed exact and rejects a lossy number', () => {
+    const lease = {
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'memory-agent',
+      miner_hotkey: '5Miner',
+      validator_hotkey: '5Validator',
+      issued_at: '2026-09-22T17:35:16Z',
+      deadline: '2026-09-22T20:35:16Z',
+      bench_version: 13,
+      attempt_count: 1,
+      score_count: 3,
+      provisional_composite: 0.9,
+      purpose: 'continual_retest',
+      seed: '9007199254740993',
+    }
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [lease],
+    })
+    expect(parsed.items[0].seed).toBe('9007199254740993')
+    for (const seed of [Number.MAX_SAFE_INTEGER + 2, '-1', '01', '1e3']) {
+      expect(() =>
+        validatorAssignmentListSchema.parse({
+          count: 1,
+          generation: 'active',
+          active_bench_version: 13,
+          items: [{ ...lease, seed }],
+        }),
+      ).toThrow()
+    }
+  })
+
+  it('parses a live generator-round lease on a row with no scoring attempt yet', () => {
+    // SN-334: a round lease is not a scoring attempt, so the row it created
+    // reports zero, and the panel must not drop the whole list over it.
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'memory-agent',
+          miner_hotkey: '5Miner',
+          validator_hotkey: '5Validator',
+          issued_at: '2026-10-24T07:00:00Z',
+          deadline: '2026-10-24T08:30:00Z',
+          bench_version: 13,
+          attempt_count: 0,
+          score_count: 3,
+          provisional_composite: 0.9,
+          purpose: 'generator_round',
+        },
+      ],
+    })
+    expect(parsed.items[0].purpose).toBe('generator_round')
+    expect(parsed.items[0].attempt_count).toBe(0)
   })
 })
 
@@ -731,6 +1115,10 @@ function confirmationSettingsControl() {
       checksum: confirmationDigest,
       source: 'revision',
       configured: true,
+      profile_installed: true,
+      installed_profiles: [
+        { revision: 'v9-confirmation-shadow-1', checksum: confirmationDigest },
+      ],
       issuance_active: true,
       max_top_n: 10,
       max_daily_bundle_cap: 1_000,
@@ -1026,6 +1414,17 @@ type MutableConfirmationBundle = MutableConfirmationValue<
   ReturnType<typeof confirmationBundle>
 >
 
+describe('screening submission search filters', () => {
+  it('lists exactly the generated Platform AgentStatus values', () => {
+    expectTypeOf<(typeof SCREENING_SUBMISSION_AGENT_STATUSES)[number]>().toEqualTypeOf<
+      PlatformComponents['schemas']['AgentStatus']
+    >()
+    expect(new Set(SCREENING_SUBMISSION_AGENT_STATUSES).size).toBe(
+      SCREENING_SUBMISSION_AGENT_STATUSES.length,
+    )
+  })
+})
+
 describe('Bench v9 confirmation bundle schemas', () => {
   it('stays statically exhaustive against the generated Platform response types', () => {
     expectTypeOf<keyof ZodOutput<typeof confirmationBundleViewSchema>>().toEqualTypeOf<
@@ -1048,6 +1447,77 @@ describe('Bench v9 confirmation bundle schemas', () => {
     )
     expect(parsed.default.mode).toBe('off')
     expect(parsed.effective.issuance_active).toBe(true)
+    expect(parsed.effective.profile_installed).toBe(true)
+    expect(parsed.effective.installed_profiles).toEqual([
+      { revision: 'v9-confirmation-shadow-1', checksum: confirmationDigest },
+    ])
+  })
+
+  it('still parses an effective view from a Platform that predates installed_profiles', () => {
+    const control = confirmationSettingsControl()
+    const { profile_installed: _installed, installed_profiles: _profiles, ...older } =
+      control.effective
+    const parsed = confirmationBundleSettingsControlSchema.parse({
+      ...control,
+      effective: older,
+    })
+    expect(parsed.effective.profile_installed).toBeUndefined()
+    expect(parsed.effective.installed_profiles).toBeUndefined()
+  })
+
+  it('parses the pinned-but-uninstalled shape: shadow, configured, inactive', () => {
+    // Production revision 39 pinned v7 after the release moved to v8.
+    const control = confirmationSettingsControl()
+    const parsed = confirmationBundleSettingsControlSchema.parse({
+      ...control,
+      effective: {
+        ...control.effective,
+        profile_installed: false,
+        installed_profiles: [
+          {
+            revision: 'v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8',
+            checksum: '8e5be01e3efd17dbf6cc21e79b9d53d82d842b1563d403b0318f2a272d6297af',
+          },
+        ],
+        issuance_active: false,
+      },
+    })
+    expect(parsed.effective.configured).toBe(true)
+    expect(parsed.effective.profile_installed).toBe(false)
+    expect(parsed.effective.issuance_active).toBe(false)
+  })
+
+  it('rejects issuance_active=true when the pinned profile is not installed', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: { ...control.effective, profile_installed: false, issuance_active: true },
+      }),
+    ).toThrow(/issuance_active contradicts/)
+  })
+
+  it('rejects issuance_active=false when the pinned profile is installed and mode is on', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: { ...control.effective, profile_installed: true, issuance_active: false },
+      }),
+    ).toThrow(/issuance_active contradicts/)
+  })
+
+  it('rejects an installed profile identity without a canonical checksum', () => {
+    const control = confirmationSettingsControl()
+    expect(() =>
+      confirmationBundleSettingsControlSchema.parse({
+        ...control,
+        effective: {
+          ...control.effective,
+          installed_profiles: [{ revision: 'v9-confirmation-shadow-1', checksum: 'abc' }],
+        },
+      }),
+    ).toThrow()
   })
 
   it.each(['shadow', 'enforce'] as const)(
@@ -1671,6 +2141,38 @@ describe('source review causal evidence schema', () => {
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
 
+  it.each(['final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome'] as const)(
+    'preserves the published I8 authority transition for %s', (effect) => {
+      const finding = {
+        ...generatedFinding,
+        causal_evidence: {
+          ...generatedFinding.causal_evidence,
+          authority_transition: 'evaluation_identity_authoritative',
+          scorer_visible_effect: effect,
+        },
+      } satisfies GeneratedSourceReviewFinding
+      expect(sourceReviewFindingSchema.parse(finding).causal_evidence).toEqual(finding.causal_evidence)
+    },
+  )
+
+  it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
+    const proof = {
+      evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
+      ordinary_product_exclusion: 'The served code skips the deciding model entirely.',
+      assumption_evidence_index: 0,
+    }
+    const finding = {
+      ...generatedFinding,
+      causal_evidence: { ...generatedFinding.causal_evidence, schema_version: 3, i5_proof: proof },
+    } as const
+    expect(sourceReviewFindingSchema.parse(finding).causal_evidence?.i5_proof).toEqual(proof)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...finding,
+      causal_evidence: { ...finding.causal_evidence, i5_proof: { ...proof, assumption_evidence_index: 9 } },
+    })).toThrow(/not bound to source evidence/)
+  })
+
   it('parses and retains the complete policy-v10 invariant sweep', () => {
     const parsed = sourceReviewFindingSchema.parse({
       ...generatedFinding,
@@ -1716,6 +2218,41 @@ describe('source review causal evidence schema', () => {
       },
     })).toThrow(/out of range/)
   })
+
+  it.each(['evaluation_independent_runtime', 'no_evaluation_identity_branch'] as const)(
+    'retains the complete policy-v13 sweep with %s', (passClause) => {
+      const assessment = {
+        schema_version: 2,
+        decisions: [...invariantAssessment.decisions, {
+          invariant: 'i8_evaluation_independence', disposition: 'pass',
+          pass_clause: passClause, summary: 'Runtime is independent of evaluation identity.',
+          evidence_indices: [],
+        }],
+      } satisfies GeneratedSourceReviewInvariantAssessment
+      const finding = { ...generatedFinding, invariant_assessment: assessment }
+      expect(sourceReviewFindingSchema.parse(finding).invariant_assessment).toEqual(assessment)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: { ...assessment, schema_version: 1 },
+      })).toThrow(/every policy-v10 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.slice(0, 7),
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: [...assessment.decisions.slice(0, 7), assessment.decisions[0]],
+        },
+      })).toThrow(/every policy-v13 invariant/)
+      expect(() => sourceReviewFindingSchema.parse({
+        ...finding, invariant_assessment: {
+          ...assessment, decisions: assessment.decisions.map((decision) => ({
+            ...decision, summary: 'x'.repeat(211),
+          })),
+        },
+      })).toThrow(/summaries exceed/)
+    },
+  )
 
   it('accepts the generated legacy shape when optional finding fields are absent', () => {
     const legacyFinding = {
@@ -1765,6 +2302,36 @@ describe('source review causal evidence schema', () => {
   })
 })
 
+describe('L2 report canary read schema', () => {
+  const view = {
+    canary_id: '797a187d-61ae-46c5-9cc1-7bc310ad0c22',
+    request_id: 'f79ff91e-8132-4bcf-88e9-8c6ca4fa1a12',
+    agent_id: '68129524-aeea-4383-98cd-f74753b61b55',
+    source_attempt_id: '03a15469-3200-46ed-8eb5-3baf234e7918',
+    artifact_sha256: 'a'.repeat(64),
+    target_node_id: 'subnet-screener-1',
+    expected_agent_status: 'rejected',
+    expected_score_count: 0,
+    review_label: 'known_reject',
+    status: 'leased',
+    claimed_instance_id: 'subnet-screener-1-worker-1',
+    report: null,
+    error_code: null,
+    created_at: '2026-09-25T15:15:44Z',
+    completed_at: null,
+  }
+
+  it('preserves the live lease deadline and accepts older responses without it', () => {
+    const lease_expires_at = '2026-09-25T16:00:44Z'
+    expect(l2ReportCanaryViewSchema.parse({ ...view, lease_expires_at }).lease_expires_at)
+      .toBe(lease_expires_at)
+    expect(l2ReportCanaryViewSchema.parse(view).lease_expires_at).toBeUndefined()
+    expect(l2ReportCanaryViewSchema.parse(view).run_mode).toBe('source_only')
+    expect(l2ReportCanaryViewSchema.parse({ ...view, run_mode: 'full_runtime' }).run_mode)
+      .toBe('full_runtime')
+  })
+})
+
 describe('screener review settings schemas', () => {
   const settings = {
     mode: 'shadow',
@@ -1788,6 +2355,18 @@ describe('screener review settings schemas', () => {
     audit_retention_days: 30,
   }
 
+  it('accepts opt-in GPT-6 review stages', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6-sol',
+      source_review_model: 'openai/gpt-6-luna',
+      l3_model: 'openai/gpt-6-sol',
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6-sol')
+    expect(parsed.source_review_model).toBe('openai/gpt-6-luna')
+    expect(parsed.l3_model).toBe('openai/gpt-6-sol')
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],
@@ -1802,6 +2381,34 @@ describe('screener review settings schemas', () => {
       shadow_observations: [],
     })
     expect(parsed.applied_instances[0]?.revision).toBe(42)
+  })
+
+  it('parses the historical Platform policy manifest wire shape', () => {
+    const parsed = screenerReviewControlSchema.parse({
+      current: [],
+      history: [],
+      known_instances: [],
+      applied_instances: [],
+      shadow_observations: [],
+      policy_manifests: [{
+        revision: 106,
+        scope: 'subnet-screener-1',
+        policy_version: 13,
+        profile: 'l1_l2',
+        rotation_id: 'policy-v11-global-topdown',
+        digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+        reason: 'Preserve the existing policy manifest contract.',
+        actor: 'operator@example.com',
+        created_at: '2026-09-14T02:51:58.121154Z',
+      }],
+    })
+
+    expect(parsed.policy_manifests[0]).toMatchObject({
+      revision: 106,
+      profile: 'l1_l2',
+      rotation_id: 'policy-v11-global-topdown',
+      digest: 'b3a2612bdd5a2085ec01892705f44cf217b7a4e184de5622b748106edb3e496d',
+    })
   })
 
   it('fills L1 Luna budget defaults when older payloads omit them', () => {
@@ -1825,6 +2432,38 @@ describe('screener review settings schemas', () => {
     expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
     expect(parsed.source_review_timeout_seconds).toBe(1_800)
     expect(parsed.adjudicator_max_steps).toBe(128)
+    expect(parsed.adjudicator_max_completion_tokens).toBeNull()
+  })
+
+  it('accepts Platform L2 budgets and preserves the upper bounds', () => {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
+      const parsed = screenerReviewSettingsSchema.parse({
+        ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
+        max_output_tokens: 1_000_000,
+        max_cost_usd: 25, critic_reasoning_effort: 'high',
+      })
+      expect(parsed.timeout_seconds).toBe(timeout_seconds)
+      expect(parsed.max_steps).toBe(max_steps)
+      expect(parsed.critic_reasoning_effort).toBe('high')
+      expect(parsed.max_input_tokens).toBe(5_000_000)
+      expect(parsed.max_output_tokens).toBe(1_000_000)
+      expect(parsed.max_cost_usd).toBe(25)
+    }
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, timeout_seconds: 1801,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_steps: 257,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_output_tokens: 1_000_001,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_input_tokens: 5_000_001,
+    })).toThrow()
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, max_cost_usd: 25.01,
+    })).toThrow()
   })
 
   it('accepts the time-bound adjudicator step budget and rejects larger values', () => {
@@ -1838,12 +2477,101 @@ describe('screener review settings schemas', () => {
     })).toThrow()
   })
 
+  it('separates the L4 completion cap from L2 and bounds it by output budget', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings, max_completion_tokens: 16_000,
+      adjudicator_max_completion_tokens: 4_000,
+    })
+    expect(parsed.max_completion_tokens).toBe(16_000)
+    expect(parsed.adjudicator_max_completion_tokens).toBe(4_000)
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, adjudicator_max_completion_tokens: 20_001,
+    })).toThrow()
+  })
+
   it('rejects duplicate model chains and short audit reasons', () => {
     expect(() => applyScreenerReviewSettingsInputSchema.parse({
       scope: '*', expectedRevision: 0,
       settings: { ...settings, l2_fallback_models: ['openai/gpt-5.6-terra'] },
       reason: 'short', confirmation: 'APPLY SCREENER REVIEW * SHADOW',
     })).toThrow()
+  })
+})
+
+describe('screen review audit schema', () => {
+  it('keeps the fixed L3 no-tool subtype in the operator diagnostic', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l3-adjudicator-model-tool-contract',
+      prompt_revision: 'l2-safety-v13', max_steps: 256, steps_used: 3,
+      final_stage: 'adjudicator', model_tool_failure_subcode: 'no_tool_call_after_corrections',
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_tool_failure_subcode: 'model response text',
+    })).toThrow()
+  })
+
+  it('accepts the configured L2 step and output ceilings', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 256,
+      max_output_tokens: 1_000_000, output_tokens_used: 1_000_000,
+      max_cost_usd: 25, cost_usd_used: 20,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({ ...audit, max_steps: 257 })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({ ...audit, output_tokens_used: 1_000_001 })).toThrow()
+  })
+
+  it('preserves bounded inconclusive choices without accepting source text', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-model-inconclusive', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 7, dossier_complete: false,
+      model_categories: ['benchmark_emulation'],
+      model_inconclusive_invariants: ['i5_production_engine'],
+      model_evidence_count: 1, model_causal_role_count: 2,
+    }
+    expect(screenReviewAuditSchema.parse(audit)).toMatchObject(audit)
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_categories: ['src/secret.py'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_inconclusive_invariants: ['private finding'],
+    })).toThrow()
+    expect(() => screenReviewAuditSchema.parse({
+      ...audit, model_evidence_count: 17,
+    })).toThrow()
+  })
+
+  it('preserves exact V13 preflight cause and budgets in Backroom diagnostics', () => {
+    const audit = {
+      stage: 'l2', reason_code: 'l2-runtime-evidence-unavailable', prompt_revision: 'l2-v13',
+      max_steps: 256, steps_used: 0,
+      max_input_tokens: 5_000_000, input_tokens_used: 0,
+      max_output_tokens: 1_000_000, output_tokens_used: 0,
+      max_cost_usd: 25, cost_usd_used: 0,
+      requested_model: 'openai/gpt-6-sol', response_provider: null,
+      final_stage: 'preflight', cause_detail: 'lease_unavailable',
+      max_elapsed_ms: 1_800_000, elapsed_ms: 0,
+    }
+    const diagnostic = screeningFailureDiagnosticSchema.parse({
+      agent_id: '4e35f415-2c3c-4a47-a32f-b62754537174',
+      artifact_sha256: 'a'.repeat(64),
+      agent_status: 'screening_failed',
+      attempt_id: '2e4a13f9-ff60-49c8-9a06-07b0684ba717',
+      policy_version: 13,
+      attempt_status: 'expired',
+      started_at: '2026-09-25T09:36:28Z',
+      deadline: '2026-09-25T09:53:54Z',
+      finished_at: '2026-09-25T09:45:19Z',
+      reason: 'Screening was inconclusive; manual retry required',
+      reason_code: 'behavioral-oracle-passed',
+      private_failure_detail: 'private policy audit inconclusive',
+      private_failure_log_tail: 'private policy audit inconclusive',
+      l2_review_diagnostic: audit,
+    })
+    expect(diagnostic.l2_review_diagnostic).toMatchObject(audit)
+    expect(JSON.stringify(diagnostic)).not.toContain('source_text')
   })
 })
 
@@ -2239,6 +2967,7 @@ describe('queue policy settings schemas', () => {
     owner_concurrent_submission_limit: 2,
     deferred_source_review: {
       mode: 'off',
+      integrity_double_check_mode: 'off',
       min_cohort_size: 8,
       composite_mad_multiplier: 6,
       axis_mad_multiplier: 6,
@@ -2260,6 +2989,7 @@ describe('queue policy settings schemas', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    lineage_reference_mode: 'same_owner_version',
   }
 
   function input(overrides: Record<string, unknown> = {}) {
@@ -2377,6 +3107,7 @@ describe('queue policy settings schemas', () => {
       'deferred_source_review',
       'fresh_submission_slots',
       'lane_cycle_size',
+      'lineage_reference_mode',
       'owner_concurrent_submission_limit',
       'prev_gen_carryover',
       'priority_cohort_size',
@@ -2388,6 +3119,14 @@ describe('queue policy settings schemas', () => {
   it('requires every policy field on write, because a revision stores the whole object', () => {
     const { owner_concurrent_submission_limit: _limit, ...missingLimit } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingLimit)).toThrow()
+    const { lineage_reference_mode: _mode, ...missingMode } = settings
+    expect(() => queuePolicySettingsWriteSchema.parse(missingMode)).toThrow()
+    expect(queuePolicySettingsSchema.parse(missingMode).lineage_reference_mode).toBe(
+      'same_owner_version',
+    )
+    expect(() =>
+      queuePolicySettingsWriteSchema.parse({ ...settings, lineage_reference_mode: 'anyone' }),
+    ).toThrow()
 
     const { prev_gen_carryover: _carryover, ...missingCarryover } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingCarryover)).toThrow()
@@ -2743,6 +3482,168 @@ describe('validator slot settings schemas', () => {
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
   })
 
+  it('reads capacity from a platform that predates reserved round slots as zero', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-25T00:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 4,
+      serviceable_slots: 4,
+      claimed_slots: 1,
+      assignments: [],
+    })
+    expect(parsed.reserved_round_slots).toBe(0)
+  })
+
+  it('reads a validator running a generator-round panel lease', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-27T19:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 8,
+      serviceable_slots: 8,
+      reserved_round_slots: 1,
+      claimed_slots: 1,
+      assignments: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'panel-agent',
+          slot_id: 'slot-0',
+          bench_version: 13,
+          purpose: 'generator_round',
+          stage: 'running_benchmark',
+          started_at: '2026-10-27T18:55:00Z',
+          age_seconds: 300,
+          completed_checks: null,
+          total_checks: null,
+          stalled: false,
+          checks_per_minute: null,
+          estimated_remaining_slot_minutes: null,
+        },
+      ],
+    })
+    expect(parsed.assignments[0].purpose).toBe('generator_round')
+  })
+
+  describe('per-validator overrides and the round reservation', () => {
+    const bigHost = '5' + 'B'.repeat(47)
+    const smallHost = '5' + 'C'.repeat(47)
+    const withOverrides = {
+      ...settings,
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+        [smallHost]: { max_concurrent_slots: 1, generator_round_reserved_slots: null },
+      },
+    }
+
+    it('accepts and round-trips overrides through the write schema', () => {
+      const parsed = setValidatorSlotSettingsInputSchema.parse(
+        input({ settings: withOverrides, confirmation: validatorSlotConfirmation(2) }),
+      )
+      expect(parsed.settings).toEqual(withOverrides)
+      // The body Backroom forwards is exactly what it parsed: nothing stripped.
+      expect(JSON.parse(JSON.stringify(parsed.settings))).toEqual(withOverrides)
+    })
+
+    it('still parses a policy from a platform that predates the new fields', () => {
+      expect(validatorSlotSettingsSchema.parse(settings)).toEqual(settings)
+    })
+
+    it('rejects out-of-range, empty and mis-keyed overrides', () => {
+      const bad = (perValidator: unknown, reserved: unknown = 1) =>
+        validatorSlotSettingsSchema.safeParse({
+          ...settings,
+          generator_round_reserved_slots: reserved,
+          per_validator: perValidator,
+        }).success
+      expect(bad({}, 9)).toBe(false)
+      expect(bad({}, -1)).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 0 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: { generator_round_reserved_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: {} })).toBe(false)
+      expect(bad({ 'not-a-hotkey': { max_concurrent_slots: 2 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 4 } })).toBe(true)
+    })
+
+    it('caps the override map at 256 validators', () => {
+      const overrides = (count: number) =>
+        Object.fromEntries(
+          Array.from({ length: count }, (_, index) => [
+            '5' + index.toString().padStart(47, 'A').replace(/0/g, 'z'),
+            { max_concurrent_slots: 2 },
+          ]),
+        )
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(256) })
+          .success,
+      ).toBe(true)
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(257) })
+          .success,
+      ).toBe(false)
+    })
+
+    it('reads the per-validator fleet sizing view', () => {
+      const parsed = validatorSlotSettingsControlSchema.parse({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: withOverrides,
+          checksum: '',
+          source: 'default',
+          hard_slot_ceiling: 8,
+          disk_restricted_slots: 1,
+          max_age_seconds: 5.0,
+        },
+        generator_round_reservation_active: true,
+        fleet: [
+          {
+            validator_hotkey: bigHost,
+            seen_at: '2026-10-25T00:00:00Z',
+            online: true,
+            issuance_paused: false,
+            round_capable: true,
+            override: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+            advertised_slots: 8,
+            healthy_slots: 8,
+            max_concurrent_slots: 6,
+            allowed_slots: 6,
+            configured_reserved_round_slots: 2,
+            reserved_round_slots: 2,
+            non_round_slot_budget: 4,
+            live_leases_by_purpose: { canonical_quorum: 3, generator_round: 1 },
+            host_specs: {
+              cpu_count: 32,
+              cpu_physical_cores: 16,
+              memory_total_mib: 131072,
+              disk_total_gib: 2000,
+              architecture: 'x86_64',
+            },
+            cpu_percent: 60,
+            memory_percent: 20,
+            disk_percent: 40,
+          },
+        ],
+      })
+      expect(parsed.generator_round_reservation_active).toBe(true)
+      expect(parsed.fleet?.[0]).toMatchObject({
+        allowed_slots: 6,
+        reserved_round_slots: 2,
+        non_round_slot_budget: 4,
+      })
+      expect(parsed.effective.settings.per_validator).toEqual(withOverrides.per_validator)
+    })
+  })
+
   // The empty-default failure class: the platform 422s a partial body, but a
   // client that defaults its knobs pre-fills the omission into a full body and
   // the operator silently ships a default they never chose. Every knob is
@@ -3050,11 +3951,19 @@ describe('continual retest cohort sizing against an older platform', () => {
   })
   const legacySupport = {
     tie_weighting_mode: false,
+    statistical_band_mode: false,
+    ledger_pin_mode: false,
+    crown_incumbent_mode: false,
+    crown_gate_mode: false,
+    min_dethrone_confirmations: false,
+    champion_standing_rank: false,
     retest_cohort_size: false,
     wave_membership: false,
     retest_eligibility_mode: false,
     retest_eligibility_z: false,
     retest_cohort_max_size: false,
+    wave_cadence_tempos: false,
+    wave_seeds_per_window: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -3064,6 +3973,12 @@ describe('continual retest cohort sizing against an older platform', () => {
   const legacyPolicy = {
     aggregate_mode: 'enabled' as const,
     tie_weighting_mode: 'disabled' as const,
+    statistical_band_mode: 'disabled' as const,
+    ledger_pin_mode: 'live' as const,
+    crown_incumbent_mode: 'disabled' as const,
+    crown_gate_mode: 'disabled' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     idle_retests_enabled: true,
     rollout_standdown: 'all' as const,
     wave_membership: 'strict' as const,
@@ -3071,6 +3986,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_eligibility_mode: 'fixed' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('tells a defaulted cohort size apart from a reported one', () => {
@@ -3163,11 +4080,19 @@ describe('continual retest cohort sizing against an older platform', () => {
 
     expect(continualRetestFieldSupport(partial)).toEqual({
       tie_weighting_mode: false,
+      statistical_band_mode: false,
+      ledger_pin_mode: false,
+      crown_incumbent_mode: false,
+      crown_gate_mode: false,
+      min_dethrone_confirmations: false,
+      champion_standing_rank: false,
       retest_cohort_size: false,
       wave_membership: true,
       retest_eligibility_mode: false,
       retest_eligibility_z: false,
       retest_cohort_max_size: false,
+      wave_cadence_tempos: false,
+      wave_seeds_per_window: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -3177,6 +4102,12 @@ describe('continual retest write contract', () => {
   const complete = {
     aggregate_mode: 'fleet_ready' as const,
     tie_weighting_mode: 'fleet_ready' as const,
+    statistical_band_mode: 'disabled' as const,
+    ledger_pin_mode: 'epoch' as const,
+    crown_incumbent_mode: 'fleet_ready' as const,
+    crown_gate_mode: 'fleet_ready' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     idle_retests_enabled: false,
     rollout_standdown: 'capable_validators' as const,
     wave_membership: 'strict' as const,
@@ -3184,6 +4115,8 @@ describe('continual retest write contract', () => {
     retest_eligibility_mode: 'statistical' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('refuses a body missing any field a revision would overwrite', () => {
@@ -3194,11 +4127,19 @@ describe('continual retest write contract', () => {
     // collapsed cohort, a discarded tie band.
     for (const field of [
       'tie_weighting_mode',
+      'statistical_band_mode',
+      'ledger_pin_mode',
+      'crown_incumbent_mode',
+      'crown_gate_mode',
+      'min_dethrone_confirmations',
+      'champion_standing_rank',
       'wave_membership',
       'retest_cohort_size',
       'retest_eligibility_mode',
       'retest_eligibility_z',
       'retest_cohort_max_size',
+      'wave_cadence_tempos',
+      'wave_seeds_per_window',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -3241,6 +4182,8 @@ describe('continual retest write contract', () => {
         ...complete,
         retest_cohort_size: 25,
         retest_cohort_max_size: 25,
+        wave_cadence_tempos: 0,
+        wave_seeds_per_window: 3,
       }).success,
     ).toBe(true)
   })
@@ -3256,6 +4199,12 @@ describe('continual retest write contract', () => {
     ).toEqual({
       aggregate_mode: 'fleet_ready',
       tie_weighting_mode: 'disabled',
+      statistical_band_mode: 'disabled',
+      ledger_pin_mode: 'epoch',
+      crown_incumbent_mode: 'disabled',
+      crown_gate_mode: 'disabled',
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: false,
       rollout_standdown: 'capable_validators',
       wave_membership: 'participants',
@@ -3263,6 +4212,8 @@ describe('continual retest write contract', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 
@@ -3591,6 +4542,18 @@ describe('validator queue reinstatement schemas', () => {
     },
     created_at: '2026-07-27T19:00:00Z',
   }
+
+  it('accepts the fail-once zero infra-grant cap Platform records today', () => {
+    // MAX_AGENT_INFRA_RETRY_GRANTS is pinned at 0, so a real reinstatement row
+    // carries 0. Rejecting it broke get_validation_retry for every reinstated
+    // agent (2026-10-15, overhorizon v2).
+    const parsed = reinstatementRetryBudgetSchema.parse({
+      ...reinstatement.retry_budget_snapshot,
+      agent_infra_retry_grants: 0,
+      max_agent_infra_retry_grants: 0,
+    })
+    expect(parsed.max_agent_infra_retry_grants).toBe(0)
+  })
 
   it('reports whether an eviction can be reversed right now', () => {
     const parsed = validationRetryDetailSchema.parse({
@@ -4168,5 +5131,555 @@ describe('public leaderboard rows that do not rank', () => {
     >().toMatchTypeOf<
       ZodInput<typeof publicLeaderboardSchema>['entries'][number]['rank']
     >()
+  })
+})
+
+describe('batched ATH rulings schemas', () => {
+  const ruling = {
+    action: 'reject',
+    agent_id: 'c25489aa-faf0-46fc-8b06-8e2240a5ac01',
+    expected_sha256: 'ab'.repeat(32),
+    expected_score_count: 3,
+    reason: 'Reject under screening policy v12 for I5',
+    evidence_references: ['routing.py:357-395', 'src/agent.rs:441'],
+  }
+
+  it('accepts the uploaded document shape inline and refuses ambiguous input', () => {
+    expect(previewAthRulingsBatchInputSchema.parse({ rulings: [ruling] }).rulings).toHaveLength(1)
+    expect(
+      previewAthRulingsBatchInputSchema.parse({
+        uploadKey: 'ath-rulings/v1/peyton-omniaura.ai/2026-09-13/x.json',
+      }).uploadKey,
+    ).toContain('ath-rulings/v1/')
+    expect(() => previewAthRulingsBatchInputSchema.parse({})).toThrow(/exactly one/)
+    expect(() =>
+      previewAthRulingsBatchInputSchema.parse({ uploadKey: 'k', rulings: [ruling] }),
+    ).toThrow(/exactly one/)
+    expect(() =>
+      previewAthRulingsBatchInputSchema.parse({ rulings: [ruling, { ...ruling, action: 'clear' }] }),
+    ).toThrow(/only once/)
+  })
+
+  it('keeps citations to path:line and reasons unbounded above', () => {
+    expect(() => athRulingSchema.parse({ ...ruling, evidence_references: ['no line'] })).toThrow()
+    expect(() => athRulingSchema.parse({ ...ruling, reason: 'no' })).toThrow()
+    expect(athRulingSchema.parse({ ...ruling, reason: 'x'.repeat(20_000) }).reason).toHaveLength(
+      20_000,
+    )
+    expect(athRulingSchema.parse({ ...ruling, evidence_references: undefined }).evidence_references).toEqual([])
+  })
+
+  it('binds execute to the exact confirmation phrase', () => {
+    const token = `1757779856.eyJ2IjoxfQ.${'a'.repeat(64)}`
+    expect(
+      executeAthRulingsBatchInputSchema.parse({
+        previewToken: token,
+        confirmation: ATH_RULINGS_CONFIRMATION,
+      }).rulings,
+    ).toBeUndefined()
+    expect(() =>
+      executeAthRulingsBatchInputSchema.parse({ previewToken: token, confirmation: 'APPLY' }),
+    ).toThrow()
+    expect(() =>
+      executeAthRulingsBatchInputSchema.parse({ previewToken: 'short', confirmation: ATH_RULINGS_CONFIRMATION }),
+    ).toThrow()
+  })
+
+  it('parses a hold-free clear as an attest step', () => {
+    const preview = athRulingPreviewItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      ok: true,
+      disposition: 'ready',
+      stale_guard: false,
+      would_change_crown: false,
+      steps: ['attest'],
+      reason: 'Reviewed: clean',
+      message: 'will clear without holding (the agent stays on the board)',
+    })
+    expect(preview.steps).toEqual(['attest'])
+    const executed = athRulingExecuteItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      status: 'applied',
+      agent_status: 'scored',
+      would_change_crown: false,
+      steps_applied: ['attest'],
+      annotated: true,
+      message: 'ruling applied and audit rows annotated',
+    })
+    expect(executed.steps_applied).toEqual(['attest'])
+    expect(() => athRulingStepSchema.parse('withdraw')).toThrow()
+  })
+
+  // The drift guard: every Platform response field has an explicit validator
+  // and the key sets match the generated contract in both directions.
+  it('mirrors the generated Platform contract field-for-field', () => {
+    expectTypeOf<keyof ZodOutput<typeof athRulingsUploadResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsUploadResponse']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsBoardProjectionSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsBoardProjection']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingPreviewItemSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingPreviewItem']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsPreviewResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsPreviewResponse']
+    >()
+    expectTypeOf<keyof ZodOutput<typeof athRulingsExecuteResponseSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminAthRulingsExecuteResponse']
+    >()
+    expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
+      PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    // A step Platform sends must parse here: Zod fails the whole response on
+    // one unknown enum value, which would blank every item of a preview.
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingPreviewItem']['steps']>[number]
+    >()
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingExecuteItem']['steps_applied']>[number]
+    >()
+    expect(
+      Object.keys(
+        athRulingPreviewItemSchema.parse({
+          index: 0,
+          action: 'reject',
+          agent_id: ruling.agent_id,
+          ok: true,
+          disposition: 'ready',
+          stale_guard: false,
+          would_change_crown: true,
+          reason: ruling.reason,
+          message: 'will open then reject',
+        }),
+      ).sort(),
+    ).toEqual([
+      'action',
+      'agent_id',
+      'agent_name',
+      'agent_status',
+      'agent_version',
+      'artifact_sha256',
+      'conflict_reason',
+      'disposition',
+      'evidence_references',
+      'index',
+      'message',
+      'miner_hotkey',
+      'ok',
+      'reason',
+      'score_count',
+      'stale_guard',
+      'steps',
+      'would_change_crown',
+    ])
+  })
+
+  it('parses the 2026-09-13 top-5 replay fixture the Platform tests execute', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(
+          __dirname,
+          '../../../platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json',
+        ),
+        'utf8',
+      ),
+    ) as { source: string; rulings: Array<unknown> }
+    const parsed = previewAthRulingsBatchInputSchema.parse({
+      rulings: fixture.rulings,
+      source: fixture.source,
+    })
+    expect(parsed.rulings).toHaveLength(5)
+    expect(parsed.rulings?.every((item) => item.action === 'reject')).toBe(true)
+    expect(parsed.rulings?.every((item) => item.evidence_references.length > 0)).toBe(true)
+    expect(parsed.source).toBe('docs/sn118-top5-board-review-2026-09-13.json')
+  })
+
+  it('parses the infrastructure retry view and refuses an unknown decision state', () => {
+    const view = {
+      generated_at: '2026-09-21T12:00:00Z',
+      basis: 'Derived at read time.',
+      policy: {
+        auto_retry_reason_codes: ['docker-build-infrastructure'],
+        base_backoff_seconds: 600, max_backoff_seconds: 3600, jitter_fraction: 0.2,
+        auto_retry_max_age_seconds: 86400, auto_retry_max_streak: 8, plan_max_claimable: 500,
+        breaker_distinct_agents: 3, breaker_window_seconds: 300, breaker_open_seconds: 600,
+        breaker_probe_interval_seconds: 300, breaker_history_lookback_seconds: 172800,
+      },
+      summary: {
+        parked_agents: 0,
+        by_state: { backoff: 0, breaker_held: 0, probe_due: 0, due: 0, capped: 0 },
+        not_admitted: 0, aged_out_agents: 0, open_breakers: 0, half_open_breakers: 0,
+        breakers_total: 0,
+      },
+      agents: [], agents_limit: 200, agents_truncated: false,
+      breakers: [], breakers_limit: 50, breakers_truncated: false,
+    }
+    expect(screeningInfraRetryViewSchema.parse(view).summary.by_state.capped).toBe(0)
+    expect(() =>
+      screeningInfraRetryViewSchema.parse({
+        ...view,
+        summary: { ...view.summary, by_state: { ...view.summary.by_state, exploded: 1 } },
+      }),
+    ).toThrow()
+  })
+})
+
+describe('diff manifest omission fields (issue #480)', () => {
+  const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+  const baselineManifest = {
+    agent_id: agentId,
+    artifact_sha256: 'a'.repeat(64),
+    baseline: {
+      source: 'https://github.com/ditto-assistant/dittobench-starter-kit',
+      revision: 'b'.repeat(40),
+      commit_set_sha256: 'c'.repeat(64),
+      commit_count: 24,
+    },
+    files: [],
+    file_count: 35,
+    identical_count: 30,
+    modified_count: 5,
+    added_count: 0,
+    removed_count: 0,
+    stock_kit_count: 30,
+    custom_file_count: 5,
+    custom_added_lines: 9952,
+    path_aligned: false,
+    truncated: false,
+  }
+  const sourceManifest = {
+    agent_id: agentId,
+    reference_agent_id: agentId,
+    candidate_sha256: 'a'.repeat(64),
+    reference_sha256: 'b'.repeat(64),
+    files: [],
+    file_count: 0,
+    identical_count: 0,
+    modified_count: 0,
+    added_count: 0,
+    removed_count: 0,
+    truncated: false,
+  }
+
+  it('matches the generated Platform contract', () => {
+    type Baseline = PlatformComponents['schemas']['AdminBaselineDiffManifest']
+    expectTypeOf<Baseline['omitted_file_count']>().toEqualTypeOf<number>()
+    expectTypeOf<Baseline['omitted_paths']>().toEqualTypeOf<string[]>()
+    expectTypeOf<Baseline['custom_added_lines_complete']>().toEqualTypeOf<boolean>()
+  })
+
+  it('carries a lower-bound baseline total from a current Platform', () => {
+    const parsed = baselineDiffManifestSchema.parse({
+      ...baselineManifest,
+      omitted_file_count: 1,
+      omitted_paths: ['fixtures/seed-user/pairs.json'],
+      custom_added_lines_complete: false,
+    })
+    expect(parsed.custom_added_lines_complete).toBe(false)
+    expect(parsed.omitted_file_count).toBe(1)
+    expect(parsed.omitted_paths).toEqual(['fixtures/seed-user/pairs.json'])
+  })
+
+  it('treats an older Platform as omitting nothing it can name, completeness unknown', () => {
+    for (const legacy of [
+      baselineManifest,
+      {
+        ...baselineManifest,
+        omitted_file_count: null,
+        omitted_paths: null,
+        custom_added_lines_complete: null,
+      },
+    ]) {
+      const parsed = baselineDiffManifestSchema.parse(legacy)
+      expect(parsed.omitted_file_count).toBe(0)
+      expect(parsed.omitted_paths).toEqual([])
+      expect(parsed.custom_added_lines_complete).toBeNull()
+    }
+  })
+
+  it('accepts copy-review omissions and defaults them for an older Platform', () => {
+    expect(
+      sourceDiffManifestSchema.parse({
+        ...sourceManifest,
+        omitted_file_count: 2,
+        omitted_paths: ['assets/big.txt', 'assets/huge.txt'],
+      }),
+    ).toMatchObject({ omitted_file_count: 2, omitted_paths: ['assets/big.txt', 'assets/huge.txt'] })
+    expect(sourceDiffManifestSchema.parse(sourceManifest)).toMatchObject({
+      omitted_file_count: 0,
+      omitted_paths: [],
+    })
+  })
+})
+
+describe('emission eligibility policy schema', () => {
+  const settings = {
+    enforcement: 'enforce',
+    require_terminal_review: true,
+    exclude_inconclusive: true,
+    exclude_infrastructure_failed: true,
+    exclude_escalated: true,
+    require_completed_review: false,
+    clearance_activation: 'next_window',
+    activation_window_seconds: 3600,
+  }
+  const control = (effective: Record<string, unknown>) => ({
+    current: null,
+    history: [],
+    default: { ...settings, enforcement: 'off' },
+    effective: {
+      revision: 1,
+      scope: '*',
+      settings,
+      checksum: 'ab'.repeat(32),
+      source: 'revision',
+      max_age_seconds: 5,
+      default: { ...settings, enforcement: 'off' },
+      current_window_start: '2026-09-27T12:00:00Z',
+      next_window_start: '2026-09-27T13:00:00Z',
+      ...effective,
+    },
+    confirmation_phrase: 'APPLY EMISSION ELIGIBILITY',
+    recent_shadow_records: [],
+  })
+
+  it('shows enforce rehearsing as shadow until the fleet folds protocol 28', () => {
+    const parsed = emissionEligibilityControlSchema.parse(
+      control({
+        effective_enforcement: 'shadow',
+        fleet_protocol_ready: false,
+        required_protocol: 28,
+      }),
+    )
+    expect(parsed.effective.settings.enforcement).toBe('enforce')
+    expect(parsed.effective).toMatchObject({
+      effective_enforcement: 'shadow',
+      fleet_protocol_ready: false,
+      required_protocol: 28,
+    })
+  })
+})
+
+describe('scoring lease settings (#1156)', () => {
+  it('mirrors the generated Platform response shape', () => {
+    expectTypeOf<keyof ZodOutput<typeof scoringLeaseSettingsControlSchema>>().toEqualTypeOf<
+      keyof PlatformComponents['schemas']['AdminScoringLeaseSettingsResponse']
+    >()
+    expectTypeOf<
+      keyof ZodOutput<typeof scoringLeaseSettingsControlSchema>['effective']
+    >().toEqualTypeOf<keyof PlatformComponents['schemas']['EffectiveScoringLeaseSettings']>()
+  })
+
+  it('requires the whole policy, the 60-240 bound, and a confirmation naming the TTL', () => {
+    const base = {
+      expectedRevision: 0,
+      settings: { scoring_ticket_ttl_minutes: 150 },
+      reason: 'v11 completions fit well inside 150 minutes',
+      confirmation: scoringLeaseConfirmation(150),
+    }
+    expect(setScoringLeaseSettingsInputSchema.parse(base)).toMatchObject({
+      scope: '*',
+      settings: { scoring_ticket_ttl_minutes: 150 },
+    })
+    expect(scoringLeaseConfirmation(150)).toBe('APPLY SCORING TICKET TTL 150 MINUTES')
+    expect(() =>
+      setScoringLeaseSettingsInputSchema.parse({ ...base, settings: {} }),
+    ).toThrow()
+    for (const minutes of [59, 241]) {
+      expect(() =>
+        setScoringLeaseSettingsInputSchema.parse({
+          ...base,
+          settings: { scoring_ticket_ttl_minutes: minutes },
+          confirmation: scoringLeaseConfirmation(minutes),
+        }),
+      ).toThrow()
+    }
+    expect(() =>
+      setScoringLeaseSettingsInputSchema.parse({
+        ...base,
+        confirmation: scoringLeaseConfirmation(180),
+      }),
+    ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
+  })
+})
+
+describe('burn settings payout curve ordering', () => {
+  it('refuses an increasing curve on writes but still reads a stored one', async () => {
+    const { burnSettingsSchema, burnSettingsWriteSchema } = await import('./admin.schemas')
+    const increasing = { burn_share: 0, rank_shares: [0.07, 0.1, 0.13, 0.2, 0.5] }
+    expect(burnSettingsWriteSchema.safeParse(increasing).success).toBe(false)
+    expect(burnSettingsSchema.safeParse(increasing).success).toBe(true)
+    expect(
+      burnSettingsWriteSchema.safeParse({ burn_share: 0, rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07] }).success,
+    ).toBe(true)
+  })
+})
+
+describe('validator fleet host specs parity', () => {
+  it('accepts every host_specs shape Platform publishes', () => {
+    type Generated = NonNullable<
+      PlatformComponents['schemas']['PublicValidatorHeartbeat']['host_specs']
+    >
+    type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
+    expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
+  })
+})
+
+
+describe('targeted validator retry input', () => {
+  const input = {
+    agentId: '3fab0521-a662-436f-8239-8fff9ff78150',
+    expectedSnapshot: 'a'.repeat(64),
+    reason: 'Recover the final score after resource correction',
+  }
+
+  it('rejects whitespace-only selectors and normalizes padded hotkeys', () => {
+    expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
+    expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
+    expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
+  })
+})
+
+describe('track share settings', () => {
+  it('spells out the split, with no trailing space and a clear phrase for null', () => {
+    expect(trackSharesConfirmation({ generator: 1000, memory: 9000 })).toBe(
+      'APPLY TRACK SHARES memory=9000 generator=1000',
+    )
+    expect(trackSharesConfirmation({ memory: 0 })).toBe('APPLY TRACK SHARES')
+    expect(trackSharesConfirmation(null)).toBe('CLEAR TRACK SHARES')
+  })
+
+  it('mirrors the Platform refusals', () => {
+    const base = { expectedRevision: 0, reason: 'activate generator emissions' }
+    const parse = (shares: Record<string, number> | null) =>
+      setTrackShareSettingsInputSchema.safeParse({
+        ...base,
+        settings: { track_shares_bps: shares },
+        confirmation: trackSharesConfirmation(shares),
+      }).success
+    expect(parse({ memory: 9000, generator: 1000 })).toBe(true)
+    expect(parse(null)).toBe(true)
+    expect(parse({ generator: 1000 })).toBe(false)
+    expect(parse({ memory: 9000, router: 1000 })).toBe(false)
+    expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
+    expect(parse({ memory: 0 })).toBe(false)
+    expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
+  })
+})
+
+describe('emission allocation', () => {
+  const live = [
+    { kind: 'burn' as const, bps: 5000 },
+    { kind: 'track' as const, id: 'memory', bps: 3500 },
+    { kind: 'track' as const, id: 'generator', bps: 1500 },
+  ]
+
+  it('spells every nonzero entry in canonical order', () => {
+    expect(emissionAllocationConfirmation([live[2], { kind: 'gamma', bucket: 'gm', bps: 0 }, live[0], live[1]])).toBe(
+      'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+    )
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'gamma', bucket: 'gm', bps: 500 },
+        { kind: 'burn', bps: 4500 },
+        live[1],
+        live[2],
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500')
+  })
+
+  it('orders Gamma buckets by codepoint like Platform', () => {
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'burn', bps: 4000 },
+        live[1],
+        live[2],
+        { kind: 'gamma', bucket: 'gm2', bps: 600 },
+        { kind: 'gamma', bucket: 'gm_2', bps: 400 },
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4000 memory=3500 generator=1500 gamma:gm2=600 gamma:gm_2=400')
+  })
+
+  it.each([
+    ['sum short of 10000', [live[0], live[1], { kind: 'track', id: 'generator', bps: 1400 }]],
+    ['duplicate', [...live, { kind: 'track', id: 'memory', bps: 0 }]],
+    ['unpaid coding', [{ kind: 'burn', bps: 4000 }, live[1], live[2], { kind: 'track', id: 'coding', bps: 1000 }]],
+    ['missing generator', [{ kind: 'burn', bps: 6500 }, live[1], { kind: 'track', id: 'router', bps: 0 }]],
+    ['burn with an id', [{ kind: 'burn', id: 'memory', bps: 5000 }, live[1], live[2]]],
+  ])('refuses %s', (_label, entries) => {
+    const parsed = setEmissionAllocationInputSchema.safeParse({
+      expectedRevision: 0,
+      entries,
+      reason: 'operator split change',
+      confirmation: emissionAllocationConfirmation(entries as typeof live),
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('accepts the live split with its phrase', () => {
+    expect(
+      setEmissionAllocationInputSchema.safeParse({
+        expectedRevision: 0,
+        entries: live,
+        reason: 'operator split change',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      }).success,
+    ).toBe(true)
+  })
+})
+
+describe('competition fee policy schemas', () => {
+  it('rejects unknown fields in operator input but tolerates them on read', () => {
+    expect(
+      competitionFeesInputSchema.safeParse({
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, extra: 1 },
+      }).success,
+    ).toBe(false)
+    const revision = submissionSettingsRevisionSchema.parse({
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 1_000_000,
+      competition_fees: {
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, added_later: 'x' },
+      },
+      reason: 'price generator uploads',
+      actor: 'operator',
+      created_at: null,
+    })
+    expect(revision.competition_fees.generator).toMatchObject({
+      fee_amount_rao: 2_000_000,
+      fee_required: true,
+    })
+  })
+})
+
+describe('benchmark rollout qualification detail', () => {
+  it('reads an agent while no rollout is open', () => {
+    const parsed = benchmarkRolloutQualificationDetailSchema.parse({
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'top-five-agent',
+      agent_status: 'scored',
+      artifact_sha256: 'ab'.repeat(32),
+      rollout_id: null,
+      source_bench_version: null,
+      target_bench_version: null,
+      currently_top_five: true,
+      rollout_member: false,
+      target_dataset_sha256: null,
+      total_score_count: 3,
+      source_score_count: 0,
+      target_score_count: 0,
+      screening_attempt_active: false,
+      validator_run_active: false,
+      qualification_allowed: false,
+      blocking_reason: 'no benchmark rollout is open',
+    })
+    expect(parsed.source_bench_version).toBeNull()
   })
 })

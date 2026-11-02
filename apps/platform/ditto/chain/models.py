@@ -274,6 +274,42 @@ class ChainEpoch:
 
 
 @dataclass(frozen=True)
+class EpochSchedule:
+    """The subnet's stateful epoch position, read at one block.
+
+    Subtensor's stateful scheduler (``run_coinbase::should_run_epoch``) fires an
+    epoch when a pending owner-triggered block is reached, when
+    ``BlocksSinceLastStep`` overruns the tempo ceiling, or ``tempo`` blocks
+    after ``LastEpochBlock``; ``SubnetEpochIndex`` counts every fire. That
+    counter is the identity the epoch-pinned ledger keys on: unlike a block
+    modulus it survives deferred and manually triggered epochs, and it is the
+    same integer the chain itself stamps on every timelocked weight commit.
+    """
+
+    netuid: int
+    subnet_epoch_index: int
+    """Monotonic epoch counter (``SubtensorModule.SubnetEpochIndex``)."""
+
+    last_epoch_block: int
+    """Block at which the subnet's last epoch slot was consumed."""
+
+    pending_epoch_at: int
+    """Owner-triggered epoch block, or ``0`` when none is pending."""
+
+    tempo: int
+    blocks_since_last_step: int
+    block: int
+    """Head block every field above was read at."""
+
+    block_hash: str
+    block_timestamp: int | None
+    """Unix seconds of ``block`` (``Timestamp.Now``), or ``None`` if unread."""
+
+    next_epoch_block: int
+    """First block after ``block`` at which the chain will step the epoch."""
+
+
+@dataclass(frozen=True)
 class ChainWeightsSnapshot:
     """A block-consistent read of the subnet's public weight matrix."""
 
@@ -292,6 +328,38 @@ class ChainWeightsSnapshot:
 
     block_timestamp: int | None = None
     """Unix seconds of ``block``, the anchor a countdown is measured from."""
+
+
+@dataclass(frozen=True)
+class ChainMinerEarning:
+    """Miner incentive credited as stake/collateral, excluding owner recycling."""
+
+    uid: int
+    hotkey: str
+    amount_rao: int
+
+
+@dataclass(frozen=True)
+class ChainMinerEmissionReceipt:
+    """Finalized successful distribution and its unambiguous consumed matrix.
+
+    This proves hotkey earnings, not which off-chain submission earned them.
+    Consumers must bind every relevant validator vector to an immutable ledger.
+    Timestamps are Unix seconds. All vectors are retained conservatively; this
+    reader does not infer that an offline validator contributed zero stake.
+    """
+
+    netuid: int
+    block: int
+    block_hash: str
+    block_timestamp: int
+    epoch_index: int
+    previous_distribution_block: int
+    owner_hotkey: str
+    earnings: tuple[ChainMinerEarning, ...]
+    vectors: tuple[ChainWeightVector, ...]
+    validator_last_updates: tuple[tuple[int, int], ...]
+    validator_last_update_timestamps: tuple[tuple[int, int], ...]
 
 
 def _axon_info_to_dict(axon: Any) -> dict[str, Any]:

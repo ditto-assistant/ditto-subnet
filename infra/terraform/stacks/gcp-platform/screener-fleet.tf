@@ -21,11 +21,9 @@
 #                   and hands off to scripts/bootstrap-screener.sh in that repo
 #                   (which installs Docker/uv, renders screener.env from Secret
 #                   Manager, and runs the repo's exact-commit updater)
-#   deploys         the ditto-subnet screener deploy workflow targets instances by
-#                   label (env=prod, role in screener|screener-fleet), so fleet
-#                   instances receive the same exact-commit updates as the pet
-#                   VM; a freshly booted instance starts from origin/main and
-#                   is converged by the next scheduled deploy run
+#   releases        release.yml publishes a keyless-signed stable descriptor;
+#                   each live GCE worker authenticates and pulls it on its own
+#                   timer, while a fleet at size zero naturally does no work
 #
 # All instances share the single prod screener identity (hotkey + bearer token
 # + sr25519 key): the platform authenticates ONE screener principal today. The
@@ -330,7 +328,9 @@ resource "google_compute_region_autoscaler" "screener_fleet" {
     # Platform's fenced controller is the sole normal writer. This independent
     # GCP mechanism is only a stale-controller safety net: it may add GCE
     # capacity for a published backlog but can never race the controller by
-    # deleting a worker. The controller drains and resizes back to zero.
+    # deleting a worker. The controller re-reads node leases after its fenced
+    # renew and deletes only idle instances (or resizes to zero when no GCE
+    # lease exists).
     mode         = "ONLY_SCALE_OUT"
     min_replicas = var.screener_fleet_min_replicas
     max_replicas = var.screener_fleet_max_replicas
@@ -346,6 +346,13 @@ resource "google_compute_region_autoscaler" "screener_fleet" {
       single_instance_assignment = var.screener_fleet_backlog_per_instance
     }
 
+  }
+
+  # The fenced controller keeps ONLY_SCALE_OUT, pausing it only around a
+  # fenced manual resize. The watchdog gates the backlog metric. Terraform
+  # continues to own the policy bounds, cooldown, and backlog metric.
+  lifecycle {
+    ignore_changes = [autoscaling_policy[0].mode]
   }
 }
 

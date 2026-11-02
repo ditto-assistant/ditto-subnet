@@ -2,6 +2,7 @@ import { createFileRoute } from '@tanstack/react-router'
 import { z } from 'zod'
 import { ScreeningQuarantinePanel } from '../../components/ScreeningQuarantinePanel'
 import {
+  actionableQuarantineCount,
   ScreeningError,
   ScreeningPending,
   ScreeningRouteFrame,
@@ -37,13 +38,13 @@ function ScreeningDisputesPage() {
   const { user } = Route.useRouteContext()
 
   return (
-    <ScreeningRouteFrame reviewCount={quarantines.count} disputeCount={disputes.count}>
+    <ScreeningRouteFrame reviewCount={actionableQuarantineCount(quarantines)} disputeCount={disputes.count}>
       <ScreeningQuarantinePanel
         view="disputes"
         initialItems={[]}
         initialDisputes={disputes.items}
         initialSubmissions={[]}
-        quarantineCount={quarantines.count}
+        quarantineCount={actionableQuarantineCount(quarantines)}
         disputeCount={disputes.count}
         submissionCount={submissions.count}
         page={page}

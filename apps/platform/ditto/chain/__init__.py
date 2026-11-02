@@ -46,6 +46,8 @@ from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
     ChainEpoch,
+    ChainMinerEarning,
+    ChainMinerEmissionReceipt,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
@@ -63,6 +65,8 @@ __all__ = [
     # Result models
     "BlockInfo",
     "ChainEpoch",
+    "ChainMinerEarning",
+    "ChainMinerEmissionReceipt",
     "ChainWeight",
     "ChainWeightsSnapshot",
     "ChainWeightVector",

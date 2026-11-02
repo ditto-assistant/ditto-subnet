@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"strings"
+
+	"github.com/ditto-assistant/dittobench-api/internal/routerscore"
 )
 
 // The control plane on :8000 serves validator-internal data. Until this file
@@ -45,6 +47,7 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/coding/supervisor/{operation}", s.handleCodingSupervisor)
 	mux.HandleFunc("POST /v1/coding/publications/{operation}", s.handleCodingPublication)
 	mux.HandleFunc("POST /v1/coding/certifier/canary", s.handleCodingCanary)
+	mux.HandleFunc("GET /v1/router/ledger", s.handleRouterLedger)
 	return mux
 }
 
@@ -73,6 +76,7 @@ var controlPlaneRoutes = []string{
 	"POST /v1/coding/supervisor/{operation}",
 	"POST /v1/coding/publications/{operation}",
 	"POST /v1/coding/certifier/canary",
+	"GET /v1/router/ledger",
 }
 
 func (s *server) handleCodingSupervisor(response http.ResponseWriter, request *http.Request) {
@@ -97,6 +101,22 @@ func (s *server) handleCodingCanary(response http.ResponseWriter, request *http.
 		return
 	}
 	s.codingHost.CanaryHandler().ServeHTTP(response, request)
+}
+
+// handleRouterLedger serves the accumulated SN118 router shadow ledger as
+// routerscore.Ledger JSON, ordered highest shadow composite first. The platform
+// relays it to validators, which only read + fold it. It is protected by the
+// control-plane credential (not in publicControlRoutes) and carries no secret:
+// every entry is shadow (weight_eligible=false, folded combined_score=0). A nil
+// store (router track never initialized) serves an empty, well-formed ledger so a
+// polling relay never 500s.
+func (s *server) handleRouterLedger(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if s == nil || s.routerLedger == nil {
+		writeJSON(w, http.StatusOK, routerscore.Ledger{Entries: []routerscore.LedgerEntry{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.routerLedger.Snapshot())
 }
 
 // controlAuthMode selects what the control plane does with a request that fails

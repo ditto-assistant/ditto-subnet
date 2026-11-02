@@ -382,6 +382,73 @@ func (d *Deps) traceEmbeddingSettled(t embeddingTrace) {
 	})
 }
 
+// decisionTrace is the decision-lane counterpart: one OpenRouter System One
+// phase carrying the locked (pin-forced) payload.
+type decisionTrace struct {
+	r           *http.Request
+	headers     *proxyHeaders
+	body        []byte
+	receivedAt  time.Time
+	grant       *postgres.InferenceGrant
+	model       string
+	locked      map[string]any
+	outcome     *settleOutcome
+	upstream    *providerHTTPResult
+	callErr     *providerCallError
+	raw         []byte
+	started     time.Time
+	deliverable bool
+	failure     *httpError
+	settleErr   error
+	reserved    int64
+	chargeable  int64
+}
+
+func (d *Deps) traceDecisionSettled(t decisionTrace) {
+	if d.Traces == nil {
+		return
+	}
+	locked, _ := json.Marshal(t.locked)
+	phase := phaseTrace{phase: 0, route: "openrouter", payload: locked, errorCode: t.outcome.terminalErrorCode.String}
+	if t.upstream != nil {
+		phase.status, phase.headers, phase.body, phase.attempts = t.upstream.status, t.upstream.header, t.upstream.body, t.upstream.attempts
+	} else if t.callErr != nil {
+		phase.attempts, phase.timedOut = t.callErr.attempts, t.callErr.timedOut
+	}
+	finished := t.started.Add(t.outcome.elapsed)
+	d.trace(&traces.Record{
+		Event:   traces.EventSettled,
+		Request: traceRequest(t.r, t.headers, traces.LaneInference, traces.KindDecision, t.body, t.receivedAt),
+		Grant:   traceInferenceGrant(t.grant, t.model),
+		Admission: &traces.Admission{
+			ReservedTokens: t.reserved, MaxChargeableTokens: t.chargeable, AdmittedAt: traces.TimePtr(t.receivedAt),
+		},
+		Upstream: &traces.Upstream{
+			Payload:           traces.RawJSON(locked),
+			Provider:          t.outcome.upstreamProvider.String,
+			Model:             t.model,
+			Attempts:          t.outcome.upstreamAttempts,
+			TimedOut:          t.outcome.timedOut,
+			TerminalErrorCode: t.outcome.terminalErrorCode.String,
+			StartedAt:         traces.TimePtr(t.started),
+			FinishedAt:        traces.TimePtr(finished),
+			LatencyMs:         t.outcome.elapsed.Milliseconds(),
+			Phases:            tracePhases([]phaseTrace{phase}, false),
+		},
+		SettlementFailure: traceSettlementFailure(t.settleErr),
+		Response: &traces.Response{
+			HTTPStatus:  traceResponseStatus(t.settleErr, t.failure, t.deliverable, t.raw),
+			Body:        traces.RawJSON(t.raw),
+			Deliverable: t.deliverable,
+		},
+		Usage: &traces.Usage{
+			PromptTokens: t.outcome.promptTokens, CompletionTokens: t.outcome.completionTokens,
+			CostMicrousd: t.outcome.costMicrousd, UsageAvailable: t.outcome.usageAvailable,
+		},
+		Outcome: &traces.Outcome{Status: t.outcome.status, StartedAt: traces.TimePtr(t.receivedAt), CompletedAt: traces.TimePtr(finished)},
+	})
+}
+
 func embeddingProviderTracePhases(result *embeddingProviderResult, payload []byte, terminal string) []phaseTrace {
 	phases := make([]phaseTrace, 0, len(result.phases))
 	for index, providerPhase := range result.phases {
