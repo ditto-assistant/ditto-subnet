@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.431.1 (2026-11-02)
+
+### Bug Fixes
+
+- **screener**: Auto-retry screened-image uploads that hit a Platform outage
+  ([#3322](https://github.com/ditto-assistant/ditto-subnet/pull/3322),
+  [`15faf2c`](https://github.com/ditto-assistant/ditto-subnet/commit/15faf2c9f6f28d8adb5d18ccc28360a8ce369a4b))
+
+
 ## v0.431.0 (2026-11-02)
 
 ### Features
