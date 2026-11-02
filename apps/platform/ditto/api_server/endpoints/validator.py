@@ -5357,9 +5357,7 @@ async def _top5_confirmation_seed_plan(
         return catchup
     if wave_window is not None and wave_window.paced:
         first_issue = await first_retest_issue_by_seed(
-            session,
-            agent_ids=cohort_ids,
-            bench_version=canonical_version,
+            session, bench_version=canonical_version
         )
         if not growth_open(wave_window, next_seed=next_seed, first_issue=first_issue):
             return catchup
@@ -6337,6 +6335,7 @@ async def request_top5_confirmation_job(
             session,
             cadence_tempos=continual_settings.wave_cadence_tempos,
             seeds_per_window=continual_settings.wave_seeds_per_window,
+            netuid=getattr(getattr(config, "chain", None), "netuid", None),
         )
         crown_block = champion.dataset_seed_block or block.number
         scheduled_round = top5_round_is_due(

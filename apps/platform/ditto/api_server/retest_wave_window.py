@@ -16,8 +16,8 @@ the chain instead:
 A window starts when the first ledger pin of its first epoch was taken
 (:class:`~ditto.db.models.LedgerEpochSnapshot`, one per chain epoch), so the
 boundary is a chain fact rather than a wall-clock guess. A seed counts as
-opened in the window when its first continual-retest lease was issued at or
-after that instant.
+opened in the window when it first entered the lane (its first lease or
+accepted score, lane-wide) at or after that instant.
 
 Pacing fails open: with no ledger pin to anchor a window (``ledger_pin_mode``
 ``live`` or a fresh database) the lane keeps its historical pacing, because the
@@ -33,12 +33,9 @@ from typing import TYPE_CHECKING
 from sqlalchemy import func, select
 
 from ditto.api_models.ticket_status import TicketPurpose
-from ditto.db.models import LedgerEpochSnapshot, ValidatorTicket
+from ditto.db.models import ConfirmationScore, LedgerEpochSnapshot, ValidatorTicket
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from uuid import UUID
-
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -66,18 +63,25 @@ class WaveWindow:
 
 
 async def current_wave_window(
-    session: AsyncSession, *, cadence_tempos: int, seeds_per_window: int
+    session: AsyncSession,
+    *,
+    cadence_tempos: int,
+    seeds_per_window: int,
+    netuid: int | None = None,
 ) -> WaveWindow:
-    """Resolve the window the chain is in now from the ledger pins."""
+    """Resolve the window the chain is in now from this subnet's ledger pins."""
     if cadence_tempos <= 0:
         return WaveWindow(cadence_tempos, seeds_per_window, None, None, None)
-    latest = await session.scalar(select(func.max(LedgerEpochSnapshot.epoch_index)))
+    scope = (LedgerEpochSnapshot.netuid == netuid,) if netuid is not None else ()
+    latest = await session.scalar(
+        select(func.max(LedgerEpochSnapshot.epoch_index)).where(*scope)
+    )
     if latest is None:
         return WaveWindow(cadence_tempos, seeds_per_window, None, None, None)
     window_epoch = int(latest) - int(latest) % cadence_tempos
     window_start = await session.scalar(
         select(func.min(LedgerEpochSnapshot.pinned_at)).where(
-            LedgerEpochSnapshot.epoch_index >= window_epoch
+            *scope, LedgerEpochSnapshot.epoch_index >= window_epoch
         )
     )
     return WaveWindow(
@@ -86,31 +90,46 @@ async def current_wave_window(
 
 
 async def first_retest_issue_by_seed(
-    session: AsyncSession,
-    *,
-    agent_ids: Iterable[UUID],
-    bench_version: int,
+    session: AsyncSession, *, bench_version: int
 ) -> dict[int, datetime]:
-    """When each retest seed was first leased to any of these agents.
+    """When each continual-retest seed first entered the lane at this version.
 
-    Every seed the lane ever leased them, whichever reign introduced it: a
-    catch-up or void re-run lease of an old seed keeps that seed's original
-    first-issue time, so only genuinely fresh seeds land inside a window.
+    Lane-wide, never scoped to the current cohort: a seed opened for a member
+    that later left the emission set still spent its window's budget.
+
+    ``ValidatorTicket`` rows are reused per (agent, version, validator), so a
+    ticket's ``seed`` and ``issued_at`` describe only its latest lease. The
+    durable record is the append-only ``ConfirmationScore`` row (voided rows
+    included: a void does not un-open a seed). A seed is first seen at the
+    earlier of its first accepted score and any live lease of it. A seed whose
+    only lease was overwritten before any score landed reads as unopened,
+    which can only let pacing open one more seed, never strand a wave.
     """
-    ids = list(dict.fromkeys(agent_ids))
-    if not ids:
-        return {}
-    rows = await session.execute(
+    first: dict[int, datetime] = {}
+    scored = await session.execute(
+        select(ConfirmationScore.seed, func.min(ConfirmationScore.created_at))
+        .where(ConfirmationScore.bench_version == bench_version)
+        .group_by(ConfirmationScore.seed)
+    )
+    for seed, created in scored:
+        if seed is not None and created is not None:
+            first[int(seed)] = created
+    leased = await session.execute(
         select(ValidatorTicket.seed, func.min(ValidatorTicket.issued_at))
         .where(
-            ValidatorTicket.agent_id.in_(ids),
             ValidatorTicket.bench_version == bench_version,
             ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
             ValidatorTicket.seed.is_not(None),
         )
         .group_by(ValidatorTicket.seed)
     )
-    return {int(seed): issued for seed, issued in rows if seed is not None}
+    for seed, issued in leased:
+        if seed is None or issued is None:
+            continue
+        key = int(seed)
+        if key not in first or _at_or_after(first[key], issued):
+            first[key] = issued
+    return first
 
 
 def seeds_opened_in_window(

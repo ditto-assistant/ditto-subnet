@@ -18,7 +18,12 @@ from ditto.api_server.retest_wave_window import (
     growth_open,
     seeds_opened_in_window,
 )
-from ditto.db.models import Agent, LedgerEpochSnapshot, ValidatorTicket
+from ditto.db.models import (
+    Agent,
+    ConfirmationScore,
+    LedgerEpochSnapshot,
+    ValidatorTicket,
+)
 
 _NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
 
@@ -88,25 +93,32 @@ async def test_no_ledger_pin_fails_open(session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_issue_reads_only_continual_retests_at_the_version(
+async def test_first_issue_is_lane_wide_and_survives_ticket_reuse(
     session: AsyncSession,
 ) -> None:
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="miner",
-        name="wave-window",
-        sha256="ef" * 32,
-        status=AgentStatus.SCORED,
-        created_at=_NOW,
-    )
-    session.add(agent)
+    """Seed first-seen times come from durable scores plus live leases, for
+    every agent at the version, so a reused ticket row or a member leaving the
+    cohort cannot make an opened seed look fresh."""
+    agents = [
+        Agent(
+            agent_id=uuid4(),
+            miner_hotkey=f"miner-{index}",
+            name=f"wave-window-{index}",
+            sha256=f"{index:02x}" * 32,
+            status=AgentStatus.SCORED,
+            created_at=_NOW,
+        )
+        for index in range(2)
+    ]
+    session.add_all(agents)
+    await session.flush()
 
-    def ticket(seed: int, issued: datetime, **overrides: object) -> ValidatorTicket:
+    def ticket(agent: Agent, seed: int, issued: datetime, **overrides: object):
         fields: dict[str, object] = {
             "agent_id": agent.agent_id,
             "validator_hotkey": f"validator-{uuid4().hex[:6]}",
             "slot_id": "slot-0",
-            "status": TicketStatus.SCORED,
+            "status": TicketStatus.ISSUED,
             "issued_at": issued,
             "deadline": issued + timedelta(minutes=30),
             "bench_version": 14,
@@ -119,18 +131,44 @@ async def test_first_issue_reads_only_continual_retests_at_the_version(
 
     session.add_all(
         [
-            ticket(5, _NOW),
-            ticket(5, _NOW + timedelta(hours=2)),
-            ticket(6, _NOW + timedelta(hours=1)),
-            ticket(7, _NOW, bench_version=13),
-            ticket(8, _NOW, purpose=TicketPurpose.CANONICAL_QUORUM),
+            # Seed 5 was scored early; its ticket row was later reused for 9.
+            ConfirmationScore(
+                agent_id=agents[0].agent_id,
+                validator_hotkey="validator-a",
+                bench_version=14,
+                seed=5,
+                composite=0.9,
+                run_id="run-5",
+                created_at=_NOW,
+            ),
+            ticket(agents[0], 9, _NOW + timedelta(hours=3)),
+            # Seed 6 lives only on another agent (one no longer in the cohort).
+            ticket(agents[1], 6, _NOW + timedelta(hours=1)),
+            # Other versions and lanes never count.
+            ticket(agents[1], 7, _NOW, bench_version=13),
+            ticket(agents[1], 8, _NOW, purpose=TicketPurpose.CANONICAL_QUORUM),
         ]
     )
     await session.flush()
 
-    first = await first_retest_issue_by_seed(
-        session, agent_ids=[agent.agent_id], bench_version=14
+    first = await first_retest_issue_by_seed(session, bench_version=14)
+
+    assert set(first) == {5, 6, 9}
+    assert first[5].replace(tzinfo=UTC) == _NOW
+    assert first[6].replace(tzinfo=UTC) == _NOW + timedelta(hours=1)
+
+
+@pytest.mark.asyncio
+async def test_window_is_scoped_to_the_lane_netuid(session: AsyncSession) -> None:
+    session.add(_snapshot(26090, _NOW))
+    other = _snapshot(30001, _NOW + timedelta(hours=9))
+    other.netuid = 999
+    session.add(other)
+    await session.flush()
+
+    window = await current_wave_window(
+        session, cadence_tempos=4, seeds_per_window=3, netuid=118
     )
 
-    assert set(first) == {5, 6}
-    assert first[5].replace(tzinfo=UTC) == _NOW
+    assert window.latest_epoch == 26090 and window.window_epoch == 26088
+    assert window.window_start == _NOW

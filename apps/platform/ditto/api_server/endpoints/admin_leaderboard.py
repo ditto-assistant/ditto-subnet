@@ -367,6 +367,7 @@ async def _claimability(
         session,
         cadence_tempos=settings.wave_cadence_tempos,
         seeds_per_window=settings.wave_seeds_per_window,
+        netuid=getattr(getattr(config, "chain", None), "netuid", None),
     )
     plan = (
         await _top5_confirmation_seed_plan(
@@ -383,11 +384,7 @@ async def _claimability(
     )
     opened_in_window: int | None = None
     if wave_window.paced and champion_agent_id is not None:
-        first_issue = await first_retest_issue_by_seed(
-            session,
-            agent_ids=tuple(dict.fromkeys((*member_ids, *wave_member_ids))),
-            bench_version=version,
-        )
+        first_issue = await first_retest_issue_by_seed(session, bench_version=version)
         opened_in_window = len(seeds_opened_in_window(wave_window, first_issue))
     leases = (
         await _live_retest_leases(

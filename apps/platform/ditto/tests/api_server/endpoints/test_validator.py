@@ -11991,7 +11991,9 @@ class TestTop5CatchUpConvergence:
             "a settled member owes exactly the next fresh growth seed"
         )
 
-        window_start = datetime.now(UTC) - timedelta(minutes=30)
+        # The window opens after the board's recorded waves, so they belong to
+        # earlier windows.
+        window_start = datetime.now(UTC)
         async with session_maker() as session, session.begin():
             session.add(
                 LedgerEpochSnapshot(
@@ -12013,7 +12015,7 @@ class TestTop5CatchUpConvergence:
 
         # A fresh seed opened inside this window spends the budget of one.
         async with session_maker() as session, session.begin():
-            issued = window_start + timedelta(minutes=5)
+            issued = window_start + timedelta(seconds=1)
             session.add(
                 ValidatorTicket(
                     agent_id=champion,
