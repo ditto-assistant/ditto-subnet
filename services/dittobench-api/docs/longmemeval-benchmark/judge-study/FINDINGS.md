@@ -3,10 +3,19 @@
 Nine models, two calling conventions, three replicates, 1,893 probes,
 102,222 judge calls, $6.89.
 
+> **Superseded in part.** §§1–3 are unaffected by the third arm. The §4 recommendation below was written
+> from the first two arms (`@official`, `@noreason`). A third arm, `@budget`
+> (`max_tokens` raised to 1024, reasoning left on; `RESULTS-three-arm.txt`),
+> reverses it: see [Third arm](#third-arm-raise-the-budget-leave-reasoning-on).
+> The subnet's production judge is now `deepseek/deepseek-v4.1-flash` with a
+> raised completion bound (#3167), not either reasoning-disabled candidate
+> recommended in §4.
+
 Every LongMemEval score ever published is denominated in one model:
 `gpt-4o-2024-08-06`. LongMemEval's official evaluator hard-codes it in a
 three-entry `model_zoo`, every paper that reports a LongMemEval number inherits
-it, and this subnet froze it into its v9 confirmation profile.
+it, and this subnet froze it into its v9 confirmation profile (until #3167
+replaced it).
 
 It retires from the OpenAI API on **2027-01-14** and from Azure on
 **2027-04-14**.
@@ -47,7 +56,7 @@ model, under the official calling convention:
 | model | empty content | truncated at 10 tokens | silently scored "no" |
 |---|---|---|---|
 | `qwen/qwen3.8-flash` | 100.0% | 100.0% | 100.0% |
-| `mistralai/mistral-large-4-0` | 99.3% | 99.3% | 99.3% |
+| `mistralai/mistral-large-4-0` | 100.0% | 100.0% | 100.0% |
 | `deepseek/deepseek-v4.1-flash` | 92.0% | 94.0% | 92.0% |
 | `moonshotai/kimi-k3` | 75.9% | 100.0% | 75.9% |
 | `z-ai/glm-5.3-flash` | 72.4% | 72.7% | 72.4% |
@@ -63,8 +72,9 @@ reports 9–10 of the 10-token budget consumed before any visible output, and
 {"reasoning": {"enabled": false}}
 ```
 
-drops every one of those rates to 0.0% and produces `"yes"` or `"no"` in one or
-two tokens.
+drops those rates to 0.0% for every model that accepts the flag except
+`kimi-k3` (3.7% empty, 3.9% truncated), and produces `"yes"` or `"no"` in one or
+two tokens. Two models do not accept it at all (§4).
 
 
 
@@ -150,6 +160,9 @@ Two arms per model. **`@official`** is the official calling convention
 untouched. **`@noreason`** adds `reasoning: {"enabled": false}` and changes
 nothing else — same prompt, same `max_tokens=10`, same label extraction.
 
+The tables in this section are the two-arm results (`RESULTS.txt`). The third
+arm, which changes the conclusion, follows the recommendation.
+
 ### Agreement with the incumbent
 
 Modal verdict over three replicates, 1,893 probes:
@@ -191,6 +204,10 @@ is raising `max_tokens`, which means editing LongMemEval itself and forfeiting
 protocol equivalence. Worth stating plainly because `glm-5.3-flash` is
 otherwise an attractive candidate and is already this repo's screener
 adjudicator model.
+
+With `max_tokens` raised (`@budget`), both are measurable and among the best
+in the panel: clause conformance 99.3% each, κ 0.960 (`glm-5.3-flash`) and
+0.961 (`minimax-m3.1-flash`).
 
 ### Stability
 
@@ -238,7 +255,14 @@ So "closest to 4o" and "most faithful to LongMemEval" are different objectives
 that point at different models. A drop-in replacement selected on agreement
 alone locks in a known defect, permanently, and calls it compatibility.
 
-### Recommendation
+This tension is largely an artefact of disabling reasoning. Under `@budget`,
+`qwen3.8-flash` scores 92% on the off-by-one clause (6% `@noreason`) while
+keeping κ 0.956 against 4o.
+
+### Recommendation (two-arm; superseded)
+
+> Written before the `@budget` arm existed, and contradicted by it: see the
+> next section. Kept as the record of the two-arm reasoning.
 
 There is no single answer, so here are two, with the trade stated:
 
@@ -260,6 +284,49 @@ option on offer, and the rubric gap is the price.
 For a subnet ranking miners against historical scores, continuity wins: the
 leaderboard is a relative ordering, and changing the denominator mid-flight
 invalidates every prior comparison.
+
+The 32% figure is `@noreason` only. Under `@budget`, `deepseek-v4.1-flash`
+honours the off-by-one clause on 94%.
+
+### Third arm: raise the budget, leave reasoning on
+
+**`@budget`** keeps the official prompt and label extraction, leaves reasoning
+on, and raises `max_tokens` to 1024. Eight of the nine models completed it;
+`mistral-large-4-0@budget` stopped at 1,421 calls and is excluded. Every
+`@budget` arm returns empty content on at most 0.4% of calls.
+
+From `RESULTS-three-arm.txt`, with the incumbent for reference:
+
+| judge | clause conformance | off-by-one clause (§2) | flip rate | κ vs 4o | Youden J |
+|---|---|---|---|---|---|
+| `qwen3.8-flash` @budget | 99.5% | 92% | 1.16% | 0.956 | 0.954 |
+| `glm-5.3-flash` @budget | 99.3% | 94% | 1.11% | 0.960 | 0.956 |
+| `deepseek-v4.1-flash` @budget | 99.3% | 94% | 0.53% | 0.958 | 0.957 |
+| `kimi-k3` @budget | 99.3% | 91% | 0.69% | 0.964 | 0.963 |
+| `minimax-m3.1-flash` @budget | 99.3% | 91% | 1.69% | 0.961 | 0.959 |
+| `gpt-6-luna` @budget | 99.2% | 94% | 1.32% | 0.952 | 0.949 |
+| `gpt-5.6-luna` @budget | 98.5% | 66% | 1.74% | 0.939 | 0.935 |
+| `gpt-4o-2024-08-06` @budget | 98.1% | 60% | 0.79% | 0.986 | 0.986 |
+| **`gpt-4o-2024-08-06` @official** | **98.0%** | **58%** | **1.06%** | — | — |
+
+What changes:
+
+- Six of the seven non-incumbent `@budget` arms score 99.2–99.5% on clause
+  conformance and 91–94% on the off-by-one clause, against the incumbent's
+  98.0% and 58%. The exception is `gpt-5.6-luna` (98.5%, 66%).
+- The §4 choice between agreement and rubric conformance mostly disappears:
+  these arms keep κ 0.952–0.964 against 4o while following the rule 4o
+  ignores.
+- `deepseek-v4.1-flash@budget` has the lowest flip rate of any `@budget` arm,
+  0.53% against the incumbent's 1.06%.
+
+What does not change: 4o honours its own off-by-one clause on 58% `@official`
+and 60% `@budget`, so §2 is not a protocol artefact.
+
+The subnet's production judge is now `deepseek/deepseek-v4.1-flash`, pinned to
+Together, with an 8192-token bound (#3167). This arm measured a 1024-token
+bound. The 8192 re-run that `provider_runtime.go` cites is not committed in
+this directory.
 
 ## 5. Translating old scores to a new judge
 
@@ -299,6 +366,9 @@ leaderboard projects what those five agents would have scored under each judge:
 | `glm-5.3-flash` @official | 5.6% | 16.0% | 17.7% | 1.7% | 10.7% |
 | `deepseek-v4.1-flash` @official | 2.0% | 3.6% | 3.6% | 1.1% | 2.6% |
 | **`qwen3.8-flash` @official** | **0.0%** | **0.0%** | **0.0%** | **0.0%** | **0.0%** |
+
+`RESULTS-three-arm.txt` adds the `@budget` rows; for example
+`deepseek-v4.1-flash@budget` projects 21.4%, 53.4%, 58.9%, 9.1% and 37.3%.
 
 The ordering of the five agents survives every viable judge. The *values* do
 not: the spread between the best and worst viable candidate is about five

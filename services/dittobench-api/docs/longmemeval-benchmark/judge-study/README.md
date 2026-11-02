@@ -1,11 +1,22 @@
 # LongMemEval judge-substitution study
 
 `gpt-4o-2024-08-06` is the model LongMemEval's official evaluator pins, and it
-is the judge frozen into this subnet's v9 confirmation profile
-(`longmemeval-official-gpt4o-openrouter-v1`). It retires from the OpenAI API on
+was the judge frozen into this subnet's v9 confirmation profile
+(`longmemeval-official-gpt4o-openrouter-v1`), which judged the 2026-07-23
+leaderboard in `../results/`. It retires from the OpenAI API on
 **2027-01-14** and from Azure on **2027-04-14**. Every LongMemEval score ever
-published, including this subnet's leaderboard, is denominated in a judge that
-is going away.
+published, including that leaderboard, is denominated in a judge that is going
+away.
+
+**Status.** #3167 has since replaced the production judge with
+`deepseek/deepseek-v4.1-flash`, pinned to Together, with the completion bound
+raised to 8192 (`officialJudgeModel` / `officialJudgeMaxTokens` in
+`internal/longmemeval/provider_runtime.go`). That follows this study's third
+(`@budget`) arm, which raises the bound and leaves reasoning on, rather than
+the reasoning-disabled recommendation `FINDINGS.md` was first written around.
+The `@budget` arm itself used a 1024-token bound, not 8192; see `RESULTS-three-arm.txt` and the "Third arm" section of `FINDINGS.md`. `provider_runtime.go` cites this directory for an 8192-token
+re-run (76 probes, maximum 2,907 completion tokens). That re-run is **not**
+committed here: only the 1024-token `@budget` arm is.
 
 This directory measures what actually happens when you substitute it.
 
@@ -97,6 +108,23 @@ labelling it would require a human-written correct personalized response per
 question, which this suite does not have. Reported totals exclude it rather
 than silently averaging a known-bad label in.
 
+## Arms
+
+| arm | request change against the official call |
+|---|---|
+| `@official` | none |
+| `@noreason` | `{"reasoning": {"enabled": false}}` |
+| `@budget` | `max_tokens` raised to 1024, reasoning untouched |
+
+`RESULTS.txt` is the two-arm analysis; `RESULTS-three-arm.txt` adds `@budget`
+for eight of the nine models (`mistral-large-4-0@budget` stopped at 1,421 calls
+and is excluded). Raw per-call data is not committed.
+
+Both result files were produced before `analyze.py` required all three
+labelled replicates per probe (it previously kept probes with two). Rerunning
+the current `analyze.py` over the same raw data can therefore drop probes that
+had one errored call, and shift the affected arms slightly.
+
 ## Reproducing
 
 ```bash
@@ -121,13 +149,21 @@ nothing to continue.
 
 Arms are `;`-separated (not `,`) because the per-arm override is JSON and
 contains commas. The third field is merged into the request body, which is how
-the `@noreason` arms set `{"reasoning": {"enabled": false}}`.
+the `@noreason` arms set `{"reasoning": {"enabled": false}}` and the `@budget`
+arms override `max_tokens`.
+
+A call that exhausts its retries is written with an `error` field and is
+retried on the next run rather than counted as done.
+
+`test_judge_study_scripts.py` covers probe selection, resume and the
+replicate filter, with no network: `python3 -I -m pytest test_judge_study_scripts.py`.
 
 ## Cost
 
 Judge calls are ~250 prompt tokens and ≤10 completion tokens. The full matrix
 (1,893 probes × 9 models × 2 arms × 3 replicates ≈ 102k calls) costs roughly
-**$8**. The incumbent is by far the most expensive participant per call.
+**$8**. That figure is for the two-arm matrix; the `@budget` arm is not
+included. The incumbent is by far the most expensive participant per call.
 
 Note that OpenRouter returned `usage.cost` as `0` for these requests, so the
 records carry `completion_tokens` / `reasoning_tokens` and cost is computed from

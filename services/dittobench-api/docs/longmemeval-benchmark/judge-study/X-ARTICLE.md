@@ -35,7 +35,7 @@ So it's scored **no**. Every question.
 How often, across 5,679 calls per model under the official protocol:
 
 qwen3.8-flash — 100% empty
-mistral-large-4 — 99.3%
+mistral-large-4 — 100%
 deepseek-v4.1 — 92%
 kimi-k3 — 75.9%
 glm-5.3-flash — 72.4%
@@ -58,7 +58,7 @@ The fix is one line:
 
     {"reasoning": {"enabled": false}}
 
-Every rate above → 0.0%.
+Every rate above → 0.0%, except kimi-k3 at 3.7%.
 
 Except two models that answer:
 "Reasoning is mandatory for this endpoint and cannot be disabled."
@@ -95,20 +95,21 @@ distinguishable by it, however carefully you run it.
 **9/**
 Now the part we didn't expect.
 
-Rank candidates by agreement with 4o → qwen3.8-flash wins (κ 0.957).
+With reasoning disabled:
+rank candidates by agreement with 4o → qwen3.8-flash wins (κ 0.957).
 Rank by conformance to LongMemEval's rubric → it's near last (6% on the
 off-by-one clause).
 
 **It agrees with 4o partly by reproducing 4o's mistake.**
 
 **10/**
-So "closest to 4o" and "most faithful to the benchmark" are different
-objectives selecting different models.
+Then we raised max_tokens to 1024 instead and left reasoning on.
 
-Continuity → qwen3.8-flash +noreason. κ 0.957, 16.7× cheaper, open-weight.
-Correctness → gpt-6-luna +noreason. 83% on the clause vs 4o's 58%, 25× cheaper.
+qwen3.8-flash: 6% → 92% on the off-by-one clause, κ 0.956.
+deepseek-v4.1-flash: 94% on the clause, 0.53% flip rate vs 4o's 1.06%.
 
-Pick deliberately. Full data ↓
+That tension was largely an artefact of disabling reasoning. We now judge
+with deepseek-v4.1-flash at a raised budget. Full data ↓
 
 ---
 
@@ -142,9 +143,9 @@ plausible-looking score instead of an error, in a benchmark whose results are
 published without the config attached.
 
 **"Why not just raise max_tokens?"**
-You can, and then your scores are no longer protocol-equivalent to anyone
-else's. That is a real cost in a benchmark whose whole value is comparability.
-Worth paying — but worth paying knowingly.
+That is what we did. Your scores are then no longer protocol-equivalent to
+anyone else's, which is a real cost in a benchmark whose whole value is
+comparability. Worth paying — but worth paying knowingly.
 
 **"Does this invalidate published LongMemEval numbers?"**
 No. Numbers produced with 4o under the official protocol are internally
@@ -153,9 +154,10 @@ rubric's intent, (b) there is a ~1 point noise floor, and (c) anyone
 substituting a judge from here on needs to check their judge is answering.
 
 **"Which should we actually use?"**
-If you're comparing against the published literature, continuity
-(qwen3.8-flash, reasoning off). If you're measuring a system for your own
-decisions, correctness (gpt-6-luna, reasoning off) and re-baseline.
+Raise the budget rather than disabling reasoning. At max_tokens=1024 six of
+the seven non-incumbent candidates scored 99.2–99.5% on clause conformance
+and 91–94% on the off-by-one clause, against 4o's 98.0% and 58%. We run
+deepseek-v4.1-flash at a raised bound.
 
 ### Disclosure to keep in the post
 
