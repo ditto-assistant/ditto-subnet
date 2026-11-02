@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.431.0 (2026-11-02)
+
+### Features
+
+- **platform,backroom**: Align continual retest waves to chain tempos
+  ([#3319](https://github.com/ditto-assistant/ditto-subnet/pull/3319),
+  [`5a8daab`](https://github.com/ditto-assistant/ditto-subnet/commit/5a8daab780c5d22f3638b1ff3be81c408c6724ed))
+
+
 ## v0.430.1 (2026-11-02)
 
 ### Bug Fixes
