@@ -32,4 +32,15 @@ describe('bounded MCP pre-parser', () => {
     const original = new Request('https://backroom.example/mcp')
     expect(await boundMcpRequest(original)).toBe(original)
   })
+  it('returns a private client error when the request stream fails', async () => {
+    const failed = new Request('https://backroom.example/mcp', {
+      method: 'POST',
+      body: new ReadableStream({ start(controller) { controller.error(new Error('fixture read failure')) } }),
+      duplex: 'half',
+    } as RequestInit)
+    const response = await boundMcpRequest(failed)
+    expect((response as Response).status).toBe(400)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(await response.text()).not.toContain('fixture read failure')
+  })
 })

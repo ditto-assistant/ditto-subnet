@@ -13,13 +13,17 @@ export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYT
       if (done) break
       size += value.byteLength
       if (size > limit) {
-        await reader.cancel()
+        await reader.cancel().catch(() => {})
         return Response.json({ error: 'MCP request body is too large' }, {
           status: 413, headers: { 'Cache-Control': 'no-store' },
         })
       }
       chunks.push(value)
     }
+  } catch {
+    return Response.json({ error: 'Could not read MCP request body' }, {
+      status: 400, headers: { 'Cache-Control': 'no-store' },
+    })
   } finally {
     reader.releaseLock()
   }
