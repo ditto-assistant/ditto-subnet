@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.431.3 (2026-11-02)
+
+### Documentation
+
+- **longmemeval**: Clause-conformance probe suite for judge substitution
+  ([#3144](https://github.com/ditto-assistant/ditto-subnet/pull/3144),
+  [`7cdd48b`](https://github.com/ditto-assistant/ditto-subnet/commit/7cdd48b542bca6c251a6679dce48e2f20c0967d4))
+
+### Performance Improvements
+
+- **platform**: Narrow the screener node row lock and defer score details
+  ([#1748](https://github.com/ditto-assistant/ditto-subnet/pull/1748),
+  [`9ad8eb9`](https://github.com/ditto-assistant/ditto-subnet/commit/9ad8eb9f49a004e36be7bada15883436ed9a3c12))
+
+
 ## v0.431.2 (2026-11-02)
 
 ### Bug Fixes
