@@ -1572,10 +1572,15 @@ async def _authorized_node(
     if node_id is None:
         raise ScreenerAuthError("node-scoped job claims require enrolled-node auth")
     if lock:
+        # ``populate_existing`` matters: the claim endpoints first read the
+        # node unlocked, so it is already in the identity map, and without it
+        # SQLAlchemy takes the lock but hands back that pre-lock snapshot. A
+        # node drained, disabled or re-scoped in between would still claim.
         node = await session.scalar(
             select(ScreenerNode)
             .where(ScreenerNode.node_id == node_id)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     else:
         node = await session.get(ScreenerNode, node_id)

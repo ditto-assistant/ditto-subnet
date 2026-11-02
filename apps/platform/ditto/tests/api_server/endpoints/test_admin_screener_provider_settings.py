@@ -9,7 +9,7 @@ from uuid import uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import event, select
+from sqlalchemy import event, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.screener_node_settings import (
@@ -1267,3 +1267,63 @@ async def test_node_claims_lock_the_node_row_but_job_updates_do_not(
         assert any("screener_nodes" in stmt for stmt in update_sql.statements), path
         # ... but it took no node row lock.
         assert _node_row_locks(update_sql.statements) == [], path
+
+
+@pytest.mark.parametrize("claim_path", _NODE_CLAIM_PATHS)
+@pytest.mark.parametrize("new_status", ["draining", "revoked"])
+async def test_node_claim_rechecks_status_changed_before_the_row_lock(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    claim_path: str,
+    new_status: str,
+) -> None:
+    """A node drained between the unlocked read and the row lock cannot claim.
+
+    The claim reads the node unlocked, resolves settings, then re-reads it
+    under ``FOR UPDATE``. That re-read must refresh the instance the first read
+    left in the identity map, or the status check sees the pre-lock snapshot.
+    """
+    from ditto.api_server.endpoints import screener as screener_endpoints
+    from ditto.tests.api_server.endpoints.test_screener import (
+        _install_chain,
+        _install_db,
+        _install_storage,
+    )
+
+    _install(app, session_maker)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    _install_storage(app)
+    node_headers = await _enroll_hetzner_claim_node(client, session_maker)
+
+    original = screener_endpoints.resolve_screener_node_channel_settings
+    changed: list[str] = []
+
+    async def _operator_changes_node_mid_claim(
+        session: AsyncSession, *, node_id: str
+    ) -> object:
+        result = await original(session, node_id=node_id)
+        # An operator commits a status change from another connection after
+        # the claim's unlocked read and before it takes the node row lock.
+        async with session_maker() as operator, operator.begin():
+            await operator.execute(
+                update(ScreenerNode)
+                .where(ScreenerNode.node_id == node_id)
+                .values(status=new_status)
+            )
+        changed.append(node_id)
+        return result
+
+    monkeypatch.setattr(
+        screener_endpoints,
+        "resolve_screener_node_channel_settings",
+        _operator_changes_node_mid_claim,
+    )
+
+    claimed = await client.post(
+        claim_path, headers=node_headers, json={"environment": "prod"}
+    )
+    assert changed == ["subnet-screener-1"], "the race window was not exercised"
+    assert claimed.status_code == 409, claimed.text
