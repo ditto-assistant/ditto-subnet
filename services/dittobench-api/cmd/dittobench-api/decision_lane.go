@@ -82,13 +82,24 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	session.decisionInFlight++
+	// Register the call's cancel in the same critical section that admitted
+	// it, like chat, so destroying the session (revoke, expiry, run end) can
+	// never miss an admitted decision call.
+	requestCtx, cancel := context.WithCancel(r.Context())
+	cancelID := uuid.NewString()
+	if session.cancels == nil {
+		session.cancels = make(map[string]context.CancelFunc)
+	}
+	session.cancels[cancelID] = cancel
 	grantID, bearer, proxyURL, generation := session.grantID, session.bearer, session.proxyURL, session.generation
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "", "")
 	session.mu.Unlock()
 	defer func() {
+		cancel()
 		session.mu.Lock()
 		session.decisionInFlight--
+		delete(session.cancels, cancelID)
 		session.mu.Unlock()
 	}()
 
@@ -111,22 +122,6 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	digest := sha256.Sum256(body)
 	message := fmt.Sprintf("ditto-inference:v1:%s:%d:%s:%s:%s", grantID, generation, nonce, requested, hex.EncodeToString(digest[:]))
 	proof := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(message)))
-	// Register with the session like chat does, so destroying the session
-	// (revoke, expiry, run end) also stops waiting on an in-flight decision.
-	requestCtx, cancel := context.WithCancel(r.Context())
-	cancelID := uuid.NewString()
-	session.mu.Lock()
-	if session.cancels == nil {
-		session.cancels = make(map[string]context.CancelFunc)
-	}
-	session.cancels[cancelID] = cancel
-	session.mu.Unlock()
-	defer func() {
-		cancel()
-		session.mu.Lock()
-		delete(session.cancels, cancelID)
-		session.mu.Unlock()
-	}()
 	upstream, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
