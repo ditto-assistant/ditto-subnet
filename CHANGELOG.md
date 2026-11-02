@@ -2,6 +2,29 @@
 
 <!-- version list -->
 
+## v0.431.2 (2026-11-02)
+
+### Bug Fixes
+
+- Let confirmation backpressure back off past a short Retry-After
+  ([#3298](https://github.com/ditto-assistant/ditto-subnet/pull/3298),
+  [`9803a26`](https://github.com/ditto-assistant/ditto-subnet/commit/9803a26cb0120e3cd4ce90434fff8afa04767d49))
+
+- **release**: Promptly roll back failed scorer starts
+  ([#3205](https://github.com/ditto-assistant/ditto-subnet/pull/3205),
+  [`dd9dd4e`](https://github.com/ditto-assistant/ditto-subnet/commit/dd9dd4eaaef04072f5025b53e5714bd79fb6eacf))
+
+### Documentation
+
+- Record source slices production delivery and next memory experiment
+  ([#1912](https://github.com/ditto-assistant/ditto-subnet/pull/1912),
+  [`aeeccbb`](https://github.com/ditto-assistant/ditto-subnet/commit/aeeccbb619c4529437745e01aa5a2b8c19cfdda2))
+
+- **backroom-review**: Record Optimistic v5 partial-carryover provenance holding
+  ([#3170](https://github.com/ditto-assistant/ditto-subnet/pull/3170),
+  [`f92947a`](https://github.com/ditto-assistant/ditto-subnet/commit/f92947a384351d5cfb5ccba2e9d74e7bf371d459))
+
+
 ## v0.431.1 (2026-11-02)
 
 ### Bug Fixes
