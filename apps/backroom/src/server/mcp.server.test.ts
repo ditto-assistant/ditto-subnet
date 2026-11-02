@@ -968,7 +968,9 @@ describe('Backroom MCP tools', () => {
     // The unreleased-copy settings pair (no-input read; mode, threshold,
     // revision, reason and confirmation write) adds about 0.6 KB; keep
     // about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(223_900)
+    // Tempo-aligned wave pacing (two bounded integers on the continual retest
+    // write) measures 224,063 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(224_550)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener

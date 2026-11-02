@@ -232,6 +232,12 @@ from ditto.api_server.queue_policy_settings import (
 from ditto.api_server.queue_policy_settings import (
     QueuePolicySettingsResolver,
 )
+from ditto.api_server.retest_wave_window import (
+    WaveWindow,
+    current_wave_window,
+    first_retest_issue_by_seed,
+    growth_open,
+)
 from ditto.api_server.scoring_gate import (
     PublicSourceRelease,
     ReviewDecision,
@@ -5260,8 +5266,15 @@ async def _top5_confirmation_seed_plan(
     cohort_member_ids: tuple[UUID, ...] = (),
     canonical_version: int,
     seed_planning: tuple[str | None, bool] | None = None,
+    wave_window: WaveWindow | None = None,
 ) -> tuple[int, ...]:
     """Every seed this member still owes: its backlog first, then wave growth.
+
+    ``wave_window`` is the tempo-aligned pacing window
+    (:mod:`ditto.api_server.retest_wave_window`). When it is paced, growth may
+    open a FRESH seed only while the window still has seed budget; a seed some
+    member was already leased keeps growing so its wave can finish, and
+    catch-up is never paced.
 
     ``seed_planning`` is the reign's ``(block_hash, allow_fresh_seeds)`` from
     :mod:`ditto.api_server.confirmation_seed_anchor`; ``None`` reads it. At a
@@ -5342,6 +5355,16 @@ async def _top5_confirmation_seed_plan(
         or next_seed in catchup
     ):
         return catchup
+    if wave_window is not None and wave_window.paced:
+        assert wave_window.window_start is not None  # paced implies a start
+        first_issue = await first_retest_issue_by_seed(
+            session,
+            bench_version=canonical_version,
+            since=wave_window.window_start,
+            include=(next_seed,),
+        )
+        if not growth_open(wave_window, next_seed=next_seed, first_issue=first_issue):
+            return catchup
     return (*catchup, next_seed)
 
 
@@ -6312,6 +6335,12 @@ async def request_top5_confirmation_job(
         seed_planning = (
             reign_anchor.planning if reign_anchor is not None else LEGACY_PLANNING
         )
+        wave_window = await current_wave_window(
+            session,
+            cadence_tempos=continual_settings.wave_cadence_tempos,
+            seeds_per_window=continual_settings.wave_seeds_per_window,
+            netuid=getattr(getattr(config, "chain", None), "netuid", None),
+        )
         crown_block = champion.dataset_seed_block or block.number
         scheduled_round = top5_round_is_due(
             block.number,
@@ -6428,6 +6457,7 @@ async def request_top5_confirmation_job(
                 cohort_member_ids=member_ids,
                 canonical_version=canonical_version,
                 seed_planning=seed_planning,
+                wave_window=wave_window,
             )
             if not seeds:
                 legacy_decline = (

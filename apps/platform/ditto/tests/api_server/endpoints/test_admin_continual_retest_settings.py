@@ -96,6 +96,9 @@ async def test_defaults_are_safe_and_revision_is_audited(
         "retest_eligibility_mode": "fixed",
         "retest_eligibility_z": 1.64,
         "retest_cohort_max_size": 25,
+        # Tempo-aligned waves ship OFF: cadence 0 is the historical pacing.
+        "wave_cadence_tempos": 0,
+        "wave_seeds_per_window": 3,
         # NOT a no-op on merge: this one feeds the weight fold, and it ships
         # deliberately widened. "strict" is what emptied the intersection at
         # 03:56Z and reverted every agent to its quorum median; it stays

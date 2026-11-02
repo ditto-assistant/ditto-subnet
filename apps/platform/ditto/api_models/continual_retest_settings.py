@@ -40,6 +40,11 @@ MAX_RETEST_COHORT_SIZE = 25
 # beyond it the band stops meaning "tied" and starts meaning "nearby", and the
 # only thing still bounding the cohort would be the size ceiling.
 MAX_RETEST_ELIGIBILITY_Z = 3.0
+# Tempo-aligned wave pacing (``wave_cadence_tempos``). Twenty-four epochs is
+# about a day of SN118 tempos; beyond it a "wave" stops tracking the chain.
+MAX_WAVE_CADENCE_TEMPOS = 24
+MAX_WAVE_SEEDS_PER_WINDOW = 16
+DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
 DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 
 
@@ -201,6 +206,32 @@ class ContinualRetestSettings(BaseModel):
     """
 
     idle_retests_enabled: bool = False
+
+    wave_cadence_tempos: Annotated[int, Field(ge=0, le=MAX_WAVE_CADENCE_TEMPOS)] = 0
+    """Tempo-aligned waves: open new shared seeds only once per N chain epochs.
+
+    ``0`` (the default, and the exact rollback) is the historical pacing: the
+    next growth seed opens as soon as the previous wave completes, so the board
+    moves whenever validators happen to finish. A positive ``N`` aligns the
+    agent competition to the chain: the epoch grid is cut into windows of ``N``
+    ``SubnetEpochIndex`` values starting at a multiple of ``N`` (the same grid
+    generator rounds use at ``epochs_per_round`` ``N``), and at most
+    :attr:`wave_seeds_per_window` NEW seeds open per window. A seed that is
+    already open keeps being leased until every member has it, and catch-up of
+    recorded coverage is never paced, so a new entrant still converges in one
+    round. Only the introduction of fresh shared seeds waits for the next
+    window. Crown changes therefore land on a tempo-aligned wave cadence, and
+    retest spend is bounded at ``wave_seeds_per_window`` seeds per window.
+    """
+
+    wave_seeds_per_window: Annotated[int, Field(ge=1, le=MAX_WAVE_SEEDS_PER_WINDOW)] = (
+        DEFAULT_WAVE_SEEDS_PER_WINDOW
+    )
+    """New shared seeds a tempo-aligned window may open (ignored at cadence 0).
+
+    Three matches the crown gate's ``min_dethrone_confirmations`` default, so
+    one window can carry a full dethrone case for a challenger."""
+
     rollout_standdown: Literal["off", "capable_validators", "all"] = (
         "capable_validators"
     )
