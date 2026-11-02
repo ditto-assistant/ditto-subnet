@@ -1,5 +1,6 @@
 import '@tanstack/react-start/server-only'
 import { observerGrant, observerRequestAllowed } from './treasury-observer-access.server'
+import { boundMcpRequest, MAX_MCP_BODY_BYTES } from './mcp-request-limits.server'
 
 import { WorkerEntrypoint } from 'cloudflare:workers'
 import { accessLevelForEmail } from '../lib/auth.policy'
@@ -74,11 +75,17 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
     try { observer = observerGrant(props.scopes) } catch {
       return Response.json({ error: 'access_denied' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
     }
-    if (observer && (props.session.accessLevel !== 'write' || !await observerRequestAllowed(request))) {
+    if (observer && props.session.accessLevel !== 'write') {
       return Response.json({ error: 'access_denied' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
     }
     if (!observer && !hasReadAccess(props)) {
       return insufficientScopeResponse(request, BACKROOM_READ_SCOPE)
+    }
+    const bounded = await boundMcpRequest(request)
+    if (bounded instanceof Response) return bounded
+    request = bounded
+    if (observer && !await observerRequestAllowed(request)) {
+      return Response.json({ error: 'access_denied' }, { status: 403, headers: { 'Cache-Control': 'no-store' } })
     }
     const requiredScopes = observer ? [] : await requiredScopesForRequest(request)
     for (const scope of requiredScopes) {
@@ -97,6 +104,7 @@ export class BackroomMcpHandler extends WorkerEntrypoint<
     const transport = new WebStandardStreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
+      maxRequestBodySize: MAX_MCP_BODY_BYTES,
     })
     await server.connect(transport)
     const response = await transport.handleRequest(request)

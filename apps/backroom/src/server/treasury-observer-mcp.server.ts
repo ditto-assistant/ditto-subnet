@@ -12,6 +12,7 @@ export function createTreasuryObserverServer(props: McpGrantProps) {
   }
   const server = new McpServer({ name: 'SN118 treasury observer', version: '1.0.0' }, {
     capabilities: { tools: {} },
+    maxToolInputElements: 10_000,
     instructions: 'Only exact historical treasury settings and verified receipt ingestion. No general read/write, source, spending, signing or provider-credit authority.',
   })
   const result = (value: Record<string, unknown>) => ({
