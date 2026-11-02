@@ -109,13 +109,30 @@ def test_ci_roles_trust_only_protected_environments() -> None:
 def _apply_statements() -> list[str]:
     start = BOOTSTRAP.index('data "aws_iam_policy_document" "apply" {')
     end = BOOTSTRAP.index('resource "aws_iam_role_policy" "github_plan"')
-    return re.split(r"\n  (?:statement|dynamic \"statement\") \{", BOOTSTRAP[start:end])[1:]
+    return re.split(
+        r"\n  (?:statement|dynamic \"statement\") \{", BOOTSTRAP[start:end]
+    )[1:]
 
 
 def test_apply_role_ec2_mutation_is_tag_scoped() -> None:
     statements = _apply_statements()
     ec2 = [s for s in statements if '"ec2:' in s]
     assert ec2
+    # Every EC2 grant is bounded by the scorer stack tag, tag-on-create, or the
+    # image publisher, except two named grants whose residual scope the policy
+    # comments record: untagged AWS-created default rules, and the launch ENI.
+    bounds = (
+        '"aws:ResourceTag/stack"',
+        '"aws:RequestTag/stack"',
+        '"ec2:CreateAction"',
+        '"ec2:Owner"',
+    )
+    unbounded = {
+        _search(r'sid\s+= "(\w+)"', s).group(1)
+        for s in ec2
+        if not any(bound in s for bound in bounds)
+    }
+    assert unbounded == {"RevokeUntaggedDefaultRules", "LaunchNetworkInterface"}
     for statement in ec2:
         if 'resources = ["*"]' in statement:
             assert '"aws:ResourceTag/stack"' in statement, statement
