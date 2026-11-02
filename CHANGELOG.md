@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.430.0 (2026-11-02)
+
+### Features
+
+- **bench**: Add the bench v15 contract with a production-scale tool catalog and the scored decision
+  lane ([#3318](https://github.com/ditto-assistant/ditto-subnet/pull/3318),
+  [`a131ed2`](https://github.com/ditto-assistant/ditto-subnet/commit/a131ed260b551d515fc71dd72d7f33fac53c2bf2))
+
+
 ## v0.429.0 (2026-11-01)
 
 ### Features
