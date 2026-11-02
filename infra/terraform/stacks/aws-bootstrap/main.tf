@@ -374,6 +374,9 @@ data "aws_iam_policy_document" "apply" {
       values   = ["136693071363", "099720109477"]
     }
   }
+  # The primary interface RunInstances creates is untagged, so it cannot be
+  # tag-scoped. Residual: a launch may name an existing untagged ENI; the new
+  # instance must still be scorer-tagged.
   statement {
     sid       = "LaunchNetworkInterface"
     actions   = ["ec2:RunInstances"]
@@ -381,7 +384,10 @@ data "aws_iam_policy_document" "apply" {
   }
 
   # A new security group's default allow-all egress rule and the VPC default
-  # group's rules are created by AWS untagged; Terraform revokes them.
+  # group's rules are created by AWS untagged; Terraform revokes them. The
+  # revoke call also authorizes the group itself, which must carry the stack
+  # tag (MutateTaggedScorerResources), so this does not reach other groups
+  # except through the TagScorerDefaultSecurityGroup residual below.
   statement {
     sid       = "RevokeUntaggedDefaultRules"
     actions   = ["ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress"]
