@@ -111,7 +111,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "state" {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
     }
-    bucket_key_enabled = true
   }
 }
 
@@ -216,6 +215,21 @@ locals {
     "arn:aws:ssm:${local.region}::parameter/aws/service/debian/*",
     "arn:aws:ssm:${local.region}::parameter/aws/service/canonical/*",
   ]
+
+  # The scorer root's provider default_tags put stack = <this> on every
+  # resource it creates; the apply role's EC2 grants are keyed on it.
+  scorer_stack_tag = "aws-generator-scorer"
+  ec2_arn          = "arn:aws:ec2:${local.region}:${local.account_id}"
+  # EC2 create call -> resource types it must tag with the stack tag.
+  scorer_tag_on_create = {
+    CreateVpc                    = ["vpc"]
+    CreateSubnet                 = ["subnet"]
+    CreateInternetGateway        = ["internet-gateway"]
+    CreateRouteTable             = ["route-table"]
+    CreateSecurityGroup          = ["security-group"]
+    AuthorizeSecurityGroupEgress = ["security-group-rule"]
+    RunInstances                 = ["instance", "volume"]
+  }
 }
 
 data "aws_iam_policy_document" "plan" {
@@ -282,26 +296,54 @@ data "aws_iam_policy_document" "apply" {
     resources = [local.state_key]
   }
 
-  # Region-scoped EC2 mutation for the scorer VPC and instance. EC2's
-  # resource-level permissions cannot express "only this root's resources"
-  # without tag gymnastics on RunInstances' many resource types; the exact
-  # saved plan and the infra-apply reviewers are the boundary.
+  # EC2 mutation is scoped by the `stack` default tag the scorer root puts on
+  # everything it creates (versions.tf default_tags). A resource is created
+  # only when the request carries that tag, and an existing resource is
+  # changed only when it already carries it, so the role cannot terminate,
+  # modify, open or delete unrelated instances, VPCs or security groups in
+  # us-east-1. No statement grants ingress: the design has none.
+  dynamic "statement" {
+    for_each = local.scorer_tag_on_create
+    content {
+      sid       = "CreateTagged${statement.key}"
+      actions   = ["ec2:${statement.key}"]
+      resources = [for type in statement.value : "${local.ec2_arn}:${type}/*"]
+      condition {
+        test     = "StringEquals"
+        variable = "aws:RequestTag/stack"
+        values   = [local.scorer_stack_tag]
+      }
+    }
+  }
+
+  # Tag-on-create needs CreateTags, limited to those create calls.
   statement {
-    sid = "MutateScorerNetworkAndHost"
+    sid       = "TagOnCreate"
+    actions   = ["ec2:CreateTags"]
+    resources = ["${local.ec2_arn}:*/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:CreateAction"
+      values   = keys(local.scorer_tag_on_create)
+    }
+  }
+
+  # Everything that touches an existing resource, including the parent VPC,
+  # subnet and security group a create or launch names, requires the tag.
+  statement {
+    sid = "MutateTaggedScorerResources"
     actions = [
-      "ec2:CreateVpc", "ec2:DeleteVpc", "ec2:ModifyVpcAttribute",
-      "ec2:CreateSubnet", "ec2:DeleteSubnet", "ec2:ModifySubnetAttribute",
-      "ec2:CreateInternetGateway", "ec2:DeleteInternetGateway",
-      "ec2:AttachInternetGateway", "ec2:DetachInternetGateway",
-      "ec2:CreateRouteTable", "ec2:DeleteRouteTable", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:ReplaceRoute",
+      "ec2:CreateSubnet", "ec2:CreateRouteTable", "ec2:CreateSecurityGroup",
+      "ec2:RunInstances", "ec2:AuthorizeSecurityGroupEgress",
+      "ec2:DeleteVpc", "ec2:ModifyVpcAttribute",
+      "ec2:DeleteSubnet", "ec2:ModifySubnetAttribute",
+      "ec2:DeleteInternetGateway", "ec2:AttachInternetGateway", "ec2:DetachInternetGateway",
+      "ec2:DeleteRouteTable", "ec2:CreateRoute", "ec2:DeleteRoute", "ec2:ReplaceRoute",
       "ec2:AssociateRouteTable", "ec2:DisassociateRouteTable",
-      "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
-      "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress",
-      "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
-      "ec2:ModifySecurityGroupRules",
-      "ec2:UpdateSecurityGroupRuleDescriptionsEgress", "ec2:UpdateSecurityGroupRuleDescriptionsIngress",
+      "ec2:DeleteSecurityGroup", "ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress",
+      "ec2:ModifySecurityGroupRules", "ec2:UpdateSecurityGroupRuleDescriptionsEgress",
       "ec2:CreateTags", "ec2:DeleteTags",
-      "ec2:RunInstances", "ec2:TerminateInstances", "ec2:StartInstances", "ec2:StopInstances",
+      "ec2:TerminateInstances", "ec2:StartInstances", "ec2:StopInstances",
       "ec2:ModifyInstanceAttribute", "ec2:ModifyInstanceMetadataOptions", "ec2:ModifyInstanceCreditSpecification",
       "ec2:AssociateIamInstanceProfile", "ec2:ReplaceIamInstanceProfileAssociation", "ec2:DisassociateIamInstanceProfile",
       "ec2:ModifyVolume",
@@ -309,21 +351,78 @@ data "aws_iam_policy_document" "apply" {
     resources = ["*"]
     condition {
       test     = "StringEquals"
+      variable = "aws:ResourceTag/stack"
+      values   = [local.scorer_stack_tag]
+    }
+    condition {
+      test     = "StringEquals"
       variable = "aws:RequestedRegion"
       values   = [local.region]
     }
   }
 
+  # RunInstances also authorizes the image and the network interface it
+  # creates. Images come only from the publishers modules/compute/aws resolves
+  # through SSM: Debian (136693071363) and Canonical (099720109477).
+  statement {
+    sid       = "LaunchPublishedImages"
+    actions   = ["ec2:RunInstances"]
+    resources = ["arn:aws:ec2:${local.region}::image/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "ec2:Owner"
+      values   = ["136693071363", "099720109477"]
+    }
+  }
+  statement {
+    sid       = "LaunchNetworkInterface"
+    actions   = ["ec2:RunInstances"]
+    resources = ["${local.ec2_arn}:network-interface/*"]
+  }
+
+  # A new security group's default allow-all egress rule and the VPC default
+  # group's rules are created by AWS untagged; Terraform revokes them.
+  statement {
+    sid       = "RevokeUntaggedDefaultRules"
+    actions   = ["ec2:RevokeSecurityGroupEgress", "ec2:RevokeSecurityGroupIngress"]
+    resources = ["${local.ec2_arn}:security-group-rule/*"]
+  }
+
+  # aws_default_security_group tags the VPC's AWS-created default group before
+  # stripping its rules, so that one existing, untagged group must be taggable.
+  # Residual: this lets the role tag any security group in the region into
+  # scope, after which it can revoke its rules, add egress, or delete it. It
+  # still cannot add ingress anywhere or touch any other resource type.
+  statement {
+    sid       = "TagScorerDefaultSecurityGroup"
+    actions   = ["ec2:CreateTags"]
+    resources = ["${local.ec2_arn}:security-group/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:RequestTag/stack"
+      values   = [local.scorer_stack_tag]
+    }
+  }
+
+  # The scorer role's trust policy is a static ec2.amazonaws.com principal.
+  # GCP federation trusts every session of this role name, so a writable trust
+  # policy would let this role grant itself the scorer's Platform bearer.
   statement {
     sid = "ManageScorerIdentity"
     actions = [
-      "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateRoleDescription", "iam:UpdateAssumeRolePolicy",
+      "iam:CreateRole", "iam:DeleteRole", "iam:UpdateRole", "iam:UpdateRoleDescription",
       "iam:TagRole", "iam:UntagRole",
       "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile",
       "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile",
       "iam:TagInstanceProfile", "iam:UntagInstanceProfile",
     ]
     resources = local.scorer_iam
+  }
+  statement {
+    sid       = "NeverRetrustScorerRole"
+    effect    = "Deny"
+    actions   = ["iam:UpdateAssumeRolePolicy"]
+    resources = ["arn:aws:iam::${local.account_id}:role/${local.scorer_role_name}"]
   }
 
   # The scorer role may carry exactly one managed policy, and no inline policy.
