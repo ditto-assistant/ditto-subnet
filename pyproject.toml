@@ -11,6 +11,9 @@ license = "MIT"
 requires-python = ">=3.12,<3.14"
 authors = [{ name = "heyDitto" }]
 dependencies = [
+    # Patched floors apply to pip consumers as well as the uv lock.
+    "anyio>=4.14.2",
+    "msgpack>=1.2.3",
     # 10.3.0 carries a breaking change the subnet requires — older releases no
     # longer interoperate with the chain, so pin the floor there (the lock pins
     # the exact resolved version operators install).
@@ -29,7 +32,15 @@ dependencies = [
 # Public wandb telemetry (opt-in). The validator imports wandb lazily and
 # degrades to a no-op when it is absent, so this is only needed to actually
 # publish stats: ``uv sync --extra telemetry`` (or ``pip install ditto[telemetry]``).
-telemetry = ["wandb>=0.17"]
+telemetry = ["wandb>=0.17", "GitPython>=3.2.0"]
+
+[tool.uv]
+# Security floors also cover dependencies pulled in through Bittensor and tooling.
+constraint-dependencies = [
+    "GitPython>=3.2.0",
+    "anyio>=4.14.2",
+    "msgpack>=1.2.3",
+]
 
 [tool.uv.sources]
 bittensor-pylon-client = { git = "https://github.com/bittensor-church/bittensor-pylon", subdirectory = "pylon_client" }
@@ -50,6 +61,7 @@ dev = [
 ]
 release = [
     "python-semantic-release==10.6.1",
+    "GitPython>=3.2.0",
 ]
 
 [tool.hatch.build.targets.wheel]
