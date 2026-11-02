@@ -17,7 +17,9 @@ REPS = 3
 # a zero that could never have been non-zero.
 complete = {a: {p: [x for x in v if "label" in x] for p, v in d.items()}
             for a, d in by.items()}
-complete = {a: {p: v for p, v in d.items() if len(v) >= 2}
+# A probe with fewer than REPS labelled calls is not a three-replicate result:
+# a 1-1 split would reach modal() as a tie and be scored "no".
+complete = {a: {p: v for p, v in d.items() if len(v) >= REPS}
             for a, d in complete.items()}
 unusable = {a: len(by[a]) for a, d in complete.items() if len(d) < 1800}
 complete = {a: d for a, d in complete.items() if len(d) >= 1800}

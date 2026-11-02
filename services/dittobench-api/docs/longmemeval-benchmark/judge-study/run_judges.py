@@ -10,7 +10,7 @@ import json, os, sys, time, hashlib, threading, argparse, collections
 import urllib.request, urllib.error
 
 API = "https://openrouter.ai/api/v1/chat/completions"
-KEY = os.environ["OPENROUTER_API_KEY"]
+KEY = None  # read in main(), so the selection/resume helpers import without it
 
 def get_anscheck_prompt(task, question, answer, response, abstention=False):
     if not abstention:
@@ -62,7 +62,42 @@ def call(model, prompt, extra=None, tries=6):
             last = "%s:%s" % (type(e).__name__, e); time.sleep(min(2 ** a, 30))
     return {"error": last}
 
+def select_probes(probes, limit, stratify):
+    """Return at most `limit` probes (all of them when limit is 0).
+
+    Stratified selection takes up to limit // n_categories per category in
+    sorted category order, and is capped at `limit`: with more categories than
+    slots, a per-category floor of one would otherwise exceed the request.
+    """
+    if not limit:
+        return probes
+    if not stratify:
+        return probes[:limit]
+    by = collections.defaultdict(list)
+    for p in probes: by[p["probe"]].append(p)
+    per = max(1, limit // len(by)); sel = []
+    for k in sorted(by): sel.extend(by[k][:per])
+    return sel[:limit]
+
+def load_done(path):
+    """(arm, probe_id, rep) triples that already have a verdict in `path`.
+
+    A record carrying "error" is an exhausted API failure, not a verdict, so
+    it is left out and the triple is retried on resume.
+    """
+    done = set()
+    if os.path.exists(path):
+        for l in open(path):
+            try:
+                r = json.loads(l)
+                if "error" not in r:
+                    done.add((r["model_arm"], r["probe_id"], r["rep"]))
+            except Exception: pass
+    return done
+
 def main():
+    global KEY
+    KEY = os.environ["OPENROUTER_API_KEY"]
     ap = argparse.ArgumentParser()
     ap.add_argument("--probes", required=True)
     ap.add_argument("--refs", required=True)
@@ -75,23 +110,9 @@ def main():
     a = ap.parse_args()
 
     refs = {e["question_id"]: e for e in json.load(open(a.refs))}
-    probes = [json.loads(l) for l in open(a.probes)]
-    if a.limit:
-        if a.stratify:
-            by = collections.defaultdict(list)
-            for p in probes: by[p["probe"]].append(p)
-            per = max(1, a.limit // len(by)); sel = []
-            for k in sorted(by): sel.extend(by[k][:per])
-            probes = sel
-        else:
-            probes = probes[:a.limit]
-
-    done = set()
-    if os.path.exists(a.out):
-        for l in open(a.out):
-            try:
-                r = json.loads(l); done.add((r["model_arm"], r["probe_id"], r["rep"]))
-            except Exception: pass
+    probes = select_probes([json.loads(l) for l in open(a.probes)],
+                           a.limit, a.stratify)
+    done = load_done(a.out)
     print("probes=%d models=%d reps=%d already=%d" % (
         len(probes), len(a.models.split(";")), a.reps, len(done)), flush=True)
 
@@ -144,4 +165,5 @@ def main():
     fh.close()
     print("DONE n=%d cost=$%.4f errors=%d" % (state["n"], state["cost"], state["err"]))
 
-main()
+if __name__ == "__main__":
+    main()
