@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
@@ -110,5 +111,43 @@ func TestPlatformDecisionURLRequiresTheChatRoute(t *testing.T) {
 	}
 	if _, err := platformDecisionURL("https://platform.example/elsewhere"); err == nil {
 		t.Fatal("a non-chat proxy route must be refused")
+	}
+}
+
+func TestDecisionLaneCallIsCancelledWhenTheSessionIsDestroyed(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	defer upstream.Close()
+	defer close(release)
+
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", llm.V9AggregateProfileRevision, llm.HarnessModelForVersion(protocol.BenchVersionV15))
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.73", protocol.BenchVersionV15)
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- callDecision(broker, "192.0.2.73", `{"state":{},"questions":{"q":{"type":"choice"}}}`)
+	}()
+	<-entered
+	broker.mu.RLock()
+	session := broker.sessions[prepared["session_id"]]
+	broker.mu.RUnlock()
+	destroyBrokerSession(session)
+	select {
+	case response := <-done:
+		if response.Code != http.StatusBadGateway {
+			t.Fatalf("cancelled decision status=%d, want 502", response.Code)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("destroying the session did not cancel the in-flight decision")
 	}
 }

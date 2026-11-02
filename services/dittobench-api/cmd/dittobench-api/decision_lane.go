@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
@@ -110,7 +111,23 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	digest := sha256.Sum256(body)
 	message := fmt.Sprintf("ditto-inference:v1:%s:%d:%s:%s:%s", grantID, generation, nonce, requested, hex.EncodeToString(digest[:]))
 	proof := base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(message)))
-	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(body))
+	// Register with the session like chat does, so destroying the session
+	// (revoke, expiry, run end) also stops waiting on an in-flight decision.
+	requestCtx, cancel := context.WithCancel(r.Context())
+	cancelID := uuid.NewString()
+	session.mu.Lock()
+	if session.cancels == nil {
+		session.cancels = make(map[string]context.CancelFunc)
+	}
+	session.cancels[cancelID] = cancel
+	session.mu.Unlock()
+	defer func() {
+		cancel()
+		session.mu.Lock()
+		delete(session.cancels, cancelID)
+		session.mu.Unlock()
+	}()
+	upstream, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
 		return
