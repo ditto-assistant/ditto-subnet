@@ -12586,7 +12586,7 @@ CREATE INDEX screening_attempts_agent_started_idx ON public.screening_attempts U
 -- Name: screening_attempts_infra_failed_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text])));
+CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text, 'image-upload-platform-unavailable'::text])));
 
 
 --

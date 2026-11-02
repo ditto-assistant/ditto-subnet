@@ -61,6 +61,7 @@ from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 _SCREENER = "5GScreenerHotkeyForInfraRetryTests00000000000000000"
 _CODE = INFRA_AUTO_RETRY_REASON_CODES[0]
 _KEY_CODE = "source-review-adjudicator-key-unavailable"
+_UPLOAD_CODE = "image-upload-platform-unavailable"
 _SECOND = timedelta(seconds=1)
 _PROVIDER = "gcp"
 _LANE = "buildkit"
@@ -90,6 +91,10 @@ _MANUAL_RETRY_CODES = (
     "l2-cache-lock-timeout",
     "source-review-model-timeout",
     "source-review-unavailable",
+    # A 4xx (an oversized or mismatched image) or a failed completion, whose
+    # cost scales with the image; only a submission-independent upload outage
+    # has its own automatic code.
+    "image-upload-failed",
 )
 
 
@@ -675,6 +680,81 @@ async def test_court_key_breaker_on_the_screening_lane_drains_without_recovery(
     assert not any(breaker.open for breaker in plan.breakers.values())
 
 
+async def test_image_upload_breaker_closes_on_a_verified_upload(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A Platform deploy that fails several uploads at once must not stall.
+
+    The upload signature is recorded on the ``screening`` lane, which a build
+    proof never matches, so it closes on the proof of its own fault instead: a
+    probe on its provider that finished with a verified screened-image upload.
+    """
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    probe_at = _opened_at(t0) + BREAKER_OPEN_DURATION + _SECOND
+    (probe,) = await _claim(session_maker, now=probe_at)
+    await _settle_probe(
+        session_maker, probe, status="passed", at=probe_at + timedelta(minutes=1)
+    )
+
+    after = probe_at + timedelta(minutes=2)
+    (breaker,) = (await _plan(session_maker, now=after)).breakers.values()
+    assert breaker.signature == (_UPLOAD_CODE, _PROVIDER, "screening")
+    assert not breaker.open
+    remaining = sorted(set(agents) - {probe})
+    assert sorted(await _claim(session_maker, now=after)) == remaining
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        # The build ran but no image was stored: says nothing about uploads.
+        {"status": "rejected", "reason_code": "docker-build", "with_image": False},
+        {"status": "passed", "with_image": False},
+    ],
+)
+async def test_image_upload_breaker_needs_an_upload_to_close(
+    session_maker: async_sessionmaker[AsyncSession], outcome: dict
+) -> None:
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], at=opened + _SECOND, hotkey=_SCREENER, **outcome
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_UPLOAD_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
+async def test_image_upload_breaker_ignores_an_upload_on_another_provider(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    other = "5GOtherProviderScreenerHotkey000000000000000000000"
+    await _enroll_node(session_maker, hotkey=other, provider="hetzner")
+    t0 = datetime.now(UTC) - timedelta(hours=1)
+    agents = await _tripped_fleet(
+        session_maker, t0=t0, lane="screening", reason_code=_UPLOAD_CODE
+    )
+    opened = _opened_at(t0)
+    await _follow_up(
+        session_maker, agents[0], status="passed", at=opened + _SECOND, hotkey=other
+    )
+    state = await _probe_state(
+        session_maker,
+        now=opened + BREAKER_OPEN_DURATION,
+        signature=(_UPLOAD_CODE, _PROVIDER, "screening"),
+    )
+    assert state.open
+
+
 async def test_concurrent_claimers_select_exactly_one_probe(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -728,7 +808,7 @@ async def test_breaker_does_not_merge_unknown_or_different_lanes(
     assert len({d.signature for d in plan.decisions.values()}) == 3
 
 
-@pytest.mark.parametrize("reason_code", ["source-review-adjudicator-key-unavailable"])
+@pytest.mark.parametrize("reason_code", [_KEY_CODE, _UPLOAD_CODE])
 async def test_breaker_keys_on_reason_code_alone_without_metadata(
     session_maker: async_sessionmaker[AsyncSession], reason_code: str
 ) -> None:

@@ -35,6 +35,7 @@ from ditto_screener.errors import (
     PlatformAuthUnavailable,
     PlatformError,
     PlatformRejected,
+    ScreenedImageUploadUnavailable,
 )
 from ditto_screener.heartbeat import (
     ScreenerHeartbeatRequest,
@@ -82,7 +83,12 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
-_IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
+# Initiation is idempotent on ``image_upload_id`` (Platform answers a replay
+# with the session it already opened), so it can wait out an API restart.
+# Production 2026-11-01: a Platform deploy reloaded the single ditto-api process
+# at 19:27:43Z and it served again at 19:28:05Z; the old 0.5s + 1.0s budget
+# spent all three tries inside that window and failed the screen with 502.
+_IMAGE_INIT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 # Completion hashes the whole stored image server-side, so a gateway can drop
 # the response (502) while Platform finishes the work. Platform answers a replay
 # of a completed session as verified, so wait long enough for that to land.
@@ -891,6 +897,7 @@ class PlatformClient:
                 json=request.model_dump(mode="json"),
                 headers=await self._auth_headers(),
                 transient_retry_delays=_IMAGE_INIT_RETRY_DELAYS,
+                fleet_owned=True,
             )
             upload = ScreenedImageUploadResponse.model_validate(response.json())
             if upload.image_upload_id != request.image_upload_id:
@@ -921,6 +928,7 @@ class PlatformClient:
                         json=part_request.model_dump(mode="json"),
                         headers=await self._auth_headers(),
                         transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
+                        fleet_owned=True,
                     )
                     part_upload = ScreenedImagePartUploadResponse.model_validate(
                         part_response.json()
@@ -933,6 +941,7 @@ class PlatformClient:
                         headers=part_upload.required_headers,
                         accepted=frozenset({200, 201, 204}),
                         transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
+                        fleet_owned=True,
                     )
                     etag = stored.headers.get("etag")
                     if not etag:
@@ -991,9 +1000,16 @@ class PlatformClient:
         operation: str,
         accepted: frozenset[int] = frozenset({200}),
         transient_retry_delays: tuple[float, ...] = (),
+        fleet_owned: bool = False,
         **kwargs: Any,
     ) -> httpx.Response:
-        """Retry only explicitly idempotent calls on transient failures."""
+        """Retry only explicitly idempotent calls on transient failures.
+
+        With ``fleet_owned`` (a step whose work does not depend on the
+        submission), a transport failure or a 5xx left after the retries raises
+        :class:`ScreenedImageUploadUnavailable`, which Platform retries
+        automatically. Every other failure is a plain :class:`PlatformError`.
+        """
         for attempt in range(len(transient_retry_delays) + 1):
             try:
                 response = await self._client.request(
@@ -1006,7 +1022,10 @@ class PlatformClient:
                 if attempt < len(transient_retry_delays):
                     await asyncio.sleep(transient_retry_delays[attempt])
                     continue
-                raise PlatformError(f"{operation} failed: {error}") from error
+                transport_error = (
+                    ScreenedImageUploadUnavailable if fleet_owned else PlatformError
+                )
+                raise transport_error(f"{operation} failed: {error}") from error
             if response.status_code in accepted:
                 return response
             if attempt < len(transient_retry_delays) and _is_transient_platform_status(
@@ -1014,9 +1033,12 @@ class PlatformClient:
             ):
                 await asyncio.sleep(transient_retry_delays[attempt])
                 continue
-            raise PlatformError(
+            message = (
                 f"{operation} rejected ({response.status_code}): {response.text[:200]}"
             )
+            if fleet_owned and response.status_code >= 500:
+                raise ScreenedImageUploadUnavailable(message)
+            raise PlatformError(message)
         raise AssertionError("image request retry loop exhausted")
 
     async def _abort_screened_image_upload(

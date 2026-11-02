@@ -3279,6 +3279,8 @@ describe('Backroom MCP tools', () => {
       expect(help.guidance).toContain('holds every worker')
       expect(help.guidance).toContain('aged_out_agents')
       expect(help.guidance).toContain('source-review-adjudicator-key-unavailable')
+      expect(help.guidance).toContain('image-upload-platform-unavailable')
+      expect(help.guidance).toContain('verified screened-image upload')
       expect(help.guidance).toContain('screening-lane signature')
       // half_open still holds all but one probe per signature per interval.
       expect(help.guidance).not.toContain('nothing is held')

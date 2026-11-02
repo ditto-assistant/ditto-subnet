@@ -24,6 +24,7 @@ import pytest
 
 from ditto_screener import gate as gate_module
 from ditto_screener.config import ScreenerConfig
+from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.gate import (
     _MAX_ARCHIVE_MEMBERS,
     _MAX_SCREENED_IMAGE_BYTES,
@@ -64,6 +65,7 @@ from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScoredRuntimeEvidenceLease,
 )
+from ditto_screening_protocol.reason_codes import ReasonCodeClass, reason_code_class
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -1338,7 +1340,50 @@ async def test_publish_failure_demotes_pass_with_dedicated_reason(
         )
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "image-upload-failed"
+    assert reason_code_class(result.evidence[-1].code) == ReasonCodeClass.OPERATOR_RETRY
     assert "object storage unavailable" in result.detail
+
+
+async def test_publish_platform_outage_is_fleet_infra(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    saved_archive, _, _ = _oci_image_save_archive()
+
+    async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        if args[0] == "build":
+            if stdin is not None:
+                stdin.read()
+            _write_iidfile(args)
+        elif args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
+            return 0, "sha256:" + "34" * 32
+        elif args[:3] == ["image", "inspect", "--format"]:
+            if "Config.Volumes" in args[3]:
+                return 0, ""
+            return 0, str(len(saved_archive))
+        elif args[:3] == ["image", "save", "--output"]:
+            Path(args[3]).write_bytes(saved_archive)
+        return 0, ""
+
+    async def fail_publish(_image: Any) -> None:
+        raise ScreenedImageUploadUnavailable("image upload initiate rejected (502): ")
+
+    gate = _gate_with(make_config(), run, tarball=tarball)
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            publish_image=fail_publish,
+        )
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    # Platform retries this code automatically (FLEET_INFRA).
+    assert result.evidence[-1].code == "image-upload-platform-unavailable"
+    assert reason_code_class(result.evidence[-1].code) == ReasonCodeClass.FLEET_INFRA
+    assert "initiate rejected (502)" in result.detail
 
 
 async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(

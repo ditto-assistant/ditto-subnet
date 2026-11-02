@@ -691,13 +691,15 @@ class ScreeningAttempt(Base):
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
                 "'l2-runtime-evidence-unavailable', "
-                "'source-review-adjudicator-key-unavailable')"
+                "'source-review-adjudicator-key-unavailable', "
+                "'image-upload-platform-unavailable')"
             ),
             sqlite_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
                 "'l2-runtime-evidence-unavailable', "
-                "'source-review-adjudicator-key-unavailable')"
+                "'source-review-adjudicator-key-unavailable', "
+                "'image-upload-platform-unavailable')"
             ),
         ),
         Index(

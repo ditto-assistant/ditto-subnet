@@ -279,6 +279,7 @@ from ditto_screening_protocol.private_failure import (
 )
 from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
+    IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
@@ -5080,6 +5081,13 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
         return (
             "Source review was unavailable on the screening node before "
             "screening completed. This is operator-owned and is retried "
+            "automatically with backoff for a limited time, then held for an "
+            "operator retry."
+        )
+    if reason_code == IMAGE_UPLOAD_PLATFORM_UNAVAILABLE:
+        return (
+            "Ditto's platform was briefly unavailable while the screened image "
+            "was being stored. This is operator-owned and is retried "
             "automatically with backoff for a limited time, then held for an "
             "operator retry."
         )

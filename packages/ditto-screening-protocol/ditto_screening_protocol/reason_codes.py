@@ -95,6 +95,11 @@ L2_RUNTIME_EVIDENCE_UNAVAILABLE: Final = "l2-runtime-evidence-unavailable"
 SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE: Final = (
     "source-review-adjudicator-key-unavailable"
 )
+IMAGE_UPLOAD_PLATFORM_UNAVAILABLE: Final = "image-upload-platform-unavailable"
+"""The screened-image upload hit a transport failure or a 5xx from Platform or
+its object store on a submission-independent step (initiate, part mint, part
+store) after the worker's own retries. A 4xx and any completion failure stay
+``image-upload-failed`` on the operator retry."""
 TARGON_BUILD_UNAVAILABLE: Final = "targon-build-unavailable"
 TARGON_RUNTIME_UNAVAILABLE: Final = "targon-runtime-unavailable"
 TARGON_SOURCE_REVIEW_UNAVAILABLE: Final = "targon-source-review-unavailable"
@@ -144,6 +149,13 @@ _REGISTRY: Final[tuple[ScreeningReasonCode, ...]] = (
     ScreeningReasonCode(
         SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE, _F, _WORKER, "source_review"
     ),
+    # Platform restarting, its gateway, or object storage refused a fixed-size,
+    # idempotent upload step (transport or 5xx). The image had already built
+    # and passed; the request bodies are bounded metadata or a fixed-size part,
+    # so the submission cannot choose the failure. The verdict-bearing
+    # completion step and every 4xx stay ``image-upload-failed``. Storing the
+    # screened image is the hand-off of the build lane's output.
+    ScreeningReasonCode(IMAGE_UPLOAD_PLATFORM_UNAVAILABLE, _F, _WORKER, "build"),
     # --- PROVIDER_BACKOFF: held on reclaim, counted with peer evidence.
     ScreeningReasonCode(TARGON_BUILD_UNAVAILABLE, _P, _RETIRED, "build"),
     ScreeningReasonCode(TARGON_RUNTIME_UNAVAILABLE, _P, _RETIRED, "runtime_smoke"),
