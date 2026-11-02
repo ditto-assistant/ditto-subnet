@@ -34,6 +34,8 @@ const SETTINGS: ContinualRetestSettingsControl['effective']['settings'] = {
   retest_eligibility_mode: 'fixed',
   retest_eligibility_z: 1.64,
   retest_cohort_max_size: 25,
+  wave_cadence_tempos: 0,
+  wave_seeds_per_window: 3,
 }
 
 function control(
@@ -86,6 +88,8 @@ function control(
       retest_eligibility_mode: true,
       retest_eligibility_z: true,
       retest_cohort_max_size: true,
+      wave_cadence_tempos: true,
+      wave_seeds_per_window: true,
     },
     cohort_sizing_supported: true,
   }
@@ -325,6 +329,8 @@ describe('ContinualRetestControlPanel', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 

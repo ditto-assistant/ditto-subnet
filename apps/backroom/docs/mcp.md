@@ -136,7 +136,15 @@ cohort is owner suppression, not a score it failed to reach;
 emission slot. `claim` runs the issuance lane's own gates for an empty validator
 hotkey, so no lease, event or slot is attributed. It gives the scheduled round,
 catch-up set, spare-capacity window, idle-retest gate, route priority and
-`decision`, the first gate a polling validator would hit now. A
+`decision`, the first gate a polling validator would hit now. With
+tempo-aligned waves on (`wave_cadence_tempos` > 0 on the continual retest
+settings) it also gives the pacing window: `wave_window_epoch`,
+`wave_next_window_epoch`, `wave_window_start`, the fresh seeds already opened
+in it (`wave_window_opened_seed_count`, a count) and `wave_growth_paused`, true
+when the window's `wave_seeds_per_window` budget is spent. A paused window
+withholds only fresh shared seeds; catch-up and open waves still lease. Null
+window fields at a positive cadence mean no ledger pin anchors a window, and
+pacing fails open. A
 `chain_unavailable` decision means the block read failed, not that the lane is
 idle. The tool also returns ticket counts and the latest ticket and accepted
 result. Outstanding work is only a count, `pending_seed_count`. Pending seed

@@ -3962,6 +3962,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_eligibility_mode: false,
     retest_eligibility_z: false,
     retest_cohort_max_size: false,
+    wave_cadence_tempos: false,
+    wave_seeds_per_window: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -3984,6 +3986,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_eligibility_mode: 'fixed' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('tells a defaulted cohort size apart from a reported one', () => {
@@ -4087,6 +4091,8 @@ describe('continual retest cohort sizing against an older platform', () => {
       retest_eligibility_mode: false,
       retest_eligibility_z: false,
       retest_cohort_max_size: false,
+      wave_cadence_tempos: false,
+      wave_seeds_per_window: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -4109,6 +4115,8 @@ describe('continual retest write contract', () => {
     retest_eligibility_mode: 'statistical' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('refuses a body missing any field a revision would overwrite', () => {
@@ -4130,6 +4138,8 @@ describe('continual retest write contract', () => {
       'retest_eligibility_mode',
       'retest_eligibility_z',
       'retest_cohort_max_size',
+      'wave_cadence_tempos',
+      'wave_seeds_per_window',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -4172,6 +4182,8 @@ describe('continual retest write contract', () => {
         ...complete,
         retest_cohort_size: 25,
         retest_cohort_max_size: 25,
+        wave_cadence_tempos: 0,
+        wave_seeds_per_window: 3,
       }).success,
     ).toBe(true)
   })
@@ -4200,6 +4212,8 @@ describe('continual retest write contract', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 

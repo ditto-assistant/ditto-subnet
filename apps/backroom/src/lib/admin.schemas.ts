@@ -2343,6 +2343,11 @@ export const MAX_RETEST_COHORT_SIZE = 25
 // stops meaning "tied" and starts meaning "nearby", so the platform hard-stops
 // there and the only thing still bounding the cohort would be the size ceiling.
 export const MAX_RETEST_ELIGIBILITY_Z = 3
+// Tempo-aligned wave pacing: mirrors MAX_WAVE_CADENCE_TEMPOS,
+// MAX_WAVE_SEEDS_PER_WINDOW and DEFAULT_WAVE_SEEDS_PER_WINDOW in the platform.
+export const MAX_WAVE_CADENCE_TEMPOS = 24
+export const MAX_WAVE_SEEDS_PER_WINDOW = 16
+export const DEFAULT_WAVE_SEEDS_PER_WINDOW = 3
 export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // Not `strict`. The platform ships `participants` deliberately, and `strict` is
 // kept as the audited rollback path rather than as the default.
@@ -2439,6 +2444,16 @@ const continualRetestSettingsBaseSchema = z.object({
     .min(EMISSION_SET_SIZE)
     .max(MAX_RETEST_COHORT_SIZE)
     .default(MAX_RETEST_COHORT_SIZE),
+  // Tempo-aligned waves: 0 is the historical pacing (a new shared seed opens
+  // as soon as the previous wave completes); N opens at most
+  // wave_seeds_per_window new seeds per window of N chain epochs.
+  wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS).default(0),
+  wave_seeds_per_window: z
+    .number()
+    .int()
+    .min(1)
+    .max(MAX_WAVE_SEEDS_PER_WINDOW)
+    .default(DEFAULT_WAVE_SEEDS_PER_WINDOW),
 })
 
 export const continualRetestSettingsSchema =
@@ -2462,6 +2477,8 @@ export const continualRetestSettingsWriteSchema = continualRetestSettingsBaseSch
     min_dethrone_confirmations: z.number().int().min(2).max(MAX_MIN_DETHRONE_CONFIRMATIONS),
     champion_standing_rank: z.number().int().min(1).max(EMISSION_SET_SIZE),
     wave_membership: z.enum(['strict', 'participants', 'per_agent']),
+    wave_cadence_tempos: z.number().int().min(0).max(MAX_WAVE_CADENCE_TEMPOS),
+    wave_seeds_per_window: z.number().int().min(1).max(MAX_WAVE_SEEDS_PER_WINDOW),
     retest_cohort_size: z.number().int().min(EMISSION_SET_SIZE).max(MAX_RETEST_COHORT_SIZE),
     retest_eligibility_mode: z.enum(['fixed', 'statistical']),
     retest_eligibility_z: z.number().min(0).max(MAX_RETEST_ELIGIBILITY_Z),
@@ -2689,6 +2706,18 @@ export const CONTINUAL_RETEST_EXTENDED_FIELDS: ReadonlyArray<ContinualRetestExte
     legacyValue: (bounds) => bounds.max_retest_cohort_size,
     legacyBehaviour: (bounds) =>
       `the cohort can never exceed the rank cutoff, capped at ${bounds.max_retest_cohort_size}`,
+  },
+  {
+    field: 'wave_cadence_tempos',
+    label: 'tempo-aligned wave pacing',
+    legacyValue: () => 0,
+    legacyBehaviour: () => 'a new shared seed opens as soon as the previous wave completes',
+  },
+  {
+    field: 'wave_seeds_per_window',
+    label: 'a per-window wave seed budget',
+    legacyValue: () => DEFAULT_WAVE_SEEDS_PER_WINDOW,
+    legacyBehaviour: () => 'waves are not paced per window',
   },
 ]
 
@@ -9092,6 +9121,15 @@ export const retestClaimabilitySchema = z.object({
   // The provider gate admits no new lease now: the lane issues nothing on any
   // route and the decision is `provider_outage`.
   provider_gate_closed: z.boolean().default(false),
+  // Tempo-aligned wave pacing: the window this lane is in and whether its
+  // fresh-seed budget is spent. Counts only; seed values stay server-side.
+  wave_cadence_tempos: z.number().int().nonnegative().default(0),
+  wave_seeds_per_window: z.number().int().positive().nullable().default(null),
+  wave_window_epoch: z.number().int().nonnegative().nullable().default(null),
+  wave_next_window_epoch: z.number().int().nonnegative().nullable().default(null),
+  wave_window_start: z.string().nullable().default(null),
+  wave_window_opened_seed_count: z.number().int().nonnegative().nullable().default(null),
+  wave_growth_paused: z.boolean().default(false),
   decision: z.enum([
     'claimable', 'lane_disabled', 'not_in_cohort', 'chain_unavailable',
     'round_not_due', 'newer_canonical_work_pending', 'no_pending_seeds',

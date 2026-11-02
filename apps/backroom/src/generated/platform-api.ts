@@ -21176,11 +21176,21 @@ export interface components {
              */
             tie_weighting_mode: "disabled" | "fleet_ready";
             /**
+             * Wave Cadence Tempos
+             * @default 0
+             */
+            wave_cadence_tempos: number;
+            /**
              * Wave Membership
              * @default participants
              * @enum {string}
              */
             wave_membership: "strict" | "participants" | "per_agent";
+            /**
+             * Wave Seeds Per Window
+             * @default 3
+             */
+            wave_seeds_per_window: number;
         };
         /** ContinualRetestSettingsRevision */
         ContinualRetestSettingsRevision: {
@@ -35382,6 +35392,26 @@ export interface components {
              * @default 0
              */
             void_rerun_seed_count: number;
+            /**
+             * Wave Cadence Tempos
+             * @default 0
+             */
+            wave_cadence_tempos: number;
+            /**
+             * Wave Growth Paused
+             * @default false
+             */
+            wave_growth_paused: boolean;
+            /** Wave Next Window Epoch */
+            wave_next_window_epoch?: number | null;
+            /** Wave Seeds Per Window */
+            wave_seeds_per_window?: number | null;
+            /** Wave Window Epoch */
+            wave_window_epoch?: number | null;
+            /** Wave Window Opened Seed Count */
+            wave_window_opened_seed_count?: number | null;
+            /** Wave Window Start */
+            wave_window_start?: string | null;
         };
         /**
          * RetestCutoffComparison

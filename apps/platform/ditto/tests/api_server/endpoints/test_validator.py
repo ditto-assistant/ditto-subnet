@@ -11930,6 +11930,108 @@ class TestTop5CatchUpConvergence:
             settled[:3]
         ), "each validator must hold a distinct backlog seed"
 
+    async def test_tempo_window_holds_fresh_growth_but_not_catchup(
+        self,
+        app: FastAPI,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """``wave_cadence_tempos``: once a window has opened its seed budget,
+        a settled member gets no fresh growth seed until the next window, while
+        the promoted newcomer still drains its whole backlog."""
+        from uuid import uuid4
+
+        from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+        from ditto.api_server.endpoints.validator import (
+            _current_emission_set,
+            _top5_confirmation_seed_plan,
+        )
+        from ditto.api_server.retest_wave_window import current_wave_window
+        from ditto.db.models import LedgerEpochSnapshot, ValidatorTicket
+
+        champion, newcomer, settled = await _seed_catchup_board(
+            app, session_maker, settled_depth=2
+        )
+        async with session_maker() as session:
+            members = await _current_emission_set(
+                session, canonical_version=_BENCH_VERSION
+            )
+        member_ids = tuple(member.agent_id for member in members)
+        settled_member = next(
+            agent_id for agent_id in member_ids if agent_id not in (champion, newcomer)
+        )
+        settled_wave = tuple(
+            agent_id for agent_id in member_ids if agent_id != newcomer
+        )
+
+        async def plan_for(agent_id: UUID, paced: bool) -> tuple[int, ...]:
+            async with session_maker() as session:
+                window = (
+                    await current_wave_window(
+                        session, cadence_tempos=4, seeds_per_window=1
+                    )
+                    if paced
+                    else None
+                )
+                return await _top5_confirmation_seed_plan(
+                    session,
+                    champion_agent_id=champion,
+                    member_agent_id=agent_id,
+                    # The settled wave alone: a depth-zero newcomer in the wave
+                    # would hold growth open by itself (strict issuance).
+                    wave_member_ids=(
+                        member_ids if agent_id == newcomer else settled_wave
+                    ),
+                    cohort_member_ids=member_ids,
+                    canonical_version=_BENCH_VERSION,
+                    wave_window=window,
+                )
+
+        unpaced = await plan_for(settled_member, paced=False)
+        assert len(unpaced) == 1 and unpaced[0] not in settled, (
+            "a settled member owes exactly the next fresh growth seed"
+        )
+
+        window_start = datetime.now(UTC) - timedelta(minutes=30)
+        async with session_maker() as session, session.begin():
+            session.add(
+                LedgerEpochSnapshot(
+                    snapshot_id=uuid4(),
+                    netuid=118,
+                    epoch_index=26088,
+                    last_epoch_block=26088 * 361,
+                    pinned_block=26088 * 361 + 2,
+                    pinned_block_hash="0x" + "ab" * 32,
+                    pinned_at=window_start,
+                    bench_version=_BENCH_VERSION,
+                    entries=[],
+                    context={},
+                    ledger_digest="cd" * 32,
+                )
+            )
+        # Budget not yet spent: the window still opens the fresh seed.
+        assert await plan_for(settled_member, paced=True) == unpaced
+
+        # A fresh seed opened inside this window spends the budget of one.
+        async with session_maker() as session, session.begin():
+            issued = window_start + timedelta(minutes=5)
+            session.add(
+                ValidatorTicket(
+                    agent_id=champion,
+                    validator_hotkey="wave-window-validator",
+                    slot_id="slot-0",
+                    status=TicketStatus.ISSUED,
+                    issued_at=issued,
+                    deadline=issued + timedelta(hours=2),
+                    bench_version=_BENCH_VERSION,
+                    attempt_count=1,
+                    seed=987_654_321,
+                    purpose=TicketPurpose.CONTINUAL_RETEST,
+                )
+            )
+        assert await plan_for(settled_member, paced=True) == ()
+        # Catch-up is never paced.
+        assert await plan_for(newcomer, paced=True) == tuple(settled)
+
     async def test_emission_catchup_bypasses_the_growth_cadence(
         self,
         app: FastAPI,

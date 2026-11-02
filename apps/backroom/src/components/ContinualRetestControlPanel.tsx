@@ -5,6 +5,7 @@ import {
   CONTINUAL_RETEST_CONFIRMATION,
   DEFAULT_CHAMPION_STANDING_RANK,
   DEFAULT_MIN_DETHRONE_CONFIRMATIONS,
+  DEFAULT_WAVE_SEEDS_PER_WINDOW,
   EMISSION_SET_SIZE,
   MAX_MIN_DETHRONE_CONFIRMATIONS,
   type ContinualRetestSettingsControl,
@@ -430,6 +431,14 @@ export function ContinualRetestControlPanel({
               ? parsedEligibilityZ
               : effective.settings.retest_eligibility_z,
             retest_cohort_max_size: eligibilitySupported ? parsedCohortMaxSize : ceiling,
+            // Tempo-aligned wave pacing is written through Backroom MCP; this
+            // page carries the live values forward unchanged.
+            wave_cadence_tempos: state.field_support.wave_cadence_tempos
+              ? effective.settings.wave_cadence_tempos
+              : 0,
+            wave_seeds_per_window: state.field_support.wave_seeds_per_window
+              ? effective.settings.wave_seeds_per_window
+              : DEFAULT_WAVE_SEEDS_PER_WINDOW,
           },
           reason,
           confirmation,

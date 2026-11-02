@@ -55,6 +55,11 @@ from ditto.api_server.koth import (
     tie_band_comparison,
     top5_round_is_due,
 )
+from ditto.api_server.retest_wave_window import (
+    current_wave_window,
+    first_retest_issue_by_seed,
+    seeds_opened_in_window,
+)
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.chain import ChainClient
 from ditto.db.models import Agent, ConfirmationScore, ValidatorTicket
@@ -358,6 +363,11 @@ async def _claimability(
         if champion_agent_id is not None
         else frozenset()
     )
+    wave_window = await current_wave_window(
+        session,
+        cadence_tempos=settings.wave_cadence_tempos,
+        seeds_per_window=settings.wave_seeds_per_window,
+    )
     plan = (
         await _top5_confirmation_seed_plan(
             session,
@@ -366,10 +376,19 @@ async def _claimability(
             wave_member_ids=wave_member_ids,
             cohort_member_ids=member_ids,
             canonical_version=version,
+            wave_window=wave_window,
         )
         if champion_agent_id is not None
         else ()
     )
+    opened_in_window: int | None = None
+    if wave_window.paced and champion_agent_id is not None:
+        first_issue = await first_retest_issue_by_seed(
+            session,
+            agent_ids=tuple(dict.fromkeys((*member_ids, *wave_member_ids))),
+            bench_version=version,
+        )
+        opened_in_window = len(seeds_opened_in_window(wave_window, first_issue))
     leases = (
         await _live_retest_leases(
             session,
@@ -481,6 +500,20 @@ async def _claimability(
         void_rerun_claimable=void_rerun_claimable,
         provider_outage_active=provider_outage,
         provider_gate_closed=gate_closed,
+        wave_cadence_tempos=wave_window.cadence_tempos,
+        wave_seeds_per_window=(
+            wave_window.seeds_per_window if wave_window.cadence_tempos else None
+        ),
+        wave_window_epoch=wave_window.window_epoch if wave_window.paced else None,
+        wave_next_window_epoch=(
+            wave_window.next_window_epoch if wave_window.paced else None
+        ),
+        wave_window_start=wave_window.window_start if wave_window.paced else None,
+        wave_window_opened_seed_count=opened_in_window,
+        wave_growth_paused=(
+            opened_in_window is not None
+            and opened_in_window >= wave_window.seeds_per_window
+        ),
         decision=_claim_decision(
             lane_enabled=lane_enabled,
             in_cohort=in_cohort,

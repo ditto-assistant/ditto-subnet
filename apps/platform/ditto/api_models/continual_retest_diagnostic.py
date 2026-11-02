@@ -95,6 +95,20 @@ class RetestClaimability(BaseModel):
     """The provider-outage gate admits no new lease right now (open circuit
     cooling down, or its one half-open probe already claimed). The lane then
     issues nothing on any route and the decision is ``provider_outage``."""
+    wave_cadence_tempos: int = 0
+    """Tempo-aligned wave pacing in force (0: historical pacing)."""
+    wave_seeds_per_window: int | None = None
+    wave_window_epoch: int | None = None
+    """First chain epoch of the current pacing window, or null when unpaced
+    (cadence 0, or no ledger pin to anchor a window -- pacing fails open)."""
+    wave_next_window_epoch: int | None = None
+    wave_window_start: datetime | None = None
+    wave_window_opened_seed_count: int | None = None
+    """Fresh shared seeds already opened in this window (a count; seeds stay
+    private)."""
+    wave_growth_paused: bool = False
+    """The window's seed budget is spent: no fresh shared seed opens until
+    ``wave_next_window_epoch``. Catch-up and open waves still lease."""
     decision: Literal[
         "claimable",
         "lane_disabled",

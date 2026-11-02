@@ -2346,6 +2346,8 @@ describe('continual retest administration', () => {
     retest_eligibility_mode: 'fixed',
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
   const legacyEquivalent = {
     ...readDefaults,
@@ -2405,6 +2407,8 @@ describe('continual retest administration', () => {
     retest_eligibility_mode: carried,
     retest_eligibility_z: carried,
     retest_cohort_max_size: carried,
+    wave_cadence_tempos: carried,
+    wave_seeds_per_window: carried,
   })
   // The platform carries every field, so reads and writes both keep them.
   const supported = {
@@ -2431,6 +2435,8 @@ describe('continual retest administration', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     }
     const enabled = {
       ...control,
@@ -4285,6 +4291,13 @@ describe('production score reads', () => {
       void_rerun_claimable: false,
       provider_outage_active: false,
       provider_gate_closed: false,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: null,
+      wave_window_epoch: null,
+      wave_next_window_epoch: null,
+      wave_window_start: null,
+      wave_window_opened_seed_count: null,
+      wave_growth_paused: false,
       decision: 'claimable',
     },
     latest_ticket_status: 'issued',
