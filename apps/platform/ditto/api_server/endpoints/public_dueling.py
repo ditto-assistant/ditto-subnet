@@ -172,6 +172,10 @@ async def public_dueling_seasons(
     the whole index."""
     response.headers["Cache-Control"] = _CACHE
     stmt = select(DuelingSeason).where(DuelingSeason.status == "revealed")
+    if before_bench_version is not None and before_index is None:
+        raise HTTPException(
+            status_code=422, detail="before_bench_version requires before_index"
+        )
     if before_index is not None:
         stmt = stmt.where(
             tuple_(DuelingSeason.season_index, DuelingSeason.bench_version)
