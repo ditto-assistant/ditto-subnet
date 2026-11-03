@@ -103,8 +103,12 @@ async def test_activate_inference_session_binds_dynamic_route_to_trusted_broker(
             embedding_request_budget=100_000,
             embedding_token_budget=1_000_000_000,
             max_output_tokens=8192,
+            cost_ceiling_microusd=2_500_000,
+            cost_ceiling_mode="shadow",
         )
 
+    assert captured["cost_ceiling_microusd"] == 2_500_000
+    assert captured["cost_ceiling_mode"] == "shadow"
     assert captured["provider"] == "WandB"
     assert captured["profile_revision"] == "openrouter-route-wandb-v1"
     assert captured["model"] == "openai/gpt-oss-20b"

@@ -1225,6 +1225,93 @@ async def test_exchange_inference_grant_prefers_json_budget_evidence() -> None:
     assert response.max_output_tokens == 8192
 
 
+async def _exchange_with(headers: dict[str, str], extra_json: dict[str, object]) -> Any:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers=headers,
+            json={
+                "grant_id": str(grant_id),
+                "bearer": "b" * 32,
+                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
+                "expires_at": datetime.now(UTC).isoformat(),
+                "generation": 1,
+                "request_budget": 8192,
+                "token_budget": 75_000_000,
+                "embedding_request_budget": 100_000,
+                "embedding_token_budget": 1_000_000_000,
+                "max_output_tokens": 8192,
+                **extra_json,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        return await PlatformClient(
+            cast(Any, config), http, keypair
+        ).exchange_inference_grant(
+            grant_id,
+            "A" * 43,
+            "https://platform.test/api/v1/inference/exchange",
+        )
+
+
+async def test_exchange_inference_grant_reads_the_cost_ceiling() -> None:
+    from_json = await _exchange_with(
+        {},
+        {"cost_ceiling_microusd": 2_500_000, "cost_ceiling_mode": "enforce"},
+    )
+    assert from_json.cost_ceiling_microusd == 2_500_000
+    assert from_json.cost_ceiling_mode == "enforce"
+
+    # Body fields win; headers are only the fallback for a body without them.
+    from_headers = await _exchange_with(
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": "1000",
+            "X-Ditto-Cost-Ceiling-Mode": "shadow",
+        },
+        {},
+    )
+    assert from_headers.cost_ceiling_microusd == 1000
+    assert from_headers.cost_ceiling_mode == "shadow"
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {},
+        {"X-Ditto-Cost-Ceiling-Microusd": "1000"},
+        {"X-Ditto-Cost-Ceiling-Mode": "enforce"},
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": "lots",
+            "X-Ditto-Cost-Ceiling-Mode": "enforce",
+        },
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": "1000",
+            "X-Ditto-Cost-Ceiling-Mode": "enforced",
+        },
+        {
+            "X-Ditto-Cost-Ceiling-Microusd": "0",
+            "X-Ditto-Cost-Ceiling-Mode": "enforce",
+        },
+    ],
+)
+async def test_exchange_inference_grant_drops_an_unusable_cost_ceiling(
+    headers: dict[str, str],
+) -> None:
+    """A missing or malformed ceiling leaves the broker unarmed, never broken."""
+    response = await _exchange_with(headers, {})
+    assert response.cost_ceiling_microusd is None
+    assert response.cost_ceiling_mode is None
+    assert response.request_budget == 8192
+
+
 async def test_exchange_inference_grant_json_survives_partial_headers() -> None:
     """A Cloudflare hop that drops some X-Ditto-* headers must not disarm JSON."""
     keypair = bittensor.Keypair.create_from_uri("//Alice")

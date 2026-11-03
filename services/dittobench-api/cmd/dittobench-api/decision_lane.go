@@ -148,6 +148,12 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	defer response.Body.Close()
+	// Decision spend is ledger cost under the run's ceiling (#3271): keep the
+	// settled total the relay reports so a later 4110 on any lane can be
+	// confirmed, and let the harness pace itself on this lane too.
+	session.mu.Lock()
+	observeLedgerCostLocked(session, response.Header)
+	session.mu.Unlock()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, decisionResponseLimit+1))
 	if err != nil || len(responseBody) > decisionResponseLimit {
 		writeError(w, http.StatusBadGateway, "decision lane unavailable")
@@ -156,6 +162,9 @@ func (b *inferenceBroker) handleDecision(w http.ResponseWriter, r *http.Request,
 	if retryAfter := response.Header.Get("Retry-After"); retryAfter != "" {
 		w.Header().Set("Retry-After", retryAfter)
 	}
+	session.mu.Lock()
+	setHarnessCostHeadersLocked(session, w.Header())
+	session.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(response.StatusCode)
 	_, _ = w.Write(responseBody)

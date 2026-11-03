@@ -1610,6 +1610,8 @@ func activateBrokerSessionFor(t *testing.T, broker *inferenceBroker, prepared ma
 		activation.EmbeddingRequestBudget = budgetEvidence[0].EmbeddingRequestBudget
 		activation.EmbeddingTokenBudget = budgetEvidence[0].EmbeddingTokenBudget
 		activation.MaxOutputTokens = budgetEvidence[0].MaxOutputTokens
+		activation.CostCeilingMicrousd = budgetEvidence[0].CostCeilingMicrousd
+		activation.CostCeilingMode = budgetEvidence[0].CostCeilingMode
 	}
 	body, _ := json.Marshal(activation)
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session/id/activate", bytes.NewReader(body))
