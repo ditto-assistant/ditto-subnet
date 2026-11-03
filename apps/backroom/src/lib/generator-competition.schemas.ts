@@ -588,6 +588,9 @@ const generatorScorerHeartbeatSchema = z.object({
   grading_bench_versions: z.array(z.number().int()).nullable().optional().default(null),
   // What Platform matches against: the advertised list, else v13 only.
   effective_grading_bench_versions: z.array(z.number().int()).optional(),
+  // Dueling-bench work kinds (slice, battery) advertised on the dueling-work
+  // poll; null when the scorer never polled for dueling work.
+  dueling_work_kinds: z.array(z.string()).nullable().optional().default(null),
 })
 
 export const generatorScorerStatusSchema = z.object({
