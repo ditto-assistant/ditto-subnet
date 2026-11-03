@@ -575,6 +575,8 @@ describe('Backroom MCP tools', () => {
         'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
         'list_stranded_previous_era_submissions',
+        'admit_stranded_submission',
+        'get_stranded_admissions',
         'get_burn_settings',
         'get_track_share_settings',
         'get_emission_allocation',
@@ -973,7 +975,10 @@ describe('Backroom MCP tools', () => {
     // write) measures 224,063 bytes; keep about 0.5 KB.
     // The stranded previous-era read (three bounded paging inputs, one-line
     // summary, detail in tool help) measures 224,683 bytes; keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(225_200)
+    // The stranded admission write and its effect read (one uuid, one SHA, two
+    // guards, one-line summaries, detail in tool help) measure 226,436 bytes;
+    // keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(226_950)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1026,7 +1031,9 @@ describe('Backroom MCP tools', () => {
       // 28,400; keep about 200 chars.
       // The unreleased-copy settings pair adds two one-line summaries; measured
       // 28,613 after the competition-improvement read.
-      28_800,
+      // The one-line stranded admission write and effect read measure 28,856;
+      // keep about 200 chars.
+      29_050,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2813,6 +2820,124 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/stranded-previous-era?limit=50&offset=0&owner_best_only=true',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('admits one stranded submission with guards and reads its effect', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '22222222-2222-4222-8222-222222222222'
+    const sha = 'ab'.repeat(32)
+    const effect = {
+      agent_id: agentId,
+      agent_name: 'stranded',
+      miner_hotkey: '5Stranded',
+      status: 'scored',
+      admitted_at: '2026-11-03T08:00:00Z',
+      actor: 'peyton@omniaura.ai',
+      reason: 'backfill the owner best stranded v14 agent',
+      position: 16,
+      agent_sha256: sha,
+      previous_bench_version: 14,
+      previous_score_count: 3,
+      previous_median_composite: 0.95,
+      dataset_sha256: 'cd'.repeat(32),
+      is_member: true,
+      admitted: true,
+      active_score_count: 0,
+      active_median_composite: null,
+      first_lease_at: null,
+      live_lease_count: 0,
+      ticket_state: 'awaiting_first_lease',
+      tickets: [],
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          admission: {
+            rollout_id: '11111111-1111-4111-8111-111111111111',
+            bench_version: 15,
+            position: 16,
+            dataset_sha256: 'cd'.repeat(32),
+            seed_source: 'source_scores_canonical_min',
+            rendered: true,
+          },
+          effect,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          active_bench_version: 15,
+          rollout_id: '11111111-1111-4111-8111-111111111111',
+          total: 1,
+          items: [effect],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const refused = await client.callTool({
+      name: 'admit_stranded_submission',
+      arguments: {
+        agentId,
+        expectedActiveVersion: 15,
+        expectedSha256: sha,
+        expectedPreviousScoreCount: 3,
+        reason: 'backfill the owner best stranded v14 agent',
+        confirmation: `ADMIT STRANDED ${agentId} TO BENCHMARK V14`,
+      },
+    })
+    expect(refused.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    const response = await client.callTool({
+      name: 'admit_stranded_submission',
+      arguments: {
+        agentId,
+        expectedActiveVersion: 15,
+        expectedSha256: sha,
+        expectedPreviousScoreCount: 3,
+        reason: 'backfill the owner best stranded v14 agent',
+        confirmation: `ADMIT STRANDED ${agentId} TO BENCHMARK V15`,
+      },
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      admission: { bench_version: 15, position: 16 },
+      effect: { admitted: true, ticket_state: 'awaiting_first_lease' },
+    })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/stranded-previous-era/${agentId}/admit`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body))
+    expect(body).toMatchObject({
+      expected_active_version: 15,
+      expected_sha256: sha,
+      expected_previous_score_count: 3,
+      confirmation: `ADMIT STRANDED ${agentId} TO BENCHMARK V15`,
+    })
+
+    const read = await client.callTool({
+      name: 'get_stranded_admissions',
+      arguments: { agentId },
+    })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ total: 1, items: [{ agent_id: agentId }] })
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/stranded-previous-era/admissions?agent_id=${agentId}`,
       expect.objectContaining({ method: 'GET' }),
     )
 

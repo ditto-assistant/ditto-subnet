@@ -624,6 +624,10 @@ import {
   competitionImprovementMetricsSchema,
 } from '../lib/competition-improvement.schemas'
 import {
+  admitStrandedSubmissionInputSchema,
+  strandedAdmissionResponseSchema,
+  strandedAdmissionsInputSchema,
+  strandedAdmissionsSchema,
   strandedPreviousEraInputSchema,
   strandedPreviousEraSchema,
 } from '../lib/benchmark-era-stranded.schemas'
@@ -3589,6 +3593,41 @@ export async function fetchStrandedPreviousEra(rawInput: unknown) {
     `/api/v1/admin/benchmark-rollout/stranded-previous-era?${params.toString()}`,
   )
   return strandedPreviousEraSchema.parse(payload)
+}
+
+export async function fetchStrandedAdmissions(rawInput: unknown) {
+  const input = strandedAdmissionsInputSchema.parse(rawInput ?? {})
+  const params = new URLSearchParams()
+  if (input.agentId) params.set('agent_id', input.agentId.toLowerCase())
+  const query = params.toString()
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/benchmark-rollout/stranded-previous-era/admissions${query ? `?${query}` : ''}`,
+  )
+  return strandedAdmissionsSchema.parse(payload)
+}
+
+export async function admitStrandedSubmission(actor: string, rawInput: unknown) {
+  const input = admitStrandedSubmissionInputSchema.parse(rawInput)
+  const agentId = input.agentId.toLowerCase()
+  type AdmitRequest = PlatformOperations['admit_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era__agent_id__admit_post']['requestBody']['content']['application/json']
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/benchmark-rollout/stranded-previous-era/${encodeURIComponent(agentId)}/admit`,
+    {
+      method: 'POST',
+      actor,
+      // Admission may render one active-version dataset before committing.
+      timeoutMs: 120_000,
+      body: {
+        actor,
+        reason: input.reason,
+        confirmation: input.confirmation,
+        expected_active_version: input.expectedActiveVersion,
+        expected_sha256: input.expectedSha256.toLowerCase(),
+        expected_previous_score_count: input.expectedPreviousScoreCount,
+      } satisfies AdmitRequest,
+    },
+  )
+  return strandedAdmissionResponseSchema.parse(payload)
 }
 
 export async function fetchBenchmarkContractRefresh(rawInput: unknown) {

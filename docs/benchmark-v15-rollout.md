@@ -93,3 +93,9 @@ includes a newer sibling of a cohort member and work that reached quorum
 while the rollout was open. The v13→v14 bump behaved the same way (#3237).
 Backroom `list_stranded_previous_era_submissions` lists this population. Any
 backfill policy is an operator decision; the read does not admit anything.
+
+The operator backfill is `admit_stranded_submission`, one guarded agent per
+call. It pins the v15 dataset and appends the agent to the activated rollout
+after the frozen cohort, with an audited actor and reason. The post-activation
+top-up lane then leases it out of `scored`. `get_stranded_admissions` reports
+whether each admitted agent is admitted and how far its v15 leases have got.

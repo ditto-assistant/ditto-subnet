@@ -252,7 +252,11 @@ import {
   screeningSubmissionFiltersSchema,
 } from '../lib/admin.schemas'
 import { competitionImprovementMetricsInputSchema } from '../lib/competition-improvement.schemas'
-import { strandedPreviousEraInputSchema } from '../lib/benchmark-era-stranded.schemas'
+import {
+  admitStrandedSubmissionInputSchema,
+  strandedAdmissionsInputSchema,
+  strandedPreviousEraInputSchema,
+} from '../lib/benchmark-era-stranded.schemas'
 import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
@@ -310,6 +314,8 @@ import {
   fetchAgentScoringReadiness,
   fetchBenchmarkContractRefresh,
   fetchStrandedPreviousEra,
+  fetchStrandedAdmissions,
+  admitStrandedSubmission,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
   refreshBenchmarkContract,
@@ -996,6 +1002,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read rollout control: versions, start_ready, cohort, targets. Starts nothing.',
   list_stranded_previous_era_submissions:
     'Scored prior-bench agents the active era never admits. Read-only.',
+  admit_stranded_submission:
+    'Admit ONE stranded prior-bench agent to the active era. Guards + confirmation; see tool help.',
+  get_stranded_admissions:
+    'Audited stranded admissions: admitted state and active-era lease progress. Read-only.',
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   list_benchmark_canaries: 'Page isolated benchmark canaries. No score or rollout authority.',
@@ -4328,6 +4338,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           items: { pin: ['agent_id'] },
         }),
       ),
+  )
+
+  registerTool(
+    'admit_stranded_submission',
+    {
+      title: 'Admit one stranded previous-era submission',
+      description:
+        'Admit exactly ONE agent from list_stranded_previous_era_submissions onto the activated benchmark era, after activation. Pins its active-version dataset (rendered before commit), appends it to the activated rollout after the frozen cohort without resizing or re-gating it, and writes an audited stranded_admitted rollout event with actor, reason, artifact SHA and previous-era evidence. The agent stays scored/live with its previous-era scores and history untouched; the post-activation top-up lane then leases it toward an active-version quorum. Guards, all re-checked before commit: expectedActiveVersion equals the active bench, no rollout is open, expectedSha256 is the exact artifact SHA, the agent is in the stranded list (scored/live, previous-era scores, no active score, no admission path; banned and rejected agents never are), expectedPreviousScoreCount equals its previous-era score count, it is not withdrawn from the active queue, and its screened image satisfies the active contract. Confirmation: "ADMIT STRANDED {agentId} TO BENCHMARK V{expectedActiveVersion}" with the lowercase agent UUID. Read the effect with get_stranded_admissions or agent_scoring_readiness. Requires backroom:write.',
+      inputSchema: admitStrandedSubmissionInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => admitStrandedSubmission(props.session.email, input)),
+  )
+
+  registerTool(
+    'get_stranded_admissions',
+    {
+      title: 'Read stranded admissions',
+      description:
+        'List every audited stranded admission on the active era (optionally one agentId) with its live effect: admitted (the live admission predicate; false if later withdrawn), is_member, actor, reason, admitted_at, previous-era score count and median, the pinned dataset SHA, active-version score count and median, first_lease_at (earliest active-version lease), live_lease_count, ticket_state (awaiting_first_lease, leased, awaiting_next_lease, quorum_complete) and every active-version ticket. Read-only. Requires backroom:read.',
+      inputSchema: strandedAdmissionsInputSchema.shape,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchStrandedAdmissions(input)),
   )
 
   registerTool(

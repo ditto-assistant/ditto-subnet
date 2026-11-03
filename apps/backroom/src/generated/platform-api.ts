@@ -521,6 +521,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/benchmark-rollout/stranded-previous-era/admissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stranded Admissions
+         * @description Read every audited stranded admission on the active era and its effect.
+         *
+         *     Read-only. ``admitted`` is the live admission predicate; ``ticket_state``
+         *     and ``tickets`` show active-version lease progress toward quorum, and
+         *     ``first_lease_at`` is the earliest active-version lease.
+         */
+        get: operations["get_stranded_admissions_api_v1_admin_benchmark_rollout_stranded_previous_era_admissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-rollout/stranded-previous-era/{agent_id}/admit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admit Stranded Previous Era
+         * @description Admit ONE stranded previous-era submission onto the activated era.
+         *
+         *     Guards: the exact confirmation phrase, the expected active version, the
+         *     exact artifact SHA, the expected previous-era score count, membership of
+         *     the stranded list (scored/live, previous-era scores, no active score, no
+         *     admission path), not withdrawn, and a screened image the active contract
+         *     can lease. Pins the active-version dataset, appends the agent to the
+         *     activated rollout after its frozen cohort, and audits actor and reason, so
+         *     the post-activation top-up lane leases it out of ``scored``.
+         */
+        post: operations["admit_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era__agent_id__admit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/benchmark-rollout/{desired_version}": {
         parameters: {
             query?: never;
@@ -15080,6 +15132,27 @@ export interface components {
             revision: string;
             /** Source */
             source: string;
+        };
+        /**
+         * AdminStrandedAdmissionRequest
+         * @description Guards for admitting ONE stranded previous-era submission.
+         */
+        AdminStrandedAdmissionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Active Version */
+            expected_active_version: number;
+            /** Expected Previous Score Count */
+            expected_previous_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * AdminStuckSubmission
@@ -39741,6 +39814,120 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** StrandedAdmissionReceipt */
+        StrandedAdmissionReceipt: {
+            /** Bench Version */
+            bench_version: number;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Position */
+            position: number;
+            /** Rendered */
+            rendered: boolean;
+            /**
+             * Rollout Id
+             * Format: uuid
+             */
+            rollout_id: string;
+            /** Seed Source */
+            seed_source: string;
+        };
+        /** StrandedAdmissionResponse */
+        StrandedAdmissionResponse: {
+            admission: components["schemas"]["StrandedAdmissionReceipt"];
+            effect: components["schemas"]["StrandedAdmissionRow"];
+        };
+        /**
+         * StrandedAdmissionRow
+         * @description One audited stranded admission and its live active-era effect.
+         */
+        StrandedAdmissionRow: {
+            /** Active Median Composite */
+            active_median_composite: number | null;
+            /** Active Score Count */
+            active_score_count: number;
+            /** Actor */
+            actor: string | null;
+            /** Admitted */
+            admitted: boolean;
+            /**
+             * Admitted At
+             * Format: date-time
+             */
+            admitted_at: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Sha256 */
+            agent_sha256: string | null;
+            /** Dataset Sha256 */
+            dataset_sha256: string | null;
+            /** First Lease At */
+            first_lease_at: string | null;
+            /** Is Member */
+            is_member: boolean;
+            /** Live Lease Count */
+            live_lease_count: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Position */
+            position: number | null;
+            /** Previous Bench Version */
+            previous_bench_version: number | null;
+            /** Previous Median Composite */
+            previous_median_composite: number | null;
+            /** Previous Score Count */
+            previous_score_count: number | null;
+            /** Reason */
+            reason: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Ticket State
+             * @enum {string}
+             */
+            ticket_state: "awaiting_first_lease" | "leased" | "awaiting_next_lease" | "quorum_complete";
+            /** Tickets */
+            tickets: components["schemas"]["StrandedAdmissionTicketRow"][];
+        };
+        /** StrandedAdmissionTicketRow */
+        StrandedAdmissionTicketRow: {
+            /** Attempt Count */
+            attempt_count: number;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Purpose */
+            purpose: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Status */
+            status: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** StrandedAdmissionsResponse */
+        StrandedAdmissionsResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Items */
+            items: components["schemas"]["StrandedAdmissionRow"][];
+            /** Rollout Id */
+            rollout_id: string | null;
+            /** Total */
+            total: number;
+        };
         /**
          * StrandedEraAgentRow
          * @description One scored previous-era submission the active era does not admit.
@@ -45118,6 +45305,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["StrandedEraResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stranded_admissions_api_v1_admin_benchmark_rollout_stranded_previous_era_admissions_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrandedAdmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admit_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era__agent_id__admit_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminStrandedAdmissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrandedAdmissionResponse"];
                 };
             };
             /** @description Validation Error */

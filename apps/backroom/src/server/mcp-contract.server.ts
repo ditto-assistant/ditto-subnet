@@ -115,6 +115,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'migrate_zero_score_benchmark_contract',
   'qualify_scored_benchmark_rollout',
   'expand_benchmark_rollout_cohort',
+  'admit_stranded_submission',
   'start_benchmark_rollout',
   'issue_benchmark_canary',
   'cancel_benchmark_canary',

@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +19,7 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contracts,
 )
 from ditto.api_server.benchmark_rollout import (
+    admit_stranded_previous_era_agent,
     expand_rolling_qualification,
     inference_activation_requirements,
     qualification_candidate,
@@ -67,6 +68,11 @@ from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
 )
 from ditto.db.queries.retry_state import classify_agent_retry_states
+from ditto.db.queries.stranded_admission import (
+    StrandedAgentNotFoundError,
+    stranded_admission_confirmation,
+    stranded_admissions,
+)
 
 router = APIRouter(prefix="/admin/benchmark-rollout", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -656,6 +662,187 @@ async def get_stranded_previous_era(
             StrandedEraAgentRow(**asdict(item))
             for item in items[offset : offset + limit]
         ],
+    )
+
+
+class AdminStrandedAdmissionRequest(BaseModel):
+    """Guards for admitting ONE stranded previous-era submission."""
+
+    model_config = ConfigDict(extra="ignore")
+    reason: _Reason
+    actor: _Actor = "admin_api"
+    confirmation: str
+    expected_active_version: int
+    expected_sha256: Annotated[
+        str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{64}$")
+    ]
+    expected_previous_score_count: int = Field(ge=1)
+
+
+class StrandedAdmissionTicketRow(BaseModel):
+    validator_hotkey: str
+    slot_id: str
+    status: str
+    purpose: str
+    issued_at: datetime
+    deadline: datetime
+    attempt_count: int
+
+
+class StrandedAdmissionRow(BaseModel):
+    """One audited stranded admission and its live active-era effect."""
+
+    agent_id: UUID
+    agent_name: str
+    miner_hotkey: str
+    status: str
+    admitted_at: datetime
+    actor: str | None
+    reason: str | None
+    position: int | None
+    agent_sha256: str | None
+    previous_bench_version: int | None
+    previous_score_count: int | None
+    previous_median_composite: float | None
+    dataset_sha256: str | None
+    is_member: bool
+    admitted: bool
+    active_score_count: int
+    active_median_composite: float | None
+    first_lease_at: datetime | None
+    live_lease_count: int
+    ticket_state: Literal[
+        "awaiting_first_lease", "leased", "awaiting_next_lease", "quorum_complete"
+    ]
+    tickets: list[StrandedAdmissionTicketRow]
+
+
+class StrandedAdmissionsResponse(BaseModel):
+    active_bench_version: int
+    rollout_id: UUID | None
+    total: int
+    items: list[StrandedAdmissionRow]
+
+
+class StrandedAdmissionReceipt(BaseModel):
+    rollout_id: UUID
+    bench_version: int
+    position: int
+    dataset_sha256: str
+    seed_source: str
+    rendered: bool
+
+
+class StrandedAdmissionResponse(BaseModel):
+    admission: StrandedAdmissionReceipt
+    effect: StrandedAdmissionRow
+
+
+async def _stranded_admissions_response(
+    session: AsyncSession, *, agent_id: UUID | None
+) -> StrandedAdmissionsResponse:
+    report = await stranded_admissions(
+        session, now=datetime.now(UTC), agent_id=agent_id
+    )
+    return StrandedAdmissionsResponse(
+        active_bench_version=report.active_bench_version,
+        rollout_id=report.rollout.rollout_id if report.rollout is not None else None,
+        total=len(report.items),
+        items=[
+            StrandedAdmissionRow(
+                **{
+                    **asdict(item),
+                    "tickets": [
+                        StrandedAdmissionTicketRow(**asdict(ticket))
+                        for ticket in item.tickets
+                    ],
+                }
+            )
+            for item in report.items
+        ],
+    )
+
+
+@router.get(
+    "/stranded-previous-era/admissions", response_model=StrandedAdmissionsResponse
+)
+async def get_stranded_admissions(
+    _: AdminDep,
+    session: SessionDep,
+    agent_id: UUID | None = None,
+) -> StrandedAdmissionsResponse:
+    """Read every audited stranded admission on the active era and its effect.
+
+    Read-only. ``admitted`` is the live admission predicate; ``ticket_state``
+    and ``tickets`` show active-version lease progress toward quorum, and
+    ``first_lease_at`` is the earliest active-version lease.
+    """
+
+    return await _stranded_admissions_response(session, agent_id=agent_id)
+
+
+@router.post(
+    "/stranded-previous-era/{agent_id}/admit",
+    response_model=StrandedAdmissionResponse,
+)
+async def admit_stranded_previous_era(
+    _: AdminDep,
+    session: SessionDep,
+    generator: GeneratorDep,
+    agent_id: UUID,
+    payload: AdminStrandedAdmissionRequest,
+) -> StrandedAdmissionResponse:
+    """Admit ONE stranded previous-era submission onto the activated era.
+
+    Guards: the exact confirmation phrase, the expected active version, the
+    exact artifact SHA, the expected previous-era score count, membership of
+    the stranded list (scored/live, previous-era scores, no active score, no
+    admission path), not withdrawn, and a screened image the active contract
+    can lease. Pins the active-version dataset, appends the agent to the
+    activated rollout after its frozen cohort, and audits actor and reason, so
+    the post-activation top-up lane leases it out of ``scored``.
+    """
+    expected_confirmation = stranded_admission_confirmation(
+        agent_id, payload.expected_active_version
+    )
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f'type "{expected_confirmation}" exactly to confirm this operation',
+        )
+    try:
+        result = await admit_stranded_previous_era_agent(
+            session,
+            generator=generator,
+            now=datetime.now(UTC),
+            agent_id=agent_id,
+            expected_active_version=payload.expected_active_version,
+            expected_sha256=payload.expected_sha256.lower(),
+            expected_previous_score_count=payload.expected_previous_score_count,
+            actor=payload.actor,
+            reason=payload.reason,
+        )
+    except StrandedAgentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DataPipelineError as exc:
+        raise _generator_unavailable(payload.expected_active_version, exc) from exc
+    except RolloutConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    effects = await _stranded_admissions_response(session, agent_id=agent_id)
+    if not effects.items:
+        raise HTTPException(
+            status_code=500, detail="admission committed but its audit row is missing"
+        )
+    return StrandedAdmissionResponse(
+        admission=StrandedAdmissionReceipt(
+            rollout_id=result.rollout_id,
+            bench_version=result.bench_version,
+            position=result.position,
+            dataset_sha256=result.dataset_sha256,
+            seed_source=result.seed_source,
+            rendered=result.rendered,
+        ),
+        effect=effects.items[0],
     )
 
 

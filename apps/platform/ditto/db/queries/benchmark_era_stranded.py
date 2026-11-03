@@ -13,7 +13,8 @@ That exclusion is the designed era boundary, not a fault in issuance. This
 module only makes the population visible: which ``scored``/``live``
 submissions carry previous-era scores, have no active-version score and are
 not admitted, and whether the owner is already represented on the new board by
-a cohort sibling. It writes nothing and decides nothing.
+a cohort sibling. It writes nothing and decides nothing; the guarded
+operator remedy lives in :mod:`ditto.db.queries.benchmark_era_admission`.
 """
 
 from __future__ import annotations
@@ -88,13 +89,19 @@ class StrandedEraReport:
     items: list[StrandedEraAgent]
 
 
-async def stranded_previous_era_agents(session: AsyncSession) -> StrandedEraReport:
+async def stranded_previous_era_agents(
+    session: AsyncSession, *, agent_id: UUID | None = None
+) -> StrandedEraReport:
     """Every scored previous-era submission the active era does not admit.
 
     "Previous era" is the admission rollout's ``from_version``. Rows are
     ordered best previous-era median first. ``owner_best_stranded`` marks the
     owner's highest-median stranded row (one per owner key), which is the
     natural candidate set for any per-owner backfill decision.
+
+    ``agent_id`` narrows the read to one exact submission, which is the guard
+    the stranded-admission write uses. ``owner_best_stranded`` is meaningless
+    on a narrowed read (every returned row is trivially its owner's best).
     """
 
     active = await active_bench_version(session)
@@ -202,6 +209,8 @@ async def stranded_previous_era_agents(session: AsyncSession) -> StrandedEraRepo
         )
         .limit(MAX_STRANDED_ROWS + 1)
     )
+    if agent_id is not None:
+        statement = statement.where(Agent.agent_id == agent_id)
     rows = (await session.execute(statement)).all()
     truncated = len(rows) > MAX_STRANDED_ROWS
     rows = rows[:MAX_STRANDED_ROWS]
