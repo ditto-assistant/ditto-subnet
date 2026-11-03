@@ -93,7 +93,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v40-policy-v13"
+        return "source-review-v41-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -2142,7 +2142,12 @@ negation scope, setting-and-remember requests, duplicate calls followed by
 unfinished work, and identifiers available only through a supplied tool. A
 genuine authoritative model planner may produce an exact pinned plan; an
 advisory planner must remain rejectable and every valid deviation executable.
-Neither architecture bypasses authorization or safety.
+Neither architecture bypasses authorization or safety. Hiding connector-gated
+or app-specific tools on the published connector marker or the request's
+app-name wording is W4 availability narrowing, not incorrect removal, even when
+it hides a tool the case needed; apply the I7 connector and app-wording safe
+harbor below and charge only fake execution of a hidden tool, a claim that a
+removed needed tool ran, or forcing.
 
 On a scored v13 `/run`, the validator supplies `inference_base_url` as a
 case-scoped broker URL. A harness may build a per-request model client from it

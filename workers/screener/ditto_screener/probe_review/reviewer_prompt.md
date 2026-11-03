@@ -124,6 +124,11 @@ lacks_tool), `http_ok`. `cmp` is one of `==`, `!=`, `>`, `>=`, `<`, `<=`.
      the same answer with no disagree clause, when the deciding model's own
      reply ships and no host compare, retry, overwrite or rebuild acts on
      it (not I3/I4, ruled 2026-10-29);
+   - hiding connector-gated or app-specific tools from the deciding catalog
+     on the connector marker ("Needs the <App> connector ...") or on the
+     request's app-name wording, even when a needed tool ends up hidden, when
+     no hidden tool is reported as run and nothing is pinned or forced (W4,
+     not I7, ruled 2026-11-03);
    - Unicode/whitespace/wrapper/`Answer:` normalization (W8);
    - suppressing an exact duplicate after genuine success when repetition was
      not requested (W11).

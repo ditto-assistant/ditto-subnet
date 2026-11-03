@@ -270,6 +270,45 @@ ground.
 - Poor routing that does not displace model authority remains a performance
   issue.
 
+#### Clarification: connector and app-wording tool filtering (2026-11-03)
+
+A harness may hide connector-gated or app-specific tools from the catalog its
+deciding model sees. This is W4 availability narrowing, not, by itself, a
+rejection ground under I7 or any other condition. It covers:
+
+- filtering on the published connector marker, the tool description that says
+  the tool needs a connector (for example one ending "Needs the <App>
+  connector to be linked in Settings."); and
+- filtering on the request's app-name wording, for example hiding an app's
+  tools when the request does not name that app.
+
+Guessing which tools apply from the request's wording is an allowed approach.
+The filter may be hand-written rules, regular expressions or a small model
+declared under W13, and may run before the deciding model sees the catalog. It
+needs no proof that a hidden tool was logically impossible, and the W4
+conditions on exact request correctness, entity names, ambiguity and low
+confidence do not apply to it. When the filter hides a tool a case needed, the
+honest result is a missing call or a worse answer, which the benchmark scores.
+That over-filtering is a performance issue, not a violation. Hiding tools this
+way does not by itself manufacture a singleton under W10. A call to a hidden
+tool may be refused when it is recorded honestly as blocked (W11). Tools the
+model is shown keep their names, descriptions and schemas (W10).
+
+It is still a violation when the harness:
+
+- answers or reports as if a hidden or removed tool ran, or fabricates its
+  call, result, receipt or success (I6);
+- removes a tool the case needs and then claims it ran or reports its effect
+  as done (I6, I7); or
+- uses the filter to force or pin the remaining trajectory, for example by
+  pinning `tool_choice`, replacing the catalog with a host plan, or refusing a
+  valid call the deciding model selected from the tools it was shown (I7).
+
+A reviewer that finds only this narrowing resolves those I7 leads as refuted
+under this clarification rather than leaving them unresolved. The other I7
+grounds, such as planning takeover, forced trajectories, execution after
+revocation and duplicate handling, are unchanged.
+
 ### W5: financial formulas and calculators
 
 Financial, statistical, temporal, scientific, and conversion calculations are
@@ -904,7 +943,8 @@ proven under its own condition. Examples:
   answers and serves that result in place of the model's own reading (I5);
 - the host writes, edits or overrides the graded value or a dissenting model
   answer (I3, I4);
-- the route removes, hides or forces tool capabilities (I7);
+- the route removes, hides or forces tool capabilities beyond the W4
+  connector and app-wording narrowing (2026-11-03) (I7);
 - the guidance carries benchmark-private content.
 
 Guidance that misfires outside the benchmark is a product-quality lead, not an
@@ -949,6 +989,15 @@ Reject when:
 - execution remains enabled after revocation;
 - planner authority is concealed or falsely described as advisory; or
 - strong fixed prompting effectively forces one trajectory.
+
+Connector and app-wording tool filtering that meets the W4 clarification
+(2026-11-03) is a valid W4 policy ground. Hiding a connector-gated or
+app-specific tool on the connector marker or on the request's app-name wording
+does not trigger the removal, wording or low-confidence items above, even when
+it hides a tool the case needed; that miss is performance. Answering or
+reporting as if a hidden or removed tool ran, or removing a needed tool and
+claiming it ran or that its effect is done, remains a violation (I6, I7). The
+other items above still apply to the tools the model is shown.
 
 Proof names the triggering request or state, the catalog, the authority
 source, the removed or enforced choice, the valid blocked alternative, and the

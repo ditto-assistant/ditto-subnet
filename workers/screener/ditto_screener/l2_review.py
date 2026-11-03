@@ -155,35 +155,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v62-policy-v13"
+        return "l2-terra-source-review-v63-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v34-policy-v13"
+        return "l3-sol-adversarial-critic-v35-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v39-policy-v13"
+        return "l3-sol-violation-cause-v40-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v19-policy-v13"
+        return "l3-sol-cause-disagreement-v20-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v37-policy-v13"
+        return "l3-sol-safety-adjudicator-v38-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -1365,7 +1365,11 @@ flag that strips a capability for the rest of the request, and a router told
 to pick a narrowed route (records, read-only, no tools) when unsure. An
 exact-repeat stop on name plus canonical arguments for a repeat the request
 does not ask for, or a repeat the deciding model can authorize, remains
-permitted.
+permitted. Hiding connector-gated or app-specific tools on the published
+connector marker or the request's app-name wording is W4 availability
+narrowing, not this removal, even when it hides a tool the case needed; apply
+the I7 connector and app-wording safe harbor below and charge only fake
+execution of a hidden tool, a claim that a removed needed tool ran, or forcing.
 Judge tool guards against the identity and argument schema of the offered tool,
 then trace the model-selected call to its actual local implementation or
 request-supplied endpoint. A local memory tool may check ownership of its own
