@@ -8,7 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -32,6 +32,7 @@ from ditto.db.queries.benchmark_rollout import (
     create_rollout_snapshot,
 )
 from ditto.tests.legacy_era import retired_era_writes_allowed
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -72,7 +73,7 @@ async def test_concurrent_legacy_qualification_has_one_winner() -> None:
     initial_ids = [uuid4() for _ in range(5)]
     rising_id = uuid4()
     async with maker() as session, retired_era_writes_allowed(session), session.begin():
-        await session.execute(text("TRUNCATE TABLE benchmark_rollouts, agents CASCADE"))
+        await truncate_test_tables(session, "benchmark_rollouts", "agents")
         members: list[RolloutSnapshotMember] = []
         pins: dict = {}
         for position, agent_id in enumerate(initial_ids, start=1):
@@ -236,7 +237,7 @@ async def test_validator_bootstrap_is_disabled() -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     agent_ids = [uuid4() for _ in range(5)]
     async with maker() as session, retired_era_writes_allowed(session), session.begin():
-        await session.execute(text("TRUNCATE TABLE benchmark_rollouts, agents CASCADE"))
+        await truncate_test_tables(session, "benchmark_rollouts", "agents")
         for position, agent_id in enumerate(agent_ids, start=1):
             session.add(
                 Agent(

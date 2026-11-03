@@ -7,6 +7,15 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from .treasury import Block, Digest, Hash, TreasuryEmissionPolicy, TreasuryLedgerPin
 
+# Independently shipped public trust anchor, not supplied by a ledger/request.
+# Verified against public SN118 runtime revision 2. A collector rebind requires
+# an audited software update; allocation revisions remain offline signed.
+SN118_FOLLOWER_AUTHORITY = (
+    "0x2f0555cc76fc2840a25a6ea3b9637146806f1f44b090c175ffde2a7e5ab36c03",
+    118,
+    "5Fhnko5TCPtR1hyD8aua6n23XRM8cxcBM6TgNEqqUhcxWs1t",
+)
+
 SignatureVerifier = Callable[[str, bytes, bytes], bool]
 
 
@@ -112,3 +121,21 @@ def verify_public_signature(address: str, message: bytes, signature: bytes) -> b
         # Invalid SS58 checksums/signature scalars and unavailable runtime
         # crypto fail closed, without returning or logging input material.
         return False
+
+
+def verify_follower_policy_approval(
+    approval: TreasuryPolicyApproval,
+) -> TreasuryEmissionPolicy:
+    """Verify an independent follower against the shipped public authority."""
+    approval = TreasuryPolicyApproval.model_validate(approval)
+    policy = approval.policy
+    if (policy.genesis_hash, policy.netuid, policy.collector_coldkey) != (
+        SN118_FOLLOWER_AUTHORITY
+    ):
+        raise ValueError("follower approval differs from trusted SN118 authority")
+    return verify_policy_approval(
+        approval,
+        expected_policy_digest=policy.digest,
+        expected_collector_policy_digest=policy.collector_policy_digest,
+        verify_signature=verify_public_signature,
+    )

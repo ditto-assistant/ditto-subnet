@@ -15,6 +15,111 @@ from ditto.treasury.service_allocation import ServiceDestination
 
 
 class Migration(unittest.TestCase):
+    def test_v478_to_v481_reapproval_cannot_change_financial_authority(self):
+        from ditto_screening_protocol.collector_receipts import (
+            V478_COLLECTOR_CODE_HASH,
+            V479_READONLY_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
+        )
+
+        old = replace(self.new, runtime_code_hash=V478_COLLECTOR_CODE_HASH)
+        new = replace(
+            old,
+            revision=old.revision + 1,
+            runtime_code_hash=V482_COLLECTOR_CODE_HASH,
+        )
+        m.policy_transition(old, new)
+        for changed in (
+            replace(new, max_distribution_rao=2_500_000_000_000),
+            replace(new, max_fee_rao=new.max_fee_rao + 1),
+            replace(new, runtime_code_hash=V479_READONLY_CODE_HASH),
+            replace(new, revision=old.revision),
+            replace(new, start_block=old.start_block + 1),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(old, changed)
+
+    def test_v481_to_v482_reapproval_cannot_change_financial_authority(self):
+        from ditto_screening_protocol.collector_receipts import (
+            V479_READONLY_CODE_HASH,
+            V481_COLLECTOR_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
+        )
+
+        old = replace(self.new, runtime_code_hash=V481_COLLECTOR_CODE_HASH)
+        new = replace(
+            old,
+            revision=old.revision + 1,
+            runtime_code_hash=V482_COLLECTOR_CODE_HASH,
+        )
+        m.policy_transition(old, new)
+        for changed in (
+            replace(new, max_distribution_rao=2_500_000_000_000),
+            replace(new, max_fee_rao=new.max_fee_rao + 1),
+            replace(new, runtime_code_hash=V479_READONLY_CODE_HASH),
+            replace(new, revision=old.revision),
+            replace(new, revision=old.revision + 2),
+            replace(new, start_block=old.start_block + 1),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(old, changed)
+        # Reverse and same-runtime transitions stay refused.
+        with self.assertRaises(ValueError):
+            m.policy_transition(
+                new,
+                replace(old, revision=new.revision + 1),
+            )
+
+    def test_v482_to_v483_reapproval_cannot_change_financial_authority(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            V479_READONLY_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
+        )
+
+        old = replace(self.new, runtime_code_hash=V482_COLLECTOR_CODE_HASH)
+        new = replace(
+            old,
+            revision=old.revision + 1,
+            runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
+        )
+        m.policy_transition(old, new)
+        for changed in (
+            replace(new, max_distribution_rao=2_500_000_000_000),
+            replace(new, max_fee_rao=new.max_fee_rao + 1),
+            replace(new, runtime_code_hash=V479_READONLY_CODE_HASH),
+            replace(new, revision=old.revision),
+            replace(new, revision=old.revision + 2),
+            replace(new, start_block=old.start_block + 1),
+        ):
+            with self.assertRaises(ValueError):
+                m.policy_transition(old, changed)
+        # Reverse and same-runtime transitions stay refused.
+        with self.assertRaises(ValueError):
+            m.policy_transition(
+                new,
+                replace(old, revision=new.revision + 1),
+            )
+
+    def test_old_runtimes_cannot_skip_to_v483(self):
+        from ditto_screening_protocol.collector_receipts import (
+            AUDITED_COLLECTOR_CODE_HASH,
+            V478_COLLECTOR_CODE_HASH,
+            V481_COLLECTOR_CODE_HASH,
+        )
+
+        for code in (V478_COLLECTOR_CODE_HASH, V481_COLLECTOR_CODE_HASH):
+            old = replace(self.new, runtime_code_hash=code)
+            with self.assertRaises(ValueError):
+                m.policy_transition(
+                    old,
+                    replace(
+                        old,
+                        revision=old.revision + 1,
+                        runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH,
+                    ),
+                )
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
@@ -111,8 +216,8 @@ class Migration(unittest.TestCase):
 
     def test_runtime_reapproval_preserves_already_migrated_custody_and_spend(self):
         from ditto_screening_protocol.collector_receipts import (
-            AUDITED_COLLECTOR_CODE_HASH,
             HISTORICAL_COLLECTOR_CODE_HASH,
+            V482_COLLECTOR_CODE_HASH,
         )
 
         old = replace(self.old, runtime_code_hash=HISTORICAL_COLLECTOR_CODE_HASH)
@@ -126,9 +231,7 @@ class Migration(unittest.TestCase):
         first = m.manifest(self.source, old, isolated, "registration", sha)
         current = self.root / "policy4.db"
         m.migrate(self.source, current, old, isolated, first, self.signed(first))
-        new = replace(
-            isolated, revision=5, runtime_code_hash=AUDITED_COLLECTOR_CODE_HASH
-        )
+        new = replace(isolated, revision=5, runtime_code_hash=V482_COLLECTOR_CODE_HASH)
         current_sha = hashlib.sha256(current.read_bytes()).hexdigest()
         approval = m.manifest(current, isolated, new, "registration", current_sha)
         target = self.root / "policy5.db"
@@ -290,6 +393,62 @@ class Migration(unittest.TestCase):
         Path(str(self.source) + "-wal").write_bytes(b"")
         with self.assertRaises(ValueError):
             m.manifest(self.source, self.old, self.new, "registration", self.sha)
+
+    def test_signed_complete_backup_with_wal_header_preserves_exact_history(self):
+        # sqlite3.backup copies journal-mode header bytes even when the backup
+        # is complete and has no WAL. Do not rewrite the signed source file.
+        live = self.root / "live-wal.db"
+        source = sqlite3.connect(self.source)
+        writer = sqlite3.connect(live)
+        source.backup(writer)
+        source.close()
+        self.assertEqual(writer.execute("PRAGMA journal_mode=WAL").fetchone()[0], "wal")
+        backup = self.root / "wal-header-backup.db"
+        output = sqlite3.connect(backup)
+        writer.backup(output)
+        output.close()
+        writer.close()
+        backup.chmod(0o600)
+        raw = backup.read_bytes()
+        self.assertEqual(raw[18:20], b"\x02\x02")
+        self.assertFalse(Path(str(backup) + "-wal").exists())
+        digest = hashlib.sha256(raw).hexdigest()
+        approval = m.manifest(backup, self.old, self.new, "registration", digest)
+        self.assertEqual(approval["history_sha256"], self.approval["history_sha256"])
+        target = self.root / "wal-migrated.db"
+        result = m.migrate(
+            backup, target, self.old, self.new, approval, self.signed(approval)
+        )
+        self.assertEqual(backup.read_bytes(), raw)
+        self.assertEqual(result["registration_reserved_rao"], 3)
+        self.assertEqual(result["cursor"], 199)
+        migrated = m.snapshot(target, result["target_sha256"])
+        original = m.snapshot(self.source, self.sha)
+        before, after = m.history(original), m.history(migrated)
+        self.assertEqual(after["events"][:-1], before["events"])
+        for table in ("cursor", "earnings", "operations"):
+            self.assertEqual(after[table], before[table])
+        original.close()
+        migrated.close()
+        with self.assertRaises(ValueError):
+            m.manifest(backup, self.old, self.new, "registration", self.sha)
+        Path(str(backup) + "-wal").write_bytes(b"pending-pages")
+        with self.assertRaises(ValueError):
+            m.manifest(backup, self.old, self.new, "registration", digest)
+
+    def test_unknown_or_mixed_sqlite_header_modes_refuse(self):
+        for header in (b"\x01\x02", b"\x02\x01", b"\x03\x03"):
+            raw = self.source.read_bytes()
+            raw = raw[:18] + header + raw[20:]
+            self.source.write_bytes(raw)
+            with self.assertRaises(ValueError):
+                m.manifest(
+                    self.source,
+                    self.old,
+                    self.new,
+                    "registration",
+                    hashlib.sha256(raw).hexdigest(),
+                )
 
 
 if __name__ == "__main__":

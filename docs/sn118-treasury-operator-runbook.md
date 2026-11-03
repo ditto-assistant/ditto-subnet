@@ -3,7 +3,7 @@
 > **Superseded economics:** The 25+25 bps, released-share proposal below is
 > historical and must not be activated. The new service-wallet design is in
 > [sn118-service-treasury-v2.md](sn118-service-treasury-v2.md): GM begins at a
-> proposed 1,000 bps of the full miner emission vector, with service shares
+> configurable 0–10,000 bps of the full miner emission vector, with service shares
 > carved out before burn. Even at 100% burn, approved service shares persist
 > and only the miner remainder burns. The signer remains blocked.
 

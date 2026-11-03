@@ -1,11 +1,16 @@
-"""Mutations against the ``evaluation_payments`` table."""
+"""Mutations against the upload-payment tables.
+
+``evaluation_payments`` records the proofs that fund agent uploads and
+``generator_submission_payments`` the proofs that fund generator uploads; a
+proof funds exactly one upload across both (:func:`lock_payment_proof`).
+"""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from asyncpg.exceptions import UniqueViolationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
 # PaymentReplayedError is a payment-domain outcome that happens to be
@@ -15,7 +20,7 @@ from sqlalchemy.exc import IntegrityError as SAIntegrityError
 # the shipped PaymentVerifier already uses by importing chain.errors.
 from ditto.api_server.payment_verifier import PaymentReplayedError
 from ditto.db.errors import IntegrityError as DbIntegrityError
-from ditto.db.models import Agent, EvaluationPayment
+from ditto.db.models import Agent, EvaluationPayment, GeneratorSubmissionPayment
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -32,6 +37,7 @@ if TYPE_CHECKING:
 # migration that renames the PK is caught before the dispatch silently
 # stops translating replays into PaymentReplayedError.
 _PAYMENT_REPLAY_CONSTRAINT = "evaluation_payments_pkey"
+_GENERATOR_PAYMENT_REPLAY_CONSTRAINT = "generator_submission_payments_pkey"
 
 
 async def get_miner_coldkey_for_agent(
@@ -108,6 +114,35 @@ async def get_evaluation_payment_for_proof(
     return await session.scalar(stmt)
 
 
+async def lock_payment_proof(
+    session: AsyncSession, *, block_hash: str, extrinsic_index: int
+) -> None:
+    """Serialize every upload that spends one proof until the transaction ends.
+
+    Agent uploads record a proof in ``evaluation_payments`` and generator
+    uploads in ``generator_submission_payments``; each table's primary key
+    stops a replay within its lane. Both lanes take this lock before checking
+    the other lane's table and inserting their own row, so two concurrent
+    uploads (one per lane) cannot both spend the same transfer.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+        {"key": f"upload-payment:{block_hash.lower()}:{extrinsic_index}"},
+    )
+
+
+async def get_generator_payment_for_proof(
+    session: AsyncSession, *, block_hash: str, extrinsic_index: int
+) -> GeneratorSubmissionPayment | None:
+    """Return the generator upload a proof already funded, if any."""
+    return await session.scalar(
+        select(GeneratorSubmissionPayment).where(
+            GeneratorSubmissionPayment.block_hash == block_hash.lower(),
+            GeneratorSubmissionPayment.extrinsic_index == extrinsic_index,
+        )
+    )
+
+
 async def get_same_owner_agent_by_sha(
     session: AsyncSession, *, miner_coldkey: str, sha256: str
 ) -> Agent | None:
@@ -155,7 +190,8 @@ async def insert_evaluation_payment(
 
     Raises:
         PaymentReplayedError: Composite-PK collision on
-            ``(block_hash, extrinsic_index)``. The envelope handler maps
+            ``(block_hash, extrinsic_index)``, or the proof already funded
+            a generator upload. The envelope handler maps
             this to HTTP 402 + error code 3207. Closes threat-model row
             P1 (replay same payment proof twice).
         DbIntegrityError: Any other constraint violation
@@ -167,6 +203,25 @@ async def insert_evaluation_payment(
     if (agent_id is None) == (credit_for_agent_id is None):
         raise ValueError(
             "exactly one of agent_id or credit_for_agent_id must be supplied"
+        )
+    # The cross-lane check must not flush the caller's pending rows: their
+    # constraint violations keep surfacing from the flush below.
+    with session.no_autoflush:
+        await lock_payment_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+        funded_generator = await get_generator_payment_for_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+    if funded_generator:
+        raise PaymentReplayedError(
+            f"payment proof (block_hash={verified.block_hash}, "
+            f"extrinsic_index={verified.extrinsic_index}) already funded a "
+            "generator upload"
         )
     row = EvaluationPayment(
         block_hash=verified.block_hash.lower(),
@@ -224,3 +279,66 @@ async def consume_evaluation_credit(
     payment.agent_id = agent_id
     payment.credit_for_agent_id = None
     await session.flush()
+
+
+async def insert_generator_payment(
+    session: AsyncSession, *, verified: VerifiedPayment, submission_id: UUID
+) -> None:
+    """Bind a verified proof to the generator submission it funded.
+
+    Runs inside the caller's upload transaction. Takes the shared proof lock,
+    refuses a proof already recorded by either lane, then inserts; a primary
+    key collision (a concurrent generator upload that committed first) is the
+    same replay.
+
+    Raises:
+        PaymentReplayedError: the proof already funded an agent or generator
+            upload, or is held as an agent upload credit.
+    """
+    with session.no_autoflush:
+        await lock_payment_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+        agent_lane = await get_evaluation_payment_for_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+        generator_lane = await get_generator_payment_for_proof(
+            session,
+            block_hash=verified.block_hash,
+            extrinsic_index=verified.extrinsic_index,
+        )
+    if agent_lane is not None or generator_lane is not None:
+        raise PaymentReplayedError(
+            f"payment proof (block_hash={verified.block_hash}, "
+            f"extrinsic_index={verified.extrinsic_index}) already used"
+        )
+    session.add(
+        GeneratorSubmissionPayment(
+            block_hash=verified.block_hash.lower(),
+            extrinsic_index=verified.extrinsic_index,
+            submission_id=submission_id,
+            miner_hotkey=verified.miner_hotkey,
+            miner_coldkey=verified.miner_coldkey,
+            amount_rao=verified.amount_rao,
+            tao_usd_rate=verified.tao_usd_rate,
+            dest_address=verified.dest_address,
+            timestamp=verified.block_timestamp,
+        )
+    )
+    try:
+        await session.flush()
+    except SAIntegrityError as e:
+        asyncpg_err = e.orig.__cause__ if e.orig is not None else None
+        if (
+            isinstance(asyncpg_err, UniqueViolationError)
+            and (getattr(asyncpg_err, "constraint_name", "") or "")
+            == _GENERATOR_PAYMENT_REPLAY_CONSTRAINT
+        ):
+            raise PaymentReplayedError("payment proof already used") from e
+        raise DbIntegrityError(
+            f"generator_submission_payments insert violated constraint: {e.orig}"
+        ) from e

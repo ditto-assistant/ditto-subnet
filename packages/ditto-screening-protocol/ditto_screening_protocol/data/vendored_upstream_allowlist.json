@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "description": "Unmodified upstream release files that exceed the per-file source limits. A member is exempt only when its SHA-256 matches an entry exactly; any edit makes it first-party source. Add entries only from an official release download, recording the URL.",
+  "files": [
+    {
+      "sha256": "bed3cd2ea73b5afa4d43d7db400c66fe2b8127a21e1b6e4b7c96a48e6862165d",
+      "bytes": 958266,
+      "lines": 31099,
+      "upstream": "SQLite 3.46.1 amalgamation",
+      "upstream_path": "shell.c",
+      "source_url": "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
+    },
+    {
+      "sha256": "6c35bc5f7f85eac9c49928bacbb02bb694b547aabf69197e058cca245ad80e83",
+      "bytes": 9089564,
+      "lines": 257679,
+      "upstream": "SQLite 3.46.1 amalgamation",
+      "upstream_path": "sqlite3.c",
+      "source_url": "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
+    },
+    {
+      "sha256": "89b62c671c5964e137409ce034941b7b05a3af2c9875aba41f47f9483d0c2515",
+      "bytes": 644069,
+      "lines": 13425,
+      "upstream": "SQLite 3.46.1 amalgamation",
+      "upstream_path": "sqlite3.h",
+      "source_url": "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
+    },
+    {
+      "sha256": "a0a0c13dc086663863dbe6730a19716f7d3744904b6205496e8301750814dbd5",
+      "bytes": 344297,
+      "lines": 10255,
+      "upstream": "cpp-httplib v0.18.3",
+      "upstream_path": "httplib.h",
+      "source_url": "https://github.com/yhirose/cpp-httplib/archive/refs/tags/v0.18.3.tar.gz"
+    },
+    {
+      "sha256": "6762b46550b936973582c9bc8bdf7b42367242ae3840c19efdbb1dc2382bc07b",
+      "bytes": 2144977,
+      "lines": 64861,
+      "upstream": "quickjs-ng v0.16.2",
+      "upstream_path": "quickjs.c",
+      "source_url": "https://github.com/quickjs-ng/quickjs/archive/refs/tags/v0.16.2.tar.gz"
+    }
+  ]
+}

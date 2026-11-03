@@ -535,6 +535,9 @@ class SimilarityBudgetSettings(BaseModel):
     """
 
 
+LineageReferenceMode = Literal["same_owner_version", "same_owner", "released_base"]
+
+
 class QueuePolicySettings(BaseModel):
     """The complete, hot-swappable validator-queue policy.
 
@@ -646,6 +649,26 @@ class QueuePolicySettings(BaseModel):
     between off, observe, and enforce. ``integrity_double_check_mode``
     separately extends the top-five review, on a stronger reviewer posture, to
     submissions that already passed the full pre-score screen.
+    """
+
+    lineage_reference_mode: LineageReferenceMode = "same_owner_version"
+    """Which already-screened artifact a screening attempt may be diffed against.
+
+    The lineage packet scopes the model review to the diff from a reference and
+    carries that reference's review history; every full-review rule (build
+    surface, opaque or unread change, size, policy, no history) still applies,
+    and the model review always runs.
+
+    ``same_owner_version`` (default, the shipped behaviour): only the same
+    hotkey's prior version of the same agent name.
+    ``same_owner``: additionally, when there is no such version, the latest
+    earlier upload paid by the same coldkey (any hotkey or name) that passed
+    screening.
+    ``released_base``: additionally, at packet time, a base the submission
+    declares in its DECLARATION / BASE / ATTRIBUTION / README documents whose
+    exact SHA had a public handoff before this upload and that passed
+    screening under the attempt's policy -- chosen only when it yields a diff
+    scope with fewer changed lines than the claim-time reference.
     """
 
     @model_validator(mode="after")

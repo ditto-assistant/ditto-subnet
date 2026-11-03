@@ -12,13 +12,16 @@ from ditto.api_models.treasury_runtime import (
     TreasuryRuntimeRevision,
     TreasuryRuntimeSettings,
 )
+from ditto.api_models.treasury_settings import TreasurySettings
 from ditto.db.models import TreasuryRuntimeRevision as RuntimeRow
+from ditto.db.models import TreasurySettingsRevision as SettingsRow
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
 from ditto_screening_protocol.treasury_approval import (
     TreasuryPolicyApproval,
     verify_policy_approval,
     verify_public_signature,
 )
+from ditto_screening_protocol.treasury_enforcement import TreasuryBucketAllocation
 
 
 @dataclass(frozen=True)
@@ -101,4 +104,65 @@ async def treasury_runtime(session: AsyncSession, config: Any) -> TreasuryRuntim
         treasury_weight_enforcement=s.mode == "enforce",
         activation_epoch=s.activation_epoch,
         treasury_managed_validator_hotkeys=s.managed_validator_hotkeys,
+    )
+
+
+def settings_match_policy(
+    settings: TreasurySettings, policy: TreasuryEmissionPolicy
+) -> bool:
+    """Same collector and wallets, each Gamma % inside its coldkey-signed range.
+
+    A fixed signed bucket admits only its exact value, so fixed policies keep
+    the original exact-match rule.
+    """
+    return (
+        settings.allocation_version == 2
+        and (settings.treasury_hotkey, settings.treasury_coldkey)
+        == (policy.collector_hotkey, policy.collector_coldkey)
+        and sorted((b.bucket_id, b.holding_coldkey) for b in settings.service_buckets)
+        == sorted((b.bucket_id, b.holding_coldkey) for b in policy.buckets)
+        and policy.admits(
+            {b.bucket_id: b.allocation_bps for b in settings.service_buckets}
+        )
+    )
+
+
+def gamma_only_change(previous: TreasurySettings, new: TreasurySettings) -> bool:
+    """True when two revisions differ in nothing but bucket allocation values."""
+
+    def without_allocation(settings: TreasurySettings) -> dict:
+        raw = settings.model_dump(mode="json")
+        for bucket in raw["service_buckets"]:
+            bucket["allocation_bps"] = 0
+        return raw
+
+    return without_allocation(previous) == without_allocation(new)
+
+
+async def latest_settings(session: AsyncSession) -> TreasurySettings | None:
+    row = await session.scalar(
+        select(SettingsRow).order_by(SettingsRow.revision.desc()).limit(1)
+    )
+    if row is None:
+        return None
+    if canonical_settings(row.settings) != row.checksum:
+        raise ValueError("stored treasury settings checksum mismatch")
+    return TreasurySettings.model_validate(row.settings)
+
+
+async def pinned_allocations(
+    session: AsyncSession, policy: TreasuryEmissionPolicy
+) -> tuple[TreasuryBucketAllocation, ...] | None:
+    """The operator's in-range Gamma allocation an enforcing epoch freezes.
+
+    A fixed policy pins nothing: its signature already names the allocation.
+    """
+    if not policy.ranged:
+        return None
+    settings = await latest_settings(session)
+    if settings is None or not settings_match_policy(settings, policy):
+        raise ValueError("Gamma allocation is outside the signed policy range")
+    return tuple(
+        TreasuryBucketAllocation(bucket_id=b.bucket_id, allocation_bps=b.allocation_bps)
+        for b in sorted(settings.service_buckets, key=lambda b: b.bucket_id)
     )

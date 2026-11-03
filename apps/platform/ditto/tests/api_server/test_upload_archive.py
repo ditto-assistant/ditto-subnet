@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import io
 import tarfile
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -15,6 +16,10 @@ from ditto.api_server.source_inspect import (
     UPLOAD_MAX_UNPACKED_BYTES,
     SourceInspectError,
     validate_upload_archive,
+)
+from ditto_screening_protocol.source_limits import (
+    MAX_SOURCE_FILE_LINES,
+    SOURCE_LIMITS_EFFECTIVE_AT,
 )
 
 SCREENER_GATE = (
@@ -146,6 +151,35 @@ def test_accepts_a_dockerfile_larger_than_one_read_chunk() -> None:
     # across the chunk boundary must still decode.
     body = b"FROM scratch\n# " + "\u00e9".encode() * (64 * 1024) + b"\n"
     validate_upload_archive(_archive([("Dockerfile", body, tarfile.REGTYPE)]))
+
+
+def _with_source(path: str, data: bytes) -> bytes:
+    return _archive(
+        [
+            ("Dockerfile", b"FROM scratch\n", tarfile.REGTYPE),
+            (path, data, tarfile.REGTYPE),
+        ]
+    )
+
+
+def test_rejects_an_oversized_source_file_once_enforced() -> None:
+    tar = _with_source("src/agent.rs", b"fn a() {}\n" * (MAX_SOURCE_FILE_LINES + 1))
+    with pytest.raises(SourceInspectError) as raised:
+        validate_upload_archive(tar, now=SOURCE_LIMITS_EFFECTIVE_AT)
+    assert raised.value.code == "source-file-limit"
+    assert "src/agent.rs: 10,001 lines (limit 10,000)" in str(raised.value)
+
+
+def test_grandfathers_an_oversized_source_file_before_the_effective_date() -> None:
+    tar = _with_source("src/agent.rs", b"fn a() {}\n" * (MAX_SOURCE_FILE_LINES + 1))
+    validate_upload_archive(tar, now=SOURCE_LIMITS_EFFECTIVE_AT - timedelta(days=1))
+
+
+def test_source_limits_still_require_a_root_dockerfile() -> None:
+    tar = _archive([("src/agent.py", b"x = 1\n", tarfile.REGTYPE)])
+    with pytest.raises(SourceInspectError) as raised:
+        validate_upload_archive(tar, now=SOURCE_LIMITS_EFFECTIVE_AT)
+    assert raised.value.code == "archive-missing-dockerfile"
 
 
 def _screener_constant(name: str) -> object:

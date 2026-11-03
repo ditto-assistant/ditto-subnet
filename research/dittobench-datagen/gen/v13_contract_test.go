@@ -143,6 +143,7 @@ func TestV13ContractMetamorphicRelations(t *testing.T) {
 // planted decoy scores 0 — while records-disagree, an exempt claim set, still
 // credits a response that names the decoy alongside both recorded values.
 func TestV13ContractOracleSynonymsAndDistractorsGrade(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 25; seed++ {
 		business, _, err := V13BusinessProgramCases(seed, 28)
 		if err != nil {

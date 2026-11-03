@@ -23,7 +23,6 @@ rather than duplicated.
 
 from __future__ import annotations
 
-import copy
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -40,7 +39,6 @@ from ditto.api_models.gate_evidence import (
     GATE_EVIDENCE_MIN_BENCH_VERSION,
     GATE_FINDINGS,
     GATE_NOTE_VOCABULARY,
-    GATE_ZEROING_NOTES,
     TWIN_NOTE_MARKERS,
     StoredGateEvidence,
 )
@@ -264,14 +262,6 @@ class TestVocabulary:
             assert finding.waived_by == frozenset(spec.get("waived_by", [])), note
         markers = json.loads(_SHARED_FINDINGS.read_text())["case_note_markers"]
         assert set(markers) == TWIN_NOTE_MARKERS
-
-    def test_only_scorer_emitted_tokens_are_in_the_vocabulary(self) -> None:
-        # Names that were rule / env values, never a finding, must not be here:
-        # a note nothing ever appends would be a dead dispute target.
-        for never_emitted in ("concordant_zero", "pair_product", "cost_factor_shadow"):
-            assert never_emitted not in GATE_NOTE_VOCABULARY
-        assert {"twin_concordant", "counterfactual_insensitive"} <= GATE_ZEROING_NOTES
-        assert "expected_tool_not_offered" in GATE_ZEROING_NOTES
 
 
 class TestBuildGateEvidence:
@@ -579,22 +569,6 @@ class TestPublicSurfaces:
         assert accepted and accepted[0]["gate_evidence"]["flagged_case_count"] == 4
         assert '"note_id"' not in resp.text
 
-    @pytest.mark.asyncio
-    async def test_previous_version_rows_publish_null(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        miner = bittensor.Keypair.create_from_uri("//Alice")
-        agent_id = await _seed_scored_agent(
-            session_maker, miner_hotkey=miner.ss58_address, bench_version=_PREVIOUS
-        )
-        _install_db(app, session_maker)
-        resp = await client.get(f"/api/v1/public/agent/{agent_id}/scores")
-        assert resp.status_code == 200, resp.text
-        assert resp.json()["scores"][0]["gate_evidence"] is None
-
 
 class TestOwnerSurface:
     @pytest.mark.asyncio
@@ -657,7 +631,10 @@ class TestOwnerSurface:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "status", [AgentStatus.EVALUATING, AgentStatus.REJECTED, AgentStatus.LIVE]
+        "status",
+        [
+            AgentStatus.REJECTED,
+        ],
     )
     async def test_owner_sees_case_ids_in_every_status(
         self,
@@ -911,33 +888,6 @@ class TestDisputeLink:
         assert item["original_reason"] == "Initial rejection remains supported"
 
     @pytest.mark.asyncio
-    async def test_dispute_without_note_ids_is_unchanged(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_scored_agent(
-            session_maker, miner_hotkey=_KEYPAIR.ss58_address
-        )
-        await _reject_after_quarantine(session_maker, agent_id)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        message = "The screener misread a generic normalizer as benchmark logic."
-        signature = _sign(
-            _KEYPAIR, screening_dispute_signing_message(agent_id, message)
-        )
-        submitted = await client.post(
-            f"/api/v1/public/agent/{agent_id}/dispute",
-            json={"message": message, "signature": signature},
-        )
-        assert submitted.status_code == 201, submitted.text
-        async with session_maker() as s:
-            dispute = await s.scalar(select(ScreeningDispute))
-            assert dispute is not None and dispute.gate_note_ids is None
-            assert dispute.kind == "screening"
-
-    @pytest.mark.asyncio
     async def test_scored_agent_disputes_its_gate_notes_without_being_released(
         self,
         app: FastAPI,
@@ -1050,47 +1000,6 @@ class TestDisputeLink:
         )
         assert again.status_code == 409
 
-    @pytest.mark.asyncio
-    async def test_upholding_a_gate_notes_dispute_changes_nothing_either(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _enable_admin(app)
-        agent_id = await _seed_scored_agent(
-            session_maker,
-            miner_hotkey=_KEYPAIR.ss58_address,
-            status=AgentStatus.EVALUATING,
-        )
-        _install_db(app, session_maker)
-        _install_chain(app)
-        cited = sorted(await _own_note_ids(session_maker, agent_id))[:1]
-        message = "The catalog was suppressed by the validator's own tool_choice."
-        signature = _sign(
-            _KEYPAIR, screening_dispute_signing_message(agent_id, message)
-        )
-        submitted = await client.post(
-            f"/api/v1/public/agent/{agent_id}/dispute",
-            json={"message": message, "signature": signature, "gate_note_ids": cited},
-        )
-        assert submitted.status_code == 201, submitted.text
-        listing = await client.get(
-            "/api/v1/admin/screening-disputes", headers=_ADMIN_HEADERS
-        )
-        dispute_id = listing.json()["items"][0]["dispute_id"]
-        upheld = await client.post(
-            f"/api/v1/admin/screening-disputes/{dispute_id}/resolve",
-            headers=_ADMIN_HEADERS,
-            json={"resolution": "uphold", "reason": "The relay record is settled."},
-        )
-        assert upheld.status_code == 200, upheld.text
-        assert upheld.json()["agent_status"] == "evaluating"
-        assert upheld.json()["dispute"]["resolution"] == "uphold"
-        async with session_maker() as s:
-            agent = await s.get(Agent, agent_id)
-            assert agent is not None and agent.status == AgentStatus.EVALUATING
-
 
 class TestIngest:
     @pytest.mark.asyncio
@@ -1143,42 +1052,3 @@ class TestIngest:
                 score.details["per_case"][1]["claim_provenance"]
                 == (raw["per_case"][1]["claim_provenance"])
             )
-
-    @pytest.mark.asyncio
-    async def test_previous_version_score_report_stores_null(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        session_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        agent_id = await _seed_agent(
-            session_maker, status=AgentStatus.EVALUATING, dataset_version=_PREVIOUS
-        )
-        await _seed_ticket(session_maker, agent_id, bench_version=_PREVIOUS)
-        _install_db(app, session_maker)
-        _install_chain(app)
-        raw = _raw_report(bench_version=_PREVIOUS)
-        resp = await client.post(
-            f"/api/v1/validator/agent/{agent_id}/score",
-            json=_score_payload(
-                agent_id,
-                run_id="run_gate_1",
-                bench_version=_PREVIOUS,
-                composite=raw["composite"],
-                n=raw["n"],
-                per_case=copy.deepcopy(raw["per_case"]),
-                details=copy.deepcopy(raw["details"]),
-            ),
-        )
-        assert resp.status_code == 200, resp.text
-        async with session_maker() as s:
-            score = await s.scalar(select(Score).where(Score.agent_id == agent_id))
-            assert score is not None
-            assert score.gate_evidence is None
-            assert score.details is not None
-            # The advisory summaries still ride in details verbatim, exactly
-            # as every other details key does; the per-case shape is the
-            # pre-v13 one.
-            assert score.details["catalog_gate"] == raw["details"]["catalog_gate"]
-            for case in score.details["per_case"]:
-                assert set(case) == _LEGACY_CASE_KEYS

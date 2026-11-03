@@ -1,0 +1,77 @@
+{
+  "checked_at_utc": "2026-10-23",
+  "independent_rebuild_performed": false,
+  "artifact": {
+    "version": 483,
+    "source_commit": "db3fdeb98b",
+    "release_published": false,
+    "status": "pending: no official v483 srtool artifact published; release-train run 39944237080 cancelled",
+    "transaction_version": 1
+  },
+  "upgrade": {
+    "first_block": 9342487,
+    "first_block_hash": "0xd8a162475c392355da171400741c7dfec1b3ed1f354cad0565e2024fbce882f6",
+    "parent_runtime_code_hash": "0x37d83888085e2f1b7c9c36c1341cfb6c0d6689f8efd6e0c6128e3666eb5d8b62",
+    "runtime_code_hash": "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2"
+  },
+  "live_current": {
+    "block": 9347382,
+    "block_hash": "0x7868621932ef4a1cb7d4875d3e13b4b588f90e62ee2035d1a6774399cef8214e",
+    "runtime_code_hash": "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2",
+    "spec_version": 483,
+    "surfaces": [
+      {
+        "surface": "source_emission",
+        "admitted_by": "interface",
+        "interface_digest": "1ef98cc80020ae30fd6db2c7ab1cb3d9be974facca18b51e88682ff434d518fe",
+        "changed_entries": []
+      },
+      {
+        "surface": "treasury_receipt",
+        "admitted_by": "interface",
+        "interface_digest": "9e0d036eb8e9b4ab3d7b28aa28c66bd0ec3770c36769826cda8fd814b5dbaf5d",
+        "nearest_audited_release": "v482",
+        "changed_entries": []
+      }
+    ],
+    "treasury_signer_changed_calls": []
+  },
+  "source_diff": {
+    "base": "8cf229f8ef969389d054a4c161b53ffd164a041f",
+    "head": "db3fdeb98b",
+    "runtime_files": [
+      "pallets/subtensor/src/extensions/subtensor.rs",
+      "precompiles/src/dispatch_security.rs",
+      "precompiles/src/extensions.rs",
+      "precompiles/src/lib.rs",
+      "precompiles/src/mock.rs",
+      "precompiles/src/proxy.rs",
+      "runtime/src/lib.rs",
+      "vendor/frontier/frame/evm/precompile/dispatch/src/lib.rs",
+      "vendor/frontier/frame/evm/precompile/dispatch/src/mock.rs"
+    ],
+    "unchanged": [
+      "pallets/proxy",
+      "pallets/subtensor/src/macros/dispatches.rs",
+      "pallets/subtensor/src/macros/events.rs",
+      "pallets/subtensor/src/macros/errors.rs",
+      "migrations"
+    ],
+    "fee_free_only_validation": "check_fee_free_wrapped_calls runs only when info.pays_fee == Pays::No"
+  },
+  "unchanged_encoding": {
+    "proxy_pallet_call": [
+      16,
+      0
+    ],
+    "transfer_stake": [
+      7,
+      86
+    ],
+    "register_limit": [
+      7,
+      134
+    ],
+    "transfer_proxy_type": 10
+  }
+}

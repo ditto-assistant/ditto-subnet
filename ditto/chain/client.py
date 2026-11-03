@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote
 
@@ -333,10 +335,9 @@ class ChainClient:
 
     async def _query_subtensor_storage(self, storage_function: str, netuid: int) -> Any:
         """Query ``SubtensorModule.<storage_function>(netuid)`` at the latest block."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_SUBTENSOR_MODULE,
                     storage_function=storage_function,
@@ -438,6 +439,58 @@ class ChainClient:
             f"put_weights submitted for netuid={self._config.netuid} "
             f"with {len(weights)} entries"
         )
+
+    # --- Commitments ---
+
+    def has_identity(self) -> bool:
+        """True when this client can submit identity-scoped extrinsics."""
+        return bool(self._config.identity_name and self._config.identity_token)
+
+    async def set_commitment(self, data: bytes) -> None:
+        """Publish ``data`` as this hotkey's subnet commitment via Pylon.
+
+        Used for generator-round seed commitments Platform elects this
+        validator to publish. Pylon schedules the extrinsic and returns before
+        it lands; read it back with :meth:`get_own_commitment`. The
+        Commitments pallet keeps one value per hotkey and subnet, so each call
+        overwrites the last.
+
+        Raises:
+            ChainAuthError: When the client has no identity, or Pylon refuses it.
+            ChainConnectionError: When Pylon rejects or cannot reach the chain.
+            ValueError: When ``data`` is empty or over the pallet's 128 bytes.
+        """
+        if not self.has_identity():
+            raise ChainAuthError("set_commitment requires a Pylon identity client")
+        if not data or len(data) > 128:
+            raise ValueError("commitment data must be 1..128 bytes")
+        pylon = self._ensure_pylon()
+        try:
+            await pylon.v1.identity.set_commitment(data.hex())
+        except Exception as e:
+            raise _translate_pylon_error(e, "set_commitment") from e
+        logger.info(
+            f"set_commitment submitted for netuid={self._config.netuid} "
+            f"({len(data)} bytes)"
+        )
+
+    async def get_own_commitment(self, hotkey: str) -> tuple[int, bytes] | None:
+        """Read ``hotkey``'s current subnet commitment as ``(block, data)``.
+
+        ``None`` when the hotkey has no commitment. The block is the one the
+        chain stamped the commitment at.
+        """
+        pylon = self._ensure_pylon()
+        try:
+            response = await pylon.v1.identity.get_commitment(hotkey)
+        except Exception as e:
+            translated = _translate_pylon_error(e, "get_commitment")
+            if isinstance(translated, ExtrinsicNotFoundError):
+                return None
+            raise translated from e
+        raw = str(response.commitment)
+        data = bytes.fromhex(raw.removeprefix("0x"))
+        return int(response.commitment_block_number), data
 
     async def _weight_receipt_request(
         self,
@@ -560,10 +613,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the events query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 events = await substrate.query(
                     module=_SYSTEM_MODULE,
                     storage_function="Events",
@@ -622,10 +674,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_SUBTENSOR_MODULE,
                     storage_function=_OWNER_STORAGE,
@@ -669,10 +720,9 @@ class ChainClient:
             ChainConnectionError: When the substrate node is unreachable.
             ChainTimeoutError: When the query exceeds its timeout.
         """
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
-            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+            async with self._live_substrate() as substrate:
                 result = await substrate.query(
                     module=_TIMESTAMP_MODULE,
                     storage_function=_TIMESTAMP_NOW_STORAGE,
@@ -700,12 +750,11 @@ class ChainClient:
         self, policy: TreasuryEmissionPolicy, *, first_block: int, pinned_block: int
     ) -> TreasuryLedgerPin:
         """Revalidate collector identity with finalized read-only storage queries."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
             async with (
                 asyncio.timeout(8),
-                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+                self._live_substrate() as substrate,
             ):
                 return await read_finalized_collector_pin(
                     substrate,
@@ -728,12 +777,11 @@ class ChainClient:
         self, policy: TreasuryEmissionPolicy
     ) -> TreasuryDispatchObservation:
         """Read fresh finalized identity and epoch from the configured chain."""
-        from async_substrate_interface import AsyncSubstrateInterface
 
         try:
             async with (
                 asyncio.timeout(8),
-                AsyncSubstrateInterface(url=self._substrate_url()) as substrate,
+                self._live_substrate() as substrate,
             ):
                 return await read_treasury_dispatch_observation(substrate, policy)
         except ValueError:
@@ -746,6 +794,45 @@ class ChainClient:
             raise ChainConnectionError(
                 "treasury dispatch observation unavailable"
             ) from error
+
+    def _live_substrate_urls(self) -> tuple[str, ...]:
+        """Return the configured provider first, then the network's entrypoint."""
+        urls = (
+            [self._config.subtensor_rpc_url] if self._config.subtensor_rpc_url else []
+        )
+        urls.append(self._substrate_url())
+        return tuple(dict.fromkeys(urls))
+
+    @asynccontextmanager
+    async def _live_substrate(self) -> AsyncIterator[Any]:
+        """Open a substrate connection on the first provider that accepts it.
+
+        The public entrypoint rejects websocket handshakes with HTTP 429 under
+        load, so a failed connect falls through to the next provider. Failures
+        after the connection opens propagate unchanged.
+        """
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        urls = self._live_substrate_urls()
+        for index, url in enumerate(urls):
+            stack = AsyncExitStack()
+            try:
+                substrate = await stack.enter_async_context(
+                    AsyncSubstrateInterface(url=url)
+                )
+            except Exception:
+                await stack.aclose()
+                if index + 1 < len(urls):
+                    logger.warning(
+                        "substrate provider %d of %d refused; trying next",
+                        index + 1,
+                        len(urls),
+                    )
+                    continue
+                raise
+            async with stack:
+                yield substrate
+            return
 
     def _substrate_url(self) -> str:
         """Resolve substrate WebSocket URL for the configured network identifier."""

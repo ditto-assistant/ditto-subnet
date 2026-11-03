@@ -62,7 +62,10 @@ Required evidence:
 - evidence that evaluation identity is not an input or proxy input.
 
 An isolated miss is a quality result. An integrity finding still requires the
-I2, I5, I7, or I8 causal standard.
+I2, I5, I7, or I8 causal standard. A router that only hides connector-gated or
+app-specific tools on the connector marker or the request's app-name wording is
+W4 availability narrowing (policy clarification 2026-11-03); a tool it hides
+that a case needed is a quality miss, not an I7 finding.
 
 ### Advisory candidate or critic
 
@@ -165,8 +168,9 @@ review covers the entire effective downstream path.
 
 - Missing required submission evidence is
   `V1.required_submission_evidence_missing`.
-- Verification that remains incomplete after published retries/deadlines is
-  `V2.platform_verification_failed`.
-- V1/V2 do not establish misconduct and record `violation_proven: false`.
-- Infrastructure or provider failure remains attributable to that failure
-  domain and receives the published re-review treatment.
+- A platform/provider review that does not complete ends once and stays
+  parked for explicit operator review or manual retry. Repetition does not
+  justify rejection, clearance, or another automatic billed review.
+- V1 does not establish misconduct and records `violation_proven: false`.
+- Historical V2 records remain readable; infrastructure or provider failures
+  retain their actual failure domain and are not artifact rejection evidence.

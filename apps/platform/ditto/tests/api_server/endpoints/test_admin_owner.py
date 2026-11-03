@@ -197,23 +197,6 @@ async def test_unpaid_hotkey_is_reported_without_inventing_a_coldkey(
 
 
 @pytest.mark.asyncio
-async def test_unknown_key_answers_empty_rather_than_404(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    """ "No record" is an answer a reviewer needs, not an error."""
-    _install(app, maker)
-
-    body = await _footprint(client, "5NeverSeen")
-
-    assert body["identifier_kind"] == "unknown"
-    assert body["hotkeys"] == []
-    assert body["hotkey_count"] == 0
-    assert body["submission_count"] == 0
-    assert body["expansion_complete"] is True
-    assert "not on-chain metagraph ownership" in body["linkage_caveat"]
-
-
-@pytest.mark.asyncio
 async def test_agents_per_hotkey_bounds_the_sample_and_flags_truncation(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

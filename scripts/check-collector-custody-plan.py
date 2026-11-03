@@ -39,6 +39,19 @@ ALLOWED = {f"{name}[0]" for name in SINGLE} | {
     f'{name}["{role}"]' for name in PER_ROLE for role in ("registration", "transfer")
 }
 ALLOWED_DATA = "data.google_project.collector_custody[0]"
+MAILBOX = {
+    *{
+        f'google_pubsub_{kind}.manual["{name}"]'
+        for kind in ("topic", "subscription")
+        for name in ("requests", "reports")
+    },
+    *{
+        f"google_pubsub_{kind}_iam_member.manual_{name}[0]"
+        for kind in ("topic", "subscription")
+        for name in ("requests", "reports")
+    },
+}
+ALLOWED |= MAILBOX
 BACKEND_GRANTS = {
     "google_storage_bucket_iam_member.collector_custody_state_lock[0]": (
         "roles/storage.objectAdmin",
@@ -57,6 +70,41 @@ def resources(module: dict) -> list[dict]:
     return module.get("resources", [])
 
 
+def reviewed_mailbox_storage(policy: object, unknown: object) -> bool:
+    """Accept only the reviewed region and known unset provider transit default."""
+    if not isinstance(policy, list) or len(policy) != 1:
+        return False
+    storage = policy[0]
+    if (
+        not isinstance(storage, dict)
+        or set(storage) - {"allowed_persistence_regions", "enforce_in_transit"}
+        or storage.get("allowed_persistence_regions") != ["us-central1"]
+        or (
+            storage.get("enforce_in_transit") is not None
+            and storage.get("enforce_in_transit") is not False
+        )
+    ):
+        return False
+    if unknown is False:
+        return True
+    if not isinstance(unknown, list) or len(unknown) != 1:
+        return False
+    flags = unknown[0]
+    return (
+        isinstance(flags, dict)
+        and not set(flags) - {"allowed_persistence_regions", "enforce_in_transit"}
+        and (
+            "allowed_persistence_regions" not in flags
+            or (
+                isinstance(flags["allowed_persistence_regions"], list)
+                and len(flags["allowed_persistence_regions"]) == 1
+                and flags["allowed_persistence_regions"][0] is False
+            )
+        )
+        and flags.get("enforce_in_transit", False) is False
+    )
+
+
 def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
     if project not in ("ditto-app-dev", "sn118-gamma-custody"):
         raise ValueError("unapproved custody project")
@@ -67,6 +115,27 @@ def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
     ):
         raise ValueError("incomplete plan")
     variables = {name: item["value"] for name, item in plan["variables"].items()}
+    mailbox = variables.get("enable_manual_mailbox", False)
+    if type(mailbox) is not bool or (
+        mailbox
+        and (
+            project != "sn118-gamma-custody"
+            or variables.get("collector_custody_phases")
+            != {"registration": "sealed", "transfer": "sealed"}
+            or variables.get("manual_mailbox_platform_service_account")
+            != "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com"
+        )
+    ):
+        raise ValueError("unapproved manual mailbox intent")
+    planned_mailbox = [
+        item["address"]
+        for item in resources(plan["planned_values"]["root_module"])
+        if item["address"] in MAILBOX
+    ]
+    if len(planned_mailbox) != 8 * int(mailbox) or (
+        mailbox and set(planned_mailbox) != MAILBOX
+    ):
+        raise ValueError("mailbox intent and plan differ")
     if any(
         variables.get(name) != value
         for name, value in {
@@ -90,6 +159,70 @@ def validate(plan: dict, *, project: str = "ditto-app-dev") -> int:
         raise ValueError("unbound public identities")
     for resource in plan.get("resource_changes", []):
         address = resource["address"]
+        if address in MAILBOX:
+            change = resource["change"]
+            if "delete" in change["actions"] or not mailbox:
+                raise ValueError("manual mailbox removal/unapproved update refused")
+            value = change["after"]
+            if value.get("project") != "sn118-gamma-custody":
+                raise ValueError("mailbox project differs")
+            if "_iam_member." not in address:
+                name = "requests" if '["requests"]' in address else "reports"
+                if value.get("name") != f"sn118-manual-{name}":
+                    raise ValueError("mailbox resource differs")
+                if address.startswith("google_pubsub_topic."):
+                    if not reviewed_mailbox_storage(
+                        value.get("message_storage_policy"),
+                        change.get("after_unknown", {}).get(
+                            "message_storage_policy", False
+                        ),
+                    ):
+                        raise ValueError("mailbox persistence differs")
+                elif (
+                    value.get("topic")
+                    != f"projects/sn118-gamma-custody/topics/sn118-manual-{name}"
+                    or value.get("ack_deadline_seconds") != 600
+                    or value.get("message_retention_duration") != "604800s"
+                    or value.get("expiration_policy") != [{"ttl": ""}]
+                    or value.get("retry_policy")
+                    != [{"minimum_backoff": "15s", "maximum_backoff": "300s"}]
+                    or value.get("push_config")
+                ):
+                    raise ValueError("mailbox delivery differs")
+            if "_iam_member." in address:
+                platform = (
+                    "serviceAccount:ditto-platform-api@"
+                    "ditto-app-dev.iam.gserviceaccount.com"
+                )
+                signer = (
+                    "serviceAccount:sn118-collector-transfer@"
+                    "sn118-gamma-custody.iam.gserviceaccount.com"
+                )
+                kind = (
+                    "topic"
+                    if address.startswith("google_pubsub_topic_")
+                    else "subscription"
+                )
+                name = "requests" if ".manual_requests" in address else "reports"
+                expected = (
+                    platform
+                    if (kind, name)
+                    in {("topic", "requests"), ("subscription", "reports")}
+                    else signer
+                )
+                if (
+                    value.get("member") != expected
+                    or value.get("role")
+                    != (
+                        "roles/pubsub.publisher"
+                        if kind == "topic"
+                        else "roles/pubsub.subscriber"
+                    )
+                    or value.get(kind) != f"sn118-manual-{name}"
+                ):
+                    raise ValueError(
+                        "mailbox authority is broader than the reviewed direction"
+                    )
         if resource["mode"] == "managed":
             if address not in ALLOWED:
                 raise ValueError("unrelated change")

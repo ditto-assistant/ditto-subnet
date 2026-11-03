@@ -382,7 +382,7 @@ func yearLikeV13(n int) bool { return n >= 1900 && n <= 2100 }
 func numberMentionsV13(text string, lex claimLexicon) []mention {
 	var out []mention
 	for _, tok := range numericTokensV13(text) {
-		if strings.HasPrefix(strings.TrimLeft(text[tok.end:], " "), "%") {
+		if !lex.percentClaim && strings.HasPrefix(strings.TrimLeft(text[tok.end:], " "), "%") {
 			continue
 		}
 		whole, _, hasFrac, ok := parseAmountTokenV13(tok.text)

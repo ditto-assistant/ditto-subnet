@@ -1,36 +1,62 @@
-# Depot validation
+# Manual Depot validation fallback
 
-Same-repository PR checks for root, Platform, Backroom, Model Relay and the
-conventional title run on Depot CI in organization `4q2czr6whg`, following the
-backend repository's validation-only setup and subnet PR #243. These are current
-workflow copies, not the older test definitions from that PR. Four-CPU / 16-GB
-Linux sandboxes retain the existing sharding, locked dependencies, real
-PostgreSQL services, MinIO integration, immutable actions and test commands.
+GitHub-hosted runners own automatic PR validation. This repository is public,
+so its standard GitHub runners are free. The Depot workflow copies remain in
+organization `4q2czr6whg` for explicit operator use during an Actions outage or
+when faster validation is worth the cost. They have **no automatic PR, push or
+scheduled triggers**: entrypoints are `workflow_dispatch` only and reusable
+verifiers are `workflow_call` only.
 
-GitHub retains fork PR validation and manual rollback. Its reusable verifiers
-remain available to the protected release gate. The PR-specific migration check
-uses the same proof script and required status on Depot; the authoritative
-main-branch migration sweep stays exclusively on GitHub, including its queued
-non-cancelling lane. Protected release/deployment workflows stay on GitHub.
-No cloud identity, production secret or deployment trigger is copied to Depot.
+Four-CPU / 16-GB Depot sandboxes retain the same sharding, locked dependencies,
+real PostgreSQL services, MinIO integration, immutable actions and test commands.
+`ditto/tests/test_depot_ci.py` compares the executable jobs with their GitHub
+copies to prevent drift. Update both definitions when shared validation changes.
 
-The Depot preview workflow runs only plan and cheatcode validation. GitHub's
-existing preview workflow still owns its protected publisher and same-run
-artifact boundary; it is intentionally not replaced with a Depot publisher.
+## Run the fallback
 
-Run a validation against the current checkout (local changes are uploaded):
+Use a clean checkout of the exact **pushed PR head**. The CLI uploads local
+changes as a patch, so a local-patch run is useful for iteration but is not
+evidence that the pushed head passed. Resolve the PR head with `gh pr view`,
+fetch it, and compare `git rev-parse HEAD` before running:
 
 ```sh
+git status --porcelain
+git rev-parse HEAD
+depot ci run --org 4q2czr6whg --workflow .depot/workflows/ci.yml
 depot ci run --org 4q2czr6whg --workflow .depot/workflows/platform-ci.yml
 ```
 
-The installed Depot Code Access app reports automatic PR jobs as GitHub checks;
-verify their exact pushed head. The CLI is also available for pre-push iteration:
-a passing local-patch run is separate from the pushed-head PR check. Do not merge
-while an applicable Depot validation fails or has not run.
+Choose the workflows applicable to the PR; `.depot/workflows/backroom-ci.yml`
+and `model-relay.yml` validate their components. Invoke `ci.yml` and
+`platform-ci.yml`, not the reusable verifier files directly: the parent passes
+the exact ref and verification mode. The relay's static release-binary check
+also runs manually. `conventional-pr.yml` resolves the title of exactly one
+open same-repository PR at the run SHA when no PR event payload is present;
+it fails if there is no unique matching head.
 
-`test_depot_ci.py` compares the executable jobs with the GitHub verifier copies
-to prevent command, service or security drift. Update both definitions whenever
-the shared validation changes. To roll back validation, remove the Depot-only
-PR conditions from the six GitHub entrypoints and disable the corresponding
-Depot triggers together; releases continue to use GitHub throughout.
+The only required status on `main` is `migration-order/merge-result`. Its normal
+PR owner and authoritative queued main sweep stay on GitHub. The fallback can
+run the same per-head migration proof and publish the same status:
+
+```sh
+depot ci run --org 4q2czr6whg --workflow .depot/workflows/platform-migration-order.yml
+```
+
+Wait for completion, inspect the run source SHA and job conclusions, and verify
+`migration-order/merge-result` on the current PR head. A dispatch, local patch,
+historical check or a skipped job is not passing evidence. If the head changes,
+validate the new head. Do not bypass failed or missing applicable validation.
+
+## Reliability boundary
+
+Depot provides independent validation compute and scheduling during a GitHub
+Actions outage. It still needs GitHub repository access and check/status APIs;
+it cannot guarantee merges during a broader GitHub outage. A Depot usage cap
+or Depot outage can also block fallback runs. Retaining manual workflows avoids
+paying for duplicate automatic validation on every push.
+
+Protected releases, deployments and the authoritative migration sweep stay on
+GitHub. No cloud identity, production secret or deployment trigger is copied to
+Depot. `preview.yml` runs only unprivileged plan and cheatcode validation;
+GitHub owns dashboard publication and its same-run artifact boundary. Depot
+validation does not replace that publisher during an Actions outage.

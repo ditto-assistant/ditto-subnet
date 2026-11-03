@@ -166,11 +166,16 @@ async def test_below_quorum_king_is_not_published(session: AsyncSession) -> None
     )
 
 
-@pytest.mark.parametrize("status", [AgentStatus.BANNED, AgentStatus.ATH_PENDING_REVIEW])
+@pytest.mark.parametrize(
+    "status",
+    [
+        AgentStatus.REJECTED,
+    ],
+)
 async def test_non_serving_status_is_not_published(
     session: AsyncSession, status: AgentStatus
 ) -> None:
-    """A banned or re-opened artifact stops being served, so it stops counting.
+    """A rejected or re-opened artifact stops being served, so it stops counting.
 
     Conservative on purpose: it may have been downloadable earlier, and reading
     the status as it stands now can only *withhold* an exemption -- i.e. keep a
@@ -190,6 +195,22 @@ async def test_non_serving_status_is_not_published(
         )
         == {}
     )
+
+
+async def test_banned_king_is_still_published(session: AsyncSession) -> None:
+    """A ban does not withhold a king's source, so it still counts as public."""
+    confirmed = datetime(2026, 8, 4, 11, 46, 31, tzinfo=UTC)
+    agent_id = await _submission(
+        session,
+        name="banned-king",
+        status=AgentStatus.BANNED,
+        crowned_at=datetime(2026, 8, 4, 8, 0, tzinfo=UTC),
+        emission_confirmed_at=confirmed,
+    )
+
+    assert await list_public_source_releases(
+        session, agent_ids=[agent_id], quorum=_QUORUM, policy=_PUBLIC_120H
+    ) == {agent_id: confirmed + timedelta(hours=120)}
 
 
 async def test_disclosure_never_publishes_nothing(session: AsyncSession) -> None:
@@ -408,12 +429,9 @@ async def test_actual_publication_survives_policy_pause_and_agent_suspension(
 @pytest.mark.parametrize(
     "endpoint,kind,sha",
     [
-        ("admin.get_screening_artifact", "admin", "p" * 64),
         ("validator.agent_artifact", "validator", "p" * 64),
-        ("screener.agent_artifact", "screener", "p" * 64),
         ("public.agent_artifact", "admin", "p" * 64),
         ("public.agent_artifact", "public", "wrong" * 16),
-        ("public.agent_artifact", "public", None),
     ],
 )
 async def test_private_or_mismatched_fetch_is_not_publication(

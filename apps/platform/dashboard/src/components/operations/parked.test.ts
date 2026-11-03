@@ -22,6 +22,22 @@ describe("parkedReading", () => {
     expect(read?.title).toContain("not anything in this submission");
   });
 
+  it("names a missed seed deadline without attributing it to either side", () => {
+    const read = parkedReading(
+      entry({
+        retry_state: "exhausted",
+        retry_disposition: "operator_hold",
+        hold_failure_code: "seed_deadline_exceeded",
+      }),
+    );
+    expect(read?.tone).toBe("hold");
+    expect(read?.label).toBe("On hold · seed deadline");
+    expect(read?.title).toContain("has not attributed it to either side");
+    for (const claim of ["Ditto-side", "not anything in this submission"]) {
+      expect(read?.title).not.toContain(claim);
+    }
+  });
+
   it("asserts no fault at all on a hold with no agreed cause", () => {
     // The classifier sends mixed, unnamed, stale and unactionable rows here.
     // Those are unattributed, not proven fleet failures, and the copy has to

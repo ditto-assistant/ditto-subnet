@@ -432,3 +432,39 @@ deployed. A failed or expired lease remains an unresolved hold. To roll back,
 set its channels to zero and node status to `draining` through Backroom, await
 active leases, then revoke the exact node-2 WIF impersonation/provider and
 registration as separately reviewed operations. Preserve receipt history.
+
+## Read-only SSH log access
+
+The `screener_logs_access` role provisions `logs` during normal fleet convergence.
+It uses the managed team SSH keys from `infra/ansible/group_vars/all.yml`,
+including Peyton's cmux key, with forwarding and PTY allocation disabled. The
+account belongs only to its primary `logs` group and `systemd-journal`; it has
+no sudo, Docker, deployment, or service-control grant. Worker logs are in the
+system journal. A separate additive SSH allowlist drop-in keeps access intact
+when the base role renders its own hardening file.
+
+To converge access alone using the real screener inventory (and the normal
+operator identity over company Tailscale):
+
+```bash
+cd infra/ansible
+ansible-playbook -i inventory/hetzner-screener.yml playbooks/hetzner-screener-logs.yml --check --diff
+ansible-playbook -i inventory/hetzner-screener.yml playbooks/hetzner-screener-logs.yml
+```
+
+A fresh check-mode run predicts account creation and skips key ownership until
+the account actually exists. Repeat the check after applying. The role validates
+SSH configuration and reloads SSH only when its allowlist changes; no workers
+are restarted.
+
+For normal log reads use the bounded helper rather than an operator shell:
+
+```bash
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --since 15m --lines 200
+.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh --worker 1 --json --lines 20
+```
+
+It pins `logs@100.79.84.29` and the host key, offers one explicit
+`DITTOBOX_SSH_IDENTITY`, and never retries as an operator or through public SSH.
+Backroom remains the first source for live queue, capacity and attempt state.
+Tooling adoption is tracked in DITTO-1093.

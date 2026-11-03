@@ -44,6 +44,9 @@ cloudflare_zone_id = "TODO_HEYDITTO_ZONE_ID"
 # enable_screener_fleet_secrets = true
 # enable_screener_fleet         = true
 # enable_screener_capacity_controller = true
+# Generator competition scorer (generator-scorer.tf): add a version to
+# generator-scorer-token-prod before converging the VM or Platform.
+# enable_generator_scorer = true
 # X.509 identity for the external Hetzner fleet. The CA certificate is public;
 # its private key must remain offline and outside Terraform/GitHub/Ansible.
 # enable_screener_fleet_x509_identity = true

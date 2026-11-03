@@ -24,8 +24,8 @@ def service_first_weights(
     A configured collector remains a treasury role when service funding is
     paused, so it never competes for the ordinary miner remainder.
     """
-    if type(service_bps) is not int or not 0 <= service_bps <= 1000:
-        raise ValueError("service allocation must be between 0 and 1000 bps")
+    if type(service_bps) is not int or not 0 <= service_bps <= 10000:
+        raise ValueError("service allocation must be between 0 and 10000 bps")
     for share in (burn_share, paid_miner_fraction):
         if isinstance(share, bool) or not math.isfinite(share) or not 0 <= share <= 1:
             raise ValueError("invalid burn or paid miner share")
@@ -107,13 +107,13 @@ def plan_service_distribution(
         or not d.holding_coldkey
         or d.holding_coldkey == collector_coldkey
         or type(d.allocation_bps) is not int
-        or not 0 <= d.allocation_bps <= 1000
+        or not 0 <= d.allocation_bps <= 10000
         for d in destinations
     ):
         raise ValueError("invalid service destination")
     total = sum(d.allocation_bps for d in destinations)
-    if not 0 < total <= 1000:
-        raise ValueError("service pool must be between 1 and 1000 bps")
+    if not 0 < total <= 10000:
+        raise ValueError("service pool must be between 1 and 10000 bps")
     ordered = sorted(
         (d for d in destinations if d.allocation_bps), key=lambda d: d.bucket_id
     )

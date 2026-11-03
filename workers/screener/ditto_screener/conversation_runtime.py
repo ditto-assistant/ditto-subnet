@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import shutil
 import time
 from pathlib import Path
@@ -53,18 +54,8 @@ class ConversationRuntime:
         config: ScreenerConfig,
         launch: RuntimeImageLaunch,
         provider_key: str,
-        *,
-        private_case: bool = False,
-        private_budget_microusd: int | None = None,
     ):
-        if private_case and (
-            type(private_budget_microusd) is not int
-            or not 0 < private_budget_microusd <= 5_000_000
-        ):
-            raise AssessmentFailure("private_budget_unavailable")
         self.config, self.launch, self.provider_key = config, launch, provider_key
-        self.private_case = private_case
-        self.private_budget_microusd = private_budget_microusd
         suffix = launch.assessment_id.hex
         self.network = "ditto-conversation-" + suffix
         self.relay = self.network + "-relay"
@@ -119,6 +110,56 @@ class ConversationRuntime:
         # Pull only this release-pinned trusted helper, before claiming paid work.
         await self.docker("image", "inspect", _CANARY_IMAGE)
 
+    async def load_verified_archive(self, portable: Path, image_id: str) -> None:
+        """Resolve a daemon handle without changing the pinned config identity.
+
+        Containerd-backed Docker can return a manifest handle after importing a
+        classic archive. Inspect's Id then names that manifest, not its config.
+        Re-export and verify the config and every filesystem layer before the
+        handle is allowed to become this case's launch tag.
+        """
+        loaded = await self.docker(
+            "image", "load", "--input", str(portable), timeout=300
+        )
+        handles = re.findall(
+            r"^Loaded image ID: (sha256:[0-9a-f]{64})$", loaded, re.MULTILINE
+        )
+        if len(handles) != 1:
+            raise AssessmentFailure("screened_image_load_identity_unavailable")
+        handle = handles[0]
+        try:
+            info = json.loads(await self.docker("image", "inspect", handle))[0]
+            loaded_id = info["Id"]
+            if loaded_id != handle or info.get("Config", {}).get("Volumes"):
+                raise ValueError("unexpected loaded image")
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise AssessmentFailure("screened_image_runtime_mismatch") from None
+        if loaded_id != image_id:
+            exported = portable.with_name("loaded-image.tar")
+            normalized = portable.with_name("loaded-image-portable.tar")
+            try:
+                await self.docker(
+                    "image", "save", "--output", str(exported), handle, timeout=300
+                )
+                actual = await asyncio.to_thread(
+                    BuildGate._portable_image_archive,
+                    str(exported),
+                    str(normalized),
+                    deadline=time.monotonic() + 300,
+                )
+                if actual.image_id != image_id:
+                    raise AssessmentFailure("screened_image_runtime_mismatch")
+            finally:
+                exported.unlink(missing_ok=True)
+                normalized.unlink(missing_ok=True)
+        await self.docker("tag", handle, self.image)
+        try:
+            tagged = json.loads(await self.docker("image", "inspect", self.image))[0]
+            if tagged["Id"] != loaded_id or tagged.get("Config", {}).get("Volumes"):
+                raise ValueError("launch tag changed identity")
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise AssessmentFailure("screened_image_runtime_mismatch") from None
+
     async def start(self) -> str:
         await self.preflight()
         directory, _ = _prepare_gateway_state()
@@ -163,13 +204,7 @@ class ConversationRuntime:
         )
         if verified.image_id != self.launch.screened_image_id:
             raise AssessmentFailure("screened_image_identity_mismatch")
-        await self.docker("image", "load", "--input", str(portable), timeout=300)
-        await self.docker("tag", verified.image_id, self.image)
-        info = json.loads(await self.docker("image", "inspect", self.image))[0]
-        if info["Id"] != self.launch.screened_image_id or info.get("Config", {}).get(
-            "Volumes"
-        ):
-            raise AssessmentFailure("screened_image_runtime_mismatch")
+        await self.load_verified_archive(portable, verified.image_id)
         archive.unlink()
         portable.unlink()
         await asyncio.to_thread(_write_openrouter_shim_certs, directory)
@@ -192,14 +227,6 @@ class ConversationRuntime:
             "none",
         ]
         relay_args = ["--env", "OPENROUTER_API_KEY"]
-        if self.private_case:
-            relay_args.extend(("--env", "DITTO_PRIVATE_CASE=1"))
-            relay_args.extend(
-                (
-                    "--env",
-                    f"DITTO_PRIVATE_BUDGET_MICROUSD={self.private_budget_microusd}",
-                )
-            )
         await self.docker(
             "create",
             "--name",
@@ -334,34 +361,6 @@ class ConversationRuntime:
         if self.state:
             shutil.rmtree(self.state, ignore_errors=True)
         return usage
-
-    async def stop_private(self) -> dict[str, object]:
-        """Drain a single-case sidecar and return its terminal broker ledger.
-
-        Every Docker teardown step must succeed. The ordinary conversation
-        instrument may tolerate missing usage as uncertainty; protected V13
-        execution cannot treat an interrupted relay as settled evidence.
-        """
-        if self.state is None:
-            raise AssessmentFailure("private_sandbox_not_started")
-        try:
-            await self.docker("rm", "--force", self.container)
-            await self.docker("stop", "--time", "120", self.relay, timeout=130)
-            await self.docker("rm", self.relay)
-            raw = (self.state / "usage.json").read_bytes()
-            if len(raw) > 16_384:
-                raise AssessmentFailure("private_broker_ledger_invalid")
-            ledger = json.loads(raw)
-            if type(ledger) is not dict or ledger.get("settled") is not True:
-                raise AssessmentFailure("private_broker_ledger_unsettled")
-            await self.docker("network", "rm", self.network)
-            await self.docker("image", "rm", self.image)
-            shutil.rmtree(self.state)
-            self.state = None
-            return ledger
-        except Exception:
-            await self.stop()
-            raise AssessmentFailure("private_sandbox_teardown_failed") from None
 
 
 class HarnessTransport(httpx.AsyncBaseTransport):

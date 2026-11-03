@@ -2,7 +2,10 @@ package inference
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -67,7 +70,7 @@ func (d *Deps) closeProviderCircuit(parent context.Context, startedAt time.Time)
 // receipt-bearing response, or ordinary provider rejection cannot stop fleet
 // work. This is deliberately the same accounting boundary that authorizes the
 // relay's in-place retry.
-func receiptFreeOverload(phases []phaseTrace, model, provider string) (int, bool) {
+func receiptFreeOverload(phases []phaseTrace, model string) (int, bool) {
 	if len(phases) == 0 {
 		return 0, false
 	}
@@ -81,7 +84,7 @@ func receiptFreeOverload(phases []phaseTrace, model, provider string) (int, bool
 			header: phase.headers,
 			body:   phase.body,
 		}
-		if !providerBackpressureIsReceiptFree(result, model, provider) {
+		if !providerBackpressureIsReceiptFree(result, model) {
 			return 0, false
 		}
 		lastStatus = phase.status
@@ -89,8 +92,66 @@ func receiptFreeOverload(phases []phaseTrace, model, provider string) (int, bool
 	return lastStatus, true
 }
 
-func receiptFreeResultOverload(result *providerHTTPResult, model, provider string) bool {
+// gatewayCreditExhausted accepts only an exhausted sequence in which every
+// phase is the gateway's account-level credit refusal: HTTP 402 whose error
+// envelope says code 402 and names the OpenRouter balance (structured
+// limit_source, or the gateway's "Insufficient credits" message), with no
+// completion or usage beside it. The gateway refuses before routing, for every
+// grant on the relay's key, so a scored run that keeps going is measuring the
+// Platform balance instead of the agent. On 2026-10-31 03:59-04:09Z this
+// refusal failed 4,121 of Wonder v6's retest calls while the circuit stayed
+// closed and both runs were accepted at 0.65/0.70 against a 0.92 median.
+// Opening the circuit never re-dispatches a request, so no receipt-free proof
+// is needed beyond the envelope shape.
+func gatewayCreditExhausted(phases []phaseTrace) (int, bool) {
+	if len(phases) == 0 {
+		return 0, false
+	}
+	for _, phase := range phases {
+		// A Ditto Router 402 is one consenting user's wallet, never the fleet.
+		if phase.route == dittoRouterRoute ||
+			phase.status != http.StatusPaymentRequired ||
+			!gatewayCreditEnvelope(phase.body) {
+			return 0, false
+		}
+	}
+	return http.StatusPaymentRequired, true
+}
+
+func gatewayCreditEnvelope(body []byte) bool {
+	decoded, ok := decodeJSONNumbersRejectDuplicateKeys(body)
+	if !ok {
+		return false
+	}
+	payload, ok := decoded.(map[string]any)
+	if !ok {
+		return false
+	}
+	if _, present := payload["choices"]; present {
+		return false
+	}
+	if _, present := payload["usage"]; present {
+		return false
+	}
+	errorPayload, ok := payload["error"].(map[string]any)
+	if !ok {
+		return false
+	}
+	code, ok := errorPayload["code"].(json.Number)
+	if !ok || code.String() != "402" {
+		return false
+	}
+	if meta, isMap := errorPayload["metadata"].(map[string]any); isMap {
+		if source, _ := meta["limit_source"].(string); source == "openrouter_credits" {
+			return true
+		}
+	}
+	message, _ := errorPayload["message"].(string)
+	return strings.Contains(strings.ToLower(message), "insufficient credits")
+}
+
+func receiptFreeResultOverload(result *providerHTTPResult, model string) bool {
 	return result != nil &&
 		providerIsBackpressure(result.status, result.header) &&
-		providerBackpressureIsReceiptFree(result, model, provider)
+		providerBackpressureIsReceiptFree(result, model)
 }

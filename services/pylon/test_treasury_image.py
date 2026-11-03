@@ -279,6 +279,87 @@ class TreasuryImageTests(unittest.IsolatedAsyncioTestCase):
                 )
         self.client.subtensor.rpc.assert_not_awaited()
 
+    async def test_external_follower_without_deploy_file_checks_queued_and_precommit(
+        self,
+    ):
+        env = {
+            "DITTO_TREASURY_WEIGHT_ENFORCEMENT": "false",
+            "DITTO_TREASURY_SHADOW_APPROVAL_FILE": "",
+            "DITTO_TREASURY_APPROVED_POLICY_DIGEST": "",
+            "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST": "",
+        }
+        policy = self.pin.policy
+        with (
+            patch.dict(os.environ, env),
+            patch(
+                "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+                (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+            ),
+        ):
+            self.assertIsNone(treasury.capability())
+            await treasury.queued_block(self.client, self.body, 118, self.other)
+            with patch.object(
+                receipts, "treasury_task_body", return_value=(self.body, self.other)
+            ):
+                await treasury.guard_normalized_commit(
+                    self.client, 118, {0: 1000, 1: 9000}
+                )
+            self.values["Owner"] = self.other
+            with self.assertRaises(tasks.StopRetrying):
+                await treasury.queued_block(self.client, self.body, 118, self.other)
+
+    async def test_external_follower_refuses_bad_signature_and_partial_config(
+        self,
+    ):
+        env = {
+            "DITTO_TREASURY_WEIGHT_ENFORCEMENT": "false",
+            "DITTO_TREASURY_SHADOW_APPROVAL_FILE": "",
+            "DITTO_TREASURY_APPROVED_POLICY_DIGEST": "",
+            "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST": "",
+        }
+        policy = self.pin.policy
+        with (
+            patch.dict(os.environ, env),
+            patch(
+                "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+                (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+            ),
+        ):
+            self.body["treasury_pin"]["approval"]["signature"] = "0x" + "00" * 64
+            with self.assertRaises(tasks.StopRetrying):
+                await treasury.queued_block(self.client, self.body, 118, self.other)
+            self.body["treasury_pin"] = self.pin.model_dump(mode="json")
+            with (
+                patch.dict(
+                    os.environ,
+                    {"DITTO_TREASURY_APPROVED_POLICY_DIGEST": self.pin.policy_digest},
+                ),
+                self.assertRaises(tasks.StopRetrying),
+            ):
+                await treasury.queued_block(self.client, self.body, 118, self.other)
+        self.client.subtensor.rpc.assert_not_awaited()
+
+    async def test_external_self_signed_collector_is_not_a_trust_anchor(self):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaises(tasks.StopRetrying),
+        ):
+            await treasury.queued_block(self.client, self.body, 118, self.other)
+        self.client.subtensor.rpc.assert_not_awaited()
+
+    async def test_empty_enforcement_is_an_unconfigured_follower(self):
+        policy = self.pin.policy
+        with (
+            patch.dict(
+                os.environ, {"DITTO_TREASURY_WEIGHT_ENFORCEMENT": ""}, clear=True
+            ),
+            patch(
+                "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+                (policy.genesis_hash, policy.netuid, policy.collector_coldkey),
+            ),
+        ):
+            await treasury.queued_block(self.client, self.body, 118, self.other)
+
     async def test_precommit_rechecks_identity_after_successful_queue_check(self):
         await treasury.queued_block(
             self.client, self.body, 118, self.member.validator_hotkey

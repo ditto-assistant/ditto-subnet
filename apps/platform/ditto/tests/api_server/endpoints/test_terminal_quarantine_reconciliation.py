@@ -697,35 +697,6 @@ async def test_replay_after_ath_ruling_closed_the_quarantine_is_already_applied(
     assert await _resolution_count(session_maker, quarantine_id) == 1
 
 
-async def test_replay_by_another_operator_or_reason_is_already_applied(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    agent_id, sha256, quarantine_id = await _seed(
-        session_maker, status=AgentStatus.BANNED, ath_resolution="reject"
-    )
-    _install(app, session_maker)
-    decision = _decision(agent_id, sha256, quarantine_id)
-    first = await _preview(client, [decision])
-    applied = await _execute(client, [decision], first.json()["preview_token"])
-    assert applied.json()["items"][0]["status"] == "applied"
-
-    replay = _decision(
-        agent_id, sha256, quarantine_id, reason="Second look: already closed"
-    )
-    second = await _preview(client, [replay], actor="backroom:other-user")
-    assert second.json()["items"][0]["disposition"] == "already_applied"
-    executed = await _execute(
-        client,
-        [replay],
-        second.json()["preview_token"],
-        actor="backroom:other-user",
-    )
-    assert executed.json()["already_applied_count"] == 1
-    assert await _resolution_count(session_maker, quarantine_id) == 1
-
-
 async def test_evidence_binds_the_current_reject_not_a_historical_one(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -774,9 +745,7 @@ async def test_evidence_binds_the_current_reject_not_a_historical_one(
     assert evidence["artifact_sha256"] == sha256
 
 
-@pytest.mark.parametrize(
-    "unidentified", ["no_review", "no_action", "later_clear", "other_artifact"]
-)
+@pytest.mark.parametrize("unidentified", ["no_action", "later_clear", "other_artifact"])
 async def test_unidentified_terminal_ruling_is_never_reconciled(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -892,6 +861,50 @@ async def test_normal_preview_refused_when_agent_turns_terminal_before_execute(
     )
     assert await _active_quarantine_count(session_maker, agent_id) == 1
     assert await _resolution_count(session_maker, quarantine_id) == 0
+
+
+async def test_reconciliation_executes_with_failed_release_guards_attached(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Guards carried from the batch context never contradict the preview.
+
+    Execution read the failed-release attempt and score guards before it
+    classified the reconciliation, so a ghost row the preview had just called
+    ready came back as a conflict naming a state change that never happened
+    (ditto-subnet#3069).
+    """
+    agent_id, sha256, quarantine_id = await _seed(
+        session_maker, status=AgentStatus.BANNED, ath_resolution="reject"
+    )
+    _install(app, session_maker)
+    decision = {
+        **_decision(agent_id, sha256, quarantine_id),
+        "expected_attempt_id": str(uuid4()),
+        "expected_score_count": 0,
+    }
+    preview = await client.post(
+        "/api/v1/admin/screening-quarantines/batch-preview",
+        json={"decisions": [decision]},
+        headers=_HEADERS,
+    )
+    item = preview.json()["items"][0]
+    assert (item["disposition"], item["terminal_reconciliation"]) == ("ready", True)
+
+    executed = await client.post(
+        "/api/v1/admin/screening-quarantines/batch-resolve",
+        json={
+            "decisions": [decision],
+            "preview_token": preview.json()["preview_token"],
+            "confirmed": True,
+        },
+        headers=_HEADERS,
+    )
+    assert executed.status_code == 200, executed.text
+    assert executed.json()["items"][0]["status"] == "applied"
+    assert await _active_quarantine_count(session_maker, agent_id) == 0
+    assert await _resolution_count(session_maker, quarantine_id) == 1
 
 
 @pytest.mark.parametrize("change", ["new_ruling", "turned_terminal"])

@@ -1,13 +1,14 @@
 """Fail-closed agent-attributable exhaustion classification."""
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retry_state import RetryDisposition, RetryState
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
-from ditto.db.models import Agent, ValidatorTicket
+from ditto.db.models import Agent, Score, ValidatorTicket
 from ditto.db.queries.retry_state import (
     AGENT_ATTRIBUTABLE_WITHDRAW_REASON,
     agreed_failure_detail,
@@ -117,6 +118,27 @@ def test_named_agent_failures_are_withdraw_not_retry() -> None:
     assert allowed is False
     assert reason == AGENT_ATTRIBUTABLE_WITHDRAW_REASON
     assert selected == []
+
+
+def test_unflagged_137_is_retried_once_then_the_harnesses() -> None:
+    """A SIGKILL with no OOM flag is no-fault on one validator; the same kill
+    on a second validator is the harness's own crash."""
+    scores = [Score(validator_hotkey="scored-0")]
+    killed = {
+        "failure_reason": "infrastructure",
+        "failure_detail": "harness_killed_137",
+    }
+    once = [
+        _ticket(validator_hotkey="validator-0", **killed),
+        _ticket(
+            validator_hotkey="validator-1",
+            failure_reason="infrastructure",
+            failure_detail="host_memory_pressure",
+        ),
+    ]
+    assert is_agent_attributable_exhaustion(scores=scores, tickets=once) is False
+    twice = [_ticket(validator_hotkey=f"validator-{i}", **killed) for i in range(2)]
+    assert is_agent_attributable_exhaustion(scores=scores, tickets=twice) is True
 
 
 def test_missing_detail_stays_on_the_retry_path() -> None:
@@ -382,3 +404,77 @@ def test_an_advancing_row_has_no_disposition() -> None:
     tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
     for state in ("running", "retry_available", "cooling_down", "queued"):
         assert _disposition(tickets, state=state) is None
+
+
+def test_final_quorum_retry_can_select_later_healthy_validator() -> None:
+    scores = [Score(validator_hotkey=f"scored-{i}") for i in range(2)]
+    tickets = [
+        _ticket(
+            validator_hotkey="cpu-incompatible",
+            failure_reason="infrastructure",
+            failure_detail="sandbox_cpu_unsupported",
+            deadline=_FAILED - timedelta(minutes=1),
+        ),
+        _ticket(
+            validator_hotkey="memory-host",
+            failure_reason="sandbox_oom",
+            failure_detail="sandbox_oom",
+        ),
+    ]
+    common: dict[str, Any] = {
+        "agent": _agent(),
+        "scores": scores,
+        "tickets": tickets,
+        "now": _NOW,
+        "bench_version": 11,
+        "work_available_hotkeys": {"cpu-incompatible", "memory-host"},
+    }
+    assert recovery_gate(**common)[3] == [tickets[0]]
+    _, allowed, reason, selected = recovery_gate(
+        **common, target_validator_hotkey="memory-host"
+    )
+    assert allowed and reason is None and selected == [tickets[1]]
+    assert all(ticket.manual_retry_grants == 0 for ticket in tickets)
+
+
+def test_targeted_retry_does_not_bypass_quorum_availability_or_ticket_budget() -> None:
+    scores = [Score(validator_hotkey=f"scored-{i}") for i in range(2)]
+    ticket = _ticket(
+        validator_hotkey="memory-host",
+        failure_reason="sandbox_oom",
+        failure_detail="sandbox_oom",
+    )
+    common: dict[str, Any] = {
+        "agent": _agent(),
+        "scores": scores,
+        "tickets": [ticket],
+        "now": _NOW,
+        "bench_version": 11,
+    }
+    assert recovery_gate(**common, target_validator_hotkey="missing")[1:3] == (
+        False,
+        "selected validator has no exhausted ticket",
+    )
+    assert recovery_gate(
+        **common, target_validator_hotkey="memory-host", work_available_hotkeys=set()
+    )[1:3] == (False, "selected validator is not currently available")
+    assert recovery_gate(
+        **{
+            **common,
+            "scores": [scores[0]],
+            "tickets": [
+                ticket,
+                _ticket(validator_hotkey="other", failure_reason="infrastructure"),
+            ],
+        },
+        target_validator_hotkey="memory-host",
+    )[1:3] == (False, "validator selection requires exactly one missing score")
+    ticket.manual_retry_grants = 1
+    _, allowed, reason, selected = recovery_gate(
+        **common, target_validator_hotkey="memory-host"
+    )
+    assert (
+        not allowed
+        and selected == []
+        and reason == "operator-authorized validator retry is queued"
+    )

@@ -1,9 +1,8 @@
-# Validation only: current GitHub checks on Depot compute.
+# Manual fallback only: current GitHub checks on Depot compute.
 name: Depot CI
 
 on:
   workflow_dispatch:
-  pull_request:
 
 concurrency:
   group: depot-ci-${{ github.head_ref || github.ref }}

@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ditto_screening_protocol.v13_private_clean_control import (
     V13MatchedCleanControlCommitment,
 )
-from ditto_screening_protocol.v13_private_execute import PrivateExecutionResult
 from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE
+from ditto_screening_protocol.v13_private_result import PrivateExecutionResult
 from ditto_screening_protocol.v13_replay_observation import V13ReplayBinding
 
 

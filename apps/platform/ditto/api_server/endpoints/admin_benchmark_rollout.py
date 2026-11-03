@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import asdict
 from datetime import UTC, datetime
 from time import monotonic
-from typing import Annotated
+from typing import Annotated, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, StringConstraints
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +19,7 @@ from ditto.api_models.benchmark_contract import (
     benchmark_contracts,
 )
 from ditto.api_server.benchmark_rollout import (
+    admit_stranded_previous_era_agent,
     expand_rolling_qualification,
     inference_activation_requirements,
     qualification_candidate,
@@ -26,6 +29,7 @@ from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.datapipeline import DataPipelineError, DatasetGenerator
 from ditto.api_server.dependencies import get_dataset_generator, get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.inference_concurrency_settings import settings_from_row
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
     AGGREGATE_PROVIDER,
@@ -42,6 +46,7 @@ from ditto.db.models import (
     InferenceRoutingPolicy,
     ValidatorHeartbeat,
 )
+from ditto.db.queries.benchmark_era_stranded import stranded_previous_era_agents
 from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
     PRIORITY_COHORT_SIZE,
@@ -59,7 +64,15 @@ from ditto.db.queries.benchmark_rollout import (
     select_active_bench_version,
     supersede_open_rollout,
 )
+from ditto.db.queries.inference_concurrency_settings import (
+    latest_inference_concurrency_settings_revision,
+)
 from ditto.db.queries.retry_state import classify_agent_retry_states
+from ditto.db.queries.stranded_admission import (
+    StrandedAgentNotFoundError,
+    stranded_admission_confirmation,
+    stranded_admissions,
+)
 
 router = APIRouter(prefix="/admin/benchmark-rollout", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -339,6 +352,38 @@ def _inference_proxy_start_blocker(
     return None
 
 
+DECISION_LANE_MIN_BENCH_VERSION = 15
+"""The first bench version whose scored runs carry the locked decision lane."""
+
+
+async def _decision_lane_start_blocker(
+    session: AsyncSession,
+    desired_version: int,
+    inference_config: InferenceProxyConfig | None,
+) -> str | None:
+    """A v15+ rollout needs the operator's decision lane on with a pinned model.
+
+    v15 scored grants carry the lane (``_decision_grant_stamps``); opening a
+    rollout while the board is off would score the cohort without the lane the
+    contract promises, so the start is refused until the board pins a model.
+    Like the proxy blocker, it applies only where an inference proxy config is
+    bound (the running API), never to a config-free direct call.
+    """
+    if desired_version < DECISION_LANE_MIN_BENCH_VERSION or inference_config is None:
+        return None
+    settings = settings_from_row(
+        await latest_inference_concurrency_settings_revision(session)
+    )
+    lane = settings.decision_lane
+    if not lane.enabled or lane.model is None:
+        return (
+            f"benchmark v{desired_version} rollout requires the decision lane "
+            "enabled with a pinned model (set_inference_concurrency_settings "
+            "decision_lane)"
+        )
+    return None
+
+
 def _require_confirmation(actual: str, *, action: str, version: int) -> None:
     expected = f"{action} BENCHMARK V{version}"
     if actual != expected:
@@ -415,6 +460,10 @@ async def get_rollout_control(
                 config_blocker = _inference_proxy_start_blocker(
                     version, inference_config
                 )
+                if config_blocker is None:
+                    config_blocker = await _decision_lane_start_blocker(
+                        session, version, inference_config
+                    )
                 if config_blocker is not None:
                     blockers.append(config_blocker)
                 else:
@@ -508,6 +557,293 @@ async def rollout_retry_diagnostics(session: AsyncSession) -> list[dict[str, obj
         if (retry := states.get(agent.agent_id)) is not None
         and retry.bench_version == rollout.desired_version
     ]
+
+
+class StrandedEraAgentRow(BaseModel):
+    """One scored previous-era submission the active era does not admit."""
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: int | None
+    miner_hotkey: str
+    owner_key: str
+    status: str
+    submitted_at: datetime
+    first_screening_pass_at: datetime | None
+    previous_score_count: int
+    previous_median_composite: float | None
+    previous_finalized: bool
+    has_active_dataset: bool
+    queue_withdrawn: bool
+    cohort_sibling_agent_id: UUID | None
+    owner_best_stranded: bool
+    reason: Literal["owner_in_cohort", "owner_outside_cohort"]
+
+
+class StrandedEraRolloutSummary(BaseModel):
+    rollout_id: UUID
+    from_version: int
+    desired_version: int
+    status: str
+    created_at: datetime
+    activated_at: datetime | None
+    cohort_size: int
+
+
+class StrandedEraResponse(BaseModel):
+    """Scored previous-era work with no admission path into the active era."""
+
+    active_bench_version: int
+    previous_bench_version: int | None
+    rollout: StrandedEraRolloutSummary | None
+    prev_gen_carryover_enabled: bool
+    total: int
+    owner_count: int
+    finalized_count: int
+    owner_in_cohort_count: int
+    owner_outside_cohort_count: int
+    truncated: bool
+    limit: int
+    offset: int
+    items: list[StrandedEraAgentRow]
+
+
+@router.get("/stranded-previous-era", response_model=StrandedEraResponse)
+async def get_stranded_previous_era(
+    _: AdminDep,
+    session: SessionDep,
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    owner_best_only: bool = False,
+) -> StrandedEraResponse:
+    """List scored previous-era submissions the active benchmark era excludes.
+
+    Read-only. These are ``scored``/``live`` submissions with accepted scores
+    on the admission rollout's ``from_version``, no active-version score, and
+    no admission disjunct (not a frozen cohort member, not carryover, not
+    first queued in the new era, no audited contract refresh). By design no
+    active-version dataset is pinned for them and no validator leases them, so
+    they are absent from the active leaderboard. Registered before
+    ``/{desired_version}`` so the literal path wins.
+    """
+
+    report = await stranded_previous_era_agents(session)
+    settings = await resolve_queue_policy_settings(session)
+    items = [
+        item for item in report.items if item.owner_best_stranded or not owner_best_only
+    ]
+    rollout = report.rollout
+    return StrandedEraResponse(
+        active_bench_version=report.active_bench_version,
+        previous_bench_version=rollout.from_version if rollout is not None else None,
+        rollout=(
+            StrandedEraRolloutSummary(
+                rollout_id=rollout.rollout_id,
+                from_version=rollout.from_version,
+                desired_version=rollout.desired_version,
+                status=rollout.status,
+                created_at=rollout.created_at,
+                activated_at=rollout.activated_at,
+                cohort_size=rollout.cohort_size,
+            )
+            if rollout is not None
+            else None
+        ),
+        prev_gen_carryover_enabled=settings.prev_gen_carryover.enabled,
+        total=len(items),
+        owner_count=report.owner_count,
+        finalized_count=report.finalized_count,
+        owner_in_cohort_count=report.owner_in_cohort_count,
+        owner_outside_cohort_count=report.owner_outside_cohort_count,
+        truncated=report.truncated,
+        limit=limit,
+        offset=offset,
+        items=[
+            StrandedEraAgentRow(**asdict(item))
+            for item in items[offset : offset + limit]
+        ],
+    )
+
+
+class AdminStrandedAdmissionRequest(BaseModel):
+    """Guards for admitting ONE stranded previous-era submission."""
+
+    model_config = ConfigDict(extra="ignore")
+    reason: _Reason
+    actor: _Actor = "admin_api"
+    confirmation: str
+    expected_active_version: int
+    expected_sha256: Annotated[
+        str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{64}$")
+    ]
+    expected_previous_score_count: int = Field(ge=1)
+
+
+class StrandedAdmissionTicketRow(BaseModel):
+    validator_hotkey: str
+    slot_id: str
+    status: str
+    purpose: str
+    issued_at: datetime
+    deadline: datetime
+    attempt_count: int
+
+
+class StrandedAdmissionRow(BaseModel):
+    """One audited stranded admission and its live active-era effect."""
+
+    agent_id: UUID
+    agent_name: str
+    miner_hotkey: str
+    status: str
+    admitted_at: datetime
+    actor: str | None
+    reason: str | None
+    position: int | None
+    agent_sha256: str | None
+    previous_bench_version: int | None
+    previous_score_count: int | None
+    previous_median_composite: float | None
+    dataset_sha256: str | None
+    is_member: bool
+    admitted: bool
+    active_score_count: int
+    active_median_composite: float | None
+    first_lease_at: datetime | None
+    live_lease_count: int
+    ticket_state: Literal[
+        "awaiting_first_lease", "leased", "awaiting_next_lease", "quorum_complete"
+    ]
+    tickets: list[StrandedAdmissionTicketRow]
+
+
+class StrandedAdmissionsResponse(BaseModel):
+    active_bench_version: int
+    rollout_id: UUID | None
+    total: int
+    items: list[StrandedAdmissionRow]
+
+
+class StrandedAdmissionReceipt(BaseModel):
+    rollout_id: UUID
+    bench_version: int
+    position: int
+    dataset_sha256: str
+    seed_source: str
+    rendered: bool
+
+
+class StrandedAdmissionResponse(BaseModel):
+    admission: StrandedAdmissionReceipt
+    effect: StrandedAdmissionRow
+
+
+async def _stranded_admissions_response(
+    session: AsyncSession, *, agent_id: UUID | None
+) -> StrandedAdmissionsResponse:
+    report = await stranded_admissions(
+        session, now=datetime.now(UTC), agent_id=agent_id
+    )
+    return StrandedAdmissionsResponse(
+        active_bench_version=report.active_bench_version,
+        rollout_id=report.rollout.rollout_id if report.rollout is not None else None,
+        total=len(report.items),
+        items=[
+            StrandedAdmissionRow(
+                **{
+                    **asdict(item),
+                    "tickets": [
+                        StrandedAdmissionTicketRow(**asdict(ticket))
+                        for ticket in item.tickets
+                    ],
+                }
+            )
+            for item in report.items
+        ],
+    )
+
+
+@router.get(
+    "/stranded-previous-era/admissions", response_model=StrandedAdmissionsResponse
+)
+async def get_stranded_admissions(
+    _: AdminDep,
+    session: SessionDep,
+    agent_id: UUID | None = None,
+) -> StrandedAdmissionsResponse:
+    """Read every audited stranded admission on the active era and its effect.
+
+    Read-only. ``admitted`` is the live admission predicate; ``ticket_state``
+    and ``tickets`` show active-version lease progress toward quorum, and
+    ``first_lease_at`` is the earliest active-version lease.
+    """
+
+    return await _stranded_admissions_response(session, agent_id=agent_id)
+
+
+@router.post(
+    "/stranded-previous-era/{agent_id}/admit",
+    response_model=StrandedAdmissionResponse,
+)
+async def admit_stranded_previous_era(
+    _: AdminDep,
+    session: SessionDep,
+    generator: GeneratorDep,
+    agent_id: UUID,
+    payload: AdminStrandedAdmissionRequest,
+) -> StrandedAdmissionResponse:
+    """Admit ONE stranded previous-era submission onto the activated era.
+
+    Guards: the exact confirmation phrase, the expected active version, the
+    exact artifact SHA, the expected previous-era score count, membership of
+    the stranded list (scored/live, previous-era scores, no active score, no
+    admission path), not withdrawn, and a screened image the active contract
+    can lease. Pins the active-version dataset, appends the agent to the
+    activated rollout after its frozen cohort, and audits actor and reason, so
+    the post-activation top-up lane leases it out of ``scored``.
+    """
+    expected_confirmation = stranded_admission_confirmation(
+        agent_id, payload.expected_active_version
+    )
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f'type "{expected_confirmation}" exactly to confirm this operation',
+        )
+    try:
+        result = await admit_stranded_previous_era_agent(
+            session,
+            generator=generator,
+            now=datetime.now(UTC),
+            agent_id=agent_id,
+            expected_active_version=payload.expected_active_version,
+            expected_sha256=payload.expected_sha256.lower(),
+            expected_previous_score_count=payload.expected_previous_score_count,
+            actor=payload.actor,
+            reason=payload.reason,
+        )
+    except StrandedAgentNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DataPipelineError as exc:
+        raise _generator_unavailable(payload.expected_active_version, exc) from exc
+    except RolloutConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    effects = await _stranded_admissions_response(session, agent_id=agent_id)
+    if not effects.items:
+        raise HTTPException(
+            status_code=500, detail="admission committed but its audit row is missing"
+        )
+    return StrandedAdmissionResponse(
+        admission=StrandedAdmissionReceipt(
+            rollout_id=result.rollout_id,
+            bench_version=result.bench_version,
+            position=result.position,
+            dataset_sha256=result.dataset_sha256,
+            seed_source=result.seed_source,
+            rendered=result.rendered,
+        ),
+        effect=effects.items[0],
+    )
 
 
 @router.get("/{desired_version}")
@@ -731,6 +1067,10 @@ async def start_rollout(
         request.app.state.config.inference_proxy if request is not None else None
     )
     config_blocker = _inference_proxy_start_blocker(target, inference_config)
+    if config_blocker is None:
+        config_blocker = await _decision_lane_start_blocker(
+            session, target, inference_config
+        )
     if config_blocker is not None:
         raise HTTPException(status_code=409, detail=config_blocker)
     await _require_rollout_start_capacity(

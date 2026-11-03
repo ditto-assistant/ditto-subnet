@@ -232,6 +232,12 @@ class ScreenerConfig:
     """L4-only output cap; None inherits the existing L2 completion cap."""
     l2_max_completion_request_seconds: float | None = None
     """Per-turn L2/L3 wall-clock cap; None derives it from the completion budget."""
+    probe_review_key_file: str | None = None
+    """Node-local Router key for the report-only probe reviewer; None disables it."""
+    probe_review_base_url: str = "https://router.heyditto.ai/v1"
+    """OpenAI-compatible gateway the probe reviewer calls with that key."""
+    probe_review_model: str = "anthropic/claude-sonnet-5.5"
+    """Model the probe reviewer requests."""
 
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured."""
@@ -503,6 +509,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         l2_max_completion_request_seconds=_parse_optional_float(
             "SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS"
         ),
+        probe_review_key_file=os.environ.get("SCREENER_PROBE_REVIEW_KEY_FILE") or None,
+        probe_review_base_url=os.environ.get(
+            "SCREENER_PROBE_REVIEW_BASE_URL", "https://router.heyditto.ai/v1"
+        ),
+        probe_review_model=os.environ.get(
+            "SCREENER_PROBE_REVIEW_MODEL", "anthropic/claude-sonnet-5.5"
+        ),
     )
     if not config.signing_source_present():
         raise ScreenerConfigError(
@@ -596,11 +609,12 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if config.l2_review_model not in {
         "openai/gpt-5.6-terra",
         "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
         "moonshotai/kimi-k3",
     }:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra, "
-            "openai/gpt-6-sol, or moonshotai/kimi-k3"
+            "openai/gpt-6-sol, openai/gpt-6.1-terra, or moonshotai/kimi-k3"
         )
     if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
         raise ScreenerConfigError(
@@ -618,9 +632,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_L2_FALLBACK_MODELS must be z-ai/glm-5.2, optionally "
             "followed by openai/gpt-5.6-sol for legacy revisions"
         )
-    if config.l3_review_model not in {"openai/gpt-5.6-sol", "openai/gpt-6-sol"}:
+    if config.l3_review_model not in {
+        "openai/gpt-5.6-sol",
+        "openai/gpt-6-sol",
+        "openai/gpt-6.1-terra",
+    }:
         raise ScreenerConfigError(
-            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol or openai/gpt-6-sol"
+            "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol, "
+            "openai/gpt-6-sol, or openai/gpt-6.1-terra"
         )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(
@@ -643,9 +662,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError("SCREENER_L2_WORKSPACE_ROOT must be absolute")
     if not 1 <= config.l2_max_steps <= 256:
         raise ScreenerConfigError("SCREENER_L2_MAX_STEPS must be between 1 and 256")
-    if not 30 <= config.l2_timeout_seconds <= 1_800:
+    if not 30 <= config.l2_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
-            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 1800"
+            "SCREENER_L2_TIMEOUT_SECONDS must be between 30 and 3600"
         )
     if not 1 <= config.l2_max_output_tokens <= 1_000_000:
         raise ScreenerConfigError(

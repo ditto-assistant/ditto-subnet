@@ -13,7 +13,7 @@ path = "src/bin/dittobench-miner.rs"
 # The Ditto agent + memory harness (public git dep), pinned to a known-good
 # ditto-harness commit for reproducible builds. Bump `rev` deliberately: set it
 # to the new commit, `cargo update -p ditto-harness`, then run the full suite.
-ditto-harness = { git = "https://github.com/ditto-assistant/ditto-harness", rev = "b2c647b6e061ba415c9846fd2fafa5cb34cf3d98" }
+ditto-harness = { git = "https://github.com/ditto-assistant/ditto-harness", rev = "51e06e3b5e3d7884b1cab57b0309780a2a0bc483" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

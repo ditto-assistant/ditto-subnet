@@ -305,6 +305,92 @@ class ShadowReviewObservationResponse(BaseModel):
     accepted: bool
 
 
+MAX_PROBE_BATTERY_LEADS = 32
+
+
+class ProbeBatteryLead(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    item_id: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+
+
+class ProbeReviewFinding(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    invariant: Annotated[str, Field(pattern=r"^I[1-8]$")]
+    verified: bool
+    citations: tuple[Annotated[str, Field(max_length=170)], ...] = ()
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewFinding:
+        if len(self.citations) > 4:
+            raise ValueError("probe review finding has too many citations")
+        return self
+
+
+class ProbeReviewSummary(BaseModel):
+    """Bounded report-only reviewer agent result: no claims or transcripts."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    status: Literal[
+        "complete",
+        "no_verdict",
+        "budget_exhausted",
+        "untracked_spend",
+        "skipped",
+        "timeout",
+        "error",
+    ]
+    verified: bool = False
+    invariants: tuple[Annotated[str, Field(pattern=r"^I[1-8]$")], ...] = ()
+    findings: tuple[ProbeReviewFinding, ...] = ()
+    requests: Annotated[int, Field(ge=0, le=1000)] = 0
+    prompt_tokens: Annotated[int, Field(ge=0, le=50_000_000)] = 0
+    completion_tokens: Annotated[int, Field(ge=0, le=5_000_000)] = 0
+    cost_usd: Annotated[float, Field(ge=0, le=50, allow_inf_nan=False)] = 0.0
+    review_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    # Content-free failure label: stage, exception class and HTTP status.
+    error: Annotated[str, Field(pattern=r"^[A-Za-z0-9_:]{1,80}$")] | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeReviewSummary:
+        if len(self.findings) > 4 or len(self.invariants) > 8:
+            raise ValueError("probe review summary is too large")
+        return self
+
+
+class ProbeBatteryObservationRequest(BaseModel):
+    """Bounded zero-token probe battery leads for an active attempt.
+
+    Report-only: a lead is an unverified black-box observation and never
+    participates in the signed decision.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    attempt_id: UUID
+    artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    settings_revision: Annotated[int, Field(ge=1)]
+    settings_scope: Annotated[str, Field(pattern=r"^(?:\*|[a-zA-Z0-9._-]{1,63})$")]
+    settings_checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    status: Literal["complete", "calibration_failed", "timeout", "error"]
+    encoding: Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")] | None = None
+    seed_first: bool = False
+    items_run: Annotated[int, Field(ge=0, le=128)] = 0
+    probe_count: Annotated[int, Field(ge=0, le=512)] = 0
+    leads: tuple[ProbeBatteryLead, ...] = ()
+    battery_ms: Annotated[int, Field(ge=0, le=3_600_000)] = 0
+    review: ProbeReviewSummary | None = None
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> ProbeBatteryObservationRequest:
+        if len(self.leads) > MAX_PROBE_BATTERY_LEADS:
+            raise ValueError("probe battery has too many leads")
+        return self
+
+
 __all__ = [
     "SCREENING_POLICY_VERSION",
     "ScreenerQueueItem",
@@ -314,6 +400,10 @@ __all__ = [
     "ScreenerHeartbeatResponse",
     "ShadowReviewObservationRequest",
     "ShadowReviewObservationResponse",
+    "ProbeBatteryLead",
+    "ProbeBatteryObservationRequest",
+    "ProbeReviewFinding",
+    "ProbeReviewSummary",
     "ScreenerProgress",
     "ScreenerProgressStage",
     "ScreenerRuntimeState",

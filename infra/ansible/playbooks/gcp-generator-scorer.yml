@@ -1,0 +1,18 @@
+---
+# Converge the private generator-competition scorer. It builds and runs miner
+# generators in a networkless Docker sandbox and holds only its Platform bearer.
+#
+#   GCP_OSLOGIN_USER=... ansible-playbook -i infra/ansible/inventory/gcp.yml \
+#     infra/ansible/playbooks/gcp-generator-scorer.yml \
+#     -e generator_scorer_revision=<released commit>
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_generator_scorer
+
+- name: Converge the generator competition scorer
+  hosts: role_generator_scorer
+  become: true
+  gather_facts: true
+  roles:
+    - base
+    - generator_scorer

@@ -5,16 +5,23 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.inference_costs import (
+    InferenceGrantCostGroup,
+    InferenceGrantCostSnapshot,
+)
 from ditto.api_models.inference_failure_taxonomy import (
+    ConfirmationFailureGroup,
+    ConfirmationFailureKind,
+    ConfirmationFailureLaneWindow,
     InferenceFailureGroup,
     InferenceFailureLaneWindow,
     InferenceFailureTaxonomy,
@@ -43,9 +50,15 @@ from ditto.api_server.runtime_profiles import (
     RuntimeProfileStore,
 )
 from ditto.db.models import ProviderOutageCircuit
+from ditto.db.queries.confirmation_failure_taxonomy import (
+    CONFIRMATION_FAILURE_GROUP_LIMIT,
+    CONFIRMATION_FAILURE_WINDOWS_SECONDS,
+    load_confirmation_failure_taxonomy_rows,
+)
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
 )
+from ditto.db.queries.inference_costs import load_inference_grant_costs
 from ditto.db.queries.inference_failure_taxonomy import (
     FAILURE_GROUP_LIMIT,
     FAILURE_WINDOWS_SECONDS,
@@ -65,6 +78,42 @@ ActorDep = Annotated[
     Header(alias="X-Admin-Actor", max_length=320),
 ]
 CAPTURE_CONFIRMATION = "CAPTURE RUNTIME PROFILE"
+
+
+@router.get(
+    "/admin/inference-grant-costs",
+    response_model=InferenceGrantCostSnapshot,
+)
+async def get_inference_grant_costs(
+    _admin: AdminDep,
+    session: SessionDep,
+    hours: Annotated[int, Query(ge=1, le=744)] = 24,
+) -> InferenceGrantCostSnapshot:
+    """Full recorded cost of grants created in a bounded window, not an invoice."""
+    observed_at = datetime.now(UTC)
+    window_start = observed_at - timedelta(hours=hours)
+    rows = await load_inference_grant_costs(
+        session, window_start=window_start, window_end=observed_at
+    )
+    groups = [InferenceGrantCostGroup.model_validate(dict(row)) for row in rows]
+    unknown = [group for group in groups if group.classification_basis == "unknown"]
+    return InferenceGrantCostSnapshot(
+        observed_at=observed_at,
+        window_start=window_start,
+        window_end=observed_at,
+        groups=groups,
+        total_cost_microusd=sum(
+            group.chat_cost_microusd + group.embedding_cost_microusd for group in groups
+        ),
+        unclassified_cost_microusd=sum(
+            group.chat_cost_microusd + group.embedding_cost_microusd
+            for group in unknown
+        ),
+        grants=sum(group.grants for group in groups),
+        unclassified_grants=sum(group.grants for group in unknown),
+    )
+
+
 _CAPACITY_RE = re.compile(
     r"^ditto_inference_admission_at_capacity_total\{"
     r'lane="([^"]+)",scope="([^"]+)"\} ([0-9.eE+-]+)$'
@@ -153,7 +202,9 @@ async def get_inference_runtime_metrics(
     windows = [
         InferenceLaneWindow(
             window_seconds=int(row["window_seconds"]),
-            request_kind=cast(Literal["chat", "embedding"], str(row["request_kind"])),
+            request_kind=cast(
+                Literal["chat", "embedding", "decision"], str(row["request_kind"])
+            ),
             calls=int(row["calls"]),
             calls_per_second=round(float(row["calls_per_second"]), 4),
             tokens=int(row["tokens"]),
@@ -184,7 +235,7 @@ async def get_inference_runtime_metrics(
     }
     lanes: list[InferenceLaneCurrent] = []
     for row in current_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         if kind == "chat":
             per_ticket = settings.chat_per_ticket_concurrency
             per_validator = settings.chat_per_validator_concurrency
@@ -265,7 +316,7 @@ async def get_inference_failure_taxonomy(
         groups.append(
             InferenceFailureGroup(
                 window_seconds=key[0],
-                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
                 model=str(row["model"]),
                 gateway=cast(InferenceGateway, str(row["gateway"])),
                 upstream_route=row["upstream_route"],
@@ -293,7 +344,7 @@ async def get_inference_failure_taxonomy(
         lanes.append(
             InferenceFailureLaneWindow(
                 window_seconds=key[0],
-                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
                 calls=int(row["calls"]),
                 settled=settled,
                 completed=int(row["completed"]),
@@ -308,6 +359,7 @@ async def get_inference_failure_taxonomy(
                 groups_truncated=group_total > group_count,
             )
         )
+    confirmation_lanes, confirmation_groups = await _confirmation_failure_rows(session)
     return InferenceFailureTaxonomy(
         observed_at=datetime.now(UTC),
         window_seconds=list(FAILURE_WINDOWS_SECONDS),
@@ -315,7 +367,87 @@ async def get_inference_failure_taxonomy(
         lanes=lanes,
         groups=groups,
         rate_limit_bursts=await _rate_limit_bursts(session, lanes),
+        confirmation_window_seconds=list(CONFIRMATION_FAILURE_WINDOWS_SECONDS),
+        confirmation_lanes=confirmation_lanes,
+        confirmation_groups=confirmation_groups,
     )
+
+
+async def _confirmation_failure_rows(
+    session: AsyncSession,
+) -> tuple[list[ConfirmationFailureLaneWindow], list[ConfirmationFailureGroup]]:
+    """Aggregate the confirmation grants the ordinary taxonomy cannot see.
+
+    ``inference_requests`` and ``confirmation_inference_requests`` are different
+    tables, so a confirmation provider rejection appears in neither ``lanes``
+    nor ``groups`` above however the windows are widened. LongMem lost 83% of
+    its bundles to provider rejections while this endpoint reported
+    ``rate_limited_failures: 0``.
+    """
+    lane_rows, group_rows = await load_confirmation_failure_taxonomy_rows(
+        session, group_limit=CONFIRMATION_FAILURE_GROUP_LIMIT
+    )
+    lanes = [
+        ConfirmationFailureLaneWindow(
+            window_seconds=int(row["window_seconds"]),
+            lane=cast(Literal["reader", "judge", "embedding"], str(row["lane"])),
+            calls=int(row["calls"]),
+            settled=int(row["settled"]),
+            completed=int(row["completed"]),
+            failed=int(row["failed"]),
+            in_flight=int(row["in_flight"]),
+            failed_without_provider=int(row["failed_without_provider"]),
+            failed_without_cost=int(row["failed_without_cost"]),
+            bundles_with_failure=int(row["bundles_with_failure"]),
+            failed_max_duration_ms=int(row["failed_max_duration_ms"]),
+            failed_p50_duration_ms=int(row["failed_p50_duration_ms"]),
+            failure_share=(
+                round(int(row["failed"]) / int(row["settled"]), 4)
+                if int(row["settled"]) > 0
+                else 0.0
+            ),
+        )
+        for row in lane_rows
+    ]
+    groups = [
+        ConfirmationFailureGroup(
+            window_seconds=int(row["window_seconds"]),
+            lane=cast(Literal["reader", "judge", "embedding"], str(row["lane"])),
+            model=str(row["model"]),
+            upstream_provider=(
+                str(row["upstream_provider"])
+                if row["upstream_provider"] is not None
+                else None
+            ),
+            provider_basis=cast(InferenceRouteBasis, str(row["provider_basis"])),
+            status=str(row["status"]),
+            failure_kind=cast(
+                ConfirmationFailureKind | None,
+                str(row["failure_kind"]) if row["failure_kind"] is not None else None,
+            ),
+            upstream_http_status=(
+                int(row["upstream_http_status"])
+                if row["upstream_http_status"] is not None
+                else None
+            ),
+            upstream_error_code=(
+                int(row["upstream_error_code"])
+                if row["upstream_error_code"] is not None
+                else None
+            ),
+            receipt_free=(
+                bool(row["receipt_free"]) if row["receipt_free"] is not None else None
+            ),
+            max_upstream_attempts=int(row["max_upstream_attempts"]),
+            calls=int(row["calls"]),
+            without_cost=int(row["without_cost"]),
+            bundles_affected=int(row["bundles_affected"]),
+            max_duration_ms=int(row["max_duration_ms"]),
+            p50_duration_ms=int(row["p50_duration_ms"]),
+        )
+        for row in group_rows
+    ]
+    return lanes, groups
 
 
 async def _rate_limit_bursts(
@@ -352,7 +484,7 @@ async def _rate_limit_bursts(
         )
     bursts: list[InferenceRateLimitBurst] = []
     for row in peak_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         count = rate_limited.get(kind, 0)
         peak = int(row["peak_global_concurrency"])
         returned = tickets.get(kind, [])

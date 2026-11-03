@@ -26,8 +26,6 @@ on:
         description: Exact 40-character commit to check out and test
         type: string
         required: false
-  pull_request:
-    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read
@@ -122,7 +120,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22
+          node-version: 22.23.4
 
       - name: Prove the trusted dashboard preview boundary
         run: node --test apps/platform/dashboard/preview/cloudflare-pages-worker.test.mjs

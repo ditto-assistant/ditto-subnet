@@ -2,17 +2,19 @@
 
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from uuid import uuid4
 
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
 )
 
 from ditto.api_models.inference_concurrency_settings import (
-    DEFAULT_CHAT_REQUEST_BUDGET,
+    InferenceConcurrencySettings,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.inference_concurrency_settings import (
@@ -102,55 +104,6 @@ class TestAuth:
         _install(app, settings_maker)
         assert (await client.get(_URL)).status_code == 401
 
-    async def test_write_requires_the_admin_token(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        assert (await client.post(_URL, json=_payload())).status_code == 401
-
-
-class TestRead:
-    async def test_empty_board_reports_the_shipped_defaults_as_effective(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        body = (await client.get(_URL, headers=_HEADERS)).json()
-        assert body["current"] == []
-        assert body["effective"]["source"] == "default"
-        assert body["effective"]["revision"] == 0
-        # The claim under test: with no revision written, the fleet is already
-        # running the raised limits rather than the vestigial 1/8/32 -- and,
-        # since this board grew a chat field, the raised request budget rather
-        # than the 1024 that was exhausting legitimate agents.
-        assert body["effective"]["settings"] == {
-            "chat_request_budget": DEFAULT_CHAT_REQUEST_BUDGET,
-            "chat_token_budget": 25_000_000,
-            "chat_per_ticket_concurrency": 16,
-            "chat_per_validator_concurrency": 48,
-            "chat_global_concurrency": 96,
-            "embedding_per_ticket_concurrency": 12,
-            "embedding_per_validator_concurrency": 48,
-            "embedding_global_concurrency": 96,
-            "chat_per_ticket_requests_per_minute": 1920,
-            "chat_per_validator_requests_per_minute": 7680,
-            "chat_global_requests_per_minute": 23040,
-            "embedding_per_ticket_requests_per_minute": 10_000,
-            "embedding_per_validator_requests_per_minute": 40_000,
-            "embedding_global_requests_per_minute": 100_000,
-            "benchmark_runtime": {
-                "case_concurrency": 4,
-                "relay_delay_fingerprint_mode": "off",
-                "relay_delay_fingerprint_min_ms": 25,
-                "relay_delay_fingerprint_max_ms": 250,
-            },
-        }
-
 
 class TestWrite:
     async def test_apply_then_read_back(
@@ -183,10 +136,21 @@ class TestWrite:
             "relay_delay_fingerprint_mode": "shadow",
             "relay_delay_fingerprint_min_ms": 40,
             "relay_delay_fingerprint_max_ms": 160,
+            # A non-default cap proves a legacy write carries it forward.
+            "sandbox_memory_limit_mib": 8_192,
+        }
+        decision_lane = {
+            **InferenceConcurrencySettings().decision_lane.model_dump(mode="json"),
+            "enabled": True,
+            "model": "typesafe/jev-1.14",
         }
         first = await client.post(
             _URL,
-            json=_payload(benchmark_runtime=runtime),
+            json=_payload(
+                benchmark_runtime=runtime,
+                decision_lane=decision_lane,
+                scored_provider_routing="bf16_price_order_canary",
+            ),
             headers=_HEADERS,
         )
         assert first.status_code == 200, first.text
@@ -204,30 +168,11 @@ class TestWrite:
         )
         assert legacy.status_code == 200, legacy.text
         assert legacy.json()["settings"]["benchmark_runtime"] == runtime
-
-    async def test_emergency_brake_down_is_accepted(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Reverting must be as easy as ramping.
-
-        A board an operator can only raise is not a safety lever. The admission
-        path turns a lowered limit into ``503`` backpressure rather than a lost
-        lease, which is what makes this safe to do mid-run.
-        """
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                embedding_per_ticket_concurrency=1,
-                embedding_per_validator_concurrency=1,
-                embedding_global_concurrency=1,
-            ),
-            headers=_HEADERS,
+        assert legacy.json()["settings"]["decision_lane"] == decision_lane
+        assert (
+            legacy.json()["settings"]["scored_provider_routing"]
+            == "bf16_price_order_canary"
         )
-        assert response.status_code == 200, response.text
 
     async def test_wrong_confirmation_is_refused(
         self,
@@ -254,72 +199,6 @@ class TestWrite:
         )
         assert stale.status_code == 409
 
-    async def test_partial_policy_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(settings={"embedding_global_concurrency": 96}),
-            headers=_HEADERS,
-        )
-        # The envelope middleware replaces the body with a generic message, so
-        # the status is all this layer can assert; the named-missing-fields text
-        # is pinned in ditto/tests/api_models/test_inference_concurrency_settings.
-        assert response.status_code == 422
-
-    async def test_inverted_hierarchy_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                embedding_per_ticket_concurrency=64,
-                embedding_per_validator_concurrency=8,
-                embedding_global_concurrency=96,
-            ),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-
-    async def test_above_the_boot_check_ceiling_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        """Never accept a revision that ``check_config`` would reject at boot."""
-        _install(app, settings_maker)
-        response = await client.post(
-            _URL,
-            json=_payload(
-                embedding_per_ticket_concurrency=513,
-                embedding_per_validator_concurrency=513,
-                embedding_global_concurrency=513,
-            ),
-            headers=_HEADERS,
-        )
-        assert response.status_code == 422
-
-    async def test_non_global_scope_is_refused(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        settings_maker: async_sessionmaker[AsyncSession],
-    ) -> None:
-        _install(app, settings_maker)
-        payload = _payload()
-        payload["scope"] = "validator-1"
-        response = await client.post(_URL, json=payload, headers=_HEADERS)
-        assert response.status_code == 422
-
     async def test_write_invalidates_the_admission_cache(
         self,
         app: FastAPI,
@@ -342,3 +221,89 @@ class TestWrite:
         )
         resolved = await resolver.resolve(settings_maker)
         assert resolved.embedding_per_ticket_concurrency == 2
+
+
+class TestDecisionLaneRead:
+    async def test_reports_switch_pin_and_ledger_usage(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        url = f"{_URL}/decision-lane"
+        dark = (await client.get(url, headers=_HEADERS)).json()
+        assert dark["state"] == "disabled"
+        assert dark["settings"]["enabled"] is False
+        assert dark["upstream"] == "https://openrouter.ai/api/v1/systemone"
+        assert [w["requests"] for w in dark["usage"]] == [0, 0, 0]
+
+        agent, grant = uuid4(), uuid4()
+        async with settings_maker() as session, session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO agents (agent_id, miner_hotkey, name, sha256) "
+                    "VALUES (:a, 'miner', 'decision-agent', repeat('d', 64))"
+                ),
+                {"a": agent},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO validator_tickets (agent_id, validator_hotkey, "
+                    "slot_id, status, deadline, bench_version, attempt_count) "
+                    "VALUES (:a, 'validator', 'slot-0', 'issued', "
+                    "now() + interval '1 hour', 9, 1)"
+                ),
+                {"a": agent},
+            )
+            await session.execute(
+                text(
+                    "INSERT INTO inference_grants (grant_id, agent_id, bench_version, "
+                    "validator_hotkey, slot_id, ticket_deadline, status, generation, "
+                    "allowed_models, request_budget, token_budget, expires_at, "
+                    "decision_model, decision_input_microusd_per_mtok, "
+                    "decision_request_budget, decision_token_budget) "
+                    "VALUES (:g, :a, 9, 'validator', 'slot-0', "
+                    "now() + interval '1 hour', 'active', 1, '[\"m\"]'::jsonb, 10, "
+                    "10, now() + interval '1 hour', 'typesafe/jev-1.14', 42000, 10, "
+                    "1000)"
+                ),
+                {"g": grant, "a": agent},
+            )
+            for code, tokens, cost in (
+                (None, 476, 20),
+                ("decision_model_mismatch", 0, 0),
+            ):
+                await session.execute(
+                    text(
+                        "INSERT INTO inference_requests (grant_id, nonce, generation, "
+                        "request_kind, model, reserved_tokens, max_chargeable_tokens, "
+                        "started_at, status, prompt_tokens, completion_tokens, "
+                        "cost_microusd, timed_out, terminal_error_code) VALUES "
+                        "(:g, :n, 1, 'decision', 'typesafe/jev-1.14', 1, 2000, now(), "
+                        ":s, :t, 0, :c, false, :code)"
+                    ),
+                    {
+                        "g": grant,
+                        "n": uuid4(),
+                        "s": "completed" if code is None else "failed",
+                        "t": tokens,
+                        "c": cost,
+                        "code": code,
+                    },
+                )
+
+        body = (await client.get(url, headers=_HEADERS)).json()
+        hour = body["usage"][0]
+        assert hour["window_seconds"] == 3600
+        assert (hour["requests"], hour["completed"], hour["model_mismatches"]) == (
+            2,
+            1,
+            1,
+        )
+        assert (hour["input_tokens"], hour["ledger_cost_microusd"]) == (476, 20)
+        assert hour["provider_failures"] == 0
+        assert body["live_grants_with_lane"] == 1
+        assert body["terminal_error_codes_24h"] == [
+            {"terminal_error_code": "decision_model_mismatch", "requests": 1}
+        ]

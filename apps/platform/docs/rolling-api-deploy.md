@@ -6,6 +6,10 @@ failure detection to send new requests to standby while a fork-mode PM2 reload
 stops the primary port. The standby serves the same HTTP routes but does not
 start the provider-route refresher or any other singleton background loop. It
 hydrates the validator-name snapshot from the shared durable cache at boot.
+Both upstreams share Caddy's restart handover (`platform_api_restart_try_duration`,
+SN-426): if neither process accepts a connection, Caddy keeps re-dialing for
+that window, and a request one process already accepted is never replayed on
+the other.
 
 The standby's PostgreSQL pool is capped at 8 connections. The budget is
 primary 30 + development 30 + two inference relays at 12 each + standby 8 =

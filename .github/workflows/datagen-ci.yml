@@ -1,12 +1,9 @@
 name: DittoBench datagen CI
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - research/dittobench-datagen/**
-      - .github/workflows/datagen-ci.yml
-
 permissions:
   contents: read
 
@@ -27,7 +24,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.23"
+          go-version: "1.27.3"
           cache-dependency-path: research/dittobench-datagen/go.mod
       - name: Gofmt
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
@@ -38,10 +35,11 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Test
-        # The full v13 seed sweeps exceed Go's default per-package 10m on
-        # hosted runners. Preserve every seed and assertion with a bounded
-        # timeout rather than reducing the immutable-contract coverage.
-        run: go test -timeout 20m ./...
+        # Shared seed sweeps generate each artifact once per test binary and
+        # the heavy tests run in parallel, so the suite fits well inside this
+        # bound on a 4-vCPU runner. A timeout here means a regression in test
+        # cost, not a reason to raise the bound.
+        run: go test -timeout 15m ./...
       - name: Grader audit release gate
         run: go run ./cmd/graderaudit -release-gate
       - name: Determinism

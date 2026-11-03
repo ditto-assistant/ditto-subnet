@@ -8,13 +8,10 @@ import (
 )
 
 func TestQuantityV13DeliveredWaveControl(t *testing.T) {
-	profile, _ := gen.ProfileForVersion("full", 13)
+	t.Parallel()
 	total, passed := 0, 0
-	for seed := int64(1); seed <= 10; seed++ {
-		a, err := gen.GenerateDataset(seed, profile, 13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, a := range probeArtifacts(t, 13, seedRange(1, 3)...) {
+		seed := a.Seed
 		for _, c := range a.MemoryCases {
 			if !strings.HasPrefix(c.QuestionType, "record-quantity-") {
 				continue

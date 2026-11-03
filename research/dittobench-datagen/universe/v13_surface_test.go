@@ -83,6 +83,7 @@ func TestV13ProjectIdentityPermutesClausesAndOmitsVendor(t *testing.T) {
 // for many seeds (validatePlan proves each frame answerable, leak-free and
 // constraint-complete) and checks every oracle renders several distinct frames.
 func TestV13QuestionPlansValidateAndVaryFrames(t *testing.T) {
+	t.Parallel()
 	frames := map[string]map[string]bool{}
 	for seed := int64(1); seed <= 40; seed++ {
 		w := GenerateForVersion(seed, 3, protocol.BenchVersionV13)

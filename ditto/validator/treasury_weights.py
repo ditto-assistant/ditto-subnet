@@ -98,7 +98,7 @@ def fold_treasury_weights(
         raise ValueError("collector cannot be the burn destination")
     return service_first_weights(
         weights,
-        service_bps=validated.policy.service_bps,
+        service_bps=validated.service_bps,
         burn_share=burn_share,
         paid_miner_fraction=paid_miner_fraction,
         collector_hotkey=validated.policy.collector_hotkey,

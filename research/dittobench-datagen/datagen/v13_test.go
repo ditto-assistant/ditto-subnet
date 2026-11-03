@@ -71,6 +71,7 @@ func TestV13FillerGrammarsCarryExactlyOnePlaceholder(t *testing.T) {
 // TestV13GrammarsAreWellFormed expands every v13 grammar many times and fails
 // on an unresolved #symbol#, an empty prompt, or doubled spaces.
 func TestV13GrammarsAreWellFormed(t *testing.T) {
+	t.Parallel()
 	check := func(name string, grammar persona.Grammar, slots map[string]string) {
 		r := persona.HashRand(1, "wellformed", name)
 		for i := 0; i < 400; i++ {
@@ -109,6 +110,7 @@ func TestV13GrammarsAreWellFormed(t *testing.T) {
 // TestV13RouterKeywordGuardHolds re-runs the N4 router-leak guard over the v13
 // surface for the guarded categories.
 func TestV13RouterKeywordGuardHolds(t *testing.T) {
+	t.Parallel()
 	res := map[string]*regexp.Regexp{}
 	for _, g := range routerLeakGuard {
 		for _, tok := range g.banned {
@@ -142,6 +144,7 @@ func TestV13RouterKeywordGuardHolds(t *testing.T) {
 // (nickname, alias, needle subject) always present, and the v8 fixed frames
 // never reproduced verbatim.
 func TestV13ToolSurfacesVaryAndKeepAnchors(t *testing.T) {
+	t.Parallel()
 	frames := map[string]map[string]bool{}
 	note := func(category, prompt string) {
 		if frames[category] == nil {
@@ -217,6 +220,7 @@ func TestV13ToolSurfacesVaryAndKeepAnchors(t *testing.T) {
 // TestV13ArgKeyCategoriesStillPinRequiredArgs keeps the exact-argument contract:
 // a verbatim filler category still records RequiredArgs[argKey]=filler.
 func TestV13ArgKeyCategoriesStillPinRequiredArgs(t *testing.T) {
+	t.Parallel()
 	pinned := map[string]int{}
 	for seed := int64(1); seed <= 30; seed++ {
 		ds, err := GenerateForVersion(seed, 100, protocol.BenchVersionV13)
@@ -271,6 +275,7 @@ func TestV13ToolBytesBelowV13AreUnchanged(t *testing.T) {
 // itself. A verbatim value (the proper-noun proxy used to skip capitalised
 // multi-word fonts such as "JetBrains Mono") is a baked lookup.
 func TestV13CapabilityAliasesNeverRenderTheCanonicalValue(t *testing.T) {
+	t.Parallel()
 	checked := map[string]int{}
 	for seed := int64(1); seed <= 30; seed++ {
 		ds, err := GenerateForVersion(seed, 100, protocol.BenchVersionV13)

@@ -206,7 +206,14 @@ class PublicActivityMCP:
         if not notification:
             body["id"] = self.next_id
         with self.client.stream(
-            "POST", PUBLIC_MCP, headers=self.headers, json=body
+            "POST",
+            PUBLIC_MCP,
+            headers=self.headers,
+            json=body,
+            timeout=130
+            if method == "tools/call"
+            and params.get("name") == "record_treasury_receipt"
+            else 60,
         ) as response:
             if response.status_code not in {200, 202, 204}:
                 if response.status_code == 429 or response.status_code >= 500:
@@ -496,12 +503,10 @@ def observer_tick(
         settings.get("allocation_version") != 2
         or (settings.get("treasury_hotkey"), settings.get("treasury_coldkey"))
         != (policy.collector_hotkey, policy.collector_coldkey)
-        or sorted(
-            (b["bucket_id"], b["holding_coldkey"], b["allocation_bps"]) for b in buckets
-        )
-        != sorted(
-            (b.bucket_id, b.holding_coldkey, b.allocation_bps) for b in policy.buckets
-        )
+        or sorted((b["bucket_id"], b["holding_coldkey"]) for b in buckets)
+        != sorted((b.bucket_id, b.holding_coldkey) for b in policy.buckets)
+        # Exact for a fixed signed bucket; inside the signed range otherwise.
+        or not policy.admits({b["bucket_id"]: b["allocation_bps"] for b in buckets})
     ):
         raise ValueError("observer destinations differ from historical offline policy")
     queue = ActivityQueue(state_path, config, initialize=initialize_selector_state)

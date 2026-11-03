@@ -19,6 +19,9 @@ const observation = {
   offline_epoch_verified: false,
   weight_effect: 'none',
   can_enforce_weights: false,
+  producer: null,
+  producer_loop: null,
+  chain_reads: [],
   ledger_schedule_probe_status: 'not_checked',
   ledger_schedule_probe_epoch: null,
   ledger_schedule_probe_block: null,
@@ -33,6 +36,24 @@ afterEach(() => {
 })
 
 describe('treasury ledger observation boundary', () => {
+  it('preserves bounded producer state and drops exception text', async () => {
+    const producer = {
+      scope: 'this_platform_process', in_progress: false, epoch_index: 25599,
+      stage: 'treasury_observation', started_at: '2026-10-08T15:11:00Z',
+      finished_at: '2026-10-08T15:11:10Z', elapsed_seconds: 10,
+      lock_wait_seconds: 0, outcome: 'error',
+      failure: { kind: 'value', location: 'ditto/api_server/treasury_shadow.py:48', read_step: null },
+      last_success_epoch: null, last_success_at: null,
+    }
+    const diagnostic = { ...observation, producer }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      ...diagnostic, producer: { ...producer, raw_trace: 'secret',
+        failure: { ...producer.failure, message: 'private exception' } },
+    })))
+    expect(await fetchTreasuryLedgerReadiness()).toEqual(diagnostic)
+    expect(diagnostic.can_enforce_weights).toBe(false)
+  })
   it('preserves verified enforcing diagnostics without turning them into spending authority', async () => {
     const pin = JSON.parse(readFileSync(new URL(
       '../../../../packages/ditto-screening-protocol/tests/fixtures/treasury_enforcing_pin_v2.json',
@@ -73,6 +94,7 @@ describe('treasury ledger observation boundary', () => {
     delete legacy.ledger_schedule_probe_block
     delete legacy.ledger_schedule_matches_stored_pin
     delete legacy.ledger_schedule_failure_kind
+    delete legacy.chain_reads
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(legacy)))
     expect(await fetchTreasuryLedgerReadiness()).toEqual(observation)
@@ -89,6 +111,23 @@ describe('treasury ledger observation boundary', () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ ...diagnostic, future_secret: 'never publish' })))
     expect(await fetchTreasuryLedgerReadiness()).toEqual(diagnostic)
+  })
+  it('retains completed chain-read failures after recovery and strips provider text', async () => {
+    const read = {
+      scope: 'this_platform_process', operation: 'requester_activation',
+      attempts: 2, successes: 1, failures: 1,
+      last_finished_at: '2026-10-08T23:00:02Z', last_elapsed_seconds: 2,
+      last_failure_at: '2026-10-08T23:00:00Z', last_failure_elapsed_seconds: 8,
+      last_failure_stage: 'identity', last_failure_step: 'uid_binding',
+      last_failure_kind: 'timeout', last_failure_request_id: 'synthetic-request',
+    }
+    process.env.DITTO_ADMIN_API_TOKEN = 'synthetic-test-token'
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({
+      ...observation, chain_reads: [{ ...read, provider_url: 'private' }],
+    })))
+    expect(await fetchTreasuryLedgerReadiness()).toEqual({
+      ...observation, chain_reads: [read],
+    })
   })
   it('preserves known shadow evidence and ignores future fields at every level', async () => {
     const pin = JSON.parse(readFileSync(new URL(

@@ -1,0 +1,85 @@
+# Maintainer-provided CLA documents
+
+No production CLA text is supplied by this implementation. Maintainers and
+counsel provide the approved document as `CLA-v<N>.md` in this directory.
+Do not use test fixtures as a production document, and do not replace an
+existing version's text. A text change requires a new version.
+
+Publish the exact UTF-8 bytes and their SHA-256 through Backroom's
+`publish_cla_version`, with the version, effective date, operator reason and
+`PUBLISH CLA <version> <sha256>` confirmation. Platform validates the digest
+and persists immutable text/metadata. The publication and effective dates are
+public; versions and effective dates must advance monotonically.
+
+Publication does not enable the gate. The migration seeds the policy as
+`off`. Read adoption and history with `get_cla_policy`, then use
+`set_cla_policy` for `shadow`. Shadow
+accepts unsigned artifacts and counts each accepted one without refusing it.
+Announce the effective date in miner docs before choosing `enforce`. Enforce
+requires currently effective published text, and every current or scheduled
+version must have had at least 24 hours notice; `get_cla_policy` reports
+`earliest_enforcement_at`. An effective new version requires a new receipt
+before the next contribution.
+
+While enforcement is on, publishing another version requires at least 24
+hours notice. `get_cla_policy` exposes the minimum notice and earliest allowed
+activation time. Miners can sign a published future version with
+`ditto cla sign --version <N>` before activation. Configure a positive
+`DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE` to limit public CLA signing as well as
+uploads. Signing is idempotent: each hotkey has at most one receipt per
+version, and signing again returns it. Invalid documents, used nonces and
+already-signed versions are answered before chain lookup.
+
+The CLI downloads the registry's exact published bytes, checks them against
+the SHA-256 that the same Platform publishes, saves the complete document for
+review, and requires explicit typed version/digest confirmation. The check
+catches transfer corruption, not a dishonest Platform: compare the digest with
+the reviewed `CLA-v<N>.md` in this directory for independent assurance. It
+signs only with the miner hotkey. Public receipts retain the signing inputs
+and finalized ownership snapshot.
+
+Upload checks enforce the same policy in Python and the Go relay. The CLI
+checks it before preflight, registration or payment, and Platform checks it
+again when committing a new artifact. Exact retries of an already accepted
+artifact remain idempotent. Existing scored agents retain their lifecycle and
+scores; no consent is synthesized for old submissions.
+
+While the gate is shadow or enforce, new artifact rows are linked to their
+exact consent receipt through `agent_cla_bindings`. This binds the stored artifact SHA and hotkey to the
+receipt without changing old agent rows. Model/base-licence validation is a
+separate artifact-validation policy, not a conclusion drawn from a signature.
+
+Adoption counts use distinct hotkeys with a non-rejected, non-banned,
+non-retired submission, explicitly reported as `active_hotkeys_basis`. They do
+not claim to be a current chain registration census. Unsigned includes
+outdated receipts. The shadow upload count covers accepted unsigned artifacts
+only: each observation commits with its upload, so rejected requests and exact
+accepted-artifact retries add none.
+
+## Activation and deploy order
+
+`off` is inert. Python and the Go relay still read the policy in
+`/upload/check`, under a shared `cla-policy` advisory lock when reserving a
+payment, and Python reads it again when committing the artifact. With the gate
+off, each of those is a single policy read: no agreement or receipt lookup,
+nothing refused or counted, and no `agent_cla_bindings` row, so uploads made
+before activation stay deletable even for miners who have already signed.
+Bindings are recorded only once the gate is shadow or enforce.
+
+The gate fails closed: without the migrated tables and the seeded policy
+revision, every non-recovery upload check returns 500. Apply the migration
+before any API or relay release that contains the gate. The standard deploy
+already does this: `apps/platform/scripts/update.sh` runs `alembic upgrade
+head` before it restarts the API, and the Platform Deploy workflow's
+`relay-release` job runs only after that deploy job succeeds. A manual relay
+rollout must follow the same order.
+
+Before choosing `enforce`:
+
+- Publishing and policy writes take the `cla-policy` lock exclusively, and new
+  uploads queue behind a waiting writer. A writer therefore waits at most five
+  seconds for in-flight uploads, then returns a retryable 503 without
+  changing anything. There is no deadlock cycle.
+- A miner who paid but has not committed when enforcement starts gets 403/1106.
+  They recover by running `ditto cla sign` and retrying the upload within the
+  payment-recovery window; announce this with the effective date.

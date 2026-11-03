@@ -1022,6 +1022,12 @@ def runtime_adapter(code):
             ("SubtensorModule", "transfer_stake_and_hotkey"),
         ],
     }
+    from ditto_screening_protocol.collector_receipts import (
+        COLLECTOR_POW_REGISTRATION_HASHES,
+    )
+
+    if code in COLLECTOR_POW_REGISTRATION_HASHES:
+        expected["Registration"].append(("SubtensorModule", "pow_register"))
     filters = [
         {
             "name": name,
@@ -1041,6 +1047,7 @@ def runtime_adapter(code):
         rpc_request=lambda *_: {"result": code},
         runtime_call=lambda *_args, **_kwargs: filters,
     )
+    c.query = lambda *_: "Yuma"
     return c, filters
 
 
@@ -1142,8 +1149,11 @@ def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, all
         return {"result": {"block": {"extrinsics": []}}}
 
     s.rpc_request = rpc
+    s.runtime_call = lambda *_args, **kw: runtime_adapter(
+        hashes[parent] if kw["block_hash"] == "b100" else hashes[post]
+    )[1]
     s.get_events = lambda _: []
-    c.query = lambda *_: 7
+    c.query = lambda _module, name, *_: "Yuma" if name == "SubnetEpochConsensus" else 7
     p = policy(runtime_code_hash=AUDITED_CODE_HASH)
     scripts = Path(__file__).resolve().parents[2] / "scripts"
     cls = runpy.run_path(str(scripts / "treasury_activity_observer.py"))[
@@ -1170,3 +1180,374 @@ def test_activity_and_epoch_readers_use_historical_guards_only(parent, post, all
     if post == "historic":
         with pytest.raises(ValueError, match="runtime changed"):
             c.guard_runtime(p, "b101")  # Default signing guard did not widen.
+
+
+@pytest.mark.parametrize("historical", [False, True])
+def test_v473_approval_cannot_authorize_v478_even_for_receipts(historical):
+    from ditto_screening_protocol.collector_receipts import V473_COLLECTOR_CODE_HASH
+
+    c, _ = runtime_adapter(AUDITED_CODE_HASH)
+    with pytest.raises(ValueError, match="runtime policy"):
+        c.guard_runtime(
+            policy(runtime_code_hash=V473_COLLECTOR_CODE_HASH),
+            "finalized",
+            historical=historical,
+        )
+
+
+@pytest.mark.parametrize("historical", [False, True])
+@pytest.mark.parametrize("consensus", ["Null", None, 0, {"Yuma": None}])
+def test_v478_non_yuma_or_unknown_consensus_refuses(consensus, historical):
+    c, _ = runtime_adapter(AUDITED_CODE_HASH)
+    c.query = lambda *_: consensus
+    with pytest.raises(ValueError, match="Yuma"):
+        c.guard_runtime(policy(), "finalized", historical=historical)
+
+
+def test_v478_requires_exact_new_registration_scope_and_unchanged_transfer_scope():
+    c, filters = runtime_adapter(AUDITED_CODE_HASH)
+    assert c.guard_runtime(policy(), "finalized") == AUDITED_CODE_HASH
+    calls = filters[0]["filter_mode"]["Allow"]
+    pow_call = calls.pop()
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "finalized")
+    calls.append(pow_call)
+    filters[1]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "finalized")
+
+
+def test_all_audited_receipt_hashes_are_forward_only():
+    from ditto_screening_protocol.collector_receipts import (
+        COLLECTOR_RUNTIME_ORDER,
+        collector_receipt_runtime,
+    )
+
+    for i, parent in enumerate(COLLECTOR_RUNTIME_ORDER):
+        for j, post in enumerate(COLLECTOR_RUNTIME_ORDER):
+            if i <= j:
+                assert collector_receipt_runtime(parent, post) == parent
+            else:
+                with pytest.raises(ValueError, match="transition"):
+                    collector_receipt_runtime(parent, post)
+    with pytest.raises(ValueError, match="not audited"):
+        collector_receipt_runtime(COLLECTOR_RUNTIME_ORDER[-1], "0x" + "aa" * 32)
+
+
+def test_v473_historical_receipt_does_not_require_new_consensus_storage():
+    from ditto_screening_protocol.collector_receipts import V473_COLLECTOR_CODE_HASH
+
+    c, _ = runtime_adapter(V473_COLLECTOR_CODE_HASH)
+    c.query = lambda *_: pytest.fail("v473 has no new consensus storage")
+    assert (
+        c.guard_runtime(policy(), "historical", historical=True)
+        == V473_COLLECTOR_CODE_HASH
+    )
+
+
+@pytest.mark.parametrize("release", ["v478", "v479", "v481", "v482"])
+def test_old_runtime_is_read_only_under_new_v483_policy(release):
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_RECEIPT_HASHES,
+        V478_COLLECTOR_CODE_HASH,
+        V479_READONLY_CODE_HASH,
+        V481_COLLECTOR_CODE_HASH,
+        V482_COLLECTOR_CODE_HASH,
+    )
+
+    code = {
+        "v478": V478_COLLECTOR_CODE_HASH,
+        "v479": V479_READONLY_CODE_HASH,
+        "v481": V481_COLLECTOR_CODE_HASH,
+        "v482": V482_COLLECTOR_CODE_HASH,
+    }[release]
+    c, filters = runtime_adapter(code)
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(), "current")
+    assert c.guard_runtime(policy(), "historical", historical=True) == code
+    # Historical admission still validates the observed native shape/consensus.
+    c.query = lambda *_: "Null"
+    with pytest.raises(ValueError, match="Yuma"):
+        c.guard_runtime(policy(), "historical", historical=True)
+    c.query = lambda *_: "Yuma"
+    calls = filters[0]["filter_mode"]["Allow"]
+    pow_call = next(x for x in calls if x["call_name"] == "pow_register")
+    calls.remove(pow_call)
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "historical", historical=True)
+    calls.append(pow_call)
+    # An old signature cannot bind a new current or historical read context.
+    with pytest.raises(ValueError, match="runtime policy"):
+        c.guard_runtime(policy(runtime_code_hash=code), "historical", historical=True)
+    filters[1]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "historical", historical=True)
+    assert V479_READONLY_CODE_HASH not in AUDITED_COLLECTOR_RECEIPT_HASHES
+
+
+def test_v483_is_the_exact_current_published_artifact():
+    # docs/audits/collector-finney-v483: official compressed WASM blake2b-256.
+    assert AUDITED_CODE_HASH == (
+        "0x99856ec64a61eb8011999a803bd336979512275214a173fea583abd5c89952d2"
+    )
+    c, _ = runtime_adapter(AUDITED_CODE_HASH)
+    assert c.guard_runtime(policy(), "current") == AUDITED_CODE_HASH
+
+
+def upgrade_consensus_adapter(*, decoded="Yuma", raw="0x00"):
+    from async_substrate_interface.errors import StorageFunctionNotFound
+
+    from ditto_screening_protocol.collector_receipts import (
+        V473_COLLECTOR_CODE_HASH,
+        V475_COLLECTOR_CODE_HASH,
+    )
+
+    c, filters = runtime_adapter(V475_COLLECTOR_CODE_HASH)
+    codes = {
+        "b99": V473_COLLECTOR_CODE_HASH,
+        "b100": V475_COLLECTOR_CODE_HASH,
+        "b101": V475_COLLECTOR_CODE_HASH,
+    }
+    calls = []
+    result = {"result": raw}
+
+    def missing(*_):
+        raise StorageFunctionNotFound("SubnetEpochConsensus")
+
+    def rpc(method, params):
+        calls.append((method, params))
+        return (
+            {"result": codes[params[1]]} if method == "state_getStorageHash" else result
+        )
+
+    def storage_key(module, name, params, *, block_hash):
+        calls.append(("metadata", (module, name, params, block_hash)))
+        return SimpleNamespace(
+            to_hex=lambda: "0xconsensus",
+            decode_scale_value=lambda data: (
+                calls.append(("decode", None if data is None else bytes(data.data)))
+                or SimpleNamespace(value=decoded)
+            ),
+        )
+
+    c.query = missing
+    c.substrate.get_block_hash = lambda n: FINNEY_GENESIS if n == 0 else f"b{n}"
+    c.substrate.get_block_number = lambda h: int(h[1:])
+    c.substrate.get_chain_finalised_head = lambda: "b200"
+    c.substrate.get_parent_block_hash = lambda h: f"b{int(h[1:]) - 1}"
+    c.substrate.rpc_request = rpc
+    c.substrate.create_storage_key = storage_key
+    return c, codes, calls, result, filters
+
+
+@pytest.mark.parametrize("raw", ["0x00", None])
+def test_v475_upgrade_uses_child_metadata_but_exact_upgrade_storage(raw):
+    from ditto_screening_protocol.collector_receipts import V475_COLLECTOR_CODE_HASH
+
+    c, _, calls, _, _ = upgrade_consensus_adapter(raw=raw)
+    assert (
+        c.guard_runtime(policy(), "b100", historical=True) == V475_COLLECTOR_CODE_HASH
+    )
+    assert (
+        "metadata",
+        ("SubtensorModule", "SubnetEpochConsensus", [118], "b101"),
+    ) in calls
+    assert ("state_getStorageAt", ["0xconsensus", "b100"]) in calls
+    assert ("decode", b"\x00" if raw is not None else None) in calls
+    assert not any(
+        method == "state_getStorageAt" and params[-1] == "b101"
+        for method, params in calls
+    )
+
+
+@pytest.mark.parametrize("decoded", ["Null", None, "Unknown"])
+def test_upgrade_metadata_does_not_replace_non_yuma_or_missing_value(decoded):
+    c, *_ = upgrade_consensus_adapter(decoded=decoded)
+    with pytest.raises(ValueError, match="Yuma"):
+        c.guard_runtime(policy(), "b100", historical=True)
+
+
+def test_current_signing_observation_never_uses_upgrade_metadata_fallback():
+    from async_substrate_interface.errors import StorageFunctionNotFound
+
+    c, codes, calls, _, _ = upgrade_consensus_adapter()
+    codes["b100"] = AUDITED_CODE_HASH
+    with pytest.raises(StorageFunctionNotFound):
+        c.guard_runtime(policy(), "b100")
+    assert not any(method == "metadata" for method, _ in calls)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "unknown_parent",
+        "same_parent",
+        "unfinalized_child",
+        "wrong_child_parent",
+        "changed_child_code",
+        "rpc_error",
+        "missing_result",
+        "invalid_hex",
+        "oversize_hex",
+    ],
+)
+def test_upgrade_metadata_fails_closed_on_incomplete_boundary_evidence(case):
+    from ditto_screening_protocol.collector_receipts import V475_COLLECTOR_CODE_HASH
+
+    c, codes, _, result, _ = upgrade_consensus_adapter()
+    if case == "unknown_parent":
+        codes["b99"] = "0x" + "aa" * 32
+    elif case == "same_parent":
+        codes["b99"] = V475_COLLECTOR_CODE_HASH
+    elif case == "unfinalized_child":
+        c.substrate.get_chain_finalised_head = lambda: "b100"
+    elif case == "wrong_child_parent":
+        c.substrate.get_parent_block_hash = lambda _: "other"
+    elif case == "changed_child_code":
+        codes["b101"] = AUDITED_CODE_HASH
+    elif case == "rpc_error":
+        result["error"] = {"code": -1}
+    elif case == "missing_result":
+        result.clear()
+    elif case == "invalid_hex":
+        result["result"] = "not-scale"
+    elif case == "oversize_hex":
+        result["result"] = "0x" + "00" * 33
+    with pytest.raises(ValueError):
+        c.guard_runtime(policy(), "b100", historical=True)
+
+
+def test_upgrade_consensus_still_validates_exact_native_filter_inventory():
+    c, _, _, _, filters = upgrade_consensus_adapter()
+    filters[0]["filter_mode"]["Allow"].append(
+        {"pallet_name": "Utility", "call_name": "batch", "constraint": None}
+    )
+    with pytest.raises(ValueError, match="scope"):
+        c.guard_runtime(policy(), "b100", historical=True)
+
+
+def surface_adapter(
+    live, digests, *, reference=None, reference_code=None, live_version=(484, 1)
+):
+    """Live runtime ``live``; ``digests`` maps metadata block -> surface digest."""
+    from ditto.treasury import collector_chain
+    from ditto_screening_protocol.collector_receipts import (
+        AUDITED_COLLECTOR_REFERENCE_BLOCK,
+    )
+
+    number, pinned = AUDITED_COLLECTOR_REFERENCE_BLOCK
+    c, filters = runtime_adapter(AUDITED_CODE_HASH)
+    reads = []
+
+    def rpc(method, params):
+        if method == "state_getRuntimeVersion":
+            spec, tx = (483, 1) if params[0] == pinned else live_version
+            return {"result": {"specVersion": spec, "transactionVersion": tx}}
+        at = params[1]
+        return {
+            "result": (reference_code or AUDITED_CODE_HASH) if at == pinned else live
+        }
+
+    def metadata(at):
+        reads.append(at)
+        if isinstance(digests[at], Exception):
+            raise digests[at]
+        return digests[at]
+
+    c.substrate.rpc_request = rpc
+    c.substrate.get_block_hash = lambda n: (
+        (reference or pinned) if n == number else FINNEY_GENESIS
+    )
+    c._metadata = metadata
+    collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+    return c, pinned, reads
+
+
+@pytest.fixture(name="fingerprint")
+def _fingerprint(monkeypatch):
+    from ditto.treasury import collector_chain
+
+    monkeypatch.setattr(
+        collector_chain,
+        "runtime_interface",
+        lambda metadata, _surface: SimpleNamespace(digest=metadata),
+    )
+    yield
+    collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("historical", [False, True])
+def test_unchanged_signer_surface_signs_as_the_cold_signed_runtime(historical):
+    live = "0x" + "bb" * 32
+    c, pinned, reads = surface_adapter(live, {"pinned": "same", "head": "same"})
+    c._metadata = lambda at: reads.append(at) or "same"
+    p = policy(runtime_code_hash=AUDITED_CODE_HASH)
+    # Effective runtime is the signed one, so receipt ordering and the
+    # pow_register filter shape follow the audited runtime.
+    assert c.guard_runtime(p, "head", historical=historical) == AUDITED_CODE_HASH
+    assert reads == [pinned, "head"]
+    assert c.guard_runtime(p, "head", historical=historical) == AUDITED_CODE_HASH
+    assert reads == [pinned, "head"]  # cached per (signed, live) code pair
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("historical", [False, True])
+def test_changed_signer_surface_still_stops_for_audit(historical):
+    from ditto.treasury.collector_chain import CollectorRuntimeRefused
+
+    live = "0x" + "cc" * 32
+    c, pinned, _ = surface_adapter(live, {})
+    c._metadata = lambda at: "signed" if at == pinned else "moved"
+    with pytest.raises(CollectorRuntimeRefused, match="runtime changed") as refused:
+        c.guard_runtime(
+            policy(runtime_code_hash=AUDITED_CODE_HASH), "head", historical=historical
+        )
+    assert (refused.value.code, refused.value.observed) == ("runtime_changed", live)
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize(
+    "reference,reference_code",
+    [("0x" + "dd" * 32, None), (None, "0x" + "ee" * 32)],
+)
+def test_unverifiable_reference_refuses_without_caching(reference, reference_code):
+    from ditto.treasury import collector_chain
+
+    c, _, reads = surface_adapter(
+        "0x" + "bb" * 32, {}, reference=reference, reference_code=reference_code
+    )
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    assert reads == []
+    assert collector_chain.SIGNER_SURFACE_VERDICTS == {}
+
+
+def test_unreadable_live_surface_refuses(monkeypatch):
+    from ditto.treasury import collector_chain
+
+    def interface(metadata, _surface):
+        if metadata == "broken":
+            raise ValueError("runtime lacks consumed interface")
+        return SimpleNamespace(digest=metadata)
+
+    monkeypatch.setattr(collector_chain, "runtime_interface", interface)
+    c, pinned, _ = surface_adapter("0x" + "bb" * 32, {})
+    c._metadata = lambda at: "signed" if at == pinned else "broken"
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    collector_chain.SIGNER_SURFACE_VERDICTS.clear()
+
+
+@pytest.mark.usefixtures("fingerprint")
+@pytest.mark.parametrize("live_version", [(484, 2), (482, 1), (484, True)])
+def test_transaction_version_bump_or_downgrade_stops_for_audit(live_version):
+    c, pinned, reads = surface_adapter("0x" + "bb" * 32, {}, live_version=live_version)
+    c._metadata = lambda at: reads.append(at) or "same"
+    with pytest.raises(ValueError, match="runtime changed"):
+        c.guard_runtime(policy(runtime_code_hash=AUDITED_CODE_HASH), "head")
+    assert reads == []  # refused before any surface is fingerprinted

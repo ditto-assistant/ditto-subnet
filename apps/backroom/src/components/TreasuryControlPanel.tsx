@@ -2,12 +2,14 @@ import { useState } from 'react'
 import { useServerFn } from '@tanstack/react-start'
 import type { z } from 'zod'
 import { treasuryControlSchema, treasurySettingsSchema } from '../lib/treasury.schemas'
+import { bucketMaximumBps, bucketMinimumBps, type TreasuryPolicyBucket } from '../lib/treasury-ledger.schemas'
 import { getTreasurySettings, saveTreasurySettings } from '../server/treasury.functions'
 
 type Settings = z.infer<typeof treasurySettingsSchema>
 type Bucket = Settings['service_buckets'][number]
 type Control = z.infer<typeof treasuryControlSchema>
 const inputClass = 'w-full rounded border border-[var(--line)] bg-[var(--panel)] p-2 text-sm'
+const validAllocationText = (value: string) => /^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(value)
 const blankBucket = (bucket_id: string, purpose: string): Bucket => ({
   bucket_id,
   purpose,
@@ -37,24 +39,47 @@ function editable(settings: Settings): Settings {
   }
 }
 
+/** The recorded coldkey-signed policy, when one exists. */
+export type SignedGammaPolicy = { mode: 'observe' | 'enforce' | 'pause', buckets: TreasuryPolicyBucket[] }
+
+function withoutAllocations(settings: Settings): string {
+  return JSON.stringify({
+    ...settings,
+    service_buckets: settings.service_buckets.map((bucket) => ({ ...bucket, allocation_bps: 0 })),
+  })
+}
+
 export function TreasuryControlPanel({
   initialState,
   readOnly,
+  signed = null,
 }: {
   initialState: Control
   readOnly: boolean
+  signed?: SignedGammaPolicy | null
 }) {
   const refresh = useServerFn(getTreasurySettings)
   const save = useServerFn(saveTreasurySettings)
   const [state, setState] = useState(initialState)
   const [settings, setSettings] = useState(() => editable(initialState.effective))
+  const [allocationDrafts, setAllocationDrafts] = useState(() =>
+    editable(initialState.effective).service_buckets.map((bucket) => String(bucket.allocation_bps / 100)),
+  )
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const total = settings.service_buckets.reduce((sum, bucket) => sum + bucket.allocation_bps, 0)
+  // A signed range applies only to the exact signed wallet, as on Platform.
+  const signedBucket = (bucket: Bucket) =>
+    signed?.buckets.find((b) => b.bucket_id === bucket.bucket_id && b.holding_coldkey === bucket.holding_coldkey)
+  // Enforcing a ranged policy makes this % the live knob, folded next epoch.
+  const liveKnob = signed?.mode === 'enforce' && signed.buckets.some((b) => b.min_allocation_bps != null)
+  // While it is, Platform accepts only allocation changes; anything else needs a pause.
+  const mixedEdit = liveKnob && withoutAllocations(settings) !== withoutAllocations(editable(state.effective))
   const parsed = treasurySettingsSchema.safeParse(settings)
+  const validDrafts = allocationDrafts.every(validAllocationText)
   const updateBucket = (index: number, change: Partial<Bucket>) => {
     setSettings((current) => ({
       ...current,
@@ -67,12 +92,14 @@ export function TreasuryControlPanel({
   const load = (next: Control) => {
     setState(next)
     setSettings(editable(next.effective))
+    setAllocationDrafts(editable(next.effective).service_buckets.map((bucket) => String(bucket.allocation_bps / 100)))
     setConfirmation('')
     setReason('')
   }
   const submit = async () => {
     if (
       readOnly ||
+      !validDrafts ||
       !parsed.success ||
       reason.trim().length < 8 ||
       confirmation !== 'RECORD TREASURY SHADOW POLICY'
@@ -92,7 +119,9 @@ export function TreasuryControlPanel({
           },
         }),
       )
-      setMessage('Wallet policy recorded. Funding, distribution, and payment observation remain inactive.')
+      setMessage(liveKnob
+        ? 'Gamma allocation recorded. Enforcing epochs fold it from the next epoch, inside the signed range. Transfers are controlled separately.'
+        : 'Wallet policy recorded. Live emissions still require a matching signed policy and activation. Transfers are controlled separately.')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to record treasury policy')
     } finally {
@@ -104,16 +133,19 @@ export function TreasuryControlPanel({
       className="mt-8 space-y-5 border-t border-[var(--line)] pt-6"
       aria-label="Service treasury wallets"
     >
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col items-start justify-between gap-4 sm:flex-row">
         <div>
           <h2 className="text-lg font-semibold">Service treasury wallets</h2>
           <p className="mt-2 max-w-[70ch] text-sm text-[var(--muted-strong)]">
-            One collector, a shared 1,000 bps service pool, and separately controlled holding wallets. Burn
-            applies only to the miner remainder after service allocation. This policy is shadow only.
+            Allocate up to 100% of miner emissions to Gamma service wallets. The remainder goes to
+            miners before burn.{' '}
+            {liveKnob
+              ? 'Gamma is enforcing a coldkey-signed range: saving a % inside that range changes live emissions from the next epoch, like burn, with no new signature. Wallet changes still require pausing Gamma.'
+              : 'Recording this proposal does not change live emissions; a matching signed policy and activation are required.'}
           </p>
         </div>
         <button
-          className={inputClass}
+          className="shrink-0 rounded border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-sm"
           disabled={busy}
           onClick={async () => {
             setBusy(true)
@@ -131,9 +163,24 @@ export function TreasuryControlPanel({
           Refresh policy
         </button>
       </div>
-      <p className="text-sm">
-        Revision {state.revision} · Configured pool {total} / 1,000 bps · Effective funding 0% · No active
-        sweep
+      <p className="text-sm" aria-live="polite">
+        {validDrafts && total >= 0 && total <= 10000
+          ? `Proposed split: Gamma ${total / 100}% · Miners ${(10000 - total) / 100}% before burn`
+          : 'Enter valid allocations to preview the proposed split'}
+        {' · '}Revision {state.revision}
+      </p>
+      {total > 10000 && <p role="alert">Combined Gamma allocation must be 100% or less.</p>}
+      {mixedEdit && (
+        <p role="alert">
+          While Gamma enforces a signed range, only the Gamma % can change. Pause Gamma to change
+          wallets, collector or payment rules.
+        </p>
+      )}
+      {total === 10000 && <p className="text-sm">This proposal leaves 0% for miners.</p>}
+      <p className="text-sm text-[var(--muted-strong)]">
+        Burn reduces only the miner remainder; it does not fund Gamma. For a 75% Gamma / 25% miner
+        split, allocate 75% here and use 0% burn.{' '}
+        <a href="/burn" className="underline">Review burn settings</a>
       </p>
       {error && (
         <p role="alert" className="text-[var(--red)]">
@@ -214,21 +261,26 @@ export function TreasuryControlPanel({
                   onChange={(event) => updateBucket(index, { purpose: event.target.value })}
                 />
               </label>
-              <label>
-                Allocation (bps of full miner emissions)
-                <input
-                  className={inputClass}
-                  type="number"
-                  min="0"
-                  max="1000"
-                  value={bucket.allocation_bps}
-                  onChange={(event) =>
-                    updateBucket(index, {
-                      allocation_bps: Number(event.target.value),
-                    })
-                  }
-                />
-              </label>
+              <div>
+                <label>
+                  Allocation (% of miner emissions)
+                  <input
+                    className={inputClass}
+                    type="text"
+                    inputMode="decimal"
+                    value={allocationDrafts[index]}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setAllocationDrafts((current) => current.map((draft, i) => i === index ? value : draft))
+                      setConfirmation('')
+                      if (validAllocationText(value)) {
+                        updateBucket(index, { allocation_bps: Math.round(Number(value) * 100) })
+                      }
+                    }}
+                  />
+                </label>
+                <SignedRange bucket={signedBucket(bucket)} allocationBps={bucket.allocation_bps} />
+              </div>
               <label>
                 Holding coldkey
                 <input
@@ -381,6 +433,7 @@ export function TreasuryControlPanel({
               ...settings,
               service_buckets: [...settings.service_buckets, blankBucket('', '')],
             })
+            setAllocationDrafts((current) => [...current, '0'])
             setConfirmation('')
           }}
         >
@@ -391,7 +444,10 @@ export function TreasuryControlPanel({
           GM credits. Wallets, allocations, and rule changes appear in public admin activity; service account
           references stay private.
         </p>
-        {!parsed.success && <p role="alert">{parsed.error.issues[0]?.message}</p>}
+        {!validDrafts && <p role="alert">Enter an allocation from 0 to 100 with up to two decimal places.</p>}
+        {!parsed.success && [...new Set(parsed.error.issues.map((issue) => issue.message))].map((message) => (
+          <p role="alert" key={message}>{message}</p>
+        ))}
         <label className="block">
           Reason for change
           <textarea
@@ -411,7 +467,7 @@ export function TreasuryControlPanel({
         <button
           className={inputClass}
           disabled={
-            !parsed.success || reason.trim().length < 8 || confirmation !== 'RECORD TREASURY SHADOW POLICY'
+            mixedEdit || !validDrafts || !parsed.success || reason.trim().length < 8 || confirmation !== 'RECORD TREASURY SHADOW POLICY'
           }
           onClick={submit}
         >
@@ -419,5 +475,18 @@ export function TreasuryControlPanel({
         </button>
       </fieldset>
     </section>
+  )
+}
+
+function SignedRange({ bucket, allocationBps }: { bucket?: TreasuryPolicyBucket, allocationBps: number }) {
+  if (!bucket) return null
+  const low = bucketMinimumBps(bucket)
+  const high = bucketMaximumBps(bucket)
+  const inside = low <= allocationBps && allocationBps <= high
+  return (
+    <span className={`mt-1 block text-xs ${inside ? 'text-[var(--muted-strong)]' : 'text-[var(--red)]'}`} role={inside ? undefined : 'alert'}>
+      {low === high ? `Signed fixed at ${low / 100}%` : `Signed range ${low / 100}%–${high / 100}%`}
+      {inside ? '' : ' · outside the signed policy; Platform refuses it while Gamma is enforcing'}
+    </span>
   )
 }

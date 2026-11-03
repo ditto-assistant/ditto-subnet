@@ -727,6 +727,19 @@
         "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
         "type": "string"
       },
+      "name": {
+        "anyOf": [
+          {
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "payment_block_hash": {
         "anyOf": [
           {

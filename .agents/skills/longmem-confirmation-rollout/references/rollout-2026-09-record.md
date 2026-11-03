@@ -58,3 +58,112 @@ log), `repro/` (exact artifact `agent.tar.gz` sha `06db691f…`, `mock_broker.py
 `run_real_case.sh`, `project_case.py`, `longmemeval_s_cleaned.json` sha
 `d6f21ea9…`, harness crate at `ba5b463a`). Nothing in `repro/` is needed to reproduce
 the accepted result; it documents the diagnosis.
+
+## bench_version 13 failure diagnosis — 2026-10-21/22
+
+Live state read through Backroom MCP at 2026-10-22T01:0xZ. `bench_version` is now
+13; everything above was recorded against the v8/v9 profiles, so treat the
+canary numbers as history, not as current contract.
+
+| Evidence | Value |
+| --- | --- |
+| Lane outcome split (v13 lifetime) | **63 failed / 13 completed / 3 superseded** — 83% of bundles lost |
+| Recent sample | 32 failed / 13 completed, all `confirmation_execution_failed` at `running_confirmation`, median 134 s |
+| Validator fleet | 4 validators at 0.380.1, `fresh_verified`, 15 base benchmarks concurrent |
+| Budget at read time | 0 attempts today, $0 settled |
+
+The fleet is healthy and base benchmarks run normally, so the failure is
+confirmation-lane-specific.
+
+### Why a bundle dies
+
+A bundle makes roughly 96 reader plus 48 judge serial provider calls. The frozen
+profiles set `allow_fallbacks: false`, so **any single call failure ends the whole
+48-case run**. Failure compounds over that chain: the observed reader
+`provider_timeout` rate alone (4 of 39,608 chat calls in one hour, ~1.0e-4) costs
+~1.4% of bundles, and a judge 429 rate of ~2.5% per call gives
+`(1-0.025)^48 ≈ 0.30` — which is the order of the measured loss.
+
+Two distinct terminal mechanisms, both confirmed from relay traces:
+
+| Bundle | Lane | Shape | Terminal code |
+| --- | --- | --- | --- |
+| `05e1ebab` 10-21 21:49 | judge | 429 after **1** judge call, 177 ms | `confirmation_confirmation_provider_unavailable` |
+| `6a997cc2` 10-21 19:47 | reader | `latency_ms 90015`, `timed_out` | `confirmation_internal_server_error` |
+| `f141d7cb` 10-19 17:25 | judge | 429 after 27 judge calls, 328 ms | `confirmation_confirmation_provider_unavailable` |
+| `53486919` 10-19 17:33 | judge-shaped | 298 ms fast-fail | same signature |
+
+The reader 90 s death is `DITTO_INFERENCE_TIMEOUT_SECONDS=90` expiring, not an
+unexplained hang. A timeout may already have been billed, so it is correctly
+non-retryable under the receipt-free accounting boundary.
+
+The judge is pinned by `longmemeval-official-gpt4o-azure-zdr-v2` to
+`openai/gpt-4o-2024-08-06` with `only: ["azure"]`, `allow_fallbacks: false`,
+`zdr: true`. Its 429 carries `limit_source: upstream_provider_shared_pool`,
+`provider_error_code: rate_limit_exceeded`, `Retry-After: 30`, and
+`endpoints: {total: 2, available: [{Azure, selected: false}]}` — the one
+permitted endpoint exists and was refused for capacity. There is nowhere to
+route.
+
+**This is not the September OpenRouter story.** `longmem-openrouter-429-kills-bundles`
+attributed failures to the *reader* route (`openai/gpt-oss-20b`); at v13 the
+reader runs on Amazon Bedrock and succeeds, and the dominant terminal failures
+are judge-lane. That memory's diagnostic rule (read the last failed record's
+`upstream.phases[0].status`) still holds; its conclusion does not.
+
+### Three code findings
+
+1. **The confirmation lane never retried anything.** `postProviderWithRetryPolicy`
+   opened with `_ = policy; _ = sleep` and made exactly one `postOnce` call, with
+   `result.attempts = 1` hardcoded. Every policy field the confirmation handler
+   computed — including its reader/judge branch — was discarded. This was
+   deliberate and tested ("A failed scored request is parked for an operator
+   retry"), not an accident.
+2. **The receipt-free classifier no longer matched the gateway envelope.**
+   `providerFailureIsReceiptFree` rejected the live 429 on four independent
+   gates: an added `user_id` sibling, an added `error.metadata`, four added
+   `openrouter_metadata` fields, and `attempt: 1` where it demanded `0`. It also
+   required `endpoints.total == len(available)`, which is false for any
+   provider-pinned profile, and compared provider identity against a grant
+   `route_provider` that is a sort strategy (`throughput`) for the reader. Every
+   test fixture was hand-authored with `attempt: 0`, `total: 1`, so CI could not
+   see it. Because the classifier fails closed with no log or metric, this
+   silently disabled the ordinary chat path's retry **and** left the provider
+   circuit breaker unable to open — so Platform kept issuing bundles into a
+   rate-limited provider at ~$14 of settled reservation each.
+3. **`confirmationReaderBackpressureDelay` was dead code with passing tests.**
+   Carefully written (handles `ErrRange`, non-ASCII digits, duplicate headers),
+   asserted by two tests, and called from no production path. Its existence is
+   why the September investigation read as "retry needs an owner decision"
+   rather than "retry does not exist".
+
+### What landed, and what is still inert
+
+The envelope fix is unconditional: it restores the ordinary chat retry and the
+circuit breaker to their own stated intent, and pins the captured production
+envelope in `provider_envelope_test.go` so the next drift fails a test.
+
+Confirmation-lane retry is **merged inactive** behind
+`DITTO_CONFIRMATION_BACKPRESSURE_RETRY` (default `false`). It is a gate rather
+than a fix because re-dispatching a frozen scored request changes what the
+shadow evidence attests, even though the receipt-free proof guarantees the retry
+cannot duplicate provider work or billing. With the gate off the lane stays
+single-shot and every existing contract test passes unchanged.
+
+Activation, when the owner decides: set the env var on the relay, confirm
+`receipt_free` and `retry_activated` appear in the lane journal's
+`confirmation provider rejected request` warning, then re-check
+`get_confirmation_lane_diagnosis` after one bundle. The 404 "no allowed
+providers" classifier keeps `attempt == 0`: no live 404 envelope has been
+captured, so relaxing it would be inference from the 429 shape rather than
+evidence.
+
+### Backroom visibility gap (unfixed)
+
+`get_inference_failure_taxonomy` reported `rate_limited_failures: 0` and
+`rate_limit_bursts.active: false` in every window while the lane was losing 83%
+of bundles to 429s. Its windows cap at 3600 s and it carries no judge-model
+group, so a lane that runs a handful of bundles a day is structurally invisible
+to the tool built to surface exactly this. Per the repository rule to prefer
+Backroom visibility for production knobs, that read wants a confirmation-lane
+dimension; it is not addressed here.

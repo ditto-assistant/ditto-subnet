@@ -99,3 +99,18 @@ func TestRunBoundedStopsSchedulingOnCancel(t *testing.T) {
 		t.Fatalf("cancel did not stop scheduling: ran %d of 1000", got)
 	}
 }
+
+func TestBenchmarkRuntimeSandboxMemoryLimitRange(t *testing.T) {
+	for _, mib := range []int{0, 512, 6144, 32768} {
+		r := &benchmarkRuntimeSettings{CaseConcurrency: 4, RelayDelayFingerprintMode: delayFingerprintOff, SandboxMemoryLimitMiB: mib}
+		if err := r.validate(13); err != nil {
+			t.Fatalf("sandbox_memory_limit_mib=%d rejected: %v", mib, err)
+		}
+	}
+	for _, mib := range []int{1, 511, 32769} {
+		r := &benchmarkRuntimeSettings{CaseConcurrency: 4, RelayDelayFingerprintMode: delayFingerprintOff, SandboxMemoryLimitMiB: mib}
+		if err := r.validate(13); err == nil {
+			t.Fatalf("sandbox_memory_limit_mib=%d accepted", mib)
+		}
+	}
+}

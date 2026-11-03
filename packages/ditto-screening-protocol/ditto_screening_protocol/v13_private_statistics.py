@@ -21,9 +21,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ditto_screening_protocol.v13_private_execute import PrivatePairCounts
 from ditto_screening_protocol.v13_private_package import V13_PRIVATE_PROFILE
 from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
+from ditto_screening_protocol.v13_private_result import PrivatePairCounts
 
 _FAMILY_ALPHA = 0.05
 _REQUIRED_CLASSES = (

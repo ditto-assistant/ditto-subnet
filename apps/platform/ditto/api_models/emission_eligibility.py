@@ -75,6 +75,7 @@ EligibilityState = Literal[
     "review_missing",
     "review_rejected",
     "awaiting_next_window",
+    "not_scored",
 ]
 """Why one exact artifact is or is not earning.
 
@@ -85,6 +86,12 @@ are the review vocabulary this repository already uses:
 ``screening_infra_retry.INFRA_AUTO_RETRY_REASON_CODES``, ``review_escalated`` is
 the copy-hold court's ``escalate`` verdict or an ``anomalous_score`` hold, and
 ``unresolved_review`` is a pending ``ath_reviews`` row of any kind.
+
+``not_scored`` is a read-only answer from the per-agent operator read, never a
+gate verdict: the artifact has no accepted score, or is not ``scored`` or
+``live``, so there is nothing to pay or withhold. Under ``off`` the gate answers
+``eligible`` for any artifact, which read as "earning" for a screening-failed
+upload that never reached a validator.
 """
 
 WITHHELD_STATES: frozenset[str] = frozenset(
@@ -134,6 +141,10 @@ STATE_REASONS: dict[str, str] = {
         "Source review cleared this exact artifact. Emissions start at the next "
         "emission window -- a clear is never applied backwards, so no reward is "
         "granted for the period under review."
+    ),
+    "not_scored": (
+        "This artifact has no accepted score in a scored or live status, so it "
+        "is not earning emissions. Eligibility applies only once it is scored."
     ),
 }
 """Miner-facing text, one per state. Public surfaces publish these verbatim so

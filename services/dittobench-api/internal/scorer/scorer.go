@@ -145,6 +145,36 @@ func answerCarriesValue(answer, needleValue string) bool {
 	return containsNumberToken(got, want)
 }
 
+// answerCarriesValueV14 is answerCarriesValue under the v14 number boundary:
+// a "." or "," that no digit follows ends the token, so "the index is 3,418,
+// up 2%" and "3,418." mid-reply both carry "3,418", while "3,418.5" and
+// "3,4180" still do not. The leading boundary, the sign rule and the separator
+// stripping are unchanged, so the needle still cannot match inside another
+// number and a decoy is read by the same rule. The caller passes the reply as
+// grade.ReplyAsRead reads it (markdown rendered, non-ASCII spaces folded).
+func answerCarriesValueV14(answer, needleValue string) bool {
+	want := stripSeparators(needleValue)
+	if want == "" {
+		return false
+	}
+	text := stripSeparators(normalizeAnswer(answer))
+	for i := 0; ; {
+		j := strings.Index(text[i:], want)
+		if j < 0 {
+			return false
+		}
+		j += i
+		before := j == 0 || !numAttached(text[j-1])
+		end := j + len(want)
+		after := end >= len(text) || !numAttached(text[end]) ||
+			((text[end] == '.' || text[end] == ',') && (end+1 >= len(text) || !isDigit(text[end+1])))
+		if before && after {
+			return true
+		}
+		i = j + 1
+	}
+}
+
 // stripSeparators removes thousands separators (commas, spaces) that fall between
 // digits so "3,418" / "3 418" / "3418" all normalize to "3418", without merging
 // two genuinely separate numbers ("call 5, order 9" stays "call 5, order 9").

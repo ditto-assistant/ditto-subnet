@@ -3,6 +3,7 @@ package gen
 import "testing"
 
 func TestPrivateBaseObserverDoesNotChangeFrozenBytes(t *testing.T) {
+	t.Parallel()
 	for _, size := range []string{"small", "full"} {
 		base, tokens, err := GeneratePrivateBase(4242, size, 91)
 		if err != nil {

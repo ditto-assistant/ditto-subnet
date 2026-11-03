@@ -48,6 +48,12 @@ variable "labels" {
 
 # --- GCP-specific extensions (all defaulted; do not break the contract) -----
 
+variable "deletion_protection" {
+  description = "GCE deletion protection. Disable only in a separately reviewed retirement plan after recovery verification; Terraform prevent_destroy remains enforced."
+  type        = bool
+  default     = true
+}
+
 variable "project" {
   description = "GCP project ID. Defaults to the provider's configured project when empty."
   type        = string
@@ -146,4 +152,14 @@ variable "enable_integrity_monitoring" {
   description = "Enable Shielded VM boot integrity monitoring."
   type        = bool
   default     = true
+}
+
+variable "desired_status" {
+  description = "RUNNING, or TERMINATED to stop the VM while keeping its disks, identity and address of record. Stopped VMs bill only for disk."
+  type        = string
+  default     = "RUNNING"
+  validation {
+    condition     = contains(["RUNNING", "TERMINATED"], var.desired_status)
+    error_message = "desired_status must be RUNNING or TERMINATED."
+  }
 }

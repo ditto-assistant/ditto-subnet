@@ -1,6 +1,6 @@
 module github.com/ditto-assistant/dittobench-api
 
-go 1.26.6
+go 1.27.3
 
 require (
 	github.com/ChainSafe/go-schnorrkel v1.1.0

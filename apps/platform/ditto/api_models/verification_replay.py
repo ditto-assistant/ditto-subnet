@@ -8,11 +8,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ditto.api_models.v13_private_generation import (
-    V13KnownBenignApprovalView,
-    V13ReplayGenerationGroupView,
-    V13ReplayGroupPackageView,
-)
 from ditto_screening_protocol.v13_private_statistics import (
     V13PrivateStatisticalReport,
 )
@@ -161,33 +156,6 @@ class VerificationReplayPrivateStatisticsState(BaseModel):
     report: V13PrivateStatisticalReport
     policy_verification_complete: Literal[False] = False
     terminal_eligible: Literal[False] = False
-
-
-class VerificationReplayPrivateImageInput(BaseModel):
-    role: Literal["target", "known_benign"]
-    agent_id: UUID
-    attempt_id: UUID
-    artifact_sha256: Sha256
-    image_sha256: Sha256
-    image_id: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
-    size_bytes: int = Field(gt=0, le=8 * 1024 * 1024 * 1024)
-    verified_at: datetime
-    committed_at: datetime
-    url: str
-
-
-class VerificationReplayPrivateInputs(BaseModel):
-    replay_id: UUID
-    lease_started_at: datetime
-    lease_deadline: datetime
-    group: V13ReplayGenerationGroupView
-    approval: V13KnownBenignApprovalView
-    target_package: V13ReplayGroupPackageView
-    control_package: V13ReplayGroupPackageView
-    target_image: VerificationReplayPrivateImageInput
-    control_image: VerificationReplayPrivateImageInput
-    urls_expire_at: datetime
-    policy_verification_complete: Literal[False] = False
 
 
 class VerificationReplayFinish(BaseModel):

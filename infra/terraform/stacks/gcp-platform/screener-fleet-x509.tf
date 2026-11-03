@@ -124,6 +124,18 @@ resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_ditto_in
   depends_on = [google_secret_manager_secret.screener_review_ditto_inference_key]
 }
 
+# Report-only probe reviewer (Ansible screener_fleet_probe_review_enabled). The
+# container was created by an operator through `ditto endpoints keys create
+# --gcp-secret`, like screener-fanout-shadow-router-key; Terraform grants read
+# access only, so a node can materialize the spend-capped key.
+resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_probe_review" {
+  count     = local.screener_fleet_x509_count
+  project   = var.project
+  secret_id = "screener-probe-review-router-key"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.screener_fleet_x509[0].member
+}
+
 output "screener_fleet_x509_provider" {
   description = "Provider audience for subnet-screener-1's non-secret external-account configuration."
   value       = var.enable_screener_fleet_x509_identity ? google_iam_workload_identity_pool_provider.screener_fleet_x509[0].name : ""
@@ -227,6 +239,14 @@ resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_node2_re
   member    = google_service_account.screener_fleet_x509_node2[0].member
 
   depends_on = [google_secret_manager_secret.screener_review_ditto_inference_key]
+}
+
+resource "google_secret_manager_secret_iam_member" "screener_fleet_x509_node2_probe_review" {
+  count     = local.screener_fleet_x509_node2_count
+  project   = var.project
+  secret_id = "screener-probe-review-router-key"
+  role      = "roles/secretmanager.secretAccessor"
+  member    = google_service_account.screener_fleet_x509_node2[0].member
 }
 
 output "screener_fleet_x509_node2_provider" {

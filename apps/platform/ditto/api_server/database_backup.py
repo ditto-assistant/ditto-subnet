@@ -155,21 +155,42 @@ async def newest_snapshot() -> DatabaseSnapshot | None:
             headers={"Metadata-Flavor": "Google"},
         )
         identity.raise_for_status()
-        response = await client.get(
-            f"https://compute.googleapis.com/compute/v1/projects/{_PROJECT}/global/snapshots",
-            headers={"Authorization": f"Bearer {identity.json()['access_token']}"},
-            params={
+        # GCE rejects combining a list filter with orderBy. Keep the exact
+        # source-disk filter, paginate completely, then select newest locally.
+        rows = []
+        token = None
+        seen: set[str] = set()
+        for _ in range(10):
+            params = {
                 "filter": f'sourceDisk = "{_DISK}"',
-                "orderBy": "creationTimestamp desc",
-                "maxResults": 1,
-                "fields": "items(name,creationTimestamp,status,diskSizeGb)",
-            },
-        )
-        response.raise_for_status()
-        rows = response.json().get("items", [])
+                "maxResults": "100",
+                "fields": (
+                    "items(name,creationTimestamp,status,diskSizeGb),nextPageToken"
+                ),
+            }
+            if token:
+                params["pageToken"] = token
+            response = await client.get(
+                f"https://compute.googleapis.com/compute/v1/projects/{_PROJECT}/global/snapshots",
+                headers={"Authorization": f"Bearer {identity.json()['access_token']}"},
+                params=params,
+            )
+            response.raise_for_status()
+            page = response.json()
+            rows.extend(page.get("items", []))
+            token = page.get("nextPageToken")
+            if not token:
+                break
+            if token in seen:
+                raise ValueError("snapshot inventory pagination incomplete")
+            seen.add(token)
+        else:
+            raise ValueError("snapshot inventory exceeded bound")
         if not rows:
             return None
-        row = rows[0]
+        row = max(
+            rows, key=lambda item: datetime.fromisoformat(item["creationTimestamp"])
+        )
         return DatabaseSnapshot(
             name=row["name"],
             created_at=row["creationTimestamp"],

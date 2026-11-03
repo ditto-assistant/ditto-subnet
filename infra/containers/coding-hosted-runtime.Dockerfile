@@ -1,5 +1,5 @@
 # Public software only; build via the Git-archive wrapper, never a worktree context.
-FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS go-build
+FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS go-build
 RUN apk add --no-cache build-base
 WORKDIR /src/services/dittobench-api
 COPY services/dittobench-api/ ./

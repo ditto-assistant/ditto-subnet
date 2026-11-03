@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.miner_session import (
@@ -40,6 +40,7 @@ from ditto.api_server.miner_session import (
     verify_signed_action,
 )
 from ditto.api_server.name_claim import expected_netuid
+from ditto.api_server.no_store import no_store
 from ditto.db.models import MinerSession, MinerSessionToken
 from ditto.db.queries.attestation import get_bound_coldkey_for_hotkey
 from ditto.db.queries.miner_sessions import (
@@ -58,11 +59,6 @@ from ditto.db.queries.miner_sessions import (
 from ditto.db.queries.miner_sessions import (
     get_session as get_session_row,
 )
-
-
-def no_store(response: Response) -> None:
-    response.headers["Cache-Control"] = "no-store"
-
 
 router = APIRouter(
     prefix="/miner-auth",

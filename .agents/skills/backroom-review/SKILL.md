@@ -48,8 +48,13 @@ SHA-256, and `agent_status`. Screenshots, rank, and truncated keys are leads.
 - Leaderboard / ATH / scored or live high-rank / precedent search → board.
 - Miner appeal: follow current status. A scored agent is a board case even
   if it was once quarantined.
-- Skip `banned` rows. Park `evaluating` / `waiting_validator` for the next
-  fire — `open_ath_review` 409s until the agent is `scored` or `live`.
+- Skip `banned` rows for new review; to withdraw a wrong reject see
+  [Reconsidering a reject](#reconsidering-a-reject). An `evaluating` /
+  `waiting_validator` row can still
+  be rejected through the batched rulings court (below): a proven violation
+  need not wait for quorum, and the reject ends its live validator tickets.
+  A hold (`open_ath_review`, or a batch `open`) still 409s until the agent
+  is `scored` or `live`.
 - An ATH reject is per UUID. Same SHA or same hotkey is a different agent row
   (see [references/precedents/identity-uuid-not-sha.md](references/precedents/identity-uuid-not-sha.md)).
   The rare `banned_hotkeys` upload gate is separate and blocks future uploads;
@@ -70,7 +75,17 @@ Use `list_screening_source_files`, `read_screening_source_file`, and
 Read the Dockerfile, manifests, entrypoint, and every reachable answer- or
 tool-construction path. Use `get_copy_review_source_diff` and
 `read_copy_review_source_diff_file` for suspected copying or same-owner
-resubmits. Use `get_screening_baseline_diff` for starter-kit comparisons.
+resubmits. Use `get_lineage_source_diff` (add `path` for one file) to diff a
+resubmission against its rejected ancestor. A same-hotkey resubmission's
+screening attempt names its `lineage_parent_agent_id`; read
+`get_screening_review_lineage(attemptId)` for the exact diff, rulings and
+prior findings its reviewer was scoped by. Use
+`get_screening_baseline_diff` for starter-kit comparisons.
+For a suspected copy of another owner's unreleased agent, including a port to
+another language, read `get_unreleased_copy_signal` (shadow; shared items as
+`path:line` on both sides with each matched agent's release state) and page
+leads with `list_unreleased_copy_signals`. A flag is a lead: confirm the cited
+lines in source before ruling.
 Search terms and class labels live in
 [references/techniques.md](references/techniques.md).
 
@@ -170,6 +185,13 @@ appear; treat one as a pre-fix row or a bug to report.
 Search **both** reporters, then apply the same holding to the same pattern
 under the same applicable policy.
 
+Before a ruling, check Peyton's relevant miner DMs as well as the live and
+local reporters. Follow
+[miner-communication precedents](references/miner-communication-precedents.md)
+to verify context, reconcile prior assurances and preserve new precedents in
+the existing store. A DM clarification is not automatically a court action
+or clearance of every path in a submission.
+
 Live production holdings (for the same applicable policy and mechanism):
 
 ```
@@ -184,10 +206,25 @@ python3 .agents/skills/backroom-review/scripts/search-precedents.py --list
 python3 .agents/skills/backroom-review/scripts/search-precedents.py --resolution reject --tag family-compiler
 ```
 
-Cite the matching file or live `agent_id` in the miner-visible reason. If
-live and local disagree under the same policy, the live holding wins for that
-exact pattern; say so. Historical precedent cannot override the applicable
-published policy or transfer a finding to another artifact.
+Cite the matching file or live `agent_id` in the miner-visible reason. Reconcile
+live and local holdings against the latest applicable published clarification
+or withdrawal: an old live reject cannot override that later reasoning rule.
+The current native court row remains authoritative for live eligibility until
+guarded restoration and readback confirm a change. Historical precedent cannot
+override applicable published policy or transfer a finding to another artifact.
+
+Before proposing a reject or overturning a CLEAR, check recent withdrawals
+and the scoped miner DM/channel assurances in the existing precedent store.
+Read the exact prior reason and decisive current source yourself. Preserve the
+assurance's actual mechanism and limits; do not dismiss unchanged code as an
+ancestor or turn unread source, incidental evidence loss or an illustrative
+fault sequence into proof. The
+[2026-10-25 recovery withdrawal](references/precedents/october-25-fallback-recovery-withdrawal.md)
+covers retrieval, summaries, compaction, checkpoints, retries and fresh
+fallbacks, including receipts a successful model already consumed. Loss alone
+is quality/reliability, not rejection. Require a separate prohibited mechanism
+and material consequence; applicable trusted instructions and authorization
+remain protected. Historical rejected rows can still appear in live search.
 
 1. Call `get_leaderboard` (current bench) and `get_screening_review_queue`.
 2. Resolve every target. Include every emission recipient and every scored
@@ -212,7 +249,9 @@ published policy or transfer a finding to another artifact.
    row mixed because I4 or I7 passed while I3 or I5 still fails.
 5. Re-fetch `get_screening_submission` immediately before writing.
 6. `open_ath_review` with the exact SHA-256 and score count, then
-   `resolve_ath_review` `clear` or `reject`.
+   `resolve_ath_review` `clear` or `reject`. To record a clean review of an
+   unheld scored or live row, use a batched `clear` ruling instead: it
+   attests without holding, so the row never leaves the board.
 7. Write a specific miner-visible reason: pattern, file:line, which limb or
    engine test failed or passed, and the cited precedent.
 8. Re-read the agent. A timeout is ambiguous; verify before retrying.
@@ -223,8 +262,9 @@ published policy or transfer a finding to another artifact.
 ### Batched rulings (5-20 decisions from one board review)
 
 Use the rulings court instead of walking `open_ath_review` /
-`resolve_ath_review` one row at a time. It is the same two writers behind the
-quarantine court's shape, with the crown re-read on both legs.
+`resolve_ath_review` one row at a time. It is the same writers behind the
+quarantine court's shape (plus the hold-free `attest` writer for a clear on
+an unheld row), with the crown re-read on both legs.
 
 1. Write the rulings document (Platform wire shape, snake_case):
 
@@ -237,8 +277,13 @@ quarantine court's shape, with the crown re-read on both legs.
    ```
 
    `action` is `open` (hold for investigation), `clear`, or `reject`. A
-   `reject` on a scored/live agent opens and resolves in one item; on a held
-   agent it resolves only. Each agent appears once; every reject cites at
+   `reject` on a scored, live, or still-evaluating agent opens and resolves
+   in one item (set `expected_score_count` to the current partial count, which
+   may be 0); on a held agent it resolves only. A `clear` on a held agent
+   resolves the hold (`["clear"]`); on an unheld scored or live agent with no
+   ATH review it attests (`["attest"]`): the terminal clear is recorded, the
+   agent keeps its status and board position, and `would_change_crown` is
+   false. Each agent appears once; every reject cites at
    least one `path:line`. The replay of the 2026-09-13 top-5 rejects lives at
    `apps/platform/ditto/tests/fixtures/ath_rulings_replay_2026-09-13.json`.
 2. `create_ath_rulings_upload` (backroom:write), then
@@ -268,6 +313,30 @@ quarantine court's shape, with the crown re-read on both legs.
 5. Re-read `board_after`, then `get_leaderboard` and `get_ath_review` for
    each applied row. Every clear/reject action row carries `batch_ruling`
    (batch_id, index, evidence_references, rulings digest, upload key).
+
+### Reconsidering a reject
+
+A reject that turns out to rest on an unsupported ground is withdrawn on the
+record, never by un-banning through some other path. One example is a ground
+the operator later ruled insufficient on its own, such as the benign 6000-char
+tool-result cut with no independent second factor (ditto-subnet#3081).
+Another is the October 25 withdrawal of 51 fallback-only rulings, linked above.
+Use the exact UUID/SHA scope; a separate proven I3 or other ground is not
+silently withdrawn, and a policy correction is not proof restoration landed.
+
+1. Confirm on `get_ath_review` that this exact UUID's review is
+   `resolved` / `reject`, and re-read the SHA and score count with
+   `get_screening_submission`.
+2. Submit a `clear` ruling whose miner-visible reason names the withdrawn
+   ground and why it no longer stands. An `open` ruling holds the agent for
+   fresh review instead.
+3. The preview must read `ready` with `steps: ["open","clear"]` (or `["open"]`).
+   Read `would_change_crown`: a restored high scorer can retake the crown.
+4. Execute, then re-read: the status returns to the one recorded before the
+   reject, and the history reads `reject`, `reopen`, `clear`.
+
+Withdraw only with the operator's authority for that ruling. A ban with no
+rejected review stays a conflict, and the hotkey upload gate is separate.
 
 Do not un-ban a row to restore a bench version. Rollout authority is a
 Platform question, not an enforcement undo.

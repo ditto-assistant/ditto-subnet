@@ -1,9 +1,8 @@
-# Validation only: current GitHub checks on Depot compute.
+# Manual fallback only: current GitHub checks on Depot compute.
 name: Depot Conventional PR title
 
 on:
-  pull_request:
-    types: [opened, edited, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +14,9 @@ concurrency:
 jobs:
   title:
     runs-on: depot-ubuntu-24.04-4
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       # This list is python-semantic-release's conventional-parser
       # allowed_tags, held identical on purpose. PSR is the authority on what
@@ -27,7 +29,20 @@ jobs:
       - name: Require a release-aware squash title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+        # API/dispatch events have no PR payload. Resolve exactly one open,
+        # same-repository PR at this SHA rather than accepting a stale title.
         run: |
+          if [[ -z "$PR_TITLE" ]]; then
+            titles="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${HEAD_SHA}/pulls" \
+              --paginate --jq '.[] | select(.state == "open" and .head.sha == env.HEAD_SHA and .head.repo.full_name == env.GITHUB_REPOSITORY) | .title')"
+            if [[ -z "$titles" || "$titles" == *$'\n'* ]]; then
+              echo "manual title validation requires exactly one open same-repository PR at $HEAD_SHA" >&2
+              exit 1
+            fi
+            PR_TITLE="$titles"
+          fi
           pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|style|test)(\([^)]+\))?!?: .+'
           if [[ ! "$PR_TITLE" =~ $pattern ]]; then
             echo "PR titles must start with a conventional type, which decides the release:"

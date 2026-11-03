@@ -51,7 +51,9 @@ _BASIS = (
     "Derived from screening attempt history at read time; nothing is stored. "
     "Agents whose latest infrastructure failure is older than "
     "auto_retry_max_age_seconds are counted in aged_out_agents but not listed "
-    "individually, and an agent that reached auto_retry_max_streak is "
+    "individually, and an agent that reached auto_retry_max_streak, or whose "
+    "latest code failed more than its auto_retry_max_retries_by_code bound in "
+    "the current run (l2-late-result retries once), is "
     "'capped': both wait for an operator retry. The breaker is per signature "
     "(reason code, provider, lane); half_open means its open window elapsed and "
     "probes are allowed. It closes only when a probe on its provider and lane "
@@ -59,7 +61,14 @@ _BASIS = (
     "a docker-build rejection). A signature on the screening lane (a non-build "
     "code reported with failure detail) never shows that, so it stays "
     "half_open, one probe per breaker_probe_interval_seconds, until its "
-    "failures leave breaker_history_lookback_seconds. A breaker with a known "
+    "failures leave breaker_history_lookback_seconds. The exception is "
+    "image-upload-platform-unavailable, whose fault is storing the image: it "
+    "closes on a probe on its provider that finished with a verified "
+    "screened-image upload. l2-late-result, whose fault is the deep review "
+    "not finishing in time, closes on a probe on its provider whose review "
+    "finished (a pass with a verified image, or a "
+    "source-review-confirmed-violation reject; never a quarantine). A breaker "
+    "with a known "
     "provider holds and probes only "
     "workers on that provider: a worker on another provider can still claim "
     "those agents by backoff alone (that run is not a probe). A signature with "
@@ -84,6 +93,7 @@ def infra_retry_policy() -> InfraRetryPolicy:
         jitter_fraction=infra.INFRA_RETRY_JITTER_FRACTION,
         auto_retry_max_age_seconds=_seconds(infra.INFRA_AUTO_RETRY_MAX_AGE),
         auto_retry_max_streak=infra.INFRA_AUTO_RETRY_MAX_STREAK,
+        auto_retry_max_retries_by_code=dict(infra.INFRA_AUTO_RETRY_MAX_RETRIES_BY_CODE),
         plan_max_claimable=infra.INFRA_PLAN_MAX_CLAIMABLE,
         breaker_distinct_agents=infra.BREAKER_DISTINCT_AGENTS,
         breaker_window_seconds=_seconds(infra.BREAKER_WINDOW),

@@ -26,16 +26,25 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_compatible,
     _assert_validator_permitted,
     _heartbeat_resource_sample,
-    _held_lease_slots,
     _inference_stage_slot_cap,
+    _live_slot_leases,
     _validator_slot_settings,
+)
+from ditto.api_server.generator_round_reservation import (
+    round_reservation_active,
+    validator_advertises_rounds,
 )
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.operator_diagnostic import (
+    diagnostic_target_refusal,
+    operator_diagnostic_hotkeys,
+)
 from ditto.api_server.private_benchmark_preparation import lease_dataset_sha
 from ditto.api_server.scoring_lease_settings import resolve_scoring_ticket_ttl
 from ditto.api_server.validator_slot_settings import (
     allowed_slot_count,
+    reserved_round_slots,
     validator_issuance_paused,
 )
 from ditto.db.models import (
@@ -53,6 +62,7 @@ from ditto.db.queries.benchmark_rollout import (
 )
 from ditto.db.queries.inference import ensure_inference_grant, revoke_ticket_inference
 from ditto.db.queries.provider_outages import lock_provider_work_gate, scoring_probe_key
+from ditto.db.queries.tickets import live_ticket_for_agent_on_validator
 from ditto.db.queries.validator_slot_occupancy import (
     live_ordinary_slot_ticket,
     live_v9_confirmation_slot_ticket,
@@ -282,16 +292,28 @@ async def issue_benchmark_canary(
             raise HTTPException(
                 409, "validator lacks deterministic V13 dataset capability"
             )
-        held = await _held_lease_slots(
+        leases = await _live_slot_leases(
             session, validator_hotkey=payload.validator_hotkey, now=now
         )
-        cap = min(
-            allowed_slot_count(
-                slots,
-                advertised_slots=capacity.configured_slots,
-                sample=_heartbeat_resource_sample(heartbeat),
+        held = leases.slots
+        allowed = allowed_slot_count(
+            slots,
+            advertised_slots=capacity.configured_slots,
+            sample=_heartbeat_resource_sample(heartbeat),
+            validator_hotkey=payload.validator_hotkey,
+        )
+        cap = min(allowed, _inference_stage_slot_cap(inference_config))
+        # A canary is non-round work, so it answers to the generator-round
+        # reservation exactly like a canonical lease.
+        non_round_budget = allowed - reserved_round_slots(
+            slots,
+            validator_hotkey=payload.validator_hotkey,
+            allowed_slots=allowed,
+            rounds_active=(
+                validator_advertises_rounds(heartbeat)
+                and await round_reservation_active(request.app.state, session)
             ),
-            _inference_stage_slot_cap(inference_config),
+            healthy_slots=len(capacity.healthy_slots),
         )
         if (
             validator_issuance_paused(slots, validator_hotkey=payload.validator_hotkey)
@@ -299,6 +321,7 @@ async def issue_benchmark_canary(
             or payload.slot_id not in capacity.healthy_slots
             or any(slot.slot_id == payload.slot_id for slot in capacity.active)
             or len(held) >= cap
+            or len(leases.non_round_slots) >= non_round_budget
         ):
             raise HTTPException(
                 409, "validator slot is not available under current policy"
@@ -338,8 +361,37 @@ async def issue_benchmark_canary(
             )
         agent = await session.get(Agent, payload.agent_id, with_for_update=True)
         if (
+            await live_ticket_for_agent_on_validator(
+                session,
+                agent_id=payload.agent_id,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+            )
+            is not None
+        ):
+            raise HTTPException(
+                409,
+                "validator already holds a live lease on this agent; "
+                "choose another validator or wait for it to finish",
+            )
+        # Finalized agents are the ordinary canary target. The one exception is
+        # an isolated operator diagnostic agent (see operator_diagnostic): an
+        # operator-owned shadow agent withheld from this queue before dispatch
+        # and never ordinarily leased or scored.
+        diagnostic_refusal = (
+            None
+            if agent is not None
+            and agent.status in {AgentStatus.SCORED, AgentStatus.LIVE}
+            else await diagnostic_target_refusal(
+                session,
+                agent,
+                bench_version=payload.bench_version,
+                operator_hotkeys=operator_diagnostic_hotkeys(),
+            )
+        )
+        if (
             agent is None
-            or agent.status not in {AgentStatus.SCORED, AgentStatus.LIVE}
+            or diagnostic_refusal is not None
             or agent.sha256 != payload.expected_artifact_sha256
             or agent.screened_image_sha256 != payload.expected_screened_image_sha256
             or not agent.screened_image_verified_at

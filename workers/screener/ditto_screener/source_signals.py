@@ -8,7 +8,10 @@ never leave the archive through this module.
 
 from __future__ import annotations
 
+import ast
+import contextlib
 import re
+from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import cast
@@ -26,6 +29,7 @@ _MAX_LEADS = 32
 _MAX_LEADS_PER_RULE_FILE = 4
 _WINDOW_LINES = 18
 _MAX_STATIC_FINDINGS = 16
+_MAX_REVIEW_FINDINGS_PER_KIND = 6
 _COMMAND_EXECUTION_EFFECT = re.compile(
     r"\b(?:Command::new|subprocess\.|os\.system|child_process\.|execFile|spawn|"
     r"ProcessBuilder|Process\.(?:run|start|Start)|Runtime(?:\.getRuntime\(\))?\.exec)\b"
@@ -84,6 +88,13 @@ class _Fingerprint:
     attribute affirmatively restricts to the test build (``#[test]``,
     ``#[cfg(test)]``) before matching, for tells whose honest look-alike is the
     same text parked in a test-only helper that ``/run`` never reaches.
+
+    ``suppressor_role`` measures suppressors from that role's matched line,
+    within ``suppressor_window`` lines, instead of from the anchor: the honest
+    look-alike of a wide-window shape can be a check on one particular line
+    (a content test beside a length branch). ``file_roles`` names roles that
+    may match anywhere in the file, for a shape whose consumer is routinely
+    refactored into a separate helper of the same module.
     """
 
     kind: str
@@ -95,6 +106,9 @@ class _Fingerprint:
     languages: frozenset[str] = frozenset()
     min_hits: int = 1
     skip_test_items: bool = False
+    suppressor_role: str | None = None
+    suppressor_window: int = 0
+    file_roles: frozenset[str] = frozenset()
 
 
 def _words(value: str) -> re.Pattern[str]:
@@ -1932,20 +1946,177 @@ _EMULATION_FINGERPRINTS = (
         ),
         scan="raw",
     ),
+    _Fingerprint(
+        # generator-construction-admission (ATH sweep 2026-10-15..18): a comment
+        # or docstring saying the code was fitted to how the benchmark generator
+        # builds its data -- typo-tolerant cues because "the records are
+        # generated with deliberate typos", router examples "generated locally
+        # with the public dataset generator", or a quoted v13 record sentence
+        # ("X used to work at Org"). Probe-tuning admissions stay with
+        # self-reported-benchmark-fitting. The admission is a reason to read
+        # the path, never the charge. The public starter kits describe the
+        # benchmark only in READMEs, which are not scanned, and their source
+        # wording ("the local generator emits", "dataset generation") is not
+        # matched.
+        kind="generator-construction-admission",
+        severity="medium",
+        roles=(
+            _Role(
+                "generator-construction-admission",
+                re.compile(
+                    r"\bgenerated with (?:deliberate |intentional |injected )?typos\b"
+                    r"|\b(?:public |local |benchmark )?dataset generator\b"
+                    r"|\bpractice exams? generated\b"
+                    r"|\brecords are (?:all )?generated\b"
+                    r"|\bthe (?:benchmark |bench |dataset )?generator(?:'s)?"
+                    r" (?:renders|writes|stamps|permutes)\b"
+                    r"|\bgenerator(?:'s)? (?:own )?record sentences\b"
+                    # A comment quoting a v13 record sentence template.
+                    r"|(?:#|//|/\*|^\s*\*)[^\n]*[\"'`\u201c][^\"'`\u201d\n]{0,60}"
+                    r"\b(?:used to work at|back when they were at"
+                    r"|the new work email is|the work email I had saved"
+                    r"|ownership of [^\"'`\u201d\n]{1,40} moved to)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    # Policy-v13 I3/I2 shapes confirmed by L2/L3 on one sibling after the
+    # screener passed the same mechanism on another (ATH sweep 2026-10-15..18).
+    _Fingerprint(
+        # length-cut-draft-fallback (I3): with deliberation on, the first reply
+        # is held as draft 1 and the served output cleared; when the deciding
+        # reply ends with finish_reason "length" the host breaks out without
+        # reading its content and serves draft 1. A nonempty deciding reply,
+        # ANSWER line included, is discarded on length metadata alone. The
+        # cleared sibling keeps the deciding reply whenever it has content and
+        # retries only an empty one. Only a structurally bound empty-content
+        # guard or a preceding content-preserving exit drops the lead; nearby
+        # prose and unrelated content tests cannot establish that guard.
+        kind="length-cut-draft-fallback",
+        severity="medium",
+        roles=(
+            _Role(
+                "length-finish-branch",
+                re.compile(
+                    r"(?i:finish[_ ]?reason|stop[_ ]?reason)[^\n]{0,60}"
+                    r"(?:===?|\bis\b|Some\(|\bin\s*[(\[{])\s*[\"'](?:length|max_tokens)[\"']"
+                    r"|[\"'](?:length|max_tokens)[\"']\s*===?[^\n]{0,30}"
+                    r"(?i:finish[_ ]?reason|stop[_ ]?reason)"
+                    r"|\bFinishReason::Length\b"
+                ),
+            ),
+            _Role(
+                "earlier-draft-holder",
+                re.compile(
+                    r"\b(?:self\.)?(?:draft\w*|first_(?:reply|answer|draft|output)\w*"
+                    r"|initial_(?:reply|draft)\w*)\s*(?::[^=\n]{1,40})?=(?!=)"
+                    r"|\b\w*drafts\s*\.\s*(?:append|push|insert)\s*\("
+                    r"|\b\w*drafts\s*(?::[^=\n]{1,40})?=\s*(?:\[|vec!\[)\s*\w",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "served-output-cleared",
+                re.compile(
+                    r"\b\w*(?:output|served|answer|final_text)\w*\s*=\s*"
+                    r"(?:\"\"|''|String::new\(\)|None|null|nil|undefined)\s*;?\s*$"
+                    r"|\b\w*(?:output|served)\w*\s*\.\s*clear\(\)"
+                    r"|mem::(?:take|replace)\(\s*&mut\s+(?:self\.)?\w*(?:output|served)",
+                ),
+            ),
+            _Role(
+                "draft-served-fallback",
+                re.compile(
+                    r"\b(?!draft)\w*(?:output|served|answer|final_text|reply_text)\w*"
+                    r"\s*(?:\+?=(?!=)|\.push_str\(|\.extend\()\s*&?\s*(?:Some\()?"
+                    r"(?:self\.)?(?:draft\w*|first_(?:reply|answer|draft|output)\w*"
+                    r"|initial_(?:reply|draft)\w*|\w*drafts\s*(?:\[\s*0\s*\]"
+                    r"|\.(?:first|remove|pop|swap_remove)\w*\())"
+                    r"|\.(?:unwrap_or|unwrap_or_else|or)\(\s*(?:\|\|\s*)?&?"
+                    r"(?:draft\w*|first_(?:reply|answer|draft)\w*)"
+                    r"|\bor\s+(?:draft\w*|first_(?:reply|answer|draft)\w*)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=60,
+    ),
+    _Fingerprint(
+        # prompt-only-record-dedupe (I2): records sharing a request identifier
+        # are walked oldest first and a seen-set keyed on a normalized form of
+        # the record's PROMPT keeps the first one, while the rendered record
+        # also carries the stored response. A later record with the same prompt
+        # and a different response never reaches the deciding model. The
+        # rejected sibling had the loop in a helper, the passed one inline, so
+        # the response render counts anywhere in the file. A key that includes
+        # the response or a record id, and retrieval that keeps every selected
+        # record, stay silent.
+        kind="prompt-only-record-dedupe",
+        severity="medium",
+        roles=(
+            _Role(
+                "prompt-derived-key",
+                re.compile(
+                    # Not a key that also carries the response or a record id.
+                    r"^(?![^\n]*(?:\.|\[\s*[\"']|get\(\s*[\"'])"
+                    r"(?:response|assistant\w*|reply|answer|id|\w+_id|uuid)\b)"
+                    r"(?=[^\n]*(?:\.|\[\s*[\"']|get\(\s*[\"'])"
+                    r"(?:prompt|question|user_prompt|user_message)\b)"
+                    r"(?:[^\n]*\b(?:\w*_key|key|k|norm\w*|\w*fingerprint)\s*"
+                    r"(?::[^=\n]{1,40}|:)?(?<![=!<>])=(?!=)(?!\s*lambda\b)"
+                    r"|[^\n]*\b\w*seen\w*\s*\.\s*(?:add|insert|contains|has|"
+                    r"contains_key|get)\s*\("
+                    r"|[^\n]*(?::?=\s*|\bif\s+!?)\w*seen\w*\["
+                    r"|[^\n]*\b\w*seen\w*\[[^\]\n]+\]\s*=(?!=)"
+                    r"|[^\n]*\bin\s+(?:self\.)?\w*seen\w*\b"
+                    r"|[^\n]*\b(?:dedup_by_key|dedup_by|unique_by|uniqBy|distinctBy|"
+                    r"drop_duplicates)\b"
+                    r"|[^\n]*\{[^\n]*:\s*\w+\s+for\b)",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "seen-drop",
+                re.compile(
+                    r"\bin\s+(?:self\.)?\w*seen\w*\b"
+                    r"|\b\w*seen\w*\s*\.\s*(?:add|insert|contains|has|contains_key)\s*\("
+                    # A map lookup or mark, not a counter (`seen[k]++`).
+                    r"|(?::?=\s*|\bif\s+!?)\w*seen\w*\["
+                    r"|\b\w*seen\w*\[[^\]\n]+\]\s*=(?!=)"
+                    r"|\b(?:dedup_by_key|dedup_by|unique_by|uniqBy|distinctBy|"
+                    r"drop_duplicates)\b"
+                    r"|\{[^\n]*(?:\.|\[\s*[\"'])(?:prompt|question)\b[^\n]*:\s*\w+\s+for\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "response-rendered",
+                re.compile(
+                    r"(?:\.|\[\s*[\"']|get\(\s*[\"'])"
+                    r"(?:response|assistant_response|assistant_reply)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=12,
+        file_roles=frozenset({"response-rendered"}),
+    ),
 )
 
 
 def find_source_review_leads(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bounded location-only review leads from readable source files."""
     leads: list[dict[str, object]] = []
-    # The lead cap is spent on executable and build files first. Docs and data
-    # fixtures keep their leads (a fixture can still be compiled in or read as
-    # an answer table), but only in the capacity the executable surface
-    # leaves, so they cannot starve a miner source file that sorts after them.
-    # Test-named modules count as executable: whether they are served cannot
-    # be proved from source text.
+    # Within each kind, executable and build files get the first examples.
+    # Docs and data fixtures keep their leads (they can be compiled in or read
+    # as answer tables). Test-named modules count as executable: whether they
+    # are served cannot be proved from source text. Select only after scanning.
     for path, text in sorted(files, key=lambda item: _lead_path_priority(item[0])):
         lines = text.splitlines()
         if not lines:
@@ -2008,11 +2179,54 @@ def find_source_review_leads(
                         continue
                     seen.add(normalized)
                     leads.append({"kind": rule.kind, "locations": locations})
-                    if len(leads) >= _MAX_LEADS:
-                        return leads
                     if len(seen) >= _MAX_LEADS_PER_RULE_FILE:
                         break
-    return leads
+    return _select_review_findings(leads, _MAX_LEADS, selection_report)
+
+
+def _select_review_findings(
+    findings: list[dict[str, object]],
+    limit: int,
+    report: dict[str, object] | None,
+) -> list[dict[str, object]]:
+    """Spend the output budget only after scanning, by severity and kind.
+
+    Preserve input path priority within each kind, but take one of every kind
+    before a second example. A flooded kind cannot consume another kind's slots.
+    Counts describe candidates after the existing per-rule/file safety bounds.
+    """
+    groups: dict[tuple[int, str], list[dict[str, object]]] = defaultdict(list)
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    for finding in findings:
+        severity = severity_order.get(str(finding.get("severity", "medium")), 1)
+        groups[severity, str(finding["kind"])].append(finding)
+    selected: list[dict[str, object]] = []
+    selected_by_kind: Counter[str] = Counter()
+    for severity in sorted({key[0] for key in groups}):
+        kinds = sorted(kind for level, kind in groups if level == severity)
+        for index in range(_MAX_REVIEW_FINDINGS_PER_KIND):
+            for kind in kinds:
+                candidates = groups[severity, kind]
+                if (
+                    index < len(candidates)
+                    and selected_by_kind[kind] < _MAX_REVIEW_FINDINGS_PER_KIND
+                    and len(selected) < limit
+                ):
+                    selected.append(candidates[index])
+                    selected_by_kind[kind] += 1
+    if report is not None:
+        counts = Counter(str(finding["kind"]) for finding in findings)
+        omitted = counts - selected_by_kind
+        report.update(
+            truncated=bool(omitted),
+            candidate_count=len(findings),
+            selected_count=len(selected),
+            omitted_count=sum(omitted.values()),
+            omitted_by_kind=dict(sorted(omitted.items())),
+            per_kind_limit=_MAX_REVIEW_FINDINGS_PER_KIND,
+            counts_after_per_rule_file_bounds=True,
+        )
+    return selected
 
 
 def find_decisive_malicious_source(
@@ -2154,6 +2368,8 @@ def _fingerprint_language(path: str) -> str | None:
 
 def find_benchmark_emulation_fingerprints(
     files: Iterable[tuple[str, str]],
+    *,
+    selection_report: dict[str, object] | None = None,
 ) -> list[dict[str, object]]:
     """Return bench-v12 anti-emulation fingerprints as location-only review leads.
 
@@ -2201,9 +2417,29 @@ def find_benchmark_emulation_fingerprints(
                         fingerprint, path, scan_lines, fingerprint_raw_lines
                     )
                 )
-            if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
-                return findings[:_MAX_FINGERPRINT_FINDINGS]
-    return findings
+    selected = _select_review_findings(
+        findings, _MAX_FINGERPRINT_FINDINGS, selection_report
+    )
+    if selection_report is not None:
+        raw_kinds = {
+            item.kind for item in _EMULATION_FINGERPRINTS if item.scan == "raw"
+        }
+        counts = Counter(str(item["kind"]) for item in findings)
+        # One location-only routing lead per saturated raw-scan kind. Comments
+        # and strings can create these matches: saturation is never a verdict.
+        selection_report["saturation_leads"] = [
+            {
+                "kind": "raw-fingerprint-kind-saturation",
+                "saturated_kind": kind,
+                "candidate_count": counts[kind],
+                "locations": next(
+                    item["locations"] for item in findings if item["kind"] == kind
+                ),
+            }
+            for kind in sorted(raw_kinds)
+            if counts[kind] > _MAX_REVIEW_FINDINGS_PER_KIND
+        ]
+    return selected
 
 
 def _rust_test_item_lines(code_lines: list[str]) -> frozenset[int]:
@@ -2235,6 +2471,12 @@ def _cooccurrence_fingerprint(
     scan_lines: list[str],
     raw_lines: list[str],
 ) -> list[dict[str, object]]:
+    tree = None
+    if fingerprint.kind == "prompt-only-record-dedupe" and path.endswith(
+        (".py", ".pyi")
+    ):
+        with contextlib.suppress(SyntaxError, ValueError, RecursionError):
+            tree = ast.parse("\n".join(scan_lines))
     role_hits = {
         role.name: [
             line_number
@@ -2260,16 +2502,43 @@ def _cooccurrence_fingerprint(
         locations: list[dict[str, object]] = []
         signature: list[tuple[str, int]] = []
         for role in fingerprint.roles:
+            candidates = role_hits[role.name]
+            if (
+                fingerprint.kind == "prompt-only-record-dedupe"
+                and role.name == "response-rendered"
+            ):
+                candidates = [
+                    line
+                    for line in candidates
+                    if _dedupe_response_related(
+                        path, scan_lines, dict(signature), line, tree
+                    )
+                ]
+                if not candidates:
+                    break
             nearby = min(
-                role_hits[role.name],
+                candidates,
                 key=lambda line: (abs(line - anchor), line),
             )
-            if abs(nearby - anchor) > fingerprint.window:
+            if (
+                role.name not in fingerprint.file_roles
+                and abs(nearby - anchor) > fingerprint.window
+            ):
                 break
             signature.append((role.name, nearby))
             locations.append({"path": path, "line": nearby, "role": role.name})
         else:
-            if any(abs(hit - anchor) <= fingerprint.window for hit in suppressor_hits):
+            if fingerprint.suppressor_role is None:
+                center, reach = anchor, fingerprint.window
+            else:
+                center = dict(signature)[fingerprint.suppressor_role]
+                reach = fingerprint.suppressor_window
+            if any(abs(hit - center) <= reach for hit in suppressor_hits):
+                continue
+            if (
+                fingerprint.kind == "length-cut-draft-fallback"
+                and _length_content_guard(path, scan_lines, dict(signature))
+            ):
                 continue
             normalized = tuple(signature)
             if normalized in seen:
@@ -2279,6 +2548,252 @@ def _cooccurrence_fingerprint(
             if len(seen) >= _MAX_FINGERPRINT_PER_RULE_FILE:
                 break
     return findings
+
+
+def _dedupe_response_related(
+    path: str,
+    lines: list[str],
+    roles: dict[str, int],
+    response: int,
+    tree: ast.Module | None,
+) -> bool:
+    """Require one record scope, or an explicit dedupe-helper consumer.
+
+    This is still a routing heuristic, not a claim that a render is reachable.
+    In particular, a random response access elsewhere in a file is no longer
+    enough to complete the three-role fingerprint.
+    """
+    key = roles["prompt-derived-key"]
+    seen = roles["seen-drop"]
+    receiver = r"\b(\w+)\s*(?:\.|\[\s*[\"']|\.get\(\s*[\"'])"
+    prompt = re.search(
+        receiver + r"(?:prompt|question|user_prompt|user_message)\b",
+        lines[key - 1],
+        re.I,
+    )
+    reply = re.search(
+        receiver + r"(?:response|assistant_response|assistant_reply)\b",
+        lines[response - 1],
+        re.I,
+    )
+    if prompt is None or reply is None:
+        return False
+    if path.endswith((".py", ".pyi")):
+        if tree is None:
+            return False
+        functions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+
+        def owner(line: int):
+            return min(
+                (
+                    node
+                    for node in functions
+                    if node.lineno <= line <= (node.end_lineno or node.lineno)
+                ),
+                key=lambda node: (node.end_lineno or node.lineno) - node.lineno,
+                default=None,
+            )
+
+        producer, consumer = owner(key), owner(response)
+        if producer is None or consumer is None or owner(seen) is not producer:
+            return False
+        if producer is consumer:
+            return prompt[1] == reply[1]
+        # A remote render must actually iterate the helper's return value and
+        # read the response from that iteration variable (for or comprehension).
+        for node in ast.walk(consumer):
+            iterators: Iterable[ast.comprehension | ast.For]
+            if isinstance(node, (ast.GeneratorExp, ast.ListComp, ast.SetComp)):
+                iterators = node.generators
+            elif isinstance(node, ast.For):
+                iterators = [node]
+            else:
+                continue
+            if not node.lineno <= response <= (node.end_lineno or node.lineno):
+                continue
+            if any(
+                isinstance(item.target, ast.Name)
+                and item.target.id == reply[1]
+                and isinstance(item.iter, ast.Call)
+                and isinstance(item.iter.func, ast.Name)
+                and item.iter.func.id == producer.name
+                for item in iterators
+            ):
+                return True
+        return False
+    if prompt[1] != reply[1]:
+        return False
+    # Brace languages: all three roles must share one loop body. Use the
+    # literal-masked view so braces in prompts cannot invent a common scope.
+    executable = mask_effect_literals("\n".join(lines), path).splitlines()
+    stack: list[int] = []
+    loop_scopes: dict[int, tuple[int, ...]] = {}
+    for number, line in enumerate(executable, 1):
+        for char in line:
+            if char == "{":
+                stack.append(number)
+            elif char == "}" and stack:
+                stack.pop()
+        if number in (key, seen, response):
+            loop_scopes[number] = tuple(
+                start for start in stack if re.search(r"\bfor\b", executable[start - 1])
+            )
+    return bool(
+        set(loop_scopes.get(key, ()))
+        & set(loop_scopes.get(seen, ()))
+        & set(loop_scopes.get(response, ()))
+    )
+
+
+def _reply_content(node: ast.expr, receiver: str) -> bool:
+    """Recognize only direct content and its inert empty-string normalization."""
+    if isinstance(node, ast.Attribute):
+        return (
+            node.attr == "content"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == receiver
+        )
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or):
+        return (
+            len(node.values) == 2
+            and _reply_content(node.values[0], receiver)
+            and isinstance(node.values[1], ast.Constant)
+            and node.values[1].value == ""
+        )
+    return (
+        isinstance(node, ast.Call)
+        and not node.args
+        and not node.keywords
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "strip"
+        and _reply_content(node.func.value, receiver)
+    )
+
+
+def _length_content_guard(path: str, lines: list[str], roles: dict[str, int]) -> bool:
+    """Narrow proven look-alikes, never an arbitrary nearby content mention.
+
+    Unrecognized syntax keeps the routing lead for human review. This is not
+    a general control-flow proof or a policy verdict.
+    """
+    branch = roles["length-finish-branch"]
+    receiver_match = re.search(r"\b(\w+)\.finish_reason\b", lines[branch - 1])
+    if receiver_match is None:
+        return False
+    receiver = receiver_match[1]
+    clear = lines[roles["served-output-cleared"] - 1]
+    output = re.match(r"\s*(\w+)\s*=", clear) or re.search(
+        r"mem::(?:take|replace)\(\s*&mut\s+(\w+)", clear
+    )
+    if output is None:
+        return False
+    if path.endswith((".py", ".pyi")):
+        try:
+            tree = ast.parse("\n".join(lines))
+        except (SyntaxError, ValueError, RecursionError):
+            return False
+        for parent in ast.walk(tree):
+            for _field, children in ast.iter_fields(parent):
+                if not isinstance(children, list):
+                    continue
+                for index, node in enumerate(children):
+                    if not isinstance(node, ast.If) or node.lineno != branch:
+                        continue
+                    # The *entire* length branch is gated by this reply being
+                    # empty. An inner guard on only continue does not qualify.
+                    following = (
+                        children[index + 1] if index + 1 < len(children) else None
+                    )
+                    if (
+                        isinstance(node.test, ast.BoolOp)
+                        and isinstance(node.test.op, ast.And)
+                        and any(
+                            isinstance(term, ast.UnaryOp)
+                            and isinstance(term.op, ast.Not)
+                            and _reply_content(term.operand, receiver)
+                            for term in node.test.values
+                        )
+                        and not node.orelse
+                        and isinstance(following, ast.Assign)
+                        and _reply_content(following.value, receiver)
+                        and any(
+                            isinstance(target, ast.Name) and target.id == output[1]
+                            for target in following.targets
+                        )
+                    ):
+                        return True
+                    if index < 2:
+                        continue
+                    assignment, keep = children[index - 2 : index]
+                    if not (
+                        isinstance(assignment, ast.Assign)
+                        and len(assignment.targets) == 1
+                        and isinstance(assignment.targets[0], ast.Name)
+                        and _reply_content(assignment.value, receiver)
+                        and isinstance(keep, ast.If)
+                        and not keep.orelse
+                        and isinstance(keep.test, ast.Name)
+                        and keep.test.id == assignment.targets[0].id
+                        and len(keep.body) == 2
+                        and isinstance(keep.body[0], ast.Assign)
+                        and isinstance(keep.body[0].value, ast.Name)
+                        and keep.body[0].value.id == keep.test.id
+                        and isinstance(keep.body[1], ast.Break)
+                    ):
+                        continue
+                    # It must preserve the served output, not merely log or
+                    # assign an unrelated variable before breaking.
+                    if output and any(
+                        isinstance(target, ast.Name) and target.id == output[1]
+                        for target in keep.body[0].targets
+                    ):
+                        return True
+        return False
+    if not path.endswith(".rs"):
+        return False
+    # Rust: only a conjunction on the outer length if qualifies. A check in
+    # its body can guard a retry while leaving an unconditional discard below.
+    executable = mask_effect_literals("\n".join(lines), path).splitlines()
+    condition = executable[branch - 1].strip()
+    if (
+        not condition.startswith("if ")
+        or not condition.endswith("{")
+        or "||" in condition
+    ):
+        return False
+    direct = rf"{re.escape(receiver)}\.message\.content(?:\.\w+\(\))*"
+    aliases = [direct]
+    for prior in executable[max(0, branch - 3) : branch - 1]:
+        alias = re.fullmatch(rf"\s*let\s+(\w+)\s*=\s*{direct}\s*;\s*", prior)
+        if alias:
+            aliases.append(re.escape(alias[1]))
+    empty_guard = any(
+        re.search(rf"&&\s*{alias}(?:\.trim\(\))?\.is_empty\(\)\s*\{{$", condition)
+        is not None
+        for alias in aliases
+    )
+    if not empty_guard:
+        return False
+    depth = 0
+    for index in range(branch - 1, len(executable)):
+        depth += executable[index].count("{") - executable[index].count("}")
+        if depth == 0:
+            following_line = next(
+                (line.strip() for line in executable[index + 1 :] if line.strip()), ""
+            )
+            # The nonempty path must retain this reply immediately after the
+            # guarded branch. A following unconditional break is a discard.
+            return (
+                re.fullmatch(
+                    rf"{re.escape(output[1])}\s*=\s*{direct}\s*;", following_line
+                )
+                is not None
+            )
+    return False
 
 
 def _aggregate_fingerprint(

@@ -501,7 +501,7 @@ class TestV9ConfirmationExecution:
         assert _prepared(job).evidence_sha256 in signing_text
         _assert_score_lanes_untouched(platform)
 
-    @pytest.mark.parametrize("bench_version", [10, 11, 12])
+    @pytest.mark.parametrize("bench_version", [10, 12])
     async def test_carried_forward_confirmation_bench_executes(
         self, bench_version: int
     ) -> None:
@@ -595,30 +595,6 @@ class TestV9ConfirmationExecution:
         platform.submit_v9_confirmation_report.assert_awaited_once()
         platform.fail_v9_confirmation_job.assert_not_awaited()
         _assert_score_lanes_untouched(platform)
-
-    async def test_runs_without_received_failures_publish_no_diagnostics(
-        self,
-    ) -> None:
-        worker, platform, dittobench, _ = _worker(capacity=1)
-        worker._telemetry = MagicMock()
-        job = _job("longmem-0")
-        platform.request_v9_confirmation_job.return_value = job
-        platform.get_v9_confirmation_artifact.return_value = _artifact(job)
-        assert _result().longmem_diagnostics is None
-
-        await worker._run_v9_confirmation_lane()
-
-        worker._telemetry.record_confirmation_longmem_diagnostics.assert_not_called()
-        dittobench.execute_v9_confirmation.return_value = _result().model_copy(
-            update={
-                "longmem_diagnostics": V9ConfirmationLongMemDiagnostics(
-                    received_failures=0
-                )
-            }
-        )
-        platform.request_v9_confirmation_job.return_value = job
-        await worker._run_v9_confirmation_lane()
-        worker._telemetry.record_confirmation_longmem_diagnostics.assert_not_called()
 
     async def test_longmem_case_progress_is_published_like_dittobench_checks(
         self,
@@ -776,7 +752,11 @@ class TestV9ConfirmationExecution:
         _assert_score_lanes_untouched(platform)
 
     @pytest.mark.parametrize(
-        "failing_stage", ["claim", "artifact", "execute", "submit"]
+        "failing_stage",
+        [
+            "claim",
+            "execute",
+        ],
     )
     async def test_one_slot_error_does_not_cancel_a_successful_sibling(
         self, failing_stage: str

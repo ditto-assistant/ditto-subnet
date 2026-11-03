@@ -13,6 +13,7 @@ import (
 // Replay only the served CSV/JSON and public question. This intentionally does
 // not call the world evaluator or read the query program from provenance.
 func TestV13EnterpriseCaseAnswersFromServedRecords(t *testing.T) {
+	t.Parallel()
 	entityPattern := regexp.MustCompile(`entity-[a-f0-9]+`)
 	checked := 0
 	for seed := int64(0); seed < 18; seed++ {

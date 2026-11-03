@@ -67,7 +67,11 @@ def test_production_api_has_a_passive_health_standby() -> None:
         "localhost:{{ platform_api_standby_port }} {"
     )
     assert proxy in template
-    for match in ("lb_policy first", "fail_duration 10s", "lb_try_duration 5s"):
+    for match in (
+        "lb_policy first",
+        "fail_duration 10s",
+        "import ditto_api_restart_handover",
+    ):
         assert match in template.split(proxy, 1)[1].split("}", 1)[0]
 
 

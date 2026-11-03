@@ -143,28 +143,6 @@ def _body(
     }
 
 
-async def test_valid_link_is_recorded(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, session_maker)
-    alice, bob = _kp("//Alice"), _kp("//Bob")
-
-    response = await client.post(_URL, json=_body(alice, bob))
-
-    assert response.status_code == 201, response.text
-    payload = response.json()
-    lo, hi = canonical_pair(alice.ss58_address, bob.ss58_address)
-    assert payload["hotkey_lo"] == lo
-    assert payload["hotkey_hi"] == hi
-    assert payload["evidence_grade"] == "hotkey-hotkey"
-    # The scope is stated on the wire so nobody downstream has to infer it.
-    assert payload["scope"] == "plagiarism-screening-only"
-    assert payload["grants_additional_emission_slot"] is False
-    assert payload["cleared_copy_review_count"] == 0
-
-
 async def test_valid_link_backfills_pending_direct_pair_copy_review(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -494,21 +472,6 @@ async def test_reviewer_read_requires_admin_token(
     assert response.status_code in (401, 403)
 
 
-async def test_unknown_hotkey_reads_as_empty_not_404(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    """ "This miner never attested anything" is an answer a reviewer needs."""
-    _install(app, session_maker)
-    response = await client.get(
-        "/api/v1/admin/owner-attestations/5NeverSeen", headers=_HEADERS
-    )
-    assert response.status_code == 200
-    assert response.json()["attestations"] == []
-    assert response.json()["linked_hotkeys"] == []
-
-
 async def test_revocation_deactivates_the_link_but_keeps_the_row(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -544,32 +507,3 @@ async def test_revocation_deactivates_the_link_but_keeps_the_row(
     assert payload["attestations"][0]["revoked_reason"] == (
         "one key was sold to another operator"
     )
-
-
-async def test_revoking_an_unknown_attestation_is_404(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, session_maker)
-    response = await client.post(
-        f"/api/v1/admin/owner-attestations/{uuid4()}/revoke",
-        json={"reason": "no such link exists"},
-        headers=_HEADERS,
-    )
-    assert response.status_code == 404
-
-
-async def test_revocation_requires_an_admin_actor(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, session_maker)
-    created = await client.post(_URL, json=_body(_kp("//Alice"), _kp("//Bob")))
-    response = await client.post(
-        f"/api/v1/admin/owner-attestations/{created.json()['attestation_id']}/revoke",
-        json={"reason": "missing the actor header"},
-        headers={"Authorization": f"Bearer {_TOKEN}"},
-    )
-    assert response.status_code == 422

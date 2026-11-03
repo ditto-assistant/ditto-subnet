@@ -134,17 +134,22 @@ def test_unknown_reason_and_missing_ancestor_stay_unknown() -> None:
 
 
 def test_effective_mode_is_master_capped_per_class() -> None:
-    settings = CopyCourtSettings(
-        mode="shadow",
-        byte_identical_resubmission_mode="enforce",
-    )
-    assert settings.effective_mode("rejected_resubmission_byte_identical") == ("shadow")
-    assert settings.effective_mode("near_duplicate") == "off"
-    enforced = CopyCourtSettings(
-        mode="enforce",
-        byte_identical_resubmission_mode="enforce",
-    )
-    assert enforced.effective_mode("rejected_resubmission_byte_identical") == (
-        "enforce"
-    )
-    assert enforced.effective_mode("near_duplicate") == "off"
+    settings = CopyCourtSettings(mode="shadow", near_duplicate_mode="enforce")
+    assert settings.effective_mode("near_duplicate") == "shadow"
+    assert settings.effective_mode("rejected_resubmission_byte_identical") == "off"
+    enforced = CopyCourtSettings(mode="enforce", near_duplicate_mode="enforce")
+    assert enforced.effective_mode("near_duplicate") == "enforce"
+    assert enforced.effective_mode("rejected_resubmission_byte_identical") == "off"
+
+
+def test_enforce_is_only_accepted_for_the_near_duplicate_class() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    for name in (
+        "byte_identical_resubmission_mode",
+        "repack_resubmission_mode",
+        "cross_miner_resubmission_mode",
+    ):
+        with pytest.raises(ValidationError):
+            CopyCourtSettings.model_validate({"mode": "enforce", name: "enforce"})

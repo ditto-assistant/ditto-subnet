@@ -5,6 +5,10 @@ import type { input as ZodInput, output as ZodOutput } from 'zod'
 import type { components as PlatformComponents } from '../generated/platform-api'
 import {
   SCREENING_SUBMISSION_AGENT_STATUSES,
+  competitionFeesInputSchema,
+  submissionSettingsRevisionSchema,
+  retryValidationInputSchema,
+  reinstatementRetryBudgetSchema,
   scoringLeaseConfirmation,
   scoringLeaseSettingsControlSchema,
   setScoringLeaseSettingsInputSchema,
@@ -26,6 +30,8 @@ import {
   ATH_RULINGS_CONFIRMATION,
   athRulingSchema,
   athRulingPreviewItemSchema,
+  athRulingStepSchema,
+  athRulingExecuteItemSchema,
   athRulingsPreviewResponseSchema,
   athRulingsExecuteResponseSchema,
   athRulingsUploadResponseSchema,
@@ -61,6 +67,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
   inferenceConcurrencySettingsSchema,
+  DEFAULT_DECISION_LANE_SETTINGS,
   INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_CONCURRENCY,
   MAX_CHAT_REQUEST_BUDGET,
@@ -76,6 +83,8 @@ import {
   setQueuePolicySettingsInputSchema,
   validatorSlotConfirmation,
   validatorIssuanceConfirmation,
+  validatorCapacityEntrySchema,
+  benchmarkRolloutQualificationDetailSchema,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
   setValidatorIssuancePauseInputSchema,
@@ -119,6 +128,11 @@ import {
   queueValidatorScoreRetestsInputSchema,
   v9ContractRetestListSchema,
   publicLeaderboardSchema,
+  validatorFleetObservabilityMemberSchema,
+  setTrackShareSettingsInputSchema,
+  emissionAllocationConfirmation,
+  setEmissionAllocationInputSchema,
+  trackSharesConfirmation,
 } from './admin.schemas'
 
 type GeneratedConfirmationBundleView = PlatformComponents['schemas']['ConfirmationBundleView']
@@ -154,10 +168,15 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_request_budget: MAX_CHAT_REQUEST_BUDGET + 1,
@@ -180,10 +199,15 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
@@ -206,12 +230,17 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_mode: 'shadow' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
       },
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
     expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
     expect(MAX_REQUESTS_PER_MINUTE).toBe(100_000)
-    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual({
+      ...settings,
+      decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
+      scored_provider_routing: 'throughput',
+    })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       embedding_global_concurrency: 513,
@@ -235,6 +264,7 @@ describe('admin API schemas', () => {
       relay_delay_fingerprint_mode: 'off',
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,
+      sandbox_memory_limit_mib: 6144,
     })
     expect(() =>
       setInferenceConcurrencySettingsInputSchema.parse({
@@ -244,6 +274,38 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       }),
     ).toThrow(/benchmark_runtime/)
+  })
+
+  it('keeps scored provider routing optional on writes and rejects unknown modes', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: 25_000_000,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
+      embedding_per_ticket_concurrency: 12,
+      embedding_per_validator_concurrency: 48,
+      embedding_global_concurrency: 96,
+      ...INFERENCE_RPM,
+      benchmark_runtime: {
+        case_concurrency: 4,
+        relay_delay_fingerprint_mode: 'off' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+        sandbox_memory_limit_mib: 6144,
+      },
+    }
+    const write = (extra: Record<string, unknown>) =>
+      setInferenceConcurrencySettingsInputSchema.parse({
+        expectedRevision: 0,
+        settings: { ...settings, ...extra },
+        reason: 'canary the bf16 price order',
+        confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
+      })
+    expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
+      .scored_provider_routing).toBe('bf16_price_order_canary')
+    expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()
   })
 
   it('requires exact confirmation for v9 contract retests only', () => {
@@ -978,6 +1040,33 @@ describe('admin API schemas', () => {
         }),
       ).toThrow()
     }
+  })
+
+  it('parses a live generator-round lease on a row with no scoring attempt yet', () => {
+    // SN-334: a round lease is not a scoring attempt, so the row it created
+    // reports zero, and the panel must not drop the whole list over it.
+    const parsed = validatorAssignmentListSchema.parse({
+      count: 1,
+      generation: 'active',
+      active_bench_version: 13,
+      items: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'memory-agent',
+          miner_hotkey: '5Miner',
+          validator_hotkey: '5Validator',
+          issued_at: '2026-10-24T07:00:00Z',
+          deadline: '2026-10-24T08:30:00Z',
+          bench_version: 13,
+          attempt_count: 0,
+          score_count: 3,
+          provisional_composite: 0.9,
+          purpose: 'generator_round',
+        },
+      ],
+    })
+    expect(parsed.items[0].purpose).toBe('generator_round')
+    expect(parsed.items[0].attempt_count).toBe(0)
   })
 })
 
@@ -2052,6 +2141,21 @@ describe('source review causal evidence schema', () => {
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
   })
 
+  it.each(['final_text', 'answer', 'abstain', 'tool_calls',
+    'validator_observed_trajectory', 'graded_outcome'] as const)(
+    'preserves the published I8 authority transition for %s', (effect) => {
+      const finding = {
+        ...generatedFinding,
+        causal_evidence: {
+          ...generatedFinding.causal_evidence,
+          authority_transition: 'evaluation_identity_authoritative',
+          scorer_visible_effect: effect,
+        },
+      } satisfies GeneratedSourceReviewFinding
+      expect(sourceReviewFindingSchema.parse(finding).causal_evidence).toEqual(finding.causal_evidence)
+    },
+  )
+
   it('retains signed v3 I5 proof and rejects an unbound assumption', () => {
     const proof = {
       evaluation_assumption: 'A fixed evaluation answer replaces the request answer.',
@@ -2263,6 +2367,20 @@ describe('screener review settings schemas', () => {
     expect(parsed.l3_model).toBe('openai/gpt-6-sol')
   })
 
+  it('accepts GPT-6.1 Terra deep review with a deep-review budget up to an hour', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6.1-terra',
+      l2_fallback_models: ['openai/gpt-6-sol', 'z-ai/glm-5.2'],
+      l3_model: 'openai/gpt-6.1-terra',
+      timeout_seconds: 2_700,
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.l3_model).toBe('openai/gpt-6.1-terra')
+    expect(parsed.timeout_seconds).toBe(2_700)
+    expect(() => screenerReviewSettingsSchema.parse({ ...settings, timeout_seconds: 3_601 })).toThrow()
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],
@@ -2332,7 +2450,7 @@ describe('screener review settings schemas', () => {
   })
 
   it('accepts Platform L2 budgets and preserves the upper bounds', () => {
-    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [1800, 256]]) {
+    for (const [timeout_seconds, max_steps] of [[1200, 32], [1800, 128], [3600, 256]]) {
       const parsed = screenerReviewSettingsSchema.parse({
         ...settings, timeout_seconds, max_steps, max_input_tokens: 5_000_000,
         max_output_tokens: 1_000_000,
@@ -2346,7 +2464,7 @@ describe('screener review settings schemas', () => {
       expect(parsed.max_cost_usd).toBe(25)
     }
     expect(() => screenerReviewSettingsSchema.parse({
-      ...settings, timeout_seconds: 1801,
+      ...settings, timeout_seconds: 3601,
     })).toThrow()
     expect(() => screenerReviewSettingsSchema.parse({
       ...settings, max_steps: 257,
@@ -2885,6 +3003,7 @@ describe('queue policy settings schemas', () => {
       require_cohort_complete: true,
       require_desired_era_drained: true,
     },
+    lineage_reference_mode: 'same_owner_version',
   }
 
   function input(overrides: Record<string, unknown> = {}) {
@@ -3002,6 +3121,7 @@ describe('queue policy settings schemas', () => {
       'deferred_source_review',
       'fresh_submission_slots',
       'lane_cycle_size',
+      'lineage_reference_mode',
       'owner_concurrent_submission_limit',
       'prev_gen_carryover',
       'priority_cohort_size',
@@ -3013,6 +3133,14 @@ describe('queue policy settings schemas', () => {
   it('requires every policy field on write, because a revision stores the whole object', () => {
     const { owner_concurrent_submission_limit: _limit, ...missingLimit } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingLimit)).toThrow()
+    const { lineage_reference_mode: _mode, ...missingMode } = settings
+    expect(() => queuePolicySettingsWriteSchema.parse(missingMode)).toThrow()
+    expect(queuePolicySettingsSchema.parse(missingMode).lineage_reference_mode).toBe(
+      'same_owner_version',
+    )
+    expect(() =>
+      queuePolicySettingsWriteSchema.parse({ ...settings, lineage_reference_mode: 'anyone' }),
+    ).toThrow()
 
     const { prev_gen_carryover: _carryover, ...missingCarryover } = settings
     expect(() => queuePolicySettingsWriteSchema.parse(missingCarryover)).toThrow()
@@ -3368,6 +3496,168 @@ describe('validator slot settings schemas', () => {
     expect(parsed.current[0].actor).toBe('peyton@omniaura.ai')
   })
 
+  it('reads capacity from a platform that predates reserved round slots as zero', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-25T00:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 4,
+      serviceable_slots: 4,
+      claimed_slots: 1,
+      assignments: [],
+    })
+    expect(parsed.reserved_round_slots).toBe(0)
+  })
+
+  it('reads a validator running a generator-round panel lease', () => {
+    const parsed = validatorCapacityEntrySchema.parse({
+      validator_hotkey: '5' + 'B'.repeat(47),
+      seen_at: '2026-10-27T19:00:00Z',
+      bench_serviceability: 'serving',
+      admission: 'accepting',
+      issuance_paused: false,
+      configured_slots: 8,
+      serviceable_slots: 8,
+      reserved_round_slots: 1,
+      claimed_slots: 1,
+      assignments: [
+        {
+          agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+          agent_name: 'panel-agent',
+          slot_id: 'slot-0',
+          bench_version: 13,
+          purpose: 'generator_round',
+          stage: 'running_benchmark',
+          started_at: '2026-10-27T18:55:00Z',
+          age_seconds: 300,
+          completed_checks: null,
+          total_checks: null,
+          stalled: false,
+          checks_per_minute: null,
+          estimated_remaining_slot_minutes: null,
+        },
+      ],
+    })
+    expect(parsed.assignments[0].purpose).toBe('generator_round')
+  })
+
+  describe('per-validator overrides and the round reservation', () => {
+    const bigHost = '5' + 'B'.repeat(47)
+    const smallHost = '5' + 'C'.repeat(47)
+    const withOverrides = {
+      ...settings,
+      generator_round_reserved_slots: 1,
+      per_validator: {
+        [bigHost]: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+        [smallHost]: { max_concurrent_slots: 1, generator_round_reserved_slots: null },
+      },
+    }
+
+    it('accepts and round-trips overrides through the write schema', () => {
+      const parsed = setValidatorSlotSettingsInputSchema.parse(
+        input({ settings: withOverrides, confirmation: validatorSlotConfirmation(2) }),
+      )
+      expect(parsed.settings).toEqual(withOverrides)
+      // The body Backroom forwards is exactly what it parsed: nothing stripped.
+      expect(JSON.parse(JSON.stringify(parsed.settings))).toEqual(withOverrides)
+    })
+
+    it('still parses a policy from a platform that predates the new fields', () => {
+      expect(validatorSlotSettingsSchema.parse(settings)).toEqual(settings)
+    })
+
+    it('rejects out-of-range, empty and mis-keyed overrides', () => {
+      const bad = (perValidator: unknown, reserved: unknown = 1) =>
+        validatorSlotSettingsSchema.safeParse({
+          ...settings,
+          generator_round_reserved_slots: reserved,
+          per_validator: perValidator,
+        }).success
+      expect(bad({}, 9)).toBe(false)
+      expect(bad({}, -1)).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 0 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: { generator_round_reserved_slots: 9 } })).toBe(false)
+      expect(bad({ [bigHost]: {} })).toBe(false)
+      expect(bad({ 'not-a-hotkey': { max_concurrent_slots: 2 } })).toBe(false)
+      expect(bad({ [bigHost]: { max_concurrent_slots: 4 } })).toBe(true)
+    })
+
+    it('caps the override map at 256 validators', () => {
+      const overrides = (count: number) =>
+        Object.fromEntries(
+          Array.from({ length: count }, (_, index) => [
+            '5' + index.toString().padStart(47, 'A').replace(/0/g, 'z'),
+            { max_concurrent_slots: 2 },
+          ]),
+        )
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(256) })
+          .success,
+      ).toBe(true)
+      expect(
+        validatorSlotSettingsSchema.safeParse({ ...settings, per_validator: overrides(257) })
+          .success,
+      ).toBe(false)
+    })
+
+    it('reads the per-validator fleet sizing view', () => {
+      const parsed = validatorSlotSettingsControlSchema.parse({
+        current: [],
+        history: [],
+        default: settings,
+        effective: {
+          revision: 0,
+          scope: '*',
+          settings: withOverrides,
+          checksum: '',
+          source: 'default',
+          hard_slot_ceiling: 8,
+          disk_restricted_slots: 1,
+          max_age_seconds: 5.0,
+        },
+        generator_round_reservation_active: true,
+        fleet: [
+          {
+            validator_hotkey: bigHost,
+            seen_at: '2026-10-25T00:00:00Z',
+            online: true,
+            issuance_paused: false,
+            round_capable: true,
+            override: { max_concurrent_slots: 6, generator_round_reserved_slots: 2 },
+            advertised_slots: 8,
+            healthy_slots: 8,
+            max_concurrent_slots: 6,
+            allowed_slots: 6,
+            configured_reserved_round_slots: 2,
+            reserved_round_slots: 2,
+            non_round_slot_budget: 4,
+            live_leases_by_purpose: { canonical_quorum: 3, generator_round: 1 },
+            host_specs: {
+              cpu_count: 32,
+              cpu_physical_cores: 16,
+              memory_total_mib: 131072,
+              disk_total_gib: 2000,
+              architecture: 'x86_64',
+            },
+            cpu_percent: 60,
+            memory_percent: 20,
+            disk_percent: 40,
+          },
+        ],
+      })
+      expect(parsed.generator_round_reservation_active).toBe(true)
+      expect(parsed.fleet?.[0]).toMatchObject({
+        allowed_slots: 6,
+        reserved_round_slots: 2,
+        non_round_slot_budget: 4,
+      })
+      expect(parsed.effective.settings.per_validator).toEqual(withOverrides.per_validator)
+    })
+  })
+
   // The empty-default failure class: the platform 422s a partial body, but a
   // client that defaults its knobs pre-fills the omission into a full body and
   // the operator silently ships a default they never chose. Every knob is
@@ -3678,11 +3968,16 @@ describe('continual retest cohort sizing against an older platform', () => {
     statistical_band_mode: false,
     ledger_pin_mode: false,
     crown_incumbent_mode: false,
+    crown_gate_mode: false,
+    min_dethrone_confirmations: false,
+    champion_standing_rank: false,
     retest_cohort_size: false,
     wave_membership: false,
     retest_eligibility_mode: false,
     retest_eligibility_z: false,
     retest_cohort_max_size: false,
+    wave_cadence_tempos: false,
+    wave_seeds_per_window: false,
   }
   const fullSupport = Object.fromEntries(
     Object.keys(legacySupport).map((field) => [field, true]),
@@ -3695,6 +3990,9 @@ describe('continual retest cohort sizing against an older platform', () => {
     statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'live' as const,
     crown_incumbent_mode: 'disabled' as const,
+    crown_gate_mode: 'disabled' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     idle_retests_enabled: true,
     rollout_standdown: 'all' as const,
     wave_membership: 'strict' as const,
@@ -3702,6 +4000,8 @@ describe('continual retest cohort sizing against an older platform', () => {
     retest_eligibility_mode: 'fixed' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('tells a defaulted cohort size apart from a reported one', () => {
@@ -3797,11 +4097,16 @@ describe('continual retest cohort sizing against an older platform', () => {
       statistical_band_mode: false,
       ledger_pin_mode: false,
       crown_incumbent_mode: false,
+      crown_gate_mode: false,
+      min_dethrone_confirmations: false,
+      champion_standing_rank: false,
       retest_cohort_size: false,
       wave_membership: true,
       retest_eligibility_mode: false,
       retest_eligibility_z: false,
       retest_cohort_max_size: false,
+      wave_cadence_tempos: false,
+      wave_seeds_per_window: false,
     })
     expect(continualRetestFieldSupport(null).wave_membership).toBe(false)
   })
@@ -3814,6 +4119,9 @@ describe('continual retest write contract', () => {
     statistical_band_mode: 'disabled' as const,
     ledger_pin_mode: 'epoch' as const,
     crown_incumbent_mode: 'fleet_ready' as const,
+    crown_gate_mode: 'fleet_ready' as const,
+    min_dethrone_confirmations: 3,
+    champion_standing_rank: 3,
     idle_retests_enabled: false,
     rollout_standdown: 'capable_validators' as const,
     wave_membership: 'strict' as const,
@@ -3821,6 +4129,8 @@ describe('continual retest write contract', () => {
     retest_eligibility_mode: 'statistical' as const,
     retest_eligibility_z: 1.64,
     retest_cohort_max_size: 25,
+    wave_cadence_tempos: 0,
+    wave_seeds_per_window: 3,
   }
 
   it('refuses a body missing any field a revision would overwrite', () => {
@@ -3834,11 +4144,16 @@ describe('continual retest write contract', () => {
       'statistical_band_mode',
       'ledger_pin_mode',
       'crown_incumbent_mode',
+      'crown_gate_mode',
+      'min_dethrone_confirmations',
+      'champion_standing_rank',
       'wave_membership',
       'retest_cohort_size',
       'retest_eligibility_mode',
       'retest_eligibility_z',
       'retest_cohort_max_size',
+      'wave_cadence_tempos',
+      'wave_seeds_per_window',
     ] as const) {
       const { [field]: _omitted, ...partial } = complete
       expect(continualRetestSettingsWriteSchema.safeParse(partial).success).toBe(false)
@@ -3881,6 +4196,8 @@ describe('continual retest write contract', () => {
         ...complete,
         retest_cohort_size: 25,
         retest_cohort_max_size: 25,
+        wave_cadence_tempos: 0,
+        wave_seeds_per_window: 3,
       }).success,
     ).toBe(true)
   })
@@ -3899,6 +4216,9 @@ describe('continual retest write contract', () => {
       statistical_band_mode: 'disabled',
       ledger_pin_mode: 'epoch',
       crown_incumbent_mode: 'disabled',
+      crown_gate_mode: 'disabled',
+      min_dethrone_confirmations: 3,
+      champion_standing_rank: 3,
       idle_retests_enabled: false,
       rollout_standdown: 'capable_validators',
       wave_membership: 'participants',
@@ -3906,6 +4226,8 @@ describe('continual retest write contract', () => {
       retest_eligibility_mode: 'fixed',
       retest_eligibility_z: 1.64,
       retest_cohort_max_size: 25,
+      wave_cadence_tempos: 0,
+      wave_seeds_per_window: 3,
     })
   })
 
@@ -4234,6 +4556,18 @@ describe('validator queue reinstatement schemas', () => {
     },
     created_at: '2026-07-27T19:00:00Z',
   }
+
+  it('accepts the fail-once zero infra-grant cap Platform records today', () => {
+    // MAX_AGENT_INFRA_RETRY_GRANTS is pinned at 0, so a real reinstatement row
+    // carries 0. Rejecting it broke get_validation_retry for every reinstated
+    // agent (2026-10-15, overhorizon v2).
+    const parsed = reinstatementRetryBudgetSchema.parse({
+      ...reinstatement.retry_budget_snapshot,
+      agent_infra_retry_grants: 0,
+      max_agent_infra_retry_grants: 0,
+    })
+    expect(parsed.max_agent_infra_retry_grants).toBe(0)
+  })
 
   it('reports whether an eviction can be reversed right now', () => {
     const parsed = validationRetryDetailSchema.parse({
@@ -4814,6 +5148,107 @@ describe('public leaderboard rows that do not rank', () => {
   })
 })
 
+describe('public leaderboard emissions', () => {
+  const champion = '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6d'
+  const rival = '3f1d6b8a-1c2e-4a5b-8d90-1f2e3a4b5c6e'
+  const recipient = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    role: 'champion',
+    agent_id: champion,
+    miner_hotkey: '5Champion',
+    raw_rank: 1,
+    share_of_miner_pool: 0.65,
+    shared_seed_confirmations: 0,
+    ...overrides,
+  })
+  const board = (
+    recipients: Record<string, unknown>[],
+    emissions: Record<string, unknown> = {},
+  ): Record<string, unknown> => ({
+    generated_at: '2026-10-16T00:00:00Z',
+    count: 0,
+    current_bench_version: 13,
+    active_bench_version: 13,
+    desired_bench_version: 13,
+    available_bench_versions: [13],
+    selection_mode: 'authoritative',
+    entries: [],
+    emissions: {
+      margin: 0.01,
+      dethrone_z: 1.645,
+      band_decay_min_bench_version: 9,
+      band_decay_start_composite: 0.8,
+      band_decay_rate: 4,
+      champion_share: 0.65,
+      rank_shares: [0.65, 0.2, 0.1, 0.05],
+      tail_size: 3,
+      champion_agent_id: champion,
+      champion_miner_hotkey: '5Champion',
+      raw_leader_agent_id: champion,
+      raw_leader_miner_hotkey: '5Champion',
+      recipients,
+      ...emissions,
+    },
+  })
+
+  it('reads a score-ceiling joint crown', () => {
+    // #2981: a deadlocked crown pools the champion's share across the tied
+    // cohort, and each member is published as a joint champion. Rejecting the
+    // role failed every leaderboard tool exactly when operators had to explain
+    // the split.
+    const parsed = publicLeaderboardSchema.parse(
+      board(
+        [
+          recipient({ role: 'joint_champion', share_of_miner_pool: 0.5 }),
+          recipient({
+            role: 'joint_champion',
+            agent_id: rival,
+            miner_hotkey: '5Rival',
+            raw_rank: 2,
+            share_of_miner_pool: 0.5,
+          }),
+        ],
+        { allocation_mode: 'score_ceiling_pool', score_ceiling_pool_size: 2 },
+      ),
+    )
+
+    expect(parsed.emissions?.allocation_mode).toBe('score_ceiling_pool')
+    expect(parsed.emissions?.score_ceiling_pool_size).toBe(2)
+    expect(parsed.emissions?.recipients.map((each) => each.role)).toEqual([
+      'joint_champion',
+      'joint_champion',
+    ])
+  })
+
+  it('keeps an unpaid recipient unpaid', () => {
+    // A provisional incumbent holds its slot unpaid and validators burn its
+    // share; Platform omits `paid` only when it is true.
+    const parsed = publicLeaderboardSchema.parse(
+      board([
+        recipient({ paid: false }),
+        recipient({ role: 'tail', agent_id: rival, miner_hotkey: '5Rival', raw_rank: 2, share_of_miner_pool: 0.2 }),
+      ]),
+    )
+
+    expect(parsed.emissions?.recipients.map((each) => each.paid)).toEqual([false, true])
+    expect(parsed.emissions?.allocation_mode).toBe('ranked')
+    expect(parsed.emissions?.score_ceiling_pool_size).toBe(0)
+  })
+
+  it('accepts every role and allocation mode the generated Platform type can send', () => {
+    // The next enum Platform adds fails this type check, not production tools.
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicEmissionRecipient']['role']
+    >().toMatchTypeOf<
+      NonNullable<ZodInput<typeof publicLeaderboardSchema>['emissions']>['recipients'][number]['role']
+    >()
+    expectTypeOf<
+      PlatformComponents['schemas']['PublicKothEmissions']['allocation_mode']
+    >().toMatchTypeOf<
+      NonNullable<NonNullable<ZodInput<typeof publicLeaderboardSchema>['emissions']>['allocation_mode']>
+    >()
+  })
+})
+
 describe('batched ATH rulings schemas', () => {
   const ruling = {
     action: 'reject',
@@ -4865,6 +5300,35 @@ describe('batched ATH rulings schemas', () => {
     ).toThrow()
   })
 
+  it('parses a hold-free clear as an attest step', () => {
+    const preview = athRulingPreviewItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      ok: true,
+      disposition: 'ready',
+      stale_guard: false,
+      would_change_crown: false,
+      steps: ['attest'],
+      reason: 'Reviewed: clean',
+      message: 'will clear without holding (the agent stays on the board)',
+    })
+    expect(preview.steps).toEqual(['attest'])
+    const executed = athRulingExecuteItemSchema.parse({
+      index: 0,
+      action: 'clear',
+      agent_id: ruling.agent_id,
+      status: 'applied',
+      agent_status: 'scored',
+      would_change_crown: false,
+      steps_applied: ['attest'],
+      annotated: true,
+      message: 'ruling applied and audit rows annotated',
+    })
+    expect(executed.steps_applied).toEqual(['attest'])
+    expect(() => athRulingStepSchema.parse('withdraw')).toThrow()
+  })
+
   // The drift guard: every Platform response field has an explicit validator
   // and the key sets match the generated contract in both directions.
   it('mirrors the generated Platform contract field-for-field', () => {
@@ -4885,6 +5349,14 @@ describe('batched ATH rulings schemas', () => {
     >()
     expectTypeOf<ZodInput<typeof athRulingSchema>>().toMatchTypeOf<
       PlatformComponents['schemas']['AdminAthRuling']
+    >()
+    // A step Platform sends must parse here: Zod fails the whole response on
+    // one unknown enum value, which would blank every item of a preview.
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingPreviewItem']['steps']>[number]
+    >()
+    expectTypeOf<ZodOutput<typeof athRulingStepSchema>>().toEqualTypeOf<
+      NonNullable<PlatformComponents['schemas']['AdminAthRulingExecuteItem']['steps_applied']>[number]
     >()
     expect(
       Object.keys(
@@ -5148,5 +5620,181 @@ describe('scoring lease settings (#1156)', () => {
         confirmation: scoringLeaseConfirmation(180),
       }),
     ).toThrow(/APPLY SCORING TICKET TTL 150 MINUTES/)
+  })
+})
+
+describe('burn settings payout curve ordering', () => {
+  it('refuses an increasing curve on writes but still reads a stored one', async () => {
+    const { burnSettingsSchema, burnSettingsWriteSchema } = await import('./admin.schemas')
+    const increasing = { burn_share: 0, rank_shares: [0.07, 0.1, 0.13, 0.2, 0.5] }
+    expect(burnSettingsWriteSchema.safeParse(increasing).success).toBe(false)
+    expect(burnSettingsSchema.safeParse(increasing).success).toBe(true)
+    expect(
+      burnSettingsWriteSchema.safeParse({ burn_share: 0, rank_shares: [0.5, 0.2, 0.13, 0.1, 0.07] }).success,
+    ).toBe(true)
+  })
+})
+
+describe('validator fleet host specs parity', () => {
+  it('accepts every host_specs shape Platform publishes', () => {
+    type Generated = NonNullable<
+      PlatformComponents['schemas']['PublicValidatorHeartbeat']['host_specs']
+    >
+    type Parsed = NonNullable<ZodInput<typeof validatorFleetObservabilityMemberSchema>['host_specs']>
+    expectTypeOf<Generated>().toMatchTypeOf<Parsed>()
+  })
+})
+
+
+describe('targeted validator retry input', () => {
+  const input = {
+    agentId: '3fab0521-a662-436f-8239-8fff9ff78150',
+    expectedSnapshot: 'a'.repeat(64),
+    reason: 'Recover the final score after resource correction',
+  }
+
+  it('rejects whitespace-only selectors and normalizes padded hotkeys', () => {
+    expect(retryValidationInputSchema.safeParse({ ...input, targetValidatorHotkey: '   ' }).success).toBe(false)
+    expect(retryValidationInputSchema.parse({ ...input, targetValidatorHotkey: '  validator-3  ' }).targetValidatorHotkey).toBe('validator-3')
+    expect(retryValidationInputSchema.parse(input).targetValidatorHotkey).toBeUndefined()
+  })
+})
+
+describe('track share settings', () => {
+  it('spells out the split, with no trailing space and a clear phrase for null', () => {
+    expect(trackSharesConfirmation({ generator: 1000, memory: 9000 })).toBe(
+      'APPLY TRACK SHARES memory=9000 generator=1000',
+    )
+    expect(trackSharesConfirmation({ memory: 0 })).toBe('APPLY TRACK SHARES')
+    expect(trackSharesConfirmation(null)).toBe('CLEAR TRACK SHARES')
+  })
+
+  it('mirrors the Platform refusals', () => {
+    const base = { expectedRevision: 0, reason: 'activate generator emissions' }
+    const parse = (shares: Record<string, number> | null) =>
+      setTrackShareSettingsInputSchema.safeParse({
+        ...base,
+        settings: { track_shares_bps: shares },
+        confirmation: trackSharesConfirmation(shares),
+      }).success
+    expect(parse({ memory: 9000, generator: 1000 })).toBe(true)
+    expect(parse(null)).toBe(true)
+    expect(parse({ generator: 1000 })).toBe(false)
+    expect(parse({ memory: 9000, router: 1000 })).toBe(false)
+    expect(parse({ memory: 9500, generator: 1000 })).toBe(false)
+    expect(parse({ memory: 0 })).toBe(false)
+    expect(parse({ memory: 9000, bogus: 0 })).toBe(false)
+  })
+})
+
+describe('emission allocation', () => {
+  const live = [
+    { kind: 'burn' as const, bps: 5000 },
+    { kind: 'track' as const, id: 'memory', bps: 3500 },
+    { kind: 'track' as const, id: 'generator', bps: 1500 },
+  ]
+
+  it('spells every nonzero entry in canonical order', () => {
+    expect(emissionAllocationConfirmation([live[2], { kind: 'gamma', bucket: 'gm', bps: 0 }, live[0], live[1]])).toBe(
+      'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+    )
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'gamma', bucket: 'gm', bps: 500 },
+        { kind: 'burn', bps: 4500 },
+        live[1],
+        live[2],
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4500 memory=3500 generator=1500 gamma:gm=500')
+  })
+
+  it('orders Gamma buckets by codepoint like Platform', () => {
+    expect(
+      emissionAllocationConfirmation([
+        { kind: 'burn', bps: 4000 },
+        live[1],
+        live[2],
+        { kind: 'gamma', bucket: 'gm2', bps: 600 },
+        { kind: 'gamma', bucket: 'gm_2', bps: 400 },
+      ]),
+    ).toBe('APPLY EMISSION ALLOCATION burn=4000 memory=3500 generator=1500 gamma:gm2=600 gamma:gm_2=400')
+  })
+
+  it.each([
+    ['sum short of 10000', [live[0], live[1], { kind: 'track', id: 'generator', bps: 1400 }]],
+    ['duplicate', [...live, { kind: 'track', id: 'memory', bps: 0 }]],
+    ['unpaid coding', [{ kind: 'burn', bps: 4000 }, live[1], live[2], { kind: 'track', id: 'coding', bps: 1000 }]],
+    ['missing generator', [{ kind: 'burn', bps: 6500 }, live[1], { kind: 'track', id: 'router', bps: 0 }]],
+    ['burn with an id', [{ kind: 'burn', id: 'memory', bps: 5000 }, live[1], live[2]]],
+  ])('refuses %s', (_label, entries) => {
+    const parsed = setEmissionAllocationInputSchema.safeParse({
+      expectedRevision: 0,
+      entries,
+      reason: 'operator split change',
+      confirmation: emissionAllocationConfirmation(entries as typeof live),
+    })
+    expect(parsed.success).toBe(false)
+  })
+
+  it('accepts the live split with its phrase', () => {
+    expect(
+      setEmissionAllocationInputSchema.safeParse({
+        expectedRevision: 0,
+        entries: live,
+        reason: 'operator split change',
+        confirmation: 'APPLY EMISSION ALLOCATION burn=5000 memory=3500 generator=1500',
+      }).success,
+    ).toBe(true)
+  })
+})
+
+describe('competition fee policy schemas', () => {
+  it('rejects unknown fields in operator input but tolerates them on read', () => {
+    expect(
+      competitionFeesInputSchema.safeParse({
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, extra: 1 },
+      }).success,
+    ).toBe(false)
+    const revision = submissionSettingsRevisionSchema.parse({
+      revision: 2,
+      parent_revision: 1,
+      cooldown_seconds: 3600,
+      fee_amount_rao: 1_000_000,
+      competition_fees: {
+        generator: { fee_amount_rao: 2_000_000, fee_required: true, added_later: 'x' },
+      },
+      reason: 'price generator uploads',
+      actor: 'operator',
+      created_at: null,
+    })
+    expect(revision.competition_fees.generator).toMatchObject({
+      fee_amount_rao: 2_000_000,
+      fee_required: true,
+    })
+  })
+})
+
+describe('benchmark rollout qualification detail', () => {
+  it('reads an agent while no rollout is open', () => {
+    const parsed = benchmarkRolloutQualificationDetailSchema.parse({
+      agent_id: '90cb5697-cbc1-40f4-a27e-439a7986a054',
+      agent_name: 'top-five-agent',
+      agent_status: 'scored',
+      artifact_sha256: 'ab'.repeat(32),
+      rollout_id: null,
+      source_bench_version: null,
+      target_bench_version: null,
+      currently_top_five: true,
+      rollout_member: false,
+      target_dataset_sha256: null,
+      total_score_count: 3,
+      source_score_count: 0,
+      target_score_count: 0,
+      screening_attempt_active: false,
+      validator_run_active: false,
+      qualification_allowed: false,
+      blocking_reason: 'no benchmark rollout is open',
+    })
+    expect(parsed.source_bench_version).toBeNull()
   })
 })

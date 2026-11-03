@@ -17,7 +17,7 @@ import {
   BACKROOM_WRITE_SCOPE,
   type BackroomEnv,
   type McpGrantProps,
-} from './mcp.server'
+} from './mcp-contract.server'
 import { accessLevelForEmail } from '../lib/auth.policy'
 import { constantTimeEqual, randomToken, sealToken, unsealToken } from './crypto.server'
 import { readSessionFromRequest } from './session.server'

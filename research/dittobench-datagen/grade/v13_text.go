@@ -96,13 +96,20 @@ func isWordRuneV13(r rune) bool {
 // rune boundaries, exact number-token matching for purely numeric values, and
 // the same single-common-word refusal.
 func hitV13(expected, response string) bool {
+	return hitRuleV13(expected, response, false)
+}
+
+// hitRuleV13 is hitV13 with the number-token boundary rule explicit:
+// punctBounds (v14 numberPunctuationBounds) lets a "." or "," that no digit
+// follows end a number token. hitV13 is hitRuleV13(..., false).
+func hitRuleV13(expected, response string, punctBounds bool) bool {
 	e := normalizeV13(expected)
 	if e == "" {
 		return false
 	}
 	r := foldV13(response)
 	if isPureNumber(e) {
-		return containsNumberTokenV13(r, e)
+		return indexNumberTokenRuleV13(r, e, 0, punctBounds) >= 0
 	}
 	if !strings.Contains(e, " ") && commonWords[e] {
 		return false
@@ -112,8 +119,13 @@ func hitV13(expected, response string) bool {
 
 // hitAnyV13 mirrors hitAny for the v13 fold.
 func hitAnyV13(accept []string, response string) bool {
+	return hitAnyRuleV13(accept, response, false)
+}
+
+// hitAnyRuleV13 is hitAnyV13 under hitRuleV13's boundary rule.
+func hitAnyRuleV13(accept []string, response string, punctBounds bool) bool {
 	for _, a := range accept {
-		if hitV13(a, response) {
+		if hitRuleV13(a, response, punctBounds) {
 			return true
 		}
 	}
@@ -175,6 +187,13 @@ func containsNumberTokenV13(text, num string) bool {
 // text at or after from whose neighbours are not number-attached runes
 // (digits, ".", ",", "-"), or -1.
 func indexNumberTokenV13(text, num string, from int) int {
+	return indexNumberTokenRuleV13(text, num, from, false)
+}
+
+// indexNumberTokenRuleV13 is indexNumberTokenV13 with the trailing boundary
+// rule explicit: with punctBounds a "." or "," after num ends it unless a
+// digit follows (numAttachedAfterV14). The leading boundary is unchanged.
+func indexNumberTokenRuleV13(text, num string, from int, punctBounds bool) int {
 	if num == "" || from > len(text) {
 		return -1
 	}
@@ -191,8 +210,12 @@ func indexNumberTokenV13(text, num string, from int) int {
 		}
 		after := true
 		if end := j + len(num); end < len(text) {
-			r, _ := utf8.DecodeRuneInString(text[end:])
-			after = !numAttachedV13(r)
+			if punctBounds {
+				after = !numAttachedAfterV14(text, end)
+			} else {
+				r, _ := utf8.DecodeRuneInString(text[end:])
+				after = !numAttachedV13(r)
+			}
 		}
 		if before && after {
 			return j
@@ -207,6 +230,12 @@ func numAttachedV13(r rune) bool {
 
 // countDistinctHitsV13 mirrors countDistinctHits for the v13 fold.
 func countDistinctHitsV13(vals []string, response string) int {
+	return countDistinctHitsRuleV13(vals, response, false)
+}
+
+// countDistinctHitsRuleV13 is countDistinctHitsV13 under hitRuleV13's
+// boundary rule.
+func countDistinctHitsRuleV13(vals []string, response string, punctBounds bool) int {
 	n := 0
 	seen := map[string]bool{}
 	for _, v := range vals {
@@ -215,7 +244,7 @@ func countDistinctHitsV13(vals []string, response string) int {
 			continue
 		}
 		seen[nv] = true
-		if hitV13(v, response) {
+		if hitRuleV13(v, response, punctBounds) {
 			n++
 		}
 	}

@@ -13,6 +13,7 @@ import (
 // category — whose intended work is a memory write — is generated at every
 // version the scorer change reasons about.
 func TestLifecycleWriteCategoryUnreachableFromV8(t *testing.T) {
+	t.Parallel()
 	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV12, protocol.BenchVersionV13} {
 		prof, ok := ProfileForVersion("full", version)
 		if !ok {

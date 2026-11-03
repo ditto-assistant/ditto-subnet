@@ -61,7 +61,8 @@ authorization does not authorize IAM changes, a merge, or production convergence
    administration and could change secret policies, so protected human review
    remains a custody boundary even without direct payload-read permissions.
    Keep the private-key secret empty until this effective-access review passes.
-5. In Chrome Hippius Console, verify `ditto-platform-pg-backups` stays private.
+5. In Hippius Console (in-app Browser when available), verify
+   `ditto-platform-pg-backups` stays private.
    Create distinct single-bucket writer and reader sub-tokens, using the
    owner-approved lifetime (initially 30 days). No all-bucket grant and no reuse
    of avatars, traces or Coding credentials. The writer needs write/delete;
@@ -99,8 +100,9 @@ authorization does not authorize IAM changes, a merge, or production convergence
    separately authorized repository-admin access before adding the private
    identity. It protects the workflow, every imported restore file, dependency
    lock and custody configuration with independent `admin` team review.
-8. With separate host-convergence authorization, run the DB playbook with
-   `postgres_backup_enabled=true`. Persist that explicit intent in the reviewed
+8. With separate host-convergence authorization, run
+   `infra/ansible/playbooks/gcp-platform-pg-backup.yml`, limited to
+   `ditto-pg-platform`, with `postgres_backup_enabled=true` in the reviewed
    host/group configuration after qualification. Do not rely on a one-time flag
    as a permanent source of truth.
    Run from an authorized controller whose `gcloud` identity may read only the
@@ -113,9 +115,16 @@ authorization does not authorize IAM changes, a merge, or production convergence
    [python3-boto3 1.37.9-1](https://packages.debian.org/trixie/python3-boto3), plus
    [python3-requests 2.32.3+dfsg-5+deb13u1](https://packages.debian.org/trixie/python3-requests).
    Refresh pins through review if Debian archives change; do not silently float.
-9. Enable the Platform reader with
+9. Enable the production-only Platform reader with
    `platform_database_backup_reader_enabled=true` in its separately authorized
-   app convergence. Platform receives only the reader pair, never the writer or
+   host configuration. Use `gcp-platform-backup-reader.yml`, limited to
+   `ditto-platform-prod`, to write only the two reader entries into the existing
+   app environment and create an exclusive protected temporary rollback copy. It
+   verifies unrelated environment lines stay identical and restores the original
+   file on a failed update, retaining the copy for recovery on failure and
+   removing it after a verified successful update. Apply the normal reviewed app deployment (or an
+   authorized API-only reload) afterward to load the pair.
+   Platform receives only the reader pair, never the writer or
    private age identity. Verify served API/Backroom SHA and authenticated
    `get_database_backup_status`; `disabled` or `unavailable` is not freshness.
 10. On the DB VM, assert the three files in `/etc/ditto-pg-backup` are root-owned,
@@ -150,6 +159,10 @@ the manifest commit marker. Retention runs only after those commits succeed:
 30 newest complete daily groups and the latest first-day dump in each of the
 12 newest months. Only exact date/timestamp/type-matching keys in daily/monthly
 are eligible for deletion. Unknown keys and incomplete groups are untouched.
+
+Listing parsers decode object keys once when the response declares
+`EncodingType=url`, preserving literal percent escapes and opaque pagination
+tokens; otherwise retention, restore discovery and status cannot match names.
 
 A successful run atomically writes `/var/lib/ditto-pg-backup/last_success`
 (UTC epoch and manifest SHA-256). Backroom reports newest object metadata and the
@@ -190,6 +203,18 @@ Use the exact reviewed restore-drill script as the rehearsal. A manifest is the
 commit marker; never select a dump without its matching encrypted globals and
 manifest. Check backup age, both encrypted SHA-256 values and sizes before
 decrypting. Use the matching PostgreSQL major plus pgvector/extensions.
+
+Database collation must also match. Production uses libc (`locale_provider=c`),
+`UTF8` encoding and `C.UTF-8` for both `collate` and `ctype`; the recovery image's
+default `en_US.utf8` reverses some canonical hotkey comparisons and rejects valid
+rows at the `owner_attestations` CHECK. The drill initializes with
+`POSTGRES_INITDB_ARGS=--locale=C.UTF-8 --encoding=UTF8` and verifies the resulting
+database profile before restoring globals or data. New manifests record
+`database_locale` from the source database. Other declared profiles fail closed.
+Only the first backup, `20261009T021522Z`, may omit that field: the drill pins
+its two encrypted object digests and uses the independently verified source
+profile above. Later backups must declare their locale. Retain all constraints;
+never bypass a CHECK or alter production rows to make a rehearsal pass.
 
 For an authorized human recovery, download only encrypted objects into a private
 mode-0700 directory, consume the separately protected identity with

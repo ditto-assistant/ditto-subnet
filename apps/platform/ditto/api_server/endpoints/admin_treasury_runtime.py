@@ -26,6 +26,7 @@ from ditto.api_server.treasury_runtime import (
     latest_runtime_row,
     lock_runtime,
     runtime_revision,
+    settings_match_policy,
 )
 from ditto.db.models import TreasuryRuntimeRevision as RuntimeRow
 from ditto_screening_protocol.treasury_approval import (
@@ -154,21 +155,7 @@ async def record_treasury_runtime(
                 if shadow_row
                 else TreasurySettings()
             )
-            if shadow.allocation_version != 2 or (
-                shadow.treasury_hotkey,
-                shadow.treasury_coldkey,
-                sorted(
-                    (b.bucket_id, b.allocation_bps, b.holding_coldkey)
-                    for b in shadow.service_buckets
-                ),
-            ) != (
-                policy.collector_hotkey,
-                policy.collector_coldkey,
-                sorted(
-                    (b.bucket_id, b.allocation_bps, b.holding_coldkey)
-                    for b in policy.buckets
-                ),
-            ):
+            if not settings_match_policy(shadow, policy):
                 raise HTTPException(
                     409,
                     "Public allocation settings differ from the signed Gamma policy",

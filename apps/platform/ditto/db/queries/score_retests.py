@@ -41,6 +41,7 @@ from ditto.db.queries.lease_liveness import (
     record_declined_force_expiry,
     record_lease_revocation,
 )
+from ditto.db.queries.tickets import release_generator_round_dataset_pin
 
 # Default only: paired with the canonical scoring TTL and, since #1156, both
 # come from the operator's scoring lease revision. Callers pass the resolved
@@ -532,6 +533,7 @@ async def activate_next_score_retest(
 
         assert ticket is not None
         deadline = now + ttl
+        release_generator_round_dataset_pin(ticket)
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.CANONICAL_QUORUM
         ticket.purpose_revision += 1

@@ -260,3 +260,20 @@ Merging application source performs semantic release and automatic runtime
 deployment. Infrastructure remains separate: Terraform apply, first-boot
 Ansible convergence, and initial secret population are explicit operator
 actions backed by a reviewed plan.
+
+
+## Generator scorer pull updates
+
+`publish-generator-scorer` publishes a signed native scorer bundle after the
+exact-source release gates. The generator scorer VM polls its own protocol-1
+channel every minute; it verifies the digest and release identity, prepares the
+sandbox images, drains its current lease and activates with rollback. See
+`services/dittobench-api/docs/challenge-scorer.md` for adoption and recovery.
+
+Datagen publication reuses the successful exact-source gate SHA instead of
+running the full suite a second time. The publication script verifies ancestry
+and an unchanged module tree, permitting only the literal semantic-release
+version stamp. Any other source change refuses reuse. Standalone invocation
+still runs the full suite, and publication always reruns the known vector and
+builds the image from the tagged source. This removes the second ~20-minute
+suite observed in the October 27 release without removing the merge gate.

@@ -172,3 +172,26 @@
 .miner-subs-more {
   margin-top: 10px;
 }
+
+.account-submission-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: start;
+  margin: 8px 0 12px;
+}
+.account-submission-download {
+  min-width: 0;
+}
+.account-submission-download p {
+  max-width: 36ch;
+  overflow-wrap: anywhere;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.account-head > div:not(.account-head-actions) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}

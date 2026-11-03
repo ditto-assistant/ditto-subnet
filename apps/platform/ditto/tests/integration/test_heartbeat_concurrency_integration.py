@@ -21,6 +21,7 @@ from ditto.api_server.endpoints.validator import _validated_heartbeat_work
 from ditto.db import create_db_engine, create_session_maker
 from ditto.db.models import Agent, ValidatorHeartbeat, ValidatorTicket
 from ditto.db.queries.heartbeats import upsert_validator_heartbeat
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -54,9 +55,7 @@ async def session_maker() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
             text("SELECT pg_advisory_lock(:key)"), {"key": _MODULE_LOCK_KEY}
         )
         async with engine.begin() as connection:
-            await connection.execute(
-                text("TRUNCATE TABLE validator_heartbeats, agents CASCADE")
-            )
+            await truncate_test_tables(connection, "validator_heartbeats", "agents")
         yield create_session_maker(engine)
     finally:
         # Explicit: returning the connection to the pool rolls back but does not

@@ -246,3 +246,95 @@ describe("weekend drift: board reshape and refresh resilience", () => {
     );
   });
 });
+
+// ── The pipeline theater: the same snapshot told as three acts ──────────────
+describe("pipeline theater", () => {
+  /** Serve the recorded generator round alongside the fixture set. */
+  function withGeneratorRound(): () => void {
+    const inner = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = new URL(raw, "http://fixtures.test").pathname;
+      const name = path.endsWith("/generator/rounds")
+        ? "generator-rounds"
+        : path.endsWith("/generator/rounds/25967")
+          ? "generator-round-25967"
+          : null;
+      if (!name) return inner(input, init);
+      return Promise.resolve(new Response(JSON.stringify(loadFixture(name)), { status: 200 }));
+    }) as typeof fetch;
+    return () => {
+      globalThis.fetch = inner;
+    };
+  }
+
+  it("tells build, screening and scoring as three acts with authoritative counts", async () => {
+    const { container } = render(() => <PipelinePage />);
+    await waitFor(() => expect(text("theater-scored")).toContain("628"));
+    const acts = Array.from(container.querySelectorAll(".theater .act h3"), (h) => h.textContent);
+    expect(acts).toEqual(["The factory", "Security", "The arena"]);
+    expect(text("theater-queued")).toBe("0");
+    expect(text("theater-held")).toBe("53");
+    expect(text("theater-rejected")).toBe("164");
+    // The three waiting rows have no attempts left: the count stays
+    // authoritative and the act says how many are on hold.
+    expect(text("theater-waiting")).toBe("3, 3 on hold");
+    // Each act carries a plain-language summary for assistive technology.
+    expect(container.querySelector(".act-arena .act-summary")?.textContent).toBe(
+      "Scoring: 3 waiting for validators (3 on hold), 0 validator runs in progress, 628 scored and live.",
+    );
+  });
+
+  it("casts the waiting submissions at the arena gate with the board's hold reading", async () => {
+    const { container } = render(() => <PipelinePage />);
+    await waitFor(() =>
+      expect(container.querySelectorAll(".act-arena .act-lanes li").length).toBe(3),
+    );
+    const first = container.querySelector(".act-arena .act-lanes li");
+    expect(first?.querySelector("[data-entity-link]")?.textContent).toBe("ditto-v1");
+    expect(first?.querySelector(".act-cast-detail")?.textContent).toBe(
+      "On hold · needs operator review",
+    );
+  });
+
+  it("replays the newest scored generator round in the arena", async () => {
+    const restore = withGeneratorRound();
+    try {
+      const { container } = render(() => <PipelinePage />);
+      await waitFor(() => expect(container.querySelector(".scene-arena")).not.toBeNull());
+      expect(container.querySelector(".arena-banner-round")?.textContent).toBe("Round 25967");
+      // Five counted generators throw; the uncounted challenger does not.
+      expect(container.querySelectorAll(".scene-arena .pf-human")).toHaveLength(5);
+      expect(container.querySelectorAll(".scene-arena .pf-ditto")).toHaveLength(5);
+      const generators = container.querySelector(".arena-table tbody");
+      expect(generators?.querySelectorAll("tr")).toHaveLength(5);
+      expect(generators?.querySelector("tr td")?.textContent).toBe("24");
+      expect(container.querySelector(".arena-stage .sr-only")?.textContent).toContain(
+        "Generator round 25967: 5 generators produced 160 cases",
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("explains an empty arena when no round has been scored", async () => {
+    const { container } = render(() => <PipelinePage />);
+    await waitFor(() => expect(text("theater-scored")).toContain("628"));
+    expect(container.querySelector(".arena-empty")?.textContent).toContain(
+      "No scored generator round to replay yet.",
+    );
+  });
+
+  it("offers a pause control for the animation", async () => {
+    const { container } = render(() => <PipelinePage />);
+    const button = await waitFor(() => {
+      const found = container.querySelector(".theater-pause") as HTMLButtonElement | null;
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(container.querySelector(".theater")).toHaveAttribute("data-playing", "true");
+    fireEvent.click(button);
+    expect(button).toHaveAttribute("aria-pressed", "true");
+    expect(container.querySelector(".theater")).toHaveAttribute("data-playing", "false");
+  });
+});

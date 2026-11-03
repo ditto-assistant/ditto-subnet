@@ -22,14 +22,9 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
 )
-from ditto.api_server.coding_hosted_signer_config import (
-    HostedControlSignerConfig,
-    check_hosted_signer_config,
-    parse_hosted_signer_config_from_env,
-)
-from ditto.api_server.coding_private_catalog import (
-    CodingPrivateCatalogConfig,
-    parse_coding_private_catalog_config_from_env,
+from ditto.api_server.ath_review_queue_slo_config import (
+    AthReviewQueueSloConfig,
+    parse_ath_review_queue_slo_config_from_env,
 )
 from ditto.api_server.datapipeline import (
     DataPipelineConfig,
@@ -41,6 +36,7 @@ from ditto.api_server.embedding import (
     parse_embedding_config_from_env,
 )
 from ditto.api_server.errors import ApiServerConfigError
+from ditto.api_server.github_link import GithubLinkConfig
 from ditto.api_server.pricing import PricingConfig, parse_pricing_config_from_env
 from ditto.api_server.private_benchmark_preparation import (
     PrivatePreparationConfig,
@@ -71,21 +67,15 @@ from ditto_screening_protocol.treasury_approval import (
 _SS58_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
 
 
-def _http_origin(value: str) -> tuple[str, str, int] | None:
-    try:
-        parsed = urlparse(value)
-        port = parsed.port
-    except ValueError:
-        return None
-    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-        return None
-    default_port = 443 if parsed.scheme == "https" else 80
-    return parsed.scheme, parsed.hostname.lower(), port or default_port
-
-
 DEFAULT_CAPACITY_EVENT_RETENTION_DAYS = 30
 # Floor for a non-zero window so a typo cannot erase incident-review history.
 MIN_CAPACITY_EVENT_RETENTION_DAYS = 7
+# Transport cap on a request body with no tighter route cap. 32 MiB matches the
+# largest body any endpoint accepts today (a validator's transcript) and clears
+# the 16 MiB canonical private-v2 publication receipt an admin registers. The
+# floor keeps a typo from refusing every ordinary JSON request.
+DEFAULT_REQUEST_BODY_MAX_BYTES = 32 << 20
+MIN_REQUEST_BODY_MAX_BYTES = 1 << 20
 
 
 @dataclass(frozen=True)
@@ -191,6 +181,16 @@ class InferenceProxyConfig:
     route_max_timeout_rate: float = 0.15
     route_cooldown_seconds: int = 30
     reviewed_calibration_manifest_sha256: str | None = None
+    # Decision-lane grant stamps. Never read from env: the operator's
+    # ``decision_lane`` board overlays them (``apply_settings``). ``None`` and
+    # zeros are "lane not granted", which is the pre-lane grant exactly.
+    decision_model: str | None = None
+    decision_input_microusd_per_mtok: int = 0
+    decision_request_budget: int = 0
+    decision_token_budget: int = 0
+    # The board's ``scored_provider_routing``; never read from env. The chat
+    # endpoint resolves the canary mode per ticket before the provider call.
+    scored_provider_routing: str = "throughput"
 
 
 @dataclass(frozen=True)
@@ -393,6 +393,10 @@ class ApiServerConfig:
     admin_api_token: str | None = None
     """Bearer token for private Backroom/operator administration endpoints."""
 
+    generator_scorer_token: str | None = None
+    """Bearer token the trusted generator-competition scorer presents to lease
+    packs and post panel results. Unset disables the scorer endpoints (503)."""
+
     ditto_link: DittoLinkConfig = field(
         default_factory=lambda: DittoLinkConfig(
             enabled=False,
@@ -405,49 +409,8 @@ class ApiServerConfig:
     )
     """Sign in with Ditto relying-party settings; disabled until configured."""
 
-    coding_catalog_curator_hotkeys: tuple[str, ...] = ()
-    """Offline curator keys allowed to register signed coding catalogs.
-
-    Empty by default, which disables registration without affecting catalog
-    reads or the rest of Platform.
-    """
-
-    coding_private_catalog: CodingPrivateCatalogConfig | None = None
-    """Optional, separately credentialed store for private coding records.
-
-    Absence disables private record loading. A public catalog commitment never
-    grants access to private corpus bytes by itself.
-    """
-
-    coding_hosted_signer: HostedControlSignerConfig = field(
-        default_factory=HostedControlSignerConfig
-    )
-    """Default-off native-v2 control signer; no secret bytes in API config."""
-
-    coding_shadow_reconciliation_enabled: bool = False
-    """Permit one explicitly confirmed shadow coding reconciliation request.
-
-    ``DITTO_CODING_SHADOW_RECONCILIATION_ENABLED`` ships false. Enabling it
-    only exposes the single-artifact admin route; it never schedules a fleet,
-    issues validator tickets, dispatches a model, or affects weights.
-    """
-
-    coding_shadow_reconciliation_selection_delay_blocks: int = 20
-    """Finalized-block delay used by the one-shot shadow reconciler.
-
-    This is Platform-controlled rather than request-controlled so one operator
-    request cannot choose a different reveal boundary.
-    """
-
-    coding_shadow_ticket_set_enabled: bool = False
-    """Permit one explicitly confirmed k=3 shadow ticket-set request.
-
-    ``DITTO_CODING_SHADOW_TICKET_SET_ENABLED`` ships false. Enabling it does
-    not select validators, run a worker, dispatch a model, or affect weights.
-    """
-
-    coding_shadow_ticket_lease_seconds: int = 60 * 60
-    """Platform-controlled lifetime for an issued shadow coding ticket set."""
+    github_link: GithubLinkConfig = field(default_factory=GithubLinkConfig)
+    """Server-side GitHub OAuth; disabled until an identity-only app is configured."""
 
     dashboard_enabled: bool = True
     """Serve the public dashboard SPA (``dashboard/index.html``) at ``/``.
@@ -499,14 +462,28 @@ class ApiServerConfig:
     """Observability-only overdue thresholds for the ordinary source-review
     queue-age SLO (ditto-subnet#2042). Both thresholds default unset."""
 
+    ath_review_queue_slo: AthReviewQueueSloConfig = field(
+        default_factory=AthReviewQueueSloConfig
+    )
+    """Observability-only overdue thresholds for the ATH-hold and copy-review
+    queue-age SLO (ditto-subnet#2042, slice 2). Every threshold defaults unset."""
+
     source_emission_confirmation_enabled: bool = True
     """Allow verified payout attribution to arm the embargo; collection stays on."""
+
+    treasury_ledger_sampler_enabled: bool = True
+    """Record one public Gamma collector reading per epoch (read-only chain state)."""
 
     public_rate_limit_per_minute: int = 0
     """Per-client-IP requests per minute on the unauthenticated upload,
     retrieval, and public read routes (``DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE``).
     ``0``, the default, installs no limiter. See
     :mod:`ditto.api_server.middleware.public_rate_limit`."""
+
+    request_body_max_bytes: int = DEFAULT_REQUEST_BODY_MAX_BYTES
+    """Byte cap on any request body without a tighter route cap
+    (``DITTO_REQUEST_BODY_MAX_BYTES``). See
+    :mod:`ditto.api_server.middleware.request_body_limit`."""
 
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -549,34 +526,6 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     dashboard_enabled = (
         os.environ.get("DITTO_DASHBOARD_ENABLED", "true").strip().lower() in _TRUTHY
     )
-    reconciliation_enabled = (
-        os.environ.get("DITTO_CODING_SHADOW_RECONCILIATION_ENABLED", "false")
-        .strip()
-        .lower()
-        in _TRUTHY
-    )
-    ticket_set_enabled = (
-        os.environ.get("DITTO_CODING_SHADOW_TICKET_SET_ENABLED", "false")
-        .strip()
-        .lower()
-        in _TRUTHY
-    )
-    try:
-        reconciliation_selection_delay_blocks = int(
-            os.environ.get("DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS", "20")
-        )
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS must be an integer"
-        ) from error
-    try:
-        coding_shadow_ticket_lease_seconds = int(
-            os.environ.get("DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS", "3600")
-        )
-    except ValueError as error:
-        raise ApiServerConfigError(
-            "DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS must be an integer"
-        ) from error
     dashboard_wandb_url = os.environ.get(
         "DITTO_DASHBOARD_WANDB_URL", "https://wandb.ai/"
     )
@@ -861,6 +810,22 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             "DITTO_PUBLIC_RATE_LIMIT_PER_MINUTE must be non-negative (0 disables)"
         )
 
+    try:
+        request_body_max_bytes = int(
+            os.environ.get(
+                "DITTO_REQUEST_BODY_MAX_BYTES", str(DEFAULT_REQUEST_BODY_MAX_BYTES)
+            )
+        )
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_REQUEST_BODY_MAX_BYTES must be an integer"
+        ) from error
+    if request_body_max_bytes < MIN_REQUEST_BODY_MAX_BYTES:
+        raise ApiServerConfigError(
+            "DITTO_REQUEST_BODY_MAX_BYTES must be at least "
+            f"{MIN_REQUEST_BODY_MAX_BYTES}"
+        )
+
     treasury_policy = parse_treasury_shadow_policy()
     treasury_approval, treasury_approved_digest, collector_policy_digest = (
         parse_treasury_shadow_approval(treasury_policy)
@@ -881,6 +846,10 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         in _TRUTHY,
         source_emission_confirmation_enabled=(
             os.environ.get("DITTO_SOURCE_EMISSION_CONFIRMATION_ENABLED", "true").lower()
+            in _TRUTHY
+        ),
+        treasury_ledger_sampler_enabled=(
+            os.environ.get("DITTO_TREASURY_LEDGER_SAMPLER_ENABLED", "true").lower()
             in _TRUTHY
         ),
         treasury_shadow_policy=treasury_policy,
@@ -918,22 +887,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         ),
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
+        generator_scorer_token=os.environ.get("DITTO_GENERATOR_SCORER_TOKEN") or None,
         ditto_link=parse_ditto_link_config_from_env(),
-        coding_catalog_curator_hotkeys=tuple(
-            value
-            for item in os.environ.get(
-                "DITTO_CODING_CATALOG_CURATOR_HOTKEYS", ""
-            ).split(",")
-            if (value := item.strip())
-        ),
-        coding_private_catalog=parse_coding_private_catalog_config_from_env(),
-        coding_hosted_signer=parse_hosted_signer_config_from_env(),
-        coding_shadow_reconciliation_enabled=reconciliation_enabled,
-        coding_shadow_reconciliation_selection_delay_blocks=(
-            reconciliation_selection_delay_blocks
-        ),
-        coding_shadow_ticket_set_enabled=ticket_set_enabled,
-        coding_shadow_ticket_lease_seconds=coding_shadow_ticket_lease_seconds,
+        github_link=parse_github_link_config_from_env(),
         dashboard_enabled=dashboard_enabled,
         dashboard_wandb_url=dashboard_wandb_url,
         top5_backoff_base=top5_backoff_base,
@@ -941,7 +897,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         top5_backoff_cap=top5_backoff_cap,
         efficiency_bonus=efficiency_bonus,
         source_review_queue_slo=parse_source_review_queue_slo_config_from_env(),
+        ath_review_queue_slo=parse_ath_review_queue_slo_config_from_env(),
         public_rate_limit_per_minute=public_rate_limit_per_minute,
+        request_body_max_bytes=request_body_max_bytes,
     )
 
 
@@ -1055,9 +1013,9 @@ def check_config(config: ApiServerConfig) -> None:
         ApiServerConfigError: When ``port`` is outside ``1..65535`` or
             ``log_level`` is not a stdlib level name.
     """
-    check_hosted_signer_config(config.coding_hosted_signer)
     check_private_preparation_config(config.private_preparation)
     check_ditto_link_config(config.ditto_link)
+    check_github_link_config(config.github_link)
     if not 1 <= config.port <= 65535:
         raise ApiServerConfigError(f"port out of range: {config.port}")
     if config.log_level not in _VALID_LOG_LEVELS:
@@ -1099,55 +1057,12 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "DITTO_ADMIN_API_TOKEN must be at least 32 characters"
         )
-    if not 1 <= config.coding_shadow_reconciliation_selection_delay_blocks <= 10_000:
-        raise ApiServerConfigError(
-            "DITTO_CODING_SHADOW_SELECTION_DELAY_BLOCKS must be between 1 and 10000"
-        )
-    if config.coding_shadow_reconciliation_enabled and config.admin_api_token is None:
-        raise ApiServerConfigError(
-            "coding shadow reconciliation requires DITTO_ADMIN_API_TOKEN"
-        )
-    if not 60 <= config.coding_shadow_ticket_lease_seconds <= 2 * 60 * 60:
-        raise ApiServerConfigError(
-            "DITTO_CODING_SHADOW_TICKET_LEASE_SECONDS must be between 60 and 7200"
-        )
-    if config.coding_shadow_ticket_set_enabled and config.admin_api_token is None:
-        raise ApiServerConfigError(
-            "coding shadow ticket-set issuance requires DITTO_ADMIN_API_TOKEN"
-        )
-    if len(set(config.coding_catalog_curator_hotkeys)) != len(
-        config.coding_catalog_curator_hotkeys
+    if (
+        config.generator_scorer_token is not None
+        and len(config.generator_scorer_token) < 32
     ):
         raise ApiServerConfigError(
-            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS must not contain duplicates"
-        )
-    if any(
-        not _SS58_RE.fullmatch(hotkey)
-        for hotkey in config.coding_catalog_curator_hotkeys
-    ):
-        raise ApiServerConfigError(
-            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS contains an invalid SS58 address"
-        )
-    catalog = config.coding_private_catalog
-    if catalog is not None:
-        upload = config.storage
-        same_endpoint = _http_origin(catalog.endpoint_url) == _http_origin(
-            upload.endpoint_url
-        )
-        if same_endpoint and catalog.bucket == upload.bucket:
-            raise ApiServerConfigError(
-                "private coding catalog must not reuse the miner-upload bucket"
-            )
-        if (
-            catalog.access_key == upload.access_key
-            or catalog.secret_key == upload.secret_key
-        ):
-            raise ApiServerConfigError(
-                "private coding catalog must use distinct least-privilege credentials"
-            )
-    elif config.coding_shadow_reconciliation_enabled:
-        raise ApiServerConfigError(
-            "coding shadow reconciliation requires a private coding catalog"
+            "DITTO_GENERATOR_SCORER_TOKEN must be at least 32 characters"
         )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):
@@ -1432,4 +1347,63 @@ def check_config(config: ApiServerConfig) -> None:
     if not 0.0 <= efficiency.memory_floor <= 1.0:
         raise ApiServerConfigError(
             "DITTO_EFFICIENCY_BONUS_MEMORY_FLOOR must be in [0, 1]"
+        )
+
+
+def parse_github_link_config_from_env() -> GithubLinkConfig:
+    enabled = os.environ.get("GITHUB_LINK_ENABLED", "false").strip().lower() in _TRUTHY
+    # A disabled feature's unused timeout never blocks startup.
+    timeout = 10.0
+    if enabled:
+        try:
+            timeout = float(
+                os.environ.get("GITHUB_LINK_TIMEOUT_SECONDS", "").strip() or "10"
+            )
+        except ValueError as error:
+            raise ApiServerConfigError(
+                "GITHUB_LINK_TIMEOUT_SECONDS must be numeric"
+            ) from error
+    return GithubLinkConfig(
+        enabled=enabled,
+        client_id=os.environ.get("GITHUB_LINK_CLIENT_ID", "").strip() or None,
+        client_secret=os.environ.get("GITHUB_LINK_CLIENT_SECRET", "").strip() or None,
+        redirect_url=os.environ.get("GITHUB_LINK_REDIRECT_URL", "").strip(),
+        timeout_seconds=timeout,
+    )
+
+
+def check_github_link_config(config: GithubLinkConfig) -> None:
+    if not config.enabled:
+        return
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(config.redirect_url)
+        _ = parts.port  # urlsplit defers numeric/range validation until access.
+        valid_origin = parts.scheme == "https" or (
+            parts.scheme == "http"
+            and parts.hostname in ("localhost", "127.0.0.1", "::1")
+        )
+        valid_path = parts.path == "/api/v1/miner-auth/github/callback"
+        invalid_extra = bool(
+            parts.username or parts.password or parts.query or parts.fragment
+        )
+        # Requests compare Origin with this value; an IDNA-invalid host must
+        # fail startup rather than every consent request.
+        _ = config.origin
+    except (ValueError, UnicodeError):
+        raise ApiServerConfigError("GITHUB_LINK_REDIRECT_URL is invalid") from None
+    if not config.client_id or not config.client_secret:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_CLIENT_ID and GITHUB_LINK_CLIENT_SECRET are required "
+            "when linking is enabled"
+        )
+    if not parts.hostname or not valid_origin or not valid_path or invalid_extra:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_REDIRECT_URL must be the HTTPS callback (HTTP is "
+            "allowed only on loopback)"
+        )
+    if not 1 <= config.timeout_seconds <= 60:
+        raise ApiServerConfigError(
+            "GITHUB_LINK_TIMEOUT_SECONDS must be between 1 and 60"
         )

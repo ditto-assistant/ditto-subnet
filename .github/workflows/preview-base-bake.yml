@@ -10,10 +10,9 @@ name: Bake preview base image
 # the validator and platform dependency layers even when the resolved dependency
 # set is byte-identical. A week-old image would spend most of its life missing
 # the layer that costs the most to rebuild.
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
-  schedule:
-    # 08:20 UTC, off the hour because GitHub delays crons scheduled at :00.
-    - cron: "20 8 * * *"
   workflow_dispatch: {}
 
 permissions:

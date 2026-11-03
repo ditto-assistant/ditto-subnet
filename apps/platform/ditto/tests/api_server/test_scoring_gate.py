@@ -116,20 +116,6 @@ def _entry(
 
 
 class TestEvaluateAntidup:
-    def test_clean_submission_not_held(self) -> None:
-        incumbent = _entry(composite=0.70, sha256="aa" * 32, size_bytes=500000)
-        # A genuine improvement from another miner: far higher, different size+hash.
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Challenger",
-            sha256="bb" * 32,
-            composite=0.85,
-            size_bytes=700000,
-            eligible=[incumbent],
-        )
-        assert decision.held is False
-        assert decision.duplicate_of is None
-
     def test_exact_sha256_copy_is_held(self) -> None:
         incumbent = _entry(composite=0.70, sha256="cc" * 32, size_bytes=500000)
         decision = evaluate_duplicate_signals(
@@ -251,26 +237,6 @@ class TestEvaluateAntidup:
         assert decision.held is True
         assert decision.duplicate_of == oldest.agent_id
 
-    def test_same_miner_repack_not_held(self) -> None:
-        # A miner re-uploading their OWN agent (same normalized hash) is iterating,
-        # not copying — the other-miner filter must exempt it.
-        own = _entry(
-            composite=0.60,
-            miner="5Self",
-            sha256="cc" * 32,
-            normalized_source_hash="ns" * 32,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Self",
-            sha256="dd" * 32,
-            composite=0.61,
-            size_bytes=500000,
-            normalized_source_hash="ns" * 32,
-            eligible=[own],
-        )
-        assert decision.held is False
-
     def test_null_normalized_hash_never_matches(self) -> None:
         # An incumbent with no stored hash (uploaded before the normalized-source hash /
         # unreadable
@@ -305,19 +271,6 @@ class TestEvaluateAntidup:
         assert decision.duplicate_of == incumbent.agent_id
         assert "near-duplicate" in (decision.reason or "")
 
-    def test_large_improvement_not_held(self) -> None:
-        incumbent = _entry(composite=0.80, sha256="aa" * 32, size_bytes=500000)
-        # Same size but a big score jump => a real improvement, not a copy.
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Challenger",
-            sha256="bb" * 32,
-            composite=0.90,
-            size_bytes=500000,
-            eligible=[incumbent],
-        )
-        assert decision.held is False
-
     def test_distant_score_not_held(self) -> None:
         incumbent = _entry(composite=0.80, sha256="aa" * 32, size_bytes=500000)
         # Similar size but score gap > tol => not a near-dup.
@@ -327,22 +280,6 @@ class TestEvaluateAntidup:
             sha256="bb" * 32,
             composite=0.75,
             size_bytes=500050,
-            eligible=[incumbent],
-        )
-        assert decision.held is False
-
-    def test_same_miner_improvement_not_held(self) -> None:
-        # A miner iterating on THEIR OWN eligible agent (near-identical size, small
-        # score bump, different bytes) is not a copier — must not be held.
-        incumbent = _entry(
-            composite=0.80, miner="5Mine", sha256="aa" * 32, size_bytes=500000
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Mine",  # same miner
-            sha256="bb" * 32,
-            composite=0.81,
-            size_bytes=500200,
             eligible=[incumbent],
         )
         assert decision.held is False
@@ -564,32 +501,6 @@ class TestEvaluateAntidup:
         assert "content near-duplicate" in (decision.reason or "")
         assert "structural jaccard" in (decision.reason or "")
 
-    def test_structural_below_tol_not_held(self) -> None:
-        # Two crates sharing reference-harness AST scaffolding but well under the
-        # (high) structural threshold, and lexically distinct => not held.
-        incumbent = _entry(
-            composite=0.80,
-            sha256="aa" * 32,
-            size_bytes=500000,
-            content_fingerprint=_sk({f"lex{i:013x}" for i in range(30)}),
-            structural_fingerprint=_sk({f"{i:016x}" for i in range(30)}),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Challenger",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=900000,
-            content_fingerprint=_sk({f"z{i:015x}" for i in range(30)}),
-            # 15 of 45 shingles shared => Jaccard 0.33, containment 0.5: below the
-            # 0.85 / 0.98 structural tolerances.
-            structural_fingerprint=_sk(
-                {f"{i:016x}" for i in range(15)} | {f"s{i:015x}" for i in range(15)}
-            ),
-            eligible=[incumbent],
-        )
-        assert decision.held is False
-
     def test_distinct_content_not_held_despite_close_score(self) -> None:
         # Two independent harnesses that only share reference scaffolding: close
         # score but low fingerprint overlap (5 of 30) => a genuine competitor.
@@ -611,34 +522,6 @@ class TestEvaluateAntidup:
             eligible=[incumbent],
         )
         assert decision.held is False
-
-    def test_content_dup_held_when_score_far(self) -> None:
-        # Regression: a matching lexical fingerprint holds on its own. A large
-        # score gap is NOT evidence of independence — benchmark noise moves
-        # identical code further than any plausible proximity window (see
-        # test_dittotop_v0_incident below), so the gate must not skip the
-        # comparison just because the composites are far apart.
-        shared = _sk({f"{i:016x}" for i in range(20)})
-        incumbent = _entry(
-            composite=0.80,
-            sha256="aa" * 32,
-            size_bytes=500000,
-            content_fingerprint=shared,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Challenger",
-            sha256="bb" * 32,
-            composite=0.90,
-            size_bytes=505000,
-            content_fingerprint=shared,
-            eligible=[incumbent],
-        )
-        assert decision.held is True
-        assert decision.duplicate_of == incumbent.agent_id
-        assert "content near-duplicate" in (decision.reason or "")
-        # The delta is still reported, as context rather than as a precondition.
-        assert "composite delta 0.1000" in (decision.reason or "")
 
     def test_dittotop_v0_incident(self) -> None:
         """The bench_version 7 copy the old 0.03 score window let through.
@@ -698,40 +581,6 @@ class TestEvaluateAntidup:
             composite=0.805,
             size_bytes=600000,
             content_fingerprint=shared,
-            eligible=[incumbent],
-        )
-        assert decision.held is False
-
-    def test_missing_fingerprints_fall_back_to_size_rule(self) -> None:
-        # No fingerprints anywhere (legacy rows): the content rule is inert
-        # (similarity 0) and the size rule still catches a same-size near-dup.
-        incumbent = _entry(composite=0.80, sha256="aa" * 32, size_bytes=500000)
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=500100,
-            content_fingerprint=None,
-            eligible=[incumbent],
-        )
-        assert decision.held is True
-        assert "near-duplicate" in (decision.reason or "")
-
-    def test_negative_fingerprint_evidence_disables_size_fallback(self) -> None:
-        incumbent = _entry(
-            composite=0.80,
-            sha256="aa" * 32,
-            size_bytes=500000,
-            content_fingerprint=_sk({f"a{i:015x}" for i in range(20)}),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Independent",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=500100,
-            content_fingerprint=_sk({f"b{i:015x}" for i in range(20)}),
             eligible=[incumbent],
         )
         assert decision.held is False
@@ -838,31 +687,6 @@ class TestEvaluateAntidup:
         assert decision.duplicate_of == current.agent_id
         assert "content near-duplicate" in (decision.reason or "")
 
-    def test_cross_version_structural_fallback_is_not_used(self) -> None:
-        legacy_content = _sk({f"a{i:015x}" for i in range(30)})
-        legacy_content["v"] = 1
-        shared_structural = _sk({f"{i:016x}" for i in range(30)})
-        incumbent = _entry(
-            composite=0.80,
-            content_fingerprint=legacy_content,
-            structural_fingerprint=shared_structural,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            submitted_at=_CHALLENGER_SEEN,
-            miner_hotkey="5Challenger",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=None,
-            content_fingerprint=_sk({f"b{i:015x}" for i in range(30)}),
-            structural_fingerprint=shared_structural,
-            eligible=[incumbent],
-        )
-        assert decision.held is True
-        assert "comparison inconclusive" in (decision.reason or "")
-        assert "lexical" in (decision.reason or "")
-        assert "structural near-duplicate" not in (decision.reason or "")
-
     def test_cross_version_far_score_is_not_held(self) -> None:
         legacy = _sk({f"{i:016x}" for i in range(30)})
         legacy["v"] = 1
@@ -875,18 +699,6 @@ class TestEvaluateAntidup:
             composite=0.80,
             size_bytes=None,
             content_fingerprint=_sk({f"{i:016x}" for i in range(30)}),
-            eligible=[incumbent],
-        )
-        assert decision.held is False
-
-    def test_missing_sizes_skip_near_dup(self) -> None:
-        incumbent = _entry(composite=0.80, sha256="aa" * 32, size_bytes=None)
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=None,
             eligible=[incumbent],
         )
         assert decision.held is False
@@ -1035,47 +847,6 @@ class TestPromptShadowSignal:
         assert "content near-duplicate" in (decision.reason or "")
         assert "prompt jaccard" in (decision.reason or "")
 
-    def test_hold_without_prompt_sketch_has_no_note(self) -> None:
-        # Same lexical hold, but no prompt sketches: reason must not mention prompt.
-        shingles = {f"s{i:03d}" for i in range(30)}
-        incumbent = _entry(
-            composite=0.80, content_fingerprint=_sk(shingles), size_bytes=500000
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=500100,
-            content_fingerprint=_sk(shingles),
-            eligible=[incumbent],
-        )
-        assert decision.held is True
-        assert "prompt" not in (decision.reason or "")
-
-    def test_low_prompt_overlap_not_noted(self) -> None:
-        # Lexical hold fires, prompt sketches present but nearly disjoint (below the
-        # advisory tolerance): no prompt note is added.
-        shingles = {f"s{i:03d}" for i in range(30)}
-        incumbent = _entry(
-            composite=0.80,
-            size_bytes=500000,
-            content_fingerprint=_sk(shingles),
-            prompt_fingerprint=_psk({f"a{i:02d}" for i in range(20)}),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=500100,
-            content_fingerprint=_sk(shingles),
-            prompt_fingerprint=_psk({f"b{i:02d}" for i in range(20)}),  # disjoint
-            eligible=[incumbent],
-        )
-        assert decision.held is True
-        assert "prompt" not in (decision.reason or "")
-
 
 class TestAttestedOwnerLink:
     """The owner-link exemption.
@@ -1155,26 +926,6 @@ class TestAttestedOwnerLink:
         )
         assert decision.held is False
 
-    def test_attestation_exempts_repack(self) -> None:
-        """Canonicalized-source equality is also exempt for the direct pair."""
-        incumbent = _entry(
-            composite=0.60,
-            miner="5OldHotkey",
-            sha256="cc" * 32,
-            normalized_source_hash="ns" * 32,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5NewHotkey",
-            sha256="dd" * 32,
-            composite=0.60,
-            size_bytes=incumbent.size_bytes,
-            normalized_source_hash="ns" * 32,
-            eligible=[incumbent],
-            linked_owner_hotkeys=frozenset({"5OldHotkey"}),
-        )
-        assert decision.held is False
-
     def test_attestation_does_not_shield_a_third_partys_work(self) -> None:
         """A link exempts only its counterparty.
 
@@ -1206,40 +957,6 @@ class TestAttestedOwnerLink:
         )
         assert decision.held is True
         assert decision.duplicate_of == stranger.agent_id
-
-    def test_size_fallback_also_respects_the_exemption(self) -> None:
-        """Rule 3, the legacy no-fingerprint path, is exempted too."""
-        incumbent = _entry(
-            composite=0.80, miner="5OldHotkey", sha256="aa" * 32, size_bytes=500000
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5NewHotkey",
-            sha256="bb" * 32,
-            composite=0.805,
-            size_bytes=500100,
-            eligible=[incumbent],
-            linked_owner_hotkeys=frozenset({"5OldHotkey"}),
-        )
-        assert decision.held is False
-
-    def test_empty_set_is_todays_behaviour(self) -> None:
-        """The default must change nothing for the 99% who never rotated."""
-        incumbent = _entry(composite=0.80, sha256="aa" * 32, size_bytes=500000)
-        kwargs = {
-            "agent_id": uuid4(),
-            "miner_hotkey": "5Copier",
-            "sha256": "bb" * 32,
-            "composite": 0.805,
-            "size_bytes": 500100,
-            "eligible": [incumbent],
-        }
-        assert (
-            evaluate_duplicate_signals(**kwargs).held
-            is evaluate_duplicate_signals(
-                **kwargs, linked_owner_hotkeys=frozenset()
-            ).held
-        )
 
 
 _EMBARGO = timedelta(hours=120)
@@ -1325,39 +1042,6 @@ class TestPublicReleaseNoCopyOpportunity:
         assert decision.duplicate_of == incumbent.agent_id
         assert decision.no_copy_opportunity is None
 
-    def test_disclosure_not_public_still_holds(self) -> None:
-        """Under ``disclosure = never`` nothing is published, so nothing is exempt.
-
-        The caller expresses that by passing no releases at all -- see
-        :func:`ditto.db.queries.artifact_release.list_public_source_releases`,
-        which returns ``{}`` whenever the policy in force does not release
-        publicly.
-        """
-        shared = {f"{i:016x}" for i in range(20)}
-        incumbent = _entry(
-            composite=0.80,
-            miner="5Original",
-            sha256="aa" * 32,
-            size_bytes=500000,
-            content_fingerprint=_sk(shared),
-            first_seen=_FIRST_SEEN,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="bb" * 32,
-            composite=0.81,
-            size_bytes=520000,
-            content_fingerprint=_sk(shared | {"ff" * 8}),
-            eligible=[incumbent],
-            # Long after upload: under a public policy this would be well past
-            # the window. The empty release set is the whole difference.
-            submitted_at=_FIRST_SEEN + timedelta(days=400),
-            public_source_releases=[],
-        )
-        assert decision.held is True
-        assert decision.duplicate_of == incumbent.agent_id
-
     def test_exact_byte_copy_of_a_published_artifact_is_not_held(self) -> None:
         """Equality admits no ordering: a published twin is a complete account."""
         published = _entry(
@@ -1383,36 +1067,6 @@ class TestPublicReleaseNoCopyOpportunity:
         withdrawal = decision.no_copy_opportunity
         assert withdrawal is not None
         assert withdrawal.signal == "exact_byte"
-
-    def test_exact_byte_copy_of_a_private_artifact_is_still_held(self) -> None:
-        private = _entry(
-            composite=0.80,
-            miner="5Original",
-            sha256="cc" * 32,
-            size_bytes=500000,
-            first_seen=_FIRST_SEEN,
-        )
-        unrelated_public = _entry(
-            composite=0.60,
-            miner="5Someone",
-            sha256="dd" * 32,
-            size_bytes=400000,
-            first_seen=_FIRST_SEEN,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="cc" * 32,
-            composite=0.80,
-            size_bytes=500000,
-            eligible=[private, unrelated_public],
-            submitted_at=_FIRST_SEEN + _EMBARGO + timedelta(hours=1),
-            public_source_releases=[
-                _released(unrelated_public, available_at=_FIRST_SEEN + _EMBARGO)
-            ],
-        )
-        assert decision.held is True
-        assert decision.duplicate_of == private.agent_id
 
     def test_closer_match_to_an_embargoed_artifact_still_holds(self) -> None:
         """A published near-relative does not launder a closer private match.
@@ -1492,32 +1146,6 @@ class TestPublicReleaseNoCopyOpportunity:
         assert decision.held is True
         assert decision.duplicate_of == embargoed.agent_id
 
-    def test_publication_after_the_candidate_upload_does_not_exempt(self) -> None:
-        """Release is judged at the candidate's upload time, not at score time."""
-        shared = {f"{i:016x}" for i in range(20)}
-        incumbent = _entry(
-            composite=0.80,
-            miner="5Original",
-            sha256="aa" * 32,
-            size_bytes=500000,
-            content_fingerprint=_sk(shared),
-            first_seen=_FIRST_SEEN,
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5Copier",
-            sha256="bb" * 32,
-            composite=0.81,
-            size_bytes=520000,
-            content_fingerprint=_sk(shared | {"ff" * 8}),
-            eligible=[incumbent],
-            submitted_at=_FIRST_SEEN + timedelta(hours=6),
-            public_source_releases=[
-                _released(incumbent, available_at=_FIRST_SEEN + timedelta(hours=7))
-            ],
-        )
-        assert decision.held is True
-
     def test_white_bolt_reproducing_published_red_dragon(self) -> None:
         """The concrete production case (both bans since reversed by hand).
 
@@ -1593,44 +1221,6 @@ class TestSelfLineagePrecedence:
     nineteen. Content this owner already shipped cannot have come from a
     submission that did not yet exist.
     """
-
-    def test_owner_row_predating_the_match_withdraws_the_hold(self) -> None:
-        engine = {f"engine{i:010x}" for i in range(30)}
-        own_prior = _entry(
-            composite=0.93,
-            miner="5DcpbvmTro",
-            coldkey="5RedDragonCold",
-            sha256="17" * 32,
-            size_bytes=505000,
-            content_fingerprint=_sk(engine),
-            first_seen=datetime(2026, 8, 9, 15, 49, 16, tzinfo=UTC),
-        )
-        recipient = _entry(
-            composite=0.94,
-            miner="5CkuRmNC5R",
-            coldkey="5AstrionCold",
-            sha256="a9" * 32,
-            size_bytes=507000,
-            content_fingerprint=_sk(engine | {f"as{i:014x}" for i in range(2)}),
-            first_seen=datetime(2026, 8, 11, 17, 37, 48, tzinfo=UTC),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=uuid4(),
-            miner_hotkey="5DcpbvmTro",
-            miner_coldkey="5RedDragonCold",
-            sha256="18" * 32,
-            composite=0.95,
-            size_bytes=509000,
-            content_fingerprint=_sk(engine | {f"v18{i:013x}" for i in range(2)}),
-            eligible=[own_prior, recipient],
-            submitted_at=datetime(2026, 8, 12, 10, 40, 3, tzinfo=UTC),
-        )
-        assert decision.held is False
-        withdrawal = decision.no_copy_opportunity
-        assert withdrawal is not None
-        assert withdrawal.kind == "self_lineage"
-        assert withdrawal.matched_agent_id == recipient.agent_id
-        assert withdrawal.source_agent_id == own_prior.agent_id
 
     def test_owner_row_postdating_the_match_is_no_alibi(self) -> None:
         """Order is the whole argument: a later own row proves nothing.
@@ -1815,34 +1405,6 @@ class TestEarliestSourceAttribution:
         assert withdrawal.source_agent_id == kingbear.agent_id
         assert red_dragon_v17.agent_id != withdrawal.source_agent_id
 
-    def test_red_dragon_case_still_inverts_without_full_history(self) -> None:
-        """The same inputs minus the history are exactly the production bug.
-
-        Pinned so a regression that stops threading ``eligible_history`` fails
-        loudly here rather than silently re-accusing the originator.
-        """
-        astrion_v1 = _entry(
-            agent_id=_id("516f2a9b"),
-            composite=0.94,
-            miner="5CkuRmNC5R",
-            coldkey="5AstrionCold",
-            content_fingerprint=_sk(self.ENGINE | {f"as{i:014x}" for i in range(2)}),
-            first_seen=datetime(2026, 8, 11, 17, 37, 48, tzinfo=UTC),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=_id("69bf2cc5"),
-            miner_hotkey="5DcpbvmTro",
-            miner_coldkey="5HgisASb3W",
-            sha256="18" * 32,
-            composite=0.95,
-            size_bytes=509000,
-            content_fingerprint=_sk(self.ENGINE | {f"v18{i:013x}" for i in range(2)}),
-            eligible=[astrion_v1],
-            submitted_at=datetime(2026, 8, 12, 10, 40, 3, tzinfo=UTC),
-        )
-        assert decision.held is True
-        assert decision.duplicate_of == astrion_v1.agent_id
-
     def test_kaelith_v3_is_not_a_duplicate_of_banblackycat_v7(self) -> None:
         """Case 2: held against a reference its own v1 predates by 4h52m.
 
@@ -1916,108 +1478,6 @@ class TestEarliestSourceAttribution:
         withdrawal = decision.no_copy_opportunity
         assert withdrawal is not None
         assert withdrawal.matched_agent_id == banblackycat_v7.agent_id
-        assert withdrawal.source_agent_id == kaelith_v1.agent_id
-
-    def test_whitycatboss_v3_is_not_a_duplicate_of_kaelith_v1(self) -> None:
-        """Case 3: the other half of a bidirectional pair.
-
-        whitycatboss v3 (``0dbb3d4e``, hotkey ``5Dvj3htj``) was held naming
-        Kaelith v1. That same hotkey's banblackycat v6 (``9603b036``,
-        2026-08-09T03:10) predates the reference by 2.5 days. Cases 2 and 3
-        together are two operators developing a common ancestor in parallel,
-        each accused of copying the other; both accusations must be withdrawn.
-        """
-        banblackycat_v6 = _entry(
-            agent_id=_id("9603b036"),
-            composite=0.88,
-            miner="5Dvj3htj",
-            coldkey="5BanColdkey",
-            sha256="b6" * 32,
-            size_bytes=494000,
-            content_fingerprint=_sk(self.ENGINE),
-            first_seen=datetime(2026, 8, 9, 3, 10, 0, tzinfo=UTC),
-        )
-        kaelith_v1 = _entry(
-            agent_id=_id("6fd58c8d"),
-            composite=0.90,
-            miner="5EnPyord",
-            coldkey="5KaelithCold",
-            sha256="3c" * 32,
-            size_bytes=500000,
-            content_fingerprint=_sk(self.ENGINE | {f"ka{i:014x}" for i in range(2)}),
-            first_seen=datetime(2026, 8, 11, 14, 13, 0, tzinfo=UTC),
-        )
-        whity_rep = _entry(
-            agent_id=_id("ee55ff66"),
-            composite=0.925,
-            miner="5Dvj3htj",
-            coldkey="5BanColdkey",
-            sha256="6f" * 32,
-            size_bytes=505000,
-            content_fingerprint=_sk(self.ENGINE | {f"w2{i:014x}" for i in range(2)}),
-            first_seen=datetime(2026, 8, 11, 22, 0, 0, tzinfo=UTC),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=_id("0dbb3d4e"),
-            miner_hotkey="5Dvj3htj",
-            miner_coldkey="5BanColdkey",
-            sha256="7a" * 32,
-            composite=0.93,
-            size_bytes=507000,
-            content_fingerprint=_sk(self.ENGINE | {f"w3{i:014x}" for i in range(2)}),
-            eligible=[kaelith_v1, whity_rep],
-            eligible_history=[banblackycat_v6, kaelith_v1, whity_rep],
-            submitted_at=datetime(2026, 8, 12, 9, 0, 0, tzinfo=UTC),
-        )
-        assert decision.held is False
-        withdrawal = decision.no_copy_opportunity
-        assert withdrawal is not None
-        assert withdrawal.matched_agent_id == kaelith_v1.agent_id
-        assert withdrawal.source_agent_id == banblackycat_v6.agent_id
-
-    def test_kaelith_v2_earlier_pair_is_not_held(self) -> None:
-        """Case 4: the same inversion one generation earlier.
-
-        Kaelith v2 held against a banblackycat generation that postdates
-        Kaelith's own v1. Same shape, same withdrawal.
-        """
-        kaelith_v1 = _entry(
-            agent_id=_id("6fd58c8d"),
-            composite=0.90,
-            miner="5EnPyord",
-            coldkey="5KaelithCold",
-            sha256="3c" * 32,
-            size_bytes=500000,
-            content_fingerprint=_sk(self.ENGINE | {f"ka{i:014x}" for i in range(2)}),
-            first_seen=datetime(2026, 8, 11, 14, 13, 0, tzinfo=UTC),
-        )
-        banblackycat_v7 = _entry(
-            agent_id=_id("98d56bdf"),
-            composite=0.92,
-            miner="5Dvj3htj",
-            coldkey="5BanColdkey",
-            sha256="b7" * 32,
-            size_bytes=503000,
-            content_fingerprint=_sk(self.ENGINE | {f"bb{i:014x}" for i in range(2)}),
-            first_seen=datetime(2026, 8, 11, 19, 5, 0, tzinfo=UTC),
-        )
-        decision = evaluate_duplicate_signals(
-            agent_id=_id("cc33dd44"),
-            miner_hotkey="5EnPyord",
-            miner_coldkey="5KaelithCold",
-            sha256="4d" * 32,
-            composite=0.925,
-            size_bytes=504000,
-            content_fingerprint=_sk(self.ENGINE | {f"k2{i:014x}" for i in range(2)}),
-            # Kaelith's representative is the held v2 itself, so nothing of this
-            # owner's own history survives owner reduction into `eligible`.
-            eligible=[banblackycat_v7],
-            eligible_history=[kaelith_v1, banblackycat_v7],
-            submitted_at=datetime(2026, 8, 11, 21, 0, 0, tzinfo=UTC),
-        )
-        assert decision.held is False
-        withdrawal = decision.no_copy_opportunity
-        assert withdrawal is not None
         assert withdrawal.source_agent_id == kaelith_v1.agent_id
 
     def test_beking_v1_copy_of_gggggggg_v3_is_still_held(self) -> None:

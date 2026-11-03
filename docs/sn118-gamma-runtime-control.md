@@ -27,6 +27,10 @@ the offline-signed policy or confer control over independent validator keys.
   reviewed epoch-boundary rollback and queue drain. Pause can be recorded during
   a chain-read outage, but invalid stored approval refuses.
 
+A signed policy may carry a per-bucket allocation range. Moving the Backroom
+Gamma % inside that range needs no pause or new revision here; see
+[sn118-gamma-signed-range.md](sn118-gamma-signed-range.md).
+
 Active controls cannot be replaced or rearmed until explicitly paused. An
 already enforcing environment-only deployment must be migrated deliberately;
 the database control cannot silently override it. No control is seeded by the

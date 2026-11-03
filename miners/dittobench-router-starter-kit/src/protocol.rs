@@ -132,7 +132,7 @@ mod tests {
     fn seed_request_accepts_empty_and_unknown_fields() {
         let empty: RouterSeedRequest = serde_json::from_str("{}").unwrap();
         assert_eq!(empty.router_contract_version, ROUTER_CONTRACT_VERSION);
-        assert!(empty.memories.is_empty());
+        assert_eq!(empty.memories.len(), 0);
 
         let seeded: RouterSeedRequest = serde_json::from_str(
             r#"{"router_contract_version":1,"unknown_future_field":true,"memories":[

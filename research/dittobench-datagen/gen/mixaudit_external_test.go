@@ -9,20 +9,15 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-// mixauditPinnedSeeds is the 40-seed qualification sweep every mix envelope is
-// asserted on (per seed, never on the average).
-const mixauditPinnedSeeds = 40
+// mixauditPinnedSeeds is the frozen-v12 sweep the classifier is exercised on.
+// v12 bytes are pinned (TestV12KnownVector) and its family set saturates well
+// inside ten seeds; the v13 envelope itself is asserted on all 40 v13
+// qualification seeds (TestV13QualificationSeeds).
+const mixauditPinnedSeeds = 10
 
 func auditSeed(t *testing.T, seed int64, version int) mixaudit.SeedReport {
 	t.Helper()
-	prof, ok := gen.ProfileForVersion("full", version)
-	if !ok {
-		t.Fatalf("no full profile for v%d", version)
-	}
-	artifact, err := gen.GenerateDataset(seed, prof, version)
-	if err != nil {
-		t.Fatalf("generate v%d seed %d: %v", version, seed, err)
-	}
+	artifact := gen.CachedDataset(t, seed, "full", version)
 	report, err := mixaudit.Audit(artifact, "full", false)
 	if err != nil {
 		t.Fatalf("audit v%d seed %d: %v", version, seed, err)
@@ -61,8 +56,9 @@ func TestMixauditReproducesV12PublicSeedFigures(t *testing.T) {
 
 // TestMixauditClassifiesEveryPinnedSeed proves the classifier fails closed on
 // nothing the v12 generator emits: every family, answer kind, and list-item kind
-// across the 40 pinned seeds is classified, and the report is deterministic.
+// across the pinned seeds is classified, and the report is deterministic.
 func TestMixauditClassifiesEveryPinnedSeed(t *testing.T) {
+	t.Parallel()
 	var reports []mixaudit.SeedReport
 	for seed := int64(1); seed <= mixauditPinnedSeeds; seed++ {
 		reports = append(reports, auditSeed(t, seed, protocol.BenchVersionV12))
@@ -95,7 +91,7 @@ func TestMixauditClassifiesEveryPinnedSeed(t *testing.T) {
 			t.Logf("v12 seed %d violates v13 envelope: %s", r.Seed, v)
 		}
 	}
-	t.Logf("v12 40-seed money share min/mean/max = %.4f/%.4f/%.4f", summary.MoneyShare.Min, summary.MoneyShare.Mean, summary.MoneyShare.Max)
+	t.Logf("v12 %d-seed money share min/mean/max = %.4f/%.4f/%.4f", mixauditPinnedSeeds, summary.MoneyShare.Min, summary.MoneyShare.Mean, summary.MoneyShare.Max)
 }
 
 // TestMixauditEnvelopeConstantsMatchPlan pins the caps and floors issue #1830

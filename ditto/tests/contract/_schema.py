@@ -67,6 +67,24 @@ ROUTER_MODELS = [
     "RouterLedgerResponse",
 ]
 
+# The generator-round validator lane: Platform leases one panel agent's round
+# run, the validator posts signed per-case results. A hand-maintained copy on
+# both sides (root/validator + apps/platform), pinned the same way as the
+# router ledger so a one-sided rename cannot silently break the round matrix.
+GENERATOR_ROUND_MODELS = [
+    "GeneratorRoundJobRequest",
+    "GeneratorRoundJobResponse",
+    "GeneratorRoundCaseResult",
+    "GeneratorRoundScoreRequest",
+    "GeneratorRoundScoreResponse",
+    "GeneratorRoundFailRequest",
+    "GeneratorRoundFailResponse",
+    "GeneratorRoundCommitmentJobRequest",
+    "GeneratorRoundCommitmentJobResponse",
+    "GeneratorRoundCommitmentReportRequest",
+    "GeneratorRoundCommitmentReportResponse",
+]
+
 # The miner-CLI request/response models that cross the same boundary, keyed by
 # the module each lives in. Guarded for the same reason as the validator models
 # and learned the same way: the platform added ``payment_required``,
@@ -135,6 +153,13 @@ def compute_confirmation_contract() -> dict[str, Any]:
 def compute_router_contract() -> dict[str, Any]:
     """Return the normalized structure of the shadow router-ledger wire models."""
     return compute_contract(ROUTER_MODELS, module="ditto.api_models.router_ledger")
+
+
+def compute_generator_round_contract() -> dict[str, Any]:
+    """Return the normalized structure of the generator-round lane models."""
+    return compute_contract(
+        GENERATOR_ROUND_MODELS, module="ditto.api_models.generator_round_validator"
+    )
 
 
 def compute_miner_contract(

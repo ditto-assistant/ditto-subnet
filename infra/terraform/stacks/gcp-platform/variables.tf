@@ -173,6 +173,12 @@ variable "api_domain_dev" {
   default     = "platform-api-dev.heyditto.ai"
 }
 
+variable "dev_environment_running" {
+  description = "Run the permanent dev environment (ditto-platform-dev and ditto-validator-dev). False stops both VMs and drops the dev A record; disks, buckets, secrets and the dev hotkey are kept. Ephemeral per-PR stacks come from preview-stack.yml."
+  type        = bool
+  default     = true
+}
+
 variable "manage_dns" {
   description = "When true, create the Cloudflare A records pointing the platform hostnames at the app VM IPs. Set false to stand up the VMs first and point DNS later."
   type        = bool

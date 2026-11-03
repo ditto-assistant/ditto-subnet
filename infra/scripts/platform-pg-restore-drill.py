@@ -5,8 +5,10 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,6 +20,35 @@ MODULE = (
 spec = importlib.util.spec_from_file_location("pg_backup", MODULE)
 backup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backup)
+
+DATABASE_LOCALE = {
+    "encoding": "UTF8",
+    "collate": "C.UTF-8",
+    "ctype": "C.UTF-8",
+    "locale_provider": "c",
+}
+POSTGRES_INITDB_ARGS = "--locale=C.UTF-8 --encoding=UTF8"
+# First production backup predates locale metadata. Its source locale was
+# independently queried; permit only these exact encrypted objects as legacy.
+LEGACY_STAMP = "20261009T021522Z"
+LEGACY_DIGESTS = {
+    f"ditto_platform_prod-{LEGACY_STAMP}.dump.age": (
+        "e28b3b1f2b4d743d36efb8d447e75e4061575eb40a0ab91c4fc471877619bc62"
+    ),
+    f"globals-{LEGACY_STAMP}.sql.age": (
+        "a9a50b4440e1efabb35db9e7c78031fb099a99d936520b8aac1f8f1429f2b1fd"
+    ),
+}
+
+
+def validate_database_locale(manifest, stamp):
+    if "database_locale" not in manifest:
+        digests = {item["name"]: item["sha256"] for item in manifest["objects"]}
+        if stamp == LEGACY_STAMP and digests == LEGACY_DIGESTS:
+            return
+        raise ValueError("backup database locale is missing")
+    if manifest["database_locale"] != DATABASE_LOCALE:
+        raise ValueError("unsupported backup database locale")
 
 
 def validate_manifest(manifest, stamp, now):
@@ -63,6 +94,7 @@ def validate_manifest(manifest, stamp, now):
         raise ValueError("manifest core tables must be nonempty")
     if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", manifest["alembic_version"]):
         raise ValueError("invalid migration marker")
+    validate_database_locale(manifest, stamp)
     return major
 
 
@@ -74,7 +106,127 @@ def compare_counts(expected, actual):
             raise ValueError("restored core table count differs")
 
 
+def report(stage):
+    # Constant stage names and aggregate disk bytes only; never exception text.
+    print(f"Restore stage: {stage}", flush=True)
+
+
+def classify_restore_errors(stream, result, checks=None):
+    # Drain stderr concurrently to prevent pipe backpressure. Retain no SQL,
+    # role hashes, identifiers or provider URLs; return only fixed categories.
+    patterns = {
+        "disk-full": b"No space left on device",
+        "extension-unavailable": b"extension is not available",
+        "object-conflict": b"already exists",
+        "missing-control-file": b"could not open extension control file",
+        "missing-library": b"could not access file",
+        "unique-violation": b"violates unique constraint",
+        "check-violation": b"violates check constraint",
+        "foreign-key-violation": b"violates foreign key constraint",
+        "invalid-input": b"invalid input syntax",
+        "unknown-parameter": b"unrecognized configuration parameter",
+        "out-of-memory": b"out of memory",
+        "maintenance-memory": b"maintenance_work_mem",
+        "shared-memory": b"shared memory",
+        "archive-read": b"could not read from input file",
+        "invalid-allocation": b"invalid memory alloc",
+        "server-disconnected": b"server closed the connection",
+        "permission-denied": b"Permission denied",
+        "archive-version": b"unsupported version",
+    }
+    tail = b""
+    while chunk := stream.read(4096):
+        window = tail + chunk
+        for label, pattern in patterns.items():
+            if pattern in window:
+                result.add(label)
+        if checks is not None:
+            identifier = rb"([A-Za-z_][A-Za-z_0-9]{0,62})"
+            for table, constraint in re.findall(
+                rb'new row for relation "'
+                + identifier
+                + rb'" violates check constraint "'
+                + identifier
+                + rb'"',
+                window,
+            ):
+                checks.add((table.decode("ascii"), constraint.decode("ascii")))
+            for constraint, table in re.findall(
+                rb'check constraint "'
+                + identifier
+                + rb'" of relation "'
+                + identifier
+                + rb'" is violated by some row',
+                window,
+            ):
+                checks.add((table.decode("ascii"), constraint.decode("ascii")))
+        tail = window[-512:]
+    stream.close()
+
+
+def sqlstates_from_log(stream):
+    # Read only error prefixes, not error messages or SQL. The server suppresses
+    # error statements and CONTEXT/DETAIL and labels severity with its SQLSTATE.
+    codes = set()
+    tail = b""
+    while chunk := stream.read(4096):
+        window = tail + chunk
+        codes.update(
+            match.decode("ascii")
+            for match in re.findall(rb"restore-sqlstate:([0-9A-Z]{5}) ", window)
+            if match != b"00000"
+        )
+        tail = window[-64:]
+    return sorted(codes)
+
+
+def report_server_sqlstates(container, since):
+    logs = subprocess.Popen(
+        ["docker", "logs", "--since", since, container],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    codes = sqlstates_from_log(logs.stdout)
+    logs.stdout.close()
+    logs.wait()
+    print(f"Restore server SQLSTATE: {','.join(codes) or 'none'}", flush=True)
+
+
+def report_check_names(container, role, checks):
+    # Only report identifiers that exist in the restored public catalog. This
+    # prevents error DETAIL/row content from fabricating an identifier to print.
+    query = (
+        "SELECT coalesce(json_agg(json_build_array(r.relname,c.conname)),'[]') "
+        "FROM pg_constraint c JOIN pg_class r ON r.oid=c.conrelid "
+        "WHERE c.contype='c' AND c.connamespace='public'::regnamespace;"
+    )
+    known = json.loads(
+        subprocess.check_output(
+            [
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-XAtq",
+                "-U",
+                role,
+                "-d",
+                "restore_drill",
+                "-c",
+                query,
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+    )
+    if len(known) > 10000:
+        raise RuntimeError("restored constraint catalog exceeds bound")
+    selected = sorted(checks & {tuple(row) for row in known})
+    print("Restore CHECK identifiers: " + json.dumps(selected), flush=True)
+
+
 def stream_restore(source, identity, container, command):
+    since = datetime.now(UTC).isoformat()
     decrypt = subprocess.Popen(
         ["age", "-d", "-i", str(identity), str(source)],
         stdout=subprocess.PIPE,
@@ -85,12 +237,28 @@ def stream_restore(source, identity, container, command):
             ["docker", "exec", "-i", container, *command],
             stdin=decrypt.stdout,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
         )
+        categories = set()
+        checks = set()
+        drain = threading.Thread(
+            target=classify_restore_errors, args=(restore.stderr, categories, checks)
+        )
+        drain.start()
         decrypt.stdout.close()
         restore_result = restore.wait()
         decrypt_result = decrypt.wait()
+        drain.join()
         if restore_result or decrypt_result:
+            report_server_sqlstates(container, since)
+            if checks:
+                report_check_names(container, command[command.index("-U") + 1], checks)
+            print(
+                f"Restore process failed: decrypt_exit={decrypt_result} "
+                f"restore_exit={restore_result} "
+                f"categories={','.join(sorted(categories)) or 'other'}",
+                flush=True,
+            )
             raise RuntimeError("decryption or restore failed")
     finally:
         if decrypt.poll() is None:
@@ -100,6 +268,8 @@ def stream_restore(source, identity, container, command):
 
 def drill(directory):
     os.umask(0o077)
+    report("list-backups")
+    print(f"Runner free disk bytes: {shutil.disk_usage(directory).free}", flush=True)
     s3 = backup.S3(directory)
     identity = backup.protected_file(directory, "age-identity")
     objects = s3.list("daily/")
@@ -113,14 +283,21 @@ def drill(directory):
     instant, newest = max(candidates, key=lambda row: row[0])
     stamp = instant.strftime("%Y%m%dT%H%M%SZ")
     manifest_file = directory / "manifest.json"
+    report("validate-manifest")
     s3.download(newest["key"], manifest_file, max_bytes=65536)
     manifest = json.loads(manifest_file.read_text())
     major = validate_manifest(manifest, stamp, datetime.now(UTC))
     prefix = newest["key"].rsplit("/", 1)[0] + "/"
     paths = {}
     for item in manifest["objects"]:
+        report(
+            "download-globals"
+            if item["name"].startswith("globals-")
+            else "download-database"
+        )
         destination = directory / item["name"]
         s3.download(prefix + item["name"], destination, max_bytes=item["size"])
+        report("verify-encrypted-object")
         if (
             destination.stat().st_size != item["size"]
             or backup.sha256(destination) != item["sha256"]
@@ -137,6 +314,10 @@ def drill(directory):
     container = f"ditto-pg-drill-{run}-{attempt}"
     role = "ditto_backup_drill_superuser"
     try:
+        report("start-isolated-database")
+        print(
+            f"Runner free disk bytes: {shutil.disk_usage(directory).free}", flush=True
+        )
         (directory / "pgdata").mkdir()
         # No ports, no network, no persistent named volume. Every DB byte lives
         # under the workflow's private staging directory and is shredded later.
@@ -156,15 +337,27 @@ def drill(directory):
                 "-e",
                 "POSTGRES_DB=restore_drill",
                 "-e",
+                f"POSTGRES_INITDB_ARGS={POSTGRES_INITDB_ARGS}",
+                "-e",
                 "PGDATA=/var/lib/postgresql/data",
                 "--mount",
                 f"type=bind,src={directory / 'pgdata'},dst=/var/lib/postgresql/data",
                 f"pgvector/pgvector:pg{major}",
+                "postgres",
+                "-c",
+                "log_min_error_statement=panic",
+                "-c",
+                "log_error_verbosity=terse",
+                "-c",
+                "log_min_messages=error",
+                "-c",
+                "log_line_prefix=restore-sqlstate:%e ",
             ],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        report("wait-for-database")
         for _ in range(60):
             ready = subprocess.run(
                 [
@@ -184,6 +377,7 @@ def drill(directory):
             time.sleep(1)
         else:
             raise RuntimeError("restore database did not become ready")
+        report("verify-database-version")
         version = subprocess.check_output(
             [
                 "docker",
@@ -203,12 +397,34 @@ def drill(directory):
         )
         if int(version.strip()) // 10000 != major:
             raise RuntimeError("restore database major version differs")
+        report("verify-database-locale")
+        locale = subprocess.check_output(
+            [
+                "docker",
+                "exec",
+                container,
+                "psql",
+                "-XAtq",
+                "-U",
+                role,
+                "-d",
+                "restore_drill",
+                "-c",
+                backup.DATABASE_LOCALE_SQL,
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        if json.loads(locale) != DATABASE_LOCALE:
+            raise RuntimeError("restore database locale differs")
+        report("restore-globals")
         stream_restore(
             paths[f"globals-{stamp}.sql.age"],
             identity,
             container,
             ["psql", "-Xq", "-v", "ON_ERROR_STOP=1", "-U", role, "-d", "restore_drill"],
         )
+        report("restore-database")
         stream_restore(
             paths[f"ditto_platform_prod-{stamp}.dump.age"],
             identity,
@@ -224,6 +440,7 @@ def drill(directory):
                 "restore_drill",
             ],
         )
+        report("verify-schema-and-counts")
         query = (
             "SELECT json_build_object('alembic_version', "
             "(SELECT version_num FROM alembic_version), "
@@ -262,6 +479,7 @@ def drill(directory):
             "Platform PostgreSQL restore drill passed: schema and 3 core counts match"
         )
     finally:
+        report("remove-isolated-database")
         subprocess.run(
             ["docker", "rm", "-f", container],
             stdout=subprocess.DEVNULL,

@@ -14,9 +14,12 @@
 | Production DB / Targon logs | `.agents/skills/gcloud-ditto-readonly/` |
 | GCP and Cloudflare state | `infra/terraform/stacks/` |
 | Hippius Coding secret containers | `infra/terraform/stacks/gcp-platform/main.tf`, `infra/ansible/roles/platform_app/` |
+| Hetzner screener journals | `.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh` (`logs`, company Tailscale, no sudo) |
 | Host convergence | `infra/ansible/` |
 | Platform app VM disk | `.agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md`, `app_boot_disk_gb` |
 | Validator updater | `scripts/validator-stack-auto-update.sh` |
+| Generator scorer (`challenge-scorer`) pull updater | `scripts/generator-scorer-auto-update.sh`, `infra/ansible/roles/generator_scorer/`, `services/dittobench-api/docs/challenge-scorer.md`; live build via Backroom `get_generator_scorer` |
+| Bench activation across agents and generators | `.agents/skills/ditto-subnet-bench-version-bump/SKILL.md`, `research/dittobench-datagen/docs/tandem-upgrades.md` |
 | Screener fleet updater (rolling activation, drain fallback) | `scripts/screener-fleet-auto-update.sh`, `scripts/screener-fleet-drain.py`, `docs/hetzner-screener-fleet.md` |
 
 ## Release graph expectations

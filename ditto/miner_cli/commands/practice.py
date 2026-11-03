@@ -25,7 +25,7 @@ def add_subparser(
         help="Run a self-contained local DittoBench practice score.",
         description=(
             "Build and start the miner harness plus the local DittoBench scorer "
-            "against the live SN118 scoring contract (currently bench 11). "
+            "against the live SN118 scoring contract (the runner's default bench). "
             "Optionally run the pinned LongMemEval-S adapter and official judge "
             "as a separate score. Nothing must be exposed to the public internet."
         ),
@@ -52,8 +52,8 @@ def add_subparser(
         "--bench-version",
         type=int,
         help=(
-            "DittoBench contract to generate and score. Defaults to live SN118 "
-            "scoring (11). cargo evaluate remains a separate local subset."
+            "DittoBench contract to generate and score. Defaults to the live "
+            "SN118 scoring contract. cargo evaluate remains a separate local subset."
         ),
     )
     parser.add_argument("--seed", type=int, help="Pin the generated dataset seed.")
@@ -130,14 +130,17 @@ def rehearsal_argv(args: argparse.Namespace) -> list[str]:
         command.extend(("--seed", str(args.seed)))
     if args.report is not None:
         command.extend(("--report", str(args.report)))
+    # Forward dependent options even without their parent flag: the runner
+    # rejects the combination before starting, instead of a full practice run
+    # that silently ignores them.
     if getattr(args, "gates", False):
         command.append("--gates")
-        if getattr(args, "keep_artifacts", None) is not None:
-            command.extend(("--keep-artifacts", str(args.keep_artifacts)))
+    if getattr(args, "keep_artifacts", None) is not None:
+        command.extend(("--keep-artifacts", str(args.keep_artifacts)))
     if args.longmem_eval:
         command.extend(("--longmem-eval", "--longmem-shards", str(args.longmem_shards)))
-        if args.longmem_limit is not None:
-            command.extend(("--longmem-limit", str(args.longmem_limit)))
+    if args.longmem_limit is not None:
+        command.extend(("--longmem-limit", str(args.longmem_limit)))
     return command
 
 

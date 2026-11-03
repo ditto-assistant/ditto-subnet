@@ -5,13 +5,8 @@
   failed_when: false
   changed_when: false
 
-- name: Detect current Go version string
-  ansible.builtin.set_fact:
-    current_go_version: >-
-      {{
-        (go_version_check.stdout | regex_search('go(\d+\.\d+\.\d+)', '\\1') | first)
-        if go_version_check.rc == 0 else ''
-      }}
+- name: Include Go version detection
+  ansible.builtin.import_tasks: go_version_fact.yml
 
 - name: Download Go {{ base_go_version }}
   ansible.builtin.get_url:

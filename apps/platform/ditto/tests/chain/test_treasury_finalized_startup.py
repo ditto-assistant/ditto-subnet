@@ -1,12 +1,12 @@
 """SDK startup uses the same fresh finalized snapshot as treasury reads."""
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
 
 from ditto.chain.client import ChainClient, _treasury_substrate
 from ditto.chain.errors import ChainConnectionError
+from ditto.chain.models import ChainConfig
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,11 @@ async def test_epoch_schedule_joins_finalized_startup_and_reads_fresh_next_call(
             }[storage_function]
 
     monkeypatch.setattr(async_substrate_interface, "AsyncSubstrateInterface", SDK)
-    client = ChainClient(SimpleNamespace(subtensor_network="finney", netuid=118))
+    client = ChainClient(
+        ChainConfig(
+            pylon_url="http://unused.invalid", netuid=118, open_access_token="test-only"
+        )
+    )
     first = await client.read_epoch_schedule(118)
     second = await client.read_epoch_schedule(118)
     assert (first.block_hash, second.block_hash) == ("finalized-one", "finalized-two")
@@ -236,7 +240,11 @@ async def test_epoch_schedule_refuses_failed_finalized_head_without_best_fallbac
             raise ConnectionError("synthetic finalized head unavailable")
 
     monkeypatch.setattr(async_substrate_interface, "AsyncSubstrateInterface", SDK)
-    client = ChainClient(SimpleNamespace(subtensor_network="finney", netuid=118))
+    client = ChainClient(
+        ChainConfig(
+            pylon_url="http://unused.invalid", netuid=118, open_access_token="test-only"
+        )
+    )
     with pytest.raises(
         ChainConnectionError, match="synthetic finalized head unavailable"
     ):

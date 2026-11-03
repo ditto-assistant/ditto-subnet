@@ -14,6 +14,7 @@ from ditto.api_server.treasury_weights import (
     require_enforcing_requester,
     treasury_fleet_members,
 )
+from ditto.chain.errors import ChainTreasuryActivationReadError
 from ditto.db.models import ValidatorHeartbeat
 from ditto_screening_protocol.treasury import TreasuryLedgerPin
 from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
@@ -124,7 +125,6 @@ async def test_stale_or_absent_chain_permitted_weight_setter_blocks_real_pg_flee
     await session.flush()
     p = pin()
     args = {
-        "now": now,
         "policy_digest": p.policy_digest,
         "collector_digest": p.policy.collector_policy_digest,
     }
@@ -195,6 +195,70 @@ async def add_runtime(session, now):
     return dbrow
 
 
+@pytest.mark.parametrize(
+    "fault",
+    [None, "stale", "future", "legacy", "missing", "managed_stale", "epoch", "owner"],
+)
+async def test_independent_requester_reads_same_pin_without_managed_capability(
+    session, fault
+):
+    from bittensor_wallet import Keypair
+
+    p = pin()
+    now = datetime.now(UTC)
+    managed = await add_runtime(session, now)
+    state = app_state(p)
+    hotkey = Keypair.create_from_uri("//Dave").ss58_address
+    row = ValidatorHeartbeat(
+        validator_hotkey=hotkey,
+        protocol_version=30,
+        software_version="0.355.1",
+        seen_at=now,
+        reported_at=now,
+        signature="cd" * 64,
+        capabilities={},
+        state="idle",
+        active_agent_id=None,
+        code_digest="b" * 64,
+    )
+    if fault == "stale":
+        row.seen_at -= timedelta(minutes=16)
+    elif fault == "future":
+        row.seen_at += timedelta(minutes=1)
+    elif fault == "legacy":
+        row.protocol_version = 29
+    elif fault == "managed_stale":
+        managed.seen_at -= timedelta(minutes=16)
+    elif fault in {"epoch", "owner"}:
+        observed = state.chain.get_treasury_dispatch_observation.return_value
+        update = (
+            {"epoch_index": observed.epoch_index + 1}
+            if fault == "epoch"
+            else {
+                "identity": observed.identity.model_copy(
+                    update={"owner_coldkey": hotkey}
+                )
+            }
+        )
+        state.chain.get_treasury_dispatch_observation.return_value = (
+            observed.model_copy(update=update)
+        )
+    if fault != "missing":
+        session.add(row)
+    await session.flush()
+    if fault is None:
+        await require_enforcing_requester(session, p, hotkey, app_state=state)
+        assert tuple(m.validator_hotkey for m in p.fleet) == (managed.validator_hotkey,)
+        state.chain.get_treasury_dispatch_observation.assert_awaited_once()
+    else:
+        rejection = ChainTreasuryActivationReadError if fault == "owner" else ValueError
+        with pytest.raises(rejection) as rejected:
+            await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "owner":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, ValueError)
+
+
 async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
     p = pin()
     now = datetime.now(UTC)
@@ -209,23 +273,17 @@ async def test_producer_binds_real_approval_complete_roster_and_epoch(session):
         block=p.pinned_block,
         block_hash=p.pinned_block_hash,
     )
-    assert (
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
-        == p
-    )
+    assert await enforcing_pin_from_observation(state, session, shadow, schedule) == p
     state.chain.get_treasury_weight_setters.assert_awaited_once_with(
         p.policy, block_hash=p.identity.finalized_block_hash
     )
     # Independent permitted setters do not block our managed activation.
     state.chain.get_treasury_weight_setters.return_value += (p.policy.collector_hotkey,)
-    assert (
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
-        == p
-    )
+    assert await enforcing_pin_from_observation(state, session, shadow, schedule) == p
     # A missing managed member still blocks; membership never shrinks on staleness.
     state.config.treasury_managed_validator_hotkeys += (p.policy.collector_hotkey,)
     with pytest.raises(ValueError, match="no fresh proof"):
-        await enforcing_pin_from_observation(state, session, shadow, schedule, now=now)
+        await enforcing_pin_from_observation(state, session, shadow, schedule)
 
 
 @pytest.mark.parametrize(
@@ -268,16 +326,13 @@ async def test_producer_and_dispatch_use_fresh_exact_managed_permission_scope(
     )
 
     async def producer():
-        return await enforcing_pin_from_observation(
-            state, session, shadow, schedule, now=now
-        )
+        return await enforcing_pin_from_observation(state, session, shadow, schedule)
 
     async def dispatch():
         await require_enforcing_requester(
             session,
             p,
             p.fleet[0].validator_hotkey,
-            now=now,
             app_state=state,
         )
 
@@ -285,8 +340,13 @@ async def test_producer_and_dispatch_use_fresh_exact_managed_permission_scope(
         if fault == "none":
             await action()
         else:
-            with pytest.raises(ValueError):
+            wrapped = fault == "partial" and action is dispatch
+            rejection = ChainTreasuryActivationReadError if wrapped else ValueError
+            with pytest.raises(rejection) as rejected:
                 await action()
+            if wrapped:
+                assert rejected.value.read_stage == "setter_roster"
+                assert isinstance(rejected.value.read_error, ValueError)
     assert scoped.await_count == 2
     for call in scoped.await_args_list:
         assert call.kwargs == {
@@ -362,15 +422,19 @@ async def test_requester_revalidates_current_chain_and_every_pinned_member(
         state.chain.get_treasury_dispatch_observation.side_effect = TimeoutError()
     await session.flush()
     if fault in {"none", "new_setter"}:
-        await require_enforcing_requester(session, p, hotkey, now=now, app_state=state)
+        await require_enforcing_requester(session, p, hotkey, app_state=state)
         state.chain.get_treasury_weight_setters.assert_awaited_once_with(
             p.policy, block_hash=observation.finalized_block_hash
         )
     else:
-        with pytest.raises((ValueError, TimeoutError)):
-            await require_enforcing_requester(
-                session, p, hotkey, now=now, app_state=state
-            )
+        expected = (
+            ChainTreasuryActivationReadError if fault == "rpc_failure" else ValueError
+        )
+        with pytest.raises(expected) as rejected:
+            await require_enforcing_requester(session, p, hotkey, app_state=state)
+        if fault == "rpc_failure":
+            assert rejected.value.read_stage == "identity"
+            assert isinstance(rejected.value.read_error, TimeoutError)
 
 
 @pytest.mark.parametrize(
@@ -422,13 +486,13 @@ async def test_dispatch_combined_reader_is_fresh_and_never_falls_back(session, f
     if fault == "none":
         for _ in range(2):
             await require_enforcing_requester(
-                session, p, row.validator_hotkey, now=now, app_state=state
+                session, p, row.validator_hotkey, app_state=state
             )
         assert combined.await_count == 2
     else:
         with pytest.raises((ValueError, ChainTreasuryActivationReadError)):
             await require_enforcing_requester(
-                session, p, row.validator_hotkey, now=now, app_state=state
+                session, p, row.validator_hotkey, app_state=state
             )
     combined.assert_awaited_with(
         p.policy, managed_hotkeys=state.config.treasury_managed_validator_hotkeys
@@ -490,3 +554,77 @@ def test_cached_ledger_refuses_legacy_fallback_when_enforcing(configured, has_v2
             request, pin().fleet[0].validator_hotkey, RuntimeError("db down")
         )
     assert refused.value.status_code == 503
+
+
+def _generator_ledger(track_shares_bps):
+    from ditto.api_server.ledger_pin import LedgerPin, canonical_entries, ledger_digest
+    from ditto.tests.api_server.test_ledger_pin import _entry
+
+    p = pin()
+    now = datetime.now(UTC)
+    entries = (_entry("memory", 0.8, first_seen=now),)
+    served = {"treasury_pin": p.model_dump(mode="json"), "burn_share": 0.5}
+    if track_shares_bps is not None:
+        served["track_shares_bps"] = track_shares_bps
+    return p, LedgerPin(
+        netuid=118,
+        epoch_index=p.epoch_index,
+        last_epoch_block=p.first_block,
+        pinned_block=p.pinned_block,
+        pinned_block_hash=p.pinned_block_hash,
+        pinned_at=now,
+        bench_version=13,
+        entries=entries,
+        context={"served": served},
+        ledger_digest=ledger_digest(canonical_entries(entries), served),
+    )
+
+
+@pytest.mark.parametrize(
+    "case,matches",
+    [
+        ("memory_only", True),
+        ("generator_paid", True),
+        ("generator_paid_unserved", False),
+        ("burn_short", False),
+        ("service_short", False),
+        ("memory_short", False),
+    ],
+)
+def test_treasury_vector_accepts_the_served_generator_split_only(case, matches):
+    from ditto.api_server.ledger_pin import (
+        pin_generator_fraction,
+        treasury_vector_matches_pin,
+    )
+
+    served_split = (
+        None
+        if case == "generator_paid_unserved"
+        else {
+            "memory": 7000,
+            "generator": 3000,
+        }
+    )
+    p, ledger = _generator_ledger(served_split)
+    collector = p.policy.collector_hotkey
+    # 10% service; half of the remaining 90% burns; 45% pays miners.
+    vector = {
+        "memory_only": {collector: 0.1, "memory": 0.45, "burn": 0.45},
+        "generator_paid": {collector: 0.1, "memory": 0.315, "gen": 0.135, "burn": 0.45},
+        "generator_paid_unserved": {
+            collector: 0.1,
+            "memory": 0.315,
+            "gen": 0.135,
+            "burn": 0.45,
+        },
+        "burn_short": {collector: 0.1, "memory": 0.315, "gen": 0.185, "burn": 0.4},
+        "service_short": {collector: 0.05, "memory": 0.315, "gen": 0.185, "burn": 0.45},
+        "memory_short": {collector: 0.1, "memory": 0.25, "gen": 0.2, "burn": 0.45},
+    }[case]
+    fraction = pin_generator_fraction(ledger.context["served"])
+    assert (
+        treasury_vector_matches_pin(
+            vector, ledger, burn_hotkey="burn", generator_fraction=fraction
+        )
+        is matches
+    )

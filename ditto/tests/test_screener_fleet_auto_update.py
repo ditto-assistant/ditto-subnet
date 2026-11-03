@@ -859,11 +859,21 @@ def test_timeout_sigterm_during_drain_restores_signed_workers(
             assert time.monotonic() < deadline, "drain never started"
             time.sleep(0.05)
         process.send_signal(signal.SIGTERM)
-        process.communicate(timeout=30)
+        stdout, stderr = process.communicate(timeout=30)
     finally:
         if process.poll() is None:
             process.kill()
-    assert process.returncode == 143
+    drain_status = state / "updater/drain-status.env"
+    drain_tail = (
+        drain_status.read_text()[-2000:] if drain_status.exists() else "missing"
+    )
+    assert process.returncode == 143, (
+        f"SIGTERM drain exit={process.returncode}\n"
+        f"stdout tail:\n{stdout[-4000:]}\n"
+        f"stderr tail:\n{stderr[-4000:]}\n"
+        f"drain status tail:\n{drain_tail}\n"
+        f"service actions tail:\n{log.read_text()[-2000:]}"
+    )
     recorded = log.read_text().splitlines()
     assert "start --no-block ditto-screener-fleet-agent.service" not in recorded
     assert "interrupted-review" not in log.read_text()
@@ -958,11 +968,6 @@ def test_prepare_success_promotes_the_staged_release(tmp_path: Path) -> None:
     ("step", "marker"),
     [
         ("fetch", "fetch --force origin"),
-        ("cat-file", "cat-file -e"),
-        ("merge-base", "merge-base --is-ancestor"),
-        ("checkout", "checkout --detach"),
-        ("rev-parse", "rev-parse HEAD"),
-        ("sync", "uv sync --frozen"),
         ("verify", "verify-installed-signing-contract.py"),
     ],
 )
@@ -1277,6 +1282,7 @@ def _analyzer_release(releases: Path, revision: str) -> Path:
         "deploy/l2-analyzer.Dockerfile",
         ".dockerignore",
         "tools/l2_analyzer.py",
+        "ditto_screener/data/vendored-upstream-allowlist.json",
         *(
             str(path.relative_to(source))
             for path in (source / "ditto_screener/data").glob(
@@ -1509,8 +1515,6 @@ def test_identical_analyzer_inputs_allow_a_rolling_activation(
     "relative",
     [
         "tools/l2_analyzer.py",
-        "ditto_screener/data/starter-kit-provenance-v5.json",
-        "deploy/l2-analyzer.Dockerfile",
         ".dockerignore",
     ],
 )

@@ -13,7 +13,7 @@ ARG DITTOBENCH_SOFTWARE_VERSION=unknown
 ARG DITTOBENCH_SOURCE_SHA=unknown
 
 # ---- build stage ----
-FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS build
+FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS build
 WORKDIR /src/services/dittobench-api
 
 # The AST structural fingerprint (internal/astfp) uses go-tree-sitter, which wraps
@@ -63,7 +63,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
 # fetch inside a deterministic RUN layer instead of remote ADD: remote ADD asks
 # the origin to revalidate on every build, while this layer can be restored from
 # the architecture-specific release cache after its first verified download.
-FROM alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8 AS confirmation-assets
+FROM alpine:3.22@sha256:2e0b81d60597f449baa56dc25d355367869d2dca4cd57e866f1e2b52af3eb55f AS confirmation-assets
 RUN wget -q -O /longmemeval_s_cleaned.json \
       https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json && \
     echo "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442  /longmemeval_s_cleaned.json" \
@@ -75,6 +75,7 @@ RUN wget -q -O /longmemeval_s_cleaned.json \
 # out to both git and docker when it materializes and runs miner submissions.
 # Keep the ordinary runtime below as the default target for hosted practice.
 FROM docker:28.3.3-cli-alpine3.22@sha256:0135662b510037ea581d99c2e5929c5e01185139c0b86986a418bd4da0b98a44 AS sandbox
+RUN apk upgrade --no-cache ca-certificates ca-certificates-bundle
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 RUN apk add --no-cache git
@@ -102,7 +103,7 @@ EXPOSE 8000
 ENTRYPOINT ["/updater-bootstrap"]
 
 # ---- runtime stage ----
-FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab AS runtime
+FROM gcr.io/distroless/static:nonroot@sha256:d62067879de890a1def9da0e7766b7d20810a5e5555cef8506b752437d7a3e88 AS runtime
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 COPY --from=build /out/dittobench-api /dittobench-api
@@ -119,6 +120,7 @@ ENTRYPOINT ["/dittobench-api", "-port", "8000"]
 # profile must still supply the socket, token, private state, host network, and
 # narrowed firewall before it can receive work.
 FROM docker:28.3.3-cli-alpine3.22@sha256:0135662b510037ea581d99c2e5929c5e01185139c0b86986a418bd4da0b98a44 AS coding-executor-scorer
+RUN apk upgrade --no-cache ca-certificates ca-certificates-bundle
 ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 LABEL io.heyditto.dittobench.coding-executor-scorer-contract="1"

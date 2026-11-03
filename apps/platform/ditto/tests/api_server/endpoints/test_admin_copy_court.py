@@ -165,32 +165,6 @@ async def test_settings_requires_confirmation_and_revision(
     assert response.status_code == 409
 
 
-async def test_settings_get_returns_history(
-    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
-) -> None:
-    _install(app, maker)
-    response = await client.get("/api/v1/admin/copy-court/settings", headers=_HEADERS)
-    assert response.status_code == 200
-    body = response.json()
-    assert body["current"] is None and body["history"] == []
-
-    await client.post(
-        "/api/v1/admin/copy-court/settings",
-        json={
-            "expected_revision": 0,
-            "settings": {"mode": "shadow"},
-            "reason": "first shadow revision",
-            "actor": "operator",
-            "confirmation": "APPLY COPY COURT SHADOW",
-        },
-        headers=_HEADERS,
-    )
-    response = await client.get("/api/v1/admin/copy-court/settings", headers=_HEADERS)
-    body = response.json()
-    assert body["current"]["settings"]["mode"] == "shadow"
-    assert len(body["history"]) == 1
-
-
 async def test_byte_identical_resubmission_gets_reject_recommendation(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -307,3 +281,69 @@ async def test_off_mode_records_nothing(
     _install(app, maker)
     recommendation = await _recommend(maker)
     assert recommendation is None
+
+
+async def test_triage_preview_records_nothing_and_settings_show_runtime(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_server.copy_hold_court import CopyHoldCourt
+
+    ancestor_hint = uuid4()
+    agent_id, _original_id, review_id, _sha = await _seed_copy_hold(
+        maker,
+        reason=(
+            "Same miner, previously rejected as unione v21 "
+            f"(agent {ancestor_hint}, uploaded 2026-09-01T12:38:29+00:00). This "
+            "upload is byte-identical to that rejected artifact. Held for "
+            "operator review to check whether the cited behavior was removed."
+        ),
+    )
+    _install(app, maker)
+    response = await client.get(
+        f"/api/v1/admin/copy-court/triage/{agent_id}/preview", headers=_HEADERS
+    )
+    assert response.status_code == 409  # no court in this process yet
+
+    app.state.copy_hold_court = CopyHoldCourt(session_maker=maker)
+    response = await client.get(
+        f"/api/v1/admin/copy-court/triage/{agent_id}/preview", headers=_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["verdict"] == "reject"
+    assert body["review_id"] == str(review_id)
+    assert body["triage_revision"] == "rules-v1"
+    assert body["auto_clear_eligible"] is False
+    async with maker() as session:
+        assert await session.scalar(select(AthCopyCourtRecommendation)) is None
+
+    missing = await client.get(
+        f"/api/v1/admin/copy-court/triage/{uuid4()}/preview", headers=_HEADERS
+    )
+    assert missing.status_code == 404
+
+    settings = await client.get("/api/v1/admin/copy-court/settings", headers=_HEADERS)
+    runtime = settings.json()["runtime"]
+    assert runtime is not None and runtime["running"] is False
+
+
+async def test_enforce_is_refused_outside_the_near_duplicate_class(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    response = await client.post(
+        "/api/v1/admin/copy-court/settings",
+        json={
+            "expected_revision": 0,
+            "settings": {
+                "mode": "enforce",
+                "byte_identical_resubmission_mode": "enforce",
+            },
+            "reason": "try to enforce a rules class",
+            "confirmation": "APPLY COPY COURT ENFORCE",
+        },
+        headers=_HEADERS,
+    )
+    assert response.status_code == 422

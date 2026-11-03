@@ -10,14 +10,14 @@ import (
 
 // Public-wire recovery is measured independently of metadata classification:
 // registering a family alone must not masquerade as implementing its parser.
+//
+// Three seeds give each story family ~39 cases: a family the parser cannot
+// read drops to ~0%, and a broken frame variant well below the 90% floor.
 func TestStoryV13WireParser(t *testing.T) {
-	p, _ := gen.ProfileForVersion("full", 13)
+	t.Parallel()
 	counts, pass := map[string]int{}, map[string]int{}
-	for seed := int64(11); seed < 21; seed++ {
-		a, err := gen.GenerateDataset(seed, p, 13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	for _, a := range probeArtifacts(t, 13, seedRange(11, 13)...) {
+		seed := a.Seed
 		st := buildStores(a)[gen.PrimaryUser]
 		for _, c := range a.MemoryCases {
 			if !strings.HasPrefix(c.QuestionType, "world-story-") {

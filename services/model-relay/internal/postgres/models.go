@@ -192,6 +192,7 @@ type ConfirmationBundleTicket struct {
 	FailureStage      pgtype.Text        `json:"failureStage"`
 	PrepareRejection  pgtype.Text        `json:"prepareRejection"`
 	PrepareRejectedAt pgtype.Timestamptz `json:"prepareRejectedAt"`
+	FailureStatus     pgtype.Int4        `json:"failureStatus"`
 }
 
 type ConfirmationInferenceGrant struct {
@@ -236,6 +237,11 @@ type ConfirmationInferenceRequest struct {
 	UpstreamProvider    pgtype.Text        `json:"upstreamProvider"`
 	StartedAt           pgtype.Timestamptz `json:"startedAt"`
 	CompletedAt         pgtype.Timestamptz `json:"completedAt"`
+	FailureKind         pgtype.Text        `json:"failureKind"`
+	UpstreamHttpStatus  pgtype.Int4        `json:"upstreamHttpStatus"`
+	UpstreamAttempts    pgtype.Int4        `json:"upstreamAttempts"`
+	ReceiptFree         pgtype.Bool        `json:"receiptFree"`
+	UpstreamErrorCode   pgtype.Int4        `json:"upstreamErrorCode"`
 }
 
 type InferenceConcurrencySettingsRevision struct {
@@ -287,6 +293,14 @@ type InferenceGrant struct {
 	EmbeddingCostMicrousd        int64              `json:"embeddingCostMicrousd"`
 	EmbeddingActiveRequests      int32              `json:"embeddingActiveRequests"`
 	UsageAccountingVersion       int32              `json:"usageAccountingVersion"`
+	DecisionModel                pgtype.Text        `json:"decisionModel"`
+	DecisionInputMicrousdPerMtok int64              `json:"decisionInputMicrousdPerMtok"`
+	DecisionRequestBudget        int32              `json:"decisionRequestBudget"`
+	DecisionTokenBudget          int64              `json:"decisionTokenBudget"`
+	DecisionRequestCount         int32              `json:"decisionRequestCount"`
+	DecisionTokens               int64              `json:"decisionTokens"`
+	DecisionCostMicrousd         int64              `json:"decisionCostMicrousd"`
+	DecisionActiveRequests       int32              `json:"decisionActiveRequests"`
 }
 
 type InferenceProviderRoute struct {
@@ -409,4 +423,6 @@ type ValidatorTicket struct {
 	ContainerLogTailAttempt      pgtype.Int4        `json:"containerLogTailAttempt"`
 	ProviderOutageEpoch          pgtype.UUID        `json:"providerOutageEpoch"`
 	ProviderOutageAttemptedEpoch pgtype.UUID        `json:"providerOutageAttemptedEpoch"`
+	DuelingSeasonID              pgtype.UUID        `json:"duelingSeasonId"`
+	SliceSha256                  pgtype.Text        `json:"sliceSha256"`
 }

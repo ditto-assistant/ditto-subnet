@@ -177,6 +177,20 @@ class TestDefaults:
                 relay_delay_fingerprint_max_ms=100,
             )
 
+    def test_sandbox_memory_cap_defaults_to_six_gib(self) -> None:
+        runtime = InferenceConcurrencySettings().benchmark_runtime
+        assert runtime.sandbox_memory_limit_mib == 6_144
+
+    def test_stored_revision_without_the_cap_reads_the_default(self) -> None:
+        # Revisions written before the field existed must keep loading.
+        runtime = BenchmarkRuntimeSettings.model_validate({"case_concurrency": 8})
+        assert runtime.sandbox_memory_limit_mib == 6_144
+
+    @pytest.mark.parametrize("mib", [511, 32_769])
+    def test_sandbox_memory_cap_bounds_are_fail_closed(self, mib: int) -> None:
+        with pytest.raises(ValidationError):
+            BenchmarkRuntimeSettings(sandbox_memory_limit_mib=mib)
+
 
 class TestHierarchy:
     def test_chat_ticket_may_not_exceed_validator(self) -> None:
@@ -452,3 +466,14 @@ class TestChatBudgetsSurviveAnEmbeddingOnlyEdit:
         message = str(caught.value)
         assert "chat_request_budget" in message
         assert "chat_token_budget" in message
+
+
+def test_decision_lane_ships_off_and_cannot_be_enabled_without_a_pin() -> None:
+    from ditto.api_models.inference_concurrency_settings import DecisionLaneSettings
+
+    assert InferenceConcurrencySettings().decision_lane.enabled is False
+    assert InferenceConcurrencySettings().decision_lane.model is None
+    with pytest.raises(ValidationError):
+        DecisionLaneSettings(enabled=True)
+    with pytest.raises(ValidationError):
+        DecisionLaneSettings(enabled=True, model="~typesafe/jev-latest")

@@ -34,6 +34,12 @@ def _key(*, network: str, hotkey: str) -> str:
     return f"{network}:{hotkey}"
 
 
+# Agent upload proofs. Agent uploads scan this whole bucket for reusable
+# credits, so a proof for another lane must live in its own bucket.
+AGENT_PAYMENTS_BUCKET = "pending_upload_payments"
+GENERATOR_PAYMENTS_BUCKET = "pending_generator_payments"
+
+
 def _pending_payment_key(*, network: str, hotkey: str, name: str, sha256: str) -> str:
     identity = f"{network}\0{hotkey}\0{name}\0{sha256}".encode()
     return hashlib.sha256(identity).hexdigest()
@@ -146,11 +152,16 @@ def save_agent_wallet(
 
 
 def load_pending_payment(
-    *, network: str, hotkey: str, name: str, sha256: str
+    *,
+    network: str,
+    hotkey: str,
+    name: str,
+    sha256: str,
+    bucket: str = AGENT_PAYMENTS_BUCKET,
 ) -> PaymentReceipt | None:
     """Load a finalized proof saved for this exact local upload identity."""
     raw = _load_preferences()
-    payments = raw.get("pending_upload_payments")
+    payments = raw.get(bucket)
     if not isinstance(payments, dict):
         return None
     value = payments.get(
@@ -183,7 +194,7 @@ def load_pending_payments_for_hotkey(
 ) -> tuple[PendingUploadPayment, ...]:
     """Discover reusable credits saved by compatible clients for one hotkey."""
     raw = _load_preferences()
-    payments = raw.get("pending_upload_payments")
+    payments = raw.get(AGENT_PAYMENTS_BUCKET)
     if not isinstance(payments, dict):
         return ()
     found: list[PendingUploadPayment] = []
@@ -234,10 +245,11 @@ def save_pending_payment(
     name: str,
     sha256: str,
     payment: PaymentReceipt,
+    bucket: str = AGENT_PAYMENTS_BUCKET,
 ) -> bool:
     """Persist a finalized proof before attempting the corresponding upload."""
     raw = _load_preferences()
-    payments = raw.get("pending_upload_payments")
+    payments = raw.get(bucket)
     if not isinstance(payments, dict):
         payments = {}
     payments[
@@ -251,7 +263,7 @@ def save_pending_payment(
         "block_number": payment.block_number,
         "extrinsic_index": payment.extrinsic_index,
     }
-    raw["pending_upload_payments"] = payments
+    raw[bucket] = payments
     return _save_preferences(raw)
 
 
@@ -311,10 +323,11 @@ def clear_pending_payment(
     name: str,
     sha256: str,
     payment: PaymentReceipt,
+    bucket: str = AGENT_PAYMENTS_BUCKET,
 ) -> bool:
     """Clear only the matching proof after a confirmed upload response."""
     raw = _load_preferences()
-    payments = raw.get("pending_upload_payments")
+    payments = raw.get(bucket)
     if not isinstance(payments, dict):
         return True
     key = _pending_payment_key(network=network, hotkey=hotkey, name=name, sha256=sha256)
@@ -329,5 +342,5 @@ def clear_pending_payment(
     ):
         return True
     del payments[key]
-    raw["pending_upload_payments"] = payments
+    raw[bucket] = payments
     return _save_preferences(raw)

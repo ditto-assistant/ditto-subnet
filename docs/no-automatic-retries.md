@@ -44,6 +44,14 @@ stale operator request cannot authorize newly changed work. Attempt history is
 append-only. Trusted-build attempt counts have no manual ceiling; the database
 keeps only the nonnegative invariant.
 
+## Historical screening retry grants
+
+The screener no longer creates `platform:auto-review-retry` overrides after
+inconclusive or provider-failed reviews. Existing exact-attempt overrides remain
+in the append-only ledger and remain usable; this change does not revoke or
+rewrite previously issued grants. Revoking outstanding legacy grants requires
+an explicitly designed and authorized migration.
+
 ## Deliberate non-retry loops
 
 The following recurring activity does not repeat failed cost-bearing work:

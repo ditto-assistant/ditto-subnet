@@ -1,21 +1,9 @@
 name: DittoBench coding starter kit CI
 
+# Cost control: standalone verification is operator-dispatched; release gates
+# remain in release.yml and its reusable verification workflows (SN-120).
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - miners/dittobench-coding-starter-kit/**
-      - miners/dittobench-unified-starter-kit/**
-      - miners/dittobench-starter-kit/**
-      - research/dittobench-coding-datagen/**
-      - packages/dittobench-coding-contract/**
-      - services/dittobench-api/internal/codingcertifier/**
-      - services/dittobench-api/internal/codingcontract/**
-      - services/dittobench-api/internal/codingrelay/**
-      - services/dittobench-api/internal/codingrunner/**
-      - .github/workflows/coding-starter-kit-ci.yml
-      - scripts/test-coding-starter-practice-e2e.sh
-
 permissions:
   contents: read
 

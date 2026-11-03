@@ -29,6 +29,7 @@ from ditto.db.queries.inference_observability import (
     CURRENT_SQL,
     WINDOWS_SECONDS,
     load_inference_runtime_rows,
+    load_live_lease_inference_activity,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -44,6 +45,7 @@ async def _grant(
     now: datetime,
     slot_id: str = "slot-0",
     status: str = "active",
+    bench_version: int = _BENCH_VERSION,
 ) -> InferenceGrant:
     agent = Agent(
         agent_id=uuid4(),
@@ -60,7 +62,7 @@ async def _grant(
         status=TicketStatus.ISSUED,
         issued_at=now - timedelta(hours=2),
         deadline=now + timedelta(minutes=20),
-        bench_version=_BENCH_VERSION,
+        bench_version=bench_version,
         attempt_count=1,
     )
     session.add_all([agent, ticket])
@@ -68,7 +70,7 @@ async def _grant(
     grant = InferenceGrant(
         grant_id=uuid4(),
         agent_id=agent.agent_id,
-        bench_version=_BENCH_VERSION,
+        bench_version=bench_version,
         validator_hotkey=validator_hotkey,
         slot_id=ticket.slot_id,
         ticket_deadline=ticket.deadline,
@@ -481,3 +483,233 @@ def _percentile(values: list[int], fraction: float) -> float:
     lower = int(position)
     upper = min(lower + 1, len(values) - 1)
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
+
+
+async def test_grant_costs_do_not_relabel_reused_tickets(session: AsyncSession) -> None:
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC)
+    async with session.begin():
+        exact = await _grant(session, validator_hotkey="current", now=now)
+        historical = await _grant(session, validator_hotkey="reused", now=now)
+        accepted = await _grant(session, validator_hotkey="accepted", now=now)
+        outside = await _grant(session, validator_hotkey="outside", now=now)
+        for grant in (exact, historical, accepted, outside):
+            grant.created_at = now - timedelta(minutes=10)
+            grant.cost_microusd = 1_000_000
+            grant.embedding_cost_microusd = 17
+            grant.request_count = 3
+        outside.created_at = now - timedelta(days=3)
+        # The present ticket must not lend its purpose to a different lease.
+        for grant in (historical, accepted):
+            await session.execute(
+                text(
+                    "UPDATE validator_tickets SET deadline=deadline+interval '1 hour', "
+                    "purpose='continual_retest' WHERE agent_id=:agent"
+                ),
+                {"agent": grant.agent_id},
+            )
+        session.add(
+            ScoreAuditEntry(
+                agent_id=accepted.agent_id,
+                validator_hotkey=accepted.validator_hotkey,
+                event="score",
+                payload={
+                    "bench_version": accepted.bench_version,
+                    "ticket_deadline": accepted.ticket_deadline.isoformat(
+                        timespec="microseconds"
+                    ),
+                },
+                prev_hash="0" * 64,
+                entry_hash="1" * 64,
+                recorded_at=now,
+            )
+        )
+        await session.flush()
+        rows = await load_inference_grant_costs(
+            session, window_start=now - timedelta(hours=24), window_end=now
+        )
+        groups = {row["classification_basis"]: row for row in rows}
+        assert set(groups) == {
+            "current_exact_lease",
+            "unknown",
+            "accepted_score_receipt",
+        }
+        assert groups["unknown"]["purpose"] == "historical_unclassified"
+        assert groups["accepted_score_receipt"]["purpose"] == "accepted_canonical_score"
+        assert sum(row["grants"] for row in rows) == 3
+        assert sum(row["chat_cost_microusd"] for row in rows) == 3_000_000
+        assert sum(row["embedding_cost_microusd"] for row in rows) == 51
+        assert sum(row["chat_calls"] for row in rows) == 9
+
+
+async def test_round_cost_classification_is_version_scoped(
+    session: AsyncSession,
+) -> None:
+    from ditto.db.models import GeneratorRound, GeneratorRoundAttempt
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC)
+    async with session.begin():
+        grant = await _grant(
+            session, validator_hotkey="version-scoped", now=now, bench_version=13
+        )
+        grant.created_at = now - timedelta(minutes=5)
+        round_row = GeneratorRound(
+            round_index=1,
+            status="void",
+            epochs_per_round=1,
+            first_epoch_index=1,
+            secret=b"a" * 32,
+            commitment="a" * 64,
+            committed_at=now,
+            committed_epoch_index=1,
+            commitment_publication="disabled",
+            bench_version=14,
+            void_reason="test fixture",
+        )
+        session.add(round_row)
+        await session.flush()
+        session.add(
+            GeneratorRoundAttempt(
+                round_index=1,
+                agent_id=grant.agent_id,
+                validator_hotkey=grant.validator_hotkey,
+                ticket_deadline=grant.ticket_deadline,
+                slot_id=grant.slot_id,
+                status="completed",
+                issued_at=now,
+                finished_at=now,
+            )
+        )
+        await session.flush()
+
+        async def read():
+            return await load_inference_grant_costs(
+                session, window_start=now - timedelta(hours=1), window_end=now
+            )
+
+        rows = await read()
+        assert rows[0]["purpose"] == "canonical_quorum"
+        # The same immutable attempt is authoritative only in its round's version.
+        round_row.bench_version = 13
+        await session.flush()
+        rows = await read()
+        assert rows[0]["purpose"] == "generator_round"
+
+
+@pytest.mark.parametrize(
+    "grant_us,receipt_us,expected",
+    [
+        (0, 0, "accepted_score_receipt"),
+        (123456, 123456, "accepted_score_receipt"),
+        (123456, 0, "unknown"),
+        (0, 1, "unknown"),
+    ],
+)
+async def test_score_cost_receipts_preserve_fractional_identity(
+    session: AsyncSession,
+    grant_us: int,
+    receipt_us: int,
+    expected: str,
+) -> None:
+    from ditto.db.models import ScoreAuditEntry
+    from ditto.db.queries.inference_costs import load_inference_grant_costs
+
+    now = datetime.now(UTC).replace(microsecond=grant_us)
+    async with session.begin():
+        grant = await _grant(session, validator_hotkey="receipt-format", now=now)
+        grant.created_at = now - timedelta(minutes=5)
+        await session.execute(
+            text(
+                "UPDATE validator_tickets SET deadline=deadline+interval '1 hour' "
+                "WHERE agent_id=:agent"
+            ),
+            {"agent": grant.agent_id},
+        )
+        session.add(
+            ScoreAuditEntry(
+                agent_id=grant.agent_id,
+                validator_hotkey=grant.validator_hotkey,
+                event="score",
+                payload={
+                    "bench_version": grant.bench_version,
+                    "ticket_deadline": grant.ticket_deadline.replace(
+                        microsecond=receipt_us
+                    ).isoformat(),
+                },
+                prev_hash="0" * 64,
+                entry_hash="1" * 64,
+                recorded_at=now,
+            )
+        )
+        await session.flush()
+        rows = await load_inference_grant_costs(
+            session, window_start=now - timedelta(hours=1), window_end=now
+        )
+        assert rows[0]["classification_basis"] == expected
+
+
+async def test_lease_activity_counts_any_served_lane_and_ignores_activation(
+    session: AsyncSession,
+) -> None:
+    """A grant that only activated is no evidence of a running harness; a
+    grant that served a chat, embedding or decision request is."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        silent = await _grant(session, validator_hotkey="silent", now=now)
+        decision_only = await _grant(session, validator_hotkey="decision", now=now)
+        chatty = await _grant(session, validator_hotkey="chatty", now=now)
+        decision_only.decision_request_count = 2
+        chatty.request_count = 40
+        chatty.embedding_request_count = 3
+        for grant in (silent, decision_only, chatty):
+            grant.updated_at = now - timedelta(seconds=30)
+        await session.flush()
+
+        activity = await load_live_lease_inference_activity(session, now=now)
+
+    assert activity[("silent", "slot-0", silent.agent_id)].last_activity_at is None
+    decision = activity[("decision", "slot-0", decision_only.agent_id)]
+    assert decision.last_activity_at is not None
+    assert decision.chat_requests == 0
+    busy = activity[("chatty", "slot-0", chatty.agent_id)]
+    assert (busy.chat_requests, busy.embedding_requests) == (40, 3)
+    assert busy.last_activity_at is not None
+
+
+async def test_a_reissued_lease_never_borrows_the_old_grants_activity(
+    session: AsyncSession,
+) -> None:
+    """Two live grants on one slot: the most recently touched one is the lease
+    the validator runs, even before it serves its first request."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        old = await _grant(session, validator_hotkey="v", now=now)
+        old.request_count = 900
+        old.updated_at = now - timedelta(minutes=5)
+        newer_deadline = old.ticket_deadline + timedelta(minutes=30)
+        # A lease re-issued in place keeps its ticket row and moves the
+        # deadline, so the new grant is keyed by the new deadline.
+        reissued = InferenceGrant(
+            **{
+                column.key: getattr(old, column.key)
+                for column in InferenceGrant.__table__.columns
+                if column.key not in {"grant_id", "ticket_deadline", "expires_at"}
+            },
+            grant_id=uuid4(),
+            ticket_deadline=newer_deadline,
+            expires_at=newer_deadline,
+        )
+        reissued.request_count = 0
+        reissued.embedding_request_count = 0
+        reissued.updated_at = now - timedelta(seconds=10)
+        session.add(reissued)
+        await session.flush()
+
+        activity = await load_live_lease_inference_activity(session, now=now)
+
+    lease = activity[("v", "slot-0", old.agent_id)]
+    assert lease.chat_requests == 0
+    assert lease.last_activity_at is None

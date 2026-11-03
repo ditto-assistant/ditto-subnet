@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
@@ -14,6 +16,42 @@ import (
 const twoChoiceCompletion = `{"choices":[{"message":{"content":"a"}},{"message":{"content":"b"}}],"usage":{"prompt_tokens":10,"completion_tokens":40}}`
 
 const reasoningCompletion = `{"choices":[{"message":{"content":"a"}}],"usage":{"prompt_tokens":10,"completion_tokens":1500,"completion_tokens_details":{"reasoning_tokens":1200}}}`
+
+// #2972: the cost ledger reads reasoning tokens from the model relay's own
+// response. The golden body is the relay's exact output for a provider that
+// reported 1500 completion tokens, 1200 of them reasoning
+// (TestPublicProviderResponseCarriesBoundedReasoningTokens pins it there), so
+// a relay that stops carrying the details fails one of the two suites.
+func TestCompletionUsageReadsTheRelayResponse(t *testing.T) {
+	relay, err := os.ReadFile(filepath.Join("..", "..", "..", "model-relay", "internal", "inference", "testdata", "public_response_reasoning_usage.json"))
+	if err != nil {
+		t.Fatalf("read relay golden: %v", err)
+	}
+	usageOK, prompt, completion, reasoning := completionUsage(relay)
+	if !usageOK || prompt != 10 || completion != 1500 || reasoning != 1200 {
+		t.Fatalf("relay usage = ok=%v prompt=%d completion=%d reasoning=%d", usageOK, prompt, completion, reasoning)
+	}
+	var cost brokerCaseCost
+	bookInferenceCost(&cost, scoregates.CostAttributionSerialRunCase, decodeChoiceCount(relay), usageOK, completion, reasoning)
+	if cost.CompletionTokens != 300 || cost.ReasoningTokens != 1200 || cost.ChoicesTotal != 1 {
+		t.Fatalf("booked = %+v, want 300 answer and 1200 reasoning tokens", cost)
+	}
+
+	// Without the details every completion token is answer output, and a
+	// reasoning count above the completion is clamped.
+	for body, want := range map[string]uint64{
+		`{"usage":{"prompt_tokens":10,"completion_tokens":1500,"total_tokens":1510}}`:                                 0,
+		`{"usage":{"prompt_tokens":10,"completion_tokens":100,"completion_tokens_details":{"reasoning_tokens":500}}}`: 100,
+		`{"usage":{"prompt_tokens":10,"completion_tokens":100,"completion_tokens_details":{"reasoning_tokens":-5}}}`:  0,
+	} {
+		if ok, _, _, got := completionUsage([]byte(body)); !ok || got != want {
+			t.Fatalf("%s: reasoning = %d (ok=%v), want %d", body, got, ok, want)
+		}
+	}
+	if ok, _, _, _ := completionUsage([]byte(`{"usage":{"prompt_tokens":-1,"completion_tokens":1}}`)); ok {
+		t.Fatal("negative usage must read as unavailable")
+	}
+}
 
 func TestRecordInferenceCostLockedAttributesSerialAndCapabilityBoundCompletions(t *testing.T) {
 	session := &brokerSession{benchVersion: protocol.BenchVersionV13}

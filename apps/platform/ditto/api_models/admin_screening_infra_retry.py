@@ -36,6 +36,10 @@ class InfraRetryPolicy(BaseModel):
     jitter_fraction: float
     auto_retry_max_age_seconds: int
     auto_retry_max_streak: int
+    auto_retry_max_retries_by_code: dict[str, int] = Field(default_factory=dict)
+    """Per-code automatic retry bound, tighter than ``auto_retry_max_streak``,
+    for a code an artifact can provoke (``l2-late-result``: 1). More failures of
+    that code than this in the current consecutive run decide ``capped``."""
     plan_max_claimable: int
     breaker_distinct_agents: int
     breaker_window_seconds: int

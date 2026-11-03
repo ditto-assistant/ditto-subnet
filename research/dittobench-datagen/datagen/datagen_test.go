@@ -34,7 +34,7 @@ func TestGenerateForVersionUsesExplicitV9Stream(t *testing.T) {
 	if v9.GeneratedAt != v9Epoch.Format("2006-01-02T15:04:05Z07:00") {
 		t.Fatalf("v9 epoch = %q, want %q", v9.GeneratedAt, v9Epoch)
 	}
-	if _, err := GenerateForVersion(seed, 30, protocol.NewestSupportedBenchVersion()+1); err == nil {
+	if _, err := GenerateForVersion(seed, 30, protocol.NewestGeneratableBenchVersion()+1); err == nil {
 		t.Fatal("unsupported benchmark version accepted")
 	}
 }
@@ -226,6 +226,7 @@ func TestStratifiedBalance(t *testing.T) {
 // serves — otherwise the honest inspect-the-options path cannot solve the case.
 // The case keeps the v8 capability-resolution shape.
 func TestV13AppearanceIntentsAreServedByTheInventory(t *testing.T) {
+	t.Parallel()
 	const n = 100 // the full-profile tool count
 	checked := map[string]int{}
 	for seed := int64(1); seed <= 40; seed++ {

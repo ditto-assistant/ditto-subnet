@@ -43,7 +43,13 @@ export const treasuryReceiptSchema = z.object({
 export const treasuryReceiptPageSchema = z.object({ items: z.array(treasuryReceiptSchema).max(100) })
 
 
-export const treasuryReceiptPreflightInputSchema = treasuryReceiptInputSchema.omit({ confirmation: true })
+// Aggregate manual transfers prove one payment from many epochs. Without the
+// claims, zod strips them and Platform audits a different single-source selector.
+export const treasuryReceiptPreflightInputSchema = treasuryReceiptInputSchema.omit({ confirmation: true }).extend({
+  source_claims: z.array(z.object({
+    source_block: uint.min(1), amount_rao: uint.min(1), epoch_index: uint,
+  }).strict()).max(512).default([]),
+})
 export const treasuryReceiptPreflightSchema = z.object({
   ready: z.boolean(), receipt_id: digest.nullable(), already_recorded: z.boolean(),
   refusal: z.enum(['unavailable', 'invalid_or_unsupported', 'conflict']).nullable(),

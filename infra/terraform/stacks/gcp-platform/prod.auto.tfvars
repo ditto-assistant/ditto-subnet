@@ -8,6 +8,9 @@ enable_datapipeline   = true
 enable_embedder       = true
 enable_validator      = true
 enable_validator_prod = true
+# Permanent dev is stopped to save cost; per-PR previews (preview-stack.yml)
+# replace it. Flip to true to bring ditto-platform-dev/validator-dev back.
+dev_environment_running = false
 # Snapshot metadata only; encrypted-backup custody is in ditto-subnet.
 enable_platform_postgres_snapshot_reader = true
 # Treasury hosts remain physically absent until separately reviewed applies.
@@ -17,11 +20,8 @@ enable_treasury_planner_host = false
 # apply creates the complete three-host executor cohort. No worker, daemon, or
 # provider route is activated by this default.
 coding_executor_host_count = 0
-# Native v2 qualification foundation only, with the explicitly nominated custodian.
-# Requires a reviewed protected plan/apply; no runtime or private-data authority.
-enable_coding_hosted_host     = true
-coding_hosted_operators       = ["user:peyton@omniaura.ai"]
-enable_coding_hosted_postgres = true
+# SN-138: the native-v2 host module is removed for reviewed retirement.
+# Retain cold snapshot ditto-coding-hosted-v2-cold-20261009 outside this root.
 # The generator VM must never become persistent production intent. The
 # protected plan workflow overrides this only for a supervised bootstrap/armed
 # window, then seals a teardown plan returning it to absent.
@@ -35,6 +35,9 @@ enable_screener_prod = false
 enable_screener_fleet_secrets       = true
 enable_screener_fleet               = true
 enable_screener_capacity_controller = true
+# Private VM that builds and runs miner generators for the shadow generator
+# competition. Its identity reads only generator-scorer-token-prod.
+enable_generator_scorer = true
 # Rehearsal VM is opt-in through the protected workflow and absent otherwise.
 enable_screener_fleet_dev_host = false
 # The bare-metal X.509 identity is live on subnet-screener-1. Preserve its

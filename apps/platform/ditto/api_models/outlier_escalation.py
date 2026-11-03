@@ -26,6 +26,7 @@ OutlierSettingField = Literal[
     "min_cohort_size",
     "modified_z_threshold",
     "min_composite_floor",
+    "per_axis_enforce",
 ]
 
 _SOURCE_DESCRIPTION = (
@@ -48,6 +49,16 @@ class OutlierEscalationSettingsView(BaseModel):
     min_cohort_size: int
     modified_z_threshold: Annotated[float | None, Field(description=_NON_FINITE)]
     min_composite_floor: Annotated[float | None, Field(description=_NON_FINITE)]
+    per_axis_enforce: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether a single-axis outlier may hold on its own (only in "
+                "enforce mode, and only with the composite at or above "
+                "min_composite_floor). Off: per-axis results are evidence only."
+            )
+        ),
+    ]
 
 
 class OutlierEscalationSettingSourcesView(BaseModel):
@@ -58,6 +69,44 @@ class OutlierEscalationSettingSourcesView(BaseModel):
     min_cohort_size: OutlierSettingSource
     modified_z_threshold: OutlierSettingSource
     min_composite_floor: OutlierSettingSource
+    per_axis_enforce: OutlierSettingSource
+
+
+class OutlierEscalationAxisEvidence(BaseModel):
+    """One score axis's robust z against its cohort; null when absent."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    axis: Annotated[str, Field(description="Score axis, e.g. tool_mean.")]
+    value: float | None = None
+    cohort_size: int | None = None
+    cohort_median: float | None = None
+    cohort_mad: float | None = None
+    modified_z: Annotated[
+        float | None,
+        Field(
+            default=None,
+            description="Null for a zero-MAD or too-small axis cohort.",
+        ),
+    ]
+    upward: bool | None = None
+    outlier: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "Strict upward deviation at or beyond modified_z_threshold. "
+                "Always false when the axis cohort is too small."
+            ),
+        ),
+    ]
+    anomaly_unavailable: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="cohort_too_small when the axis failed closed.",
+        ),
+    ]
 
 
 class OutlierEscalationEvidence(BaseModel):
@@ -81,6 +130,30 @@ class OutlierEscalationEvidence(BaseModel):
     min_composite_floor: float | None = None
     upward: bool | None = None
     above_floor: bool | None = None
+    per_axis: Annotated[
+        list[OutlierEscalationAxisEvidence] | None,
+        Field(
+            default=None,
+            description=(
+                "Per-axis robust z evidence (outlier-escalation-v2+). Null on "
+                "entries recorded before per-axis evidence existed. Audit-chain "
+                "entries are public and record only axis and outlier; their "
+                "statistics are null (the dry run reports them in full)."
+            ),
+        ),
+    ]
+    per_axis_outlier_axes: list[str] | None = None
+    per_axis_enforce: bool | None = None
+    trigger: Annotated[
+        Literal["composite", "per_axis"] | None,
+        Field(
+            default=None,
+            description=(
+                "What held (or would hold) the row. Null for evidence-only "
+                "per-axis entries and for pre-v2 entries."
+            ),
+        ),
+    ]
 
 
 class OutlierEscalationEntryView(BaseModel):
@@ -112,6 +185,18 @@ class OutlierEscalationActivityView(BaseModel):
     enforced_total: Annotated[int, Field(ge=0)]
     observed_in_window: Annotated[int, Field(ge=0)]
     enforced_in_window: Annotated[int, Field(ge=0)]
+    axis_evidence_total: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Evidence-only per-axis outlier entries (audit_kind "
+                "anomalous_score_axis): an axis out of band while the policy "
+                "held nothing. Never counted as observed or enforced."
+            ),
+        ),
+    ] = 0
+    axis_evidence_in_window: Annotated[int, Field(ge=0)] = 0
     latest_recorded_at: datetime | None = None
     recent_limit: Annotated[int, Field(ge=1)]
     recent: list[OutlierEscalationEntryView]
@@ -119,6 +204,17 @@ class OutlierEscalationActivityView(BaseModel):
         bool,
         Field(description="More matching entries exist beyond recent_limit."),
     ]
+    recent_axis_evidence: Annotated[
+        list[OutlierEscalationEntryView],
+        Field(
+            default_factory=list,
+            description=(
+                "Newest evidence-only per-axis entries, at most recent_limit "
+                "rows. enforced is always false."
+            ),
+        ),
+    ]
+    recent_axis_evidence_truncated: bool = False
 
 
 class AdminOutlierEscalationResponse(BaseModel):
@@ -217,6 +313,16 @@ class AdminOutlierEscalationDryRunResponse(BaseModel):
     ] = None
     ledger_mad: float | None = None
     would_trigger_count: Annotated[int, Field(ge=0)]
+    axis_evidence_count: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Rows with a per-axis outlier that the replayed policy would "
+                "NOT hold (recorded as evidence only by the live gate)."
+            ),
+        ),
+    ] = 0
     limit: Annotated[int, Field(ge=1)]
     would_trigger: Annotated[
         list[OutlierEscalationDryRunEntryView],
@@ -226,3 +332,11 @@ class AdminOutlierEscalationDryRunResponse(BaseModel):
         bool,
         Field(description="would_trigger_count exceeds the returned rows."),
     ]
+    axis_evidence: Annotated[
+        list[OutlierEscalationDryRunEntryView],
+        Field(
+            default_factory=list,
+            description="Highest composite first, at most limit rows.",
+        ),
+    ]
+    axis_evidence_truncated: bool = False

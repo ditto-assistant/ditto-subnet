@@ -4,6 +4,11 @@ on:
   pull_request:
     paths:
       - 'scripts/collector_delegate_key.py'
+      - 'scripts/check-treasury-manual-mode.sh'
+      - 'scripts/test-treasury-manual-systemd.sh'
+      - 'infra/systemd/sn118-treasury-manual.service'
+      - 'infra/systemd/sn118-collector@.timer'
+      - 'scripts/manual-mailbox-input.py'
       - 'scripts/test-collector-custody.sh'
       - 'ditto/tests/test_collector_delegate_ceremony.py'
       - 'infra/terraform/stacks/gcp-collector-custody/**'
@@ -16,6 +21,7 @@ on:
       - 'ditto/tests/test_collector_custody_scope.py'
       - '.github/workflows/infra-plan-apply.yml'
       - 'infra/terraform/tests/collector-custody/**'
+      - 'infra/terraform/tests/gamma-custody/**'
       - 'infra/terraform/tests/collector-backend/**'
       - 'infra/terraform/stacks/gcp-preview/**'
       - '.github/workflows/collector-custody.yml'
@@ -42,6 +48,15 @@ jobs:
         run: python3 -m unittest discover -s ditto/tests -p test_collector_custody_phase_input.py -v
       - name: Credentials-free concrete resource and IAM plans
         run: bash scripts/test-collector-custody.sh
+  manual-mode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Manual consumer survives attempted recurring activation
+        run: bash scripts/test-treasury-manual-systemd.sh
   bootstrap:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -5,6 +5,7 @@ import type { JSX } from "solid-js";
 import { HandleBadge } from "../components/ui/HandleBadge";
 import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
+import { SubmissionDownload } from "../components/account/SubmissionDownload";
 import { authJSON, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
 import { dashboardHref, fullEntityHref, spaHref, spaQuery } from "../lib/router";
@@ -109,6 +110,7 @@ interface DittoLinkAttempt {
 interface MinerSubmission {
   agent_id: string;
   name: string;
+  version?: number | null;
   status: string;
   created_at: string;
 }
@@ -322,7 +324,7 @@ export function ReviewsPage(): JSX.Element {
 
 function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.Element {
   const [hours, setHours] = createSignal(24);
-  const [scopes, setScopes] = createSignal<string[]>(["read", "profile"]);
+  const [scopes, setScopes] = createSignal<string[]>(["read", "profile", "download"]);
   const [pending, setPending] = createSignal<DeviceStart | null>(null);
   const [status, setStatus] = createSignal("idle");
   const [error, setError] = createSignal("");
@@ -999,17 +1001,25 @@ function AccountPanel(): JSX.Element {
                   <li>
                     <a href={"/agent/" + item.agent_id}>{item.name}</a>
                     <span class="muted">
-                      {item.status} · {item.created_at}
+                      {item.version == null ? "Unversioned" : "v" + item.version} · {item.status} ·{" "}
+                      {item.created_at}
                     </span>
-                    <button class="btn ghost" onClick={() => void loadLogs(item.agent_id)}>
-                      Logs
-                    </button>
-                    <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
-                      Screening feedback
-                    </button>
-                    <button class="btn ghost" onClick={() => void loadGateNotes(item.agent_id)}>
-                      Gate notes
-                    </button>
+                    <div class="account-submission-actions">
+                      <SubmissionDownload
+                        agentId={item.agent_id}
+                        name={item.name}
+                        canDownload={me()?.session.scopes.includes("download") === true}
+                      />
+                      <button class="btn ghost" onClick={() => void loadLogs(item.agent_id)}>
+                        Logs
+                      </button>
+                      <button class="btn ghost" onClick={() => void loadScreening(item.agent_id)}>
+                        Screening feedback
+                      </button>
+                      <button class="btn ghost" onClick={() => void loadGateNotes(item.agent_id)}>
+                        Gate notes
+                      </button>
+                    </div>
                     <Show when={logAgent() === item.agent_id}>
                       <Show when={logsError()}>
                         <p class="account-error">{logsError()}</p>

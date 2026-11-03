@@ -23,7 +23,7 @@ from ditto.api_models.validator import (
     V9ConfirmationEvidenceRoot,
     V9ConfirmationReceipt,
 )
-from ditto.validator.platform import PlatformClient
+from ditto.validator.platform import PlatformClient, PlatformError
 from ditto.validator.signing import (
     sign_score,
     sign_v9_confirmation_bundle,
@@ -31,10 +31,15 @@ from ditto.validator.signing import (
     verify_v9_confirmation_receipt,
 )
 from ditto.validator.weights import (
+    RECEIPT_CONTRACT_VERSIONS,
+    _bounded_efficiency_factor,
     _effective_composite,
+    _entry_seed_composites,
+    _quality_composite,
     compute_weights,
     filter_weight_confirmed,
 )
+from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
 
 _VECTOR = (
     Path(__file__).resolve().parents[3]
@@ -607,3 +612,172 @@ async def test_v9_efficiency_factor_survives_serialized_http_ledger_round_trip()
         received = await PlatformClient(config, http, caller).get_ledger()  # type: ignore[arg-type]
 
     assert received.entries[0].efficiency_factor == pytest.approx(0.85)
+
+
+# --- #2989: the receipt is quality authority for every confirmation version ---
+#
+# Platform crowns on ``full_effective_micros`` for every confirmation-capable
+# version (``koth_entries_from_ledger``). The fold used to read the receipt only
+# at v9, so a v10+ enforce ledger crowned a different champion than the pin and
+# every weight receipt failed ``ledger_pin_mismatch``. These tests relabel the
+# v9 fixture's version: the fold reads ``bench_version`` and the receipt and
+# never re-verifies signatures, so the relabel isolates exactly the version gate.
+
+
+def _at_version(entry: LedgerEntry, bench_version: int) -> LedgerEntry:
+    return entry.model_copy(update={"bench_version": bench_version})
+
+
+def _ordinary_vs_full_leaders() -> tuple[LedgerEntry, LedgerEntry]:
+    ordinary_leader = _entry()
+    full_leader = _entry(
+        agent_id=UUID("10000000-0000-0000-0000-000000000099"),
+        ordinary_micros=750_000,
+        longmem_micros=1_000_000,
+        first_seen=ordinary_leader.first_seen + timedelta(minutes=1),
+    )
+    return ordinary_leader, full_leader
+
+
+def test_receipt_versions_cover_v9_through_the_newest_confirmation_bench() -> None:
+    assert set(CONFIRMATION_BENCH_VERSIONS) == RECEIPT_CONTRACT_VERSIONS
+    assert {9, 13, 14} <= RECEIPT_CONTRACT_VERSIONS
+
+
+@pytest.mark.parametrize("bench_version", sorted(RECEIPT_CONTRACT_VERSIONS))
+def test_weights_use_verified_full_composite_for_every_receipt_version(
+    bench_version: int,
+) -> None:
+    ordinary, full = (
+        _at_version(entry, bench_version) for entry in _ordinary_vs_full_leaders()
+    )
+    assert full.composite < ordinary.composite
+    assert _quality_composite(full) == pytest.approx(0.85)
+    weights = compute_weights(
+        [ordinary, full], margin=0.005, tail_size=1, rank_shares=(0.8, 0.2)
+    )
+    assert weights[full.miner_hotkey] == pytest.approx(0.8)
+
+
+def test_zero_receipt_cannot_be_crowned_on_its_raw_score() -> None:
+    # The issue's worst case: a receipt of 0 fails the gate and Platform ranks
+    # it at 0.0. The fold must not crown it on its higher raw quorum composite.
+    ordinary, _ = _ordinary_vs_full_leaders()
+    other = _at_version(
+        _entry(
+            agent_id=UUID("10000000-0000-0000-0000-000000000099"),
+            ordinary_micros=700_000,
+            first_seen=ordinary.first_seen + timedelta(minutes=1),
+        ),
+        13,
+    )
+    receipt = ordinary.v9_confirmation
+    assert receipt is not None
+    zeroed = _at_version(
+        ordinary.model_copy(
+            update={
+                "v9_confirmation": receipt.model_copy(
+                    update={"full_effective_micros": 0}
+                )
+            }
+        ),
+        13,
+    )
+    assert zeroed.composite > other.composite
+    assert _quality_composite(zeroed) == 0.0
+    weights = compute_weights(
+        [zeroed, other], margin=0.005, tail_size=1, rank_shares=(0.8, 0.2)
+    )
+    assert weights[other.miner_hotkey] == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize("bench_version", sorted(RECEIPT_CONTRACT_VERSIONS))
+def test_receipt_disables_legacy_paired_seed_path_for_every_receipt_version(
+    bench_version: int,
+) -> None:
+    entry = _at_version(_entry(), bench_version).model_copy(
+        update={
+            "confirmation_seeds": [1, 2],
+            "confirmation_composites": [0.99, 1.0],
+        }
+    )
+    assert _entry_seed_composites(entry) is None
+
+
+# --- live behavior (confirmation off or shadow) stays unchanged ---------------
+#
+# Platform serves receipts only alongside ``v9_confirmation_mode=enforce``, and
+# the validator rejects a ledger that carries one without that marker. While
+# the live bench shadows confirmation no row has a receipt, so the fold must
+# keep paying the continual quorum composite and honoring the efficiency factor
+# exactly as before #2989.
+
+
+@pytest.mark.parametrize("bench_version", [10, 13, 14])
+def test_receiptless_live_ledger_keeps_continual_composite_and_factor(
+    bench_version: int,
+) -> None:
+    ordinary, full = (
+        _at_version(entry, bench_version).model_copy(
+            update={"v9_confirmation": None, "efficiency_factor": 1.02}
+        )
+        for entry in _ordinary_vs_full_leaders()
+    )
+    assert _quality_composite(ordinary) == ordinary.composite
+    assert _quality_composite(full) == full.composite
+    assert _bounded_efficiency_factor(ordinary) == pytest.approx(1.02)
+    weights = compute_weights(
+        [ordinary, full], margin=0.005, tail_size=1, rank_shares=(0.8, 0.2)
+    )
+    assert weights[ordinary.miner_hotkey] == pytest.approx(0.8)
+    assert filter_weight_confirmed([ordinary, full], enforce=False) == [
+        ordinary,
+        full,
+    ]
+
+
+def test_v9_receiptless_factor_neutralization_is_unchanged() -> None:
+    entry = _entry(efficiency_factor=1.02).model_copy(update={"v9_confirmation": None})
+    assert _bounded_efficiency_factor(entry) == 1.0
+    assert _quality_composite(entry) == entry.composite
+
+
+async def _served_ledger(
+    entries: list[LedgerEntry], mode: str | None
+) -> LedgerResponse:
+    payload = LedgerResponse(
+        entries=entries,
+        v9_confirmation_mode=mode,  # type: ignore[arg-type]
+        count=len(entries),
+        generated_at=datetime(2026, 8, 9, tzinfo=UTC),
+    ).model_dump(mode="json")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    caller = bittensor.Keypair.create_from_uri("//Alice")
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=caller.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        return await PlatformClient(config, http, caller).get_ledger()  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("bench_version", sorted(RECEIPT_CONTRACT_VERSIONS))
+async def test_enforce_ledger_rejects_a_receiptless_confirmation_row(
+    bench_version: int,
+) -> None:
+    entry = _at_version(_entry(), bench_version).model_copy(
+        update={"v9_confirmation": None}
+    )
+    with pytest.raises(PlatformError, match="without full confirmation"):
+        await _served_ledger([entry], "enforce")
+
+
+async def test_enforce_check_ignores_a_pre_confirmation_row() -> None:
+    entry = _at_version(_entry(), 8).model_copy(update={"v9_confirmation": None})
+    # Clears the enforce check and reaches proof verification, which the
+    # relabeled fixture fails on its own terms rather than on the enforce rule.
+    with pytest.raises(PlatformError, match="score proof verification failed"):
+        await _served_ledger([entry], "enforce")

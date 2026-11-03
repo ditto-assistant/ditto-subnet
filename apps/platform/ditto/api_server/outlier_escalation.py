@@ -25,6 +25,14 @@ BOTH far in MAD terms AND above an absolute high-composite floor, so the gate
 fires only on *upward* spikes near the top of the scale, never on an ordinary
 row that happens to sit a few MADs off a tight cohort.
 
+The composite is a 0.6/0.4 blend of ``tool_mean`` and ``memory_mean``, so one
+gamed axis can sit far out of band while the blend stays in band. Each axis is
+therefore given the same median/MAD robust z against the same cohort, under the
+same fail-closed cohort rule, and recorded as per-axis evidence. A per-axis
+outlier is observe-only evidence by default: it holds only when the gate is in
+``enforce`` mode AND ``per_axis_enforce`` is on, and the composite verdict is
+unchanged either way.
+
 The function is pure and deterministic: the same cohort and composite always
 yield the same verdict, so re-scoring an agent can never flip its fate.
 """
@@ -85,9 +93,33 @@ OUTLIER_REVIEW_REASON = "Anomalous benchmark score pending operator review"
 # operator queue can filter them apart from copy / overfit / deferred holds.
 OUTLIER_REVIEW_KIND = "anomalous_score"
 
+# ``score_audit_log`` ``audit_kind`` for a per-axis outlier that is recorded as
+# evidence only: an axis far out of band while the policy would NOT hold the
+# row (the composite is in band and per-axis enforcement is off). Kept apart
+# from ``OUTLIER_REVIEW_KIND`` so the would-be-hold / hold counts the posture
+# read reports keep meaning exactly "rows this policy holds or would hold".
+OUTLIER_AXIS_EVIDENCE_KIND = "anomalous_score_axis"
+
 # Bumped whenever the statistic or its wiring changes, so an operator can tell
-# which rule version produced a given held row.
-OUTLIER_ALGORITHM_VERSION = "outlier-escalation-v1"
+# which rule version produced a given held row. v1: composite median/MAD gate.
+# v2: the same composite gate, byte-identical in decision, plus per-axis
+# (``tool_mean`` / ``memory_mean``) robust z evidence and the opt-in per-axis
+# hold behind ``per_axis_enforce``.
+OUTLIER_ALGORITHM_VERSION = "outlier-escalation-v2"
+
+# The score-payload axes the per-axis evidence covers, in recording order.
+# ``composite = 0.6 * tool_mean + 0.4 * memory_mean`` (see ``ScoreReport``), so
+# a gamed single axis can sit far out of band while the blend stays in band.
+OUTLIER_AXES: tuple[str, ...] = ("tool_mean", "memory_mean")
+
+# Ships OFF: per-axis outliers are observe-only evidence until an operator
+# opts in AND the gate itself is in ``enforce`` mode.
+DEFAULT_PER_AXIS_ENFORCE = False
+
+# Accepted spellings for the boolean per-axis toggle. Anything else is
+# rejected (``default_invalid_env``) and the shipped default stays in force.
+_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 
 
 @dataclass(frozen=True)
@@ -102,6 +134,11 @@ class OutlierEscalationSettings:
                  rollout-and-measure mode issue #476 asks to start in.
     ``enforce``  a would-be hold is applied: the agent moves to
                  ``ATH_PENDING_REVIEW`` and is excluded from ranking.
+
+    ``per_axis_enforce`` lets a single-axis outlier (with the composite still
+    at or above ``min_composite_floor``) hold on its own. It defaults OFF, so
+    per-axis results are evidence only; even when on, it holds only in
+    ``enforce`` mode and records a would-be hold in ``observe`` mode.
     """
 
     mode: str = "off"
@@ -109,6 +146,7 @@ class OutlierEscalationSettings:
     min_cohort_size: int = DEFAULT_MIN_COHORT_SIZE
     modified_z_threshold: float = DEFAULT_MODIFIED_Z_THRESHOLD
     min_composite_floor: float = DEFAULT_MIN_COMPOSITE_FLOOR
+    per_axis_enforce: bool = DEFAULT_PER_AXIS_ENFORCE
 
 
 OUTLIER_ESCALATION_MODES: frozenset[str] = frozenset({"off", "observe", "enforce"})
@@ -121,6 +159,7 @@ OUTLIER_ESCALATION_ENV_VARS: Mapping[str, str] = {
     "min_cohort_size": "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE",
     "modified_z_threshold": "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD",
     "min_composite_floor": "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR",
+    "per_axis_enforce": "DITTO_OUTLIER_ESCALATION_PER_AXIS_ENFORCE",
 }
 
 # Where one effective value came from. ``default_invalid_env`` means the
@@ -138,6 +177,7 @@ class OutlierEscalationSettingSources:
     min_cohort_size: OutlierSettingSource = "default"
     modified_z_threshold: OutlierSettingSource = "default"
     min_composite_floor: OutlierSettingSource = "default"
+    per_axis_enforce: OutlierSettingSource = "default"
 
 
 @dataclass(frozen=True)
@@ -209,6 +249,22 @@ def load_outlier_escalation_settings(
     min_composite_floor, min_composite_floor_source = _float(
         "min_composite_floor", defaults.min_composite_floor
     )
+
+    raw_per_axis = environ.get(env["per_axis_enforce"])
+    per_axis_enforce_source: OutlierSettingSource
+    if raw_per_axis is None:
+        per_axis_enforce, per_axis_enforce_source = defaults.per_axis_enforce, "default"
+    else:
+        flag = raw_per_axis.strip().lower()
+        if flag in _TRUE_VALUES:
+            per_axis_enforce, per_axis_enforce_source = True, "env"
+        elif flag in _FALSE_VALUES:
+            per_axis_enforce, per_axis_enforce_source = False, "env"
+        else:
+            per_axis_enforce, per_axis_enforce_source = (
+                defaults.per_axis_enforce,
+                "default_invalid_env",
+            )
     return OutlierEscalationSettingsLoad(
         settings=OutlierEscalationSettings(
             mode=mode,
@@ -216,6 +272,7 @@ def load_outlier_escalation_settings(
             min_cohort_size=min_cohort_size,
             modified_z_threshold=modified_z_threshold,
             min_composite_floor=min_composite_floor,
+            per_axis_enforce=per_axis_enforce,
         ),
         sources=OutlierEscalationSettingSources(
             mode=mode_source,
@@ -223,9 +280,23 @@ def load_outlier_escalation_settings(
             min_cohort_size=min_cohort_size_source,
             modified_z_threshold=modified_z_threshold_source,
             min_composite_floor=min_composite_floor_source,
+            per_axis_enforce=per_axis_enforce_source,
         ),
         loaded_at=now if now is not None else datetime.now(UTC),
     )
+
+
+@dataclass(frozen=True)
+class AxisObservation:
+    """One score axis: the candidate's value and the same axis over its cohort.
+
+    ``cohort`` is drawn from the same comparable peer set as the composite
+    cohort (one value per peer), so every axis is judged against the same
+    population the composite is.
+    """
+
+    value: float
+    cohort: Sequence[float]
 
 
 @dataclass(frozen=True)
@@ -238,11 +309,16 @@ class OutlierDecision:
     review so the operator sees exactly WHY it held. It is always populated,
     even when ``held`` is False, so ``observe`` mode and the "insufficient data"
     branch leave an auditable record.
+
+    ``axis_outliers`` names every axis whose own robust z is an upward
+    out-of-band deviation, whether or not that axis contributed to ``held``.
+    It is empty when no axes were supplied.
     """
 
     held: bool
     reason: str | None = None
     evidence: dict[str, object] = field(default_factory=dict)
+    axis_outliers: tuple[str, ...] = ()
 
 
 def median_mad(values: Sequence[float]) -> tuple[float, float]:
@@ -255,17 +331,79 @@ def median_mad(values: Sequence[float]) -> tuple[float, float]:
     return center, float(median(abs(value - center) for value in values))
 
 
+def _robust_deviation(
+    value: float, peers: Sequence[float], threshold: float
+) -> tuple[float, float, float | None, bool, bool]:
+    """``(median, mad, modified_z, upward, beyond_threshold)`` of ``value``.
+
+    The single statistic both the composite and every axis use. A zero-MAD
+    cohort has no spread to divide by: any strictly-upward value counts as
+    beyond the threshold and the modified z is ``None`` (JSON cannot carry
+    an infinity).
+    """
+    center, mad = median_mad(peers)
+    upward = value > center
+    if mad == 0.0:
+        return center, mad, None, upward, upward
+    modified_z = _MAD_TO_SIGMA * (value - center) / mad
+    return center, mad, modified_z, upward, modified_z >= threshold
+
+
+def _axis_evidence(
+    axis: str, observation: AxisObservation, settings: OutlierEscalationSettings
+) -> dict[str, object]:
+    """Per-axis robust z under the composite's exact cohort rules.
+
+    Fails closed per axis: a cohort below ``min_cohort_size`` records
+    ``anomaly_unavailable = "cohort_too_small"`` and is never an outlier.
+    An axis is an outlier iff it is a strict upward deviation at or beyond
+    ``modified_z_threshold`` -- the composite rule without the absolute
+    floor, which stays a property of the composite (see the hold rule).
+    """
+    peers = [float(value) for value in observation.cohort]
+    value = float(observation.value)
+    # A fixed key set either way, so every recorded axis has the same shape.
+    entry: dict[str, object] = {
+        "axis": axis,
+        "value": value,
+        "cohort_size": len(peers),
+        "cohort_median": None,
+        "cohort_mad": None,
+        "modified_z": None,
+        "upward": None,
+        "outlier": False,
+        "anomaly_unavailable": None,
+    }
+    if len(peers) < settings.min_cohort_size:
+        entry["anomaly_unavailable"] = "cohort_too_small"
+        return entry
+    center, mad, modified_z, upward, beyond = _robust_deviation(
+        value, peers, settings.modified_z_threshold
+    )
+    entry.update(
+        {
+            "cohort_median": center,
+            "cohort_mad": mad,
+            "modified_z": modified_z,
+            "upward": upward,
+            "outlier": bool(beyond and upward),
+        }
+    )
+    return entry
+
+
 def evaluate_score_outlier(
     *,
     composite: float,
     cohort: Sequence[float],
     settings: OutlierEscalationSettings,
+    axes: Mapping[str, AxisObservation] | None = None,
 ) -> OutlierDecision:
     """Decide whether ``composite`` is an out-of-band upward spike vs ``cohort``.
 
     ``cohort`` is the comparable same-benchmark peer set (the eligible ledger's
     composites), which already excludes the candidate itself, held agents, and
-    banned agents. The candidate holds iff ALL of:
+    banned agents. The candidate holds on the composite iff ALL of:
 
     * the cohort has at least ``min_cohort_size`` members (else fail closed,
       recording ``anomaly_unavailable = "cohort_too_small"``);
@@ -278,6 +416,14 @@ def evaluate_score_outlier(
     zero: an identical cohort has no spread, so any strictly-upward composite
     above the floor is treated as out-of-band and the modified z-score is
     recorded as ``None`` rather than an infinity that JSON cannot store.
+
+    ``axes`` (optional) adds per-axis evidence: each axis gets the same
+    median/MAD robust z against its own cohort, recorded under ``per_axis``.
+    Per-axis outliers are evidence only unless ``settings.per_axis_enforce``
+    is on, in which case one also holds when the composite cohort is large
+    enough and the composite is at or above ``min_composite_floor``. Whatever
+    the axes say, the composite verdict and every composite evidence value are
+    exactly what they are without ``axes``.
     """
     peers = [float(value) for value in cohort]
     cohort_size = len(peers)
@@ -292,24 +438,48 @@ def evaluate_score_outlier(
         "algorithm_version": OUTLIER_ALGORITHM_VERSION,
     }
 
+    axis_entries = (
+        [
+            _axis_evidence(axis, observation, settings)
+            for axis, observation in axes.items()
+        ]
+        if axes is not None
+        else None
+    )
+    axis_outliers = tuple(
+        str(entry["axis"]) for entry in axis_entries or () if entry["outlier"]
+    )
+
+    def _decide(held: bool, trigger: str | None) -> OutlierDecision:
+        if axis_entries is not None:
+            evidence.update(
+                {
+                    "per_axis": axis_entries,
+                    "per_axis_outlier_axes": list(axis_outliers),
+                    "per_axis_enforce": settings.per_axis_enforce,
+                    "trigger": trigger,
+                }
+            )
+        # The reason is a fixed NEUTRAL string (no cohort numbers) because it
+        # renders publicly; the statistics that justify the hold are in
+        # ``evidence``, which only operators see. See ``OUTLIER_REVIEW_REASON``.
+        return OutlierDecision(
+            held=held,
+            reason=OUTLIER_REVIEW_REASON if held else None,
+            evidence=evidence,
+            axis_outliers=axis_outliers,
+        )
+
     # Fail closed on a thin cohort: too few points for a median/MAD to be a
     # meaningful baseline. Record the condition; never invent a decision.
     if cohort_size < settings.min_cohort_size:
         evidence["anomaly_unavailable"] = "cohort_too_small"
-        return OutlierDecision(held=False, reason=None, evidence=evidence)
+        return _decide(False, None)
 
-    center, mad = median_mad(peers)
-    upward = composite > center
+    center, mad, modified_z, upward, beyond_distance = _robust_deviation(
+        composite, peers, settings.modified_z_threshold
+    )
     above_floor = composite >= settings.min_composite_floor
-
-    if mad == 0.0:
-        # Degenerate cohort: no spread to divide by. Any strictly-upward
-        # composite is "infinitely" far, but we record None rather than inf.
-        modified_z: float | None = None
-        beyond_distance = upward
-    else:
-        modified_z = _MAD_TO_SIGMA * (composite - center) / mad
-        beyond_distance = modified_z >= settings.modified_z_threshold
 
     evidence.update(
         {
@@ -321,11 +491,43 @@ def evaluate_score_outlier(
         }
     )
 
-    held = bool(beyond_distance and upward and above_floor)
-    if not held:
-        return OutlierDecision(held=False, reason=None, evidence=evidence)
+    if beyond_distance and upward and above_floor:
+        return _decide(True, "composite")
+    # Per-axis hold: opt-in, and still only for a ranks-threatening composite,
+    # so a mediocre row with one odd axis is recorded but never parked.
+    if settings.per_axis_enforce and axis_outliers and above_floor:
+        return _decide(True, "per_axis")
+    return _decide(False, None)
 
-    # The reason is a fixed NEUTRAL string (no cohort numbers) because it renders
-    # publicly; the statistics that justify the hold are in ``evidence``, which
-    # only operators see. See ``OUTLIER_REVIEW_REASON``.
-    return OutlierDecision(held=True, reason=OUTLIER_REVIEW_REASON, evidence=evidence)
+
+# The only per-axis fields the PUBLIC audit chain carries. ``score_audit_log``
+# is served verbatim at ``/audit`` and every entry's hash covers its whole
+# payload, so a field cannot be redacted at serialization without breaking
+# chain verification -- it has to be left out when the entry is written.
+_PUBLIC_AXIS_FIELDS = ("axis", "outlier")
+_PRIVATE_EVIDENCE_KEYS = ("per_axis_outlier_axes", "per_axis_enforce")
+
+
+def public_audit_evidence(evidence: Mapping[str, object]) -> dict[str, object]:
+    """``evidence`` as written to the public, hash-chained audit log.
+
+    Per-axis material is reduced to the neutral axis name and outlier flag:
+    no per-axis value, cohort median/MAD, modified z or policy setting. The
+    composite fields are passed through unchanged, so an entry without axes
+    is exactly the evidence the gate has always published. The full snapshot
+    stays operator-only: on ``ath_reviews.original_evidence`` for a hold, and
+    recomputable through the admin dry-run replay.
+    """
+    public = {
+        key: value
+        for key, value in evidence.items()
+        if key not in _PRIVATE_EVIDENCE_KEYS
+    }
+    per_axis = evidence.get("per_axis")
+    if isinstance(per_axis, list):
+        public["per_axis"] = [
+            {name: entry.get(name) for name in _PUBLIC_AXIS_FIELDS}
+            for entry in per_axis
+            if isinstance(entry, Mapping)
+        ]
+    return public

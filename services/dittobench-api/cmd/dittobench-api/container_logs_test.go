@@ -111,3 +111,69 @@ func TestContainerLogTailSurvivesThePriorVerdictMerge(t *testing.T) {
 		t.Fatalf("evidence lost through the merge: %+v", job.Failure.Diagnostics)
 	}
 }
+
+// A harness supervisord keeps respawning after SIGILL never serves on this host,
+// while the same screened image starts elsewhere. That is the host CPU's
+// envelope, so it must reach the validator as retryable infrastructure rather
+// than spend the miner's attempt.
+func TestFinishSandboxRunClassifiesStartupSIGILLAsHostCPU(t *testing.T) {
+	backend := &diagnosticSandbox{
+		diagnostics: sandbox.RuntimeDiagnostics{StateKnown: true, Running: true},
+		logs: "INFO spawned: 'dittobench_miner' with pid 306\n" +
+			"WARN exited: dittobench_miner (terminated by SIGILL; not expected)",
+	}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-sigill", "sandbox", store.StatusRunning, 13, 283)
+	s.store.Fail("run-sigill", "harness never became healthy: harness not healthy after 3m0s")
+
+	s.finishSandboxRun("run-sigill", &sandbox.Handle{ContainerID: "private"})
+
+	job, _ := s.store.Get("run-sigill")
+	if job.Failure == nil || job.Failure.Kind != "validator_infrastructure" ||
+		job.Failure.Code != "sandbox_cpu_unsupported" || !job.Failure.Retryable {
+		t.Fatalf("startup SIGILL not classified as host CPU: %+v", job.Failure)
+	}
+	// Miner output is unauthenticated; the envelope must say so.
+	if got := job.Failure.Diagnostics["illegal_instruction_evidence"]; got != sandbox.IllegalInstructionEvidenceLogTail {
+		t.Fatalf("evidence = %v, want log_tail", got)
+	}
+}
+
+// The runtime's own exit status for PID 1 is trusted evidence and is recorded as such.
+func TestFinishSandboxRunRecordsTrustedSIGILLExitCode(t *testing.T) {
+	backend := &diagnosticSandbox{
+		diagnostics: sandbox.RuntimeDiagnostics{StateKnown: true, ExitCode: 132},
+	}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-sigill-exit", "sandbox", store.StatusRunning, 13, 283)
+	s.store.Fail("run-sigill-exit", "harness never became healthy: harness exited before health: exit_code=132")
+
+	s.finishSandboxRun("run-sigill-exit", &sandbox.Handle{ContainerID: "private"})
+
+	job, _ := s.store.Get("run-sigill-exit")
+	if job.Failure == nil || job.Failure.Code != "sandbox_cpu_unsupported" {
+		t.Fatalf("exit 132 at startup not classified as host CPU: %+v", job.Failure)
+	}
+	if got := job.Failure.Diagnostics["illegal_instruction_evidence"]; got != sandbox.IllegalInstructionEvidenceExitCode {
+		t.Fatalf("evidence = %v, want exit_code", got)
+	}
+}
+
+// SIGILL after the harness served is the agent's own runtime, not a startup
+// envelope mismatch, and keeps the ordinary agent-failure path.
+func TestFinishSandboxRunKeepsMidRunSIGILLOnTheAgent(t *testing.T) {
+	backend := &diagnosticSandbox{
+		diagnostics: sandbox.RuntimeDiagnostics{StateKnown: true, ExitCode: 132},
+		logs:        "WARN exited: dittobench_miner (terminated by SIGILL; not expected)",
+	}
+	s := &server{store: store.New(), sandbox: backend}
+	s.store.Create("run-midrun", "sandbox", store.StatusRunning, 13, 283)
+	s.store.Fail("run-midrun", "case 17 /run failed: connection reset by peer")
+
+	s.finishSandboxRun("run-midrun", &sandbox.Handle{ContainerID: "private"})
+
+	job, _ := s.store.Get("run-midrun")
+	if job.Failure == nil || job.Failure.Kind == "validator_infrastructure" {
+		t.Fatalf("mid-run SIGILL must stay the agent's failure: %+v", job.Failure)
+	}
+}

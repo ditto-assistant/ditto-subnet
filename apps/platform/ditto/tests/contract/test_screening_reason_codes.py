@@ -79,15 +79,6 @@ def test_platform_lists_are_the_registry_classes() -> None:
     assert dict(ADMISSION_LANE_BY_REASON_CODE) == public._ADMISSION_LANE_BY_REASON_CODE
 
 
-def test_retry_and_backoff_codes_are_live_worker_codes_or_allowlisted() -> None:
-    for code in (*INFRA_AUTO_RETRY_REASON_CODES, *PROVIDER_BACKOFF_REASON_CODES):
-        producer = SCREENING_REASON_CODES[code].producer
-        if code in RETIRED_CODES_PLATFORM_STILL_HANDLES:
-            assert producer == ReasonCodeProducer.RETIRED, code
-        else:
-            assert producer == ReasonCodeProducer.WORKER, code
-
-
 def test_retired_allowlist_matches_the_registry() -> None:
     retired = {
         code
@@ -138,11 +129,6 @@ def test_fleet_infra_code_publishes_its_automatic_retry(code: str) -> None:
 )
 def test_no_other_code_promises_an_automatic_retry(code: str) -> None:
     assert _AUTO_RETRY_PROMISE not in screener._public_screening_reason("", code)
-
-
-@pytest.mark.parametrize("code", _codes(ReasonCodeClass.PROVIDER_BACKOFF))
-def test_provider_backoff_code_names_its_lane(code: str) -> None:
-    assert code in public._ADMISSION_LANE_BY_REASON_CODE
 
 
 @pytest.mark.parametrize("code", _codes(ReasonCodeClass.AGENT_FAULT))

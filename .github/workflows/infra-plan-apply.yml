@@ -32,6 +32,11 @@ on:
         required: true
         default: false
         type: boolean
+      gamma_manual_mailbox_enabled:
+        description: Add the reviewed manual-only request/report mailbox on sealed Gamma custody
+        required: true
+        default: false
+        type: boolean
       targets:
         description: Optional comma-separated Terraform -target addresses
         required: false
@@ -98,7 +103,12 @@ jobs:
           HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
           HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
           SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
+          GAMMA_MANUAL_MAILBOX_ENABLED: ${{ inputs.gamma_manual_mailbox_enabled }}
         run: |
+          if [ "${GAMMA_MANUAL_MAILBOX_ENABLED:-false}" = true ] && [ '${{ inputs.root }}' != gcp-gamma-custody ]; then
+            echo 'gamma_manual_mailbox_enabled requires root=gcp-gamma-custody' >&2
+            exit 2
+          fi
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;
@@ -228,6 +238,9 @@ jobs:
             python3 scripts/collector-custody-phase-input.py "$phase" \
               '${{ inputs.gamma_custody_runtime_rpc_egress }}' "$RUNNER_TEMP/gamma-phase.json"
             extra+=(-var-file="$RUNNER_TEMP/gamma-phase.json")
+            python3 scripts/manual-mailbox-input.py \
+              '${{ inputs.gamma_manual_mailbox_enabled }}' "$RUNNER_TEMP/manual-mailbox.json"
+            extra+=(-var-file="$RUNNER_TEMP/manual-mailbox.json")
           fi
           terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan "${extra[@]}"
 
@@ -350,7 +363,12 @@ jobs:
           HOTKEY_ADMIN_PHASE: ${{ inputs.validator_hotkey_admin_phase }}
           HOTKEY_ADMIN_REVISION: ${{ inputs.validator_hotkey_admin_revision }}
           SCREENER_DEV_HOST_ENABLED: ${{ inputs.screener_fleet_dev_host_enabled }}
+          GAMMA_MANUAL_MAILBOX_ENABLED: ${{ inputs.gamma_manual_mailbox_enabled }}
         run: |
+          if [ "${GAMMA_MANUAL_MAILBOX_ENABLED:-false}" = true ] && [ '${{ inputs.root }}' != gcp-gamma-custody ]; then
+            echo 'gamma_manual_mailbox_enabled requires root=gcp-gamma-custody' >&2
+            exit 2
+          fi
           case '${{ inputs.root }}' in
             gcp-platform) root=infra/terraform/stacks/gcp-platform ;;
             gcp-preview) root=infra/terraform/stacks/gcp-preview ;;

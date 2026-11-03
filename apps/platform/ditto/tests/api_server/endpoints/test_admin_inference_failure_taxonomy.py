@@ -271,8 +271,27 @@ async def test_a_burst_names_its_model_route_and_code_without_inventing_a_route(
         "lanes",
         "groups",
         "rate_limit_bursts",
+        "confirmation_window_seconds",
+        "confirmation_lanes",
+        "confirmation_groups",
     }
     assert body["window_seconds"] == [60, 300, 900, 3600]
+    # The confirmation lane reads a different table on a different cadence, so
+    # it must not borrow the chat/embedding windows.
+    assert body["confirmation_window_seconds"] == [3600, 86400, 604800]
+    # Every (window, lane) pair reports even when idle: a silent omission is how
+    # an operator reads a dying lane as a healthy one.
+    assert {
+        (row["window_seconds"], row["lane"]) for row in body["confirmation_lanes"]
+    } == {
+        (window, lane)
+        for window in (3600, 86400, 604800)
+        for lane in ("reader", "judge", "embedding")
+    }
+    # This fixture seeds only ordinary inference_requests rows, so the
+    # confirmation lane must be quiet rather than absent.
+    assert all(row["calls"] == 0 for row in body["confirmation_lanes"])
+    assert body["confirmation_groups"] == []
 
     chat = _lane(body, 60, "chat")
     assert chat["calls"] == 50

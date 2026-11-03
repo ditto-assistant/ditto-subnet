@@ -55,7 +55,9 @@ names, then trace every writer of the served text field.
 
 Then `read_screening_source_file` only at the hit. For same-owner resubmits,
 `get_copy_review_source_diff` then `read_copy_review_source_diff_file` shows
-what actually changed.
+what actually changed. To confirm a resubmission removed a rejected mechanism,
+`get_lineage_source_diff` diffs it against the rejected ancestor directly (any
+two agents, no hold required); pass `path` for one file's unified diff.
 
 ## Download when the path is large
 

@@ -17,7 +17,7 @@ import (
 func TestV13ContractCounterfactualChangesExactlyOneRecord(t *testing.T) {
 	for seed := int64(1); seed <= 40; seed++ {
 		schema := generateV13Schema(seed)
-		d := newV13Draws(seed, "business")
+		d := newV13Draws(seed, "business", protocol.BenchVersionV13)
 		for group := 0; group < len(V13Families); group++ {
 			g := d.drawGroup(group)
 			base := renderV13Member(d, schema, group, 0, g, false)
@@ -45,7 +45,7 @@ func TestV13ContractCounterfactualChangesExactlyOneRecord(t *testing.T) {
 // business proof for every personal domain.
 func TestV13ContractPersonalCounterfactualChangesExactlyOneRecord(t *testing.T) {
 	for seed := int64(1); seed <= 40; seed++ {
-		d := newV13Draws(seed, "personal")
+		d := newV13Draws(seed, "personal", protocol.BenchVersionV13)
 		for group, domain := range V13PersonalDomains {
 			g := d.drawPersonalGroup(group, domain)
 			base := renderV13PersonalMember(d, group, 0, g, false)
@@ -236,7 +236,7 @@ func TestV13ContractRecordTimestampsRespectAssertedDates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		d := newV13Draws(seed, "business")
+		d := newV13Draws(seed, "business", protocol.BenchVersionV13)
 		for group := 0; group < len(V13Families); group++ {
 			g := d.drawGroup(group)
 			members := generated[group*4 : group*4+4]
@@ -265,7 +265,7 @@ func TestV13ContractRecordTimestampsRespectAssertedDates(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		pd := newV13Draws(seed, "personal")
+		pd := newV13Draws(seed, "personal", protocol.BenchVersionV13)
 		domainPerm := v13Perm(seed, "personal-domains", len(V13PersonalDomains))
 		for group := 0; group < 6; group++ {
 			g := pd.drawPersonalGroup(group, V13PersonalDomains[domainPerm[group]])

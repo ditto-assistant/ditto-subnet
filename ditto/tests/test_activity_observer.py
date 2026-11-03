@@ -373,6 +373,41 @@ def test_public_mcp_only_bounded_transport_and_no_general_tools():
     assert len(requests) == 4
 
 
+def test_only_receipt_call_waits_for_platform_proof_budget():
+    deadlines = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        deadlines.append(
+            (body.get("params", {}).get("name"), request.extensions["timeout"]["read"])
+        )
+        if body["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        result = {}
+        if body["method"] == "tools/list":
+            result = {
+                "tools": [
+                    {"name": "get_treasury_settings"},
+                    {"name": "record_treasury_receipt"},
+                ]
+            }
+        elif body["method"] == "tools/call":
+            result = {"structuredContent": {"receipt_id": "synthetic"}}
+        return httpx.Response(
+            200, json={"jsonrpc": "2.0", "id": body["id"], "result": result}
+        )
+
+    client = PublicActivityMCP("SYNTHETIC", transport=httpx.MockTransport(handler))
+    client.call("get_treasury_settings", {})
+    client.call("record_treasury_receipt", {})
+    client.close()
+    assert deadlines[-2:] == [
+        ("get_treasury_settings", 60),
+        ("record_treasury_receipt", 130),
+    ]
+    assert all(timeout == 60 for _name, timeout in deadlines[:-1])
+
+
 @pytest.mark.parametrize(
     "tools",
     [

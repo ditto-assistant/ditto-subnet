@@ -97,6 +97,8 @@ function item(overrides: Partial<CopyReviewConsoleItem> = {}): CopyReviewConsole
       triggered: false,
       triggered_signal: null,
       current_decision: 'clear',
+      candidate_languages: null,
+      reference_languages: null,
     },
     ...overrides,
   }
@@ -200,6 +202,101 @@ describe('CopyReviewPanel', () => {
     expect(screen.getByRole('heading', { name: 'Review evidence' })).toBeDefined()
     expect(screen.getByText('Current calibrated comparison')).toBeDefined()
     expect(screen.getByText('line 0.214 / 0.310')).toBeDefined()
+  })
+
+  it('shows each side\'s language mix and flags mostly non-Rust source', () => {
+    const comparison = eligible.current_comparison
+    if (comparison.availability !== 'available') throw new Error('fixture unavailable')
+    const python = item({
+      current_comparison: {
+        ...comparison,
+        candidate_languages: {
+          version: 'lang1',
+          files: { python: 3, markdown: 1, toml: 1, json: 1, rust: 1 },
+          bytes: { python: 8000, markdown: 1000, toml: 500, json: 400, rust: 100 },
+          excluded_files: 2,
+          excluded_bytes: 4000,
+        },
+        reference_languages: null,
+      },
+    })
+    render(<CopyReviewPanel {...panelProps} initialItems={[python]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('candidate python 80% · markdown 10% · toml 5% +2 more (7 files)')).toBeDefined()
+    expect(screen.getByText('reference not recorded')).toBeDefined()
+    expect(screen.getByText(/Mostly non-Rust source/)).toBeDefined()
+  })
+
+  it('does not flag a Rust comparison or an unrecorded inventory', () => {
+    render(<CopyReviewPanel {...panelProps} initialItems={[eligible]} initialBulkEligibleCount={1} readOnly={false} />)
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('candidate not recorded')).toBeDefined()
+    expect(screen.queryByText(/Mostly non-Rust source/)).toBeNull()
+  })
+
+  describe('mostly non-Rust note', () => {
+    function withInventories(
+      candidate: Record<string, number> | null,
+      reference: Record<string, number> | null = null,
+      referenceVersion = 'lang1',
+    ) {
+      const comparison = eligible.current_comparison
+      if (comparison.availability !== 'available') throw new Error('fixture unavailable')
+      const inventory = (bytes: Record<string, number>, version = 'lang1') => ({
+        version,
+        files: Object.fromEntries(Object.keys(bytes).map((language) => [language, 1])),
+        bytes,
+        excluded_files: 0,
+        excluded_bytes: 0,
+      })
+      return item({
+        current_comparison: {
+          ...comparison,
+          candidate_languages: candidate ? inventory(candidate) : null,
+          reference_languages: reference ? inventory(reference, referenceVersion) : null,
+        },
+      })
+    }
+
+    function renderSelected(selectedItem: CopyReviewConsoleItem) {
+      render(<CopyReviewPanel {...panelProps} initialItems={[selectedItem]} initialBulkEligibleCount={1} readOnly={false} />)
+      fireEvent.click(screen.getByText(/held-agent/))
+    }
+
+    it('does not fire on a 50/50 Rust/Python tie', () => {
+      renderSelected(withInventories({ python: 5000, rust: 5000 }))
+      expect(screen.queryByText(/Mostly non-Rust source/)).toBeNull()
+    })
+
+    it('does not fire on an unknown-only inventory', () => {
+      renderSelected(withInventories({ unknown: 9000 }))
+      expect(screen.queryByText(/Mostly non-Rust source/)).toBeNull()
+    })
+
+    it('does not fire on Rust code beside a larger JSON registry and prompt docs', () => {
+      renderSelected(withInventories({ rust: 3000, json: 40000, markdown: 6000, toml: 800 }))
+      expect(screen.queryByText(/Mostly non-Rust source/)).toBeNull()
+    })
+
+    it('does not fire on Rust code beside a substantial Makefile and Dockerfile', () => {
+      renderSelected(withInventories({ rust: 2000, make: 12000, dockerfile: 9000 }))
+      expect(screen.queryByText(/Mostly non-Rust source/)).toBeNull()
+    })
+
+    it('fires when non-Rust code bytes are the majority of code on either side', () => {
+      renderSelected(withInventories({ rust: 9000 }, { rust: 2000, typescript: 2001, json: 50000 }))
+      expect(screen.getByText(/Mostly non-Rust source/)).toBeDefined()
+    })
+
+    it('reports zero-byte files instead of an empty artifact', () => {
+      renderSelected(withInventories({ rust: 0 }))
+      expect(screen.getByText('candidate 1 file (0 bytes)')).toBeDefined()
+    })
+
+    it('names inventories recorded under different detection rules', () => {
+      renderSelected(withInventories({ rust: 100 }, { rust: 100 }, 'lang2'))
+      expect(screen.getByText(/candidate lang1 vs reference lang2/)).toBeDefined()
+    })
   })
 
   it('labels a rotated-hotkey match as same-owner lineage', () => {

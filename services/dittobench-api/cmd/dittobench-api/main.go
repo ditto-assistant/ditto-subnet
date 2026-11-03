@@ -48,6 +48,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
 	"github.com/ditto-assistant/dittobench-datagen/datagen"
 	"github.com/ditto-assistant/dittobench-datagen/gen"
+	"github.com/ditto-assistant/dittobench-datagen/grade"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
@@ -56,7 +57,8 @@ const defaultN = 30
 
 // sandboxHealthTimeout bounds how long we wait for a freshly built container to
 // answer /health before giving up on the submission.
-const sandboxHealthTimeout = 3 * time.Minute
+// It is the published runtime envelope's healthy_within_seconds.
+var sandboxHealthTimeout = time.Duration(sandbox.PublishedEnvelope.Timing.HealthyWithinSeconds) * time.Second
 
 // Abuse guards for the public submit endpoint.
 const (
@@ -175,9 +177,14 @@ type server struct {
 	sandbox sandbox.Sandbox
 	// allowPrivate relaxes caller-supplied URL checks for local development.
 	// Validator-owned loopback sandboxes use a separate trusted client.
-	allowPrivate           bool
-	allowScreenedImages    bool
-	allowPrivateDatasets   bool
+	allowPrivate         bool
+	allowScreenedImages  bool
+	allowPrivateDatasets bool
+	// allowGeneratorRounds admits generator-round-v1 runs. It follows the
+	// trusted screened-image mode every validator stack sets, not the
+	// private V13 transport: a round run is a screened-image run whose
+	// tickets only Platform issues, and only while validator rounds are on.
+	allowGeneratorRounds   bool
 	requireTicketInference bool
 	softwareVersion        string
 	sourceRevision         string
@@ -285,6 +292,7 @@ func main() {
 		allowPrivate:           allowPrivate,
 		allowScreenedImages:    allowScreenedImages,
 		allowPrivateDatasets:   envBool("DITTOBENCH_ALLOW_PRIVATE_DATASETS"),
+		allowGeneratorRounds:   allowScreenedImages,
 		requireTicketInference: requireTicketInference,
 		softwareVersion:        identity.SoftwareVersion,
 		sourceRevision:         identity.SourceRevision,
@@ -438,6 +446,7 @@ type capabilitiesResponse struct {
 	// Only keys injected by this binary into a Bench v13 sandbox are covered.
 	ScoredRuntimeEnv    *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
 	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
+	V15ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v15_scored_runtime_env,omitempty"`
 }
 
 type scoredRuntimeEnvEvidence struct {
@@ -473,7 +482,7 @@ func (s *server) scoredRuntimeEnvEvidenceForVersion(version int) *scoredRuntimeE
 // Platform's reviewed rollout and exact scorer packet govern scheduling.
 const (
 	advertisedMinBenchVersion = protocol.BenchVersionV8
-	advertisedMaxBenchVersion = protocol.BenchVersionV14
+	advertisedMaxBenchVersion = protocol.BenchVersionV15
 )
 
 // supportedBenchVersions is the capability set this build can administer. It is
@@ -555,6 +564,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		SoftwareVersionOrigin:  s.softwareVersionOrigin,
 		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
 		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
+		V15ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV15),
 	})
 }
 
@@ -721,9 +731,9 @@ type submitRequest struct {
 	// ScreenedImageURL is a short-lived URL for a `docker save` archive
 	// produced by the trusted screener from this exact tarball. The stored
 	// object may be a plain tar or gzip of that tar; sha256 and size pin the
-	// stored bytes. It is accepted only together with TarballURL: the source
-	// is still materialized for structural anti-copy fingerprinting, but the
-	// Rust crate is not rebuilt.
+	// stored bytes. With TarballURL (legacy validators) the source is also
+	// materialized for a structural fingerprint; without it the image runs
+	// alone and Platform owns the fingerprint. The crate is never rebuilt.
 	ScreenedImageURL string `json:"screened_image_url,omitempty"`
 	// ScreenedImageSHA256 pins the archive bytes. ScreenedImageID pins
 	// the Docker image loaded from those bytes, preventing an archive/tag swap.
@@ -772,6 +782,23 @@ type benchmarkRuntimeSettings struct {
 	RelayDelayFingerprintMode  delayFingerprintMode `json:"relay_delay_fingerprint_mode"`
 	RelayDelayFingerprintMinMS int                  `json:"relay_delay_fingerprint_min_ms"`
 	RelayDelayFingerprintMaxMS int                  `json:"relay_delay_fingerprint_max_ms"`
+	// SandboxMemoryLimitMiB is the Platform-issued harness memory cap. Zero
+	// means an older Platform issued none and the host default applies.
+	SandboxMemoryLimitMiB int `json:"sandbox_memory_limit_mib,omitempty"`
+}
+
+const (
+	minSandboxMemoryLimitMiB = 512
+	maxSandboxMemoryLimitMiB = 32768
+)
+
+// sandboxContext applies the ticket's memory cap to the harness started with
+// the returned context.
+func (r *benchmarkRuntimeSettings) sandboxContext(ctx context.Context) context.Context {
+	if r == nil {
+		return ctx
+	}
+	return sandbox.WithMemoryLimitMiB(ctx, r.SandboxMemoryLimitMiB)
 }
 
 func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
@@ -792,6 +819,14 @@ func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
 		r.RelayDelayFingerprintMinMS > r.RelayDelayFingerprintMaxMS ||
 		r.RelayDelayFingerprintMaxMS > 5000 {
 		return fmt.Errorf("benchmark_runtime relay delay range must satisfy 0 <= min <= max <= 5000")
+	}
+	if r.SandboxMemoryLimitMiB != 0 &&
+		(r.SandboxMemoryLimitMiB < minSandboxMemoryLimitMiB ||
+			r.SandboxMemoryLimitMiB > maxSandboxMemoryLimitMiB) {
+		return fmt.Errorf(
+			"benchmark_runtime.sandbox_memory_limit_mib must be between %d and %d",
+			minSandboxMemoryLimitMiB, maxSandboxMemoryLimitMiB,
+		)
 	}
 	return nil
 }
@@ -851,8 +886,8 @@ func validateScreenedImage(req submitRequest) string {
 	if !fieldsSet {
 		return ""
 	}
-	if req.TarballURL == "" {
-		return "screened image requires tarball_url for source fingerprinting"
+	if req.GitURL != "" {
+		return "screened image cannot be combined with git_url"
 	}
 	if req.ScreenedImageURL == "" || req.ScreenedImageSHA256 == "" ||
 		req.ScreenedImageID == "" || req.ScreenedImageRef == "" || req.ScreenedImageSize <= 0 {
@@ -920,10 +955,18 @@ func sandboxStartInfraFailure(err error) *store.Failure {
 		(strings.Contains(msg, "unable to find image") ||
 			strings.Contains(msg, "no such image") ||
 			strings.Contains(msg, "pull access denied for dittobench-sub")) {
+		// The request-scoped tag is the screened image as this host holds it,
+		// so report the fleet-recognized screened_image_unavailable code and
+		// keep the precise cause in diagnostics. Validators that predate a
+		// dedicated code reject it as unknown and charge the miner for a tag
+		// this host lost (ditto-subnet#2959).
 		return &store.Failure{
 			Kind:      "validator_infrastructure",
-			Code:      "sandbox_image_unavailable",
+			Code:      "screened_image_unavailable",
 			Retryable: true,
+			Diagnostics: map[string]any{
+				"sandbox_cause": "request_image_tag_missing",
+			},
 		}
 	}
 	if !strings.Contains(msg, "network") || !strings.Contains(msg, "not found") {
@@ -1041,7 +1084,7 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	// a presigned platform tarball (mode B). git_url + tarball_url both build in
 	// the Docker sandbox.
 	sources := 0
-	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != ""} {
+	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != "" || req.ScreenedImageURL != ""} {
 		if set {
 			sources++
 		}
@@ -1127,8 +1170,8 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	var req submitRequest
 	bodyLimit := int64(maxSubmitBody)
-	if s.allowPrivateDatasets {
-		bodyLimit += (gen.MaxPrivateArtifactBytes + 2) / 3 * 4
+	if extra := s.privateBodyBytes(); extra > 0 {
+		bodyLimit += int64((extra + 2) / 3 * 4)
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, bodyLimit)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1141,7 +1184,7 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.BenchVersion = version
-	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets); err != nil {
+	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets, s.allowGeneratorRounds); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1173,7 +1216,7 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	// Exactly one harness source; SSRF-guard any caller-supplied URL (same rules
 	// as /v1/submit).
 	sources := 0
-	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != ""} {
+	for _, set := range []bool{req.HarnessURL != "", req.GitURL != "", req.TarballURL != "" || req.ScreenedImageURL != ""} {
 		if set {
 			sources++
 		}
@@ -1292,7 +1335,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" {
+	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" && req.ScreenedImageURL == "" {
 		writeError(w, http.StatusBadRequest, "run_size requires git_url / tarball_url (build in Docker) or harness_url (point at an already-running harness, for local dev)")
 		return
 	}
@@ -1304,7 +1347,7 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 	// Sandbox is only needed when we build the crate ourselves. The local
 	// harness_url path runs the full generate→seed→run→score pipeline against an
 	// already-running harness, so it does not require Docker.
-	if req.GitURL != "" || req.TarballURL != "" {
+	if req.GitURL != "" || req.TarballURL != "" || req.ScreenedImageURL != "" {
 		if s.sandbox == nil {
 			writeError(w, http.StatusNotImplemented, "git_url (Docker build) is not available on this server; submit a reachable harness_url instead")
 			return
@@ -1339,7 +1382,12 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		writeError(w, http.StatusConflict, "ticket inference runtime policy is unavailable")
 		return
 	}
-	s.store.Create(runID, "run_size", store.StatusQueued, seed, prof.Tools+prof.Mem)
+	cases := prof.Tools + prof.Mem
+	if req.PrivateDatasetMode == generatorRoundMode {
+		// A round run's size is its dataset's, set once the job decodes it.
+		cases = 0
+	}
+	s.store.Create(runID, "run_size", store.StatusQueued, seed, cases)
 	s.store.SetRunSize(runID, req.RunSize)
 	s.store.SetBenchVersion(runID, req.BenchVersion)
 	log.Printf("run %s: run_size=%s bench_version=%d seed=%d tools=%d mem=%d",
@@ -1347,7 +1395,11 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.registerRunCancel(runID, cancel)
-	go s.runSizeJob(runCtx, runID, req, prof, seed)
+	if req.PrivateDatasetMode == generatorRoundMode {
+		go s.runGeneratorRoundJob(runCtx, runID, req, seed)
+	} else {
+		go s.runSizeJob(runCtx, runID, req, prof, seed)
+	}
 
 	writeJSON(w, http.StatusAccepted, acceptedResponse{
 		RunID:        runID,
@@ -1472,7 +1524,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	//    harness_url path (the miner is already running their harness).
 	var image string
 	var structuralFP *protocol.CodeFingerprint
-	if req.GitURL != "" || req.TarballURL != "" {
+	if req.GitURL != "" || req.TarballURL != "" || req.ScreenedImageURL != "" {
 		s.store.SetStage(runID, store.StatusBuilding, 0, total)
 		img, buildLog, fp, err := s.sandbox.Build(ctx, sourceFromReq(req))
 		if err != nil {
@@ -1671,7 +1723,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			s.broker.setHarnessBase(inferenceSessionID, env["DITTOBENCH_INFERENCE_BASE_URL"])
 		}
 		harnessInferenceGateway = env["DITTOBENCH_INFERENCE_BASE_URL"]
-		handle, runErr = s.sandbox.Run(ctx, image, env)
+		handle, runErr = s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, env)
 		if runErr != nil {
 			if sourceCapability != "" {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
@@ -1814,7 +1866,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				s.store.Fail(runID, "compatibility inference capability is unavailable")
 				return
 			}
-			replacement, err := s.sandbox.Run(ctx, image, compatEnv)
+			replacement, err := s.sandbox.Run(req.BenchmarkRuntime.sandboxContext(ctx), image, compatEnv)
 			if err != nil {
 				_ = s.broker.revokeSourceCapability(inferenceSessionID, runID, sourceCapability)
 				sourceCapability = ""
@@ -2037,7 +2089,10 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			// fished from the wrong tool's result) zeros the usage half too.
 			// Under v7 the composition is multiplicative and a decoy zeroes the
 			// whole case (ComposeResultUsageForVersion).
-			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, resp.FinalText,
+			// From v14 the reply is read as the graders read it (grade.ReplyAsRead:
+			// the #2734 hyphen fold and rendered markdown), so a needle copied with
+			// U+2011 or behind a no-break space still counts as used.
+			cs = scorer.ComposeResultUsageForVersion(req.BenchVersion, cs, grade.ReplyAsRead(req.BenchVersion, resp).FinalText,
 				fixture.NeedleValue(), fixture.DecoyValue())
 		} else {
 			cs = scorer.FinishTool(cs)
@@ -2392,6 +2447,12 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// details blob so it survives the platform wire alongside the other factors).
 	report.Details.ConversationalSanity = report.ConversationalSanity
 	report.Details.MetamorphicConsistency = scorer.MetamorphicConsistency(perCase)
+	// The memory over-call multiplier the composite gate applied (issue #533):
+	// the same function AggregateForVersion folds in, so a published composite
+	// decomposes into its factors from the record alone.
+	if factor, ok := scorer.MemoryOverCallFactorForVersion(perCase, req.BenchVersion); ok {
+		report.Details.MemoryOverCall = &factor
+	}
 	if tr, pairs := scorer.TransformRobustness(perCase); tr != nil {
 		report.Details.TransformRobustness = tr
 		report.Details.AuditCaseCount = pairs
@@ -2601,9 +2662,10 @@ func validateBenchVersionResult(requested, artifactVersion int, details *protoco
 // three frames later on this path.
 //
 // Direct sandbox resource evidence (OOM, tmpfs exhaustion) still wins over a
-// prior verdict. That is not a downgrade: those codes are themselves
-// validator_infrastructure, and physical evidence from the cgroup is strictly
-// better than an inference drawn mid-run.
+// prior verdict: physical evidence from the cgroup is strictly better than an
+// inference drawn mid-run. An OOM is the agent's (harness_oom, terminal) only
+// under the published rule in docs/RUNTIME-ENVELOPE.md; every other kill is
+// validator_infrastructure.
 func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 	job, ok := s.store.Get(runID)
 	if ok && job.Status == store.StatusFailed {
@@ -2635,15 +2697,52 @@ func (s *server) finishSandboxRun(runID string, handle *sandbox.Handle) {
 		if diagnostics.TmpfsCapacityBytes != nil {
 			failure.Diagnostics["tmpfs_capacity_bytes"] = *diagnostics.TmpfsCapacityBytes
 		}
+		if diagnostics.MemoryLimitBytes != nil {
+			failure.Diagnostics["memory_limit_bytes"] = *diagnostics.MemoryLimitBytes
+		}
+		if diagnostics.HostMemAvailableMinBytes != nil {
+			failure.Diagnostics["host_mem_available_min_bytes"] = *diagnostics.HostMemAvailableMinBytes
+		}
 		message := job.Error
-		if code := diagnostics.InfrastructureCode(); code != "" {
+		verdict, classified := diagnostics.ResourceFailure()
+		// An unflagged SIGKILL proves nothing about who sent it, so it never
+		// overrides a verdict the scored path already reached.
+		if classified && verdict.Code == sandbox.CodeHarnessKilled137 && job.Failure != nil && job.Failure.Kind != "" {
+			classified = false
+		}
+		if classified && verdict.MinerFault {
+			// The wire kind now matches the charge: a harness that reached its
+			// own published cap on a host with headroom is the agent's failure.
+			failure.Kind = "sandbox_failure"
+			failure.Code = verdict.Code
+			failure.Retryable = false
+			message = "harness exceeded its published sandbox memory cap"
+			log.Printf(
+				"run %s harness failure code=%s oom=%t exit=%d",
+				runID, verdict.Code, diagnostics.OOMKilled, diagnostics.ExitCode,
+			)
+		} else if classified {
 			failure.Kind = "validator_infrastructure"
-			failure.Code = code
+			failure.Code = verdict.Code
 			failure.Retryable = true
 			message = "validator sandbox resource envelope exhausted"
 			log.Printf(
 				"run %s validator infrastructure failure code=%s oom=%t exit=%d",
-				runID, code, diagnostics.OOMKilled, diagnostics.ExitCode,
+				runID, verdict.Code, diagnostics.OOMKilled, diagnostics.ExitCode,
+			)
+		} else if sigill, evidence := sandbox.StartupIllegalInstruction(diagnostics.ExitCode, logTail); job.Failure == nil &&
+			strings.Contains(job.Error, "harness never became healthy") && sigill {
+			// The harness died on an instruction this host's CPU lacks before it
+			// ever served. The same screened image starts on other validators, so
+			// this is the host's envelope, not the agent's attempt.
+			failure.Kind = "validator_infrastructure"
+			failure.Code = "sandbox_cpu_unsupported"
+			failure.Retryable = true
+			failure.Diagnostics["illegal_instruction_evidence"] = evidence
+			message = "validator host CPU cannot execute the screened harness"
+			log.Printf(
+				"run %s validator infrastructure failure code=%s evidence=%s exit=%d",
+				runID, failure.Code, evidence, diagnostics.ExitCode,
 			)
 		} else if prior := job.Failure; prior != nil && prior.Kind != "" {
 			// The scored path already reached a verdict. Keep it, and keep the
@@ -3084,6 +3183,7 @@ var lockedEnvKeys = map[string]bool{
 	"OPENAI_API_BASE":               true,
 	"OPENROUTER_BASE_URL":           true,
 	"DITTOBENCH_INFERENCE_BASE_URL": true,
+	"DITTOBENCH_DECISIONS_URL":      true,
 	"DITTOBENCH_DB":                 true,
 	"DITTOBENCH_MEMORY_PATH":        true,
 }
@@ -3175,6 +3275,10 @@ func harnessSandboxEnvForProvider(reqEnv map[string]string, benchVersion int, pr
 	for key, value := range sandboxPersistencePaths {
 		env[key] = value
 	}
+	// v15: the locked decision model (decision_lane.go) at the same broker.
+	if usesDecisionLane(benchVersion) {
+		env[harnessDecisionsEnvKey] = gateway + "/decisions"
+	}
 	return env
 }
 
@@ -3205,6 +3309,9 @@ func harnessSandboxEnvWithCapability(
 	env["OPENAI_API_KEY"] = capability
 	env["OPENROUTER_API_KEY"] = capability
 	env["OLLAMA_BASE_URL"] = base
+	if usesDecisionLane(benchVersion) {
+		env[harnessDecisionsEnvKey] = gateway + "/decisions"
+	}
 	return env, nil
 }
 

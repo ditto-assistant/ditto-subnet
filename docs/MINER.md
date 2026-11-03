@@ -63,12 +63,24 @@ uv run ditto practice --run-size small --longmem-eval
 uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
 ```
 
-The command starts and tears down the harness, live-bench (currently 11) scorer,
+The command starts and tears down the harness, the live-bench scorer (the
+active version from the public rollout endpoint, currently 15),
 trusted local reader/judge proxies, and isolated LongMemEval stores. Default
 `--run-size small` is a smoke profile, not the on-chain case count. Nothing is
 exposed to the public internet. LongMemEval remains a separately labeled
 offline score and is never folded into the Bench composite, KOTH rank,
 confirmation, or payout.
+
+The LongMemEval judge is `deepseek/deepseek-v4.1-flash` pinned to Together,
+the same judge the validator lane scores with, so a rehearsal number is
+comparable with the one production would produce. It is **not** LongMemEval's
+official `gpt-4o` judge, which is hard-coded upstream and retires on
+2027-01-14 (OpenAI API) and 2027-04-14 (Azure); the evaluator is Ditto's fork,
+whose recorded delta leaves the official prompts byte-identical
+(`docs/longmemeval-benchmark/judge-evaluator/`). A number from this path is a
+LongMemEval-S score under the Ditto judge profile, not an official-protocol
+LongMemEval score, and should not be compared with published LongMemEval
+results.
 
 Coding agents should load `/mine` (`.agents/skills/mine`) instead of treating
 `cargo run -- evaluate` as on-chain scoring.
@@ -96,6 +108,13 @@ normal-only image remains valid and is never penalized for omitting that route.
 Coding remains shadow-only and score-ineligible today; see
 [`coding-unified-miner-capability-shadow.md`](coding-unified-miner-capability-shadow.md)
 for the planned compatibility boundary.
+
+Your harness runs inside a fixed resource envelope: memory cap, 2 CPUs, PID
+and `/tmp` limits, `/seed` and per-case deadlines, 8 overlapping `/run` calls,
+and the inference walls. [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every
+limit and the rule that decides whether an out-of-memory kill is charged to
+you. `ditto practice` runs at the same case concurrency and reports your peak
+memory against the cap.
 
 ## Prepare for mainnet
 
@@ -166,7 +185,15 @@ if the agent is never submitted or scores 0. It is also separate from, and
 usually larger than, the evaluation fee.
 
 The coldkey pays the fee. The hotkey signs the artifact and receives incentive.
-The fee is configured in TAO through Backroom. TAO/USD pricing is recorded only
+The fee is configured in TAO through Backroom. Each competition has its own
+fee: agent uploads (the memory competition) pay the default submission fee, and
+generator uploads pay the generator competition's fee, which inherits the
+default until an operator sets a separate generator price. `GET
+/api/v1/public/submission-terms` lists every competition's deliverable
+(artifact kind, required files, size and source limits), cooldown, and fee;
+`ditto upload` and `ditto generator upload` print the relevant terms before
+asking you to pay. A payment must match its competition's fee exactly and funds
+one upload in one lane. TAO/USD pricing is recorded only
 for internal revenue reporting; it neither determines the amount due nor takes
 part in payment or admission validation. Never put wallet secrets in the build
 context.
@@ -203,8 +230,24 @@ uv run ditto verify \
 
 The archive must be a gzip-compressed tarball no larger than 20 MiB, with its
 `Dockerfile` at the root. It must use safe relative paths and contain no links
-or special files. Cargo metadata is part of the Rust reference implementation,
-not a submission requirement.
+or special files. A `RUN` instruction must not request an insecure build
+entitlement (`--network=host` or `--security=insecure`); screening rejects it
+as `SCR-CONTRACT-004`. Cargo metadata is part of the Rust reference
+implementation, not a submission requirement.
+
+Each source file (`.py`, `.rs`, `.go`, `.c`/`.cpp`/`.h`, `.ts`/`.js` and
+similar) must stay within **10,000 lines**, **1 MiB**, and **4,000 characters
+on any one line**. A reviewer reads source 400 lines at a time, so larger files
+cannot be reviewed and leave screening unable to clear the submission. Split
+large files. The one exception is an **unmodified** upstream release file whose
+SHA-256 is on the vendored allowlist
+(`packages/ditto-screening-protocol/ditto_screening_protocol/data/vendored_upstream_allowlist.json`,
+currently QuickJS-ng 0.16.2 `quickjs.c`, SQLite 3.46.1 amalgamation files and
+cpp-httplib 0.18.3 `httplib.h`). Any edit to such a file makes it your own
+source again. Data files (`.json`, `.txt`, model weights) are not counted.
+Platform rejects uploads that break these limits from **2026-10-25 00:00 UTC**,
+and `ditto verify` warns until then. Submissions uploaded earlier are not
+affected.
 
 Submit to Finney:
 
@@ -323,10 +366,8 @@ result.
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
-  choice is not a miner lever: on the current contract (**Bench v12**; Bench
-  v13 will be scored in shadow once its rollout is scheduled and activates by
-  a separate owner decision — see the starter kit's [*Bench v13: how to stay
-  inside the
+  choice is not a miner lever: on the current contract (**Bench v15**, which
+  keeps the v13 gates — see the starter kit's [*Bench v13: how to stay inside the
   gates*](../miners/dittobench-starter-kit/README.md#bench-v13-how-to-stay-inside-the-gates))
   that is **`openai/gpt-oss-20b`**, served through the platform-owned
   OpenRouter inference boundary. Reasoning effort is an intentional v9 strategy: a harness
@@ -371,8 +412,10 @@ result.
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
   both agents on shared seeds rather than dataset luck.
-- Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
-  and next four distinct miners, respectively. Evidence-tied occupied positions
+- Competitive weight is distributed to the champion and next four distinct
+  miners by the payout curve the public leaderboard reports as `rank_shares`
+  (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which
+  validators fold once the whole fleet runs protocol 31). Evidence-tied occupied positions
   pool their shares. If at least two highest-scoring miners are evidence-tied and
   the dethrone threshold cannot be exceeded within the score range, they form an
   uncapped joint crown and split the full competitive pool equally, including
@@ -601,10 +644,15 @@ the two directly linked hotkeys.
   hotkey's work only**, including byte-identical and repacked generations.
   Screening against every other miner is
   unchanged.
-- It does **not** grant an additional emission slot. Emission positions are one
-  per distinct agent no matter how many keys you hold, and this link is not an
-  input to that calculation. Rotating keys and attesting the link does not put
-  two of your agents in the weight vector.
+- It does **not** grant a second emission slot. The weight fold pays one
+  position per owner family: a payment coldkey, or hotkeys joined by an
+  owner-link attestation. The link is an input to that collapse. Rotating
+  keys and attesting the link keeps both hotkeys in one slot; it does not
+  put two of your agents in the weight vector.
+- That slot is paid to the best family member whose hotkey is registered
+  now. A deregistered hotkey cannot hold it. After a rotation, register the
+  new hotkey or the family earns nothing until you do. The copy-review
+  exemption above does not require the old hotkey to stay registered.
 - Links are recorded and auditable. If a key is sold or compromised, contact
   an operator and quote the attestation ID so the link can be revoked. The
   current miner CLI creates links; it does not provide self-service revocation.
@@ -780,6 +828,21 @@ one-shot signed actions still happen in the CLI. The hosted MCP at
 `https://dittobench.ai/mcp` returns those `ditto` commands instead of
 signing remotely.
 
+The **Submissions** tab shows each upload's submission version (`v1`, `v2`,
+and so on), status, and time. Older submissions without a stored version show
+**Unversioned**. With the `download` scope, use **Download** to recover the
+original submitted archive, including rejected or held submissions. The link
+expires after five minutes and only your hotkey's submissions are accessible.
+Existing sessions without `download` must sign in again with Download enabled.
+New dashboard sign-ins and MCP authorizations request that permission by default.
+For read-only access, disable Download in a new dashboard sign-in or have the
+MCP client request only the `read` scope.
+
+The miner MCP exposes the same download as `get_my_submission_artifact` with
+an `agent_id`, and `list_my_submissions` includes each submission's version.
+The authenticated HTTP route is `GET /api/v1/me/agents/{agent_id}/artifact`.
+These owner downloads do not change the public source release policy.
+
 Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
 and Discord are optional.
 
@@ -888,4 +951,33 @@ scores, and payment record are kept, but a hotkey absent from the SN118
 metagraph cannot receive weight and is excluded from the weight fold.
 Registering the same hotkey again restores eligibility automatically. A
 different hotkey is a separate miner identity and requires a new signed, paid
-upload.
+upload, unless you attest an owner link to the previous hotkey. The link
+shares one slot, and the best registered hotkey in that family holds it.
+
+## GitHub identity and contributor agreement
+
+Use `uv run ditto link-github --wallet.name YOUR_WALLET --wallet.hotkey YOUR_HOTKEY`
+to verify a GitHub account through browser consent and a signed hotkey link.
+`uv run ditto link-github status` shows the active numeric account id and login.
+See [GitHub links](GITHUB-LINKS.md) for unlinking, coldkey proofs and privacy.
+
+After maintainers publish an approved agreement, review and sign it with:
+
+```bash
+uv run ditto cla sign --wallet.name YOUR_WALLET --wallet.hotkey YOUR_HOTKEY
+uv run ditto cla status --wallet.name YOUR_WALLET --wallet.hotkey YOUR_HOTKEY
+```
+
+The command saves the complete text, prints its version, SHA-256 and effective
+date, and asks you to type `SIGN CLA <version> <sha256>` exactly. It refuses a
+hash mismatch and has no `--yes` shortcut. For reviewed automation, the exact
+same digest-bound text can be supplied as `--confirmation`. A published future
+version may be signed early with `--version N`.
+
+The gate initially stays `off`; in `shadow`, unsigned uploads are counted and
+accepted. In `enforce`, both the prepayment check and the actual upload require
+the currently effective version. `ditto upload` checks before preflight or any
+payment. When a new version becomes effective, sign again before your next
+submission. Existing scored agents are not altered. Maintainers announce the
+effective date before enforcement; [the rollout guide](legal/README.md) explains
+how published versions and receipts are checked.

@@ -190,7 +190,9 @@ function itStates() {
               tickets: [
                 ticket({
                   ticket_id: `20000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
-                  failure_class: 'longmem_run_http_status',
+                  // A reporter-derived class: it says the scorer failed but not
+                  // where, which is the case this generic code exists for.
+                  failure_class: 'dittobench',
                   failure_stage: 'running_confirmation',
                   issued_at: '2026-08-18T18:00:00.000Z',
                   failed_at: '2026-08-18T18:20:00.000Z',
@@ -203,6 +205,134 @@ function itStates() {
     )
 
     expect(diagnosis.likely_cause.code).toBe('execution_after_preparing')
+  })
+
+  it('names the scorer boundary instead of the generic execution code', () => {
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        pages: pages({
+          failed: {
+            count: 4,
+            items: [1, 2, 3, 4].map((index) => ({
+              ...failedBundle(index, 11),
+              tickets: [
+                ticket({
+                  ticket_id: `20000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+                  failure_class: 'longmem_run_http_status',
+                  failure_stage: 'running_confirmation',
+                  failure_status: 502,
+                  issued_at: '2026-08-18T18:00:00.000Z',
+                  failed_at: '2026-08-18T18:20:00.000Z',
+                }),
+              ],
+            })),
+          },
+        }),
+      }),
+    )
+
+    // The point of forwarding the scorer class: an operator reading only this
+    // diagnosis learns which boundary broke and with what status, without
+    // holding a shell on whichever validator claimed the ticket.
+    expect(diagnosis.likely_cause.code).toBe('scorer_boundary_failure')
+    expect(diagnosis.likely_cause.evidence).toEqual(
+      expect.arrayContaining([
+        'dominant_scorer_class=longmem_run_http_status',
+        'dominant_scorer_class_count=4',
+        'scorer_statuses=502',
+      ]),
+    )
+    expect(diagnosis.recent_failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failure_class: 'longmem_run_http_status',
+          failure_status: 502,
+        }),
+      ]),
+    )
+    expect(diagnosis.failure_histogram).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failure_class: 'longmem_run_http_status',
+          failure_status: 502,
+          count: 4,
+        }),
+      ]),
+    )
+  })
+
+  it('names an executor stage the same way it names a harness boundary', () => {
+    // longmem_exec_<stage> is how a failure reports that the harness was never
+    // involved. It must drive the same specific diagnosis rather than falling
+    // through to the generic execution_after_preparing.
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        pages: pages({
+          failed: {
+            count: 3,
+            items: [1, 2, 3].map((index) => ({
+              ...failedBundle(index, 14),
+              tickets: [
+                ticket({
+                  ticket_id: `40000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+                  failure_class: 'longmem_exec_dimension_execution',
+                  failure_stage: 'running_confirmation',
+                  failure_status: 0,
+                  issued_at: '2026-10-28T18:57:23.000Z',
+                  failed_at: '2026-10-28T18:57:45.000Z',
+                }),
+              ],
+            })),
+          },
+        }),
+      }),
+    )
+
+    expect(diagnosis.likely_cause.code).toBe('scorer_boundary_failure')
+    expect(diagnosis.likely_cause.evidence).toEqual(
+      expect.arrayContaining([
+        'dominant_scorer_class=longmem_exec_dimension_execution',
+        'dominant_scorer_class_count=3',
+        'scorer_statuses=0',
+      ]),
+    )
+  })
+
+  it('keeps a scorer status of zero distinct from no status at all', () => {
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        pages: pages({
+          failed: {
+            count: 2,
+            items: [1, 2].map((index) => ({
+              ...failedBundle(index, 11),
+              tickets: [
+                ticket({
+                  ticket_id: `30000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+                  // 0 is the scorer measuring "the boundary broke before any
+                  // status existed" -- a connection error rather than a 5xx.
+                  // Collapsing it into the absent case would erase that.
+                  failure_class: 'longmem_run_request',
+                  failure_stage: 'running_confirmation',
+                  failure_status: index === 1 ? 0 : null,
+                  issued_at: '2026-08-18T18:00:00.000Z',
+                  failed_at: '2026-08-18T18:20:00.000Z',
+                }),
+              ],
+            })),
+          },
+        }),
+      }),
+    )
+
+    expect(diagnosis.likely_cause.evidence).toEqual(
+      expect.arrayContaining(['scorer_statuses=0']),
+    )
+    const statuses = diagnosis.failure_histogram
+      .filter((row) => row.failure_class === 'longmem_run_request')
+      .map((row) => row.failure_status)
+      .sort()
+    expect(statuses).toEqual([0, null])
   })
 
   it('names prepare-report rejection when execute finished and convert/rebuild 409d', () => {

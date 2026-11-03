@@ -2,9 +2,9 @@
 
 The durable ATH review API calls :func:`compare_anti_copy_pair` after loading two
 ledger rows. The adapter delegates the decision to the score-path gate and emits
-only bounded aggregate evidence and public algorithm provenance. It never returns
-hashes, sketches, source, paths, artifact locations, or credentials, and it has no
-database or storage dependency.
+only bounded aggregate evidence, public algorithm provenance, and each side's
+label-only language inventory. It never returns hashes, sketches, source, paths,
+artifact locations, or credentials, and it has no database or storage dependency.
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ from ditto.api_server.scoring_gate import (
     _utc,
     evaluate_duplicate_signals,
 )
+from ditto.api_server.source_languages import stored_language_inventory
 from ditto.db.queries.scores import LedgerRow
 
 ANTI_COPY_ALGORITHM_VERSION = "reference-aware-v2"
@@ -82,6 +83,12 @@ class AntiCopyComparison:
     triggered: bool
     triggered_signal: str | None
     current_decision: str
+    # Private language inventory of each side's fingerprinted members: counts by
+    # fixed language label, never paths or content. ``None`` when the row was
+    # fingerprinted before the inventory existed. Provenance only; it does not
+    # feed ``triggered`` or ``current_decision``.
+    candidate_languages: dict[str, Any] | None = None
+    reference_languages: dict[str, Any] | None = None
 
     def to_wire(self) -> dict[str, Any]:
         """Return JSON-ready primitives without any submitted fingerprint data."""
@@ -312,4 +319,6 @@ def compare_anti_copy_pair(
         triggered=decision.held,
         triggered_signal=signal,
         current_decision=current_decision,
+        candidate_languages=stored_language_inventory(candidate.content_fingerprint),
+        reference_languages=stored_language_inventory(reference.content_fingerprint),
     )

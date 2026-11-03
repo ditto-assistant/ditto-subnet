@@ -5,6 +5,58 @@ from ditto.treasury.service_allocation import (
     plan_service_distribution,
     service_first_weights,
 )
+from ditto.validator.weights import owner_burn_destination_required
+
+
+@pytest.mark.parametrize("service_bps", [2500, 7500, 10000])
+@pytest.mark.parametrize("burn", [0, 0.25, 1])
+@pytest.mark.parametrize("paid", [0, 0.5, 1])
+def test_full_range_service_split_conserves_emissions(service_bps, burn, paid):
+    vector = service_first_weights(
+        {"miner": 1},
+        service_bps=service_bps,
+        burn_share=burn,
+        paid_miner_fraction=paid,
+        collector_hotkey="collector",
+        collector_verified=True,
+        burn_hotkey="burn",
+    )
+    service = service_bps / 10000
+    assert vector["collector"] == service
+    assert vector.get("miner", 0) == pytest.approx((1 - service) * (1 - burn) * paid)
+    assert sum(vector.values()) == pytest.approx(1)
+    assert owner_burn_destination_required(
+        {"miner": 1},
+        miner_share=1 - burn,
+        paid_miner_fraction=paid,
+        service_bps=service_bps,
+    ) == (vector.get("burn", 0) > 0)
+
+
+def test_full_service_allocation_with_empty_miners_needs_no_burn_destination():
+    assert service_first_weights(
+        {},
+        service_bps=10000,
+        burn_share=1,
+        paid_miner_fraction=0,
+        collector_hotkey="collector",
+        collector_verified=True,
+        burn_hotkey="",
+    ) == {"collector": 1}
+    assert not owner_burn_destination_required({}, miner_share=0, service_bps=10000)
+
+
+@pytest.mark.parametrize("invalid", [-1, 10001, True, 7500.0])
+def test_invalid_service_split_is_refused(invalid):
+    with pytest.raises(ValueError, match="service allocation"):
+        service_first_weights(
+            {},
+            service_bps=invalid,
+            burn_share=0,
+            collector_hotkey="collector",
+            collector_verified=True,
+            burn_hotkey="burn",
+        )
 
 
 @pytest.mark.parametrize(
@@ -176,6 +228,7 @@ def test_distribution_conserves_atomic_earnings_and_does_not_spend_principal():
             collector_coldkey="collector",
             destinations=destinations,
         )
+
     with pytest.raises(ValueError, match="invalid service destination"):
         plan_service_distribution(
             attributed_alpha_rao=11,
@@ -183,3 +236,15 @@ def test_distribution_conserves_atomic_earnings_and_does_not_spend_principal():
             collector_coldkey="gm-holder",
             destinations=destinations,
         )
+
+
+@pytest.mark.parametrize("allocation", [2500, 7500, 10000])
+def test_large_service_pool_distributes_only_attributed_earnings(allocation):
+    result = plan_service_distribution(
+        attributed_alpha_rao=11,
+        available_alpha_rao=100,
+        collector_coldkey="collector",
+        destinations=(ServiceDestination("gm", allocation, "gm-holder"),),
+    )
+    assert len(result) == 1
+    assert result[0].alpha_rao == 11

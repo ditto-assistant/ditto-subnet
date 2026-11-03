@@ -14,6 +14,7 @@ import (
 // mutation. It also pins that the grader-only claim identities ride the same
 // alias map as RequiredArgs, so a projected pair-id claim names the wire id.
 func TestV13ProjectionKeepsGroupsApartAndFollowUpsAfterMutations(t *testing.T) {
+	t.Parallel()
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
 	if !ok {
 		t.Fatal("v13 full profile missing")

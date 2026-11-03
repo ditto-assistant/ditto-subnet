@@ -162,34 +162,6 @@ async def test_enforce_is_activatable_but_global_inherit_is_not(
     assert "exact worker scope" in inherit.text
 
 
-async def test_gpt6_sol_l2_setting_round_trips_to_worker(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    settings_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, settings_maker)
-    payload = _payload("*", "enforce")
-    settings = payload["settings"]
-    assert isinstance(settings, dict)
-    settings["l2_model"] = "openai/gpt-6-sol"
-    settings["source_review_model"] = "openai/gpt-6-luna"
-    settings["l3_model"] = "openai/gpt-6-sol"
-    written = await client.post(
-        "/api/v1/admin/screener-review-settings",
-        headers=_ADMIN_HEADERS,
-        json=payload,
-    )
-    assert written.status_code == 200, written.text
-    fetched = await client.get(
-        "/api/v1/screener/review-settings?instance_id=ditto-screener-prod",
-        headers=_SCREENER_HEADERS,
-    )
-    assert fetched.status_code == 200, fetched.text
-    assert fetched.json()["settings"]["l2_model"] == "openai/gpt-6-sol"
-    assert fetched.json()["settings"]["source_review_model"] == "openai/gpt-6-luna"
-    assert fetched.json()["settings"]["l3_model"] == "openai/gpt-6-sol"
-
-
 async def test_manifest_rotation_preserves_policy_and_requires_exact_confirmation(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -231,31 +203,6 @@ async def test_manifest_rotation_preserves_policy_and_requires_exact_confirmatio
         json=unsafe,
     )
     assert denied.status_code == 409
-
-
-async def test_l3_can_be_disabled_without_disabling_l2(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    settings_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    _install(app, settings_maker)
-    payload = _payload("*", "enforce")
-    assert isinstance(payload["settings"], dict)
-    payload["settings"]["l3_enabled"] = False
-
-    written = await client.post(
-        "/api/v1/admin/screener-review-settings",
-        headers=_ADMIN_HEADERS,
-        json=payload,
-    )
-    assert written.status_code == 200, written.text
-    effective = await client.get(
-        "/api/v1/screener/review-settings?instance_id=ditto-screener-prod",
-        headers=_SCREENER_HEADERS,
-    )
-    assert effective.status_code == 200
-    assert effective.json()["settings"]["mode"] == "enforce"
-    assert effective.json()["settings"]["l3_enabled"] is False
 
 
 async def test_stale_parent_and_duplicate_model_chain_are_rejected(

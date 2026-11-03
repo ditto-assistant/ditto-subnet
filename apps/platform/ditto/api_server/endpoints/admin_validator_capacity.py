@@ -11,6 +11,7 @@ scheduling change and is out of scope here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 
@@ -32,7 +33,12 @@ from ditto.db.queries.benchmark_admission import admission_rollout_for_active_ve
 from ditto.db.queries.inference_concurrency_settings import (
     latest_inference_concurrency_settings_revision,
 )
-from ditto.db.queries.inference_observability import load_inference_current_rows
+from ditto.db.queries.inference_observability import (
+    LeaseInferenceActivity,
+    LeaseSlotKey,
+    load_inference_current_rows,
+    load_live_lease_inference_activity,
+)
 from ditto.db.queries.queue_order import unleased_queue_backlog
 
 router = APIRouter(tags=["admin"])
@@ -45,7 +51,11 @@ VALIDATOR_ROW_LIMIT = 64
 
 
 def _assignment(
-    progress: PublicBenchmarkProgress, *, seen_at: datetime, now: datetime
+    progress: PublicBenchmarkProgress,
+    *,
+    seen_at: datetime,
+    now: datetime,
+    activity: LeaseInferenceActivity | None = None,
 ) -> ValidatorCapacityAssignment:
     rate: float | None = None
     remaining: float | None = None
@@ -57,6 +67,7 @@ def _assignment(
     ):
         rate = progress.completed_checks / elapsed_minutes
         remaining = (progress.total_checks - progress.completed_checks) / rate
+    last_activity = activity.last_activity_at if activity is not None else None
     return ValidatorCapacityAssignment(
         agent_id=progress.agent_id,
         agent_name=progress.agent_name,
@@ -73,11 +84,26 @@ def _assignment(
         estimated_remaining_slot_minutes=(
             round(remaining, 1) if remaining is not None else None
         ),
+        inference_chat_requests=(
+            activity.chat_requests if activity is not None else None
+        ),
+        inference_embedding_requests=(
+            activity.embedding_requests if activity is not None else None
+        ),
+        inference_last_activity_at=last_activity,
+        inference_idle_seconds=(
+            max(0, int((now - last_activity).total_seconds()))
+            if last_activity is not None
+            else None
+        ),
     )
 
 
 def _entry(
-    validator: PublicValidatorHeartbeat, *, now: datetime
+    validator: PublicValidatorHeartbeat,
+    *,
+    now: datetime,
+    activity: Mapping[LeaseSlotKey, LeaseInferenceActivity] | None = None,
 ) -> ValidatorCapacityEntry:
     # ``assigned_benchmarks`` is every live lease with its synchronized progress
     # merged in, so a lease the validator has not reported yet still appears
@@ -104,9 +130,17 @@ def _entry(
             if validator.bench_serviceability == "serving"
             else 0
         ),
+        reserved_round_slots=validator.reserved_round_slots,
         claimed_slots=len(claimed),
         assignments=[
-            _assignment(progress, seen_at=validator.seen_at, now=now)
+            _assignment(
+                progress,
+                seen_at=validator.seen_at,
+                now=now,
+                activity=(activity or {}).get(
+                    (validator.validator_hotkey, progress.slot_id, progress.agent_id)
+                ),
+            )
             for progress in validator.assigned_benchmarks
         ],
     )
@@ -123,10 +157,15 @@ async def get_validator_capacity(
 ) -> ValidatorCapacitySummary:
     """Serviceable vs claimed slots, assignment progress, queue age, relay load."""
     now = datetime.now(UTC)
-    fleet = await load_validator_fleet(session, request.app.state, now=now)
+    # One read of the live grants serves both the fleet's stall judgement and
+    # the per-assignment inference columns, so the two can never disagree.
+    activity = await load_live_lease_inference_activity(session, now=now)
+    fleet = await load_validator_fleet(
+        session, request.app.state, now=now, lease_inference_activity=activity
+    )
     entries = sorted(
         (
-            _entry(validator, now=now)
+            _entry(validator, now=now, activity=activity)
             for validator in fleet.validators
             if validator.online
         ),
@@ -153,7 +192,7 @@ async def get_validator_capacity(
     for row in await load_inference_current_rows(
         session, stale_after_seconds=inference_config.timeout_seconds * 2
     ):
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         active = int(row["active_requests"])
         relay.append(
             RelayLaneSaturation(

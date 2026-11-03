@@ -14,8 +14,12 @@ validator_pylon_user: "{{ deploy_user | default('deploy') }}"
 validator_pylon_group: "{{ deploy_group | default('ditto') }}"
 validator_pylon_gcp_project: "{{ gcp_project | default('ditto-app-dev') }}"
 
-# Pylon container (amd64-only image; same as the platform sidecar).
-validator_pylon_image: "backenddevelopersltd/bittensor-pylon:latest"
+# Pylon container (amd64-only image; same as the platform sidecar in
+# apps/platform/docker-compose.yml). Digest-pinned: a floating tag would let a
+# re-pull silently change the process that holds the hotkey and signs weights.
+# 2.3.3 is the release `:latest` resolved to when the pin was taken; bump the
+# tag and index digest together, and keep the platform sidecar on the same pin.
+validator_pylon_image: "docker.io/backenddevelopersltd/bittensor-pylon:2.3.3@sha256:162a2c56b1183b1420d1c86dad135334380aeadb78e609ded4f52fd6d169efc5"
 validator_pylon_container: ditto-pylon
 # Loopback only: the co-located worker reaches it at PYLON_URL. Never exposed
 # off-box (the VM firewall is IAP-SSH only regardless).

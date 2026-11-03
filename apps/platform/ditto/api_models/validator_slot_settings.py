@@ -26,6 +26,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ditto.api_models.system_health import HostSpecs
 from ditto.api_models.upload import _SS58_PATTERN
 
 HARD_SLOT_CEILING = 8
@@ -58,6 +59,36 @@ memory reading worth reacting to is the one just short of an OOM."""
 MIN_ENABLED_CEILING = 50
 """Below this a ceiling is throttling a healthy host rather than protecting a
 failing one, so the envelope refuses it outright."""
+
+MAX_PER_VALIDATOR_OVERRIDES = 256
+"""Upper bound on ``per_validator`` entries -- the same bound as the pause list,
+comfortably above the subnet's validator count."""
+
+
+class ValidatorSlotOverride(BaseModel):
+    """One validator's departure from the subnet-wide slot policy.
+
+    Validators differ widely in CPU, memory and disk (their heartbeats carry
+    ``host_specs``), so one uniform cap either starves the big hosts or
+    overloads the small ones. Each field is ``None`` to inherit the global
+    value; an override never widens anything past what the validator itself
+    advertises, and the resource ceilings and the pause list still apply.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    max_concurrent_slots: Annotated[int, Field(ge=1, le=HARD_SLOT_CEILING)] | None = (
+        None
+    )
+    """This validator's lease cap in place of the global
+    ``max_concurrent_slots``; ``None`` inherits it."""
+
+    generator_round_reserved_slots: (
+        Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)] | None
+    ) = None
+    """Slots on this validator held back for generator-competition round work
+    in place of the global ``generator_round_reserved_slots``; ``None``
+    inherits it."""
 
 
 class ValidatorSlotSettings(BaseModel):
@@ -162,6 +193,29 @@ class ValidatorSlotSettings(BaseModel):
     host mutation is involved; Platform simply declines new leases.
     """
 
+    generator_round_reserved_slots: Annotated[
+        int, Field(ge=0, le=HARD_SLOT_CEILING)
+    ] = 1
+    """Slots on each validator held back for generator-competition round work
+    (``0 <= n <= 8``), unless ``per_validator`` overrides it.
+
+    Applies only while the competition is not ``off`` and
+    ``validator_rounds_enabled`` is set, and only on a validator whose
+    heartbeat advertises round support; otherwise nothing is reserved. The
+    effective reservation is ``min(n, allowed - 1)``, so at least one slot
+    always remains for canonical and retest work and a one-slot validator
+    reserves nothing. Non-round leases are refused once they reach
+    ``allowed - reserved``; a round lease may take any free slot below
+    ``allowed``, the reserved ones included. Like the cap, it is evaluated only
+    at issue time and never revokes a live lease."""
+
+    per_validator: Annotated[
+        dict[Annotated[str, Field(pattern=_SS58_PATTERN)], ValidatorSlotOverride],
+        Field(max_length=MAX_PER_VALIDATOR_OVERRIDES),
+    ] = Field(default_factory=dict)
+    """Per-validator overrides keyed by ss58 hotkey. A hotkey absent from the
+    map, or a ``None`` field inside its override, inherits the global value."""
+
     @field_validator("paused_validator_hotkeys")
     @classmethod
     def canonical_paused_hotkeys(cls, value: list[str]) -> list[str]:
@@ -211,6 +265,15 @@ class ValidatorSlotSettings(BaseModel):
                 f"enabled per-resource ceiling ({highest_throttle}); a hard "
                 "stop below the throttle makes the throttle unreachable"
             )
+        for hotkey, override in self.per_validator.items():
+            if (
+                override.max_concurrent_slots is None
+                and override.generator_round_reserved_slots is None
+            ):
+                raise ValueError(
+                    f"per_validator[{hotkey}] overrides nothing; remove the entry "
+                    "to inherit the global policy"
+                )
         return self
 
 
@@ -259,6 +322,69 @@ class EffectiveValidatorSlotSettings(BaseModel):
     to land on the dispatch path (0 means every read re-reads)."""
 
 
+class ValidatorSlotAllocation(BaseModel):
+    """How the slot policy resolves for one validator right now.
+
+    Built with the same functions ticket issue calls, so what an operator reads
+    here is what dispatch enforces: the per-validator cap, the resource
+    ceilings, the pause list, and the generator-round reservation, beside the
+    hardware the validator announced so each host can be sized on evidence.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    validator_hotkey: str
+    seen_at: datetime | None
+    """Latest heartbeat, or ``None`` for an override naming a validator that
+    has never reported."""
+
+    online: bool
+    """Whether the latest heartbeat is inside the fleet's online window."""
+
+    issuance_paused: bool
+    round_capable: bool
+    """Whether the heartbeat advertises generator-round support. A validator
+    that does not reserves nothing, since no round lease could ever use it."""
+
+    override: ValidatorSlotOverride | None
+    """The stored ``per_validator`` entry, or ``None`` when it inherits."""
+
+    advertised_slots: Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)]
+    """``configured_slots`` from the heartbeat capacity (1 for a pre-capacity
+    heartbeat, 0 when there is no heartbeat at all)."""
+
+    healthy_slots: Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)]
+    max_concurrent_slots: Annotated[int, Field(ge=1, le=HARD_SLOT_CEILING)]
+    """The policy cap for this validator: its override, else the global cap."""
+
+    allowed_slots: Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)]
+    """Concurrent leases dispatch permits now: the cap narrowed by advertised
+    slots and the resource ceilings, and 0 while paused."""
+
+    configured_reserved_round_slots: Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)]
+    """The reservation this validator is configured with (override or global
+    default), before the ``allowed - 1`` clamp and the rounds-enabled gate."""
+
+    reserved_round_slots: Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)]
+    """Slots held back for round work now: ``min(configured, allowed - 1)``
+    while rounds are enabled and this validator is round-capable, else 0."""
+
+    non_round_slot_budget: Annotated[int, Field(ge=0, le=HARD_SLOT_CEILING)]
+    """``allowed_slots - reserved_round_slots``: the most canonical, retest and
+    canary leases this validator may hold at once."""
+
+    live_leases_by_purpose: dict[str, int]
+    """Live (``issued`` and not past deadline) leases keyed by ticket purpose."""
+
+    host_specs: HostSpecs | None
+    """The validator's announced hardware (protocol 32+), revalidated."""
+
+    cpu_percent: int | None
+    memory_percent: int | None
+    disk_percent: int | None
+    """The latest coarse utilisation sample the ceilings are judged against."""
+
+
 class AdminValidatorSlotSettingsRequest(BaseModel):
     """Append one optimistic, confirmation-gated revision."""
 
@@ -290,3 +416,10 @@ class AdminValidatorSlotSettingsResponse(BaseModel):
     history: list[ValidatorSlotSettingsRevision]
     default: ValidatorSlotSettings
     effective: EffectiveValidatorSlotSettings
+    generator_round_reservation_active: bool = False
+    """Whether round slots are reserved right now: the generator competition is
+    not ``off`` and ``validator_rounds_enabled`` is set."""
+
+    fleet: list[ValidatorSlotAllocation] = Field(default_factory=list)
+    """Every reporting validator, plus any override naming one that is not,
+    with its effective allowance, reservation, live leases and hardware."""

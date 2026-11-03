@@ -5,6 +5,7 @@ from collections import Counter
 import pytest
 
 from ditto.chain.treasury_receipts import _FinalizedReceiptSnapshot, finalized_block
+from ditto.tests.chain.runtime_metadata import unaudited_treasury_metadata
 from ditto_screening_protocol.collector_receipts import (
     AUDITED_COLLECTOR_CODE_HASH,
     FINNEY_GENESIS,
@@ -15,6 +16,7 @@ class Reads:
     def __init__(self):
         self.calls = Counter()
         self.head = 200
+        self.consensus = "Yuma"
 
     async def get_chain_finalised_head(self):
         self.calls["head"] += 1
@@ -36,7 +38,13 @@ class Reads:
             else self.calls[method, tuple(params)]
         }
 
+    async def get_block_metadata(self, **_kwargs):
+        return unaudited_treasury_metadata()
+
     async def query(self, *_args, **_kwargs):
+        if _kwargs.get("storage_function") == "SubnetEpochConsensus":
+            self.calls["consensus", _kwargs["block_hash"]] += 1
+            return self.consensus
         self.calls["query"] += 1
         return self.calls["query"]
 
@@ -103,4 +111,20 @@ async def test_unknown_runtime_hash_still_refuses(bad):
 
     raw.rpc_request = unsupported
     with pytest.raises(ValueError, match="not audited"):
+        await finalized_block(_FinalizedReceiptSnapshot(raw), 100, FINNEY_GENESIS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["Null", None, 0, {"Yuma": None}])
+async def test_new_runtime_requires_explicit_yuma_on_both_sides(bad):
+    raw = Reads()
+    original = raw.query
+
+    async def changed(**kwargs):
+        if kwargs["block_hash"] == "block99":
+            return bad
+        return await original(**kwargs)
+
+    raw.query = changed
+    with pytest.raises(ValueError, match="Yuma"):
         await finalized_block(_FinalizedReceiptSnapshot(raw), 100, FINNEY_GENESIS)

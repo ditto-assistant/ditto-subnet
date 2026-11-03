@@ -44,6 +44,7 @@ from ditto.api_server.endpoints.miner_auth import (
     require_scope,
     resolve_miner_session,
 )
+from ditto.api_server.no_store import no_store
 from ditto.db.models import MinerDittoLink, MinerDittoLinkAttempt
 from ditto.db.queries.attestation import get_bound_coldkey_for_hotkey
 from ditto.db.queries.miner_ditto_links import (
@@ -55,11 +56,6 @@ from ditto.db.queries.miner_ditto_links import (
     revoke_link,
     upsert_link,
 )
-
-
-def no_store(response: Response) -> None:
-    response.headers["Cache-Control"] = "no-store"
-
 
 router = APIRouter(tags=["miner-ditto-link"], dependencies=[Depends(no_store)])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
