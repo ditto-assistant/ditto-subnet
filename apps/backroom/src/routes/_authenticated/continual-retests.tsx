@@ -36,12 +36,12 @@ function Pending() {
   return <div className="mt-6 h-96 animate-pulse rounded-xl bg-white/[0.035]" />
 }
 
-function ErrorState({ error }: { error: Error }) {
+function ErrorState({ error }: { error: unknown }) {
   return (
     <div className="mx-auto mt-6 max-w-2xl rounded-xl border border-[var(--red)]/25 bg-[var(--red-dim)] p-6">
       <AlertTriangle className="h-6 w-6 text-[var(--red)]" />
       <h2 className="mt-4 text-lg font-semibold">Continual retest policy unavailable</h2>
-      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
+      <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error instanceof Error ? error.message : 'An unexpected error occurred'}</p>
     </div>
   )
 }
