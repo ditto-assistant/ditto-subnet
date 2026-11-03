@@ -271,7 +271,7 @@ def adjudicator_prompt_revision(policy_version: int) -> str:
             f"(implements {list(_SUPPORTED_POLICY_VERSIONS)})"
         )
     if policy_version == 13:
-        return "adjudicator-v21-policy-v13"
+        return "adjudicator-v22-policy-v13"
     return f"adjudicator-v4-policy-v{policy_version}"
 
 
@@ -570,7 +570,12 @@ deletion or relocation of answer fields, prose-derived abstention, currency
 rescaling, added equivalents, and grader-vocabulary mapping after final model
 authority. I7 includes unjustified removal of an applicable, authorized and
 available capability, including quoted-title, compound-request, negation-scope,
-setting-and-remember, and duplicate-call failures.
+setting-and-remember, and duplicate-call failures. Hiding connector-gated or
+app-specific tools on the published connector marker or the request's app-name
+wording is W4 availability narrowing, not that removal, even when it hides a
+tool the case needed; apply the I7 connector and app-wording safe harbor below
+and charge only fake execution of a hidden tool, a claim that a removed needed
+tool ran, or forcing.
 
 For I6, a synthetic tool result in a branch reached only when
 `tool_endpoint` is absent is a lead, not a violation by itself. A request
