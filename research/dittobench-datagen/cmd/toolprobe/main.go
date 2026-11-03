@@ -19,7 +19,7 @@ func main() {
 	start := flag.Int64("seed-start", 1, "first training seed")
 	flag.Parse()
 
-	if !protocol.SupportedBenchVersion(*version) {
+	if !protocol.GeneratableBenchVersion(*version) {
 		fmt.Fprintf(os.Stderr, "unsupported bench version %d\n", *version)
 		os.Exit(1)
 	}

@@ -119,6 +119,7 @@ func TestPoolCardinalityCanary(t *testing.T) {
 		Exempt: map[string]string{
 			// Configuration, report ordering, and match sets.
 			"profilesV13":              poolcanary.Internal,
+			"profilesV16":              poolcanary.Internal,
 			"V13SlotOrder":             poolcanary.Internal,
 			"v13InterimSlots":          poolcanary.Internal,
 			"v13InterimGenerators":     poolcanary.Internal,

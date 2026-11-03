@@ -478,7 +478,7 @@ func TestV13KnownVector(t *testing.T) {
 
 func TestUnsupportedVersionRejected(t *testing.T) {
 	prof, _ := ProfileFor("small")
-	if _, err := GenerateDataset(42, prof, protocol.NewestSupportedBenchVersion()+1); err == nil {
+	if _, err := GenerateDataset(42, prof, protocol.NewestGeneratableBenchVersion()+1); err == nil {
 		t.Fatal("unsupported version accepted")
 	}
 }
