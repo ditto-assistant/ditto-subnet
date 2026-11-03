@@ -56,15 +56,15 @@ func v13ClaimExposure(claims []protocol.Claim) (float64, map[string]float64, err
 // remain fail-closed. This metadata never enters the harness projection.
 func v13StoryMixFamilies(a DatasetArtifact) (map[string]mixFamily, error) {
 	scale := 0
-	for name, prof := range profilesV13 {
-		env, _ := V13EnvelopeForRunSize(name)
+	for _, prof := range profilesForEnvelope(a.BenchVersion) {
+		env, _ := memoryEnvelopeForVersion(prof.Mem, a.BenchVersion)
 		if env.Total() == len(a.MemoryCases) {
 			scale, _ = v8WorldProfile(prof.Mem)
 			break
 		}
 	}
 	if scale == 0 {
-		return nil, fmt.Errorf("mix audit: unknown v13 envelope %d", len(a.MemoryCases))
+		return nil, fmt.Errorf("mix audit: unknown v%d envelope %d", a.BenchVersion, len(a.MemoryCases))
 	}
 	w := universe.GenerateForVersion(a.Seed, scale, a.BenchVersion)
 	plans, _, err := w.SelectQuestionPlans(universe.WorldPlanSelection{StoryPerArc: 6, Salt: "v13"})

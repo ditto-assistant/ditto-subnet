@@ -4,6 +4,11 @@ export const MAX_MCP_BODY_BYTES = 1024 * 1024
 // first read as well as the transport, including requests without Content-Length.
 export async function boundMcpRequest(request: Request, limit = MAX_MCP_BODY_BYTES): Promise<Request | Response> {
   if (!request.body) return request
+  if (request.method === 'GET' || request.method === 'HEAD') {
+    return Response.json({ error: 'MCP request method must not include a body' }, {
+      status: 400, headers: { 'Cache-Control': 'no-store' },
+    })
+  }
   const reader = request.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0

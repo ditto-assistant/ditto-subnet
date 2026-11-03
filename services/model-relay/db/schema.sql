@@ -3602,6 +3602,8 @@ CREATE TABLE public.confirmation_scores (
     v9_efficiency_token_total bigint,
     v9_efficiency_cost_eligible boolean,
     void_generation integer DEFAULT 0 NOT NULL,
+    dueling_season_id uuid,
+    dueling jsonb,
     CONSTRAINT ck_confirmation_scores_confirmation_scores_bench_versio_b860 CHECK ((bench_version > 0)),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_composite_ra_71bb CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
     CONSTRAINT ck_confirmation_scores_confirmation_scores_efficiency_c_46c3 CHECK ((((v9_efficiency_cost_eligible IS NULL) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = false) AND (v9_efficiency_token_total IS NULL)) OR ((v9_efficiency_cost_eligible = true) AND (bench_version >= 9) AND (v9_efficiency_token_total > 0)))),
@@ -3622,8 +3624,10 @@ CREATE TABLE public.confirmation_seed_anchors (
     anchor_block_hash text,
     pinned_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    season_key uuid DEFAULT '00000000-0000-0000-0000-000000000000'::uuid NOT NULL,
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__187e CHECK (((ready_block >= 0) AND (anchor_block > ready_block))),
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__18b7 CHECK (((anchor_block_hash IS NULL) OR (anchor_block_hash ~ '^0x[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__63f0 CHECK (((season_key = '00000000-0000-0000-0000-000000000000'::uuid) OR (bench_version >= 16))),
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__bb97 CHECK ((bench_version > 0)),
     CONSTRAINT ck_confirmation_seed_anchors_confirmation_seed_anchors__c2e5 CHECK (((anchor_block_hash IS NULL) = (pinned_at IS NULL)))
 );
@@ -3877,6 +3881,118 @@ CREATE SEQUENCE public.core_qualification_policy_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.core_qualification_policy_revisions_revision_seq OWNED BY public.core_qualification_policy_revisions.revision;
+
+
+--
+-- Name: dueling_season_batteries; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_season_batteries (
+    season_id uuid NOT NULL,
+    submission_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    owner_key text NOT NULL,
+    source_sha256 text NOT NULL,
+    tree_sha256 text NOT NULL,
+    rank integer NOT NULL,
+    evidence jsonb,
+    seeds jsonb NOT NULL,
+    status text NOT NULL,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    attempts integer DEFAULT 0 NOT NULL,
+    grading_bench_version integer,
+    error text,
+    scorer_version text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_at_d825 CHECK ((attempts >= 0)),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_le_7164 CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((status <> 'leased'::text) OR (lease_id IS NOT NULL)))),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_po_02bb CHECK (((status <> 'passed'::text) OR (grading_bench_version >= 15))),
+    CONSTRAINT ck_dueling_season_batteries_dueling_season_batteries_st_dedb CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'passed'::text, 'failed'::text])))
+);
+
+
+--
+-- Name: dueling_seasons; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_seasons (
+    id uuid NOT NULL,
+    bench_version integer NOT NULL,
+    season_index bigint NOT NULL,
+    shadow boolean NOT NULL,
+    status text NOT NULL,
+    commitment text NOT NULL,
+    secret bytea NOT NULL,
+    committed_at timestamp with time zone NOT NULL,
+    rounds_per_season integer NOT NULL,
+    settings_revision integer,
+    anchor_block bigint,
+    anchor_block_hash text,
+    season_seed text,
+    columns jsonb,
+    opened_at timestamp with time zone,
+    closes_at_round bigint,
+    closed_at timestamp with time zone,
+    close_epoch_index bigint,
+    reveal_at_epoch bigint,
+    revealed_at timestamp with time zone,
+    void_reason text,
+    detail jsonb,
+    rotation_requested_at timestamp with time zone,
+    rotation_immediate boolean,
+    rotation_actor text,
+    rotation_reason text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_bench_floor CHECK ((bench_version >= 16)),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_commitment_check CHECK (((commitment ~ '^[0-9a-f]{64}$'::text) AND (octet_length(secret) = 32))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_index_check CHECK (((season_index >= 0) AND ((rounds_per_season >= 1) AND (rounds_per_season <= 48)))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_open_check CHECK (((season_seed IS NULL) OR ((season_seed ~ '^[0-9a-f]{64}$'::text) AND (anchor_block_hash IS NOT NULL) AND (columns IS NOT NULL)))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_reveal_check CHECK (((status = 'revealed'::text) = (revealed_at IS NOT NULL))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_rotation_check CHECK ((((rotation_requested_at IS NULL) = (rotation_reason IS NULL)) AND ((rotation_requested_at IS NULL) = (rotation_actor IS NULL)))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_seed_check CHECK ((((status <> 'committed'::text) OR (season_seed IS NULL)) AND ((season_seed IS NOT NULL) OR (status = ANY (ARRAY['committed'::text, 'void'::text]))))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_status_check CHECK ((status = ANY (ARRAY['committed'::text, 'open'::text, 'closed'::text, 'revealed'::text, 'void'::text]))),
+    CONSTRAINT ck_dueling_seasons_dueling_seasons_void_check CHECK (((status = 'void'::text) = (void_reason IS NOT NULL)))
+);
+
+
+--
+-- Name: dueling_slice_preparations; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.dueling_slice_preparations (
+    id uuid NOT NULL,
+    season_id uuid NOT NULL,
+    run_seed bigint NOT NULL,
+    status text NOT NULL,
+    lease_id uuid,
+    lease_expires_at timestamp with time zone,
+    attempts integer DEFAULT 0 NOT NULL,
+    slice_sha256 text,
+    slice_bytes bytea,
+    columns jsonb,
+    error text,
+    scorer_version text,
+    requested_by text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    first_leased_at timestamp with time zone,
+    ready_at timestamp with time zone,
+    failed_at timestamp with time zone,
+    bytes_pruned_at timestamp with time zone,
+    retries integer DEFAULT 0 NOT NULL,
+    last_retry_at timestamp with time zone,
+    last_retry_actor text,
+    last_retry_reason text,
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_0913 CHECK ((attempts >= 0)),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_2b2c CHECK (((slice_bytes IS NULL) OR (((octet_length(slice_bytes) >= 1) AND (octet_length(slice_bytes) <= 33554432)) AND (slice_sha256 = encode(sha256(slice_bytes), 'hex'::text))))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_4cdf CHECK ((((lease_id IS NULL) = (lease_expires_at IS NULL)) AND ((status <> 'leased'::text) OR (lease_id IS NOT NULL)))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_6562 CHECK (((slice_sha256 IS NULL) OR (slice_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_7a53 CHECK ((status = ANY (ARRAY['pending'::text, 'leased'::text, 'ready'::text, 'failed'::text]))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_8022 CHECK ((((status = 'ready'::text) = (slice_sha256 IS NOT NULL)) AND ((status <> 'ready'::text) OR (slice_bytes IS NOT NULL) OR (bytes_pruned_at IS NOT NULL)))),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_993c CHECK ((run_seed >= 0)),
+    CONSTRAINT ck_dueling_slice_preparations_dueling_slice_preparation_f2e0 CHECK (((retries >= 0) AND ((retries = 0) = (last_retry_at IS NULL))))
+);
 
 
 --
@@ -4465,8 +4581,10 @@ CREATE TABLE public.generator_scorer_heartbeats (
     first_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     last_seen_at timestamp with time zone DEFAULT now() NOT NULL,
     grading_bench_versions jsonb,
+    dueling_work_kinds jsonb,
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_4487 CHECK (((grading_bench_versions IS NULL) OR ((jsonb_typeof(grading_bench_versions) = 'array'::text) AND ((jsonb_array_length(grading_bench_versions) >= 1) AND (jsonb_array_length(grading_bench_versions) <= 16))))),
-    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text]))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_46e0 CHECK (((dueling_work_kinds IS NULL) OR ((jsonb_typeof(dueling_work_kinds) = 'array'::text) AND ((jsonb_array_length(dueling_work_kinds) >= 1) AND (jsonb_array_length(dueling_work_kinds) <= 8))))),
+    CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_8669 CHECK ((last_poll = ANY (ARRAY['qualification'::text, 'round'::text, 'dueling'::text]))),
     CONSTRAINT ck_generator_scorer_heartbeats_generator_scorer_heartbe_c3f0 CHECK ((((min_cases IS NULL) = (max_cases IS NULL)) AND ((min_cases IS NULL) OR ((min_cases >= 1) AND (max_cases >= min_cases)))))
 );
 
@@ -5222,6 +5340,44 @@ CREATE TABLE public.owner_attestations (
 
 
 --
+-- Name: owner_submission_cooldown_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.owner_submission_cooldown_revisions (
+    revision_id bigint NOT NULL,
+    scope text NOT NULL,
+    owner_key text NOT NULL,
+    revision integer NOT NULL,
+    action text NOT NULL,
+    cooldown_seconds integer,
+    expires_at timestamp with time zone,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_9024 CHECK ((((action = 'set'::text) AND ((cooldown_seconds >= 60) AND (cooldown_seconds <= 2592000)) AND (expires_at IS NOT NULL) AND (expires_at > created_at)) OR ((action = 'revoke'::text) AND (cooldown_seconds IS NULL) AND (expires_at IS NULL)))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_b35a CHECK (((length(owner_key) >= 1) AND (length(owner_key) <= 128))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_c083 CHECK ((scope = ANY (ARRAY['coldkey'::text, 'hotkey'::text]))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_c5ce CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_d375 CHECK ((revision >= 1)),
+    CONSTRAINT ck_owner_submission_cooldown_revisions_owner_submission_f6d9 CHECK ((length(TRIM(BOTH FROM reason)) >= 8))
+);
+
+
+--
+-- Name: owner_submission_cooldown_revisions_revision_id_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+ALTER TABLE public.owner_submission_cooldown_revisions ALTER COLUMN revision_id ADD GENERATED BY DEFAULT AS IDENTITY (
+    SEQUENCE NAME public.owner_submission_cooldown_revisions_revision_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
+);
+
+
+--
 -- Name: private_benchmark_datasets; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -5461,6 +5617,8 @@ CREATE TABLE public.scores (
     model_completion_tokens bigint,
     gate_evidence jsonb,
     stderr_projection jsonb,
+    dueling_season_id uuid,
+    dueling jsonb,
     CONSTRAINT ck_scores_scores_bench_version_positive CHECK ((bench_version > 0)),
     CONSTRAINT ck_scores_scores_gate_evidence_bench_floor CHECK (((gate_evidence IS NULL) OR (bench_version >= 13))),
     CONSTRAINT scores_composite_check CHECK (((composite >= (0)::double precision) AND (composite <= (1)::double precision))),
@@ -7701,6 +7859,8 @@ CREATE TABLE public.validator_tickets (
     container_log_tail_attempt integer,
     provider_outage_epoch uuid,
     provider_outage_attempted_epoch uuid,
+    dueling_season_id uuid,
+    slice_sha256 text,
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),
@@ -8133,6 +8293,14 @@ ALTER TABLE public.benchmark_rollouts
 
 ALTER TABLE ONLY public.burn_settings_revisions
     ADD CONSTRAINT burn_settings_scope_parent_key UNIQUE (scope, parent_revision);
+
+
+--
+-- Name: scores ck_scores_scores_dueling_bench_floor; Type: CHECK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.scores
+    ADD CONSTRAINT ck_scores_scores_dueling_bench_floor CHECK ((((dueling_season_id IS NULL) AND (dueling IS NULL)) OR (bench_version >= 16))) NOT VALID;
 
 
 --
@@ -8732,7 +8900,7 @@ ALTER TABLE ONLY public.confirmation_scores
 --
 
 ALTER TABLE ONLY public.confirmation_seed_anchors
-    ADD CONSTRAINT confirmation_seed_anchors_pkey PRIMARY KEY (champion_agent_id, bench_version);
+    ADD CONSTRAINT confirmation_seed_anchors_pkey PRIMARY KEY (champion_agent_id, bench_version, season_key);
 
 
 --
@@ -8821,6 +8989,22 @@ ALTER TABLE ONLY public.core_qualification_policy_revisions
 
 ALTER TABLE ONLY public.core_qualification_policy_revisions
     ADD CONSTRAINT core_qualification_policy_parent_key UNIQUE (bench_version, parent_revision);
+
+
+--
+-- Name: dueling_seasons dueling_seasons_index_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_seasons
+    ADD CONSTRAINT dueling_seasons_index_key UNIQUE (bench_version, season_index);
+
+
+--
+-- Name: dueling_slice_preparations dueling_slice_preparations_seed_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_slice_preparations
+    ADD CONSTRAINT dueling_slice_preparations_seed_key UNIQUE (season_id, run_seed);
 
 
 --
@@ -9133,6 +9317,14 @@ ALTER TABLE ONLY public.owner_attestations
 
 ALTER TABLE ONLY public.owner_attestations
     ADD CONSTRAINT owner_attestations_pkey PRIMARY KEY (attestation_id);
+
+
+--
+-- Name: owner_submission_cooldown_revisions owner_submission_cooldown_revisions_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.owner_submission_cooldown_revisions
+    ADD CONSTRAINT owner_submission_cooldown_revisions_key UNIQUE (scope, owner_key, revision);
 
 
 --
@@ -9728,6 +9920,30 @@ ALTER TABLE ONLY public.core_qualification_policy_revisions
 
 
 --
+-- Name: dueling_season_batteries pk_dueling_season_batteries; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_batteries
+    ADD CONSTRAINT pk_dueling_season_batteries PRIMARY KEY (season_id, submission_id);
+
+
+--
+-- Name: dueling_seasons pk_dueling_seasons; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_seasons
+    ADD CONSTRAINT pk_dueling_seasons PRIMARY KEY (id);
+
+
+--
+-- Name: dueling_slice_preparations pk_dueling_slice_preparations; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_slice_preparations
+    ADD CONSTRAINT pk_dueling_slice_preparations PRIMARY KEY (id);
+
+
+--
 -- Name: efficiency_bonus_settings_revisions pk_efficiency_bonus_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -9997,6 +10213,14 @@ ALTER TABLE ONLY public.miner_github_operator_revocations
 
 ALTER TABLE ONLY public.outage_sweep_runs
     ADD CONSTRAINT pk_outage_sweep_runs PRIMARY KEY (sweep_id);
+
+
+--
+-- Name: owner_submission_cooldown_revisions pk_owner_submission_cooldown_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.owner_submission_cooldown_revisions
+    ADD CONSTRAINT pk_owner_submission_cooldown_revisions PRIMARY KEY (revision_id);
 
 
 --
@@ -11953,6 +12177,41 @@ CREATE UNIQUE INDEX core_qualification_policy_bench_revision_idx ON public.core_
 
 
 --
+-- Name: dueling_season_batteries_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX dueling_season_batteries_status_idx ON public.dueling_season_batteries USING btree (status, season_id);
+
+
+--
+-- Name: dueling_seasons_one_committed_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX dueling_seasons_one_committed_idx ON public.dueling_seasons USING btree (bench_version) WHERE (status = 'committed'::text);
+
+
+--
+-- Name: dueling_seasons_one_open_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX dueling_seasons_one_open_idx ON public.dueling_seasons USING btree (bench_version) WHERE (status = 'open'::text);
+
+
+--
+-- Name: dueling_seasons_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX dueling_seasons_status_idx ON public.dueling_seasons USING btree (status, season_index);
+
+
+--
+-- Name: dueling_slice_preparations_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX dueling_slice_preparations_status_idx ON public.dueling_slice_preparations USING btree (status, created_at);
+
+
+--
 -- Name: efficiency_bonus_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -12586,7 +12845,7 @@ CREATE INDEX screening_attempts_agent_started_idx ON public.screening_attempts U
 -- Name: screening_attempts_infra_failed_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text, 'image-upload-platform-unavailable'::text])));
+CREATE INDEX screening_attempts_infra_failed_idx ON public.screening_attempts USING btree (finished_at) WHERE ((status = 'failed'::text) AND (reason_code = ANY (ARRAY['docker-build-infrastructure'::text, 'worker-claim-not-started'::text, 'l2-runtime-evidence-unavailable'::text, 'source-review-adjudicator-key-unavailable'::text, 'image-upload-platform-unavailable'::text, 'l2-late-result'::text])));
 
 
 --
@@ -14972,6 +15231,22 @@ ALTER TABLE ONLY public.confirmation_inference_requests
 
 ALTER TABLE ONLY public.conversation_assessments
     ADD CONSTRAINT fk_conversation_assessments_agent_id_agents FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id);
+
+
+--
+-- Name: dueling_season_batteries fk_dueling_season_batteries_season_id_dueling_seasons; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_season_batteries
+    ADD CONSTRAINT fk_dueling_season_batteries_season_id_dueling_seasons FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
+
+
+--
+-- Name: dueling_slice_preparations fk_dueling_slice_preparations_season_id_dueling_seasons; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.dueling_slice_preparations
+    ADD CONSTRAINT fk_dueling_slice_preparations_season_id_dueling_seasons FOREIGN KEY (season_id) REFERENCES public.dueling_seasons(id) ON DELETE CASCADE;
 
 
 --

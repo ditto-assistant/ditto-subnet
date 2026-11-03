@@ -152,6 +152,48 @@ def test_running_benchmark_is_never_stalled_on_wall_clock_alone() -> None:
     assert _benchmark_stalled("running_benchmark", started, now, completed=3) is True
 
 
+def test_recent_inference_activity_clears_a_preparing_stall() -> None:
+    """A generator-round run from a validator that never forwarded scorer
+    progress sits at ``preparing`` for its whole panel run. Its grant serving
+    requests is the evidence that it is executing, not wedged."""
+    now = datetime.now(UTC)
+    started = now - timedelta(minutes=40)
+    assert _benchmark_stalled("preparing", started, now) is True
+    assert (
+        _benchmark_stalled(
+            "preparing", started, now, inference_activity_at=now - timedelta(seconds=5)
+        )
+        is False
+    )
+    # The same frozen count clears too while the harness is calling the relay.
+    assert (
+        _benchmark_stalled(
+            "running_benchmark",
+            started,
+            now,
+            completed=0,
+            inference_activity_at=now - timedelta(minutes=1),
+        )
+        is False
+    )
+
+
+def test_a_grant_quiet_for_the_grace_window_lets_the_stall_trip() -> None:
+    now = datetime.now(UTC)
+    started = now - timedelta(minutes=40)
+    quiet = now - _BENCHMARK_STALL_AFTER
+    assert (
+        _benchmark_stalled("preparing", started, now, inference_activity_at=quiet)
+        is True
+    )
+    assert (
+        _benchmark_stalled(
+            "running_benchmark", started, now, completed=3, inference_activity_at=quiet
+        )
+        is True
+    )
+
+
 class TestOrphanedSlotSerialization:
     """A slot the platform evicted while the validator kept running must never
     reconcile to a clean "idle".

@@ -2009,6 +2009,62 @@ def test_router_metadata_provider_is_trusted_but_never_returned_to_harness() -> 
     }
 
 
+def test_public_response_carries_bounded_reasoning_tokens() -> None:
+    """The v13 cost ledger books answer tokens as completion minus reasoning.
+
+    #2972: the response carries ``completion_tokens_details.reasoning_tokens``
+    when the provider reports an integer in [0, completion_tokens], and leaves
+    it out otherwise. The model relay's Go mirror pins the same golden bytes
+    (``TestPublicProviderResponseCarriesBoundedReasoningTokens``), and the
+    dittobench-api broker reads them.
+    """
+    upstream: dict[str, Any] = {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1755000000,
+        "model": "openai/gpt-oss-20b",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "logprobs": None,
+                "message": {"role": "assistant", "content": "hi"},
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 1500,
+            "cost": 0.01,
+            "completion_tokens_details": {"reasoning_tokens": 1200, "audio_tokens": 0},
+        },
+    }
+    golden = (
+        Path(__file__).parents[6]
+        / "services/model-relay/internal/inference/testdata"
+        / "public_response_reasoning_usage.json"
+    )
+    public = _public_provider_response(upstream)
+    assert json.dumps(public, separators=(",", ":")) == golden.read_text().strip()
+
+    plain = {"prompt_tokens": 10, "completion_tokens": 1500, "total_tokens": 1510}
+    for details in (
+        None,
+        {},
+        {"reasoning_tokens": None},
+        {"reasoning_tokens": -1},
+        {"reasoning_tokens": 1501},
+        {"reasoning_tokens": 12.0},
+        {"reasoning_tokens": True},
+        {"reasoning_tokens": "12"},
+        [1200],
+    ):
+        usage: dict[str, Any] = {"prompt_tokens": 10, "completion_tokens": 1500}
+        usage["completion_tokens_details"] = details
+        assert _public_provider_response({**upstream, "usage": usage})["usage"] == plain
+    absent = {"prompt_tokens": 10, "completion_tokens": 1500}
+    assert _public_provider_response({**upstream, "usage": absent})["usage"] == plain
+
+
 def test_router_metadata_rejects_ambiguous_selected_provider() -> None:
     with pytest.raises(HTTPException):
         _upstream_provider(

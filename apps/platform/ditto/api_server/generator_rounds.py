@@ -960,6 +960,20 @@ async def advance_rounds(
         revealed.revealed_at = now
         out.note(f"round {revealed.round_index}: revealed")
     await session.flush()
+
+    # 6. Dueling seasons (bench v16+) ride the same boundaries. A season
+    # failure never holds rounds back: it rolls back to its own savepoint.
+    from ditto.api_server.dueling_seasons import advance_seasons
+
+    try:
+        async with session.begin_nested():
+            for note in await advance_seasons(
+                session, resolved=resolved, position=position, now=now
+            ):
+                out.note(f"dueling {note}")
+    except Exception as exc:  # noqa: BLE001 - rounds must still advance
+        logger.exception("dueling season tick failed")
+        out.note(f"dueling seasons: tick failed: {type(exc).__name__}: {exc}"[:500])
     return out
 
 

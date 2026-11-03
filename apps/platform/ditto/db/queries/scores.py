@@ -69,7 +69,7 @@ from ditto.score_order import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -464,6 +464,12 @@ class LedgerRow:
         charging a miner its seniority for iterating.
         """
         return self.crown_first_seen or self.first_seen
+
+    dueling_season_id: UUID | None = None
+    """Bench v16+: the season of the representative score (the evidence the
+    fold reads). A v16 row without it never ranks or pays."""
+    dueling: dict | None = None
+    """Bench v16+: the representative score's signed ``details.dueling``."""
 
 
 @dataclass(frozen=True)
@@ -915,6 +921,8 @@ async def upsert_score(
     details: dict | None = None,
     model_usage: LeaseModelUsage | None = None,
     gate_evidence: dict | None = None,
+    dueling_season_id: UUID | None = None,
+    dueling: dict | None = None,
 ) -> None:
     """Insert or update the score for ``(agent_id, validator_hotkey)``.
 
@@ -933,6 +941,10 @@ async def upsert_score(
     model columns it is overwritten on every report, ``None`` included: it
     describes *this* run, and a re-score that carries no evidence must not
     keep showing the previous run's verdict.
+
+    ``dueling_season_id`` and ``dueling`` (bench v16+) are the season and the
+    signed ``details.dueling`` aggregates of *this* run, overwritten on every
+    report like ``gate_evidence``.
 
     Raises:
         DbIntegrityError: Any constraint violation on ``scores`` (the FK to
@@ -959,6 +971,8 @@ async def upsert_score(
                 signature=signature,
                 details=details,
                 gate_evidence=gate_evidence,
+                dueling_season_id=dueling_season_id,
+                dueling=dueling,
                 model_calls=None if model_usage is None else model_usage.chat_calls,
                 model_prompt_tokens=(
                     None if model_usage is None else model_usage.prompt_tokens
@@ -980,6 +994,8 @@ async def upsert_score(
         existing.signature = signature
         existing.details = details
         existing.gate_evidence = gate_evidence
+        existing.dueling_season_id = dueling_season_id
+        existing.dueling = dueling
         if model_usage is not None:
             existing.model_calls = model_usage.chat_calls
             existing.model_prompt_tokens = model_usage.prompt_tokens
@@ -1422,7 +1438,11 @@ async def ranked_quorum_agent_ids(
             order_by=(Score.composite.asc(), Score.validator_hotkey.asc()),
         )
         .label("srn"),
-    ).where(Score.bench_version == bench_version)
+    ).where(
+        Score.bench_version == bench_version,
+        # Bench v16+: only the season window's rows make a quorum.
+        await _score_season_scope(session, (bench_version,)),
+    )
     if agent_ids is not None:
         if not agent_ids:
             return set()
@@ -1473,6 +1493,22 @@ async def ranked_quorum_agent_ids(
         )
     )
     return ranked & confirmed
+
+
+async def _score_season_scope(
+    session: AsyncSession, bench_versions: Iterable[int | None]
+) -> ColumnElement[bool]:
+    """Bench v16+: only ``scores`` rows of each version's dueling season
+    window (current plus the provisional previous season); ``true()`` below
+    the floor, so every pre-16 read is unchanged."""
+    from ditto.db.queries.dueling_season_window import season_scope_predicate
+
+    return await season_scope_predicate(
+        session,
+        version_column=Score.bench_version,
+        season_column=Score.dueling_season_id,
+        bench_versions=bench_versions,
+    )
 
 
 async def count_ranked_quorum_agents(
@@ -1927,7 +1963,12 @@ async def list_eligible_ledger(
             ),
         )
         .label("srn"),
-    ).where(Score.bench_version.in_(candidate_versions))
+    ).where(
+        Score.bench_version.in_(candidate_versions),
+        # Bench v16+: a score expires from the authoritative ledger one season
+        # after the season it was scored in (dueling_season_window).
+        await _score_season_scope(session, candidate_versions),
+    )
     if v9_enforce:
         agent_best_stmt = (
             agent_best_stmt.outerjoin(
@@ -2673,6 +2714,8 @@ async def list_eligible_ledger(
             Score.validator_hotkey,
             Score.signature,
             Score.bench_version,
+            Score.dueling_season_id,
+            Score.dueling,
             winners.c.crown_first_seen,
             *receipt_columns,
         )
@@ -2861,6 +2904,8 @@ async def list_eligible_ledger(
                 family_members=family_members,
                 crown_first_seen=row.crown_first_seen,
                 v9_confirmation=v9_confirmation,
+                dueling_season_id=row.dueling_season_id,
+                dueling=row.dueling,
             )
         )
     return ledger
@@ -2892,6 +2937,7 @@ async def quorum_composites(
         select(Score.agent_id, Score.composite, Score.bench_version).where(
             Score.agent_id.in_(agent_ids),
             Score.bench_version.in_(set(versions.values())),
+            await _score_season_scope(session, set(versions.values())),
         )
     )
     out: dict[UUID, list[float]] = {}

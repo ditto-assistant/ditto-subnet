@@ -24,6 +24,12 @@ seed of a reign also hashes the finalized chain block ``B_ready + Δ``:
 
 Everything here is version-gated by :func:`crn_block_binding_active`; legacy
 versions resolve to the unbound derivation and never create a row.
+
+From the dueling floor (bench v16) a reign is also scoped to the current
+dueling season (:func:`anchor_season_key`): a season rotation is a
+mini-rollout, so the champion's family restarts on a fresh anchor per
+``(champion, bench_version, season)``. Below the floor the season key is the
+nil UUID and every family is unchanged.
 """
 
 from __future__ import annotations
@@ -42,12 +48,15 @@ from ditto.api_server.crn import (
 from ditto.api_server.koth import TOP5_MAX_CONFIRMATION_SEEDS
 from ditto.chain import ChainError
 from ditto.db.queries.confirmation_seed_anchors import (
+    NIL_SEASON_KEY,
     ensure_confirmation_seed_anchor,
     get_confirmation_seed_anchor,
     list_pinned_confirmation_seed_anchors,
     list_unpinned_confirmation_seed_anchors,
     pin_confirmation_seed_anchor,
 )
+from ditto.db.queries.dueling_season_window import dueling_season_window
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -67,8 +76,9 @@ is "not pinned yet": the row stays unpinned and the next claim retries."""
 CRN_ANCHOR_PINS_PER_CLAIM = 4
 """Most waiting anchors one claim tries to pin, bounding its chain RPC budget."""
 
-AnchorKey = tuple["UUID", int]
-"""``(champion_agent_id, bench_version)``: the reign an anchor row belongs to."""
+AnchorKey = tuple["UUID", int, "UUID"]
+"""``(champion_agent_id, bench_version, season_key)``: the reign an anchor row
+belongs to."""
 
 
 @dataclass(frozen=True)
@@ -80,6 +90,7 @@ class ReignSeedAnchor:
     ready_block: int
     anchor_block: int
     block_hash: str | None
+    season_key: UUID = NIL_SEASON_KEY
 
     @property
     def pinned(self) -> bool:
@@ -116,7 +127,22 @@ def _anchor_from_row(row: ConfirmationSeedAnchor) -> ReignSeedAnchor:
         ready_block=row.ready_block,
         anchor_block=row.anchor_block,
         block_hash=row.anchor_block_hash,
+        season_key=row.season_key,
     )
+
+
+async def anchor_season_key(session: AsyncSession, bench_version: int) -> UUID:
+    """The season a reign anchor of ``bench_version`` is scoped to.
+
+    The nil UUID below the dueling floor. At v16+ the current dueling season
+    (the open one, or the last opened between seasons), or the nil UUID when
+    no season of the version has opened yet: no slice can be leased then, so
+    no seed of that family is ever scored.
+    """
+    window = await dueling_season_window(session, bench_version)
+    if window is None or window.current is None:
+        return NIL_SEASON_KEY
+    return window.current
 
 
 async def prefetch_finalized_anchor_hashes(
@@ -141,11 +167,16 @@ async def prefetch_finalized_anchor_hashes(
             session, up_to_block=latest_block, limit=limit
         )
         pending = [
-            (row.champion_agent_id, row.bench_version, row.anchor_block)
+            (
+                row.champion_agent_id,
+                row.bench_version,
+                row.season_key,
+                row.anchor_block,
+            )
             for row in waiting
         ]
     finalized: dict[AnchorKey, str] = {}
-    for champion_agent_id, bench_version, anchor_block in pending:
+    for champion_agent_id, bench_version, season_key, anchor_block in pending:
         try:
             block_hash = await asyncio.wait_for(
                 chain.get_finalized_block_hash(anchor_block), timeout=timeout
@@ -160,7 +191,7 @@ async def prefetch_finalized_anchor_hashes(
                 exc,
             )
             continue
-        finalized[(champion_agent_id, bench_version)] = block_hash
+        finalized[(champion_agent_id, bench_version, season_key)] = block_hash
     return finalized
 
 
@@ -185,15 +216,19 @@ async def resolve_reign_seed_anchor(
     """
     if not crn_block_binding_active(bench_version):
         return None
+    season_key = await anchor_season_key(session, bench_version)
     row = await ensure_confirmation_seed_anchor(
         session,
         champion_agent_id=champion_agent_id,
         bench_version=bench_version,
         ready_block=ready_block,
         delta=delta,
+        season_key=season_key,
     )
     if row.anchor_block_hash is None and finalized_hashes:
-        block_hash = finalized_hashes.get((champion_agent_id, bench_version))
+        block_hash = finalized_hashes.get(
+            (champion_agent_id, bench_version, season_key)
+        )
         if block_hash is not None:
             row = await pin_confirmation_seed_anchor(
                 session, row, block_hash=block_hash, now=now
@@ -215,7 +250,10 @@ async def read_reign_seed_anchor(
     if not crn_block_binding_active(bench_version):
         return None
     row = await get_confirmation_seed_anchor(
-        session, champion_agent_id=champion_agent_id, bench_version=bench_version
+        session,
+        champion_agent_id=champion_agent_id,
+        bench_version=bench_version,
+        season_key=await anchor_season_key(session, bench_version),
     )
     return None if row is None else _anchor_from_row(row)
 
@@ -240,13 +278,24 @@ async def reign_seed_planning(
 
 
 async def list_reign_seed_anchors(
-    session: AsyncSession, *, bench_version: int
+    session: AsyncSession, *, bench_version: int, current_season_only: bool = False
 ) -> list[ReignSeedAnchor]:
-    """Every pinned anchor of one version, oldest first; empty below the floor."""
+    """Every pinned anchor of one version, oldest first; empty below the floor.
+
+    ``current_season_only`` keeps, from the dueling floor, only the current
+    season's anchors: what the ledger serves, because a validator plans a
+    reign from the first anchor matching its champion. Binding a reported seed
+    still searches every season (the default).
+    """
     if not crn_block_binding_active(bench_version):
         return []
+    season_key = (
+        await anchor_season_key(session, bench_version)
+        if current_season_only and is_dueling_bench_version(bench_version)
+        else None
+    )
     rows = await list_pinned_confirmation_seed_anchors(
-        session, bench_version=bench_version
+        session, bench_version=bench_version, season_key=season_key
     )
     return [_anchor_from_row(row) for row in rows]
 

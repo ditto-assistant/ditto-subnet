@@ -681,8 +681,12 @@ func IsConnectorTool(name string) (appName string, ok bool) {
 // tools spliced in at seeded positions. The v13 surface's own order is kept,
 // so every product tool and decoy keeps its relative position.
 func v15SeededCatalog(seed int64) []protocol.ToolDefinition {
-	base := v13SeededCatalog(seed)
-	connectors := ConnectorsForSeed(seed)
+	return spliceConnectors(seed, v13SeededCatalog(seed), ConnectorsForSeed(seed))
+}
+
+// spliceConnectors inserts connector tools into the seeded base surface at
+// seeded positions (shared by v15 and v16; the slot keys are v15's).
+func spliceConnectors(seed int64, base, connectors []protocol.ToolDefinition) []protocol.ToolDefinition {
 	slots := make([]int, len(connectors))
 	for i := range connectors {
 		slots[i] = v13Pick(seed, fmt.Sprintf("connector-slot:%d", i), len(base)+1)

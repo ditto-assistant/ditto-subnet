@@ -493,6 +493,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/benchmark-rollout/stranded-previous-era": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stranded Previous Era
+         * @description List scored previous-era submissions the active benchmark era excludes.
+         *
+         *     Read-only. These are ``scored``/``live`` submissions with accepted scores
+         *     on the admission rollout's ``from_version``, no active-version score, and
+         *     no admission disjunct (not a frozen cohort member, not carryover, not
+         *     first queued in the new era, no audited contract refresh). By design no
+         *     active-version dataset is pinned for them and no validator leases them, so
+         *     they are absent from the active leaderboard. Registered before
+         *     ``/{desired_version}`` so the literal path wins.
+         */
+        get: operations["get_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-rollout/stranded-previous-era/admissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Stranded Admissions
+         * @description Read every audited stranded admission on the active era and its effect.
+         *
+         *     Read-only. ``admitted`` is the live admission predicate; ``ticket_state``
+         *     and ``tickets`` show active-version lease progress toward quorum, and
+         *     ``first_lease_at`` is the earliest active-version lease.
+         */
+        get: operations["get_stranded_admissions_api_v1_admin_benchmark_rollout_stranded_previous_era_admissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/benchmark-rollout/stranded-previous-era/{agent_id}/admit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admit Stranded Previous Era
+         * @description Admit ONE stranded previous-era submission onto the activated era.
+         *
+         *     Guards: the exact confirmation phrase, the expected active version, the
+         *     exact artifact SHA, the expected previous-era score count, membership of
+         *     the stranded list (scored/live, previous-era scores, no active score, no
+         *     admission path), not withdrawn, and a screened image the active contract
+         *     can lease. Pins the active-version dataset, appends the agent to the
+         *     activated rollout after its frozen cohort, and audits actor and reason, so
+         *     the post-activation top-up lane leases it out of ``scored``.
+         */
+        post: operations["admit_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era__agent_id__admit_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/benchmark-rollout/{desired_version}": {
         parameters: {
             query?: never;
@@ -1744,6 +1824,107 @@ export interface paths {
          *     scoped to the issuing operator.
          */
         post: operations["admin_create_default_generator_upload_api_v1_admin_generator_competition_default_generator_upload_url_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Rotate Dueling Season
+         * @description Rotate the open season: it closes at the next round boundary (or now,
+         *     with ``immediate``) and the next season opens at the following boundary
+         *     on a fresh battery. Never swaps columns in place.
+         */
+        post: operations["admin_rotate_dueling_season_api_v1_admin_generator_competition_dueling_rotate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/seasons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Dueling Seasons
+         * @description The dueling target, the open and committed seasons, and recent ones.
+         */
+        get: operations["admin_dueling_seasons_api_v1_admin_generator_competition_dueling_seasons_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/seasons/{season_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Admin Dueling Season */
+        get: operations["admin_dueling_season_api_v1_admin_generator_competition_dueling_seasons__season_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/slices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Dueling Slices
+         * @description Slice preparations, newest first, with latency, digests and whether a
+         *     failed one can be retried (``retry_dueling_slice_preparation``).
+         */
+        get: operations["admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/generator-competition/dueling/slices/{preparation_id}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Admin Retry Dueling Slice
+         * @description Re-queue exactly one failed slice preparation: status pending, attempts
+         *     kept, error cleared, so the next lease of its seed reserves it again.
+         */
+        post: operations["admin_retry_dueling_slice_api_v1_admin_generator_competition_dueling_slices__preparation_id__retry_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4457,6 +4638,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/submission-settings/owner-cooldowns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Owner Cooldowns
+         * @description List operator per-owner submission cooldown overrides.
+         *
+         *     Read-only. With ``scope`` and ``owner_key`` the response also carries that
+         *     identity's full revision history, its newest submission and when the
+         *     override next lets it submit.
+         */
+        get: operations["get_owner_cooldowns_api_v1_admin_submission_settings_owner_cooldowns_get"];
+        put?: never;
+        /**
+         * Set Owner Cooldown
+         * @description Install or replace one owner identity's cooldown override (CAS).
+         */
+        post: operations["set_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/submission-settings/owner-cooldowns/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Owner Cooldown
+         * @description End one owner identity's active override early (CAS).
+         */
+        post: operations["revoke_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/traces": {
         parameters: {
             query?: never;
@@ -5817,6 +6046,66 @@ export interface paths {
          * @description Operator write. Idempotent on (source, external_ref, kind).
          */
         post: operations["record_contribution_api_v1_feedback_track_contributions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/dueling-battery": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Dueling Battery
+         * @description Record a season battery for the current battery lease.
+         */
+        post: operations["post_dueling_battery_api_v1_generator_scorer_dueling_battery_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/dueling-slice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Post Dueling Slice
+         * @description Pin a generator slice for the current slice lease.
+         */
+        post: operations["post_dueling_slice_api_v1_generator_scorer_dueling_slice_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/generator-scorer/dueling-work": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Lease Dueling
+         * @description Lease a dueling slice preparation (first) or season battery, if any.
+         */
+        get: operations["lease_dueling_api_v1_generator_scorer_dueling_work_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -10958,6 +11247,8 @@ export interface components {
              * Format: date-time
              */
             created_at: string;
+            /** Dueling Season Id */
+            dueling_season_id?: string | null;
             /** Pinned */
             pinned: boolean;
             /** Pinned At */
@@ -11801,6 +12092,88 @@ export interface components {
             } | null;
             /** Triggers */
             triggers: ("top_five" | "composite_anomaly" | "tool_anomaly" | "memory_anomaly")[];
+        };
+        /**
+         * AdminDuelingRotateRequest
+         * @description Close an open dueling season early (an audited mini-rollout).
+         */
+        AdminDuelingRotateRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Immediate
+             * @default false
+             */
+            immediate: boolean;
+            /** Reason */
+            reason: string;
+            /** Season Id */
+            season_id?: string | null;
+        };
+        /** AdminDuelingSeasonsResponse */
+        AdminDuelingSeasonsResponse: {
+            /**
+             * Confirmation Scores Without Dueling
+             * @default 0
+             */
+            confirmation_scores_without_dueling: number;
+            /** Current */
+            current: components["schemas"]["DuelingSeasonView"][];
+            /** Next */
+            next: components["schemas"]["DuelingSeasonView"][];
+            /** Recent */
+            recent: components["schemas"]["DuelingSeasonView"][];
+            /**
+             * Scores Without Dueling
+             * @default 0
+             */
+            scores_without_dueling: number;
+            target: components["schemas"]["DuelingTargetView"];
+        };
+        /**
+         * AdminDuelingSliceRetryRequest
+         * @description Re-queue exactly one failed slice preparation (audited).
+         */
+        AdminDuelingSliceRetryRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Error */
+            expected_error: string | null;
+            /**
+             * Expected Status
+             * @constant
+             */
+            expected_status: "failed";
+            /**
+             * Force
+             * @default false
+             */
+            force: boolean;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminDuelingSlicesResponse */
+        AdminDuelingSlicesResponse: {
+            /** Counts */
+            counts: {
+                [key: string]: number;
+            };
+            /** Latency P50 Seconds */
+            latency_p50_seconds: number | null;
+            /** Latency P95 Seconds */
+            latency_p95_seconds: number | null;
+            /** Slices */
+            slices: components["schemas"]["DuelingSliceView"][];
         };
         /**
          * AdminDuplicateSummary
@@ -13005,6 +13378,19 @@ export interface components {
              */
             scope_caveat: string;
         };
+        /** AdminOwnerCooldownsResponse */
+        AdminOwnerCooldownsResponse: {
+            /** Active Count */
+            active_count: number;
+            /** Items */
+            items: components["schemas"]["OwnerCooldownRevision"][];
+            lookup?: components["schemas"]["OwnerCooldownLookup"] | null;
+            /**
+             * Truncated
+             * @default false
+             */
+            truncated: boolean;
+        };
         /**
          * AdminOwnerFootprint
          * @description Every hotkey reachable from one key through payment records.
@@ -13825,6 +14211,27 @@ export interface components {
             /** Idempotent */
             idempotent: boolean;
             retirement: components["schemas"]["AdminSubmissionRetirement"];
+        };
+        /** AdminRevokeOwnerCooldownRequest */
+        AdminRevokeOwnerCooldownRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
         };
         /** AdminRolloutExpandRequest */
         AdminRolloutExpandRequest: {
@@ -14783,6 +15190,31 @@ export interface components {
             /** Worker Hotkey */
             worker_hotkey: string;
         };
+        /** AdminSetOwnerCooldownRequest */
+        AdminSetOwnerCooldownRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expires In Days */
+            expires_in_days: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
+        };
         /** AdminShadowReviewObservation */
         AdminShadowReviewObservation: {
             /** Adjudicator Disposition */
@@ -15052,6 +15484,27 @@ export interface components {
             revision: string;
             /** Source */
             source: string;
+        };
+        /**
+         * AdminStrandedAdmissionRequest
+         * @description Guards for admitting ONE stranded previous-era submission.
+         */
+        AdminStrandedAdmissionRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Active Version */
+            expected_active_version: number;
+            /** Expected Previous Score Count */
+            expected_previous_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
         };
         /**
          * AdminStuckSubmission
@@ -20992,6 +21445,8 @@ export interface components {
              * @description Composite scored on this seed.
              */
             composite: number;
+            /** @description Bench >= 16 only: this seed's signed ``details.dueling`` aggregates. The KOTH fold recomputes the seed's composite with both compared agents' owners masked; a v16 record without them carries no paired evidence. */
+            dueling?: components["schemas"]["DuelingReport"] | null;
             /**
              * Seed
              * @description Champion-anchored CRN seed.
@@ -22022,6 +22477,556 @@ export interface components {
             status: "healthy" | "degraded" | "unavailable";
             /** Unhealthy Containers */
             unhealthy_containers: number;
+        };
+        /** DuelingBatteryAck */
+        DuelingBatteryAck: {
+            /** Failed */
+            failed: string[];
+            /** Passed */
+            passed: string[];
+            /** Released */
+            released: string[];
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+        };
+        /** DuelingBatteryCandidate */
+        DuelingBatteryCandidate: {
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** DuelingBatteryCandidateResult */
+        DuelingBatteryCandidateResult: {
+            /** Error */
+            error?: string | null;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+        };
+        /** DuelingBatteryResult */
+        DuelingBatteryResult: {
+            /** Candidates */
+            candidates: components["schemas"]["DuelingBatteryCandidateResult"][];
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+        };
+        /** DuelingBatteryView */
+        DuelingBatteryView: {
+            /** Attempts */
+            attempts: number;
+            /** Error */
+            error: string | null;
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            } | null;
+            /** Finished At */
+            finished_at: string | null;
+            /** Grading Bench Version */
+            grading_bench_version: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Rank */
+            rank: number;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "leased" | "passed" | "failed";
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256: string;
+        };
+        /**
+         * DuelingColumnAggregate
+         * @description One slice column's per-run case statistics (``details.dueling``).
+         *
+         *     ``n`` counts the column's executed cases after the slice dedupe; ``sum``
+         *     and ``sum_sq`` are the sums of their scores and squared scores, a failed
+         *     ``/run`` counting as 0. ``owner_key`` is ``""`` for the public default
+         *     generator, including a substituted column, and is never masked.
+         */
+        DuelingColumnAggregate: {
+            /** Column Id */
+            column_id: string;
+            /** Grading Bench Version */
+            grading_bench_version?: number | null;
+            /** N */
+            n: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Submission Id */
+            submission_id?: string | null;
+            /**
+             * Substituted
+             * @default false
+             */
+            substituted: boolean;
+            /** Sum */
+            sum: number;
+            /** Sum Sq */
+            sum_sq: number;
+        };
+        /** DuelingColumnMean */
+        DuelingColumnMean: {
+            /** Below Floor */
+            below_floor: boolean;
+            /** Cases */
+            cases: number;
+            /** Column Id */
+            column_id: string;
+            /** Default Gap */
+            default_gap: number | null;
+            /** Mean */
+            mean: number | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Scores */
+            scores: number;
+            /** Submission Id */
+            submission_id: string;
+        };
+        /**
+         * DuelingReport
+         * @description The ``details.dueling`` block of a bench >= 16 score report.
+         *
+         *     ``owner_key`` is the scored agent's owner; the reported composite is
+         *     :meth:`self_composite` (the agent's own columns masked).
+         */
+        DuelingReport: {
+            /** Column Weight */
+            column_weight: number;
+            /** Columns */
+            columns: components["schemas"]["DuelingColumnAggregate"][];
+            /** Composite Stderr */
+            composite_stderr: number;
+            /** Datagen Gate */
+            datagen_gate: number;
+            /** Datagen Raw */
+            datagen_raw: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Season Id */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Slice Sha256 */
+            slice_sha256: string;
+        };
+        /**
+         * DuelingRotationView
+         * @description The season-open mini-rollout and how far its re-scoring has got.
+         */
+        DuelingRotationView: {
+            /**
+             * Already Current
+             * @default 0
+             */
+            already_current: number;
+            /**
+             * Busy
+             * @default 0
+             */
+            busy: number;
+            /**
+             * Closed
+             * @default 0
+             */
+            closed: number;
+            /** Cohort */
+            cohort?: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Cohort Quorum In Season
+             * @default 0
+             */
+            cohort_quorum_in_season: number;
+            /**
+             * Cohort Scores In Season
+             * @default 0
+             */
+            cohort_scores_in_season: number;
+            /**
+             * Confirmation Scores In Season
+             * @default 0
+             */
+            confirmation_scores_in_season: number;
+            /** Error */
+            error?: string | null;
+            /**
+             * Pending
+             * @default 0
+             */
+            pending: number;
+            /**
+             * Queued
+             * @default 0
+             */
+            queued: number;
+            /** Queued At */
+            queued_at?: string | null;
+            /**
+             * Running
+             * @default 0
+             */
+            running: number;
+            /**
+             * Scores In Season
+             * @default 0
+             */
+            scores_in_season: number;
+            /** Source */
+            source?: string | null;
+            /**
+             * Standing
+             * @enum {string}
+             */
+            standing: "current" | "provisional" | "expired" | "not_opened";
+        };
+        /** DuelingSeasonView */
+        DuelingSeasonView: {
+            /** Anchor Block */
+            anchor_block: number | null;
+            /** Anchor Block Hash */
+            anchor_block_hash: string | null;
+            /** Batteries */
+            batteries?: components["schemas"]["DuelingBatteryView"][];
+            /** Bench Version */
+            bench_version: number;
+            /** Closed At */
+            closed_at: string | null;
+            /** Closes At Round */
+            closes_at_round: number | null;
+            /** Column Means */
+            column_means?: components["schemas"]["DuelingColumnMean"][];
+            /** Columns */
+            columns: {
+                [key: string]: unknown;
+            }[] | null;
+            /** Commitment */
+            commitment: string;
+            /**
+             * Committed At
+             * Format: date-time
+             */
+            committed_at: string;
+            /** Detail */
+            detail: {
+                [key: string]: unknown;
+            } | null;
+            /** Fallback */
+            fallback: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Opened At */
+            opened_at: string | null;
+            /** Reveal At Epoch */
+            reveal_at_epoch: number | null;
+            /** Revealed At */
+            revealed_at: string | null;
+            rotation?: components["schemas"]["DuelingRotationView"] | null;
+            /** Rotation Actor */
+            rotation_actor: string | null;
+            /** Rotation Immediate */
+            rotation_immediate: boolean | null;
+            /** Rotation Reason */
+            rotation_reason: string | null;
+            /** Rotation Requested At */
+            rotation_requested_at: string | null;
+            /** Rounds Per Season */
+            rounds_per_season: number;
+            /** Season Index */
+            season_index: number;
+            /** Season Seed */
+            season_seed?: string | null;
+            /** Secret Hex */
+            secret_hex?: string | null;
+            /** Settings Revision */
+            settings_revision: number | null;
+            /** Shadow */
+            shadow: boolean;
+            /** Slices */
+            slices?: {
+                [key: string]: number;
+            };
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "committed" | "open" | "closed" | "revealed" | "void";
+            /** Void Reason */
+            void_reason: string | null;
+        };
+        /** DuelingSliceAck */
+        DuelingSliceAck: {
+            /**
+             * Preparation Id
+             * Format: uuid
+             */
+            preparation_id: string;
+            /** Slice Sha256 */
+            slice_sha256?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "leased" | "ready" | "failed";
+        };
+        /** DuelingSliceColumnResult */
+        DuelingSliceColumnResult: {
+            /** Column Id */
+            column_id: string;
+            /** Error */
+            error?: string | null;
+            /** Ok */
+            ok: boolean;
+            /**
+             * Substituted
+             * @default false
+             */
+            substituted: boolean;
+        };
+        /** DuelingSliceColumnWork */
+        DuelingSliceColumnWork: {
+            /** Column Id */
+            column_id: string;
+            /** Grading Bench Version */
+            grading_bench_version: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Key */
+            owner_key: string;
+            /** Public Default */
+            public_default: boolean;
+            /** Slice Seed */
+            slice_seed: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256?: string | null;
+        };
+        /**
+         * DuelingSliceFallback
+         * @description The public default generator a failed column is regenerated with.
+         */
+        DuelingSliceFallback: {
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Source Base64 */
+            source_base64: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /**
+             * Submission Id
+             * Format: uuid
+             */
+            submission_id: string;
+            /** Tree Sha256 */
+            tree_sha256?: string | null;
+        };
+        /** DuelingSliceResult */
+        DuelingSliceResult: {
+            /** Columns */
+            columns: components["schemas"]["DuelingSliceColumnResult"][];
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /**
+             * Preparation Id
+             * Format: uuid
+             */
+            preparation_id: string;
+            /** Scorer Version */
+            scorer_version: string;
+            /** Slice Base64 */
+            slice_base64?: string | null;
+            /** Slice Sha256 */
+            slice_sha256?: string | null;
+        };
+        /** DuelingSliceView */
+        DuelingSliceView: {
+            /** Attempts */
+            attempts: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Bytes Pruned */
+            bytes_pruned: boolean;
+            /** Columns */
+            columns: {
+                [key: string]: unknown;
+            }[] | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error */
+            error: string | null;
+            /** Failed At */
+            failed_at: string | null;
+            /** First Leased At */
+            first_leased_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Last Retry Actor */
+            last_retry_actor?: string | null;
+            /** Last Retry At */
+            last_retry_at?: string | null;
+            /** Last Retry Reason */
+            last_retry_reason?: string | null;
+            /** Latency Seconds */
+            latency_seconds: number | null;
+            /** Ready At */
+            ready_at: string | null;
+            /**
+             * Retries
+             * @default 0
+             */
+            retries: number;
+            /** Retry Refusal */
+            retry_refusal?: string | null;
+            /**
+             * Retryable
+             * @default false
+             */
+            retryable: boolean;
+            /** Run Seed */
+            run_seed: string;
+            /** Scorer Version */
+            scorer_version: string | null;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index: number;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /** Slice Sha256 */
+            slice_sha256: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "leased" | "ready" | "failed";
+        };
+        /** DuelingTargetView */
+        DuelingTargetView: {
+            /** Bench Version */
+            bench_version: number | null;
+            /** Blocked */
+            blocked: string | null;
+            /** Live Versions */
+            live_versions: number[];
+            /** Shadow */
+            shadow: boolean;
+        };
+        /**
+         * DuelingWork
+         * @description One leased dueling work item (``kind`` names which fields are set).
+         */
+        DuelingWork: {
+            /** Bench Version */
+            bench_version: number;
+            /** Candidates */
+            candidates?: components["schemas"]["DuelingBatteryCandidate"][] | null;
+            /** Cases */
+            cases?: number | null;
+            /** Cases Per Column */
+            cases_per_column?: number | null;
+            /** Columns */
+            columns?: components["schemas"]["DuelingSliceColumnWork"][] | null;
+            fallback?: components["schemas"]["DuelingSliceFallback"] | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "battery" | "slice";
+            /**
+             * Lease Expires At
+             * Format: date-time
+             */
+            lease_expires_at: string;
+            /**
+             * Lease Id
+             * Format: uuid
+             */
+            lease_id: string;
+            /** Preparation Id */
+            preparation_id?: string | null;
+            /** Run Seed */
+            run_seed?: number | null;
+            /**
+             * Season Id
+             * Format: uuid
+             */
+            season_id: string;
+            /** Season Index */
+            season_index?: number | null;
+            /** Seeds */
+            seeds?: string[] | null;
+        };
+        /** DuelingWorkResponse */
+        DuelingWorkResponse: {
+            work?: components["schemas"]["DuelingWork"] | null;
         };
         /** EffectiveBurnSettings */
         EffectiveBurnSettings: {
@@ -23463,6 +24468,13 @@ export interface components {
              */
             counted_columns: number;
             /**
+             * Dueling Enabled
+             * @default false
+             */
+            dueling_enabled: boolean;
+            /** Dueling Shadow Bench Version */
+            dueling_shadow_bench_version?: number | null;
+            /**
              * Epochs Per Round
              * @default 4
              */
@@ -23520,6 +24532,11 @@ export interface components {
              * @default 3600
              */
             retry_backoff_seconds: number;
+            /**
+             * Rounds Per Season
+             * @default 1
+             */
+            rounds_per_season: number;
             /**
              * Seeds Per Run
              * @default 2
@@ -24612,19 +25629,23 @@ export interface components {
              * Format: uuid
              */
             lease_id: string;
+            /** Preparation Id */
+            preparation_id?: string | null;
             /** Round Index */
             round_index?: number | null;
             /** Run Id */
             run_id?: string | null;
             /** Scorer Version */
             scorer_version: string;
+            /** Season Id */
+            season_id?: string | null;
             /** Submission Id */
             submission_id?: string | null;
             /**
              * Work
              * @enum {string}
              */
-            work: "qualification" | "round";
+            work: "qualification" | "round" | "dueling";
         };
         /** GeneratorScorerFaultAck */
         GeneratorScorerFaultAck: {
@@ -24641,7 +25662,7 @@ export interface components {
              * Work
              * @enum {string}
              */
-            work: "qualification" | "round";
+            work: "qualification" | "round" | "dueling";
         };
         /**
          * GeneratorScorerHeartbeatView
@@ -24650,6 +25671,8 @@ export interface components {
         GeneratorScorerHeartbeatView: {
             /** Build Revision */
             build_revision: string | null;
+            /** Dueling Work Kinds */
+            dueling_work_kinds?: string[] | null;
             /** Effective Grading Bench Versions */
             effective_grading_bench_versions: number[];
             /**
@@ -26116,6 +27139,10 @@ export interface components {
         InfraRetryPolicy: {
             /** Auto Retry Max Age Seconds */
             auto_retry_max_age_seconds: number;
+            /** Auto Retry Max Retries By Code */
+            auto_retry_max_retries_by_code?: {
+                [key: string]: number;
+            };
             /** Auto Retry Max Streak */
             auto_retry_max_streak: number;
             /** Auto Retry Reason Codes */
@@ -26394,6 +27421,28 @@ export interface components {
              * @description Score before this (UTC) or the ticket lapses.
              */
             deadline: string;
+            /**
+             * Dueling Owner Key
+             * @description Scored agent's owner key; the scorer self-masks it.
+             */
+            dueling_owner_key?: string | null;
+            /**
+             * Dueling Season Id
+             * @description Dueling season the slice belongs to.
+             */
+            dueling_season_id?: string | null;
+            /**
+             * Dueling Slice Bytes
+             * @description Base64 of the season's frozen slice for this run seed.
+             */
+            dueling_slice_bytes?: string | null;
+            /** Dueling Slice Mode */
+            dueling_slice_mode?: "dueling-slice-v1" | null;
+            /**
+             * Expected Slice Sha256
+             * @description SHA-256 of the decoded slice bytes (tamper pin).
+             */
+            expected_slice_sha256?: string | null;
             inference?: components["schemas"]["InferenceGrantOffer"] | null;
             /**
              * Miner Hotkey
@@ -26837,6 +27886,13 @@ export interface components {
              * @description Activation marker for validator protocol v14+. When present, the weight fold uses the arithmetic mean of the three signed quorum scores plus one aggregate per completed continual cohort wave. Older validators ignore this additive field.
              */
             continual_aggregate_method?: "mean_after_quorum" | null;
+            /** @description Bench >= 16 only: the authoritative score's signed ``details.dueling`` aggregates (owner key, datagen half, slice columns). A v16 row without them never ranks or pays. */
+            dueling?: components["schemas"]["DuelingReport"] | null;
+            /**
+             * Dueling Season Id
+             * @description Bench >= 16 only: the dueling season this row was scored in. The fold compares v16 rows only within one ``(bench_version, dueling_season_id)``; a v16 row without it never ranks or pays.
+             */
+            dueling_season_id?: string | null;
             /**
              * Effective Composite
              * @description Platform-projected efficiency tiebreak with the frozen adjustment applied; curve-v3 upside scales remaining headroom. It is considered only after exact authoritative-quality equality. Validators independently derive it from the authoritative quality evidence and efficiency_factor (or legacy efficiency_bonus); signed evidence is never modified.
@@ -28907,6 +29963,63 @@ export interface components {
             per_axis_enforce: boolean;
         };
         /**
+         * OwnerCooldownLookup
+         * @description One owner identity's override and what it means for them right now.
+         */
+        OwnerCooldownLookup: {
+            current: components["schemas"]["OwnerCooldownRevision"] | null;
+            /** Global Cooldown Seconds */
+            global_cooldown_seconds: number;
+            /** History */
+            history: components["schemas"]["OwnerCooldownRevision"][];
+            /** Latest Submission At */
+            latest_submission_at: string | null;
+            /** Next Allowed At */
+            next_allowed_at: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
+        };
+        /** OwnerCooldownRevision */
+        OwnerCooldownRevision: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "set" | "revoke";
+            /** Actor */
+            actor: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "expired" | "revoked";
+        };
+        /**
          * OwnerLinkProof
          * @description One endpoint's proof that it consents to the link.
          *
@@ -29742,8 +30855,9 @@ export interface components {
          *     failure that never judged the artifact: a Docker build infrastructure
          *     failure, a claim the worker released before starting it, missing scorer
          *     runtime evidence, a screening node whose source-review court could not
-         *     start, or Platform briefly unavailable while the screened image was being
-         *     stored. ``parked`` names a source-review/provider failure (including OpenRouter
+         *     start, Platform briefly unavailable while the screened image was being
+         *     stored, or (once) a private deep review that ran out of time. ``parked``
+         *     names a source-review/provider failure (including OpenRouter
          *     throttling), while ``stuck`` names another Ditto-owned infrastructure
          *     failure. Both require a guarded Backroom retry.
          *     ``retry_queued`` means a retry is waiting for a screener slot: either that
@@ -36681,6 +37795,8 @@ export interface components {
              * @default false
              */
             deterministic_v13_datasets: boolean;
+            /** Dueling Slice Bench Versions */
+            dueling_slice_bench_versions?: number[] | null;
             /** Generator Round Bench Versions */
             generator_round_bench_versions?: number[] | null;
             /** Generator Round Max Cases */
@@ -36717,6 +37833,7 @@ export interface components {
             supported_bench_versions: number[];
             v14_scored_runtime_env?: components["schemas"]["V14ScoredRuntimeEnvEvidence"] | null;
             v15_scored_runtime_env?: components["schemas"]["V15ScoredRuntimeEnvEvidence"] | null;
+            v16_scored_runtime_env?: components["schemas"]["V16ScoredRuntimeEnvEvidence"] | null;
             v7_calibration?: components["schemas"]["V7InferenceCalibration"] | null;
         };
         /**
@@ -38458,13 +39575,13 @@ export interface components {
              *       "openai/gpt-5.6-sol"
              *     ]
              */
-            l2_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            l2_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
             /**
              * L2 Model
              * @default openai/gpt-5.6-terra
              * @enum {string}
              */
-            l2_model: "openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
+            l2_model: "openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
             /**
              * L3 Enabled
              * @default true
@@ -38475,7 +39592,7 @@ export interface components {
              * @default openai/gpt-5.6-sol
              * @enum {string}
              */
-            l3_model: "openai/gpt-5.6-sol" | "openai/gpt-6-sol";
+            l3_model: "openai/gpt-5.6-sol" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra";
             /**
              * Max Completion Tokens
              * @default 2400
@@ -39695,6 +40812,221 @@ export interface components {
              * @constant
              */
             source_admission_accepted: false;
+            /** Status */
+            status: string;
+        };
+        /** StrandedAdmissionReceipt */
+        StrandedAdmissionReceipt: {
+            /** Bench Version */
+            bench_version: number;
+            /** Dataset Sha256 */
+            dataset_sha256: string;
+            /** Position */
+            position: number;
+            /** Rendered */
+            rendered: boolean;
+            /**
+             * Rollout Id
+             * Format: uuid
+             */
+            rollout_id: string;
+            /** Seed Source */
+            seed_source: string;
+        };
+        /** StrandedAdmissionResponse */
+        StrandedAdmissionResponse: {
+            admission: components["schemas"]["StrandedAdmissionReceipt"];
+            effect: components["schemas"]["StrandedAdmissionRow"];
+        };
+        /**
+         * StrandedAdmissionRow
+         * @description One audited stranded admission and its live active-era effect.
+         */
+        StrandedAdmissionRow: {
+            /** Active Median Composite */
+            active_median_composite: number | null;
+            /** Active Score Count */
+            active_score_count: number;
+            /** Actor */
+            actor: string | null;
+            /** Admitted */
+            admitted: boolean;
+            /**
+             * Admitted At
+             * Format: date-time
+             */
+            admitted_at: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Sha256 */
+            agent_sha256: string | null;
+            /** Dataset Sha256 */
+            dataset_sha256: string | null;
+            /** First Lease At */
+            first_lease_at: string | null;
+            /** Is Member */
+            is_member: boolean;
+            /** Live Lease Count */
+            live_lease_count: number;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Position */
+            position: number | null;
+            /** Previous Bench Version */
+            previous_bench_version: number | null;
+            /** Previous Median Composite */
+            previous_median_composite: number | null;
+            /** Previous Score Count */
+            previous_score_count: number | null;
+            /** Reason */
+            reason: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Ticket State
+             * @enum {string}
+             */
+            ticket_state: "awaiting_first_lease" | "leased" | "awaiting_next_lease" | "quorum_complete";
+            /** Tickets */
+            tickets: components["schemas"]["StrandedAdmissionTicketRow"][];
+        };
+        /** StrandedAdmissionTicketRow */
+        StrandedAdmissionTicketRow: {
+            /** Attempt Count */
+            attempt_count: number;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Purpose */
+            purpose: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Status */
+            status: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** StrandedAdmissionsResponse */
+        StrandedAdmissionsResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Items */
+            items: components["schemas"]["StrandedAdmissionRow"][];
+            /** Rollout Id */
+            rollout_id: string | null;
+            /** Total */
+            total: number;
+        };
+        /**
+         * StrandedEraAgentRow
+         * @description One scored previous-era submission the active era does not admit.
+         */
+        StrandedEraAgentRow: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Version */
+            agent_version: number | null;
+            /** Cohort Sibling Agent Id */
+            cohort_sibling_agent_id: string | null;
+            /** First Screening Pass At */
+            first_screening_pass_at: string | null;
+            /** Has Active Dataset */
+            has_active_dataset: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Owner Best Stranded */
+            owner_best_stranded: boolean;
+            /** Owner Key */
+            owner_key: string;
+            /** Previous Finalized */
+            previous_finalized: boolean;
+            /** Previous Median Composite */
+            previous_median_composite: number | null;
+            /** Previous Score Count */
+            previous_score_count: number;
+            /** Queue Withdrawn */
+            queue_withdrawn: boolean;
+            /**
+             * Reason
+             * @enum {string}
+             */
+            reason: "owner_in_cohort" | "owner_outside_cohort";
+            /** Status */
+            status: string;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+        };
+        /**
+         * StrandedEraResponse
+         * @description Scored previous-era work with no admission path into the active era.
+         */
+        StrandedEraResponse: {
+            /** Active Bench Version */
+            active_bench_version: number;
+            /** Finalized Count */
+            finalized_count: number;
+            /** Items */
+            items: components["schemas"]["StrandedEraAgentRow"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Owner Count */
+            owner_count: number;
+            /** Owner In Cohort Count */
+            owner_in_cohort_count: number;
+            /** Owner Outside Cohort Count */
+            owner_outside_cohort_count: number;
+            /** Prev Gen Carryover Enabled */
+            prev_gen_carryover_enabled: boolean;
+            /** Previous Bench Version */
+            previous_bench_version: number | null;
+            rollout: components["schemas"]["StrandedEraRolloutSummary"] | null;
+            /** Total */
+            total: number;
+            /** Truncated */
+            truncated: boolean;
+        };
+        /** StrandedEraRolloutSummary */
+        StrandedEraRolloutSummary: {
+            /** Activated At */
+            activated_at: string | null;
+            /** Cohort Size */
+            cohort_size: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Desired Version */
+            desired_version: number;
+            /** From Version */
+            from_version: number;
+            /**
+             * Rollout Id
+             * Format: uuid
+             */
+            rollout_id: string;
             /** Status */
             status: string;
         };
@@ -42380,6 +43712,32 @@ export interface components {
             /** Source Revision */
             source_revision: string;
         };
+        /**
+         * V16ScoredRuntimeEnvEvidence
+         * @description Keys reported by a descriptor-verified scorer for its v16 sandbox.
+         *
+         *     v16 (the dueling bench) injects the v15 key set, but the packet is bound to
+         *     its version like every earlier one, so a v15 packet can never qualify a
+         *     v16 rollout.
+         */
+        V16ScoredRuntimeEnvEvidence: {
+            /**
+             * Bench Version
+             * @constant
+             */
+            bench_version: 16;
+            /** Injected Keys */
+            injected_keys: string[];
+            /**
+             * Scope
+             * @constant
+             */
+            scope: "scorer-injected-env-only";
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
+        };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
             /** Manifest Sha256 */
@@ -43087,6 +44445,26 @@ export interface components {
              * @description Estimate: remaining checks of the current run at `checks_per_minute`, as of the latest heartbeat. Null whenever the rate is unknown; never a guess.
              */
             estimated_remaining_slot_minutes: number | null;
+            /**
+             * Inference Chat Requests
+             * @description Chat requests this lease's live hosted-inference grant has served so far. Null when the lease has no live grant.
+             */
+            inference_chat_requests?: number | null;
+            /**
+             * Inference Embedding Requests
+             * @description Embedding requests this lease's live grant has served so far. Null when the lease has no live grant.
+             */
+            inference_embedding_requests?: number | null;
+            /**
+             * Inference Idle Seconds
+             * @description Seconds since `inference_last_activity_at`, as of this read.
+             */
+            inference_idle_seconds?: number | null;
+            /**
+             * Inference Last Activity At
+             * @description When this lease's grant last began or finished a request. A recent time means the harness is executing whatever `stage` says; `stalled` is false while it is inside the 15-minute grace. Null before the first request or without a live grant.
+             */
+            inference_last_activity_at?: string | null;
             purpose: components["schemas"]["TicketPurpose"];
             /** Slot Id */
             slot_id: string;
@@ -44919,6 +46297,111 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+                owner_best_only?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrandedEraResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_stranded_admissions_api_v1_admin_benchmark_rollout_stranded_previous_era_admissions_get: {
+        parameters: {
+            query?: {
+                agent_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrandedAdmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admit_stranded_previous_era_api_v1_admin_benchmark_rollout_stranded_previous_era__agent_id__admit_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminStrandedAdmissionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StrandedAdmissionResponse"];
                 };
             };
             /** @description Validation Error */
@@ -48386,6 +49869,179 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminDefaultGeneratorUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_rotate_dueling_season_api_v1_admin_generator_competition_dueling_rotate_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingRotateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dueling_seasons_api_v1_admin_generator_competition_dueling_seasons_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDuelingSeasonsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dueling_season_api_v1_admin_generator_competition_dueling_seasons__season_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                season_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSeasonView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_dueling_slices_api_v1_admin_generator_competition_dueling_slices_get: {
+        parameters: {
+            query?: {
+                season_id?: string | null;
+                status?: ("pending" | "leased" | "ready" | "failed") | null;
+                limit?: number;
+                offset?: number;
+                preparation_id?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminDuelingSlicesResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_retry_dueling_slice_api_v1_admin_generator_competition_dueling_slices__preparation_id__retry_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                preparation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminDuelingSliceRetryRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSliceView"];
                 };
             };
             /** @description Validation Error */
@@ -53346,6 +55002,112 @@ export interface operations {
             };
         };
     };
+    get_owner_cooldowns_api_v1_admin_submission_settings_owner_cooldowns_get: {
+        parameters: {
+            query?: {
+                scope?: ("coldkey" | "hotkey") | null;
+                owner_key?: string | null;
+                include_inactive?: boolean;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOwnerCooldownsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminSetOwnerCooldownRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerCooldownLookup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRevokeOwnerCooldownRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerCooldownLookup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_trace_objects_api_v1_admin_traces_get: {
         parameters: {
             query?: {
@@ -56223,6 +57985,116 @@ export interface operations {
             };
         };
     };
+    post_dueling_battery_api_v1_generator_scorer_dueling_battery_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingBatteryResult"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingBatteryAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    post_dueling_slice_api_v1_generator_scorer_dueling_slice_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DuelingSliceResult"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingSliceAck"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    lease_dueling_api_v1_generator_scorer_dueling_work_get: {
+        parameters: {
+            query?: {
+                scorer_id?: string | null;
+                scorer_version?: string | null;
+                min_cases?: number | null;
+                max_cases?: number | null;
+                sandbox?: string | null;
+                build_revision?: string | null;
+                grading_bench_versions?: string | null;
+                dueling_work_kinds?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DuelingWorkResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     post_fault_api_v1_generator_scorer_fault_post: {
         parameters: {
             query?: never;
@@ -56373,6 +58245,7 @@ export interface operations {
                 sandbox?: string | null;
                 build_revision?: string | null;
                 grading_bench_versions?: string | null;
+                dueling_work_kinds?: string | null;
             };
             header?: {
                 authorization?: string | null;
@@ -56412,6 +58285,7 @@ export interface operations {
                 sandbox?: string | null;
                 build_revision?: string | null;
                 grading_bench_versions?: string | null;
+                dueling_work_kinds?: string | null;
             };
             header?: {
                 authorization?: string | null;

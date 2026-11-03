@@ -22,6 +22,15 @@ panel agent's validator results, claimed fingerprints, and the score
 parameters). ``POST /round-results`` and ``POST /round-score`` accept work only
 for the round's current lease, so the scorer never chooses a seed, a column,
 a panel agent, an owner, or the champion.
+
+Dueling seasons (bench v16+): ``GET /generator-scorer/dueling-work`` leases a
+slice preparation (``kind=slice``: the season pin, every column's source and
+slice seed, the public default fallback) or a season's battery candidates
+(``kind=battery``: 32 fresh secret seeds), and answers ``{"work": null}``
+when idle. Only kinds the poll advertises in ``dueling_work_kinds`` are
+leased. ``POST /dueling-battery`` and ``POST /dueling-slice`` accept results
+only for the current lease; faults use ``POST /fault`` with ``work:
+"dueling"``.
 """
 
 from __future__ import annotations
@@ -35,6 +44,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.dueling import (
+    DuelingBatteryAck,
+    DuelingBatteryResult,
+    DuelingSliceAck,
+    DuelingSliceResult,
+    DuelingWorkResponse,
+)
 from ditto.api_models.generator import (
     GeneratorResultRequest,
     GeneratorResultResponse,
@@ -50,6 +66,14 @@ from ditto.api_models.generator_rounds import (
     GeneratorRoundWorkResponse,
 )
 from ditto.api_server.dependencies import get_session
+from ditto.api_server.dueling_seasons import (
+    DUELING_WORK_KINDS,
+    DuelingResultRejected,
+    lease_dueling_work,
+    record_battery,
+    record_dueling_fault,
+    record_slice,
+)
 from ditto.api_server.generator_competition import (
     ResultRejected,
     lease_next,
@@ -113,6 +137,9 @@ def advertised_capability(
     grading_bench_versions: Annotated[
         str | None, Query(max_length=64, pattern=r"^[0-9]{1,3}(,[0-9]{1,3}){0,15}$")
     ] = None,
+    dueling_work_kinds: Annotated[
+        str | None, Query(max_length=64, pattern=r"^[a-z]{1,16}(,[a-z]{1,16}){0,7}$")
+    ] = None,
 ) -> ScorerCapability | None:
     """The capability a poll advertised, or ``None`` for a scorer predating it.
 
@@ -142,6 +169,11 @@ def advertised_capability(
         sandbox=sandbox or None,
         build_revision=build_revision,
         grading_bench_versions=versions,
+        dueling_work_kinds=(
+            tuple(sorted(set(dueling_work_kinds.split(","))))
+            if dueling_work_kinds
+            else None
+        ),
     )
 
 
@@ -261,6 +293,24 @@ async def post_fault(
 ) -> GeneratorScorerFaultAck:
     """Record a scorer-side fault for the current lease; never blames a generator."""
     now = datetime.now(UTC)
+    if payload.work == "dueling":
+        try:
+            action = await record_dueling_fault(session, payload, now=now)
+        except DuelingResultRejected as exc:
+            await session.rollback()
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        await session.commit()
+        logger.warning(
+            "generator scorer dueling fault lease=%s kind=%s action=%s scorer=%s",
+            payload.lease_id,
+            payload.error_kind,
+            action,
+            payload.scorer_version,
+        )
+        return GeneratorScorerFaultAck(
+            work="dueling",
+            action="voided" if action == "voided" else "released",
+        )
     if payload.work == "round":
         try:
             row = await record_round_fault(session, payload, now=now)
@@ -374,3 +424,80 @@ async def post_round_score(
     await session.commit()
     logger.info("generator round scored round=%s", row.round_index)
     return GeneratorRoundAck(round_index=row.round_index, status=row.status)  # type: ignore[arg-type]
+
+
+@router.get("/dueling-work", response_model=DuelingWorkResponse)
+async def lease_dueling(
+    _scorer: ScorerDep, session: SessionDep, capability: CapabilityDep
+) -> DuelingWorkResponse:
+    """Lease a dueling slice preparation (first) or season battery, if any."""
+    now = datetime.now(UTC)
+    await _heartbeat(session, capability, poll="dueling", now=now)
+    kinds = frozenset(
+        kind
+        for kind in (capability.dueling_work_kinds if capability else None) or ()
+        if kind in DUELING_WORK_KINDS
+    )
+    resolved = await load_settings(session)
+    try:
+        work = await lease_dueling_work(
+            session, resolved=resolved, kinds=kinds, now=now
+        )
+    except DuelingResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    if work is None:
+        return DuelingWorkResponse()
+    logger.info(
+        "generator dueling leased kind=%s season=%s lease=%s",
+        work.kind,
+        work.season_id,
+        work.lease_id,
+    )
+    return DuelingWorkResponse(work=work)
+
+
+@router.post("/dueling-battery", response_model=DuelingBatteryAck)
+async def post_dueling_battery(
+    payload: DuelingBatteryResult, _scorer: ScorerDep, session: SessionDep
+) -> DuelingBatteryAck:
+    """Record a season battery for the current battery lease."""
+    try:
+        ack = await record_battery(session, payload, now=datetime.now(UTC))
+    except DuelingResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    logger.info(
+        "generator dueling battery season=%s passed=%d failed=%d released=%d",
+        payload.season_id,
+        len(ack.passed),
+        len(ack.failed),
+        len(ack.released),
+    )
+    return ack
+
+
+@router.post("/dueling-slice", response_model=DuelingSliceAck)
+async def post_dueling_slice(
+    payload: DuelingSliceResult, _scorer: ScorerDep, session: SessionDep
+) -> DuelingSliceAck:
+    """Pin a generator slice for the current slice lease."""
+    try:
+        row = await record_slice(session, payload, now=datetime.now(UTC))
+    except DuelingResultRejected as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    logger.info(
+        "generator dueling slice preparation=%s status=%s sha=%s",
+        row.id,
+        row.status,
+        row.slice_sha256,
+    )
+    return DuelingSliceAck(
+        preparation_id=row.id,
+        status=row.status,  # type: ignore[arg-type]
+        slice_sha256=row.slice_sha256,
+    )

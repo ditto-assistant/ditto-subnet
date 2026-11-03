@@ -64,6 +64,12 @@ type Options struct {
 	// exactly as the scored path does, so a harness cannot execute a tool and
 	// omit it from its response.
 	ObservedCalls func(opaqueCaseID string) []protocol.ObservedToolCall
+	// Include, when set, selects the pack cases to run by pack case ID. Every
+	// wave is still seeded (an excluded case's evidence may ground another
+	// case); excluded cases are never sent to the harness and have no outcome.
+	// A dueling slice uses it to drop a case another column already claimed
+	// (challenge.SliceExecutionCases).
+	Include func(packCaseID string) bool
 }
 
 // CaseOutcome is one graded case: the panel result the scorer submits plus the
@@ -79,7 +85,8 @@ type CaseOutcome struct {
 var ErrHarnessUnavailable = errors.New("challenge harness unavailable")
 
 // Execute seeds the pack's waves into the harness and runs every case after its
-// wave. It returns one outcome per pack case, in pack order.
+// wave. It returns one outcome per pack case (per included case when
+// Options.Include is set), in pack order.
 //
 // A case whose /run fails (transport error or timeout) is a Fault, not a
 // miss: a scorer-side blip must never be able to manufacture "the champion
@@ -107,14 +114,24 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 	buckets := runner.StageCasesByWave(len(waves), len(p.Cases), func(i int) int { return p.Cases[i].RunAfterWave })
 
 	outcomes := make([]CaseOutcome, len(p.Cases))
+	included := make([]bool, len(p.Cases))
+	for i, c := range p.Cases {
+		included[i] = opts.Include == nil || opts.Include(c.ID)
+	}
 	err := runner.RunStagedWaves(ctx, waves, buckets,
 		func(ctx context.Context, _ int, wave protocol.SeedRequest) error {
 			_, err := runner.SeedForVersion(ctx, harnessURL, wave, opts.BenchVersion)
 			return err
 		},
 		func(ctx context.Context, _ int, bucket []int) error {
-			runBounded(len(bucket), concurrency, func(j int) {
-				i := bucket[j]
+			run := make([]int, 0, len(bucket))
+			for _, i := range bucket {
+				if included[i] {
+					run = append(run, i)
+				}
+			}
+			runBounded(len(run), concurrency, func(j int) {
+				i := run[j]
 				outcomes[i] = runCase(ctx, harnessURL, p.Cases[i], p.GradingCase(i), proj, opts)
 			})
 			return ctx.Err()
@@ -127,7 +144,16 @@ func Execute(ctx context.Context, harnessURL string, p challenge.Pack, opts Opti
 		}
 		return nil, err
 	}
-	return outcomes, nil
+	if opts.Include == nil {
+		return outcomes, nil
+	}
+	kept := make([]CaseOutcome, 0, len(outcomes))
+	for i, o := range outcomes {
+		if included[i] {
+			kept = append(kept, o)
+		}
+	}
+	return kept, nil
 }
 
 func runCase(ctx context.Context, harnessURL string, c challenge.Case, graded protocol.MemoryCase, proj *projection, opts Options) CaseOutcome {

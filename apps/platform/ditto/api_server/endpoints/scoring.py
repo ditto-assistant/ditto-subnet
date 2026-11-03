@@ -34,6 +34,7 @@ from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,6 +143,7 @@ from ditto.db.queries.validator_auth import (
     consume_validator_nonce,
     nonce_expires_at,
 )
+from ditto_screening_protocol.dueling import DuelingReport
 from ditto_screening_protocol.treasury_enforcement import (
     EnforcingTreasuryPin,
     TreasuryPin,
@@ -924,6 +926,7 @@ async def _ledger_entries(
                         validator_hotkey=row.validator_hotkey,
                         bench_version=row.bench_version,
                         signature=row.signature,
+                        dueling=_dueling_report(row.dueling),
                     )
                     for row in history[r.agent_id]
                     if row.seed in active_confirmation_by_seed.get(r.agent_id, {})
@@ -953,11 +956,31 @@ async def _ledger_entries(
                 if r.v9_confirmation is not None
                 else None
             ),
+            dueling_season_id=(
+                str(season)
+                if (season := getattr(r, "dueling_season_id", None)) is not None
+                else None
+            ),
+            dueling=_dueling_report(getattr(r, "dueling", None)),
             status=r.status,
         )
         for r in rows
     ]
     return rows, entries
+
+
+def _dueling_report(raw: dict | None) -> DuelingReport | None:
+    """A stored bench v16+ ``details.dueling`` as its wire model, or None.
+
+    Ingestion validated it; a row that no longer validates is served without
+    it, which the fold treats as no dueling evidence (it never pays)."""
+    if raw is None:
+        return None
+    try:
+        return DuelingReport.model_validate(raw)
+    except ValidationError:
+        logger.warning("stored details.dueling no longer validates; withheld")
+        return None
 
 
 async def _registered_miner_hotkeys(app_state: Any) -> set[str] | None:
@@ -1160,8 +1183,14 @@ async def materialize_ledger_snapshot(
             anchor_block=anchor.anchor_block,
             anchor_block_hash=anchor.block_hash or "",
         )
+        # Bench v16+: the current dueling season's anchors only. The validator
+        # plans a reign from the FIRST served anchor matching its champion
+        # (oldest first), so serving the previous season's anchor too would
+        # plan the old family. A leased seed carries its own binding
+        # (bind_confirmation_seed searches every season), so no in-flight
+        # lease needs a previous-season pin here.
         for anchor in await list_reign_seed_anchors(
-            session, bench_version=canonical_version
+            session, bench_version=canonical_version, current_season_only=True
         )
         if anchor.block_hash is not None
     )

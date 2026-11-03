@@ -524,9 +524,7 @@ async def _rulings(
                 "version": versions[dispute.agent_id],
                 "court": "dispute",
                 "resolution": dispute.resolution,
-                "reason": _clip(
-                    f"miner: {dispute.message}\noperator: {dispute.resolution_reason}"
-                ),
+                "reason": _dispute_reason(dispute),
                 "evidence_references": [],
                 "policy_version": None,
                 "decided_at": dispute.resolved_at,
@@ -536,6 +534,16 @@ async def _rulings(
     # MAX_LINEAGE_RULINGS are among them.
     rows.sort(key=lambda item: item["decided_at"], reverse=True)
     return rows[:MAX_LINEAGE_RULINGS]
+
+
+def _dispute_reason(dispute: ScreeningDispute) -> str:
+    """The operator's ruling on a dispute, without the miner's own message.
+
+    The packet reaches every review stage beside trusted provenance, so it
+    carries only what an operator wrote. A miner's dispute text is their claim,
+    and quoting it there would let them speak in the operator's voice.
+    """
+    return _clip(f"operator: {dispute.resolution_reason or ''}")
 
 
 def _finding_text(evidence: dict[str, Any]) -> str:
@@ -703,6 +711,30 @@ async def load_review_lineage(
     )
 
 
+def history_scope_reasons(
+    context: ReviewLineageContext,
+) -> set[ReviewLineageFullReviewReason]:
+    """Why the review history cannot scope this attempt to its diff.
+
+    The diff is taken against the parent, so only a review of the parent
+    itself under this attempt's policy settles the unchanged code. A ruling on
+    an older version does not: the parent's own changes from it were never
+    reviewed.
+    """
+    if not context.rulings and not context.findings:
+        return {ReviewLineageFullReviewReason.NO_REVIEW_HISTORY}
+    if not any(
+        row["agent_id"] == context.parent.agent_id
+        and row["policy_version"] == context.policy_version
+        for row in (*context.rulings, *context.findings)
+    ):
+        # History under an older policy, or of an older version, is still
+        # context, but it cannot settle the parent's code against the policy
+        # this attempt enforces.
+        return {ReviewLineageFullReviewReason.PARENT_POLICY_DIFFERS}
+    return set()
+
+
 async def assemble_review_lineage_packet(
     context: ReviewLineageContext, storage: S3StorageClient
 ) -> ReviewLineagePacket:
@@ -711,16 +743,7 @@ async def assemble_review_lineage_packet(
     reference = await _open(context.parent, storage)
     diff = await asyncio.to_thread(_diff, candidate, reference)
 
-    reasons = set(diff.reasons)
-    if not context.rulings and not context.findings:
-        reasons.add(ReviewLineageFullReviewReason.NO_REVIEW_HISTORY)
-    elif not any(
-        row["policy_version"] == context.policy_version
-        for row in (*context.rulings, *context.findings)
-    ):
-        # History under an older policy is still context, but it cannot settle
-        # unchanged code against the policy this attempt enforces.
-        reasons.add(ReviewLineageFullReviewReason.PARENT_POLICY_DIFFERS)
+    reasons = set(diff.reasons) | history_scope_reasons(context)
 
     return seal_review_lineage_packet(
         {
@@ -798,6 +821,7 @@ __all__ = [
     "assemble_review_lineage_packet",
     "build_review_lineage_packet",
     "dockerfile_build_surface_changed",
+    "history_scope_reasons",
     "is_build_surface",
     "is_dockerfile",
     "load_review_lineage",

@@ -125,6 +125,90 @@ def test_reused_draft_prompt_note_is_not_i4(render) -> None:
     assert "ruled 2026-10-29" in probe
 
 
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+@pytest.mark.parametrize(
+    "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
+)
+def test_connector_and_app_wording_tool_filtering_is_w4_not_i7(render) -> None:
+    # Operator ruling 2026-11-03: hiding connector-gated or app-specific tools
+    # on the "Needs the <App> connector" marker or on the request's app-name
+    # wording is W4 availability narrowing. Fake execution of a hidden tool and
+    # a needed tool removed while its effect is claimed done stay violations.
+    prompt = _flat(render(13))
+    for permitted in (
+        "I7 connector and app-wording safe harbor (2026-11-03).",
+        "is W4 availability narrowing, not by itself a finding under I7",
+        "filtering on the published connector marker",
+        '"Needs the <App> connector to be linked in Settings."',
+        "filtering on the request's app-name wording, such as hiding an app's"
+        " tools when the request does not name that app",
+        "Guessing from wording is allowed",
+        "A hidden tool the case needed is honest over-filtering, a performance issue",
+        "resolve such I7 leads as refuted, not unresolved",
+        # The per-reviewer v13 I7 paragraph points at the safe harbor.
+        "app-name wording is W4 availability narrowing",
+    ):
+        assert permitted in prompt
+    for retained in (
+        "Still charge answering or reporting as if a hidden or removed tool ran,"
+        " or fabricating its call, result or receipt (I6)",
+        "removing a needed tool and then claiming it ran or reporting its effect"
+        " as done (I6, I7)",
+        "using the filter to pin `tool_choice`, replace the catalog with a host"
+        " plan or refuse a valid call",
+        "Other I7 grounds are unchanged.",
+    ):
+        assert retained in prompt
+    assert "connector and app-wording safe harbor" not in render(12)
+
+    policy = (
+        Path(__file__).resolve().parents[1] / "docs" / "policy-v13.md"
+    ).read_text()
+    w4 = _flat(policy.split("### W4:", 1)[1].split("### W5:", 1)[0])
+    for fragment in (
+        "#### Clarification: connector and app-wording tool filtering (2026-11-03)",
+        "This is W4 availability narrowing, not, by itself, a rejection ground"
+        " under I7",
+        "Guessing which tools apply from the request's wording is an allowed approach.",
+        "That over-filtering is a performance issue, not a violation.",
+        "It is still a violation when the harness:",
+        "answers or reports as if a hidden or removed tool ran",
+        "removes a tool the case needs and then claims it ran or reports its"
+        " effect as done (I6, I7)",
+        "A reviewer that finds only this narrowing resolves those I7 leads as refuted",
+    ):
+        assert fragment in w4
+    i7 = _flat(policy.split("### I7:", 1)[1].split("### I8:", 1)[0])
+    assert "(2026-11-03) is a valid W4 policy ground." in i7
+    assert "does not trigger the removal, wording or low-confidence items" in i7
+    assert "remains a violation (I6, I7)" in i7
+    # The unrelated I7 grounds stay listed.
+    for ground in (
+        "a catalog is replaced with an advisory plan;",
+        "execution remains enabled after revocation;",
+        "strong fixed prompting effectively forces one trajectory.",
+    ):
+        assert ground in i7
+    routed = _flat(policy.split("#### Clarification: routed instruction", 1)[1])
+    assert "beyond the W4 connector and app-wording narrowing" in routed
+
+    probe = (
+        Path(__file__).resolve().parents[1]
+        / "ditto_screener/probe_review/reviewer_prompt.md"
+    ).read_text()
+    assert "not I7, ruled 2026-11-03" in probe
+    precedent = (
+        Path(__file__).resolve().parents[3]
+        / ".agents/skills/backroom-review/references/precedents"
+        / "november-03-connector-app-wording-filter-w4.md"
+    ).read_text()
+    assert "resolution: guidance" in precedent
+    assert "remains I6/I7" in precedent
+
+
 @pytest.mark.parametrize(
     "render", [_source_review_system_prompt, _l2_review_system_prompt, _system_prompt]
 )

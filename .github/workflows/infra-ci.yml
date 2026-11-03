@@ -104,11 +104,11 @@ jobs:
       - name: Install pinned Ansible collections
         run: uvx --from ansible-core==2.21.2 ansible-galaxy collection install -r requirements.yml
 
-      - name: Test Caddy body caps against the deployed Caddy version
+      - name: Test Caddy body caps and restart handover against the deployed Caddy version
         run: |
           mkdir -p "$RUNNER_TEMP/caddy-bin"
           GOBIN="$RUNNER_TEMP/caddy-bin" go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.11.4
-          PATH="$RUNNER_TEMP/caddy-bin:$PATH" uv run --no-project --with pytest --with jinja2 python -m pytest tests/test_caddy_request_body.py -q
+          PATH="$RUNNER_TEMP/caddy-bin:$PATH" uv run --no-project --with pytest --with jinja2 python -m pytest tests/test_caddy_request_body.py tests/test_caddy_restart_handover.py -q
 
       - name: Verify read-only screener log key admission
         run: uvx --from ansible-core==2.21.2 ansible-playbook -i localhost, tests/screener-logs-access.yml

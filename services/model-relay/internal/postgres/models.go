@@ -423,4 +423,6 @@ type ValidatorTicket struct {
 	ContainerLogTailAttempt      pgtype.Int4        `json:"containerLogTailAttempt"`
 	ProviderOutageEpoch          pgtype.UUID        `json:"providerOutageEpoch"`
 	ProviderOutageAttemptedEpoch pgtype.UUID        `json:"providerOutageAttemptedEpoch"`
+	DuelingSeasonID              pgtype.UUID        `json:"duelingSeasonId"`
+	SliceSha256                  pgtype.Text        `json:"sliceSha256"`
 }

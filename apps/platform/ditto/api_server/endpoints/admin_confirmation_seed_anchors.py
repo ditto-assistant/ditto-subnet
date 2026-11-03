@@ -18,6 +18,7 @@ from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import Agent
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_seed_anchors import (
+    NIL_SEASON_KEY,
     list_confirmation_seed_anchors,
 )
 
@@ -75,6 +76,9 @@ async def list_admin_confirmation_seed_anchors(
             pinned=row.anchor_block_hash is not None,
             pinned_at=row.pinned_at,
             created_at=row.created_at,
+            dueling_season_id=(
+                None if row.season_key == NIL_SEASON_KEY else row.season_key
+            ),
         )
         for row in rows
     ]
