@@ -50,7 +50,7 @@ export async function rotateDuelingSeason(rawInput: unknown, actor: string) {
       }),
     )
   } catch (cause) {
-    if (cause instanceof PlatformAdminError && (cause.status === 404 || cause.status === 409)) {
+    if (cause instanceof PlatformAdminError && cause.status === 409) {
       throw new Error(
         `Nothing was rotated: ${cause.message}. Re-read get_dueling_season and retry only `
         + 'against an open season that has not already been rotated.',

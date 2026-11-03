@@ -46,12 +46,14 @@ from ditto.api_server.dueling_seasons import dueling_target, open_season
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.api_server.generator_competition import load_settings
 from ditto.db.models import (
+    ConfirmationScore,
     DuelingSeason,
     DuelingSeasonBattery,
     DuelingSlicePreparation,
     Score,
 )
 from ditto.db.queries.generator import record_operator_action
+from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION
 
 router = APIRouter(prefix="/admin/generator-competition/dueling", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -217,7 +219,27 @@ async def admin_dueling_seasons(
             stmt = stmt.limit(limit)
         return list(await session.scalars(stmt))
 
+    floor = DUELING_MIN_BENCH_VERSION
+    missing = await session.scalar(
+        select(func.count())
+        .select_from(Score)
+        .where(
+            Score.bench_version >= floor,
+            (Score.dueling_season_id.is_(None)) | (Score.dueling.is_(None)),
+        )
+    )
+    missing_confirmations = await session.scalar(
+        select(func.count())
+        .select_from(ConfirmationScore)
+        .where(
+            ConfirmationScore.bench_version >= floor,
+            (ConfirmationScore.dueling_season_id.is_(None))
+            | (ConfirmationScore.dueling.is_(None)),
+        )
+    )
     return AdminDuelingSeasonsResponse(
+        scores_without_dueling=int(missing or 0),
+        confirmation_scores_without_dueling=int(missing_confirmations or 0),
         target=DuelingTargetView(
             bench_version=target.bench_version,
             shadow=target.shadow,
@@ -313,7 +335,7 @@ async def admin_dueling_slices(
                 season_id=row.season_id,
                 season_index=row.season_index,
                 bench_version=row.bench_version,
-                run_seed=row.run_seed,
+                run_seed=str(row.run_seed),
                 status=row.status,
                 attempts=row.attempts,
                 slice_sha256=row.slice_sha256,

@@ -34,7 +34,7 @@ const batterySchema = z.object({
 
 const columnMeanSchema = z.object({
   column_id: z.string(),
-  submission_id: z.string(),
+  submission_id: uuid,
   owner_key: z.string(),
   public_default: z.boolean(),
   scores: z.number().int(),
@@ -86,6 +86,9 @@ export const duelingSeasonsSchema = z.object({
   current: z.array(duelingSeasonSchema),
   next: z.array(duelingSeasonSchema),
   recent: z.array(duelingSeasonSchema),
+  // Bench v16+ rows with no season or aggregates (never rank or pay; should be 0).
+  scores_without_dueling: z.number().int().default(0),
+  confirmation_scores_without_dueling: z.number().int().default(0),
 })
 
 export const duelingSlicesSchema = z.object({

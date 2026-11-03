@@ -24,7 +24,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import ditto.api_server.dueling_seasons as dueling_mod
 from ditto.api_models.source_disclosure import SourceDisclosure
-from ditto.api_server.dueling_seasons import advance_seasons
+from ditto.api_server.dueling_seasons import (
+    DuelingEvidenceRejected,
+    DuelingSliceUnavailable,
+    advance_seasons,
+    dueling_score_evidence,
+    resolve_dueling_slice,
+)
 from ditto.api_server.generator_competition import load_settings
 from ditto.api_server.generator_rounds import ChainPosition
 from ditto.db.models import (
@@ -662,3 +668,177 @@ class TestDuelingAdmin:
         assert revealed["status"] == "revealed"
         assert revealed["secret_hex"] == ("02" * 32)
         assert revealed["season_seed"] == season_seed(20, b"\x02" * 32, _BLOCK)
+
+
+def _report(season_id: UUID, sha: str) -> dict[str, Any]:
+    return {
+        "dueling": {
+            "season_id": str(season_id),
+            "season_index": 5,
+            "slice_sha256": sha,
+            "owner_key": "coldkey:a",
+            "datagen_raw": 0.8,
+            "datagen_gate": 1.0,
+            "column_weight": 0.1,
+            "columns": [
+                {
+                    "column_id": f"c{i}",
+                    "owner_key": "",
+                    "n": 35,
+                    "sum": 20.0,
+                    "sum_sq": 14.0,
+                }
+                for i in range(5)
+            ],
+            "composite_stderr": 0.01,
+        }
+    }
+
+
+class TestDuelingLease:
+    async def test_lease_reserves_then_serves_and_keeps_pinned_bytes(
+        self,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        default = await _generator(
+            session_maker,
+            hotkey=_DEFAULT_KEY,
+            owner="public-default",
+            salt="default",
+            public_default=True,
+        )
+        now = datetime.now(UTC)
+        # No season: refused, nothing reserved.
+        with pytest.raises(DuelingSliceUnavailable) as none:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=7,
+                pinned_season_id=None,
+                pinned_slice_sha256=None,
+                now=now,
+            )
+        assert "no dueling season" in none.value.detail
+        season_id = await _open_season(session_maker, default)
+        # Two concurrent leases of one seed share one preparation.
+        for _ in range(2):
+            with pytest.raises(DuelingSliceUnavailable) as pending:
+                await resolve_dueling_slice(
+                    session_maker,
+                    bench_version=16,
+                    run_seed=7,
+                    pinned_season_id=None,
+                    pinned_slice_sha256=None,
+                    now=now,
+                )
+            assert pending.value.detail == "dueling slice preparation pending"
+        async with session_maker() as session, session.begin():
+            [row] = list(await session.scalars(select(DuelingSlicePreparation)))
+            raw = b'{"slice":1}'
+            row.status = "ready"
+            row.slice_bytes = raw
+            row.slice_sha256 = hashlib.sha256(raw).hexdigest()
+        served = await resolve_dueling_slice(
+            session_maker,
+            bench_version=16,
+            run_seed=7,
+            pinned_season_id=None,
+            pinned_slice_sha256=None,
+            now=now,
+        )
+        assert served.season_id == season_id and served.slice_bytes == raw
+        assert "slice" not in repr(served).replace("DuelingLeaseSlice", "")
+        # The season closes; a re-lease of the pinned seed keeps its bytes.
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            season.status = "closed"
+        again = await resolve_dueling_slice(
+            session_maker,
+            bench_version=16,
+            run_seed=7,
+            pinned_season_id=season_id,
+            pinned_slice_sha256=served.slice_sha256,
+            now=now,
+        )
+        assert again == served
+        # Pinned bytes that are no longer servable refuse the lease rather
+        # than serving another season's slice for the same seed.
+        async with session_maker() as session, session.begin():
+            [row] = list(await session.scalars(select(DuelingSlicePreparation)))
+            row.slice_bytes = None
+            row.bytes_pruned_at = now
+        with pytest.raises(DuelingSliceUnavailable) as pruned:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=7,
+                pinned_season_id=season_id,
+                pinned_slice_sha256=served.slice_sha256,
+                now=now,
+            )
+        assert "no longer servable" in pruned.value.detail
+        # A later retest on the same ticket row (a new seed, the old pin)
+        # resolves through the open season instead of the pin.
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            season.status = "open"
+        with pytest.raises(DuelingSliceUnavailable) as new_seed:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=8,
+                pinned_season_id=season_id,
+                pinned_slice_sha256=served.slice_sha256,
+                now=now,
+            )
+        assert new_seed.value.detail == "dueling slice preparation pending"
+        with pytest.raises(DuelingSliceUnavailable) as still_new:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=8,
+                pinned_season_id=season_id,
+                pinned_slice_sha256=served.slice_sha256,
+                now=now,
+            )
+        assert still_new.value.detail == "dueling slice preparation pending"
+
+    def test_score_evidence_is_bound_to_the_lease(self) -> None:
+        season_id = uuid4()
+        sha = "ab" * 32
+        assert dueling_score_evidence(
+            None, bench_version=15, season_id=None, slice_sha256=None, owner_key=None
+        ) == (None, None)
+        stored_season, stored = dueling_score_evidence(
+            _report(season_id, sha),
+            bench_version=16,
+            season_id=season_id,
+            slice_sha256=sha,
+            owner_key="coldkey:a",
+        )
+        assert stored_season == season_id and stored is not None
+        assert stored["slice_sha256"] == sha
+        with pytest.raises(DuelingEvidenceRejected, match="owner_key"):
+            dueling_score_evidence(
+                _report(season_id, sha),
+                bench_version=16,
+                season_id=season_id,
+                slice_sha256=sha,
+                owner_key="coldkey:other",
+            )
+        for details, season, digest in (
+            ({}, season_id, sha),
+            (_report(uuid4(), sha), season_id, sha),
+            (_report(season_id, sha), season_id, "cd" * 32),
+            ({"dueling": {"season_id": "x"}}, season_id, sha),
+        ):
+            with pytest.raises(DuelingEvidenceRejected):
+                dueling_score_evidence(
+                    details,
+                    bench_version=16,
+                    season_id=season,
+                    slice_sha256=digest,
+                    owner_key="coldkey:a",
+                )

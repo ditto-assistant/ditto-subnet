@@ -29,7 +29,7 @@ DuelingSliceStatus = Literal["pending", "leased", "ready", "failed"]
 
 _SHA256 = r"^[0-9a-f]{64}$"
 # A slice is at most challenge.MaxRoundDatasetBytes (32 MiB) before base64.
-_MAX_SLICE_BASE64 = 45_000_000
+_MAX_SLICE_BASE64 = 4 * (((32 << 20) + 2) // 3)
 
 
 class DuelingModel(BaseModel):
@@ -230,6 +230,11 @@ class AdminDuelingSeasonsResponse(DuelingModel):
     """Committed seasons waiting for their opening round."""
     recent: list[DuelingSeasonView]
     """The newest closed, revealed and void seasons (no batteries or means)."""
+    scores_without_dueling: int = 0
+    """Bench v16+ score rows with no season or aggregates. Ingestion refuses
+    them, so this should stay 0; any such row never ranks or pays."""
+    confirmation_scores_without_dueling: int = 0
+    """The same for bench v16+ continual-retest seed records."""
 
 
 class DuelingSliceView(DuelingModel):
@@ -237,7 +242,8 @@ class DuelingSliceView(DuelingModel):
     season_id: UUID
     season_index: int
     bench_version: int
-    run_seed: int
+    run_seed: str
+    """The int64 run seed as decimal text, exact in every JSON client."""
     status: DuelingSliceStatus
     attempts: int
     slice_sha256: str | None
