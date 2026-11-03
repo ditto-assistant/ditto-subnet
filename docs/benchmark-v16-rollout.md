@@ -25,7 +25,9 @@ A canonical run is two halves scored as one composite:
 `composite = gate_datagen x ((1 - 0.1 x |U|) x datagen + 0.1 x sum of
 unmasked columns)`. A column owned by the scored agent's coldkey is masked,
 and its 10% returns to the datagen half. The dethrone test is pair-masked.
-Gates, efficiency and outlier inputs see the datagen half only.
+Gates, efficiency and outlier inputs see the datagen half only. The priced
+inference cost factor prices the whole run (both halves) and rides in
+`gate_datagen`. It is floored at 0.6, so it never zeroes a run.
 
 Pack policy 16 ships with it (tandem upgrade). A v16 round and a v16 season
 accept packs declaring 15 or 16. Policy 16 grades like 15.
@@ -127,6 +129,17 @@ Each must be closed, or waived by the operator, before activation.
   season that can be revealed.
 - **Outlier and anomaly thresholds** recalibrated on the v16 shadow
   distribution.
+- **Priced cost curve re-check.** The priced inference cost factor
+  (`details.priced_cost`, [PROTOCOL.md](../services/dittobench-api/PROTOCOL.md)
+  "Bench v16 priced inference cost factor") is enforced in the v16 contract.
+  Its $1.00 reference and curve were calibrated on v15 runs (100 tool + 250
+  memory cases). A v16 run is 50 tool + 125 memory + 175 slice cases, so its
+  per-case token profile differs. On the v16 canary and the first shadow
+  board, read `gate_evidence.priced_cost` for the released top agents. Compare
+  `normalized_cost_usd` and the share at each factor band with the v15
+  calibration. Move the reference or curve before activation if they
+  disagree, regenerate `priced_cost_vectors.json`, and keep the Python mirror
+  in step. After activation these constants are frozen.
 - **Announcement.** At least 24 hours' notice in #118 for agent miners, and at
   least 7 days for generator miners (tandem upgrade runbook).
 - **Generator track share and upload fee**, through governance, together with

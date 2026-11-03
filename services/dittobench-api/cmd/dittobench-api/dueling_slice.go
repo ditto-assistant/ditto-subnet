@@ -333,7 +333,9 @@ func duelingOrdinaryScore(half scorer.DatagenHalf, columns []protocol.DuelingCol
 }
 
 // duelingReportDetails is the details.dueling block. datagenGate is the
-// product of every factor applied to the run's composite: the composite gate,
+// product of every factor applied to the run's composite: the composite gate
+// (from bench 16 already carrying the applied priced-cost factor,
+// applyPricedCostToHalf),
 // the token-efficiency multiplier (always 1 under the v7+ quality-only
 // contract, carried so the identity holds by construction) and, from v9, the
 // applied score-gate factor of the signed base evidence. With it

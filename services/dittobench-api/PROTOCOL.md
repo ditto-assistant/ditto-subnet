@@ -7,6 +7,100 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v16 priced inference cost factor
+
+From bench_version 16 the composite is multiplied by a **priced cost factor**.
+The scorer prices the run's inference at the contract's locked public
+per-token rates, normalises it to a 350-case run, and maps it through a steep
+published curve. The v13 `inference_cost` record (answer output tokens per
+case) stays in shadow beside it. Prompt tokens are about 85% of what a v15 run
+costs, so the v16 factor prices them.
+
+Locked rates (`scoregates/priced_cost.go`, contract `priced-cost-v1`). These
+are contract constants, not live provider bills:
+
+| Meter | Model | Rate | nano-USD / token |
+|---|---|---|---|
+| chat prompt | `openai/gpt-oss-20b` (Amazon Bedrock) | $0.07 / 1M | 70 |
+| chat completion, reasoning included | `openai/gpt-oss-20b` | $0.15 / 1M | 150 |
+| embeddings | `perplexity/pplx-embed-v1-0.6b` | $0.004 / 1M | 4 |
+| decision lane input | `typesafe/jev-1.14` | $0.042 / 1M | 42 |
+| decision lane output | `typesafe/jev-1.14` | not metered | 0 |
+
+Formula (unsigned integers, floor division, uint64 saturation; each token
+count clamped at 2^53-1):
+
+```
+cost_nano_usd  = 70 x prompt + 150 x completion + 4 x embedding
+                 + 42 x decision_input + 0 x decision_output
+normalized     = floor(cost_nano_usd x 350 / cases)          # 350-case run equivalent
+ratio_bps      = min(floor(normalized x 10000 / 1_000_000_000), 100000)   # reference $1.00
+factor_bps     = 10000                                   if ratio_bps <= 10000
+               = 10000 - floor(2000 x (ratio_bps - 10000) / 5000)   if ratio_bps <= 15000
+               = 8000  - floor(2000 x (ratio_bps - 15000) / 5000)   if ratio_bps <= 20000
+               = 6000                                    otherwise (the floor)
+```
+
+The factor is 1.0 at or below $1.00 per 350 cases, 0.90 at $1.25, 0.80 at
+$1.50, 0.70 at $1.75, and the 0.60 floor from $2.00. The Go rule and its
+Python mirror (`ditto_screening_protocol.priced_cost`) share
+`internal/scoregates/testdata/priced_cost_vectors.json`.
+
+**Measurement window: the whole run.** `cases` counts every scored case: the
+datagen half plus the generator slice. Chat counts come from the scored run's
+whole-run relay interval, which is the broker accounting that decides relay
+health. They are read before a dueling run narrows its accounting record to
+the datagen half. The datagen/slice boundary capture is not used. Embedding
+and decision-lane counts are the ticket session's totals. Route probes the
+scorer sends before the run starts are excluded. Pricing only the datagen
+half would let a harness spend freely on the 175 slice cases.
+
+**Where it applies.** The applied factor multiplies the composite gate. On a
+dueling run it rides inside `details.dueling.datagen_gate`, so it scales the
+whole composite: `gate x ((1 - w|U|) x datagen + w x sum col)`. The validator
+and Platform folds already recompute per-seed composites from that block, so
+they apply the factor with no fold change. Column statistics (`n`, `sum`,
+`sum_sq`) stay raw, so the agent's spend never moves a generator's column
+means. That is the only dueling double count that could arise, and it does
+not. The factor is floored at 0.6, so it is a multiplier and not a zeroing
+gate. `dueling-bench.md` section 4 (generator cases never feed a zeroing
+gate) holds. A bench 16 run without a slice (practice) has its composite
+scaled directly, before the v9 base evidence binds it.
+
+**Posture.** The default is `enforce`. `DITTOBENCH_V16_PRICED_COST_POSTURE=shadow`
+reports the factor and applies 10000. It is an emergency switch, not the
+rollout plan. The v16 pre-activation rollout is the shadow window: v16 scores
+do not set weights until the operator activates v16. Enforcing in the
+contract from the first v16 canary therefore shows the real board, and the
+constants can still move before activation if the canary re-check disagrees.
+The posture is a per-validator scorer setting. Flipping it after activation
+would mix seeds scored under both postures in one crown fold, which is a
+mid-bench rescore. Incomplete chat accounting, or zero scored cases, reports
+`result: "insufficient_evidence"` and applies 10000.
+
+The report adds:
+
+```jsonc
+"details": {
+  "priced_cost": {
+    "contract_id": "priced-cost-v1", "posture": "enforce", "applied": true,
+    "result": "priced", "window": "whole_run", "source": "relay", "cases": 350,
+    "prompt_tokens": 22318268, "completion_tokens": 1690233, "embedding_tokens": 294000,
+    "decision_calls": 0, "decision_input_tokens": 0, "decision_output_tokens": 0,
+    "prices": {"chat_model": "openai/gpt-oss-20b", "prompt_token": 70, "completion_token": 150, "...": "..."},
+    "cost_nano_usd": 1816989710, "normalization_cases": 350,
+    "normalized_cost_nano_usd": 1816989710, "reference_nano_usd": 1000000000,
+    "ratio_bps": 18169, "curve": [{"ratio_bps": 10000, "factor_bps": 10000}, "..."],
+    "floor_bps": 6000, "factor_bps": 6733, "applied_factor_bps": 6733
+  }
+}
+```
+
+Platform shows the block on the public score record, in Backroom and on the
+owner gate notes as `gate_evidence.priced_cost`, with `cost_usd`,
+`normalized_cost_usd`, and `rule_consistent` (Platform's own recomputation).
+`uv run ditto practice` prints the estimated cost and factor of the local run.
+
 ## Bench v15 production-scale catalog and decision lane
 
 V15 scores exactly like v14 (plus the v15 atomic-value grading floor). Its
@@ -271,16 +365,17 @@ already claimed. Each case is graded by `scorer.GradeMemory` at its column's
 Scoring: gates, efficiency, outlier and canary inputs, metamorphic and twin
 post-passes, v13 shadow telemetry, token accounting and the signed v9 base
 evidence all read the **datagen half only** (relay usage is read at the
-datagen/slice boundary; the whole run still decides relay health). The
-composite is
+datagen/slice boundary; the whole run still decides relay health). The one
+deliberate exception is the bench 16 priced cost factor (above), which prices
+the whole run. The composite is
 
 ```
 composite = gate x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
 ```
 
 with `w = 0.1`, `U` the columns not owned by `dueling_owner_key`, and `gate`
-the composite gate times the applied v9 score-gate factor
-(`challenge.DuelingComposite`), quantized to micros like every v9+ composite.
+the composite gate times the applied priced cost factor times the applied v9
+score-gate factor (`challenge.DuelingComposite`), quantized to micros like every v9+ composite.
 The report adds:
 
 ```jsonc

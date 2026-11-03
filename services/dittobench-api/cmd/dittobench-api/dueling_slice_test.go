@@ -791,6 +791,13 @@ func TestRunSizeJobRunsTheSliceAfterTheDatagenHalf(t *testing.T) {
 	if sliceRows != len(slice.cases) || report.N != len(report.PerCase) {
 		t.Fatalf("slice rows %d (want %d), n=%d per_case=%d", sliceRows, len(slice.cases), report.N, len(report.PerCase))
 	}
+	// The priced cost covers the whole run (both halves). This practice run
+	// meters no inference, so it reports insufficient evidence and the gate
+	// above stays exactly the datagen composite gate.
+	if pc := report.Details.PricedCost; pc == nil || pc.Window != "whole_run" || pc.Cases != report.N ||
+		pc.Result != "insufficient_evidence" || pc.AppliedFactorBPS != 10000 {
+		t.Fatalf("details.priced_cost = %+v", report.Details.PricedCost)
+	}
 	aggs := duelingAggregates(d.Columns)
 	self := challenge.DuelingComposite(d.DatagenRaw, d.DatagenGate, aggs, map[string]bool{d.OwnerKey: true})
 	if math.Abs(report.Composite-self) > 1e-6 {

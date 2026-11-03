@@ -179,6 +179,12 @@ type brokerSession struct {
 	// (decision_lane.go): calls in flight and signed dispatches this run.
 	decisionInFlight   int
 	decisionDispatches uint64
+	// decisionCompleted, decisionInputTokens and decisionOutputTokens are the
+	// 2xx decision calls and their relay-reported usage (bench v16 priced
+	// cost; recordDecisionUsage).
+	decisionCompleted    uint64
+	decisionInputTokens  uint64
+	decisionOutputTokens uint64
 	// chatConcurrency is the per-source in-flight chat admission for this
 	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
 	// the run's effective case concurrency so overlapping /run calls are not
