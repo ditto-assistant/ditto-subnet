@@ -1096,14 +1096,19 @@ def _authorize_replacement_payment(
         f"block={receipt.block_number} index={receipt.extrinsic_index} "
         f"hash={receipt.block_hash}"
     )
-    spent = (
-        "This proof cannot fund this upload: it already funded another one, "
-        "or it belongs to another hotkey or owner. If it funded an earlier "
-        "upload whose response was lost, rerunning that upload's exact archive "
-        "returns it without paying again.\n"
-        if isinstance(error, PaymentReplayedError)
-        else ""
-    )
+    spent = ""
+    if isinstance(error, PaymentReplayedError):
+        # 3207 also refuses a proof for another hotkey, a generator upload or a
+        # changed owner. Only "already used" can be an earlier upload of this
+        # hotkey whose response was lost, so only it points at a rerun.
+        spent = (
+            "This proof cannot fund this upload. It was already used; if it "
+            "funded an earlier upload whose response was lost, rerunning that "
+            "upload's exact archive returns it without paying again.\n"
+            if "already used" in str(error)
+            else "This proof cannot fund this upload, and rerunning an earlier "
+            "archive will not recover it.\n"
+        )
     print(
         f"warning: the platform rejected the saved payment proof ({error}).\n"
         f"Rejected proof: {proof}\n"

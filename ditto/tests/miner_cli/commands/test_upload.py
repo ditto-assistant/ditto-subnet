@@ -1387,6 +1387,81 @@ class TestUploadFailurePaths:
         ]
         pay.assert_called_once()
 
+    @pytest.mark.parametrize(
+        "reason",
+        [
+            "payment credit belongs to a different hotkey",
+            "payment proof already funded a generator upload",
+            "payment owner no longer matches this admission reservation",
+        ],
+    )
+    def test_unrecoverable_replay_offers_no_earlier_archive_rerun(
+        self,
+        good_tar: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        reason: str,
+    ) -> None:
+        # 3207 also covers proofs no earlier upload of this hotkey spent, so
+        # only "already used" may point at rerunning an earlier archive.
+        monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+        spent = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="alpha",
+            sha256="ef" * 32,
+            payment=_payment_receipt(),
+        )
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar, saved=(spent,), checks=[PaymentReplayedError(reason)]
+        )
+
+        assert rc == 1
+        clear.assert_not_called()
+        pay.assert_not_called()
+        err = capsys.readouterr().err
+        assert reason in err
+        assert "cannot fund this upload" in err
+        assert "exact archive" not in err
+        assert "rerunning an earlier archive will not recover it" in err
+
+    def test_spent_proof_flags_without_a_saved_copy_retire_nothing(
+        self, good_tar: Path
+    ) -> None:
+        # Proof flags may name a payment this machine never saved. Nothing is
+        # retired, the other saved credit stays, and the replacement still
+        # needs consent.
+        other = PendingUploadPayment(
+            network="local",
+            hotkey=HOTKEY,
+            name="beta",
+            sha256="12" * 32,
+            payment=PaymentReceipt(
+                block_hash="0x" + "34" * 32, block_number=44, extrinsic_index=2
+            ),
+        )
+        named = _payment_receipt()
+
+        rc, _client, clear, pay = self._replayed_run(
+            good_tar,
+            saved=(other,),
+            checks=[
+                PaymentReplayedError("payment proof already used"),
+                self._bound_check(),
+            ],
+            pay_again=True,
+            payment_block_hash=named.block_hash.upper().replace("0X", "0x"),
+            payment_block_number=named.block_number,
+            payment_extrinsic_index=named.extrinsic_index,
+        )
+
+        assert rc == 0
+        assert other.payment not in [
+            each.kwargs["payment"] for each in clear.call_args_list
+        ]
+        pay.assert_called_once()
+
     def test_pay_again_does_not_override_other_precheck_failures(
         self, good_tar: Path
     ) -> None:
