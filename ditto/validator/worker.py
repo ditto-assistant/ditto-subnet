@@ -83,7 +83,12 @@ from ditto.validator.crn import (
     crn_block_binding_active,
     crn_seed,
 )
-from ditto.validator.dittobench import SUPPORTED_BENCH_VERSIONS
+from ditto.validator.dittobench import (
+    SUPPORTED_BENCH_VERSIONS,
+    DuelingSlice,
+    DuelingSliceError,
+    dueling_slice_from_lease,
+)
 from ditto.validator.errors import (
     DittobenchError,
     LeaseDeadlineError,
@@ -159,6 +164,7 @@ from ditto.validator.weights import (
     apply_miner_emission_cap,
     blend_track_weights,
     contested_confirmation_set,
+    dueling_fold_dropped,
     filter_weight_confirmed,
     owner_burn_destination_required,
     reign_seed_planning,
@@ -2617,6 +2623,16 @@ class ValidatorWorker:
         # registration filters as any payable entry.
         provisional = _ledger_provisional_incumbent(ledger)
         weight_entries = _ledger_weight_entries(ledger)
+        dueling_dropped = dueling_fold_dropped(weight_entries)
+        if dueling_dropped:
+            # Fail closed: a v16 row without its season or aggregates cannot
+            # be compared inside one season, so it neither ranks nor pays.
+            logger.warning(
+                "weight fold dropped %d bench>=16 ledger row(s) without a "
+                "dueling season or aggregates: %s",
+                len(dueling_dropped),
+                sorted(str(entry.agent_id) for entry in dueling_dropped),
+            )
         if isinstance(treasury_pin, EnforcingTreasuryPin):
             weight_entries = [
                 e
@@ -3489,6 +3505,29 @@ class ValidatorWorker:
                     job, "infrastructure", "confirmation_dataset_pins_duplicated"
                 )
                 return False
+            # A dueling lease carries one season slice, derived from one run
+            # seed, so it can pin exactly one confirmation dataset.
+            try:
+                dueling_slice = dueling_slice_from_lease(job)
+            except DuelingSliceError as exc:
+                logger.warning(
+                    "top-five confirmation dueling slice refused agent=%s: %s",
+                    job.agent_id,
+                    exc,
+                )
+                await self._report_ticket_failed(job, "infrastructure", exc.code)
+                return False
+            if dueling_slice is not None and len(received_seeds) != 1:
+                logger.warning(
+                    "top-five confirmation dueling lease pins %d seeds for one "
+                    "slice agent=%s",
+                    len(received_seeds),
+                    job.agent_id,
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "dueling_slice_seed_count"
+                )
+                return False
             # Bench v13+ anti-grind, the confirmation-lane twin of the P2 check
             # in ``_score_job``: a seed Platform says is bound to a finalized
             # block must re-derive from that block here, or the lease is not
@@ -3869,6 +3908,9 @@ class ValidatorWorker:
                 ),
                 ticket_deadline=job.deadline,
                 benchmark_runtime=job.benchmark_runtime,
+                # Validated before the lease was claimed; re-derived here so the
+                # lane never forwards an unchecked slice.
+                dueling_slice=dueling_slice_from_lease(job),
             )
         finally:
             if broker is not None:
@@ -3887,6 +3929,7 @@ class ValidatorWorker:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport | None:
         """Evaluate fresh seeds and package one signed append-only receipt.
 
@@ -3924,6 +3967,7 @@ class ValidatorWorker:
                         inference_ticket_deadline=inference_ticket_deadline,
                         ticket_deadline=ticket_deadline,
                         benchmark_runtime=benchmark_runtime,
+                        dueling_slice=dueling_slice,
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
@@ -4761,6 +4805,12 @@ class ValidatorWorker:
                 f"{job.dataset_seed_block_hash!r}; refusing to score",
                 code="seed_binding_mismatch",
             )
+        try:
+            dueling_slice = dueling_slice_from_lease(job)
+        except DuelingSliceError as exc:
+            raise ValidatorInfrastructureError(
+                f"{exc}; refusing to score", code=exc.code
+            ) from exc
         # Claim the slot publicly BEFORE activating inference. Exchanging the
         # grant and standing up the broker session is unbounded work -- with
         # several slots contending for inference it can hold a slot for many
@@ -4802,6 +4852,7 @@ class ValidatorWorker:
                     job.slot_id if inference_session_id is not None else None
                 ),
                 benchmark_runtime=job.benchmark_runtime,
+                dueling_slice=dueling_slice,
             )
         finally:
             if broker is not None:
@@ -4824,6 +4875,7 @@ class ValidatorWorker:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Run one re-score while managing its benchmark heartbeat.
 
@@ -4851,6 +4903,7 @@ class ValidatorWorker:
                 inference_ticket_deadline=inference_ticket_deadline,
                 ticket_deadline=ticket_deadline,
                 benchmark_runtime=benchmark_runtime,
+                dueling_slice=dueling_slice,
             )
         finally:
             heartbeat_stop.set()
@@ -4876,6 +4929,7 @@ class ValidatorWorker:
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
         if not _supports_bench_version(bench_version):
@@ -4942,6 +4996,7 @@ class ValidatorWorker:
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
             benchmark_runtime=benchmark_runtime,
+            dueling_slice=dueling_slice,
         )
         return report
 
@@ -5072,6 +5127,7 @@ class ValidatorWorker:
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
         benchmark_runtime: BenchmarkRuntimeSettings | None = None,
+        dueling_slice: DuelingSlice | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -5084,6 +5140,7 @@ class ValidatorWorker:
                 private_dataset_mode=private_dataset_mode,
                 run_size=run_size,
                 bench_version=bench_version,
+                dueling_slice=dueling_slice,
             )
             return await self._submit_report(agent_id, miner_hotkey, report)
 
@@ -5113,6 +5170,7 @@ class ValidatorWorker:
                 ),
                 ticket_deadline=ticket_deadline,
                 benchmark_runtime=benchmark_runtime,
+                dueling_slice=dueling_slice,
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n
