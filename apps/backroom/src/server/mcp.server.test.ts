@@ -2623,7 +2623,7 @@ describe('Backroom MCP tools', () => {
     expect(queue.isError).not.toBe(true)
     expect(readJsonResult(queue)).toMatchObject({ queued: 1, skipped: 0 })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      29_200,
+      1,
       'https://platform-api.heyditto.ai/api/v1/admin/v9-contract-retests?limit=100&offset=0',
       expect.any(Object),
     )
@@ -3047,7 +3047,7 @@ describe('Backroom MCP tools', () => {
       effect: { admitted: true, ticket_state: 'awaiting_first_lease' },
     })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      29_200,
+      1,
       `https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/stranded-previous-era/${agentId}/admit`,
       expect.objectContaining({
         method: 'POST',
@@ -4244,7 +4244,7 @@ describe('Backroom MCP tools', () => {
     // The signed-in operator, not a shared service identity, is what the
     // platform records as the actor on a revision that moves TAO.
     expect(fetchMock).toHaveBeenNthCalledWith(
-      29_200,
+      1,
       'https://platform-api.heyditto.ai/api/v1/admin/burn-settings',
       expect.objectContaining({
         method: 'POST',
@@ -4383,7 +4383,7 @@ describe('Backroom MCP tools', () => {
       effective: { revision: 1, in_force_bps: split, served: true },
     })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      29_200,
+      1,
       'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
       expect.objectContaining({
         method: 'POST',
@@ -4503,7 +4503,7 @@ describe('Backroom MCP tools', () => {
     expect(response.isError).not.toBe(true)
     expect(readJsonResult(response)).toMatchObject({ revision: 1, in_sync: true })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      29_200,
+      1,
       'https://platform-api.heyditto.ai/api/v1/admin/emission-allocation',
       expect.objectContaining({
         method: 'POST',
