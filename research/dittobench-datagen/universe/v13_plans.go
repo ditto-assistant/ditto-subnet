@@ -201,9 +201,9 @@ func (w World) SelectQuestionPlans(sel WorldPlanSelection) ([]QuestionPlan, Worl
 // limitedStoryArcs picks limit of the sorted arcs by a seeded hash order (not
 // the selection shuffle stream, so the rest of the selection is unchanged). The
 // asked arcs keep the world's business/personal kind proportion (largest
-// remainder), and within each kind take one arc per theme before repeating a
-// theme, so a partial story slot keeps the full world's domain balance and
-// spreads over its themes. The result is sorted.
+// remainder), and take one arc per theme before repeating any theme (the theme
+// set is shared across kinds), so a partial story slot keeps the full world's
+// domain balance and spreads over its themes. The result is sorted.
 func (w World) limitedStoryArcs(salt string, arcs []int, limit int) []int {
 	ranked := append([]int(nil), arcs...)
 	key := func(arc int) uint64 {
