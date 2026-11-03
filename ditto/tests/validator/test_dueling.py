@@ -461,6 +461,23 @@ async def test_v2_score_forwards_the_slice_only_at_a_dueling_version(
         )
         with pytest.raises(DittobenchError, match="digest mismatch"):
             await client._submit(**_submit_kwargs(16), dueling_slice=tampered)
+        empty = DuelingSlice(
+            slice_bytes=b"",
+            expected_slice_sha256=_SLICE_SHA,
+            owner_key="coldkey:a",
+            season_id=_SEASON,
+        )
+        with pytest.raises(DittobenchError, match="empty or oversized"):
+            await client._submit(**_submit_kwargs(16), dueling_slice=empty)
+        wrong_mode = DuelingSlice(
+            slice_bytes=_SLICE,
+            expected_slice_sha256=_SLICE_SHA,
+            owner_key="coldkey:a",
+            season_id=_SEASON,
+            mode="dueling-slice-v2",
+        )
+        with pytest.raises(DittobenchError, match="mode mismatch"):
+            await client._submit(**_submit_kwargs(16), dueling_slice=wrong_mode)
     assert len(requests) == 2
     dueling_body, legacy_body = requests
     assert dueling_body["dueling_slice_mode"] == "dueling-slice-v1"

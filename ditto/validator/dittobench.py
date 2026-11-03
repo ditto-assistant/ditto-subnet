@@ -1937,11 +1937,15 @@ class DittobenchClient:
                 raise DittobenchError(
                     f"benchmark v{bench_version} requires a dueling slice"
                 )
+            if dueling_slice.mode != DUELING_SLICE_MODE:
+                raise DittobenchError("dueling slice mode mismatch")
             if (
-                dueling_slice.mode != DUELING_SLICE_MODE
-                or not dueling_slice.slice_bytes
+                not dueling_slice.slice_bytes
                 or len(dueling_slice.slice_bytes) > MAX_DUELING_SLICE_BYTES
-                or hashlib.sha256(dueling_slice.slice_bytes).hexdigest()
+            ):
+                raise DittobenchError("dueling slice is empty or oversized")
+            if (
+                hashlib.sha256(dueling_slice.slice_bytes).hexdigest()
                 != dueling_slice.expected_slice_sha256
             ):
                 raise DittobenchError("dueling slice digest mismatch")

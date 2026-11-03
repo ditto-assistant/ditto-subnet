@@ -3591,7 +3591,7 @@ class ValidatorWorker:
             # sibling slot's issuance -- for hours.
             leased = job
             report = await self._run_within_lease(
-                lambda: self._evaluate_confirmation_lease(leased),
+                lambda: self._evaluate_confirmation_lease(leased, dueling_slice),
                 job=job,
                 slot=slot,
             )
@@ -3885,7 +3885,7 @@ class ValidatorWorker:
                 await self._dittobench.cancel_inference_session(broker.session_id)
 
     async def _evaluate_confirmation_lease(
-        self, job: JobResponse
+        self, job: JobResponse, dueling_slice: DuelingSlice | None = None
     ) -> ScoreReport | None:
         """Activate the lease's inference grant and evaluate its pinned seeds."""
         broker = await self._activate_ticket_inference(job)
@@ -3909,9 +3909,8 @@ class ValidatorWorker:
                 ),
                 ticket_deadline=job.deadline,
                 benchmark_runtime=job.benchmark_runtime,
-                # Validated before the lease was claimed; re-derived here so the
-                # lane never forwards an unchecked slice.
-                dueling_slice=dueling_slice_from_lease(job),
+                # Decoded and verified before the lease was claimed.
+                dueling_slice=dueling_slice,
             )
         finally:
             if broker is not None:
