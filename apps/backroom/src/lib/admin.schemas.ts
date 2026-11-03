@@ -276,6 +276,7 @@ export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inh
 export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-terra',
   'openai/gpt-6-sol',
+  'openai/gpt-6.1-terra',
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',
@@ -304,8 +305,8 @@ export const screenerReviewSettingsSchema = z
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
     l3_enabled: z.boolean().default(true),
-    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
-    timeout_seconds: z.number().int().min(30).max(1_800),
+    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol', 'openai/gpt-6.1-terra']),
+    timeout_seconds: z.number().int().min(30).max(3_600),
     max_steps: z.number().int().min(1).max(256),
     source_review_max_steps: z.number().int().min(1).max(240).default(200),
     source_review_max_read_bytes: z.number().int().min(32_000).max(16_000_000).default(8_000_000),

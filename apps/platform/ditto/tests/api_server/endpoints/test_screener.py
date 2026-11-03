@@ -2959,6 +2959,51 @@ class TestHeartbeat:
             )
             assert await _attempt_deadline(session_maker, attempt_id) == cap
 
+    async def test_deep_review_budget_above_old_ceiling_grows_attempt_lifetime(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A 2700 s deep-review budget (above the old 1800 s ceiling) is honoured.
+
+        The renewable lease's hard lifetime is derived from the bound revision,
+        so raising ``timeout_seconds`` grows the attempt deadline with it.
+        """
+        _install_db(app, session_maker)
+        revision = await _seed_review_settings_revision(
+            session_maker,
+            ScreenerReviewSettings(
+                source_review_timeout_seconds=600,
+                timeout_seconds=2_700,
+            ),
+        )
+        now = datetime.now(UTC).replace(microsecond=0)
+        # 600 s L1 + 2700 s L2/L3 + 45 min non-review work = 100 minutes. With
+        # the old 1800 s ceiling the cap (85 minutes) would already have passed.
+        started = now - timedelta(minutes=95)
+        cap = started + timedelta(minutes=100)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(
+            session_maker,
+            agent_id=agent_id,
+            started_at=started,
+            deadline=now + timedelta(minutes=1),
+            review_settings=revision,
+            review_settings_instance_id="legacy",
+        )
+        assert (
+            await _screening_heartbeat(
+                client,
+                agent_id=agent_id,
+                timestamp=int(now.timestamp()),
+                stage="source_review_60",
+                started_at=started,
+            )
+            == cap
+        )
+        assert await _attempt_deadline(session_maker, attempt_id) == cap
+
     async def test_sibling_instance_heartbeat_does_not_renew(
         self,
         app: FastAPI,

@@ -1360,8 +1360,9 @@ see [the rollout plan](../../../docs/benchmark-v15-rollout.md).
 
 `grade.PolicyFloorV15` exists only as a grading-policy floor, as v13's grader floor once did; `protocol` gains `BenchVersionV15` only with the generation contract. It
 is not generatable, advertised or active, and it does not change any v2–v14
-generation or grading vector. The v15 generation contract (see
-[dueling-bench.md](dueling-bench.md)) inherits this policy when it lands.
+generation or grading vector. The v15 generation contract (the
+production-scale catalog and decision lane) inherits this policy, and so does
+the v16 dueling contract ([dueling-bench.md](dueling-bench.md)).
 
 - **Case values are atomic** (`caseValuesAreAtomic`). Clause segmentation
   reads every multi-word hidden value of a value or list case (expected,
