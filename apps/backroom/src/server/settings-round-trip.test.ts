@@ -1,15 +1,24 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { z } from 'zod'
 import {
   applyScreenerReviewSettings,
   fetchScreenerReviewControl,
   rotateScreenerPolicyManifest,
   updateScreenerProviderSettings,
 } from './admin.service'
-import { screenerProviderSettingsConfirmation } from '../lib/admin.schemas'
+import {
+  continualRetestSettingsSchema,
+  screenerProviderSettingsConfirmation,
+  screenerProviderSettingsSchema,
+  screenerReviewSettingsSchema,
+} from '../lib/admin.schemas'
 
 // #2979: a legacy revision read back through Backroom has its unreported
-// fields filled with read-compat defaults. Writing that read back must not
-// turn those made-up values into a stored policy.
+// fields filled with read defaults, and a whole-policy write sends every field.
+// That is only safe while each read default is the value Platform itself
+// resolves for the field, and it means a value the operator chose always
+// reaches Platform, even one equal to the default.
 
 const originalToken = process.env.DITTO_ADMIN_API_TOKEN
 const actor = 'operator@example.com'
@@ -20,6 +29,48 @@ afterEach(() => {
   vi.unstubAllGlobals()
   if (originalToken === undefined) delete process.env.DITTO_ADMIN_API_TOKEN
   else process.env.DITTO_ADMIN_API_TOKEN = originalToken
+})
+
+// The `@default` Platform's OpenAPI schema documents for each field of one
+// settings model, from the client generated off the same monorepo commit.
+function platformDefaults(model: string) {
+  const source = readFileSync(new URL('../generated/platform-api.ts', import.meta.url), 'utf8')
+  const start = source.indexOf(`\n        ${model}: {\n`)
+  expect(start, `components.schemas.${model}`).toBeGreaterThan(-1)
+  const block = source.slice(start, source.indexOf('\n        };', start))
+  const defaults = new Map<string, string | undefined>()
+  for (const [, doc, field] of block.matchAll(/\/\*\*([\s\S]*?)\*\/\s*\n\s*(\w+)\??:/g)) {
+    const text = doc!.split('\n').map((line) => line.replace(/^\s*\*\s?/, '')).join('\n')
+    defaults.set(field!, /@default ([\s\S]*?)(?=\n@|\s*$)/.exec(text)?.[1]?.trim())
+  }
+  return defaults
+}
+
+describe('Backroom read defaults', () => {
+  it.each([
+    ['ScreenerReviewSettings', screenerReviewSettingsSchema.shape],
+    ['ContinualRetestSettings', continualRetestSettingsSchema.shape],
+    ['ScreenerProviderSettings', screenerProviderSettingsSchema.shape],
+  ] as const)('match the default Platform resolves for each %s field', (model, shape) => {
+    const platform = platformDefaults(model)
+    const compared: string[] = []
+    for (const [field, validator] of Object.entries(shape)) {
+      if (!(validator instanceof z.ZodDefault)) continue
+      expect(platform.has(field), `${model}.${field} is a Platform field`).toBe(true)
+      const value: unknown = validator.def.defaultValue
+      const documented = platform.get(field)
+      if (documented === undefined) expect(value, `${model}.${field}`).toBeNull()
+      else if (typeof value === 'string') expect(value, `${model}.${field}`).toBe(documented)
+      else expect(value, `${model}.${field}`).toEqual(JSON.parse(documented))
+      compared.push(field)
+    }
+    expect(compared.length).toBeGreaterThan(0)
+  })
+
+  it('read a legacy L1 timeout as the 3,600 seconds Platform resolves', () => {
+    expect(platformDefaults('ScreenerReviewSettings').get('source_review_timeout_seconds')).toBe('3600')
+    expect(screenerReviewSettingsSchema.shape.source_review_timeout_seconds.def.defaultValue).toBe(3_600)
+  })
 })
 
 // Stored before the adjudicator, fan-out, probe, manifest and source-review
@@ -59,140 +110,144 @@ const legacyReviewControl = {
   shadow_observations: [],
 }
 
-function postedSettings(fetchMock: ReturnType<typeof vi.fn>, url: string) {
-  const post = fetchMock.mock.calls.find(
-    ([called, init]) => called === url && (init as RequestInit).method === 'POST',
+function stubReviewSettings() {
+  process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+  const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+    init?.method === 'POST'
+      ? Response.json({ ...legacyRevision, revision: 8, parent_revision: 7 })
+      : Response.json(legacyReviewControl),
   )
-  expect(post, `POST ${url}`).toBeDefined()
-  return JSON.parse(String((post![1] as RequestInit).body)).settings as Record<string, unknown>
+  vi.stubGlobal('fetch', fetchMock)
+  return fetchMock
+}
+
+function postedSettings(fetchMock: ReturnType<typeof vi.fn>, url: string) {
+  const posts = fetchMock.mock.calls.filter(
+    ([called, init]) => called === url && (init as RequestInit | undefined)?.method === 'POST',
+  )
+  expect(posts, `POST ${url}`).toHaveLength(1)
+  return JSON.parse(String((posts[0]![1] as RequestInit).body)).settings as Record<string, unknown>
 }
 
 describe('legacy settings read followed by a whole-policy write', () => {
-  it('writes only what the live screener review revision reported, plus what the operator changed', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === 'POST'
-        ? Response.json({ ...legacyRevision, revision: 8, parent_revision: 7 })
-        : Response.json(legacyReviewControl),
-    )
-    vi.stubGlobal('fetch', fetchMock)
+  it('writes the policy Platform already resolves for fields the revision did not report', async () => {
+    const fetchMock = stubReviewSettings()
 
     // The panel and MCP callers both start from the parsed read.
-    const read = await fetchScreenerReviewControl()
-    const settings = read.current[0]!.settings
-    expect(settings.adjudicator_mode).toBe('off')
-    expect(settings.source_review_timeout_seconds).toBe(1_800)
-
+    const settings = (await fetchScreenerReviewControl()).current[0]!.settings
     await applyScreenerReviewSettings(actor, {
       scope: '*',
       expectedRevision: 7,
-      settings: { ...settings, max_cost_usd: 3, probe_battery_mode: 'shadow' },
+      settings: { ...settings, max_cost_usd: 3 },
       reason: 'Raise the review budget.',
       confirmation: 'APPLY SCREENER REVIEW * SHADOW',
     })
 
+    // Platform stores `model_dump()` of the request, so these are exactly the
+    // values it would materialize for the unreported fields anyway.
     const posted = postedSettings(fetchMock, REVIEW_SETTINGS_URL)
-    expect(posted).toEqual({ ...legacySettings, max_cost_usd: 3, probe_battery_mode: 'shadow' })
+    expect(posted).toEqual({ ...settings, max_cost_usd: 3 })
+    expect(posted).toMatchObject({
+      ...legacySettings,
+      max_cost_usd: 3,
+      source_review_timeout_seconds: 3_600,
+      source_review_max_steps: 200,
+      probe_battery_mode: 'off',
+    })
   })
 
-  it('keeps the live screener review revision for fields a rotation does not name', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === 'POST'
-        ? Response.json({ ...legacyRevision, revision: 8, parent_revision: 7 })
-        : Response.json(legacyReviewControl),
-    )
-    vi.stubGlobal('fetch', fetchMock)
+  it('sends a value the operator chose for an unreported field even when it equals the default', async () => {
+    const fetchMock = stubReviewSettings()
+
+    const settings = (await fetchScreenerReviewControl()).current[0]!.settings
+    await applyScreenerReviewSettings(actor, {
+      scope: '*',
+      expectedRevision: 7,
+      settings: { ...settings, source_review_max_steps: 200, source_review_timeout_seconds: 1_800 },
+      reason: 'Pin the L1 budget explicitly.',
+      confirmation: 'APPLY SCREENER REVIEW * SHADOW',
+    })
+
+    expect(postedSettings(fetchMock, REVIEW_SETTINGS_URL)).toMatchObject({
+      source_review_max_steps: 200,
+      source_review_timeout_seconds: 1_800,
+    })
+  })
+
+  it('writes a first revision for a scope that has none', async () => {
+    const fetchMock = stubReviewSettings()
+
+    const settings = (await fetchScreenerReviewControl()).current[0]!.settings
+    await applyScreenerReviewSettings(actor, {
+      scope: 'l2-report-canary',
+      expectedRevision: 0,
+      settings,
+      reason: 'Seed the canary posture.',
+      confirmation: 'APPLY SCREENER REVIEW l2-report-canary SHADOW',
+    })
+
+    expect(postedSettings(fetchMock, REVIEW_SETTINGS_URL)).toEqual(settings)
+  })
+
+  it('rotates the manifest over the current revision exactly as read', async () => {
+    const fetchMock = stubReviewSettings()
+    const settings = (await fetchScreenerReviewControl()).current[0]!.settings
 
     await rotateScreenerPolicyManifest(actor, {
       scope: '*',
       expectedRevision: 7,
-      profile: 'l1',
+      profile: 'l1_l2',
       rotationId: 'policy-v13-rotation',
       reason: 'Rotate the manifest after the policy update.',
       confirmation: 'ROTATE SCREENER POLICY * policy-v13-rotation',
     })
 
-    // The rotation names both manifest fields, so both are sent even where
-    // the request equals the read default; nothing else is made up.
+    // Platform's rotate-only check compares this with the previous revision as
+    // it resolves it, so every other field must be the read, unchanged.
     expect(postedSettings(fetchMock, REVIEW_SETTINGS_URL)).toEqual({
-      ...legacySettings,
-      policy_manifest_profile: 'l1',
+      ...settings,
+      policy_manifest_profile: 'l1_l2',
       policy_manifest_rotation_id: 'policy-v13-rotation',
     })
   })
 
-  it('writes only what the live provider revision reported, plus what the operator changed', async () => {
+  it('writes provider settings as given without reading first', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const legacyProviders = {
-      build_provider_priority: ['hetzner', 'gcp'] as Array<'hetzner' | 'gcp'>,
-      runtime_provider_priority: ['hetzner', 'gcp'] as Array<'hetzner' | 'gcp'>,
-      source_review_provider_priority: ['hetzner', 'gcp'] as Array<'hetzner' | 'gcp'>,
-    }
-    const control = {
-      current: {
-        environment: 'prod',
-        revision: 4,
-        parent_revision: 3,
-        settings: legacyProviders,
-        reason: 'Legacy provider routing.',
-        actor,
-        created_at: '2026-08-01T00:00:00Z',
-      },
-      history: [],
-    }
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === 'POST' ? Response.json({}) : Response.json(control),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-
     const settings: Parameters<typeof screenerProviderSettingsConfirmation>[0] = {
-      ...legacyProviders,
+      build_provider_priority: ['gcp'],
+      runtime_provider_priority: ['gcp'],
+      source_review_provider_priority: ['gcp'],
       gce_overflow_enabled: false,
-      primary_node_id: 'subnet-screener-2',
+      primary_node_id: null,
       gce_overflow_backlog_multiplier: 3,
       gce_overflow_min_backlog: 12,
       gce_overflow_max_instances: 6,
     }
-    await updateScreenerProviderSettings(actor, {
-      expectedRevision: 4,
+    const revision = {
+      environment: 'prod',
+      revision: 1,
+      parent_revision: 0,
       settings,
-      reason: 'Pin the primary screener node.',
+      reason: 'Seed provider routing.',
+      actor,
+      created_at: '2026-11-03T00:00:00Z',
+    }
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? new Response(null, { status: 204 })
+        : Response.json({ current: revision, history: [revision] }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateScreenerProviderSettings(actor, {
+      expectedRevision: 0,
+      settings,
+      reason: 'Seed provider routing.',
       confirmation: screenerProviderSettingsConfirmation(settings),
     })
 
-    expect(postedSettings(fetchMock, PROVIDER_SETTINGS_URL)).toEqual({
-      ...legacyProviders,
-      primary_node_id: 'subnet-screener-2',
-    })
-  })
-
-  it('sends every field when the live revision reports every field', async () => {
-    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
-    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) =>
-      init?.method === 'POST'
-        ? Response.json({ ...legacyRevision, revision: 8, parent_revision: 7 })
-        : Response.json(legacyReviewControl),
-    )
-    vi.stubGlobal('fetch', fetchMock)
-    const settings = (await fetchScreenerReviewControl()).current[0]!.settings
-    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) =>
-      init?.method === 'POST'
-        ? Response.json({ ...legacyRevision, revision: 8, parent_revision: 7 })
-        : Response.json({
-            ...legacyReviewControl,
-            current: [{ ...legacyRevision, settings }],
-          }),
-    )
-
-    await applyScreenerReviewSettings(actor, {
-      scope: '*',
-      expectedRevision: 7,
-      settings,
-      reason: 'Restate the current posture.',
-      confirmation: 'APPLY SCREENER REVIEW * SHADOW',
-    })
-
-    expect(postedSettings(fetchMock, REVIEW_SETTINGS_URL)).toEqual(settings)
+    expect(fetchMock.mock.calls[0]![0]).toBe(PROVIDER_SETTINGS_URL)
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).method).toBe('POST')
+    expect(postedSettings(fetchMock, PROVIDER_SETTINGS_URL)).toEqual(settings)
   })
 })

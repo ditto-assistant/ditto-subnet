@@ -14,6 +14,9 @@ type PlatformResponseShape<Response extends object> = {
 // so an omitted field is not "leave it alone": it is a write of the read-compat
 // default over the live value. Reads keep their defaults so Backroom still
 // renders against an older Platform; whole-policy writes drop every one.
+// Each read default must equal Platform's own default for the field, so that a
+// read written back states the policy Platform already resolves and an explicit
+// value is always sent (settings-round-trip.test.ts pins both).
 type WithoutDefault<Schema> = Schema extends z.ZodDefault<infer Inner> ? WithoutDefault<Inner> : Schema
 
 type WithoutDefaults<Shape extends z.ZodRawShape> = {
@@ -32,32 +35,6 @@ export function withoutDefaults<Shape extends z.ZodRawShape>(shape: Shape): With
   return Object.fromEntries(
     Object.entries(shape).map(([field, schema]) => [field, withoutDefault(schema)]),
   ) as WithoutDefaults<Shape>
-}
-
-/** The live revision's settings: as Platform sent them, and as Backroom parsed them. */
-export type LiveSettings = { reported: unknown; parsed: Record<string, unknown> }
-
-/**
- * A whole-policy write without the values Backroom's own read made up.
- *
- * A read fills each field the live revision did not report with a read-compat
- * default, so writing that read back would store a value nobody chose over
- * whatever Platform resolves for the field. Such a field stays off the wire
- * while it still holds the filled-in value, and Platform keeps resolving it as
- * before. A field the operator changed is sent.
- */
-export function withoutUnreportedDefaults<Settings extends Record<string, unknown>>(
-  settings: Settings,
-  live: LiveSettings | undefined,
-): Partial<Settings> {
-  const reported = live?.reported
-  if (!live || typeof reported !== 'object' || reported === null) return { ...settings }
-  return Object.fromEntries(
-    Object.entries(settings).filter(
-      ([field, value]) =>
-        field in reported || JSON.stringify(value) !== JSON.stringify(live.parsed[field]),
-    ),
-  ) as Partial<Settings>
 }
 
 type GeneratedDecisionLaneUsageWindow =
@@ -362,7 +339,7 @@ const screenerReviewSettingsBaseSchema = z.object({
   source_review_max_completion_tokens: z.number().int().min(2_000).max(32_000).default(8_000),
   source_review_reasoning_effort: z.enum(['low', 'medium', 'high']).default('high'),
   source_review_model: sourceReviewModelSchema.default('openai/gpt-5.6-luna'),
-  source_review_timeout_seconds: z.number().int().min(60).max(3_600).default(1_800),
+  source_review_timeout_seconds: z.number().int().min(60).max(3_600).default(3_600),
   concern_hold_count: z.number().int().min(1).max(16).default(3),
   clear_min_notes: z.number().int().min(1).max(32).default(3),
   adjudicator_mode: z.enum(['off', 'shadow', 'enforce']).default('off'),

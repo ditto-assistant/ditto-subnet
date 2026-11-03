@@ -2449,7 +2449,7 @@ describe('screener review settings schemas', () => {
     expect(parsed.source_review_max_read_bytes).toBe(8_000_000)
     expect(parsed.source_review_reasoning_effort).toBe('high')
     expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
-    expect(parsed.source_review_timeout_seconds).toBe(1_800)
+    expect(parsed.source_review_timeout_seconds).toBe(3_600)
     expect(parsed.adjudicator_max_steps).toBe(128)
     expect(parsed.adjudicator_max_completion_tokens).toBeNull()
   })
