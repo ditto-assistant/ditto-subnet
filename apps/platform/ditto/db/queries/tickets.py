@@ -1452,6 +1452,18 @@ async def issue_generator_round_ticket(
         )
         session.add(ticket)
     else:
+        if ticket.purpose == TicketPurpose.BENCHMARK_CANARY:
+            # A canary's attempt and failure evidence is not scoring history.
+            # Carried onto a round lease, it would turn the row into one with
+            # a spent scoring attempt that closes ``scored`` and fills a quorum
+            # slot, so drop it the way the scoring lanes do on reuse.
+            ticket.attempt_count = 0
+            ticket.manual_retry_grants = 0
+            ticket.failure_reason = None
+            ticket.failure_detail = None
+            ticket.failed_at = None
+            ticket.provider_outage_epoch = None
+            ticket.provider_outage_attempted_epoch = None
         ticket.status = TicketStatus.ISSUED
         ticket.purpose = TicketPurpose.GENERATOR_ROUND
         ticket.purpose_revision += 1

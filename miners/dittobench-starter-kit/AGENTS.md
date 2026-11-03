@@ -12,7 +12,7 @@ uv run ditto practice --run-size medium   # development
 uv run ditto practice --run-size full     # on-chain envelope; required before upload
 ```
 
-Those default to the live scoring bench (14, read from the public rollout
+Those default to the live scoring bench (15, read from the public rollout
 endpoint) with a validator-visible `tool_endpoint`.
 Hosted rehearsal and `evaluate` 1.0 scores do not predict leaderboard
 `tool_mean`. Do not skip `full`. Before `full`, packaging, or upload, `/mine`

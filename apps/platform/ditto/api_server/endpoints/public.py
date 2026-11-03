@@ -295,8 +295,10 @@ from ditto.api_server.koth import (
     bounded_efficiency_adjusted_quality,
     champion_defense,
     crown_standings,
+    dueling_seed_records,
     emission_allocation,
     koth_entries_from_ledger,
+    ledger_row_dueling_fields,
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
@@ -390,6 +392,7 @@ from ditto.db.queries.confirmation_scores import (
     WaveMembership,
     confirmation_composites_by_seed,
     confirmation_depths,
+    confirmation_history_by_agent,
 )
 from ditto.db.queries.desired_era_backlog import prev_generation_agent_ids
 from ditto.db.queries.emission_eligibility import (
@@ -407,6 +410,11 @@ from ditto.db.queries.heartbeats import (
     live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
+from ditto.db.queries.inference_observability import (
+    LeaseInferenceActivity,
+    LeaseSlotKey,
+    load_live_lease_inference_activity,
+)
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.ledger_epochs import latest_pin, list_pins
 from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
@@ -489,6 +497,7 @@ from ditto.score_order import score_order_key
 from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol import reason_codes
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+from ditto_screening_protocol.dueling import is_dueling_bench_version
 
 logger = logging.getLogger(__name__)
 
@@ -1338,6 +1347,7 @@ def _benchmark_stalled(
     now: datetime,
     *,
     completed: int | None = None,
+    inference_activity_at: datetime | None = None,
 ) -> bool:
     """Flag a run that has taken far longer than its own reported progress allows.
 
@@ -1367,7 +1377,21 @@ def _benchmark_stalled(
     ``heartbeat_stale`` by :func:`_fleet_classification`. Conflating the two is
     what makes an operator distrust the whole view, so they stay separate
     signals.
+
+    **Inference activity.** ``inference_activity_at`` is when the lease's own
+    hosted-inference grant last served a request. A harness calling the relay
+    is executing cases, whatever stage its heartbeat last signed, so a request
+    inside the startup grace window clears either rule above. Without it a
+    generator-round run from a validator that never forwarded scorer progress
+    sat at ``preparing`` for its whole panel run and read as stalled after 15
+    minutes, while it was answering cases. A grant that goes quiet for the same
+    window lets the clock rules decide again, so a genuine wedge still trips.
     """
+    if (
+        inference_activity_at is not None
+        and now - inference_activity_at < _BENCHMARK_STALL_AFTER
+    ):
+        return False
     if stage in _BENCHMARK_STALL_EARLY_STAGES:
         return now - started_at >= _BENCHMARK_STALL_AFTER
     if stage != "running_benchmark" or completed is None:
@@ -1417,8 +1441,16 @@ def _public_benchmark_progress(
     owner_root: str | None = None,
     handle_claims: dict[str, Any] | None = None,
     strike: bool = True,
+    inference_activity_at: datetime | None = None,
 ) -> PublicBenchmarkProgress:
-    """Project private signed counts onto the fixed public allowlist."""
+    """Project private signed counts onto the fixed public allowlist.
+
+    ``inference_activity_at`` feeds only the ``stalled`` judgement; the time
+    itself is never published. It defaults to the activity the work item
+    carries from :func:`list_active_validator_work`.
+    """
+    if inference_activity_at is None:
+        inference_activity_at = work.inference_activity_at
     progress = work.progress
     started_at = cast(datetime, _aware(work.ticket.issued_at))
     agent_name = (
@@ -1477,7 +1509,11 @@ def _public_benchmark_progress(
         total_checks=total_checks,
         percent=percent,
         stalled=_benchmark_stalled(
-            progress.stage, started_at, now, completed=progress.completed
+            progress.stage,
+            started_at,
+            now,
+            completed=progress.completed,
+            inference_activity_at=inference_activity_at,
         ),
         purpose=_ticket_purpose(work.ticket),
     )
@@ -2924,6 +2960,7 @@ def _public_koth_emissions(
     quorum_by_agent: dict[UUID, list[float]] | None = None,
     confirmation_by_seed: dict[UUID, dict[int, float]] | None = None,
     confirmation_depth: dict[UUID, int] | None = None,
+    dueling_history: Mapping[UUID, Sequence[Any]] | None = None,
     include_continual_scores: bool = True,
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     anchor_version: int | None = None,
@@ -2954,6 +2991,10 @@ def _public_koth_emissions(
     the next pin will. ``provisional_incumbent`` is that incumbent when only a
     withheld generation is left (protocol 28): it folds like any row and every
     slot it takes is published unpaid, as validators burn it.
+
+    ``dueling_history`` (bench v16+) is each agent's raw confirmation records
+    with their signed ``details.dueling``; the seeds this projection admits
+    pair-mask exactly as the pinned fold does.
     """
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
@@ -3031,6 +3072,15 @@ def _public_koth_emissions(
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
+                dueling_records=(
+                    None
+                    if v9_confirmed
+                    else dueling_seed_records(
+                        (dueling_history or {}).get(row.agent_id, ()),
+                        seeds=merged_confirmations.keys(),
+                    )
+                ),
             )
         )
 
@@ -3758,9 +3808,19 @@ async def build_public_leaderboard(
             agent_ids=finalized_ids,
             bench_version=active_version,
         )
+        dueling_history = (
+            await confirmation_history_by_agent(
+                session,
+                agent_ids=finalized_ids,
+                bench_version=active_version,
+            )
+            if is_dueling_bench_version(active_version)
+            else {}
+        )
     else:
         confirmation_by_seed = {}
         confirmation_depth = {}
+        dueling_history = {}
     _, completed_by_seed, completed_depth = completed_wave_data(
         finalized_rows,
         stderrs=fold_stderrs,
@@ -4490,6 +4550,7 @@ async def build_public_leaderboard(
                 confirmation_depth=(
                     confirmation_depth if continual_mean_active else {}
                 ),
+                dueling_history=dueling_history if continual_mean_active else {},
                 include_continual_scores=continual_mean_active,
                 wave_membership=continual_settings.wave_membership,
                 anchor_version=active_version,
@@ -5099,6 +5160,8 @@ def _validator_heartbeats_response(
     active_bench_version: int,
     slot_settings: ValidatorSlotSettings,
     round_reservation_active: bool = False,
+    lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
+    | None = None,
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
@@ -5248,26 +5311,46 @@ def _validator_heartbeats_response(
                 # lease with no issue time), still not on the assigned agent: a
                 # real job/assignment mismatch.
                 assignment_state = "assignment_mismatch"
+
+        def _fleet_progress(work: ActiveValidatorWork) -> PublicBenchmarkProgress:
+            # The lease's own grant activity, so a run whose harness is calling
+            # the relay is never published as a stalled benchmark.
+            activity = (
+                lease_inference_activity.get(
+                    (
+                        work.ticket.validator_hotkey,
+                        work.ticket.slot_id,
+                        work.agent.agent_id,
+                    )
+                )
+                if lease_inference_activity is not None
+                else None
+            )
+            return _public_benchmark_progress(
+                work,
+                now,
+                inference_activity_at=(
+                    activity.last_activity_at if activity is not None else None
+                ),
+            )
+
         active_benchmark = (
-            _public_benchmark_progress(synchronized_work, now)
+            _fleet_progress(synchronized_work)
             if synchronized_work is not None
             else None
         )
-        active_benchmarks = [
-            _public_benchmark_progress(work, now) for work in synchronized_works
-        ]
+        active_benchmarks = [_fleet_progress(work) for work in synchronized_works]
         active_benchmarks.sort(key=lambda progress: progress.slot_id)
         active_by_slot = {work.ticket.slot_id: work for work in synchronized_works}
         assigned_benchmarks = [
-            _public_benchmark_progress(
+            _fleet_progress(
                 active_by_slot.get(item.ticket.slot_id)
                 or ActiveValidatorWork(
                     heartbeat=row,
                     ticket=item.ticket,
                     agent=item.agent,
                     progress=None,
-                ),
-                now,
+                )
             )
             for item in validator_assignments
         ]
@@ -5429,15 +5512,32 @@ def _validator_heartbeats_response(
 
 
 async def load_validator_fleet(
-    session: AsyncSession, app_state: Any, *, now: datetime
+    session: AsyncSession,
+    app_state: Any,
+    *,
+    now: datetime,
+    lease_inference_activity: Mapping[LeaseSlotKey, LeaseInferenceActivity]
+    | None = None,
 ) -> PublicValidatorHeartbeatsResponse:
-    """Signed reports reconciled with the platform's current assignment truth."""
+    """Signed reports reconciled with the platform's current assignment truth.
+
+    ``lease_inference_activity`` lets a caller that already read the live
+    grants (the Backroom capacity view) share that read; otherwise it is loaded
+    here, so every fleet consumer judges ``stalled`` the same way.
+    """
+    if lease_inference_activity is None:
+        lease_inference_activity = await load_live_lease_inference_activity(
+            session, now=now
+        )
     assignments = await list_active_validator_assignments(session, now=now)
     return _validator_heartbeats_response(
         rows=await list_validator_heartbeats(session),
         assignments=assignments,
         active_work=await list_active_validator_work(
-            session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
+            session,
+            now=now,
+            cutoff=now - _VALIDATOR_ONLINE_WINDOW,
+            lease_inference_activity=lease_inference_activity,
         ),
         confirmation_work=await list_active_confirmation_work(session, now=now),
         orphaned_leases=await list_orphaned_leases(
@@ -5447,6 +5547,7 @@ async def load_validator_fleet(
         active_bench_version=await active_bench_version(session),
         slot_settings=await resolve_slot_settings(app_state),
         round_reservation_active=await round_reservation_active(app_state, session),
+        lease_inference_activity=lease_inference_activity,
     )
 
 

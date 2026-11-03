@@ -50,11 +50,16 @@ const settings = {
   lease_ttl_seconds: 7200, max_attempts: 6, retry_backoff_seconds: 3600,
   epochs_per_round: 4, counted_columns: 5, challenger_columns: 1, reference_agent_ids: [],
   privacy_window_rounds: 6, onchain_commitment: true, validator_rounds_enabled: false, min_round_validators: 3,
-  upload_fee_required: false,
+  upload_fee_required: false, dueling_enabled: false, rounds_per_season: 1,
+  dueling_shadow_bench_version: null,
 }
 // What a Platform that predates the generator upload fee (and the round
-// switch quorum) returns.
-const { upload_fee_required: _absent, min_round_validators: _noQuorum, ...olderSettings } = settings
+// switch quorum, and dueling seasons) returns.
+const {
+  upload_fee_required: _absent, min_round_validators: _noQuorum,
+  dueling_enabled: _noDueling, rounds_per_season: _noSeasons,
+  dueling_shadow_bench_version: _noShadow, ...olderSettings
+} = settings
 const runSummary = {
   run_id: RUN, attempt: 1, status: 'qualified', outcome: 'qualified', score: null,
   case_counts: null,
@@ -112,11 +117,18 @@ describe('generator competition MCP tools', () => {
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
     try {
       const control = json(await client.callTool({ name: 'get_generator_competition_settings', arguments: {} })) as {
-        effective: { settings: { mode: string, upload_fee_required: boolean, min_round_validators: number } }
+        effective: {
+          settings: {
+            mode: string, upload_fee_required: boolean, min_round_validators: number,
+            dueling_enabled: boolean, rounds_per_season: number,
+          }
+        }
       }
       expect(control.effective.settings.mode).toBe('off')
       expect(control.effective.settings.upload_fee_required).toBe(false)
       expect(control.effective.settings.min_round_validators).toBe(3)
+      expect(control.effective.settings.dueling_enabled).toBe(false)
+      expect(control.effective.settings.rounds_per_season).toBe(1)
       const listing = json(await client.callTool({ name: 'list_generator_submissions', arguments: { status: 'active' } }))
       expect(JSON.stringify(listing)).not.toContain('must-not-pass')
       expect(json(await client.callTool({ name: 'get_generator_submission', arguments: { submissionId: SUBMISSION } })))
@@ -221,6 +233,20 @@ describe('generator competition MCP tools', () => {
         arguments: { expectedRevision: 1, settings: olderSettings, reason: 'open shadow lane', confirmation: 'APPLY GENERATOR COMPETITION SHADOW' },
       })
       expect(partial.isError).toBe(true)
+      expect(fetchMock).not.toHaveBeenCalled()
+
+      // A dueling season spans at least two epochs.
+      const shortSeason = await client.callTool({
+        name: 'set_generator_competition_settings',
+        arguments: {
+          expectedRevision: 1,
+          settings: { ...settings, epochs_per_round: 1, dueling_enabled: true },
+          reason: 'turn dueling seasons on',
+          confirmation: 'APPLY GENERATOR COMPETITION SHADOW',
+        },
+      })
+      expect(shortSeason.isError).toBe(true)
+      expect(JSON.stringify(shortSeason.content)).toContain('at least 2 epochs')
       expect(fetchMock).not.toHaveBeenCalled()
 
       const applied = json(await client.callTool({

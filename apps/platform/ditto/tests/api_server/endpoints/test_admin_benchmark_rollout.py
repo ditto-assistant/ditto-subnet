@@ -649,6 +649,41 @@ async def test_v15_start_blocker_clears_once_the_decision_lane_pins_a_model(
     ]
 
 
+async def test_v16_start_is_blocked_while_source_disclosure_is_never(
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With dueling on, a ``disclosure = never`` source release policy still
+    keeps every season closed, so a v16 start stays blocked; the guard holds on
+    a direct call with no inference proxy config too."""
+    from types import SimpleNamespace
+
+    from ditto.api_models.generator import GeneratorCompetitionSettings
+    from ditto.api_models.source_disclosure import SourceDisclosure
+    from ditto.api_server.endpoints import admin_benchmark_rollout
+    from ditto.db.queries.generator import insert_generator_settings_revision
+
+    async with session_maker() as session, session.begin():
+        settings = GeneratorCompetitionSettings(mode="enforce", dueling_enabled=True)
+        await insert_generator_settings_revision(
+            session,
+            parent_revision=0,
+            settings=settings.model_dump(mode="json"),
+            checksum="e" * 64,
+            reason="dueling on",
+            actor="backroom:test",
+        )
+
+    async def _never(_session: AsyncSession) -> SimpleNamespace:
+        return SimpleNamespace(disclosure=SourceDisclosure.NEVER)
+
+    monkeypatch.setattr(admin_benchmark_rollout, "artifact_release_policy", _never)
+    async with session_maker() as session:
+        blocker = await admin_benchmark_rollout._dueling_start_blocker(session, 16)
+        assert blocker is not None and "disclosure = never" in blocker
+        assert await admin_benchmark_rollout._dueling_start_blocker(session, 15) is None
+
+
 async def test_control_degrades_the_slow_section_instead_of_hanging(
     app: FastAPI,
     client: httpx.AsyncClient,

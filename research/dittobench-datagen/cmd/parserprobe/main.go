@@ -72,8 +72,13 @@ func main() {
 				fmt.Fprintf(os.Stderr, "parserprobe: parse %s: %v\n", path, err)
 				os.Exit(2)
 			}
-			if !protocol.SupportedBenchVersion(a.BenchVersion) {
+			if !protocol.GeneratableBenchVersion(a.BenchVersion) {
 				fmt.Fprintf(os.Stderr, "parserprobe: %s carries unsupported bench_version %d\n", path, a.BenchVersion)
+				os.Exit(2)
+			}
+			if protocol.StagedBenchVersion(a.BenchVersion) && a.SurfaceSalt != 0 {
+				// The private-artifact decoder serves supported contracts only.
+				fmt.Fprintf(os.Stderr, "parserprobe: %s is a salted artifact of staged bench_version %d; only public (salt 0) staged artifacts are probed\n", path, a.BenchVersion)
 				os.Exit(2)
 			}
 			if a.SurfaceSalt != 0 {
@@ -90,7 +95,7 @@ func main() {
 			opts.Artifacts = append(opts.Artifacts, a)
 			opts.BenchVersion = a.BenchVersion
 		}
-	} else if !protocol.SupportedBenchVersion(*version) {
+	} else if !protocol.GeneratableBenchVersion(*version) {
 		fmt.Fprintf(os.Stderr, "parserprobe: unsupported bench_version %d\n", *version)
 		os.Exit(2)
 	}

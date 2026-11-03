@@ -15,7 +15,7 @@ import posixpath
 import re
 import tarfile
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -93,7 +93,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v40-policy-v13"
+        return "source-review-v41-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -130,11 +130,28 @@ _COVERAGE_COMPLETE_NUDGE = (
 )
 
 
+def _is_allowed(value: object, allowed: Container[str]) -> bool:
+    """Whether an untrusted reviewer value is one of ``allowed``.
+
+    Reviewer tool schemas are not strict, so a model can answer with a list or
+    a dict where the contract names a string. ``value in allowed`` raises
+    ``TypeError: unhashable type`` on those, and the review paths catch
+    ``ValueError``, so the exception escaped to the gate and parked an
+    ordinary contract miss as ``unexpected-infrastructure``, losing the notes
+    and the finding (ditto-subnet#2987). A non-string is never a member.
+    """
+    return isinstance(value, str) and value in allowed
+
+
 def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] | None:
     """Validate one reviewer note host-side; None when unusable."""
     kind = arguments.get("kind")
     summary = arguments.get("summary")
-    if kind not in _NOTE_KINDS or not isinstance(summary, str) or not summary.strip():
+    if (
+        not _is_allowed(kind, _NOTE_KINDS)
+        or not isinstance(summary, str)
+        or not summary.strip()
+    ):
         return None
     category = arguments.get("category")
     note: dict[str, object] = {
@@ -2142,7 +2159,12 @@ negation scope, setting-and-remember requests, duplicate calls followed by
 unfinished work, and identifiers available only through a supplied tool. A
 genuine authoritative model planner may produce an exact pinned plan; an
 advisory planner must remain rejectable and every valid deviation executable.
-Neither architecture bypasses authorization or safety.
+Neither architecture bypasses authorization or safety. Hiding connector-gated
+or app-specific tools on the published connector marker or the request's
+app-name wording is W4 availability narrowing, not incorrect removal, even when
+it hides a tool the case needed; apply the I7 connector and app-wording safe
+harbor below and charge only fake execution of a hidden tool, a claim that a
+removed needed tool ran, or forcing.
 
 On a scored v13 `/run`, the validator supplies `inference_base_url` as a
 case-scoped broker URL. A harness may build a per-request model client from it
@@ -3992,7 +4014,16 @@ class OpenRouterSourceReviewAgent:
                     observation.risk_level != "low" or clearance_certified
                 ),
             )
-        except (OSError, ValueError, tarfile.TarError, httpx.HTTPError) as error:
+        # TypeError joins the contract misses: an untrusted submission is
+        # shaped by the model, and a wrong JSON type there is a bad answer,
+        # not broken infrastructure (ditto-subnet#2987).
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            httpx.HTTPError,
+        ) as error:
             code = (
                 error.code
                 if isinstance(error, SourceReviewBudgetExhausted)
@@ -4778,14 +4809,14 @@ def _parse_review(
     invariants = value["invariants"]
     summary = value["summary"]
     if (
-        risk not in {"low", "medium", "high"}
+        not _is_allowed(risk, {"low", "medium", "high"})
         or not isinstance(confidence, (int, float))
         or isinstance(confidence, bool)
         or not 0 <= float(confidence) <= 1
         or not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
         or any(
-            item not in source_review_categories_for_policy(policy_version)
+            not _is_allowed(item, source_review_categories_for_policy(policy_version))
             for item in categories
         )
         or not isinstance(evidence, list)
@@ -4805,7 +4836,9 @@ def _parse_review(
             or not isinstance(line, int)
             or isinstance(line, bool)
             or line < 1
-            or category not in source_review_categories_for_policy(policy_version)
+            or not _is_allowed(
+                category, source_review_categories_for_policy(policy_version)
+            )
         ):
             raise ValueError("source review evidence fields are invalid")
         normalized_evidence.append({"path": path, "line": line, "category": category})

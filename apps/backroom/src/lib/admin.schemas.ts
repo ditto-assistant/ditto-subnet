@@ -276,6 +276,7 @@ export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inh
 export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-terra',
   'openai/gpt-6-sol',
+  'openai/gpt-6.1-terra',
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',
@@ -304,8 +305,8 @@ export const screenerReviewSettingsSchema = z
     l2_model: screenerReviewModelSchema,
     l2_fallback_models: z.array(screenerReviewModelSchema).max(2),
     l3_enabled: z.boolean().default(true),
-    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol']),
-    timeout_seconds: z.number().int().min(30).max(1_800),
+    l3_model: z.enum(['openai/gpt-5.6-sol', 'openai/gpt-6-sol', 'openai/gpt-6.1-terra']),
+    timeout_seconds: z.number().int().min(30).max(3_600),
     max_steps: z.number().int().min(1).max(256),
     source_review_max_steps: z.number().int().min(1).max(240).default(200),
     source_review_max_read_bytes: z.number().int().min(32_000).max(16_000_000).default(8_000_000),
@@ -1152,6 +1153,8 @@ export const screeningInfraRetryViewSchema = z.object({
     jitter_fraction: z.number().nonnegative(),
     auto_retry_max_age_seconds: nonNegativeInt,
     auto_retry_max_streak: nonNegativeInt,
+    // Per-code automatic retry bound (l2-late-result: 1); absent on older Platform.
+    auto_retry_max_retries_by_code: z.record(z.string(), nonNegativeInt).default({}),
     plan_max_claimable: nonNegativeInt,
     breaker_distinct_agents: nonNegativeInt,
     breaker_window_seconds: nonNegativeInt,
@@ -5451,6 +5454,17 @@ export const validatorFleetObservabilityMemberSchema = z
             software_version: z.string().nullish().catch(null),
             source_revision: z.string().nullish().catch(null),
             supported_bench_versions: z.array(z.number().int()).catch([]),
+            // Bench versions the scorer runs generator rounds at, and runs with
+            // a dueling-slice-v1 generator slice (bench 16+). Platform leases a
+            // v16+ ticket only to a validator forwarding the version here.
+            generator_round_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
+            dueling_slice_bench_versions: z
+              .array(z.number().int())
+              .nullish()
+              .catch(null),
           })
           .nullish()
           .catch(null),
@@ -9311,11 +9325,15 @@ export const publicDethroneDecisionSchema = z.object({
 })
 
 export const publicEmissionRecipientSchema = z.object({
-  role: z.enum(['champion', 'tail']),
+  // A score-ceiling pool crowns its tied cohort as joint champions.
+  role: z.enum(['champion', 'joint_champion', 'tail']),
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
   raw_rank: z.number().int().positive(),
   share_of_miner_pool: z.number().positive().max(1),
+  // False only for a provisional incumbent whose share validators burn;
+  // Platform omits it when true.
+  paid: z.boolean().default(true),
   // Confirmation-seed depth: distinct champion-anchored CRN seeds this top-5
   // agent has been re-scored on by the continual rescore lane.
   shared_seed_confirmations: z.number().int().nonnegative().default(0),
@@ -9367,6 +9385,10 @@ export const publicKothEmissionsSchema = z.object({
   champion_share: z.number().positive().max(1),
   rank_shares: z.array(z.number().positive().max(1)),
   tail_size: z.number().int().nonnegative(),
+  // `score_ceiling_pool` splits the crown's share equally across a cohort
+  // no submission can separate within the score domain.
+  allocation_mode: z.enum(['ranked', 'score_ceiling_pool']).default('ranked'),
+  score_ceiling_pool_size: z.number().int().nonnegative().default(0),
   champion_agent_id: z.string().uuid(),
   champion_miner_hotkey: z.string(),
   raw_leader_agent_id: z.string().uuid(),
@@ -10365,6 +10387,13 @@ const validatorCapacityAssignmentSchema = z.object({
   stalled: z.boolean(),
   checks_per_minute: z.number().nonnegative().nullable(),
   estimated_remaining_slot_minutes: z.number().nonnegative().nullable(),
+  // The lease's own hosted-inference grant: the evidence that a run whose
+  // heartbeat still says `preparing` is executing cases rather than wedged.
+  // Defaulted so a Backroom deployed ahead of Platform still reads capacity.
+  inference_chat_requests: z.number().int().nonnegative().nullable().default(null),
+  inference_embedding_requests: z.number().int().nonnegative().nullable().default(null),
+  inference_last_activity_at: z.string().nullable().default(null),
+  inference_idle_seconds: z.number().int().nonnegative().nullable().default(null),
 } satisfies PlatformResponseShape<GeneratedValidatorCapacityAssignment>)
 
 export const validatorCapacityEntrySchema = z.object({

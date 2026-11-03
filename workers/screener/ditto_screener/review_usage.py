@@ -99,10 +99,13 @@ class ReviewUsageCollector:
         totals.reasoning_tokens += max(0, int(reasoning_tokens))
         if math.isfinite(estimated_cost_usd) and estimated_cost_usd > 0:
             totals.estimated_cost_usd += estimated_cost_usd
+        # A gateway zero for a request that spent tokens is not a cost
+        # (SN-424); counting it as reported would hide the stage's estimate.
+        spent = input_tokens > 0 or output_tokens > 0
         if (
             reported_cost_usd is not None
             and math.isfinite(reported_cost_usd)
-            and reported_cost_usd >= 0
+            and (reported_cost_usd > 0 or (reported_cost_usd == 0 and not spent))
         ):
             totals.reported_cost_usd += reported_cost_usd
             totals.reported_requests += 1

@@ -31,6 +31,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ditto-assistant/dittobench-api/internal/challengerun"
 	"github.com/ditto-assistant/dittobench-api/internal/codinghost"
 	"github.com/ditto-assistant/dittobench-api/internal/efficiency"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
@@ -184,7 +185,11 @@ type server struct {
 	// trusted screened-image mode every validator stack sets, not the
 	// private V13 transport: a round run is a screened-image run whose
 	// tickets only Platform issues, and only while validator rounds are on.
-	allowGeneratorRounds   bool
+	allowGeneratorRounds bool
+	// allowDuelingSlices admits dueling-slice-v1 on canonical bench >= 16
+	// runs. Like rounds it follows trusted screened-image mode: slices are
+	// issued only by Platform on a leased ticket.
+	allowDuelingSlices     bool
 	requireTicketInference bool
 	softwareVersion        string
 	sourceRevision         string
@@ -293,6 +298,7 @@ func main() {
 		allowScreenedImages:    allowScreenedImages,
 		allowPrivateDatasets:   envBool("DITTOBENCH_ALLOW_PRIVATE_DATASETS"),
 		allowGeneratorRounds:   allowScreenedImages,
+		allowDuelingSlices:     allowScreenedImages,
 		requireTicketInference: requireTicketInference,
 		softwareVersion:        identity.SoftwareVersion,
 		sourceRevision:         identity.SourceRevision,
@@ -447,6 +453,7 @@ type capabilitiesResponse struct {
 	ScoredRuntimeEnv    *scoredRuntimeEnvEvidence `json:"scored_runtime_env,omitempty"`
 	V14ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v14_scored_runtime_env,omitempty"`
 	V15ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v15_scored_runtime_env,omitempty"`
+	V16ScoredRuntimeEnv *scoredRuntimeEnvEvidence `json:"v16_scored_runtime_env,omitempty"`
 }
 
 type scoredRuntimeEnvEvidence struct {
@@ -565,6 +572,7 @@ func (s *server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		ScoredRuntimeEnv:       s.scoredRuntimeEnvEvidence(),
 		V14ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV14),
 		V15ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV15),
+		V16ScoredRuntimeEnv:    s.scoredRuntimeEnvEvidenceForVersion(protocol.BenchVersionV16),
 	})
 }
 
@@ -761,6 +769,17 @@ type submitRequest struct {
 	// they are never copied into harness requests, public artifacts, or logs.
 	PrivateDatasetMode  string `json:"private_dataset_mode,omitempty"`
 	PrivateDatasetBytes []byte `json:"private_dataset_bytes,omitempty"`
+	// Bench >= 16 (dueling) generator slice, dueling-slice-v1. A canonical run
+	// at a dueling version must carry all four; any other request must carry
+	// none (validateDuelingSliceRequest). The bytes are base64 on this trusted
+	// control-plane wire and, like private datasets, never reach the harness,
+	// public artifacts or logs. DuelingOwnerKey is the scored agent's owner:
+	// its own columns are masked out of the reported composite ("" masks
+	// nothing), so it is a pointer to tell an empty owner from a missing one.
+	DuelingSliceMode    string  `json:"dueling_slice_mode,omitempty"`
+	DuelingSliceBytes   []byte  `json:"dueling_slice_bytes,omitempty"`
+	ExpectedSliceSHA256 string  `json:"expected_slice_sha256,omitempty"`
+	DuelingOwnerKey     *string `json:"dueling_owner_key,omitempty"`
 	// InferenceSessionID selects a trusted, memory-only platform capability
 	// prepared by the validator. It is an opaque broker routing id, not a bearer.
 	InferenceSessionID string `json:"inference_session_id,omitempty"`
@@ -1075,6 +1094,10 @@ func (s *server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "private datasets are not accepted on practice")
 		return
 	}
+	if hasDuelingSliceFields(req) {
+		writeError(w, http.StatusBadRequest, "dueling slices are not accepted on practice")
+		return
+	}
 	if msg != "" {
 		writeError(w, http.StatusBadRequest, msg)
 		return
@@ -1185,6 +1208,10 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 	}
 	req.BenchVersion = version
 	if err := validatePrivateDatasetRequest(req, s.allowPrivateDatasets, s.allowGeneratorRounds); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := validateDuelingSliceRequest(req, s.allowDuelingSlices); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1519,6 +1546,23 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		privateArtifact = &loaded
 	}
+	// Bench >= 16: the generator slice is verified before anything is built,
+	// exactly like a private artifact. /v2/score already refused a dueling
+	// request without one; refuse again here so no other entry point can score
+	// a canonical v16 run on its datagen half alone.
+	var slice *duelingSlice
+	if hasDuelingSliceFields(req) {
+		loaded, err := decodeDuelingSlice(req, seed)
+		if err != nil {
+			s.store.Fail(runID, "dueling slice integrity verification failed")
+			log.Printf("run %s: dueling slice refused: %v", runID, err)
+			return
+		}
+		slice = loaded
+	} else if scope == scorer.ScopeScored && requiresDuelingSlice(req) {
+		s.store.Fail(runID, "dueling slice required")
+		return
+	}
 
 	// 1. building — build the crate in the Docker sandbox. Skipped on the local
 	//    harness_url path (the miner is already running their harness).
@@ -1586,6 +1630,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		runID, len(toolCases), len(memSuite.Cases), totalPairs, totalSubjects, memSuite.SeedingWaves, memSuite.TierBCases,
 		para.Attempted, para.Applied, para.Retried, para.Fallback)
 	total = prof.Tools + len(memSuite.Cases) // actual case count for progress
+	if slice != nil {
+		total += len(slice.cases)
+	}
 
 	// Dataset hashing + optional artifact persistence:
 	// hash the fully-rendered dataset so a dispute can be pinned to exact bytes;
@@ -2330,6 +2377,46 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		return
 	}
+	// Bench >= 16: the generator slice runs after every datagen wave, on the
+	// same harness, ticket inference session, tool catalog and observed tool
+	// endpoint. Everything the datagen half's gates, efficiency and shadow
+	// telemetry read from the session is captured first, at the boundary, so
+	// slice cases never reach them.
+	var sessionTotals datagenSessionTotals
+	var datagenRelay *relayDatagenInterval
+	var sliceResult duelingSliceResult
+	if slice != nil {
+		if scope == scorer.ScopeScored {
+			usage, execution, _, ok := s.relayRunInterval(ctx, runID, relayStart, harnessGateway(inferenceSessionID), inferenceSessionID)
+			if !ok {
+				return
+			}
+			datagenRelay = &relayDatagenInterval{usage: usage, execution: execution}
+		}
+		sessionTotals = s.captureDatagenSessionTotals(req.BenchVersion, inferenceSessionID)
+		datagenCases := len(perCase)
+		s.store.SetStage(runID, store.StatusRunning, datagenCases, total)
+		var sliceErr error
+		sliceResult, sliceErr = executeDuelingSlice(ctx, slice, duelingSliceEnv{
+			harnessURL: harnessURL, benchVersion: req.BenchVersion, seed: seed,
+			tools: tools, toolSrv: toolSrv, toolEndpoint: toolEndpoint,
+			gateway: harnessInferenceGateway, concurrency: effectiveCaseConcurrency,
+			progress: func(done int) { s.store.SetStage(runID, store.StatusRunning, datagenCases+done, total) },
+		})
+		if sliceErr != nil {
+			switch {
+			case errors.Is(sliceErr, challengerun.ErrHarnessUnavailable):
+				s.failV7Seeding(runID, "seeding dueling slice failed: ", sliceErr)
+			case ctx.Err() != nil:
+				// Cancellation: the cancel handler already failed the run.
+			default:
+				s.store.Fail(runID, "dueling slice execution failed")
+				log.Printf("run %s: dueling slice execution failed: %v", runID, sliceErr)
+			}
+			return
+		}
+	}
+
 	// Close broker access before scoring/accounting. The once-guarded deferred
 	// cleanup still handles every early return, cancel, and panic above.
 	//
@@ -2371,6 +2458,15 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			s.failRelayUnavailableWithAdmission(runID, err, relayExecution.Admission)
 			return
 		}
+		// The whole-run interval decided relay health and complete accounting
+		// above. A dueling run's accounting record, transcript relay summary
+		// and signed model-use evidence describe the datagen half only.
+		if datagenRelay != nil {
+			tokenUsage = datagenRelay.usage
+			relayExecution = datagenRelay.execution
+			relayExecution.RouteProbeAttempts = routeProbeAttempts
+			relayExecution.RouteProbeRouted = routeProbeRouted
+		}
 	}
 
 	// 6. scoring — aggregate + finish. Protocol reachability probes are
@@ -2392,23 +2488,38 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	report := scorer.AggregateForVersion(runID, perCase, req.BenchVersion)
 	report.Seed = seed
 	report.StructuralFingerprint = structuralFP
+	// Bench >= 16: the composite is the self-masked dueling composite of the
+	// datagen half and the slice's column means. The composite gate (and, in
+	// applyV9BaseEvidence, the v9 score gates) multiply it, and every gate
+	// input stays a datagen case. Slice rows join per_case only after
+	// aggregation, score-only, so no mean, category or gate reads them.
+	var datagenHalf scorer.DatagenHalf
+	if slice != nil {
+		datagenHalf = scorer.DatagenHalfForVersion(perCase, req.BenchVersion)
+		composite, stderr, err := duelingOrdinaryScore(datagenHalf, sliceResult.columns, slice.ownerKey)
+		if err != nil {
+			// CheckDuelingColumns names only column ids and statistics, never
+			// case text, so the cause is safe to persist.
+			s.store.Fail(runID, "dueling slice aggregates are invalid: "+err.Error())
+			return
+		}
+		report.Composite = composite
+		report.CompositeStderr = stderr
+		rows := make([]protocol.CaseScore, 0, len(report.PerCase)+len(sliceResult.rows))
+		rows = append(append(rows, report.PerCase...), sliceResult.rows...)
+		report.PerCase = rows
+		report.N = len(rows)
+	}
 	injections := injectionAttemptCount(perCase)
 	// Session-scoped tool provenance cannot attribute an unexecuted model
 	// emission to one case; the run summary carries the session-wide totals.
-	var toolProvenanceTotals *sessionToolProvenanceTotals
-	if req.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {
-		if totals, ok := s.broker.sessionToolProvenanceTotals(inferenceSessionID); ok {
-			toolProvenanceTotals = &totals
-		}
-	}
-	// Bench v13 catalog capture run totals (completions attributed / not) for
-	// the catalog_gate summary and its published catalog_suppression_rate.
-	var catalogTotals *sessionCatalogTotals
-	if req.BenchVersion >= scorer.CatalogGateBenchVersion && inferenceSessionID != "" && s.broker != nil {
-		if totals, ok := s.broker.sessionCatalogTotals(inferenceSessionID); ok {
-			catalogTotals = &totals
-		}
-	}
+	// Bench v13 catalog capture run totals (completions attributed / not) feed
+	// the catalog_gate summary and its published catalog_suppression_rate. A
+	// dueling run captured both at the datagen/slice boundary and never
+	// re-reads them here: totals the boundary could not read stay unavailable
+	// rather than picking up slice completions.
+	sessionTotals = s.datagenSessionTotalsAtScoring(slice != nil, sessionTotals, req.BenchVersion, inferenceSessionID)
+	toolProvenanceTotals, catalogTotals := sessionTotals.toolProvenance, sessionTotals.catalog
 	catalogGateSummary := summarizeV13CatalogGate(req.BenchVersion, v13CatalogGatePosture, perCase, catalogTotals)
 	logV13CatalogCoverageGap(runID, catalogGateSummary)
 	report.Details = &protocol.RunDetails{
@@ -2473,7 +2584,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// inference cost summary. Both are nil before v13, so earlier details keep
 	// their exact shape.
 	report.Details.TwinPostPass = twinSummary
-	report.Details.InferenceCost = s.summarizeV13InferenceCost(req.BenchVersion, inferenceSessionID, perCase)
+	report.Details.InferenceCost = summarizeV13InferenceCostFrom(req.BenchVersion, perCase, sessionTotals.unattributedCost)
 	report = applyTokenContract(report, req.BenchVersion, req.RunSize, tokenUsage)
 	if injections > 0 {
 		log.Printf("run %s: %d injection-compliance case(s) flagged", runID, injections)
@@ -2540,6 +2651,11 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// alive. Shadow-only: weight_eligible=false, folded combined_score=0, 0 bps.
 	s.dispatchRouterShadow(ctx, harnessURL, req, runStart)
 
+	if slice != nil {
+		report.Details.Dueling = duelingReportDetails(slice, datagenHalf, report.Details.TokenEfficiency, report.Details.V9Base, sliceResult.columns)
+		log.Printf("run %s: dueling slice %s season=%s cases=%d datagen_raw=%.4f datagen_gate=%.4f",
+			runID, slice.sha256, slice.dataset.SeasonID, len(sliceResult.rows), datagenHalf.Raw, report.Details.Dueling.DatagenGate)
+	}
 	s.store.Finish(runID, report)
 	log.Printf("run %s done: bench_version=%d composite=%.3f tool_mean=%.3f memory_mean=%.3f observed=%d capped=%d",
 		runID, req.BenchVersion, report.Composite, report.ToolMean, report.MemoryMean, observedTool, cappedTool)

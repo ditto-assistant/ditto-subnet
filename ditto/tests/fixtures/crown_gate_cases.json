@@ -1,5 +1,5 @@
 {
-  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen.",
+  "_comment": "Protocol-34 crown gate cases folded by BOTH the validator (ditto/tests/validator/test_crown_gate.py) and the Platform projection (apps/platform/ditto/tests/api_server/test_crown_gate.py). One fixture, two folds: a drift between them crowns a different King on the board than the fleet pays. Seeds map to per-seed confirmation composites; minutes offset first_seen. Cases with bench_version 16 build dueling rows: each entry's report (and each seed's) has n=35 cases per slice column, sum = mean x 35, sum_sq = mean^2 x 35, datagen_gate 1, the case's slice_owners per column c0..c4, and the entry's owner_key; composites are the self-masked report composites. A null season_id/dueling is a v16 row without its season or aggregates. 'tail', when present, is the ungated fold's paid tail in order.",
   "cases": [
     {
       "name": "unretested newcomer cannot take the crown",
@@ -67,6 +67,161 @@
       "gate": {"min_shared_seeds": 3, "standing_rank": 3},
       "ungated_champion": "leader",
       "gated_champion": "leader"
+    },
+    {
+      "name": "v16: the pair mask, not the self mask or no mask, lets a challenger past the king",
+      "bench_version": 16,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.8, "means": [0.95, 0.5, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.8, "means": [0.95, 0.5, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.81, "means": [0.95, 0.5, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.79, "means": [0.95, 0.5, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.805, "means": [0.95, 0.5, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.8, "means": [0.95, 0.5, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.802, "means": [0.95, 0.5, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.84, "means": [0.2, 0.6, 0.72, 0.72, 0.72]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.84, "means": [0.2, 0.6, 0.72, 0.72, 0.72]},
+           "2": {"datagen_raw": 0.85, "means": [0.2, 0.6, 0.72, 0.72, 0.72]},
+           "3": {"datagen_raw": 0.83, "means": [0.2, 0.6, 0.72, 0.72, 0.72]},
+           "4": {"datagen_raw": 0.845, "means": [0.2, 0.6, 0.72, 0.72, 0.72]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "challenger",
+      "gated_champion": "challenger"
+    },
+    {
+      "name": "v16: a challenger from another season never takes the crown",
+      "bench_version": 16,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.6, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.6, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.61, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.59, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.605, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.6, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.602, "means": [0.2, 0.6, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0002",
+         "dueling": {"datagen_raw": 0.95, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.95, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "2": {"datagen_raw": 0.96, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "3": {"datagen_raw": 0.94, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "4": {"datagen_raw": 0.955, "means": [0.9, 0.9, 0.9, 0.9, 0.9]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "king",
+      "gated_champion": "king"
+    },
+    {
+      "name": "v16: a row without its season or aggregates never ranks or pays",
+      "bench_version": 16,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.6, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.6, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.61, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.59, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.605, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "5": {"datagen_raw": 0.6, "means": [0.2, 0.6, 0.7, 0.7, 0.7]},
+           "6": {"datagen_raw": 0.602, "means": [0.2, 0.6, 0.7, 0.7, 0.7]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": null,
+         "dueling": null,
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.95, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "2": {"datagen_raw": 0.96, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "3": {"datagen_raw": 0.94, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "4": {"datagen_raw": 0.955, "means": [0.9, 0.9, 0.9, 0.9, 0.9]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "king",
+      "gated_champion": "king",
+      "tail": []
+    },
+    {
+      "name": "v16: a self-masked lead the pair mask erases keeps the king",
+      "bench_version": 16,
+      "slice_owners": ["coldkey:king", "coldkey:challenger", "coldkey:x", "coldkey:y", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.82, "means": [0.9, 0.2, 0.75, 0.75, 0.75]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.82, "means": [0.9, 0.2, 0.75, 0.75, 0.75]},
+           "2": {"datagen_raw": 0.83, "means": [0.9, 0.2, 0.75, 0.75, 0.75]},
+           "3": {"datagen_raw": 0.81, "means": [0.9, 0.2, 0.75, 0.75, 0.75]},
+           "4": {"datagen_raw": 0.825, "means": [0.9, 0.2, 0.75, 0.75, 0.75]},
+           "5": {"datagen_raw": 0.82, "means": [0.9, 0.2, 0.75, 0.75, 0.75]},
+           "6": {"datagen_raw": 0.822, "means": [0.9, 0.2, 0.75, 0.75, 0.75]}
+         }},
+        {"name": "challenger", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:challenger", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.8, "means": [0.6, 0.9, 0.7, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.8, "means": [0.6, 0.9, 0.7, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.81, "means": [0.6, 0.9, 0.7, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.79, "means": [0.6, 0.9, 0.7, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.805, "means": [0.6, 0.9, 0.7, 0.7, 0.7]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "king",
+      "gated_champion": "king"
+    },
+    {
+      "name": "v16: the paid tail is ordered by the pair-masked comparison between neighbours",
+      "bench_version": 16,
+      "slice_owners": ["coldkey:king", "coldkey:x", "coldkey:y", "coldkey:z", ""],
+      "entries": [
+        {"name": "king", "stderr": 0.01, "minutes": 0, "owner_key": "coldkey:king", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.95, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.95, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "2": {"datagen_raw": 0.96, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "3": {"datagen_raw": 0.94, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "4": {"datagen_raw": 0.955, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "5": {"datagen_raw": 0.95, "means": [0.9, 0.9, 0.9, 0.9, 0.9]},
+           "6": {"datagen_raw": 0.952, "means": [0.9, 0.9, 0.9, 0.9, 0.9]}
+         }},
+        {"name": "x", "stderr": 0.01, "minutes": 300, "owner_key": "coldkey:x", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.8, "means": [0.7, 0.95, 0.3, 0.7, 0.7]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.8, "means": [0.7, 0.95, 0.3, 0.7, 0.7]},
+           "2": {"datagen_raw": 0.81, "means": [0.7, 0.95, 0.3, 0.7, 0.7]},
+           "3": {"datagen_raw": 0.79, "means": [0.7, 0.95, 0.3, 0.7, 0.7]},
+           "4": {"datagen_raw": 0.805, "means": [0.7, 0.95, 0.3, 0.7, 0.7]}
+         }},
+        {"name": "y", "stderr": 0.01, "minutes": 600, "owner_key": "coldkey:y", "season_id": "s16-0001",
+         "dueling": {"datagen_raw": 0.84, "means": [0.75, 0.2, 0.6, 0.6, 0.6]},
+         "dueling_seeds": {
+           "1": {"datagen_raw": 0.84, "means": [0.75, 0.2, 0.6, 0.6, 0.6]},
+           "2": {"datagen_raw": 0.85, "means": [0.75, 0.2, 0.6, 0.6, 0.6]},
+           "3": {"datagen_raw": 0.83, "means": [0.75, 0.2, 0.6, 0.6, 0.6]},
+           "4": {"datagen_raw": 0.845, "means": [0.75, 0.2, 0.6, 0.6, 0.6]}
+         }}
+      ],
+      "incumbent": "king",
+      "gate": {"min_shared_seeds": 3, "standing_rank": 3},
+      "ungated_champion": "king",
+      "gated_champion": "king",
+      "tail": ["y", "x"]
     }
   ]
 }

@@ -44,6 +44,37 @@ type brokerCaseCost struct {
 	Attribution      string
 }
 
+// completionUsage reads a successful completion's token usage as the v13 cost
+// ledger books it. completion_tokens includes the reasoning tokens that
+// usage.completion_tokens_details reports (OpenRouter folds them in on the
+// agent-selected reasoning route); reasoning is clamped to the completion and
+// is 0 when absent. The model relay passes the details through bounded
+// (#2972), so this reads the relay's own response shape.
+func completionUsage(responseBody []byte) (usageOK bool, prompt, completion, reasoning uint64) {
+	var decoded struct {
+		Usage *struct {
+			PromptTokens            int `json:"prompt_tokens"`
+			CompletionTokens        int `json:"completion_tokens"`
+			CompletionTokensDetails *struct {
+				ReasoningTokens int `json:"reasoning_tokens"`
+			} `json:"completion_tokens_details"`
+		} `json:"usage"`
+	}
+	if json.Unmarshal(responseBody, &decoded) != nil || decoded.Usage == nil ||
+		decoded.Usage.PromptTokens < 0 || decoded.Usage.CompletionTokens < 0 {
+		return false, 0, 0, 0
+	}
+	prompt = uint64(decoded.Usage.PromptTokens)
+	completion = uint64(decoded.Usage.CompletionTokens)
+	if details := decoded.Usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
+		reasoning = uint64(details.ReasoningTokens)
+		if reasoning > completion {
+			reasoning = completion
+		}
+	}
+	return true, prompt, completion, reasoning
+}
+
 // recordInferenceCostLocked books one successful completion. The caller holds
 // session.mu. claimedCaseID is the harness's X-Ditto-Case-Id (already bounded
 // by the caller; "" when absent). reasoningTokens must already be clamped to
@@ -218,6 +249,16 @@ func (s *server) summarizeV13InferenceCost(benchVersion int, inferenceSessionID 
 	var unattributed scoregates.InferenceCostRecord
 	if inferenceSessionID != "" && s.broker != nil {
 		unattributed = s.broker.sessionUnattributedInferenceCost(inferenceSessionID)
+	}
+	return summarizeV13InferenceCostFrom(benchVersion, perCase, unattributed)
+}
+
+// summarizeV13InferenceCostFrom is summarizeV13InferenceCost over an
+// unattributed-cost record already read from the session (a dueling run reads
+// it at the datagen/slice boundary).
+func summarizeV13InferenceCostFrom(benchVersion int, perCase []protocol.CaseScore, unattributed scoregates.InferenceCostRecord) *protocol.InferenceCostSummary {
+	if benchVersion < protocol.BenchVersionV13 {
+		return nil
 	}
 	return scoregates.SummarizeInferenceCost(benchVersion, perCase, unattributed)
 }

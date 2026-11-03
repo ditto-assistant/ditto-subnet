@@ -692,14 +692,14 @@ class ScreeningAttempt(Base):
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
                 "'l2-runtime-evidence-unavailable', "
                 "'source-review-adjudicator-key-unavailable', "
-                "'image-upload-platform-unavailable')"
+                "'image-upload-platform-unavailable', 'l2-late-result')"
             ),
             sqlite_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
                 "'l2-runtime-evidence-unavailable', "
                 "'source-review-adjudicator-key-unavailable', "
-                "'image-upload-platform-unavailable')"
+                "'image-upload-platform-unavailable', 'l2-late-result')"
             ),
         ),
         Index(
@@ -4811,6 +4811,18 @@ class Score(Base):
     that emitted no gate telemetry.
     """
 
+    dueling_season_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Bench v16+: the dueling season this score was produced in. Crown, rank
+    and dethrone comparisons use only scores of the same season. NULL below
+    the dueling floor (``scores_dueling_bench_floor``)."""
+
+    dueling: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    """Bench v16+: the report's ``details.dueling`` aggregates (season, slice
+    digest, owner key, datagen half, per-column ``n``/``sum``/``sum_sq``).
+    Aggregates only: generator case text never leaves the scorer."""
+
     model_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Reader-model calls this run made, off the lease's inference grant.
 
@@ -4886,6 +4898,11 @@ class Score(Base):
             "gate_evidence IS NULL OR bench_version >= 13",
             name="scores_gate_evidence_bench_floor",
         ),
+        # Dueling seasons are a bench v16+ contract; a floor, not an equality.
+        CheckConstraint(
+            "(dueling_season_id IS NULL AND dueling IS NULL) OR bench_version >= 16",
+            name="scores_dueling_bench_floor",
+        ),
         Index("scores_agent_id_idx", "agent_id"),
         # Dashboard/ledger reads select one benchmark era before grouping or
         # ranking scores.  Keep the aggregate columns in the index so the
@@ -4955,6 +4972,15 @@ class ConfirmationScore(Base):
     signature: Mapped[str | None] = mapped_column(Text, nullable=True)
     """The reporting validator's sr25519 signature over the parent score payload,
     hex encoded, so the ledger row is self-verifying alongside the k=3 receipt."""
+
+    dueling_season_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Bench v16+: the dueling season this rescore ran in (NULL below 16)."""
+
+    dueling: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    """Bench v16+: this seed's ``details.dueling`` aggregates, which the
+    pair-masked per-seed fold recomputes composites from (NULL below 16)."""
 
     v9_efficiency_token_total: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
@@ -6997,6 +7023,72 @@ class SubmissionDepositAddressRevision(Base):
     )
 
 
+class OwnerSubmissionCooldownRevision(Base):
+    """Append-only, operator-audited per-owner submission cooldown override.
+
+    One row is one revision of one owner identity's override, keyed by
+    ``(scope, owner_key)`` where ``scope`` is ``coldkey`` (a payment coldkey)
+    or ``hotkey``. The newest revision for a key is its current state:
+    ``set`` installs a minimum interval between that owner's submissions until
+    ``expires_at``; ``revoke`` ends it. The effective upload cooldown is the
+    longer of the global one and every active override that names the
+    uploading hotkey or payment coldkey. See
+    :mod:`ditto.db.queries.owner_submission_cooldown`.
+    """
+
+    __tablename__ = "owner_submission_cooldown_revisions"
+
+    revision_id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope",
+            "owner_key",
+            "revision",
+            name="owner_submission_cooldown_revisions_key",
+        ),
+        CheckConstraint(
+            "scope IN ('coldkey', 'hotkey')",
+            name="owner_submission_cooldown_scope_check",
+        ),
+        CheckConstraint(
+            "length(owner_key) BETWEEN 1 AND 128",
+            name="owner_submission_cooldown_owner_key_check",
+        ),
+        CheckConstraint(
+            "revision >= 1", name="owner_submission_cooldown_revision_check"
+        ),
+        CheckConstraint(
+            "(action = 'set' AND cooldown_seconds BETWEEN 60 AND 2592000 "
+            "AND expires_at IS NOT NULL AND expires_at > created_at) "
+            "OR (action = 'revoke' AND cooldown_seconds IS NULL "
+            "AND expires_at IS NULL)",
+            name="owner_submission_cooldown_action_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="owner_submission_cooldown_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="owner_submission_cooldown_actor_check",
+        ),
+    )
+
+
 class UploadAdmissionReservation(Base):
     """Short-lived pre-payment reservation for one payment coldkey."""
 
@@ -7819,6 +7911,19 @@ class ValidatorTicket(Base):
 
     dataset_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Digest of the dataset rendered from :attr:`seed`."""
+
+    dueling_season_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Bench v16+: the dueling season whose generator slice this lease runs.
+
+    NULL below the dueling floor. Not a foreign key: this is a hot table, and
+    a season row is never deleted while a ticket can name it."""
+
+    slice_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Bench v16+: digest of the pinned generator slice served with the lease
+    (``dueling_slice_preparations``). :attr:`dataset_sha256` stays the
+    public datagen half's digest."""
 
     seed_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     """Finalized chain block used for the validator-specific seed."""
@@ -14028,6 +14133,11 @@ class GeneratorScorerHeartbeat(Base):
     grading_bench_versions: Mapped[list[int] | None] = mapped_column(
         JSONB(none_as_null=True)
     )
+    dueling_work_kinds: Mapped[list[str] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    """Dueling-bench work kinds (``slice``, ``battery``) the scorer advertised
+    on its ``dueling-work`` poll; NULL for a scorer that never polled it."""
     last_poll: Mapped[str] = mapped_column(Text, nullable=False)
     first_seen_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
@@ -14037,6 +14147,12 @@ class GeneratorScorerHeartbeat(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "dueling_work_kinds IS NULL "
+            "OR (jsonb_typeof(dueling_work_kinds) = 'array' "
+            "AND jsonb_array_length(dueling_work_kinds) BETWEEN 1 AND 8)",
+            name="generator_scorer_heartbeats_dueling_kinds_check",
+        ),
         CheckConstraint(
             "grading_bench_versions IS NULL "
             "OR (jsonb_typeof(grading_bench_versions) = 'array' "
@@ -14049,7 +14165,7 @@ class GeneratorScorerHeartbeat(Base):
             name="generator_scorer_heartbeats_cases_check",
         ),
         CheckConstraint(
-            "last_poll IN ('qualification', 'round')",
+            "last_poll IN ('qualification', 'round', 'dueling')",
             name="generator_scorer_heartbeats_poll_check",
         ),
     )
@@ -14476,6 +14592,256 @@ class GeneratorRoundCaseVerdict(Base):
             "submission_id",
             "round_index",
         ),
+    )
+
+
+class DuelingSeason(Base):
+    """One dueling-bench season: the frozen generator set of bench v16+ runs.
+
+    A season opens at a generator-round boundary (``season_index`` is the
+    round it opens on) and spans ``rounds_per_season`` rounds. Its 32-byte
+    ``secret`` is drawn and ``commitment`` published while the season is
+    ``committed``, before its anchor block (the opening round's open block)
+    exists; at ``open`` Platform derives ``season_seed`` from the secret and
+    the anchor and freezes up to five generator ``columns``. A season belongs
+    to one ``bench_version`` and never spans an activation; ``shadow`` seasons
+    run for the desired version of an open rollout. ``secret`` and
+    ``season_seed`` are Platform-only until ``revealed_at``.
+
+    See ``research/dittobench-datagen/docs/dueling-bench.md`` section 7.6.
+    """
+
+    __tablename__ = "dueling_seasons"
+
+    id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    season_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    shadow: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    rounds_per_season: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    anchor_block: Mapped[int | None] = mapped_column(BigInteger)
+    anchor_block_hash: Mapped[str | None] = mapped_column(Text)
+    season_seed: Mapped[str | None] = mapped_column(Text)
+    columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    opened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    closes_at_round: Mapped[int | None] = mapped_column(BigInteger)
+    closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    close_epoch_index: Mapped[int | None] = mapped_column(BigInteger)
+    reveal_at_epoch: Mapped[int | None] = mapped_column(BigInteger)
+    revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    rotation_requested_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    rotation_immediate: Mapped[bool | None] = mapped_column(Boolean)
+    rotation_actor: Mapped[str | None] = mapped_column(Text)
+    rotation_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bench_version", "season_index", name="dueling_seasons_index_key"
+        ),
+        # A floor, never an enumeration: every later bench version duels too.
+        CheckConstraint("bench_version >= 16", name="dueling_seasons_bench_floor"),
+        CheckConstraint(
+            "status IN ('committed', 'open', 'closed', 'revealed', 'void')",
+            name="dueling_seasons_status_check",
+        ),
+        CheckConstraint(
+            "commitment ~ '^[0-9a-f]{64}$' AND octet_length(secret) = 32",
+            name="dueling_seasons_commitment_check",
+        ),
+        CheckConstraint(
+            "season_index >= 0 AND rounds_per_season BETWEEN 1 AND 48",
+            name="dueling_seasons_index_check",
+        ),
+        CheckConstraint(
+            "(status <> 'committed' OR season_seed IS NULL) AND "
+            "(season_seed IS NOT NULL OR status IN ('committed', 'void'))",
+            name="dueling_seasons_seed_check",
+        ),
+        CheckConstraint(
+            "season_seed IS NULL OR (season_seed ~ '^[0-9a-f]{64}$' AND "
+            "anchor_block_hash IS NOT NULL AND columns IS NOT NULL)",
+            name="dueling_seasons_open_check",
+        ),
+        CheckConstraint(
+            "(status = 'void') = (void_reason IS NOT NULL)",
+            name="dueling_seasons_void_check",
+        ),
+        CheckConstraint(
+            "(status = 'revealed') = (revealed_at IS NOT NULL)",
+            name="dueling_seasons_reveal_check",
+        ),
+        CheckConstraint(
+            "(rotation_requested_at IS NULL) = (rotation_reason IS NULL) AND "
+            "(rotation_requested_at IS NULL) = (rotation_actor IS NULL)",
+            name="dueling_seasons_rotation_check",
+        ),
+        # One live season per bench version: at most one committed and at
+        # most one open at a time.
+        Index(
+            "dueling_seasons_one_open_idx",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
+        Index(
+            "dueling_seasons_one_committed_idx",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("status = 'committed'"),
+        ),
+        Index("dueling_seasons_status_idx", "status", "season_index"),
+    )
+
+
+class DuelingSeasonBattery(Base):
+    """One candidate generator's season qualification battery.
+
+    Before a season opens, every candidate column (eligibility rules 1, 2 and
+    4) runs ``DUELING_BATTERY_SEEDS`` fresh secret seeds at the slice column
+    size plus a determinism re-run on the trusted generator scorer. Only a
+    ``passed`` candidate can be pinned; one failure excludes it from the
+    season. ``seeds`` are Platform-private and never served to a miner.
+    """
+
+    __tablename__ = "dueling_season_batteries"
+
+    season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    seeds: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    grading_bench_version: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "status IN ('pending', 'leased', 'passed', 'failed')",
+            name="dueling_season_batteries_status_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL) AND "
+            "(status <> 'leased' OR lease_id IS NOT NULL)",
+            name="dueling_season_batteries_lease_check",
+        ),
+        CheckConstraint(
+            "status <> 'passed' OR grading_bench_version >= 15",
+            name="dueling_season_batteries_policy_check",
+        ),
+        CheckConstraint(
+            "attempts >= 0", name="dueling_season_batteries_attempts_check"
+        ),
+        Index("dueling_season_batteries_status_idx", "status", "season_id"),
+    )
+
+
+class DuelingSlicePreparation(Base):
+    """One run's generator slice: the private half of a bench v16+ dataset.
+
+    Keyed ``(season_id, run_seed)``: every lease of the same seed in a season
+    (quorum validators, re-leases, retries, CRN participants) reuses the same
+    bytes, and existing pinned bytes always win. A missing slice reserves a
+    ``pending`` row in its own transaction and the lease answers 503 with
+    ``Retry-After``; the trusted generator scorer leases it, builds the slice,
+    and posts the canonical ``dittobench-dueling-slice/v1`` bytes with their
+    SHA-256. ``slice_bytes`` stay in Platform-private storage until every
+    contributing generator's source is released and the dispute window has
+    passed; after that only ``slice_sha256`` is kept (``bytes_pruned_at``).
+    """
+
+    __tablename__ = "dueling_slice_preparations"
+
+    id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    slice_sha256: Mapped[str | None] = mapped_column(Text)
+    slice_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    error: Mapped[str | None] = mapped_column(Text)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    first_leased_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    ready_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    bytes_pruned_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    retries: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    """Operator re-queues of a failed preparation; each restarts the lease's
+    attempt cap while ``attempts`` keeps the whole history."""
+    last_retry_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    last_retry_actor: Mapped[str | None] = mapped_column(Text)
+    last_retry_reason: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "season_id", "run_seed", name="dueling_slice_preparations_seed_key"
+        ),
+        CheckConstraint(
+            "retries >= 0 AND (retries = 0) = (last_retry_at IS NULL)",
+            name="dueling_slice_preparations_retries_check",
+        ),
+        ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
+        CheckConstraint("run_seed >= 0", name="dueling_slice_preparations_seed_check"),
+        CheckConstraint(
+            "status IN ('pending', 'leased', 'ready', 'failed')",
+            name="dueling_slice_preparations_status_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL) AND "
+            "(status <> 'leased' OR lease_id IS NOT NULL)",
+            name="dueling_slice_preparations_lease_check",
+        ),
+        CheckConstraint(
+            "(status = 'ready') = (slice_sha256 IS NOT NULL) AND "
+            "(status <> 'ready' OR slice_bytes IS NOT NULL "
+            "OR bytes_pruned_at IS NOT NULL)",
+            name="dueling_slice_preparations_ready_check",
+        ),
+        CheckConstraint(
+            "slice_sha256 IS NULL OR slice_sha256 ~ '^[0-9a-f]{64}$'",
+            name="dueling_slice_preparations_digest_check",
+        ),
+        CheckConstraint(
+            "slice_bytes IS NULL OR (octet_length(slice_bytes) BETWEEN 1 AND "
+            "33554432 AND slice_sha256 = encode(sha256(slice_bytes), 'hex'))",
+            name="dueling_slice_preparations_bytes_check",
+        ),
+        CheckConstraint(
+            "attempts >= 0", name="dueling_slice_preparations_attempts_check"
+        ),
+        Index("dueling_slice_preparations_status_idx", "status", "created_at"),
     )
 
 

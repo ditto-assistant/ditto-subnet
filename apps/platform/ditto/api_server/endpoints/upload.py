@@ -85,8 +85,8 @@ from ditto.chain import ChainError
 from ditto.db.models import AgentClaBinding, AgentStatus
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
-    get_submission_retry_at,
     insert_agent,
+    submission_cooldown_decision,
 )
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.contributor_identity import lock_identity_writes
@@ -452,14 +452,20 @@ async def check(
         and owner_coldkey is not None
         and not recovery_payment_verified
     ):
-        retry_at = await get_submission_retry_at(
+        decision = await submission_cooldown_decision(
             session,
             miner_coldkey=owner_coldkey,
+            miner_hotkey=body.hotkey,
             cooldown=timedelta(seconds=settings.cooldown_seconds),
         )
-        if retry_at is not None:
+        if decision is not None:
+            retry_at = decision.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(submission_cooldown_message(retry_at))
+            messages.append(
+                submission_cooldown_message(
+                    retry_at, owner_override=decision.owner_override
+                )
+            )
 
     admission = None
     if not codes and body.reserve_submission_slot:
@@ -497,7 +503,9 @@ async def check(
         except SubmissionCooldownError as exc:
             retry_at = exc.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(submission_cooldown_message(retry_at))
+            messages.append(
+                submission_cooldown_message(retry_at, owner_override=exc.owner_override)
+            )
 
     payment_required = not codes and not recovery_payment_verified
     return UploadCheckResponse(

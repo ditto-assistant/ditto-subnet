@@ -8,6 +8,10 @@
 // Every section loads, fails and retries on its own: a slow or failed read
 // shows a skeleton or an error with a retry in its own place, and a failed
 // refresh keeps the last good data on screen instead of blanking it.
+//
+// Any scored round's results open from the round list (?round=), and the
+// reader's own hotkey, typed once or taken from the miner sign-in, marks
+// their rows in every table.
 import { For, Show, createMemo, createResource, createSignal, onCleanup } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
 
@@ -17,7 +21,8 @@ import { weightsResource } from "../data/weights";
 import { getJSON } from "../lib/api";
 import { REFRESH_MS } from "../lib/config";
 import { fx, monoDisplay, relTime, relTimeUntil } from "../lib/format";
-import { spaQuery } from "../lib/router";
+import { spaHref, spaQuery } from "../lib/router";
+import { minerSession } from "../stores/sessionStore";
 import { EntityButton } from "../components/ui/EntityButton";
 import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { Sparkline } from "../components/ui/Sparkline";
@@ -43,11 +48,16 @@ import {
   newestScoredIndex,
   nextRoundEta,
   nextRoundIndex,
+  parseRoundIndex,
   payoutFor,
   projectGeneratorPayouts,
   taoAmount,
 } from "../components/generators/generator-data";
-import { GeneratorIdentityCell, showGenerator } from "../components/generators/GeneratorIdentity";
+import {
+  GeneratorIdentityCell,
+  plainClick,
+  showGenerator,
+} from "../components/generators/GeneratorIdentity";
 import { GeneratorPanel } from "../components/generators/GeneratorPanel";
 import {
   CaseBar,
@@ -85,6 +95,56 @@ const UNPAID_LABEL: Record<NonNullable<ProjectedPayout["unpaidReason"]>, string>
   duplicate_hotkey: "Hotkey already paid",
   beyond_paid_ranks: "Below the paid ranks",
 };
+
+const MY_HOTKEY_KEY = "ditto:generators-hotkey";
+
+/** True when a row belongs to the reader's hotkey. */
+type IsMine = (hotkey: string | null | undefined) => boolean;
+
+/** The hotkey typed here last; an empty string means the reader cleared it. */
+function readMyHotkey(): string | null {
+  try {
+    return localStorage.getItem(MY_HOTKEY_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveMyHotkey(value: string): void {
+  try {
+    localStorage.setItem(MY_HOTKEY_KEY, value);
+  } catch {
+    // Storage is blocked: the mark still lasts for this visit.
+  }
+}
+
+/** The URL that shows one round's results; null follows the newest scored round. */
+export function roundHref(index: number | null): string {
+  const params = spaQuery();
+  params.delete("round");
+  if (index !== null) params.set("round", String(index));
+  return spaHref("generators", params);
+}
+
+/** Show a round's results without reloading and move the reader to them:
+ * the list sits below the results, so a click would otherwise change
+ * nothing in view. */
+export function showRound(index: number | null): void {
+  const href = roundHref(index);
+  if (href !== location.pathname + location.search + location.hash) {
+    history.pushState(history.state, "", href);
+    window.dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+  }
+  const heading = document.getElementById("gen-round-title");
+  if (!heading) return;
+  const reduce =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (typeof heading.scrollIntoView === "function") {
+    heading.scrollIntoView({ block: "start", behavior: reduce ? "auto" : "smooth" });
+  }
+  heading.focus({ preventScroll: true });
+}
 
 /** The newest successful value, kept through a failed refresh. */
 function lastGood<T>(
@@ -209,6 +269,63 @@ function RoundStatus(props: { round: GeneratorRoundSummary }): JSX.Element {
   return <StatusChip label={chip()[0]} tone={chip()[1]} />;
 }
 
+/** Where the reader's own generator stands, in one line, so the board answers
+ * "how am I doing" without a scan. */
+function MyHotkeyField(props: {
+  value: string;
+  fromSignIn: boolean;
+  board: GeneratorBoard | undefined;
+  rows: ProjectedPayout[];
+  mine: IsMine;
+  onInput: (value: string) => void;
+}): JSX.Element {
+  const row = () => props.rows.find((item) => props.mine(item.entry.miner_hotkey)) ?? null;
+  const status = () => {
+    if (!props.value.trim() || !props.board) return "";
+    const found = row();
+    if (!found) return "No generator from this hotkey has a scored round in the window.";
+    const score = "score " + fx(found.entry.score);
+    if (found.position === null) {
+      return UNPAID_LABEL[found.unpaidReason ?? "zero_score"] + " · " + score;
+    }
+    return (
+      "Position #" +
+      found.position +
+      " · " +
+      score +
+      " · " +
+      share(found.trackShare) +
+      " of the generator track"
+    );
+  };
+  return (
+    <div class="gen-mine">
+      <label for="gen-mine-input">
+        Your hotkey
+        <Show when={props.fromSignIn}>
+          <small> from sign-in</small>
+        </Show>
+      </label>
+      <div class="search-field">
+        <input
+          id="gen-mine-input"
+          class="search-input mono"
+          type="text"
+          value={props.value}
+          placeholder="Paste a miner hotkey to mark its rows"
+          autocomplete="off"
+          spellcheck={false}
+          aria-describedby="gen-mine-status"
+          onInput={(ev) => props.onInput(ev.currentTarget.value)}
+        />
+      </div>
+      <p id="gen-mine-status" class="gen-mine-status" aria-live="polite">
+        {status()}
+      </p>
+    </div>
+  );
+}
+
 function PayoutTable(props: {
   board: GeneratorBoard | undefined;
   rows: ProjectedPayout[];
@@ -216,6 +333,8 @@ function PayoutTable(props: {
   loading: boolean;
   failed: boolean;
   onRetry: () => void;
+  mine: IsMine;
+  hotkeyField: JSX.Element;
 }): JSX.Element {
   const anyPaid = () => props.rows.some((row) => row.position !== null);
   return (
@@ -231,6 +350,7 @@ function PayoutTable(props: {
           )}
         </Show>
       </div>
+      {props.hotkeyField}
       <Show when={props.failed}>
         <SectionError what="Generator board" stale={!!props.board} onRetry={props.onRetry} />
       </Show>
@@ -297,6 +417,7 @@ function PayoutTable(props: {
                       <tr
                         classList={{
                           unpaid: row.position === null,
+                          mine: props.mine(row.entry.miner_hotkey),
                           ["pos-" + row.position]: row.position !== null && row.position <= 3,
                         }}
                       >
@@ -311,6 +432,7 @@ function PayoutTable(props: {
                           <GeneratorIdentityCell
                             item={row.entry}
                             minerHotkey={row.entry.miner_hotkey}
+                            mine={props.mine(row.entry.miner_hotkey)}
                           />
                         </td>
                         <td class="num">{fx(row.entry.score)}</td>
@@ -382,6 +504,9 @@ function RoundDetail(props: {
   detail: GeneratorRoundDetail | undefined;
   failed: boolean;
   onRetry: () => void;
+  /** An older round the reader opened, not the newest scored one. */
+  pinned: boolean;
+  mine: IsMine;
 }): JSX.Element {
   const cases = () => {
     const counts = (props.detail?.columns ?? []).map(columnCases);
@@ -392,7 +517,7 @@ function RoundDetail(props: {
   return (
     <section class="gen-section" aria-labelledby="gen-round-title">
       <div class="gen-section-title">
-        <h3 id="gen-round-title">
+        <h3 id="gen-round-title" tabindex="-1">
           {props.index != null ? "Round " + props.index + " results" : "Latest round results"}
         </h3>
         <Show when={props.detail}>
@@ -401,6 +526,19 @@ function RoundDetail(props: {
               Scored {relTime(detail().summary.scored_at)} · {detail().summary.panel_size} panel
               agents
               <Show when={cases() !== null}> · {cases()} cases per generator</Show>
+              <Show when={props.pinned}>
+                {" · "}
+                <a
+                  href={roundHref(null)}
+                  onClick={(ev) => {
+                    if (!plainClick(ev)) return;
+                    ev.preventDefault();
+                    showRound(null);
+                  }}
+                >
+                  Show the latest round
+                </a>
+              </Show>
             </span>
           )}
         </Show>
@@ -453,12 +591,13 @@ function RoundDetail(props: {
               >
                 <For each={columns()}>
                   {(column) => (
-                    <tr>
+                    <tr classList={{ mine: props.mine(column.miner_hotkey) }}>
                       <td>
                         <GeneratorIdentityCell
                           item={column}
                           minerHotkey={column.miner_hotkey}
                           publicDefault={column.public_default || !column.miner_hotkey}
+                          mine={props.mine(column.miner_hotkey)}
                         />
                       </td>
                       <td class="num">{fx(column.score)}</td>
@@ -505,7 +644,7 @@ function RoundDetail(props: {
             <tbody>
               <For each={props.detail?.standings ?? []}>
                 {(standing) => (
-                  <tr>
+                  <tr classList={{ mine: props.mine(standing.miner_hotkey) }}>
                     <td>#{standing.rank}</td>
                     <td>
                       <span class="gen-identity">
@@ -532,6 +671,9 @@ function RoundDetail(props: {
                                 reference
                               </small>
                             </Show>
+                            <Show when={props.mine(standing.miner_hotkey)}>
+                              <span class="gen-you">You</span>
+                            </Show>
                           </span>
                         </span>
                       </span>
@@ -554,12 +696,21 @@ function RoundDetail(props: {
   );
 }
 
-function RoundHistory(props: { rounds: GeneratorRoundSummary[] }): JSX.Element {
+function RoundHistory(props: {
+  rounds: GeneratorRoundSummary[];
+  /** The round whose results are on screen. */
+  shown: number | null;
+  /** The newest scored round; opening it follows new rounds as they score. */
+  latest: number | null;
+}): JSX.Element {
+  const target = (index: number) => (index === props.latest ? null : index);
   return (
     <section class="gen-section" aria-labelledby="gen-history-title">
       <div class="gen-section-title">
         <h3 id="gen-history-title">Recent rounds</h3>
-        <span>Seeds are revealed after the privacy window</span>
+        <span>
+          Open a scored round for its results · seeds are revealed after the privacy window
+        </span>
       </div>
       <div class="gen-table-scroll">
         <table class="gen-table">
@@ -582,8 +733,24 @@ function RoundHistory(props: { rounds: GeneratorRoundSummary[] }): JSX.Element {
           <tbody>
             <For each={props.rounds}>
               {(round) => (
-                <tr>
-                  <td>{round.round_index}</td>
+                <tr classList={{ shown: round.round_index === props.shown }}>
+                  <td>
+                    <Show when={round.status === "scored"} fallback={round.round_index}>
+                      <a
+                        class="gen-round-link"
+                        href={roundHref(target(round.round_index))}
+                        aria-current={round.round_index === props.shown ? "true" : undefined}
+                        title="Show this round's results"
+                        onClick={(ev) => {
+                          if (!plainClick(ev)) return;
+                          ev.preventDefault();
+                          showRound(target(round.round_index));
+                        }}
+                      >
+                        {round.round_index}
+                      </a>
+                    </Show>
+                  </td>
                   <td>
                     <RoundStatus round={round} />
                     <Show when={round.void_reason}>
@@ -619,6 +786,10 @@ function selectedGenerator(): string | null {
   return isSubmissionId(id) ? id : null;
 }
 
+function selectedRound(): number | null {
+  return parseRoundIndex(spaQuery().get("round"));
+}
+
 export function GeneratorsPage(): JSX.Element {
   const board = useEndpoint<GeneratorBoard>("/generator/board", { pollMs: REFRESH_MS });
   const rounds = useEndpoint<GeneratorRoundList>("/generator/rounds", { pollMs: REFRESH_MS });
@@ -631,11 +802,15 @@ export function GeneratorsPage(): JSX.Element {
   const termsData = fromEndpoint(terms);
   const allocationData = fromEndpoint(allocation);
 
+  const [pickedRound, setPickedRound] = createSignal(selectedRound());
+
   // Either the board or the round list names the newest scored round, so its
-  // detail starts loading as soon as the first of the two answers. Keyed on
-  // the index: unchanged polls reuse the detail already loaded.
+  // detail starts loading as soon as the first of the two answers. A round
+  // the reader opened wins. Keyed on the index: unchanged polls reuse the
+  // detail already loaded.
   const scoredIndex = createMemo(() => newestScoredIndex(roundList(), boardData()));
-  const [detail, { refetch: refetchDetail }] = createResource(scoredIndex, (index) =>
+  const shownIndex = createMemo(() => pickedRound() ?? scoredIndex());
+  const [detail, { refetch: refetchDetail }] = createResource(shownIndex, (index) =>
     getJSON<GeneratorRoundDetail>("/generator/rounds/" + index),
   );
   const detailData = lastGood(
@@ -659,8 +834,21 @@ export function GeneratorsPage(): JSX.Element {
   const mode = () => boardData()?.mode ?? schedule()?.mode;
   const generatorShare = () => generatorEmissionShare(allocationData());
 
+  // Typed here wins over the signed-in miner; clearing the field keeps it clear.
+  const [typedHotkey, setTypedHotkey] = createSignal(readMyHotkey());
+  const hotkeyText = () => typedHotkey() ?? minerSession()?.hotkey ?? "";
+  const myHotkey = () => hotkeyText().trim();
+  const mine: IsMine = (hotkey) => !!hotkey && hotkey === myHotkey();
+  const typeHotkey = (value: string) => {
+    setTypedHotkey(value);
+    saveMyHotkey(value);
+  };
+
   const [selected, setSelected] = createSignal(selectedGenerator());
-  const restore = () => setSelected(selectedGenerator());
+  const restore = () => {
+    setSelected(selectedGenerator());
+    setPickedRound(selectedRound());
+  };
   window.addEventListener("popstate", restore);
   onCleanup(() => window.removeEventListener("popstate", restore));
 
@@ -774,23 +962,40 @@ export function GeneratorsPage(): JSX.Element {
         loading={board.loading()}
         failed={!!board.error()}
         onRetry={() => board.refresh()}
+        mine={mine}
+        hotkeyField={
+          <MyHotkeyField
+            value={hotkeyText()}
+            fromSignIn={typedHotkey() === null && !!minerSession()?.hotkey}
+            board={boardData()}
+            rows={payouts()}
+            mine={mine}
+            onInput={typeHotkey}
+          />
+        }
       />
 
       <EmissionSplit allocation={allocationData()} />
 
-      <Show when={scoredIndex() !== null || detail.error || (!boardData() && !roundList())}>
+      <Show when={shownIndex() !== null || detail.error || (!boardData() && !roundList())}>
         <RoundDetail
           // The heading follows the data on screen: while a newly scored
           // round loads, the previous round stays labelled as itself.
-          index={detailData()?.summary.round_index ?? scoredIndex()}
+          index={detailData()?.summary.round_index ?? shownIndex()}
           detail={detailData()}
           failed={!!detail.error}
           onRetry={() => void refetchDetail()}
+          pinned={pickedRound() !== null && pickedRound() !== scoredIndex()}
+          mine={mine}
         />
       </Show>
 
       <Show when={roundList()?.rounds.length}>
-        <RoundHistory rounds={roundList()?.rounds ?? []} />
+        <RoundHistory
+          rounds={roundList()?.rounds ?? []}
+          shown={detailData()?.summary.round_index ?? shownIndex()}
+          latest={scoredIndex()}
+        />
       </Show>
 
       <section class="gen-section" aria-labelledby="gen-terms-title">

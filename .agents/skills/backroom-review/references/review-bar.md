@@ -35,6 +35,13 @@ presence. These govern over the historical examples below:
 - I7 permits a declared authoritative model planner satisfying W9, including
   faithful staged execution. An advisory planner must remain overridable.
   Do not carry the historical blanket forced-planner rule into v13.
+- W4 permits hiding connector-gated or app-specific tools from the deciding
+  catalog on the published "Needs the <App> connector" marker or on the
+  request's app-name wording (operator ruling 2026-11-03). Guessing from
+  wording is allowed; hiding a tool the case needed is performance, not I7.
+  Fake execution of a hidden tool, or removing a needed tool and claiming it
+  ran or its effect is done, stays I6/I7, and forcing the remaining trajectory
+  stays I7 ([precedent](precedents/november-03-connector-app-wording-filter-w4.md)).
 - W5/W6 permit qualifying calculators and model-authored programs, including
   explicit semantic delegation. I5 needs a proven benchmark-shaped semantic
   mechanism; formulas, labels, or prescriptive prose alone are insufficient.
@@ -163,7 +170,8 @@ path for I4/I5/I7.
   runtime-described generic engines pass. Zero hits on `WORKED OUT` or
   remainder-sheet names is a search lead, not an I5 keep.
 - **I7 — model tool planning.** Policy/safety/authorization filtering and a
-  natural singleton capability class pass. Request-keyed rules, trained
+  natural singleton capability class pass. Under v13, connector-marker and
+  app-name-wording narrowing is W4 availability narrowing, not removal. Request-keyed rules, trained
   heads, or an **enforced plan authored by a separate planner turn** that
   preselect the exact tool count/set/order inside a multi-tool class, replace
   the request catalog with that plan, or expose only the host-selected next
