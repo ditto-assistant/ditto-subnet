@@ -516,6 +516,8 @@ async def admin_retry_dueling_slice(
     if refused is not None:
         raise HTTPException(status_code=409, detail=refused)
     previous_error = row.error
+    previous_columns = row.columns
+    previous_scorer_version = row.scorer_version
     retry_slice(row, actor=actor[:120], reason=reason, now=datetime.now(UTC))
     record_operator_action(
         session,
@@ -527,6 +529,8 @@ async def admin_retry_dueling_slice(
             "season_id": str(row.season_id),
             "run_seed": str(row.run_seed),
             "previous_error": previous_error,
+            "previous_columns": previous_columns,
+            "previous_scorer_version": previous_scorer_version,
             "attempts": row.attempts,
             "retries": row.retries,
             "force": payload.force,
