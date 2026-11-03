@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine@sha256:56961d79ea8129efddcc0b8643fd8a5416b4e6228cfd477e3fd61deb2672c587 AS helper
+FROM golang:1.27.3-alpine@sha256:b8c9b82affbbb82a020bbcf998dad2ba9516944ac7e883524642a481a9505e9c AS helper
 WORKDIR /src
 COPY services/screener-orchestrator/submission-builder/main.go ./main.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \

@@ -7,6 +7,29 @@ starter kit **byte-for-byte**.
 
 All payloads are JSON over HTTP.
 
+## Bench v15 production-scale catalog and decision lane
+
+V15 scores exactly like v14 (plus the v15 atomic-value grading floor). Its
+dataset advertises about 235 tools per seed: the v14 surface plus 200 unlinked
+connector tools (`catalog.ConnectorsForSeed`). The tool endpoint refuses every
+connector call with a "not connected" error and performs nothing.
+
+From v15 the sandbox also carries `DITTOBENCH_DECISIONS_URL`
+(`$DITTOBENCH_INFERENCE_BASE_URL/decisions`, a locked key). `POST` a System One
+body (`{state, questions, assets?}`) there. The broker signs it with the run's
+grant (the same `X-Ditto-*` proof as chat) and forwards it to Platform's
+`/api/v1/inference/decisions`; the relay forces the operator-pinned decision
+model, meters it, and answers `{model, answers, usage}`. Relay status codes
+and `Retry-After` pass through. The broker allows 16 decision calls in flight
+per run; the relay's per-ticket rail is authoritative. Below v15, and on
+confirmation or ablation sessions, the route answers 404.
+
+Capabilities add optional `v15_scored_runtime_env`; its digest covers version
+15 and the v15 key set (which adds `DITTOBENCH_DECISIONS_URL`). Platform
+requires it for v15 fleet readiness, and a v15 rollout cannot start while the
+operator's `decision_lane` board is off. See
+[the rollout plan](../../docs/benchmark-v15-rollout.md).
+
 ## Bench v14 declarative over-call contract
 
 V14 preserves v2–v13 scoring, including v13's whole-case declarative exclusion.
@@ -26,6 +49,12 @@ the other version's slot. Platform requires the v14 packet for v14 fleet
 readiness and v14 canary issuance. No scorer image or version is
 activated by capability advertisement. See
 [the rollout plan](../../docs/benchmark-v14-rollout.md).
+
+V14 graders also read every graded reply field (`answer`, `final_text`) as
+rendered text before matching (`grade.ReplyAsRead`): markdown markup is removed
+and the text it marks up is kept, non-ASCII spaces read as a space, and a `.`
+or `,` that no digit follows ends a number token. The wire is unchanged; see
+the rollout plan's *V14 answer-normalization contract*.
 
 ## Benchmark-version negotiation (validator control plane)
 
@@ -98,9 +127,11 @@ effort on each OpenAI-compatible chat request. The accepted spellings are:
 ```
 
 The allowed values are exactly `low`, `medium`, and `high`. Omitting both
-fields selects `medium`. Supplying both is accepted only when the values agree;
-conflicting aliases, unknown values, wrong types, and caller-supplied provider
-controls fail before provider capacity or request accounting is spent.
+fields selects `medium`. When both aliases are present, the nested effort wins.
+The nested form may also repeat `"exclude": true`, the privacy value already
+pinned by the scorer. `"exclude": false`, wrong types, unknown effort values,
+and other caller-supplied provider controls fail before provider capacity or
+request accounting is spent.
 
 The trusted scorer broker canonicalizes either spelling to one provider body:
 
@@ -161,6 +192,112 @@ stays 9); every v13 field above is additive and optional for a v9-era harness,
 which simply sees a few more tools and richer schemas.
 
 ## Dataset
+
+### Generator-round datasets
+
+`generator-round-v1` is advertised and admitted whenever the scorer runs in
+trusted screened-image mode (`DITTOBENCH_ALLOW_SCREENED_IMAGES=1`, which every
+validator stack sets). It is independent of the private V13 transport below:
+round tickets are issued only by Platform, and only while the generator
+competition's `validator_rounds_enabled` setting is on, so that setting is the
+operator kill switch. A round request carries the exact round dataset bytes
+(at most `challenge.MaxRoundDatasetBytes` decoded) and their canonical SHA-256.
+Its report goes to Platform's round endpoint and never enters the agent score
+ledger.
+
+Alongside it the scorer advertises `generator-round-max-cases-<n>`, the
+largest column (cases per pack) it runs: the pack contract's
+`challenge.MaxCases`, currently 80. The validator forwards it as
+`scorer_benchmarks.generator_round_max_cases`, and Platform leases a round only
+to a validator whose value covers the round's largest column. A scorer without
+the feature is treated as running 32-case columns, the bound earlier
+validators enforce on a round job.
+
+The mode also advertises `generator-round-bench-<n>` for every bench version
+it runs a round at: the pack grading policies
+`challenge.SupportedGradingBenchVersions` (13, 14 and 15). A round request's
+`bench_version` must be one of them. The harness is seeded and run at that
+version, and each case is graded at the `grading_bench_version` its pack
+declares, which must be the round's version or the one before it (the
+two-version window, `challenge.GradingPolicyWindow`;
+`challenge.CheckRoundGradingVersions`; a dataset with any other column fails
+the run). The validator forwards the set as
+`scorer_benchmarks.generator_round_bench_versions`; a scorer without the
+features is treated as running only v13 rounds.
+
+### Dueling slices (`dueling-slice-v1`, bench_version >= 16)
+
+From bench_version 16 a canonical run is a **datagen half** plus a **generator
+slice** (`research/dittobench-datagen/docs/dueling-bench.md` section 7.5). The
+scorer advertises `dueling-slice-v1` plus one `dueling-slice-bench-<n>` for
+every bench version `>= 16` it runs (derived from `supported_bench_versions`),
+only in trusted screened-image mode. The validator forwards the set as
+`scorer_benchmarks.dueling_slice_bench_versions`.
+
+`/v2/score` fields:
+
+| Field | Meaning |
+|---|---|
+| `dueling_slice_mode` | `"dueling-slice-v1"` |
+| `dueling_slice_bytes` | base64 of the Platform-pinned slice (`challenge.EncodeSliceDataset`, at most `challenge.MaxRoundDatasetBytes` decoded) |
+| `expected_slice_sha256` | SHA-256 of the decoded bytes (64 lowercase hex) |
+| `dueling_owner_key` | the scored agent's owner key; `""` masks nothing |
+
+A `bench_version >= 16` canonical request without all four is refused
+(`dueling slice required`); a `< 16` request, a generator round, or a practice
+submission carrying any of them is refused. The datagen half is never sent: it
+is regenerated from the public seed and checked against `dataset_sha256`
+exactly as before. The slice must hash to its pin, decode under
+`challenge.DecodeSliceDataset` (every pack re-validated, echoing its
+`slice_seed`, pinned hotkey and pinned `grading_bench_version`), carry the
+request's `bench_version`, and carry `run_seed == seed`: a run (canonical,
+retest or confirmation seed) has exactly one seed and one slice.
+
+Execution: the slice runs after every datagen wave, on the same harness, ticket
+inference session, tool catalog and observed tool endpoint, column by column
+through `internal/challengerun` with the run's case concurrency. Each column is
+projected to opaque case, pair, session and user IDs keyed by
+`sha256("dittobench-dueling-slice-projection/v1" || 0x00 || slice_seed)`, so
+reruns are byte-identical and every column answers from its own memory graph.
+`challenge.SliceExecutionCases` drops a case whose fingerprint an earlier column
+already claimed. Each case is graded by `scorer.GradeMemory` at its column's
+`grading_bench_version`, the generator-round grader. A failed `/run` scores 0.
+
+Scoring: gates, efficiency, outlier and canary inputs, metamorphic and twin
+post-passes, v13 shadow telemetry, token accounting and the signed v9 base
+evidence all read the **datagen half only** (relay usage is read at the
+datagen/slice boundary; the whole run still decides relay health). The
+composite is
+
+```
+composite = gate x ((1 - w x |U|) x datagen_raw + w x sum_{c in U} col_c)
+```
+
+with `w = 0.1`, `U` the columns not owned by `dueling_owner_key`, and `gate`
+the composite gate times the applied v9 score-gate factor
+(`challenge.DuelingComposite`), quantized to micros like every v9+ composite.
+The report adds:
+
+```jsonc
+"details": {
+  "dueling": {
+    "season_id": "<uuid>", "season_index": 26119,
+    "slice_sha256": "<hex>", "owner_key": "coldkey:...",
+    "datagen_raw": 0.81, "datagen_gate": 0.96, "column_weight": 0.1,
+    "columns": [{"column_id": "c0", "owner_key": "coldkey:...", "submission_id": "<uuid|default>",
+                 "grading_bench_version": 16, "n": 35, "sum": 30.0, "sum_sq": 29.5,
+                 "substituted": false}],
+    "composite_stderr": 0.012
+  }
+}
+```
+
+`composite_stderr` is the stratified standard error
+(`challenge.DuelingCompositeStderr`). Slice cases appear in `per_case` as
+score-only rows (`category: "dueling_slice"`, `case_id: "<column_id>/<case_id>"`,
+`kind: "memory"`); no slice question, answer, grader note or transcript leaves
+the scorer, and `per_category`, `tool_mean`, `memory_mean` and the transcript
+artifact describe the datagen half. `n` counts both halves.
 
 ### Private V13 control-plane transport (default off)
 
@@ -1032,13 +1169,14 @@ marked incomplete (`TestClaimSpanCaptureBooksHarnessAndCompletionSpans`
 (#1849), `TestClaimSpanCaptureBoundsCompletionsPerCase` (#1849)).
 
 **The published normaliser.** Both sides pass every span through
-`scoregates.NormalizeSpan` — Unicode NFKC, casefold, markdown/label stripping
+`scoregates.NormalizeSpan` — combining marks dropped and Unicode NFKC
+(`José` → `jose`), casefold, markdown/label stripping
 (emphasis, code fences, headings, list markers, `ANSWER:`-style labels),
 punctuation folded to spaces except `$ . , -` inside numbers, whitespace
-collapsed — then tokenize with the Bench v12 value-token rule
-(`scoregates.ValueTokenHashes`): every `CanonicalNumber` (strip `$` and
+collapsed — then tokenize with `scoregates.SpanTokens`, the Bench v12
+value-token rule widened to every script: every `CanonicalNumber` (strip `$` and
 grouping commas, drop trailing fractional zeros and leading zeros) plus every
-lowercase alphanumeric token of at least 4 characters. `$4,110.67`,
+lowercase letter/digit run of at least 4 characters. `$4,110.67`,
 `4110.67 dollars`, `**Answer:** $4110.67`, `{"answer":"4110.67"}` and
 `４１１０.６７` all yield the single claim token `4110.67`; `411067` does not.
 Miners run the same functions locally; the vectors are published in

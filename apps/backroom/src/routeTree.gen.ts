@@ -23,10 +23,10 @@ import { Route as AuthenticatedScoreOutliersRouteImport } from './routes/_authen
 import { Route as AuthenticatedMinerFeesRouteImport } from './routes/_authenticated/miner-fees'
 import { Route as AuthenticatedInferenceRoutingRouteImport } from './routes/_authenticated/inference-routing'
 import { Route as AuthenticatedInferenceConcurrencyRouteImport } from './routes/_authenticated/inference-concurrency'
+import { Route as AuthenticatedGammaRouteImport } from './routes/_authenticated/gamma'
 import { Route as AuthenticatedCopyReviewRouteImport } from './routes/_authenticated/copy-review'
 import { Route as AuthenticatedContinualRetestsRouteImport } from './routes/_authenticated/continual-retests'
 import { Route as AuthenticatedConfirmationBundlesRouteImport } from './routes/_authenticated/confirmation-bundles'
-import { Route as AuthenticatedCodingControlRouteImport } from './routes/_authenticated/coding-control'
 import { Route as AuthenticatedBurnRouteImport } from './routes/_authenticated/burn'
 import { Route as AuthenticatedBenchmarkRolloutRouteImport } from './routes/_authenticated/benchmark-rollout'
 import { Route as AuthenticatedArtifactReleaseRouteImport } from './routes/_authenticated/artifact-release'
@@ -112,6 +112,11 @@ const AuthenticatedInferenceConcurrencyRoute =
     path: '/inference-concurrency',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
+const AuthenticatedGammaRoute = AuthenticatedGammaRouteImport.update({
+  id: '/gamma',
+  path: '/gamma',
+  getParentRoute: () => AuthenticatedRoute,
+} as any)
 const AuthenticatedCopyReviewRoute = AuthenticatedCopyReviewRouteImport.update({
   id: '/copy-review',
   path: '/copy-review',
@@ -127,12 +132,6 @@ const AuthenticatedConfirmationBundlesRoute =
   AuthenticatedConfirmationBundlesRouteImport.update({
     id: '/confirmation-bundles',
     path: '/confirmation-bundles',
-    getParentRoute: () => AuthenticatedRoute,
-  } as any)
-const AuthenticatedCodingControlRoute =
-  AuthenticatedCodingControlRouteImport.update({
-    id: '/coding-control',
-    path: '/coding-control',
     getParentRoute: () => AuthenticatedRoute,
   } as any)
 const AuthenticatedBurnRoute = AuthenticatedBurnRouteImport.update({
@@ -184,10 +183,10 @@ export interface FileRoutesByFullPath {
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
-  '/coding-control': typeof AuthenticatedCodingControlRoute
   '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
+  '/gamma': typeof AuthenticatedGammaRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
   '/inference-routing': typeof AuthenticatedInferenceRoutingRoute
   '/miner-fees': typeof AuthenticatedMinerFeesRoute
@@ -210,10 +209,10 @@ export interface FileRoutesByTo {
   '/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/burn': typeof AuthenticatedBurnRoute
-  '/coding-control': typeof AuthenticatedCodingControlRoute
   '/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/copy-review': typeof AuthenticatedCopyReviewRoute
+  '/gamma': typeof AuthenticatedGammaRoute
   '/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
   '/inference-routing': typeof AuthenticatedInferenceRoutingRoute
   '/miner-fees': typeof AuthenticatedMinerFeesRoute
@@ -237,10 +236,10 @@ export interface FileRoutesById {
   '/_authenticated/artifact-release': typeof AuthenticatedArtifactReleaseRoute
   '/_authenticated/benchmark-rollout': typeof AuthenticatedBenchmarkRolloutRoute
   '/_authenticated/burn': typeof AuthenticatedBurnRoute
-  '/_authenticated/coding-control': typeof AuthenticatedCodingControlRoute
   '/_authenticated/confirmation-bundles': typeof AuthenticatedConfirmationBundlesRoute
   '/_authenticated/continual-retests': typeof AuthenticatedContinualRetestsRoute
   '/_authenticated/copy-review': typeof AuthenticatedCopyReviewRoute
+  '/_authenticated/gamma': typeof AuthenticatedGammaRoute
   '/_authenticated/inference-concurrency': typeof AuthenticatedInferenceConcurrencyRoute
   '/_authenticated/inference-routing': typeof AuthenticatedInferenceRoutingRoute
   '/_authenticated/miner-fees': typeof AuthenticatedMinerFeesRoute
@@ -265,10 +264,10 @@ export interface FileRouteTypes {
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
-    | '/coding-control'
     | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
+    | '/gamma'
     | '/inference-concurrency'
     | '/inference-routing'
     | '/miner-fees'
@@ -291,10 +290,10 @@ export interface FileRouteTypes {
     | '/artifact-release'
     | '/benchmark-rollout'
     | '/burn'
-    | '/coding-control'
     | '/confirmation-bundles'
     | '/continual-retests'
     | '/copy-review'
+    | '/gamma'
     | '/inference-concurrency'
     | '/inference-routing'
     | '/miner-fees'
@@ -317,10 +316,10 @@ export interface FileRouteTypes {
     | '/_authenticated/artifact-release'
     | '/_authenticated/benchmark-rollout'
     | '/_authenticated/burn'
-    | '/_authenticated/coding-control'
     | '/_authenticated/confirmation-bundles'
     | '/_authenticated/continual-retests'
     | '/_authenticated/copy-review'
+    | '/_authenticated/gamma'
     | '/_authenticated/inference-concurrency'
     | '/_authenticated/inference-routing'
     | '/_authenticated/miner-fees'
@@ -445,6 +444,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthenticatedInferenceConcurrencyRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
+    '/_authenticated/gamma': {
+      id: '/_authenticated/gamma'
+      path: '/gamma'
+      fullPath: '/gamma'
+      preLoaderRoute: typeof AuthenticatedGammaRouteImport
+      parentRoute: typeof AuthenticatedRoute
+    }
     '/_authenticated/copy-review': {
       id: '/_authenticated/copy-review'
       path: '/copy-review'
@@ -464,13 +470,6 @@ declare module '@tanstack/react-router' {
       path: '/confirmation-bundles'
       fullPath: '/confirmation-bundles'
       preLoaderRoute: typeof AuthenticatedConfirmationBundlesRouteImport
-      parentRoute: typeof AuthenticatedRoute
-    }
-    '/_authenticated/coding-control': {
-      id: '/_authenticated/coding-control'
-      path: '/coding-control'
-      fullPath: '/coding-control'
-      preLoaderRoute: typeof AuthenticatedCodingControlRouteImport
       parentRoute: typeof AuthenticatedRoute
     }
     '/_authenticated/burn': {
@@ -551,10 +550,10 @@ interface AuthenticatedRouteChildren {
   AuthenticatedArtifactReleaseRoute: typeof AuthenticatedArtifactReleaseRoute
   AuthenticatedBenchmarkRolloutRoute: typeof AuthenticatedBenchmarkRolloutRoute
   AuthenticatedBurnRoute: typeof AuthenticatedBurnRoute
-  AuthenticatedCodingControlRoute: typeof AuthenticatedCodingControlRoute
   AuthenticatedConfirmationBundlesRoute: typeof AuthenticatedConfirmationBundlesRoute
   AuthenticatedContinualRetestsRoute: typeof AuthenticatedContinualRetestsRoute
   AuthenticatedCopyReviewRoute: typeof AuthenticatedCopyReviewRoute
+  AuthenticatedGammaRoute: typeof AuthenticatedGammaRoute
   AuthenticatedInferenceConcurrencyRoute: typeof AuthenticatedInferenceConcurrencyRoute
   AuthenticatedInferenceRoutingRoute: typeof AuthenticatedInferenceRoutingRoute
   AuthenticatedMinerFeesRoute: typeof AuthenticatedMinerFeesRoute
@@ -571,10 +570,10 @@ const AuthenticatedRouteChildren: AuthenticatedRouteChildren = {
   AuthenticatedArtifactReleaseRoute: AuthenticatedArtifactReleaseRoute,
   AuthenticatedBenchmarkRolloutRoute: AuthenticatedBenchmarkRolloutRoute,
   AuthenticatedBurnRoute: AuthenticatedBurnRoute,
-  AuthenticatedCodingControlRoute: AuthenticatedCodingControlRoute,
   AuthenticatedConfirmationBundlesRoute: AuthenticatedConfirmationBundlesRoute,
   AuthenticatedContinualRetestsRoute: AuthenticatedContinualRetestsRoute,
   AuthenticatedCopyReviewRoute: AuthenticatedCopyReviewRoute,
+  AuthenticatedGammaRoute: AuthenticatedGammaRoute,
   AuthenticatedInferenceConcurrencyRoute:
     AuthenticatedInferenceConcurrencyRoute,
   AuthenticatedInferenceRoutingRoute: AuthenticatedInferenceRoutingRoute,

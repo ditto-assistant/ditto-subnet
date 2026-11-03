@@ -175,6 +175,10 @@ type brokerSession struct {
 	confirmationGrants        map[string]brokerConfirmationGrant
 	embeddingGrant            brokerConfirmationGrant
 	inFlight                  int
+	// decisionInFlight and decisionDispatches count the v15 decision lane
+	// (decision_lane.go): calls in flight and signed dispatches this run.
+	decisionInFlight   int
+	decisionDispatches uint64
 	// chatConcurrency is the per-source in-flight chat admission for this
 	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
 	// the run's effective case concurrency so overlapping /run calls are not
@@ -246,9 +250,6 @@ type brokerSession struct {
 	// tokens across the whole session (all cases, attributed or not); it exempts
 	// assistant-role prompt spans from the causal gate.
 	claimSpanSessionCompletion scoregates.TokenSet
-	// Optional, trusted-process-only V13 private verifier binding. Ordinary
-	// scoring never installs this and its ledger semantics remain unchanged.
-	privateVerifier *privateVerifierCaseBinding
 	// Bench v13 catalog capture (catalog_capture.go): per wire case, what the
 	// harness OFFERED the model on each attributed chat completion, plus the
 	// run-wide counters. Populated only for bench_version>=13, so v9..v12 are
@@ -627,6 +628,12 @@ type inferenceBroker struct {
 	sleep                 func(context.Context, time.Duration) error
 	relayWait             func(string, bool)
 	terminalAgentFailure  func(string)
+
+	// controlAuthMode mirrors the control plane's DITTOBENCH_CONTROL_AUTH_MODE
+	// so the broker's own check and controlAuth.wrap agree on whether the
+	// published Compose default token still counts as a credential.
+	controlAuthMode       controlAuthMode
+	publicDefaultTokenLog sync.Once
 }
 
 // embeddingBackpressureGate is a validator-wide circuit breaker for the
@@ -1119,15 +1126,23 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 		return false
 	}
 	if embedding {
+		// The chat and embedding lanes share one grant status. Once the
+		// harness's own chat spend marks the grant exhausted, the relay refuses
+		// every later embedding with 4102 even though the embedding lane is
+		// untouched (ditto-subnet#2970). Chat evidence that proves that wall
+		// confirms the decline; without it a chat-heavy harness whose later
+		// calls are embeddings was booked as relay infrastructure and re-leased.
 		switch code {
 		case platformDeclineBudgetExhausted:
 			// embeddingRequests increments once per handle, including this call,
 			// before the platform is contacted. It is the reservation lower
 			// bound we have: the 1B-token / 100k-request embedding grant is
 			// not crossed by a body-byte sum the way chat is.
-			return session.embeddingRequests >= session.embeddingRequestBudget
+			return session.embeddingRequests >= session.embeddingRequestBudget ||
+				chatAllowanceSpentLocked(session)
 		case platformDeclineTokenBudgetExhausted:
-			return session.embeddingTokens >= session.embeddingTokenBudget
+			return session.embeddingTokens >= session.embeddingTokenBudget ||
+				chatAllowanceSpentLocked(session)
 		case platformDeclineReservationTooLarge:
 			return false
 		default:
@@ -1150,6 +1165,19 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 	default:
 		return false
 	}
+}
+
+// chatAllowanceSpentLocked reports whether this broker's own chat evidence
+// proves the shared grant was exhausted by the harness: settled receipted
+// tokens at or past the token wall, or completed calls at the request wall.
+// It uses the same settled-only bounds as the chat branch above, never a
+// body-byte ceiling, and requires authenticated chat budgets.
+func chatAllowanceSpentLocked(session *brokerSession) bool {
+	if !sessionHasBudgetEvidenceLocked(session, false) {
+		return false
+	}
+	return session.promptTokens+session.completionTokens >= session.tokenBudget ||
+		session.successes >= session.requestBudget
 }
 
 // platformChatChargeUpperBound mirrors the Platform's tokenizer-independent
@@ -1360,6 +1388,7 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 		maxSessions:      maxSessions * 2,
 		embeddingSlots:   make(chan struct{}, capacity),
 		controlToken:     strings.TrimSpace(os.Getenv("DITTOBENCH_BROKER_CONTROL_TOKEN")),
+		controlAuthMode:  controlAuthModeFromEnv(os.Getenv("DITTOBENCH_CONTROL_AUTH_MODE")),
 		platformProxyURL: platformProxyURL,
 		platformTransportURL: configuredPlatformTransportURL(
 			os.Getenv("DITTOBENCH_PLATFORM_INFERENCE_TRANSPORT_URL"), platformProxyURL,
@@ -1460,6 +1489,20 @@ func configuredPlatformTransportURL(raw, canonical string) string {
 	return configuredPlatformProxyURL(raw)
 }
 
+// controlAuthorized admits a caller of the inference-session control routes
+// (prepare, activate, activate-confirmation, cancel).
+//
+// Loopback admission is unchanged here: those peers share the scorer's own
+// network namespace, while the validator always arrives from the Compose
+// bridge and must present the bearer. Retiring source-IP trust is a separate
+// rollout decision (see verifyControlCredential in control_auth.go).
+//
+// The published Compose default (insecureDefaultControlToken) is a literal in
+// a public repository, so it is not a secret. It follows the same staged
+// rollout as the control plane: under shadow it is still accepted, because
+// every validator that never set DITTOBENCH_BROKER_CONTROL_TOKEN depends on it,
+// and the first acceptance is logged as a would-reject; under enforce it is
+// treated as "no token configured" and every non-loopback call is refused.
 func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 	ip := net.ParseIP(sourceIP(r.RemoteAddr))
 	if ip != nil && ip.IsLoopback() {
@@ -1469,7 +1512,34 @@ func (b *inferenceBroker) controlAuthorized(r *http.Request) bool {
 		return false
 	}
 	provided, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return ok && subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) == 1
+	if !ok || subtle.ConstantTimeCompare([]byte(provided), []byte(b.controlToken)) != 1 {
+		return false
+	}
+	if b.controlToken != insecureDefaultControlToken {
+		return true
+	}
+	if b.controlAuthMode == controlAuthEnforce {
+		log.Printf(
+			"inference control auth rejected: %s %s from %s: the published Compose "+
+				"default token is not a credential; set DITTOBENCH_BROKER_CONTROL_TOKEN "+
+				"to a per-host secret",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+		return false
+	}
+	// Once per process: in shadow, controlAuth.wrap already logs every
+	// would-reject verdict for these routes (it treats this same literal as no
+	// credential), so repeating it per request here would only double the noise.
+	b.publicDefaultTokenLog.Do(func() {
+		log.Printf(
+			"inference control auth (shadow, would reject): %s %s from %s: the "+
+				"published Compose default token is not a credential; set "+
+				"DITTOBENCH_BROKER_CONTROL_TOKEN to a per-host secret before "+
+				"DITTOBENCH_CONTROL_AUTH_MODE=enforce",
+			r.Method, r.URL.Path, clientIP(r),
+		)
+	})
+	return true
 }
 
 func (b *inferenceBroker) requireControl(w http.ResponseWriter, r *http.Request) bool {
@@ -3144,6 +3214,10 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		b.health(w, session)
 		return
 	}
+	if rest == "/decisions" && r.Method == http.MethodPost {
+		b.handleDecision(w, r, lease)
+		return
+	}
 	// The frozen starter-kit Chutes adapter appends /chat/completions to its
 	// configured base URL, while newer OpenAI-compatible clients append
 	// /v1/chat/completions. Accept both at this trusted, source-bound boundary;
@@ -4372,7 +4446,18 @@ func (b *inferenceBroker) proxy(
 		// usageUnavailable is still incremented, unchanged, so the run fails
 		// exactly as before via requireCompleteV7Usage. The new counter is
 		// purely attributive.
-		agentAttributedRejection := trustedChatHandler == nil || preReservationReaderRejection
+		//
+		// A stale refusal is the one 4xx the harness cannot cause. The Platform
+		// compares X-Ditto-Requested-At -- stamped by this broker immediately
+		// before the send -- against its own clock with a 30s window, so it
+		// measures validator clock drift or a stalled upload, never the
+		// harness's bytes. Charging it to the agent spent miners' only attempt
+		// on 5CFtzzb4's intermittent skew; it is infrastructure, and the
+		// unattributed branch already lands on model_relay_unavailable, which
+		// every deployed validator retries without fault.
+		staleRefusal := legacyGateway == "" && trustedChatHandler == nil &&
+			admissionCode(responseStatus, platformRejectionMessage(responseBody)) == "stale_session"
+		agentAttributedRejection := (trustedChatHandler == nil || preReservationReaderRejection) && !staleRefusal
 		session.mu.Lock()
 		session.usageUnavailable++
 		if agentAttributedRejection {
@@ -4384,6 +4469,9 @@ func (b *inferenceBroker) proxy(
 				session.caseSnapshots[caseGeneration] = snapshot
 			}
 		} else {
+			if staleRefusal {
+				session.noteAdmissionLocked(responseStatus, platformRejectionMessage(responseBody))
+			}
 			session.failures++
 		}
 		session.providerLatency += totalLatency
@@ -4402,6 +4490,11 @@ func (b *inferenceBroker) proxy(
 			log.Printf(
 				"run %s: platform rejected the harness's inference request with %d (%s) before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
 				runID, responseStatus, admissionCode(responseStatus, detail), rejections, detail,
+			)
+		} else if staleRefusal {
+			log.Printf(
+				"run %s: platform refused the broker's request timestamp as stale (%d) -- validator clock or transport, NOT an agent fault: %s",
+				runID, responseStatus, detail,
 			)
 		} else {
 			log.Printf(
@@ -4465,20 +4558,7 @@ func (b *inferenceBroker) proxy(
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
 		return
 	}
-	var decoded struct {
-		Usage *struct {
-			PromptTokens     int `json:"prompt_tokens"`
-			CompletionTokens int `json:"completion_tokens"`
-			// Bench v13 cost ledger: OpenRouter folds reasoning tokens into
-			// completion_tokens on the agent-selected reasoning route and
-			// reports them here; the ledger books them separately from the
-			// answer output. Absent on providers/routes without reasoning.
-			CompletionTokensDetails *struct {
-				ReasoningTokens int `json:"reasoning_tokens"`
-			} `json:"completion_tokens_details"`
-		} `json:"usage"`
-	}
-	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
+	usageOK, promptTokens, completionTokens, reasoningTokens := completionUsage(responseBody)
 	session.mu.Lock()
 	session.successes++
 	// The delay fingerprint is computed and booked in the same locked section
@@ -4517,18 +4597,10 @@ func (b *inferenceBroker) proxy(
 	// Metadata only; no-op for bench_version<13.
 	recordCatalogCompletionLocked(session, catalogAttribution, body, responseBody)
 	session.providerLatency += totalLatency
-	completionTokens, reasoningTokens := uint64(0), uint64(0)
 	if usageOK {
 		session.usageAvailable++
-		session.promptTokens += uint64(decoded.Usage.PromptTokens)
-		session.completionTokens += uint64(decoded.Usage.CompletionTokens)
-		completionTokens = uint64(decoded.Usage.CompletionTokens)
-		if details := decoded.Usage.CompletionTokensDetails; details != nil && details.ReasoningTokens > 0 {
-			reasoningTokens = uint64(details.ReasoningTokens)
-			if reasoningTokens > completionTokens {
-				reasoningTokens = completionTokens
-			}
-		}
+		session.promptTokens += promptTokens
+		session.completionTokens += completionTokens
 	} else {
 		session.usageUnavailable++
 	}
@@ -4767,13 +4839,6 @@ func (b *inferenceBroker) beginRunCase(id, caseID string) (caseURL string, start
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if binding := session.privateVerifier; binding != nil {
-		if caseID != binding.caseID || binding.started {
-			binding.crossCaseStarts++
-			return "", false
-		}
-		binding.started = true
-	}
 	if session.runCases == nil {
 		session.runCases = make(map[string]int)
 	}
@@ -4814,9 +4879,6 @@ func (b *inferenceBroker) endRunCase(id, caseID string) {
 	}
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if binding := session.privateVerifier; binding != nil && caseID == binding.caseID {
-		binding.ended = true
-	}
 	if session.runCases[caseID] <= 1 {
 		delete(session.runCases, caseID)
 		if token := session.urlCaseTokens[caseID]; token != "" {
@@ -5165,7 +5227,20 @@ func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, 
 	flatEffort := ""
 	if nestedPresent {
 		nested, ok := nestedRaw.(map[string]any)
-		if !ok || len(nested) != 1 {
+		if !ok {
+			return nil, fmt.Errorf("invalid reasoning")
+		}
+		// Match Platform's accepted shapes. Repeating the trusted privacy
+		// value is harmless; the normalized body below still owns exclude.
+		_, hasEffort := nested["effort"]
+		excludeRaw, hasExclude := nested["exclude"]
+		switch {
+		case hasEffort && len(nested) == 1:
+		case hasEffort && hasExclude && len(nested) == 2:
+			if exclude, ok := excludeRaw.(bool); !ok || !exclude {
+				return nil, fmt.Errorf("invalid reasoning")
+			}
+		default:
 			return nil, fmt.Errorf("invalid reasoning")
 		}
 		candidate, ok := nested["effort"].(string)

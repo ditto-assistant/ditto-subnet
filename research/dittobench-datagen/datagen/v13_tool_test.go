@@ -18,13 +18,14 @@ func v13FullCases(t *testing.T, seed int64) []protocol.ToolCase {
 	return v13CasesForSize(t, seed, V9FullToolCaseCount)
 }
 
+// v13CasesForSize returns the v13 tool cases for (seed, n), generated once per
+// test binary and shared read-only (see toolcase_cache_test.go).
 func v13CasesForSize(t *testing.T, seed int64, n int) []protocol.ToolCase {
 	t.Helper()
-	rotated, err := protocol.RotateSeedForVersion(seed, protocol.BenchVersionV13)
+	cases, err := cachedV13Cases(seed, n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cases, _ := GenerateCasesWithFillersForVersion(rand.New(rand.NewSource(rotated)), seed, n, protocol.BenchVersionV13)
 	return cases
 }
 
@@ -47,6 +48,7 @@ func pairText(tc protocol.ToolCase) string {
 // carry a slot lexicon and record-grounded tokens that exist in their planted
 // record, and each family is present in roughly two thirds of runs.
 func TestV13RestraintGroupsAreDistributionallyMatched(t *testing.T) {
+	t.Parallel()
 	const seeds = 40
 	familySeeds := map[string]int{}
 	askHeavy, actHeavy := 0, 0
@@ -153,6 +155,7 @@ func TestV13RestraintGroupsAreDistributionallyMatched(t *testing.T) {
 // record-reading oracle scores 1.0. This is the generator-side half; the
 // scorer pins the same property over graded RunResponses.
 func TestV13RestraintPolicyBaselinesScoreAtMostChance(t *testing.T) {
+	t.Parallel()
 	const seeds = 40
 	coin := rand.New(rand.NewSource(1846))
 	total := 0.0
@@ -201,9 +204,14 @@ func TestV13RestraintPolicyBaselinesScoreAtMostChance(t *testing.T) {
 // at most eight memory-routing tool cases per full run, every one carrying an
 // effect answer that is planted in a prerequisite record (or, for a follow-up
 // read, produced by an earlier mutation) and never exposed in the prompt.
+//
+// Forty seeds (shared with the other v13 tool-case checks) replace the
+// original 200: the cap and planting are per-case invariants, and follow-up
+// reads appear within the first few seeds.
 func TestV13MemoryEffectReadsCappedAndPlanted(t *testing.T) {
+	t.Parallel()
 	followUps := 0
-	for seed := int64(1); seed <= 200; seed++ {
+	for seed := int64(1); seed <= 40; seed++ {
 		cases := v13FullCases(t, seed)
 		byID := map[string]protocol.ToolCase{}
 		for _, tc := range cases {
@@ -247,7 +255,7 @@ func TestV13MemoryEffectReadsCappedAndPlanted(t *testing.T) {
 		}
 	}
 	if followUps == 0 {
-		t.Fatal("no mutation follow-up reads were generated across 200 seeds")
+		t.Fatal("no mutation follow-up reads were generated across 40 seeds")
 	}
 }
 
@@ -257,6 +265,7 @@ func TestV13MemoryEffectReadsCappedAndPlanted(t *testing.T) {
 // end-state-equivalent alternative, and the delete claim forbids the person's
 // canonical pairs.
 func TestV13MutationGrammarIsCueUnreliable(t *testing.T) {
+	t.Parallel()
 	cueTable := []struct {
 		cues []string
 		tool string
@@ -327,6 +336,7 @@ func TestV13MutationGrammarIsCueUnreliable(t *testing.T) {
 // planted record, with the prompt never revealing the state; the family's slot
 // share is unchanged from v12.
 func TestV13StateDependentRoutingCoversCalendarAndEmail(t *testing.T) {
+	t.Parallel()
 	outcomes := map[string]int{}
 	v12Routes, v13Routes := 0, 0
 	for seed := int64(1); seed <= 20; seed++ {
@@ -387,6 +397,7 @@ func TestV13StateDependentRoutingCoversCalendarAndEmail(t *testing.T) {
 // the workflow-name claim accepts the project's formal name or alias and
 // forbids the OTHER project's client, never the correct client or name.
 func TestV13BusinessWorkflowClaimsForbidOnlyTheDistractor(t *testing.T) {
+	t.Parallel()
 	seen := 0
 	for seed := int64(1); seed <= 20; seed++ {
 		world := universe.GenerateForVersion(seed, 3, protocol.BenchVersionV13)
@@ -465,6 +476,7 @@ func TestV12ToolCasesUnchangedByV13(t *testing.T) {
 // shapes (16 = 3+3+3+3+2+2, 8 = 3+3+2, 0 = none), and every retained
 // memory-routing case carries a planted value at every size.
 func TestV13RestraintCountMatchesRunSize(t *testing.T) {
+	t.Parallel()
 	for _, n := range []int{6, 48, 100} {
 		for seed := int64(1); seed <= 12; seed++ {
 			cases := v13CasesForSize(t, seed, n)
@@ -516,6 +528,8 @@ func TestV13RestraintCountMatchesRunSize(t *testing.T) {
 // restraint cases in two triplets and one pair, each group one family with at
 // least one ask and one act member, no world-derived, result-usage, or
 // state-dependent case consumed as a slot, and the world carrier untouched.
+// Not parallel: v13CasesBeforeRestraint toggles the package-level
+// v13SkipToolSemantics switch.
 func TestV13MediumRestraintGroups(t *testing.T) {
 	for seed := int64(1); seed <= 12; seed++ {
 		cases := v13CasesForSize(t, seed, 48)
@@ -600,6 +614,7 @@ func v13CasesBeforeRestraint(t *testing.T, seed int64, n int) []protocol.ToolCas
 // stored value"); its read is discriminated by the act sibling, so it is the
 // documented exception to the prompt rule, not to the Accept rule.
 func TestV13GroundingIsRecordOnly(t *testing.T) {
+	t.Parallel()
 	seen := map[string]int{}
 	for seed := int64(1); seed <= 40; seed++ {
 		for _, tc := range v13FullCases(t, seed) {

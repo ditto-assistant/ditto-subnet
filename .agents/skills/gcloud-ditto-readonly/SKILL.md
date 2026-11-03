@@ -27,6 +27,11 @@ printf '%s\n' 'SELECT now()' | .agents/skills/gcloud-ditto-readonly/scripts/quer
 
 Target is project `ditto-app-dev`, zone `us-central1-a`, instance `ditto-platform-prod`, env `/opt/ditto-platform/.env`. Connect through IAP. Default statement timeout 30s; `DITTO_DB_STATEMENT_TIMEOUT_MS` at most 120000.
 
+To isolate JIT compilation overhead, prefix an otherwise identical read with
+`DITTO_DB_DISABLE_JIT=1`. This sets `jit=off` for that read-only connection only;
+it does not change the server, application pool or admission settings. Preserve
+both plans and report the executor and JIT times separately.
+
 JSON `null` is not SQL NULL: `col IS NOT NULL` is true for a stored JSON
 `null`, so presence checks on jsonb payloads (for example
 `observation->'review_audit'`) must compare against `'null'::jsonb` or the
@@ -67,6 +72,16 @@ unrotated — never cat it; use the bounded script.
 A request line ending `-> ERR in Nms` is immediately followed by the
 traceback. VM app logs do NOT ship to Cloud Logging; `gcloud logging read`
 on `resource.type="gce_instance"` finds nothing.
+
+## Hetzner primary screener
+
+The bare-metal primary is not a GCE instance. For its supporting host journals,
+use `.agents/skills/ditto-subnet-release-ops/scripts/read_screener_logs.sh`
+from the repo root. It authenticates as `logs` on company Tailscale, with one
+explicit key and pinned host keys; no sudo or GCP login is needed. The release
+operations skill documents its bounded options. Read Backroom first for live
+SN118 queue, admission, attempts and capacity. The GCE helper below retains
+IAP/OS Login and must never be used as a fallback for the Hetzner host.
 
 ## GCE screener workers
 

@@ -36,7 +36,7 @@ from sqlalchemy import (
 from sqlalchemy import (
     UUID as SaUUID,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.types import TIMESTAMP
 
@@ -569,6 +569,30 @@ class ScreeningAttempt(Base):
     review_settings_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_settings_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
     review_settings_checksum: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lineage-scoped review: the same-owner prior version whose diff and
+    # review history scope this attempt's model review (chosen at claim), and
+    # the scope/digest of the exact packet the worker fetched. NULL scope and
+    # digest mean the packet was never fetched; a NULL parent is a full review.
+    lineage_parent_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lineage_packet_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Why a bound packet went full (reason strings; empty for diff) and which
+    # kind of reference it was diffed against. NULL before this was recorded.
+    lineage_full_review_reasons: Mapped[list | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    lineage_reference_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Size of the bound packet's diff against its reference (every changed
+    # file and added+removed line, not only what the packet kept). NULL when
+    # no packet was bound or it predates this record.
+    lineage_changed_file_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    lineage_changed_line_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
     """This attempt only rebuilds an already-adjudicated submission's missing
     prerequisites (screened image / dataset); the screener must NOT re-run the
     anti-cheat source review and cannot quarantine. Set when an EVALUATING agent
@@ -591,6 +615,33 @@ class ScreeningAttempt(Base):
             ["agents.agent_id"],
             ondelete="SET NULL",
             name="screening_attempts_duplicate_of_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["lineage_parent_agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="screening_attempts_lineage_parent_fkey",
+        ),
+        # The claim names the parent before any packet exists; scope and
+        # digest bind together on the first packet fetch. A parent with no
+        # scope or digest is therefore a claimed attempt whose packet was
+        # never fetched (an ordinary full review), not a partial binding.
+        CheckConstraint(
+            "(lineage_scope IS NULL AND lineage_packet_sha256 IS NULL) OR "
+            "(lineage_parent_agent_id IS NOT NULL "
+            "AND lineage_scope IN ('diff', 'full') "
+            "AND length(lineage_packet_sha256) = 64)",
+            name="screening_attempts_lineage_binding_check",
+        ),
+        CheckConstraint(
+            "lineage_scope IS NOT NULL OR (lineage_full_review_reasons IS NULL "
+            "AND lineage_reference_kind IS NULL)",
+            name="screening_attempts_lineage_record_check",
+        ),
+        CheckConstraint(
+            "lineage_reference_kind IS NULL OR lineage_reference_kind IN "
+            "('same_owner_version', 'same_owner', 'released_base')",
+            name="screening_attempts_lineage_reference_kind_check",
         ),
         CheckConstraint(
             "policy_version > 0",
@@ -640,13 +691,15 @@ class ScreeningAttempt(Base):
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
                 "'l2-runtime-evidence-unavailable', "
-                "'source-review-adjudicator-key-unavailable')"
+                "'source-review-adjudicator-key-unavailable', "
+                "'image-upload-platform-unavailable', 'l2-late-result')"
             ),
             sqlite_where=text(
                 "status = 'failed' AND reason_code IN "
                 "('docker-build-infrastructure', 'worker-claim-not-started', "
                 "'l2-runtime-evidence-unavailable', "
-                "'source-review-adjudicator-key-unavailable')"
+                "'source-review-adjudicator-key-unavailable', "
+                "'image-upload-platform-unavailable', 'l2-late-result')"
             ),
         ),
         Index(
@@ -757,6 +810,83 @@ class V13KnownBenignControlApproval(Base):
         ),
         CheckConstraint("length(actor) BETWEEN 1 AND 120", name="v13kb_actor"),
         CheckConstraint("length(reason) >= 8", name="v13kb_reason"),
+    )
+
+
+class V13OfficialControlImage(Base):
+    """An operator-produced official image; never an economic miner record."""
+
+    __tablename__ = "v13_official_control_images"
+
+    control_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    request_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    fixture_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    image_id: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    producer: Mapped[str] = mapped_column(Text, nullable=False)
+    staging_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    verified_storage_key: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["fixture_id"],
+            ["screener_l2_report_canaries.canary_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("request_id"),
+        CheckConstraint("artifact_sha256 ~ '^[0-9a-f]{64}$'", name="v13oci_artifact"),
+        CheckConstraint("image_sha256 ~ '^[0-9a-f]{64}$'", name="v13oci_image"),
+        CheckConstraint("image_id ~ '^sha256:[0-9a-f]{64}$'", name="v13oci_image_id"),
+        CheckConstraint(
+            "size_bytes > 0 AND size_bytes <= 8589934592", name="v13oci_size"
+        ),
+        CheckConstraint("length(producer) BETWEEN 1 AND 320", name="v13oci_producer"),
+        CheckConstraint(
+            "(verified_at IS NULL) = (verified_storage_key IS NULL)",
+            name="v13oci_verified_pair",
+        ),
+    )
+
+
+class V13OfficialControlApproval(Base):
+    """Append-only independent operator attestation for one official image."""
+
+    __tablename__ = "v13_official_control_approvals"
+
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    control_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    review_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    approval_receipt_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["control_id"],
+            ["v13_official_control_images.control_id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint("control_id", "profile_sha256"),
+        *(
+            CheckConstraint(f"{name} ~ '^[0-9a-f]{{64}}$'", name=f"v13oca_{name}")
+            for name in (
+                "profile_sha256",
+                "review_evidence_sha256",
+                "approval_receipt_sha256",
+            )
+        ),
+        CheckConstraint("length(actor) BETWEEN 1 AND 320", name="v13oca_actor"),
+        CheckConstraint("length(reason) >= 8", name="v13oca_reason"),
     )
 
 
@@ -1404,6 +1534,17 @@ class AthCopyCourtRecommendation(Base):
     settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
     model: Mapped[str | None] = mapped_column(Text, nullable=True)
     prompt_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Engine that produced the verdict (``rules-v1`` resubmission rules,
+    # ``family-diff-v3`` near-duplicate attribution). Part of the unique key,
+    # so an improved engine re-triages a hold under the same settings.
+    triage_revision: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default=text("'rules-v1'")
+    )
+    # Enforce-mode outcome: ``{"status": "applied"|"skipped", "detail", ...}``.
+    application: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -1445,7 +1586,12 @@ class AthCopyCourtRecommendation(Base):
         UniqueConstraint(
             "review_id",
             "settings_revision",
-            name="ath_copy_court_recommendations_review_revision_key",
+            "triage_revision",
+            name="ath_copy_court_recommendations_review_triage_key",
+        ),
+        CheckConstraint(
+            "length(trim(triage_revision)) BETWEEN 1 AND 64",
+            name="ath_copy_court_recommendations_triage_revision_check",
         ),
         Index(
             "ath_copy_court_recommendations_agent_idx",
@@ -4641,6 +4787,16 @@ class Score(Base):
     details: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Optional per-case breakdown ``{"per_case": [...]}`` for audit."""
 
+    stderr_projection: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Database-derived JSON fold fields, preserving original types and nulls.
+
+    A trigger derives this from details on inserts and relevant updates,
+    including old application writers. SQL NULL means not yet backfilled;
+    the ledger falls back to details only for those rows. Never wire authority.
+    """
+
     gate_evidence: Mapped[dict | None] = mapped_column(
         _NULLABLE_JSON_VARIANT, nullable=True
     )
@@ -4654,6 +4810,18 @@ class Score(Base):
     (``scores_gate_evidence_bench_floor``) and for a v13+ report from a scorer
     that emitted no gate telemetry.
     """
+
+    dueling_season_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Bench v16+: the dueling season this score was produced in. Crown, rank
+    and dethrone comparisons use only scores of the same season. NULL below
+    the dueling floor (``scores_dueling_bench_floor``)."""
+
+    dueling: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    """Bench v16+: the report's ``details.dueling`` aggregates (season, slice
+    digest, owner key, datagen half, per-column ``n``/``sum``/``sum_sq``).
+    Aggregates only: generator case text never leaves the scorer."""
 
     model_calls: Mapped[int | None] = mapped_column(Integer, nullable=True)
     """Reader-model calls this run made, off the lease's inference grant.
@@ -4730,6 +4898,11 @@ class Score(Base):
             "gate_evidence IS NULL OR bench_version >= 13",
             name="scores_gate_evidence_bench_floor",
         ),
+        # Dueling seasons are a bench v16+ contract; a floor, not an equality.
+        CheckConstraint(
+            "(dueling_season_id IS NULL AND dueling IS NULL) OR bench_version >= 16",
+            name="scores_dueling_bench_floor",
+        ),
         Index("scores_agent_id_idx", "agent_id"),
         # Dashboard/ledger reads select one benchmark era before grouping or
         # ranking scores.  Keep the aggregate columns in the index so the
@@ -4800,6 +4973,15 @@ class ConfirmationScore(Base):
     """The reporting validator's sr25519 signature over the parent score payload,
     hex encoded, so the ledger row is self-verifying alongside the k=3 receipt."""
 
+    dueling_season_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Bench v16+: the dueling season this rescore ran in (NULL below 16)."""
+
+    dueling: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    """Bench v16+: this seed's ``details.dueling`` aggregates, which the
+    pair-masked per-seed fold recomputes composites from (NULL below 16)."""
+
     v9_efficiency_token_total: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
@@ -4823,13 +5005,27 @@ class ConfirmationScore(Base):
     )
     """When this immutable row was appended (UTC). Never updated."""
 
+    void_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    """0 for the first result on a key; ``n`` for the re-run after ``n`` voids.
+
+    Part of the primary key so an infrastructure re-run on the same
+    ``(agent, version, validator, seed)`` appends instead of being dropped.
+    See :class:`ConfirmationScoreVoid`.
+    """
+
     __table_args__ = (
         PrimaryKeyConstraint(
             "agent_id",
             "bench_version",
             "validator_hotkey",
             "seed",
+            "void_generation",
             name="confirmation_scores_pkey",
+        ),
+        CheckConstraint(
+            "void_generation >= 0", name="confirmation_scores_void_generation_check"
         ),
         ForeignKeyConstraint(
             ["agent_id"],
@@ -4861,6 +5057,168 @@ class ConfirmationScore(Base):
             name="confirmation_scores_efficiency_cost_check",
         ),
         Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),
+        # The post-outage sweep reads one version in acceptance order from a
+        # keyset watermark (see OutageSweepRun).
+        Index("confirmation_scores_version_created_idx", "bench_version", "created_at"),
+    )
+
+
+class ConfirmationScoreVoid(Base):
+    """Append-only record that one continual-retest sample measured infrastructure.
+
+    A void names the exact :class:`ConfirmationScore` row it sets aside
+    (key, generation, run id and composite), why, the evidence and its digest,
+    who or what applied it (``operator`` or the post-outage ``outage_sweep``),
+    and the outage window when one is known. It is never updated or deleted.
+
+    Every fold read (official composite, owner representative, retest cohort,
+    crown and the validator ledger) excludes a voided row, which reopens that
+    seed for the agent; the re-run is appended at ``void_generation + 1``. The
+    score row itself is untouched, so the original is always auditable.
+    """
+
+    __tablename__ = "confirmation_score_voids"
+
+    void_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    void_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    composite: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    evidence_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    """SHA-256 of the canonical (sorted-key, compact) JSON of ``evidence``."""
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    outage_started_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    outage_ended_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            [
+                "agent_id",
+                "bench_version",
+                "validator_hotkey",
+                "seed",
+                "void_generation",
+            ],
+            [
+                "confirmation_scores.agent_id",
+                "confirmation_scores.bench_version",
+                "confirmation_scores.validator_hotkey",
+                "confirmation_scores.seed",
+                "confirmation_scores.void_generation",
+            ],
+            ondelete="CASCADE",
+            name="confirmation_score_voids_sample_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "bench_version",
+            "validator_hotkey",
+            "seed",
+            "void_generation",
+            name="confirmation_score_voids_sample_key",
+        ),
+        CheckConstraint(
+            "sample_kind IN ('continual_retest')",
+            name="confirmation_score_voids_sample_kind_check",
+        ),
+        CheckConstraint(
+            "source IN ('operator', 'outage_sweep')",
+            name="confirmation_score_voids_source_check",
+        ),
+        CheckConstraint(
+            "evidence_digest ~ '^[0-9a-f]{64}$'",
+            name="confirmation_score_voids_evidence_digest_check",
+        ),
+        CheckConstraint(
+            "length(btrim(reason)) >= 8",
+            name="confirmation_score_voids_reason_check",
+        ),
+        CheckConstraint(
+            "outage_ended_at IS NULL OR outage_started_at IS NOT NULL",
+            name="confirmation_score_voids_outage_window_check",
+        ),
+        Index("confirmation_score_voids_agent_idx", "agent_id", "bench_version"),
+        Index("confirmation_score_voids_created_idx", "created_at"),
+    )
+
+
+class OutageSweepRun(Base):
+    """Append-only record of one post-outage automatic void sweep.
+
+    Each run examines the active version's un-voided continual-retest samples
+    accepted after the previous run's watermark, voids those whose serving
+    grant meets the outage evidence gate (source ``outage_sweep``), and flags
+    canonical ``scores`` rows accepted in the same range whose grant shows the
+    same evidence. Canonical scores are only flagged, never replaced.
+
+    The watermark is a keyset cursor: ``watermark_to`` plus, when the batch
+    was full, the last examined row's key in ``watermark_to_key``. The next run
+    resumes strictly after it. The JSON lists carry counts, ids and timestamps
+    only: no prompt, answer or provider body.
+    """
+
+    __tablename__ = "outage_sweep_runs"
+
+    sweep_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_from: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_to: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    watermark_to_key: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    """Last examined sample's key when the batch was full; null once drained."""
+    examined_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    voided_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    voids: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """One entry per void written: void id, sample key, run, grant, counts."""
+    outage_windows: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Per qualifying grant: first and last outage-class failure."""
+    canonical_flagged: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Canonical scores in range whose grant meets the evidence gate."""
+    errors: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    """Samples skipped because examining them raised (key + error type)."""
+
+    __table_args__ = (
+        CheckConstraint(
+            "examined_count >= 0 AND voided_count >= 0 AND error_count >= 0 "
+            "AND voided_count + error_count <= examined_count",
+            name="outage_sweep_runs_counts_check",
+        ),
+        CheckConstraint(
+            "watermark_to >= watermark_from",
+            name="outage_sweep_runs_watermark_check",
+        ),
+        CheckConstraint(
+            "finished_at >= started_at",
+            name="outage_sweep_runs_finished_check",
+        ),
+        Index("outage_sweep_runs_version_started_idx", "bench_version", "started_at"),
+        Index("outage_sweep_runs_started_idx", "started_at"),
     )
 
 
@@ -5579,6 +5937,7 @@ class ValidatorHeartbeat(Base):
     stack_health: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     updater_status: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     weights_fold: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    host_specs: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Which pinned ledger the validator last folded (heartbeat protocol v27)."""
     benchmark_capacity: Mapped[dict | None] = mapped_column(
         _JSON_VARIANT, nullable=True
@@ -6579,6 +6938,15 @@ class SubmissionSettingsRevision(Base):
     parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    """The default submission fee: what the memory (agent) lane charges and
+    what every other competition inherits unless ``competition_fees``
+    overrides it."""
+    competition_fees: Mapped[dict] = mapped_column(
+        _JSON_VARIANT, nullable=False, default=dict, server_default=text("'{}'::jsonb")
+    )
+    """Per-competition overrides, ``{competition: {"fee_amount_rao": int |
+    null, "fee_required": bool | null}}``; ``null`` (or a missing entry)
+    inherits. See :mod:`ditto.db.queries.submission_settings`."""
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     actor: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
@@ -6589,6 +6957,10 @@ class SubmissionSettingsRevision(Base):
         CheckConstraint(
             "cooldown_seconds BETWEEN 60 AND 86400",
             name="submission_settings_cooldown_seconds_check",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(competition_fees) = 'object'",
+            name="submission_settings_competition_fees_check",
         ),
         CheckConstraint(
             "fee_amount_rao BETWEEN 1 AND 1000000000000",
@@ -6647,6 +7019,72 @@ class SubmissionDepositAddressRevision(Base):
         UniqueConstraint(
             "parent_revision",
             name="submission_deposit_address_parent_revision_key",
+        ),
+    )
+
+
+class OwnerSubmissionCooldownRevision(Base):
+    """Append-only, operator-audited per-owner submission cooldown override.
+
+    One row is one revision of one owner identity's override, keyed by
+    ``(scope, owner_key)`` where ``scope`` is ``coldkey`` (a payment coldkey)
+    or ``hotkey``. The newest revision for a key is its current state:
+    ``set`` installs a minimum interval between that owner's submissions until
+    ``expires_at``; ``revoke`` ends it. The effective upload cooldown is the
+    longer of the global one and every active override that names the
+    uploading hotkey or payment coldkey. See
+    :mod:`ditto.db.queries.owner_submission_cooldown`.
+    """
+
+    __tablename__ = "owner_submission_cooldown_revisions"
+
+    revision_id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope",
+            "owner_key",
+            "revision",
+            name="owner_submission_cooldown_revisions_key",
+        ),
+        CheckConstraint(
+            "scope IN ('coldkey', 'hotkey')",
+            name="owner_submission_cooldown_scope_check",
+        ),
+        CheckConstraint(
+            "length(owner_key) BETWEEN 1 AND 128",
+            name="owner_submission_cooldown_owner_key_check",
+        ),
+        CheckConstraint(
+            "revision >= 1", name="owner_submission_cooldown_revision_check"
+        ),
+        CheckConstraint(
+            "(action = 'set' AND cooldown_seconds BETWEEN 60 AND 2592000 "
+            "AND expires_at IS NOT NULL AND expires_at > created_at) "
+            "OR (action = 'revoke' AND cooldown_seconds IS NULL "
+            "AND expires_at IS NULL)",
+            name="owner_submission_cooldown_action_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="owner_submission_cooldown_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="owner_submission_cooldown_actor_check",
         ),
     )
 
@@ -6811,6 +7249,14 @@ class SourceEmissionCollectorCursor(Base):
     )
     runtime_code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_blocked_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Running comparison of the reveal-anchored planner against the event
+    # planner; see source_emission_collector._shadow_reveal_plan.
+    reveal_plan_shadow: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    # How deep catch-up ranges were replayed: sparsely, by a full-scan
+    # fallback (and why), or not at all after a planner error.
+    catch_up: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
 
 
 class SourceEmissionVectorBinding(Base):
@@ -6857,6 +7303,65 @@ class SourceEmissionPayoutResolution(Base):
     proof: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class ScreeningReviewUsage(Base):
+    """Per-attempt model usage of the source review stages (telemetry only).
+
+    Posted by the screener holding the attempt before its verdict. It never
+    participates in the signed decision or any queue transition; it exists so
+    review cost can be compared across lineage scopes and reviewer postures.
+    """
+
+    __tablename__ = "screening_review_usage"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    stages: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    total_input_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_output_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_cost_usd: Mapped[Decimal] = mapped_column(Numeric(14, 6), nullable=False)
+    elapsed_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    lineage_scope: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The model budget that stopped the review (ReviewBudgetStop), when one
+    # did. NULL for a review no budget stopped and for older workers.
+    budget_stop: Mapped[dict | None] = mapped_column(
+        _NULLABLE_JSON_VARIANT, nullable=True
+    )
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screening_review_usage_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screening_review_usage_agent_id_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screening_review_usage_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "total_input_tokens >= 0 AND total_output_tokens >= 0 "
+            "AND total_cost_usd >= 0 AND (elapsed_ms IS NULL OR elapsed_ms >= 0)",
+            name="screening_review_usage_totals_check",
+        ),
+        CheckConstraint(
+            "lineage_scope IS NULL OR lineage_scope IN ('diff', 'full')",
+            name="screening_review_usage_lineage_scope_check",
+        ),
+        Index("screening_review_usage_recorded_idx", "recorded_at"),
     )
 
 
@@ -6924,6 +7429,62 @@ class ScreenerShadowReview(Base):
         ),
         Index("screener_shadow_reviews_created_idx", "created_at"),
         Index("screener_shadow_reviews_agent_idx", "agent_id", "created_at"),
+    )
+
+
+class ScreenerProbeBattery(Base):
+    """Report-only zero-token probe battery leads bound to one live attempt."""
+
+    __tablename__ = "screener_probe_batteries"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    screener_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings_checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    encoding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    seed_first: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    items_run: Mapped[int] = mapped_column(Integer, nullable=False)
+    probe_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    leads: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    battery_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    review: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["attempt_id"],
+            ["screening_attempts.attempt_id"],
+            ondelete="CASCADE",
+            name="screener_probe_batteries_attempt_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="screener_probe_batteries_agent_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["settings_revision"],
+            ["screener_review_settings_revisions.revision"],
+            ondelete="RESTRICT",
+            name="screener_probe_batteries_settings_revision_fkey",
+        ),
+        CheckConstraint(
+            "length(artifact_sha256) = 64",
+            name="screener_probe_batteries_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "status IN ('complete', 'calibration_failed', 'timeout', 'error')",
+            name="screener_probe_batteries_status_check",
+        ),
+        Index("screener_probe_batteries_created_idx", "created_at"),
+        Index("screener_probe_batteries_agent_idx", "agent_id", "created_at"),
     )
 
 
@@ -7188,7 +7749,12 @@ class ScreenerL2ReportCanary(Base):
 
 
 class V13ScorerCohortPin(Base):
-    """Immutable, operator-audited V13 scorer and runtime packet admission."""
+    """Immutable, operator-audited V13 scorer and runtime packet admission.
+
+    ``hotkeys`` names three to sixteen members; the per-agent quorum stays three
+    distinct validators. The constraint keeps its historical ``three_hotkeys``
+    name so the deployed constraint is replaced in place.
+    """
 
     __tablename__ = "v13_scorer_cohort_pins"
 
@@ -7206,7 +7772,8 @@ class V13ScorerCohortPin(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_pin_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_pin_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7237,7 +7804,8 @@ class V13ScorerCohortRotation(Base):
     __table_args__ = (
         CheckConstraint("bench_version = 13", name="v13_scorer_rotation_version_check"),
         CheckConstraint(
-            "jsonb_typeof(hotkeys) = 'array' AND jsonb_array_length(hotkeys) = 3",
+            "jsonb_typeof(hotkeys) = 'array' "
+            "AND jsonb_array_length(hotkeys) BETWEEN 3 AND 16",
             name="v13_scorer_rotation_three_hotkeys_check",
         ),
         CheckConstraint(
@@ -7344,6 +7912,19 @@ class ValidatorTicket(Base):
     dataset_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Digest of the dataset rendered from :attr:`seed`."""
 
+    dueling_season_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    """Bench v16+: the dueling season whose generator slice this lease runs.
+
+    NULL below the dueling floor. Not a foreign key: this is a hot table, and
+    a season row is never deleted while a ticket can name it."""
+
+    slice_sha256: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Bench v16+: digest of the pinned generator slice served with the lease
+    (``dueling_slice_preparations``). :attr:`dataset_sha256` stays the
+    public datagen half's digest."""
+
     seed_block: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     """Finalized chain block used for the validator-specific seed."""
 
@@ -7351,7 +7932,11 @@ class ValidatorTicket(Base):
     """Hash used to independently re-derive the validator-specific seed."""
 
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    """Number of leases issued to this validator for this agent/version."""
+    """Number of scoring leases issued to this validator for this agent/version.
+
+    Generator-round leases never count. A row a round lease created starts at
+    zero, which is how every retry and quorum surface tells it apart from a row
+    with scoring history (SN-334)."""
 
     manual_retry_grants: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
@@ -7520,7 +8105,7 @@ class ValidatorTicket(Base):
         CheckConstraint(
             "purpose IN ("
             "'legacy_unclassified', 'canonical_quorum', 'continual_retest', "
-            "'benchmark_canary'"
+            "'benchmark_canary', 'generator_round'"
             ")",
             name="validator_tickets_purpose_valid",
         ),
@@ -7529,8 +8114,8 @@ class ValidatorTicket(Base):
             name="validator_tickets_purpose_revision_nonnegative",
         ),
         CheckConstraint(
-            "attempt_count > 0",
-            name="validator_tickets_attempt_count_positive",
+            "attempt_count >= 0",
+            name="validator_tickets_attempt_count_nonnegative",
         ),
         CheckConstraint(
             "manual_retry_grants >= 0",
@@ -7671,6 +8256,36 @@ class InferenceGrant(Base):
     embedding_active_requests: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
+    decision_model: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The pinned decision model version, or NULL when the lane was not granted.
+
+    Stamped at mint from the operator's ``decision_lane`` board and immutable
+    for the lease, like ``allowed_models``. The relay sends it upstream and
+    refuses (as infrastructure) any answer served by a different version.
+    """
+    decision_input_microusd_per_mtok: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    """Stamped list price, micro-USD per million input tokens (output is free)."""
+    decision_request_budget: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    decision_token_budget: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    decision_request_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    decision_tokens: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    decision_cost_microusd: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default=text("0")
+    )
+    """Receipted input tokens x the stamped price: ledger cost, never a bill."""
+    decision_active_requests: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     request_count: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
@@ -7760,6 +8375,15 @@ class InferenceGrant(Base):
         ),
         CheckConstraint(
             "active_requests >= 0", name="inference_grants_active_requests"
+        ),
+        CheckConstraint(
+            "decision_input_microusd_per_mtok >= 0 AND decision_request_budget >= 0 "
+            "AND decision_token_budget >= 0 AND decision_request_count >= 0 "
+            "AND decision_tokens >= 0 AND decision_cost_microusd >= 0 "
+            "AND decision_active_requests >= 0 "
+            "AND (decision_model IS NULL OR "
+            "(decision_request_budget > 0 AND decision_token_budget > 0))",
+            name="inference_grants_decision_accounting",
         ),
         Index("inference_grants_expiry_idx", "expires_at"),
     )
@@ -8117,7 +8741,7 @@ class InferenceRequest(Base):
             name="inference_requests_status",
         ),
         CheckConstraint(
-            "request_kind IN ('chat', 'embedding')",
+            "request_kind IN ('chat', 'embedding', 'decision')",
             name="inference_requests_kind",
         ),
         CheckConstraint(
@@ -8220,6 +8844,7 @@ class ValidatorRetryRecovery(Base):
     score_count: Mapped[int] = mapped_column(Integer, nullable=False)
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     ticket_snapshot: Mapped[list[dict]] = mapped_column(_JSON_VARIANT, nullable=False)
+    target_validator_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
     granted_validator_hotkeys: Mapped[list[str]] = mapped_column(
         _JSON_VARIANT, nullable=False
     )
@@ -8699,6 +9324,9 @@ class ScoreAuditEntry(Base):
     __table_args__ = (
         UniqueConstraint("entry_hash", name="score_audit_log_entry_hash_key"),
         Index("score_audit_log_agent_id_idx", "agent_id"),
+        # Admission probes filter one exact event string per agent; see the
+        # 2026_10_06 migration of the same name.
+        Index("score_audit_log_event_agent_idx", "event", "agent_id"),
     )
 
 
@@ -8815,6 +9443,90 @@ class ContinualRetestSettingsRevision(Base):
     )
 
 
+class TreasuryFundingReconciliation(Base):
+    """Private immutable operator observations, never spend/public-proof authority."""
+
+    __tablename__ = "treasury_funding_reconciliations"
+    purchase_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    payment_reference: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    payload: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+
+
+class TreasuryManualBridgeState(Base):
+    __tablename__ = "treasury_manual_bridge_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    report: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class TreasuryManualTransfer(Base):
+    __tablename__ = "treasury_manual_transfers"
+    request_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    envelope: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    digest: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    report: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    receipt: Mapped[dict | None] = mapped_column(_JSON_VARIANT)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    dispatch_attempted_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued','dispatched','pending','audit_pending',"
+            "'published','failed','refused')",
+            name="treasury_manual_status",
+        ),
+        CheckConstraint(
+            "length(digest)=64 AND length(actor) BETWEEN 1 AND 254",
+            name="treasury_manual_identity",
+        ),
+        Index("treasury_manual_unfinished", "status", "created_at"),
+    )
+
+
+class TreasuryRuntimeRevision(Base):
+    """Append-only public approvals and guarded producer mode; never signer custody."""
+
+    __tablename__ = "treasury_runtime_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    __table_args__ = (
+        CheckConstraint("parent_revision >= 0", name="treasury_runtime_parent_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="treasury_runtime_checksum_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="treasury_runtime_reason_check",
+        ),
+        UniqueConstraint("parent_revision", name="treasury_runtime_parent_key"),
+    )
+
+
 class TreasurySettingsRevision(Base):
     """Append-only shadow policy; no validator or signer consumes it."""
 
@@ -8893,6 +9605,116 @@ class BurnSettingsRevision(Base):
             "scope",
             "parent_revision",
             name="burn_settings_scope_parent_key",
+        ),
+    )
+
+
+class TrackShareSettingsRevision(Base):
+    """Append-only operator split of emission across competition tracks.
+
+    Shaped exactly like :class:`BurnSettingsRevision`: one policy object the
+    scoring ledger serves to every validator as ``track_shares_bps``. Unset
+    (no row, or a row whose map is null) leaves validators on their compiled
+    memory-only split. See :mod:`ditto.api_models.track_share_settings`.
+    """
+
+    __tablename__ = "track_share_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="track_share_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="track_share_settings_checksum_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="track_share_settings_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="track_share_settings_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="track_share_settings_actor_check",
+        ),
+        Index(
+            "track_share_settings_scope_revision_idx",
+            "scope",
+            "revision",
+            unique=True,
+        ),
+        UniqueConstraint(
+            "scope",
+            "parent_revision",
+            name="track_share_settings_scope_parent_key",
+        ),
+    )
+
+
+class EmissionAllocationRevision(Base):
+    """Append-only typed-weights split of total miner emission (SN-350).
+
+    One revision names burn, every paid track and every Gamma bucket as integer
+    basis points summing to 10000. Platform derives the burn share, track map
+    and Gamma bucket allocation validators fold and writes any that changed as
+    revisions of their own settings in the same transaction; the three
+    ``*_settings_revision`` columns record which of those revisions were in
+    force after the write. See :mod:`ditto.api_models.emission_allocation`.
+    """
+
+    __tablename__ = "emission_allocation_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    allocation: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    served: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    burn_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    track_share_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    treasury_settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="emission_allocation_parent_revision_check",
+        ),
+        CheckConstraint(
+            "burn_settings_revision >= 0 AND track_share_settings_revision >= 0 "
+            "AND treasury_settings_revision >= 0",
+            name="emission_allocation_settings_revision_check",
+        ),
+        CheckConstraint(
+            "length(checksum) = 64",
+            name="emission_allocation_checksum_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="emission_allocation_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="emission_allocation_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="emission_allocation_parent_key",
         ),
     )
 
@@ -9653,10 +10475,10 @@ class ArtifactFetchAudit(Base):
     the question this column answers is "which door did they come through"."""
 
     requester_kind: Mapped[str] = mapped_column(Text, nullable=False)
-    """``validator`` | ``screener`` | ``admin`` | ``public``."""
+    """``validator`` | ``screener`` | ``admin`` | ``public`` | ``miner``."""
 
     requester_id: Mapped[str | None] = mapped_column(Text, nullable=True)
-    """Hotkey (validator/screener) or admin actor. NULL only for ``public``."""
+    """Hotkey (validator/screener/miner) or admin actor. NULL only for ``public``."""
 
     requester_instance_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Screener worker instance within the shared-hotkey fleet, when known.
@@ -9691,7 +10513,7 @@ class ArtifactFetchAudit(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "requester_kind IN ('validator', 'screener', 'admin', 'public')",
+            "requester_kind IN ('validator', 'screener', 'admin', 'public', 'miner')",
             name="artifact_fetch_audit_requester_kind_check",
         ),
         CheckConstraint(
@@ -10838,6 +11660,16 @@ class ConfirmationBundleTicket(Base):
     failure_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
     """Last progress stage the slot published before it broke, or ``unknown``."""
 
+    failure_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Bounded HTTP status behind a scorer-forwarded :attr:`failure_class`.
+
+    Only the scorer's own ``longmem_*`` classes have one, and only some of
+    those: ``0`` means the boundary broke before a status existed. Null means
+    the reporter sent no status at all -- an older reporter, or a class derived
+    from the reporter's exception type, which has no status behind it. The two
+    are deliberately distinguishable: ``0`` is a measurement, null is silence.
+    """
+
     failed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -10891,8 +11723,94 @@ class ConfirmationBundleTicket(Base):
             "failure_class IS NULL OR failure_class IN ("
             "'sandbox_oom', 'lease_revoked', 'validator_infrastructure', "
             "'platform_infrastructure', 'dittobench', 'platform', 'validator', "
-            "'evidence_schema', 'timeout', 'transport', 'unclassified')",
+            "'evidence_schema', 'timeout', 'transport', 'unclassified', "
+            "'longmem_run_http_status', 'longmem_run_malformed_json', "
+            "'longmem_run_missing_final_text', 'longmem_run_request', "
+            "'longmem_run_response_read', 'longmem_run_response_too_large', "
+            "'longmem_run_tool_endpoint', 'longmem_seed_http_status', "
+            "'longmem_seed_incomplete_ack', 'longmem_seed_malformed_json', "
+            "'longmem_seed_request', 'longmem_seed_response_read', "
+            "'longmem_seed_response_too_large', "
+            "'longmem_exec_ablation_dataset', 'longmem_exec_broker_session', "
+            "'longmem_exec_dimension_execution', 'longmem_exec_embedding_phase', "
+            "'longmem_exec_execution', 'longmem_exec_harness_health', "
+            "'longmem_exec_installation_validation', 'longmem_exec_longmem_dataset', "
+            "'longmem_exec_provider_capabilities', 'longmem_exec_provider_session', "
+            "'longmem_exec_runtime_acquire', 'longmem_exec_runtime_close', "
+            "'longmem_exec_runtime_material', 'longmem_exec_runtime_validation', "
+            "'longmem_exec_sandbox_availability', 'longmem_exec_sandbox_start', "
+            "'longmem_exec_sandbox_stop', 'longmem_exec_screened_image', "
+            "'longmem_exec_source_validation', "
+            "'longmem_dim_ablation_construct', "
+            "'longmem_dim_ablation_coordinate', "
+            "'longmem_dim_ablation_evaluate', 'longmem_dim_ablation_marshal', "
+            "'longmem_dim_ablation_responder', "
+            "'longmem_dim_ablation_upstream', 'longmem_dim_budget_unfundable', "
+            "'longmem_dim_deadline_missing', 'longmem_dim_longmem_digest', "
+            "'longmem_dim_longmem_execute', 'longmem_dim_longmem_marshal', "
+            "'longmem_dim_longmem_validate', 'longmem_dim_mode_inactive', "
+            "'longmem_dim_wire_digest', 'longmem_eval_accounting_final', "
+            "'longmem_eval_accounting_final_cost_source', "
+            "'longmem_eval_accounting_final_fallback_used', "
+            "'longmem_eval_accounting_final_identity_drift', "
+            "'longmem_eval_accounting_final_mixed_zero_lanes', "
+            "'longmem_eval_accounting_final_provider_evidence', "
+            "'longmem_eval_accounting_final_request_free_accounting', "
+            "'longmem_eval_accounting_initial', "
+            "'longmem_eval_accounting_initial_cost_source', "
+            "'longmem_eval_accounting_initial_fallback_used', "
+            "'longmem_eval_accounting_initial_identity_drift', "
+            "'longmem_eval_accounting_initial_lane_coverage', "
+            "'longmem_eval_accounting_initial_meter_unavailable', "
+            "'longmem_eval_accounting_initial_nonzero_start', "
+            "'longmem_eval_accounting_initial_provider_evidence', "
+            "'longmem_eval_accounting_initial_request_free_accounting', "
+            "'longmem_eval_accounting_judge', "
+            "'longmem_eval_accounting_judge_cost_source', "
+            "'longmem_eval_accounting_judge_fallback_used', "
+            "'longmem_eval_accounting_judge_identity_drift', "
+            "'longmem_eval_accounting_judge_lane_coverage', "
+            "'longmem_eval_accounting_judge_meter_unavailable', "
+            "'longmem_eval_accounting_judge_provider_evidence', "
+            "'longmem_eval_accounting_judge_receipt_changed', "
+            "'longmem_eval_accounting_judge_receipt_uncommitted', "
+            "'longmem_eval_accounting_judge_regressed', "
+            "'longmem_eval_accounting_judge_request_free_accounting', "
+            "'longmem_eval_accounting_run', "
+            "'longmem_eval_accounting_run_cost_source', "
+            "'longmem_eval_accounting_run_fallback_used', "
+            "'longmem_eval_accounting_run_identity_drift', "
+            "'longmem_eval_accounting_run_lane_coverage', "
+            "'longmem_eval_accounting_run_meter_unavailable', "
+            "'longmem_eval_accounting_run_provider_evidence', "
+            "'longmem_eval_accounting_run_receipt_changed', "
+            "'longmem_eval_accounting_run_receipt_uncommitted', "
+            "'longmem_eval_accounting_run_regressed', "
+            "'longmem_eval_accounting_run_request_free_accounting', "
+            "'longmem_eval_accounting_seed', "
+            "'longmem_eval_accounting_seed_cost_source', "
+            "'longmem_eval_accounting_seed_fallback_used', "
+            "'longmem_eval_accounting_seed_identity_drift', "
+            "'longmem_eval_accounting_seed_lane_coverage', "
+            "'longmem_eval_accounting_seed_meter_unavailable', "
+            "'longmem_eval_accounting_seed_provider_evidence', "
+            "'longmem_eval_accounting_seed_receipt_changed', "
+            "'longmem_eval_accounting_seed_receipt_uncommitted', "
+            "'longmem_eval_accounting_seed_regressed', "
+            "'longmem_eval_accounting_seed_request_free_accounting', "
+            "'longmem_eval_aggregate', 'longmem_eval_dataset', "
+            "'longmem_eval_evidence', 'longmem_eval_judge_budget', "
+            "'longmem_eval_judge_opaque', 'longmem_eval_projection', "
+            "'longmem_eval_reader_budget', 'longmem_eval_run_opaque', "
+            "'longmem_eval_run_unreceipted', 'longmem_eval_seed_incomplete', "
+            "'longmem_eval_seed_opaque', 'longmem_eval_setup', "
+            "'longmem_eval_time_budget')",
             name="confirmation_tickets_failure_class_check",
+        ),
+        CheckConstraint(
+            "failure_status IS NULL OR "
+            "(failure_class IS NOT NULL AND failure_status BETWEEN 0 AND 599)",
+            name="confirmation_tickets_failure_status_check",
         ),
         CheckConstraint(
             "failure_stage IS NULL OR failure_stage IN ("
@@ -11054,6 +11972,32 @@ class ConfirmationInferenceRequest(Base):
     completed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    # Why a failed call failed, as the relay observed it. Before these existed
+    # a failed row carried only status='failed', so every confirmation provider
+    # failure looked identical off-host -- 11 reader failures over seven days
+    # with no status, no attempt count, and no way to tell a 5xx from a reset.
+    # That fact decides whether a retry is safe and useful, so it is recorded
+    # where an operator can read it. upstream_attempts is written on every
+    # settled call (the grant retry budget sums it, so a call that succeeded
+    # only after retrying must still show those retries); the other three are
+    # null on a completed call. All four are null on rows written before they
+    # existed; a consumer must not require them.
+    failure_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Bounded reason (see the CHECK) the relay's provider call failed."""
+    upstream_http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Final upstream HTTP status, when a response arrived at all."""
+    upstream_error_code: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """``error.code`` from an OpenRouter in-body failure (a 200 carrying only an
+    error object); distinguishes a 502 inside a 200 from a 429 inside a 200."""
+    upstream_attempts: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """Upstream dispatches the relay made, including any it retried."""
+    receipt_free: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    """Whether the failure provably left no provider receipt, i.e. retry-safe.
+
+    True only on positive evidence: a dial failure, or a gateway envelope
+    proving no endpoint was selected. A timeout is NULL, not true -- it may
+    have reached the gateway and been billed.
+    """
 
     __table_args__ = (
         PrimaryKeyConstraint("grant_id", "nonce"),
@@ -11074,6 +12018,24 @@ class ConfirmationInferenceRequest(Base):
         CheckConstraint(
             "prompt_tokens >= 0 AND completion_tokens >= 0 AND cost_microusd >= 0",
             name="confirmation_inference_requests_accounting_check",
+        ),
+        CheckConstraint(
+            "failure_kind IS NULL OR failure_kind IN ("
+            "'identity_mismatch', 'receipt_invalid', 'response_invalid', "
+            "'response_too_large', 'settle_rejected', 'transport_error', "
+            "'transport_timeout', "
+            "'upstream_backpressure', 'upstream_status', 'upstream_error_envelope')",
+            name="confirmation_inference_requests_failure_kind_check",
+        ),
+        CheckConstraint(
+            "(upstream_http_status IS NULL "
+            "OR upstream_http_status BETWEEN 100 AND 599) "
+            "AND (upstream_attempts IS NULL OR upstream_attempts BETWEEN 0 AND 16)",
+            name="confirmation_inference_requests_failure_detail_check",
+        ),
+        CheckConstraint(
+            "upstream_error_code IS NULL OR upstream_error_code BETWEEN 400 AND 599",
+            name="confirmation_inference_requests_error_code_check",
         ),
         Index("confirmation_inference_requests_started_idx", "started_at"),
     )
@@ -11444,12 +12406,57 @@ class TreasuryVerifiedReceipt(Base):
             name="treasury_verified_parent",
         ),
         Index(
-            "treasury_verified_distribution_once",
+            "treasury_verified_distribution_source",
             "epoch_index",
             "source_block",
             "bucket_id",
-            unique=True,
             postgresql_where=text("stage = 'service_distribution'"),
+        ),
+    )
+
+
+class TreasuryLedgerSample(Base):
+    """One per-epoch reading of the Gamma collector from finalized chain state.
+
+    Append-only and public: every column is a public chain value read at
+    ``block_hash``, so any sample can be re-derived from an archive node. The
+    gap between what the collector earned and how its balance moved is what a
+    verified treasury receipt must explain.
+    """
+
+    __tablename__ = "treasury_ledger_samples"
+    id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    block_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    sampled_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    collector_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    collector_uid: Mapped[int | None] = mapped_column(Integer)
+    collector_incentive: Mapped[float | None] = mapped_column(Float)
+    collector_emission_rao: Mapped[int | None] = mapped_column(BigInteger)
+    collector_total_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_locked_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_available_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    collector_lock_perpetual: Mapped[bool | None] = mapped_column(Boolean)
+    owner_hotkey: Mapped[str | None] = mapped_column(Text)
+    owner_conviction_rao: Mapped[int | None] = mapped_column(BigInteger)
+    most_convicted_hotkey: Mapped[str | None] = mapped_column(Text)
+    holdings: Mapped[list] = mapped_column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
+    __table_args__ = (
+        UniqueConstraint(
+            "netuid", "epoch_index", name="treasury_ledger_samples_netuid_epoch"
+        ),
+        CheckConstraint(
+            "collector_total_rao >= 0 AND collector_locked_rao >= 0 "
+            "AND collector_available_rao >= 0",
+            name="treasury_ledger_samples_nonnegative",
         ),
     )
 
@@ -11585,4 +12592,2465 @@ class TreasuryPublicEvent(Base):
             name="treasury_public_verification_source",
         ),
         Index("treasury_public_event_at_idx", "event_at", "id"),
+    )
+
+
+class MinerGithubLinkAttempt(Base):
+    """Ephemeral OAuth/PKCE state, never an OAuth access token."""
+
+    __tablename__ = "miner_github_link_attempts"
+    attempt_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    session_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    launch_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    state_hash: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    code_verifier: Mapped[str | None] = mapped_column(Text, nullable=True)
+    browser_binding_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accept_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    github_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    github_login: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id"], ["miner_sessions.session_id"], ondelete="SET NULL"
+        ),
+        CheckConstraint(
+            "status IN ('pending','identity_verified','accepted',"
+            "'linked','failed','expired')",
+            name="status",
+        ),
+        Index("miner_github_link_attempts_hotkey_idx", "hotkey", "expires_at"),
+        Index(
+            "miner_github_link_attempts_open_expiry_idx",
+            "expires_at",
+            postgresql_where=text(
+                "status IN ('pending','identity_verified','accepted')"
+            ),
+        ),
+        Index(
+            "miner_github_link_attempts_closed_created_idx",
+            "created_at",
+            postgresql_where=text("status IN ('failed','expired')"),
+        ),
+    )
+
+
+class MinerGithubActionNonce(Base):
+    __tablename__ = "miner_github_action_nonces"
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    link_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+
+class MinerGithubLink(Base):
+    """Immutable link proofs; only one-way revocation metadata may change."""
+
+    __tablename__ = "miner_github_links"
+    link_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    github_login: Mapped[str] = mapped_column(Text, nullable=False)
+    link_attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    nonce: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    linked_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    owner_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["link_attempt_id"], ["miner_github_link_attempts.attempt_id"]
+        ),
+        ForeignKeyConstraint(["nonce"], ["miner_github_action_nonces.nonce"]),
+        CheckConstraint("github_user_id > 0", name="github_id"),
+        CheckConstraint("key_kind IN ('hotkey','coldkey')", name="key_kind"),
+        Index("miner_github_links_attempt_idx", "link_attempt_id"),
+        Index(
+            "miner_github_links_active_hotkey_key",
+            "hotkey",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+        Index(
+            "miner_github_links_active_github_key",
+            "github_user_id",
+            unique=True,
+            postgresql_where=text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class ClaVersion(Base):
+    __tablename__ = "cla_versions"
+    version: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    effective_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        CheckConstraint("version > 0 AND sha256 ~ '^[0-9a-f]{64}$'", name="identity"),
+    )
+
+
+class MinerGithubOperatorRevocation(Base):
+    """Append-only operator recovery audit, separate from miner signatures."""
+
+    __tablename__ = "miner_github_operator_revocations"
+    link_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    revoked_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["link_id"], ["miner_github_links.link_id"]),
+    )
+
+
+class ClaSignature(Base):
+    __tablename__ = "cla_signatures"
+    signature_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    cla_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    cla_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False, unique=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    signed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    owner_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["cla_version"], ["cla_versions.version"]),
+        UniqueConstraint(
+            "netuid",
+            "hotkey",
+            "cla_version",
+            name="uq_cla_signatures_hotkey_version",
+        ),
+        CheckConstraint("cla_sha256 ~ '^[0-9a-f]{64}$'", name="digest"),
+    )
+
+
+class ClaSettingsRevision(Base):
+    __tablename__ = "cla_settings_revisions"
+    revision: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=False
+    )
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint("mode IN ('off','shadow','enforce')", name="mode"),
+    )
+
+
+class ClaShadowUpload(Base):
+    """An accepted upload from an unsigned hotkey while the CLA gate is shadow.
+
+    It commits with its paid upload, so it grows no faster than paid agents
+    and stops when the gate leaves shadow. Its count is the evidence an
+    operator reads before enforcing, so it is kept.
+    """
+
+    __tablename__ = "cla_shadow_uploads"
+    observation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    cla_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (Index("cla_shadow_uploads_netuid_idx", "netuid"),)
+
+
+class AgentClaBinding(Base):
+    """The exact consent receipt bound to an immutable submitted artifact."""
+
+    __tablename__ = "agent_cla_bindings"
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    signature_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="RESTRICT"),
+        ForeignKeyConstraint(
+            ["signature_id"], ["cla_signatures.signature_id"], ondelete="RESTRICT"
+        ),
+    )
+
+
+BOUNTY_SLOT_STATUSES = (
+    "open",
+    "held",
+    "claimed",
+    "submitted",
+    "rework",
+    "accepted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "cancelled",
+)
+BOUNTY_EVENT_KINDS = (
+    "revision_published",
+    "round_opened",
+    "slot_held",
+    "hold_expired",
+    "hold_released",
+    "slot_claimed",
+    "fee_refund_owed",
+    "claims_paused",
+    "claims_resumed",
+    "submitted",
+    "withdrawn",
+    "deadline_missed",
+    "review_overdue",
+    "rework_requested",
+    "accepted",
+    "rejected",
+    "reviewer_reassigned",
+    "appeal_filed",
+    "appeal_upheld",
+    "appeal_denied",
+    "slot_cancelled",
+    "slot_reopened",
+    "fee_retained",
+    "award_recorded",
+    "obligation_approved",
+    "transfer_dispatched",
+    "transfer_confirmed",
+    "transfer_failed",
+    "transfer_uncertain",
+    "fact_recorded",
+)
+# Bounty-wide events. Every other event is about one claim and names it; an
+# open slot is cancelled or reopened without one.
+BOUNTY_CLAIMLESS_EVENT_KINDS = (
+    "revision_published",
+    "round_opened",
+    "claims_paused",
+    "claims_resumed",
+    "reviewer_reassigned",
+    "slot_cancelled",
+    "slot_reopened",
+)
+# Slots a claim occupies or once occupied; an open slot has no claim.
+BOUNTY_CLAIMED_SLOT_STATUSES = (
+    "held",
+    "claimed",
+    "submitted",
+    "rework",
+    "accepted",
+    "rejected",
+    "expired",
+    "withdrawn",
+)
+BOUNTY_REFUND_REASONS = (
+    "hold_expired",
+    "slot_lost",
+    "identity_changed",
+    "duplicate_payment",
+    "cancelled",
+    "system_fault",
+)
+BOUNTY_OBLIGATION_REASONS = (
+    *BOUNTY_REFUND_REASONS,
+    "accepted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "accepted_work",
+)
+BOUNTY_TRANSFER_STATES = ("dispatched", "confirmed", "failed", "expired", "uncertain")
+BOUNTY_NONCE_ACTIONS = ("claim", "submit", "withdraw", "appeal")
+BOUNTY_EVALUATION_KINDS = ("estimate", "actual")
+BOUNTY_EVALUATION_METRICS = (
+    "build_hours",
+    "reviewer_hours",
+    "integration_hours",
+    "operator_hours",
+    "turnaround_days",
+)
+BOUNTY_EVALUATION_DECISIONS = ("expand", "revise", "stop")
+BOUNTY_EVALUATION_INTEGRATION = (
+    "not_integrated",
+    "integrating",
+    "integrated",
+    "adopted",
+    "not_adopted",
+)
+# The largest value an evaluation metric records. The bound also refuses NaN
+# and infinity, which PostgreSQL orders above every number.
+BOUNTY_EVALUATION_MAX_VALUE = 1_000_000
+
+
+class Bounty(Base):
+    """One build bounty, identified by its public GitHub issue. Append-only."""
+
+    __tablename__ = "bounties"
+    bounty_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    repo: Mapped[str] = mapped_column(Text, nullable=False)
+    issue_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("repo", "issue_number"),
+        CheckConstraint("issue_number > 0", name="issue"),
+        # One canonical spelling per repository; GitHub ignores case.
+        CheckConstraint("repo = lower(repo)", name="repo"),
+    )
+
+
+class BountyRevision(Base):
+    """The signed public terms of one bounty revision. Append-only."""
+
+    __tablename__ = "bounty_revisions"
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    public_interfaces: Mapped[str] = mapped_column(Text, nullable=False)
+    acceptance_evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    dependencies: Mapped[list[str]] = mapped_column(_JSON_VARIANT, nullable=False)
+    reviewer_login: Mapped[str] = mapped_column(Text, nullable=False)
+    entry_fee_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    reward_pool_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    attempts_per_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivery_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    review_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    hold_minutes: Mapped[int] = mapped_column(Integer, nullable=False)
+    funding_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    fee_escrow_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    fee_escrow_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    spec_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    # Private operator identities; never part of the signed public terms.
+    reviewer_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        PrimaryKeyConstraint("bounty_id", "revision"),
+        # The target of a claim's reference to the terms it signed.
+        UniqueConstraint(
+            "bounty_id",
+            "revision",
+            "spec_digest",
+            "funding_mode",
+            "entry_fee_alpha_rao",
+            "fee_escrow_coldkey",
+            "fee_escrow_hotkey",
+        ),
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        CheckConstraint(
+            "revision > 0 AND spec_digest ~ '^[0-9a-f]{64}$'"
+            " AND entry_fee_alpha_rao >= 0 AND reward_pool_alpha_rao >= 0"
+            " AND attempts_per_round BETWEEN 1 AND 10"
+            " AND delivery_days BETWEEN 1 AND 60 AND review_days BETWEEN 1 AND 60"
+            " AND hold_minutes BETWEEN 1 AND 1440"
+            " AND funding_mode IN ('rehearsal','live')",
+            name="terms",
+        ),
+    )
+
+
+class BountyRound(Base):
+    """A round of paid slots, opened under one revision. Append-only."""
+
+    __tablename__ = "bounty_rounds"
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    __table_args__ = (
+        PrimaryKeyConstraint("bounty_id", "round"),
+        ForeignKeyConstraint(
+            ["bounty_id", "opened_revision"],
+            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+        ),
+        CheckConstraint("round > 0", name="round"),
+    )
+
+
+class BountySlot(Base):
+    """One paid slot. Its identity never changes; its status, current claim
+    and deadline do, with every change in the public event trail."""
+
+    __tablename__ = "bounty_slots"
+    slot_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    status_changed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    review_due_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        UniqueConstraint("bounty_id", "round", "position"),
+        # The target of references that must stay within the slot's bounty.
+        UniqueConstraint("slot_id", "bounty_id"),
+        ForeignKeyConstraint(
+            ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "bounty_id"],
+            ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+            use_alter=True,
+        ),
+        # A slot's claim is a claim of that slot.
+        ForeignKeyConstraint(
+            ["slot_id", "claim_id"],
+            ["bounty_claims.slot_id", "bounty_claims.claim_id"],
+            use_alter=True,
+        ),
+        CheckConstraint("position > 0", name="position"),
+        CheckConstraint(
+            "status IN (" + ",".join(f"'{s}'" for s in BOUNTY_SLOT_STATUSES) + ")",
+            name="status",
+        ),
+        CheckConstraint(
+            "(status <> 'open' OR claim_id IS NULL) AND (status NOT IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_CLAIMED_SLOT_STATUSES)
+            + ") OR claim_id IS NOT NULL)"
+            " AND (status <> 'claimed' OR deadline_at IS NOT NULL)"
+            " AND (status <> 'rework' OR deadline_at IS NOT NULL)"
+            " AND (status <> 'submitted' OR review_due_at IS NOT NULL)",
+            name="claim",
+        ),
+    )
+
+
+class BountyEvent(Base):
+    """The public, append-only status trail of a bounty."""
+
+    __tablename__ = "bounty_events"
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    round: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    slot_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    appeal_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    obligation_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    # A deadline transition is stamped at its deadline; this is when a request
+    # or sweep wrote it, which can be later. Unset for every other event.
+    noticed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        # Every reference stays within the event's own bounty.
+        ForeignKeyConstraint(
+            ["bounty_id", "revision"],
+            ["bounty_revisions.bounty_id", "bounty_revisions.revision"],
+        ),
+        ForeignKeyConstraint(
+            ["bounty_id", "round"], ["bounty_rounds.bounty_id", "bounty_rounds.round"]
+        ),
+        ForeignKeyConstraint(
+            ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "bounty_id"],
+            ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+        ),
+        # An event naming a claim and a slot names the slot that claim holds.
+        ForeignKeyConstraint(
+            ["slot_id", "claim_id"], ["bounty_claims.slot_id", "bounty_claims.claim_id"]
+        ),
+        # The target of an appeal's reference to an event of its own claim.
+        UniqueConstraint("event_id", "claim_id"),
+        ForeignKeyConstraint(["submission_id"], ["bounty_submissions.submission_id"]),
+        ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
+        ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
+        # An event's submission, appeal and obligation belong to its claim.
+        ForeignKeyConstraint(
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "appeal_id"],
+            ["bounty_appeals.claim_id", "bounty_appeals.appeal_id"],
+        ),
+        ForeignKeyConstraint(
+            ["claim_id", "obligation_id"],
+            ["bounty_obligations.claim_id", "bounty_obligations.obligation_id"],
+        ),
+        # A NULL claim would skip those composite keys, so a reference needs one.
+        CheckConstraint(
+            "(submission_id IS NULL OR claim_id IS NOT NULL)"
+            " AND (appeal_id IS NULL OR claim_id IS NOT NULL)",
+            name="review_refs",
+        ),
+        CheckConstraint(
+            "obligation_id IS NULL OR claim_id IS NOT NULL", name="obligation_ref"
+        ),
+        CheckConstraint(
+            "claim_id IS NOT NULL OR kind IN ("
+            + ",".join(f"'{k}'" for k in BOUNTY_CLAIMLESS_EVENT_KINDS)
+            + ")",
+            name="claim_scope",
+        ),
+        CheckConstraint(
+            "kind IN (" + ",".join(f"'{k}'" for k in BOUNTY_EVENT_KINDS) + ")",
+            name="kind",
+        ),
+        CheckConstraint(
+            "noticed_at IS NULL OR noticed_at >= recorded_at",
+            name="noticed_after_recorded",
+        ),
+        Index("bounty_events_bounty_idx", "bounty_id", "event_id"),
+    )
+
+
+class BountyClaimControl(Base):
+    """An operator pause or resume of new claims. Append-only; latest wins."""
+
+    __tablename__ = "bounty_claim_controls"
+    control_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    paused: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        Index("bounty_claim_controls_bounty_idx", "bounty_id", "control_id"),
+    )
+
+
+class BountyActionNonce(Base):
+    """One row per signed bounty action nonce, across every action. Append-only.
+
+    Unlike a validator replay guard, it is never pruned: each row is the nonce
+    of the claim, submission, withdrawal or appeal it authorized, which keeps
+    it by foreign key, and a refused action writes none. It grows only with
+    recorded actions.
+    """
+
+    __tablename__ = "bounty_action_nonces"
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "action IN (" + ",".join(f"'{a}'" for a in BOUNTY_NONCE_ACTIONS) + ")",
+            name="action",
+        ),
+    )
+
+
+class BountyClaim(Base):
+    """A signed claim and the hold it placed on one slot. Append-only.
+
+    The payee of record is the signed coldkey, which was Owner(hotkey) at a
+    finalized block when the claim was accepted; a later owner never moves it.
+    """
+
+    __tablename__ = "bounty_claims"
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    spec_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    slot_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    github_login: Mapped[str] = mapped_column(Text, nullable=False)
+    team_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    github_link_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    github_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cla_signature_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    funding_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    fee_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    fee_escrow_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    fee_escrow_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    held_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    hold_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        # The target of references that must stay within the claim's bounty.
+        UniqueConstraint("claim_id", "bounty_id"),
+        # The target of references to a claim together with the slot it holds.
+        UniqueConstraint("slot_id", "claim_id"),
+        # A claim carries the exact terms of the revision it signed.
+        ForeignKeyConstraint(
+            [
+                "bounty_id",
+                "revision",
+                "spec_digest",
+                "funding_mode",
+                "fee_alpha_rao",
+                "fee_escrow_coldkey",
+                "fee_escrow_hotkey",
+            ],
+            [
+                "bounty_revisions.bounty_id",
+                "bounty_revisions.revision",
+                "bounty_revisions.spec_digest",
+                "bounty_revisions.funding_mode",
+                "bounty_revisions.entry_fee_alpha_rao",
+                "bounty_revisions.fee_escrow_coldkey",
+                "bounty_revisions.fee_escrow_hotkey",
+            ],
+        ),
+        ForeignKeyConstraint(
+            ["slot_id", "bounty_id"], ["bounty_slots.slot_id", "bounty_slots.bounty_id"]
+        ),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        ForeignKeyConstraint(["github_link_id"], ["miner_github_links.link_id"]),
+        ForeignKeyConstraint(["cla_signature_id"], ["cla_signatures.signature_id"]),
+        CheckConstraint(
+            "key_kind IN ('hotkey','coldkey') AND fee_alpha_rao > 0"
+            " AND hold_expires_at > held_at AND github_user_id > 0"
+            " AND funding_mode IN ('rehearsal','live')"
+            " AND (key_kind = 'coldkey' OR signer = hotkey)"
+            " AND (key_kind = 'hotkey' OR signer = payee_coldkey)"
+            " AND spec_digest ~ '^[0-9a-f]{64}$' AND team_digest ~ '^[0-9a-f]{64}$'",
+            name="claim",
+        ),
+        Index("bounty_claims_bounty_idx", "bounty_id"),
+        Index("bounty_claims_slot_idx", "slot_id"),
+    )
+
+
+class BountyFeePayment(Base):
+    """A verified entry-fee receipt; it can be charged at most once. Append-only."""
+
+    __tablename__ = "bounty_fee_payments"
+    block_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    payer_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    outcome: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # The target of an obligation's composite reference to its payment.
+        UniqueConstraint("claim_id", "block_hash", "extrinsic_index", "payer_coldkey"),
+        CheckConstraint(
+            "amount_alpha_rao > 0 AND extrinsic_index >= 0 AND block_number >= 0"
+            " AND outcome IN ('allocated','refund_owed')",
+            name="payment",
+        ),
+        Index(
+            "bounty_fee_payments_allocated_idx",
+            "claim_id",
+            unique=True,
+            postgresql_where=text("outcome = 'allocated'"),
+        ),
+    )
+
+
+class BountyObligation(Base):
+    """Money a bounty decision commits Platform to. Append-only.
+
+    A fee refund or a retained fee follows one receipt; an award pays for
+    accepted work. Recording an obligation never moves funds: only approved
+    transfers do.
+    """
+
+    __tablename__ = "bounty_obligations"
+    obligation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    extrinsic_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    # Awards only: the accepted submission, public credit, and (privately) who
+    # decided it.
+    submission_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    actor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    __table_args__ = (
+        # One obligation per receipt: its refund, or its fee's one disposition.
+        UniqueConstraint("block_hash", "extrinsic_index"),
+        # The target of an event's reference to an obligation of its claim.
+        UniqueConstraint("claim_id", "obligation_id"),
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        # An obligation's claim belongs to the obligation's own bounty.
+        ForeignKeyConstraint(
+            ["claim_id", "bounty_id"],
+            ["bounty_claims.claim_id", "bounty_claims.bounty_id"],
+        ),
+        # A fee obligation is the payment of its own claim, owed to its payer.
+        ForeignKeyConstraint(
+            ["claim_id", "block_hash", "extrinsic_index", "payee_coldkey"],
+            [
+                "bounty_fee_payments.claim_id",
+                "bounty_fee_payments.block_hash",
+                "bounty_fee_payments.extrinsic_index",
+                "bounty_fee_payments.payer_coldkey",
+            ],
+        ),
+        # An award credits a submission of its own claim.
+        ForeignKeyConstraint(
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
+        ),
+        CheckConstraint(
+            "kind IN ('fee_refund','fee_retained','award') AND amount_alpha_rao > 0"
+            " AND reason IN ("
+            + ",".join(f"'{r}'" for r in BOUNTY_OBLIGATION_REASONS)
+            + ")"
+            " AND (kind = 'award') = (block_hash IS NULL)"
+            " AND (block_hash IS NULL) = (extrinsic_index IS NULL)"
+            " AND (kind = 'award') = (submission_id IS NOT NULL)"
+            " AND (kind = 'award') = (actor IS NOT NULL)"
+            " AND (kind = 'award') = (decision_reason IS NOT NULL)"
+            " AND (kind = 'award' OR attribution IS NULL)",
+            name="obligation",
+        ),
+        Index("bounty_obligations_claim_idx", "claim_id"),
+        Index(
+            "bounty_obligations_award_idx",
+            "claim_id",
+            unique=True,
+            postgresql_where=text("kind = 'award'"),
+        ),
+    )
+
+
+class BountyWithdrawal(Base):
+    """A claimant's signed withdrawal; the entry fee is retained. Append-only."""
+
+    __tablename__ = "bounty_withdrawals"
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    withdrawn_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        CheckConstraint("key_kind IN ('hotkey','coldkey')", name="withdrawal"),
+    )
+
+
+class BountySubmission(Base):
+    """A signed submission of one exact commit for review. Append-only."""
+
+    __tablename__ = "bounty_submissions"
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    head_sha: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    submitted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    review_due_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        # The target of a review's composite reference to its submission.
+        UniqueConstraint("claim_id", "submission_id"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        CheckConstraint(
+            "pr_number > 0 AND head_sha ~ '^[0-9a-f]{40}$'"
+            " AND key_kind IN ('hotkey','coldkey') AND review_due_at > submitted_at",
+            name="submission",
+        ),
+        Index("bounty_submissions_claim_idx", "claim_id"),
+    )
+
+
+class BountyReview(Base):
+    """The reviewer's one decision on one submission. Append-only."""
+
+    __tablename__ = "bounty_reviews"
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    attribution: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rework_deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    # Private: the operator who decided.
+    reviewer_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        # A review decides a submission of its own claim.
+        ForeignKeyConstraint(
+            ["claim_id", "submission_id"],
+            ["bounty_submissions.claim_id", "bounty_submissions.submission_id"],
+        ),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        CheckConstraint(
+            "decision IN ('accept','changes_requested','reject')"
+            " AND (decision = 'changes_requested') = (rework_deadline_at IS NOT NULL)"
+            " AND (decision = 'accept' OR attribution IS NULL)",
+            name="review",
+        ),
+    )
+
+
+class BountyReviewerAssignment(Base):
+    """An operator reassignment of a bounty's reviewer. Append-only; latest wins."""
+
+    __tablename__ = "bounty_reviewer_assignments"
+    assignment_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    reviewer_actor: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        Index("bounty_reviewer_assignments_bounty_idx", "bounty_id", "assignment_id"),
+    )
+
+
+class BountyAppeal(Base):
+    """A claimant's signed appeal of one public decision. Append-only."""
+
+    __tablename__ = "bounty_appeals"
+    appeal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    subject_event_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Private unless the appellant publishes it; the digest is public.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    reason_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    signer: Mapped[str] = mapped_column(Text, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    filed_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    __table_args__ = (
+        UniqueConstraint("nonce"),
+        UniqueConstraint("subject_event_id"),
+        # The target of an event's reference to an appeal of its claim.
+        UniqueConstraint("claim_id", "appeal_id"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        # The appealed decision must be an event of the appeal's own claim.
+        ForeignKeyConstraint(
+            ["subject_event_id", "claim_id"],
+            ["bounty_events.event_id", "bounty_events.claim_id"],
+        ),
+        ForeignKeyConstraint(["nonce"], ["bounty_action_nonces.nonce"]),
+        CheckConstraint(
+            "reason_digest ~ '^[0-9a-f]{64}$' AND key_kind IN ('hotkey','coldkey')",
+            name="appeal",
+        ),
+    )
+
+
+class BountyAppealDecision(Base):
+    """An operator's decision on one appeal. Append-only."""
+
+    __tablename__ = "bounty_appeal_decisions"
+    appeal_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    upheld: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    # Upholding restores a delivery deadline; it is part of the decision.
+    restored_deadline_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["appeal_id"], ["bounty_appeals.appeal_id"]),
+        CheckConstraint(
+            "upheld = (restored_deadline_at IS NOT NULL)", name="restored_deadline"
+        ),
+    )
+
+
+class BountySlotAction(Base):
+    """An operator cancellation or reopening of one slot. Append-only."""
+
+    __tablename__ = "bounty_slot_actions"
+    action_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    slot_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    claim_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    cancel_kind: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The slot's status when the action applied; a reopened claim keeps it as
+    # its own outcome.
+    prior_status: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["slot_id"], ["bounty_slots.slot_id"]),
+        # The claim an action names is the claim of that slot.
+        ForeignKeyConstraint(
+            ["slot_id", "claim_id"], ["bounty_claims.slot_id", "bounty_claims.claim_id"]
+        ),
+        CheckConstraint(
+            "action IN ('cancel','reopen')"
+            " AND (action = 'cancel') = (cancel_kind IS NOT NULL)"
+            " AND (cancel_kind IS NULL OR cancel_kind IN ('team','system_fault'))"
+            " AND (action <> 'cancel'"
+            " OR prior_status IN ('open','claimed','submitted','rework'))"
+            " AND (action <> 'reopen'"
+            " OR prior_status IN ('expired','withdrawn','rejected','cancelled'))",
+            name="slot_action",
+        ),
+    )
+
+
+class BountyPayoutPolicy(Base):
+    """Approval thresholds in alpha rao, as revisions. Append-only; latest wins."""
+
+    __tablename__ = "bounty_payout_policies"
+    revision: Mapped[int] = mapped_column(
+        Integer, primary_key=True, autoincrement=False
+    )
+    single_approver_max_alpha_rao: Mapped[int] = mapped_column(
+        BigInteger, nullable=False
+    )
+    dual_approver_max_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "revision > 0 AND single_approver_max_alpha_rao >= 0"
+            " AND dual_approver_max_alpha_rao >= single_approver_max_alpha_rao",
+            name="policy",
+        ),
+    )
+
+
+class BountyObligationApproval(Base):
+    """One operator's approval of one obligation round. Append-only.
+
+    It binds the payee, the amount and the payout policy revision in force.
+    """
+
+    __tablename__ = "bounty_obligation_approvals"
+    approval_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    obligation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    payee_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    amount_alpha_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    policy_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    approved_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("obligation_id", "round", "actor", "policy_revision"),
+        ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
+        ForeignKeyConstraint(["policy_revision"], ["bounty_payout_policies.revision"]),
+        CheckConstraint("round > 0 AND amount_alpha_rao > 0", name="approval"),
+    )
+
+
+class BountyTransfer(Base):
+    """One dispatch of an approved obligation. Only its outcome moves forward."""
+
+    __tablename__ = "bounty_transfers"
+    transfer_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    obligation_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False)
+    executor: Mapped[str] = mapped_column(Text, nullable=False)
+    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    block_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    block_number: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    extrinsic_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    dispatched_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    settled_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    __table_args__ = (
+        UniqueConstraint("obligation_id", "round"),
+        ForeignKeyConstraint(["obligation_id"], ["bounty_obligations.obligation_id"]),
+        CheckConstraint(
+            "state IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_TRANSFER_STATES)
+            + ") AND round > 0"
+            " AND (state = 'confirmed') = (block_hash IS NOT NULL)"
+            " AND (block_hash IS NULL) = (extrinsic_index IS NULL)"
+            " AND (block_hash IS NULL) = (block_number IS NULL)"
+            " AND (state IN ('dispatched','uncertain')) = (settled_at IS NULL)",
+            name="transfer",
+        ),
+        Index(
+            "bounty_transfers_live_idx",
+            "obligation_id",
+            unique=True,
+            postgresql_where=text("state IN ('dispatched','uncertain','confirmed')"),
+        ),
+    )
+
+
+class BountyTransferReconciliation(Base):
+    """Who reconciled a transfer, what they asked for, and what it showed.
+
+    Append-only. A check that leaves the transfer uncertain is recorded too.
+    """
+
+    __tablename__ = "bounty_transfer_reconciliations"
+    reconciliation_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    transfer_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    # The rehearsal outcome requested; None for a live executor's chain lookup.
+    requested: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["transfer_id"], ["bounty_transfers.transfer_id"]),
+        CheckConstraint(
+            "state IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_TRANSFER_STATES)
+            + ") AND (requested IS NULL OR requested IN "
+            "('confirmed','failed','expired','unknown'))",
+            name="reconciliation",
+        ),
+        Index("bounty_transfer_reconciliations_transfer_idx", "transfer_id"),
+    )
+
+
+class BountyDeliveryFact(Base):
+    """A public merge, deployment or adoption fact. Never a payment condition."""
+
+    __tablename__ = "bounty_delivery_facts"
+    fact_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    reference: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        UniqueConstraint("claim_id", "kind"),
+        ForeignKeyConstraint(["claim_id"], ["bounty_claims.claim_id"]),
+        CheckConstraint(
+            "kind IN ('merged','deployed','adopted') AND length(reference) > 0",
+            name="fact",
+        ),
+    )
+
+
+class BountyEvaluationEntry(Base):
+    """One estimate or actual of a bounty's evaluation metric. Append-only.
+
+    The latest entry of a bounty's kind and metric is the current one; the
+    entries before it stay as its history.
+    """
+
+    __tablename__ = "bounty_evaluation_entries"
+    entry_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    metric: Mapped[str] = mapped_column(Text, nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Private: why the operator recorded it, and who.
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        CheckConstraint(
+            "kind IN ("
+            + ",".join(f"'{k}'" for k in BOUNTY_EVALUATION_KINDS)
+            + ") AND metric IN ("
+            + ",".join(f"'{m}'" for m in BOUNTY_EVALUATION_METRICS)
+            + f") AND value >= 0 AND value <= {BOUNTY_EVALUATION_MAX_VALUE}"
+            " AND (note IS NULL OR length(btrim(note)) > 0)"
+            " AND length(btrim(reason)) > 0",
+            name="entry",
+        ),
+        Index(
+            "bounty_evaluation_entries_bounty_idx",
+            "bounty_id",
+            "kind",
+            "metric",
+            "entry_id",
+        ),
+    )
+
+
+class BountyEvaluationDecision(Base):
+    """An operator decision on a bounty's pilot. Append-only; latest wins."""
+
+    __tablename__ = "bounty_evaluation_decisions"
+    decision_id: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=True), primary_key=True
+    )
+    bounty_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    decision: Mapped[str] = mapped_column(Text, nullable=False)
+    integration_status: Mapped[str] = mapped_column(Text, nullable=False)
+    reasons: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(["bounty_id"], ["bounties.bounty_id"]),
+        CheckConstraint(
+            "decision IN ("
+            + ",".join(f"'{d}'" for d in BOUNTY_EVALUATION_DECISIONS)
+            + ") AND integration_status IN ("
+            + ",".join(f"'{s}'" for s in BOUNTY_EVALUATION_INTEGRATION)
+            + ") AND length(btrim(reasons)) > 0",
+            name="decision",
+        ),
+        Index("bounty_evaluation_decisions_bounty_idx", "bounty_id", "decision_id"),
+    )
+
+
+class GeneratorCompetitionSettingsRevision(Base):
+    """Append-only operator policy for the shadow generator competition.
+
+    Each revision stores the whole policy (mode, panel size, scoring
+    parameters, freshness window, upload limits); see
+    ``ditto.api_models.generator`` for the bounds. An empty table resolves to
+    ``mode=off``, so deploying the lane accepts no uploads.
+    """
+
+    __tablename__ = "generator_competition_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    settings: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    checksum: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("scope = '*'", name="generator_settings_scope_check"),
+        CheckConstraint(
+            "length(checksum) = 64", name="generator_settings_checksum_check"
+        ),
+        CheckConstraint(
+            "parent_revision >= 0", name="generator_settings_parent_revision_check"
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="generator_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="generator_settings_actor_check",
+        ),
+        UniqueConstraint(
+            "scope", "parent_revision", name="generator_settings_scope_parent_key"
+        ),
+    )
+
+
+class GeneratorSubmission(Base):
+    """One generator-competition submission: a generator's Go source archive.
+
+    ``source_bytes`` are the exact uploaded archive and ``source_sha256`` their
+    digest (the identity the miner signed and the scorer re-checks);
+    ``tree_sha256`` identifies the file tree regardless of packing. Source is
+    private: no public or miner endpoint serves it.
+
+    A hotkey has at most one ``active`` submission; uploading a new one
+    supersedes it. An active submission is leased for a run whenever
+    ``next_run_at`` passes (immediately after upload, then every rescore
+    interval) and is ``rejected`` when a run proves it broken, nondeterministic,
+    or a behavioral copy. The lease columns describe the one in-flight run.
+    """
+
+    __tablename__ = "generator_submissions"
+
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    source_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    module: Mapped[str] = mapped_column(Text, nullable=False)
+    go_version: Mapped[str] = mapped_column(Text, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    status_reason: Mapped[str | None] = mapped_column(Text)
+    next_run_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_run_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    submitted_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    qualified_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    """When a qualification run passed (build, every seed valid, deterministic,
+    not a probe copy). Only qualified submissions are eligible for round
+    columns; rotating the probe seed clears it so every generator re-probes."""
+    public_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false")
+    )
+    """The operator-registered public default generator. It fills round
+    columns while too few miner generators qualify, is owned by nobody, and
+    never appears on the generator ledger."""
+    round_score: Mapped[float | None] = mapped_column(Float)
+    round_scored_index: Mapped[int | None] = mapped_column(BigInteger)
+    """The latest scored round this generator had a column in, and its column
+    score there; columns are filled best-first from these."""
+    name: Mapped[str | None] = mapped_column(Text)
+    """Optional miner-chosen display name (1-64 characters), shown with the
+    miner's profile on the public generator pages. ``None`` renders a short
+    submission id."""
+
+    __table_args__ = (
+        UniqueConstraint("source_sha256", name="generator_submissions_sha256_key"),
+        CheckConstraint(
+            "name IS NULL OR char_length(name) BETWEEN 1 AND 64",
+            name="generator_submissions_name_check",
+        ),
+        CheckConstraint(
+            "source_sha256 ~ '^[0-9a-f]{64}$' AND tree_sha256 ~ '^[0-9a-f]{64}$'",
+            name="generator_submissions_digest_check",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'rejected')",
+            name="generator_submissions_status_check",
+        ),
+        CheckConstraint(
+            "size_bytes > 0 AND size_bytes = octet_length(source_bytes) "
+            "AND size_bytes <= 4194304",
+            name="generator_submissions_size_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL) "
+            "AND (lease_id IS NULL) = (lease_run_id IS NULL)",
+            name="generator_submissions_lease_check",
+        ),
+        CheckConstraint("attempts >= 0", name="generator_submissions_attempts_check"),
+        Index(
+            "generator_submissions_hotkey_idx",
+            "miner_hotkey",
+            text("submitted_at DESC"),
+        ),
+        Index(
+            "generator_submissions_runnable_idx",
+            "next_run_at",
+            postgresql_where=text("status = 'active'"),
+        ),
+        Index("generator_submissions_tree_idx", "tree_sha256"),
+        Index(
+            "generator_submissions_public_default_key",
+            text("(public_default)"),
+            unique=True,
+            postgresql_where=text("public_default AND status = 'active'"),
+        ),
+    )
+
+
+class GeneratorSubmissionPayment(Base):
+    """The finalized TAO transfer that funded one generator upload.
+
+    Written only while the generator setting ``upload_fee_required`` is on.
+    The primary key ``(block_hash, extrinsic_index)`` stops one proof funding
+    two generator uploads; the upload paths refuse a proof already recorded in
+    :class:`EvaluationPayment` (and agent uploads one recorded here) under a
+    shared per-proof advisory lock, so a transfer funds exactly one upload
+    across both lanes. Columns mirror :class:`EvaluationPayment`.
+    """
+
+    __tablename__ = "generator_submission_payments"
+
+    block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    extrinsic_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    miner_coldkey: Mapped[str] = mapped_column(Text, nullable=False)
+    """Coldkey that owned the hotkey and signed the transfer at payment time."""
+    amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    tao_usd_rate: Mapped[Decimal | None] = mapped_column(Numeric(20, 8), nullable=True)
+    dest_address: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    """On-chain block timestamp."""
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        PrimaryKeyConstraint(
+            "block_hash",
+            "extrinsic_index",
+            name="generator_submission_payments_pkey",
+        ),
+        UniqueConstraint(
+            "submission_id", name="generator_submission_payments_submission_key"
+        ),
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="RESTRICT",
+            name="generator_submission_payments_submission_fkey",
+        ),
+        CheckConstraint(
+            "block_hash = lower(block_hash)",
+            name="generator_submission_payments_block_hash_check",
+        ),
+        CheckConstraint(
+            "extrinsic_index >= 0",
+            name="generator_submission_payments_extrinsic_index_check",
+        ),
+        CheckConstraint(
+            "amount_rao > 0", name="generator_submission_payments_amount_rao_check"
+        ),
+        CheckConstraint(
+            "tao_usd_rate IS NULL OR tao_usd_rate > 0",
+            name="generator_submission_payments_tao_usd_rate_check",
+        ),
+        Index("generator_submission_payments_miner_coldkey_idx", "miner_coldkey"),
+    )
+
+
+class GeneratorProbeEpoch(Base):
+    """A secret seed every generator run also generates (never panel-run).
+
+    Generators that emit the same cases on the same secret seed are the same
+    program; ``generator_probe_results`` stores each submission's probe
+    fingerprints per epoch so a later upload can be recognized as a copy of an
+    earlier one. Exactly one epoch is current (``retired_at IS NULL``). The
+    seed is never served to miners or public endpoints.
+    """
+
+    __tablename__ = "generator_probe_epochs"
+
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    seed: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    retired_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "seed ~ '^[0-9a-f]{64}$'", name="generator_probe_epochs_seed_check"
+        ),
+        Index(
+            "generator_probe_epochs_current_key",
+            text("(retired_at IS NULL)"),
+            unique=True,
+            postgresql_where=text("retired_at IS NULL"),
+        ),
+    )
+
+
+class GeneratorScorerHeartbeat(Base):
+    """The latest capability one generator scorer advertised on a work poll.
+
+    ``min_cases``/``max_cases`` are the case bounds the scorer build's pack
+    contract accepts (``challenge.MinCases``/``MaxCases``); both are NULL for a
+    scorer that predates advertising. Platform refuses qualification and round
+    work, and settings writes, outside the live scorer's bounds.
+
+    ``grading_bench_versions`` is the ascending list of pack grading policies
+    the build advertises (``challenge.SupportedGradingBenchVersions``); NULL for
+    a scorer that predates the list, which Platform treats as v13-only. A round
+    opens and leases at version N, and a qualification requests N, only for a
+    scorer listing N.
+    """
+
+    __tablename__ = "generator_scorer_heartbeats"
+
+    scorer_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    scorer_version: Mapped[str] = mapped_column(Text, nullable=False)
+    min_cases: Mapped[int | None] = mapped_column(Integer)
+    max_cases: Mapped[int | None] = mapped_column(Integer)
+    sandbox: Mapped[str | None] = mapped_column(Text)
+    build_revision: Mapped[str | None] = mapped_column(Text)
+    grading_bench_versions: Mapped[list[int] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    dueling_work_kinds: Mapped[list[str] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+    """Dueling-bench work kinds (``slice``, ``battery``) the scorer advertised
+    on its ``dueling-work`` poll; NULL for a scorer that never polled it."""
+    last_poll: Mapped[str] = mapped_column(Text, nullable=False)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "dueling_work_kinds IS NULL "
+            "OR (jsonb_typeof(dueling_work_kinds) = 'array' "
+            "AND jsonb_array_length(dueling_work_kinds) BETWEEN 1 AND 8)",
+            name="generator_scorer_heartbeats_dueling_kinds_check",
+        ),
+        CheckConstraint(
+            "grading_bench_versions IS NULL "
+            "OR (jsonb_typeof(grading_bench_versions) = 'array' "
+            "AND jsonb_array_length(grading_bench_versions) BETWEEN 1 AND 16)",
+            name="generator_scorer_heartbeats_grading_versions_check",
+        ),
+        CheckConstraint(
+            "(min_cases IS NULL) = (max_cases IS NULL) "
+            "AND (min_cases IS NULL OR (min_cases >= 1 AND max_cases >= min_cases))",
+            name="generator_scorer_heartbeats_cases_check",
+        ),
+        CheckConstraint(
+            "last_poll IN ('qualification', 'round', 'dueling')",
+            name="generator_scorer_heartbeats_poll_check",
+        ),
+    )
+
+
+class GeneratorOperatorAction(Base):
+    """Append-only audit of operator actions on the generator competition.
+
+    One row per write an operator makes that is not itself a settings revision
+    or a probe epoch (which carry their own actor and reason): a requested
+    rescore, a rejection, and round actions such as republishing a commitment
+    or releasing a lease. ``subject`` is the submission id, ``round:{n}``, or
+    another stable key for what was acted on.
+    """
+
+    __tablename__ = "generator_operator_actions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    subject: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("generator_operator_actions_subject_idx", "subject", "created_at"),
+    )
+
+
+class GeneratorRun(Base):
+    """One evaluation of a submission on fresh secret seeds.
+
+    Created when the submission is leased: ``seeds`` (32-byte hex, never
+    reused), the probe epoch, and the panel snapshot are fixed here, so the
+    scorer cannot choose any of them. Lifecycle: ``leased`` -> ``scored`` |
+    ``invalid`` | ``insufficient_panel`` | ``copy``, or ``abandoned`` when its
+    lease expires and the submission is leased again on new seeds.
+    """
+
+    __tablename__ = "generator_runs"
+
+    run_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        nullable=False,
+    )
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    seeds: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    probe_epoch: Mapped[int] = mapped_column(Integer, nullable=False)
+    cases_per_seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    panel: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    outcome: Mapped[str | None] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(Float)
+    score_summary: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    evaluation: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    panel_results: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    leased_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["probe_epoch"], ["generator_probe_epochs.epoch"]),
+        CheckConstraint(
+            "status IN ('leased', 'scored', 'qualified', 'invalid', "
+            "'insufficient_panel', 'copy', 'abandoned')",
+            name="generator_runs_status_check",
+        ),
+        CheckConstraint(
+            "(status = 'leased') = (finished_at IS NULL)",
+            name="generator_runs_finished_check",
+        ),
+        CheckConstraint(
+            "(status = 'scored') = (score IS NOT NULL)",
+            name="generator_runs_score_check",
+        ),
+        CheckConstraint(
+            "cases_per_seed BETWEEN 8 AND 80", name="generator_runs_cases_check"
+        ),
+        Index("generator_runs_submission_idx", "submission_id", text("leased_at DESC")),
+        Index(
+            "generator_runs_scored_idx",
+            "finished_at",
+            postgresql_where=text("status = 'scored'"),
+        ),
+    )
+
+
+class GeneratorProbeResult(Base):
+    """A submission's case fingerprints on one probe epoch's seed."""
+
+    __tablename__ = "generator_probe_results"
+
+    submission_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        primary_key=True,
+    )
+    epoch: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        nullable=False,
+    )
+    fingerprints: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["submission_id"],
+            ["generator_submissions.submission_id"],
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(["epoch"], ["generator_probe_epochs.epoch"]),
+        ForeignKeyConstraint(["run_id"], ["generator_runs.run_id"], ondelete="CASCADE"),
+        Index("generator_probe_results_epoch_idx", "epoch"),
+    )
+
+
+class GeneratorCaseVerdict(Base):
+    """The judged outcome of one case in one seed's pack of a scored run.
+
+    ``fingerprint`` is the case's content identity; the first scored run that
+    emits a fingerprint holds its credit and later repeats score as
+    ``duplicate``.
+    """
+
+    __tablename__ = "generator_case_verdicts"
+
+    run_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        primary_key=True,
+    )
+    seed_index: Mapped[int] = mapped_column(Integer, primary_key=True)
+    case_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    panel_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    solvers: Mapped[int] = mapped_column(Integer, nullable=False)
+    solver_owners: Mapped[int] = mapped_column(Integer, nullable=False)
+    mean_score: Mapped[float] = mapped_column(Float, nullable=False)
+    champion_failed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    credit: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(["run_id"], ["generator_runs.run_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate')",
+            name="generator_case_verdicts_status_check",
+        ),
+        CheckConstraint(
+            "fingerprint ~ '^[0-9a-f]{64}$'",
+            name="generator_case_verdicts_fingerprint_check",
+        ),
+        Index("generator_case_verdicts_fingerprint_idx", "fingerprint"),
+    )
+
+
+class GeneratorRound(Base):
+    """One round of the agent x generator matrix, keyed on the chain epoch.
+
+    ``first_epoch_index`` is the subnet epoch the round opens at; it spans
+    ``epochs_per_round`` epochs from there. Indexes continue from the latest
+    round whatever the cadence, so they stay monotonic in time across an
+    ``epochs_per_round`` change (``generator_rounds.round_clock``). A round is
+    ``committed`` (its secret drawn and ``commitment`` published) at least one
+    round before it opens; at the epoch boundary it ``generating`` (columns
+    and panel frozen, ``seed`` derived from the secret and the open block),
+    then ``running`` once the scorer posts the round dataset, ``scoring``
+    when the round closes, and ``scored``. A round that cannot finish is
+    ``void`` with a reason. ``secret`` and the dataset are private until
+    ``revealed_at`` (the privacy window).
+    """
+
+    __tablename__ = "generator_rounds"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    epochs_per_round: Mapped[int] = mapped_column(Integer, nullable=False)
+    first_epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    committed_epoch_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    commitment_publication: Mapped[str] = mapped_column(Text, nullable=False)
+    commitment_published_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    commitment_error: Mapped[str | None] = mapped_column(Text)
+    open_epoch_index: Mapped[int | None] = mapped_column(BigInteger)
+    open_block: Mapped[int | None] = mapped_column(BigInteger)
+    open_block_hash: Mapped[str | None] = mapped_column(Text)
+    opened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    seed: Mapped[str | None] = mapped_column(Text)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    cases_per_column: Mapped[int | None] = mapped_column(Integer)
+    # The bench contract the round runs at, frozen when it opens (NULL before,
+    # or for a round voided at opening). See generator_rounds.round_bench_version.
+    bench_version: Mapped[int | None] = mapped_column(Integer)
+    columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    panel: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    lease_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    generation: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    dataset_sha256: Mapped[str | None] = mapped_column(Text)
+    dataset_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    column_cases: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    score: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    scored_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+    revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('committed', 'generating', 'running', 'scoring', "
+            "'scored', 'void')",
+            name="generator_rounds_status_check",
+        ),
+        CheckConstraint(
+            "commitment ~ '^[0-9a-f]{64}$' AND octet_length(secret) = 32",
+            name="generator_rounds_commitment_check",
+        ),
+        CheckConstraint(
+            "commitment_publication IN ('pending', 'published', 'failed', 'disabled')",
+            name="generator_rounds_publication_check",
+        ),
+        CheckConstraint(
+            "(status <> 'committed' OR seed IS NULL) AND "
+            "(seed IS NOT NULL OR status IN ('committed', 'void'))",
+            name="generator_rounds_seed_check",
+        ),
+        CheckConstraint(
+            "(dataset_sha256 IS NULL) = (dataset_bytes IS NULL) AND "
+            "(dataset_sha256 IS NULL OR "
+            "dataset_sha256 = encode(sha256(dataset_bytes), 'hex'))",
+            name="generator_rounds_dataset_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL)",
+            name="generator_rounds_lease_check",
+        ),
+        CheckConstraint(
+            "(status = 'void') = (void_reason IS NOT NULL)",
+            name="generator_rounds_void_check",
+        ),
+        CheckConstraint(
+            "bench_version IS NULL OR bench_version >= 13",
+            name="generator_rounds_bench_version_check",
+        ),
+        Index(
+            "generator_rounds_dataset_idx",
+            "dataset_sha256",
+            postgresql_where=text("dataset_sha256 IS NOT NULL"),
+        ),
+        Index("generator_rounds_first_epoch_idx", "first_epoch_index"),
+    )
+
+
+class GeneratorRoundResult(Base):
+    """One panel agent's signed results on a round dataset.
+
+    Written by the validator that held the agent's ``generator_round`` ticket;
+    the first accepted result per (round, agent) is the one the matrix uses.
+    """
+
+    __tablename__ = "generator_round_results"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    results: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    answered: Mapped[int] = mapped_column(Integer, nullable=False)
+    faulted: Mapped[int] = mapped_column(Integer, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+    )
+
+
+class GeneratorRoundAttempt(Base):
+    """One validator lease of a round panel run, kept for diagnosis.
+
+    The lease itself is the agent's ``validator_tickets`` row with purpose
+    ``generator_round``; this row records which validator took it and how it
+    ended, so a stuck panel agent can be traced without reading tickets.
+    """
+
+    __tablename__ = "generator_round_attempts"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), primary_key=True
+    )
+    slot_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('leased', 'completed', 'failed')",
+            name="generator_round_attempts_status_check",
+        ),
+        Index("generator_round_attempts_round_idx", "round_index", "agent_id"),
+    )
+
+
+class GeneratorRoundCommitmentPublication(Base):
+    """One validator's publication of a committed round's seed commitment.
+
+    Platform elects a few validators per committed round (see
+    ``generator_rounds.elect_commitment_publishers``) to publish
+    ``dgr1:{round}:{commitment}`` with ``Commitments.set_commitment`` from
+    their own Pylon identity. A row is ``claimed`` when Platform hands the
+    job out, then ``confirmed`` (the validator read the value back on chain at
+    ``block_number``) or ``failed``. A claim with no report after
+    ``claim_expires_at`` no longer holds an election slot.
+    """
+
+    __tablename__ = "generator_round_commitment_publications"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    claimed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    claim_expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    reported_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    block_number: Mapped[int | None] = mapped_column(BigInteger)
+    extrinsic_hash: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('claimed', 'confirmed', 'failed')",
+            name="publication_status_check",
+        ),
+        CheckConstraint(
+            "status <> 'confirmed' OR block_number IS NOT NULL",
+            name="publication_block_check",
+        ),
+    )
+
+
+class GeneratorRoundCaseVerdict(Base):
+    """One case of one column of a scored round.
+
+    The fingerprint registry rounds share with qualification: a case a scored
+    round already holds scores as ``duplicate`` in every later round.
+    """
+
+    __tablename__ = "generator_round_case_verdicts"
+
+    round_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    column_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    case_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    fingerprint: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    panel_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    solvers: Mapped[int] = mapped_column(Integer, nullable=False)
+    solver_owners: Mapped[int] = mapped_column(Integer, nullable=False)
+    mean_score: Mapped[float] = mapped_column(Float, nullable=False)
+    champion_failed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    credit: Mapped[float] = mapped_column(Float, nullable=False)
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["round_index"], ["generator_rounds.round_index"], ondelete="CASCADE"
+        ),
+        CheckConstraint(
+            "status IN ('discriminating', 'trivial', 'unsolved', 'duplicate', "
+            "'insufficient_panel')",
+            name="generator_round_case_verdicts_status_check",
+        ),
+        Index("generator_round_case_verdicts_fingerprint_idx", "fingerprint"),
+        Index(
+            "generator_round_case_verdicts_submission_idx",
+            "submission_id",
+            "round_index",
+        ),
+    )
+
+
+class DuelingSeason(Base):
+    """One dueling-bench season: the frozen generator set of bench v16+ runs.
+
+    A season opens at a generator-round boundary (``season_index`` is the
+    round it opens on) and spans ``rounds_per_season`` rounds. Its 32-byte
+    ``secret`` is drawn and ``commitment`` published while the season is
+    ``committed``, before its anchor block (the opening round's open block)
+    exists; at ``open`` Platform derives ``season_seed`` from the secret and
+    the anchor and freezes up to five generator ``columns``. A season belongs
+    to one ``bench_version`` and never spans an activation; ``shadow`` seasons
+    run for the desired version of an open rollout. ``secret`` and
+    ``season_seed`` are Platform-only until ``revealed_at``.
+
+    See ``research/dittobench-datagen/docs/dueling-bench.md`` section 7.6.
+    """
+
+    __tablename__ = "dueling_seasons"
+
+    id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    season_index: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    shadow: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    commitment: Mapped[str] = mapped_column(Text, nullable=False)
+    secret: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    rounds_per_season: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings_revision: Mapped[int | None] = mapped_column(Integer)
+    anchor_block: Mapped[int | None] = mapped_column(BigInteger)
+    anchor_block_hash: Mapped[str | None] = mapped_column(Text)
+    season_seed: Mapped[str | None] = mapped_column(Text)
+    columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    opened_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    closes_at_round: Mapped[int | None] = mapped_column(BigInteger)
+    closed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    close_epoch_index: Mapped[int | None] = mapped_column(BigInteger)
+    reveal_at_epoch: Mapped[int | None] = mapped_column(BigInteger)
+    revealed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    void_reason: Mapped[str | None] = mapped_column(Text)
+    detail: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    rotation_requested_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True)
+    )
+    rotation_immediate: Mapped[bool | None] = mapped_column(Boolean)
+    rotation_actor: Mapped[str | None] = mapped_column(Text)
+    rotation_reason: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "bench_version", "season_index", name="dueling_seasons_index_key"
+        ),
+        # A floor, never an enumeration: every later bench version duels too.
+        CheckConstraint("bench_version >= 16", name="dueling_seasons_bench_floor"),
+        CheckConstraint(
+            "status IN ('committed', 'open', 'closed', 'revealed', 'void')",
+            name="dueling_seasons_status_check",
+        ),
+        CheckConstraint(
+            "commitment ~ '^[0-9a-f]{64}$' AND octet_length(secret) = 32",
+            name="dueling_seasons_commitment_check",
+        ),
+        CheckConstraint(
+            "season_index >= 0 AND rounds_per_season BETWEEN 1 AND 48",
+            name="dueling_seasons_index_check",
+        ),
+        CheckConstraint(
+            "(status <> 'committed' OR season_seed IS NULL) AND "
+            "(season_seed IS NOT NULL OR status IN ('committed', 'void'))",
+            name="dueling_seasons_seed_check",
+        ),
+        CheckConstraint(
+            "season_seed IS NULL OR (season_seed ~ '^[0-9a-f]{64}$' AND "
+            "anchor_block_hash IS NOT NULL AND columns IS NOT NULL)",
+            name="dueling_seasons_open_check",
+        ),
+        CheckConstraint(
+            "(status = 'void') = (void_reason IS NOT NULL)",
+            name="dueling_seasons_void_check",
+        ),
+        CheckConstraint(
+            "(status = 'revealed') = (revealed_at IS NOT NULL)",
+            name="dueling_seasons_reveal_check",
+        ),
+        CheckConstraint(
+            "(rotation_requested_at IS NULL) = (rotation_reason IS NULL) AND "
+            "(rotation_requested_at IS NULL) = (rotation_actor IS NULL)",
+            name="dueling_seasons_rotation_check",
+        ),
+        # One live season per bench version: at most one committed and at
+        # most one open at a time.
+        Index(
+            "dueling_seasons_one_open_idx",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("status = 'open'"),
+        ),
+        Index(
+            "dueling_seasons_one_committed_idx",
+            "bench_version",
+            unique=True,
+            postgresql_where=text("status = 'committed'"),
+        ),
+        Index("dueling_seasons_status_idx", "status", "season_index"),
+    )
+
+
+class DuelingSeasonBattery(Base):
+    """One candidate generator's season qualification battery.
+
+    Before a season opens, every candidate column (eligibility rules 1, 2 and
+    4) runs ``DUELING_BATTERY_SEEDS`` fresh secret seeds at the slice column
+    size plus a determinism re-run on the trusted generator scorer. Only a
+    ``passed`` candidate can be pinned; one failure excludes it from the
+    season. ``seeds`` are Platform-private and never served to a miner.
+    """
+
+    __tablename__ = "dueling_season_batteries"
+
+    season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    submission_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    seeds: Mapped[list] = mapped_column(_JSON_VARIANT, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    grading_bench_version: Mapped[int | None] = mapped_column(Integer)
+    error: Mapped[str | None] = mapped_column(Text)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "status IN ('pending', 'leased', 'passed', 'failed')",
+            name="dueling_season_batteries_status_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL) AND "
+            "(status <> 'leased' OR lease_id IS NOT NULL)",
+            name="dueling_season_batteries_lease_check",
+        ),
+        CheckConstraint(
+            "status <> 'passed' OR grading_bench_version >= 15",
+            name="dueling_season_batteries_policy_check",
+        ),
+        CheckConstraint(
+            "attempts >= 0", name="dueling_season_batteries_attempts_check"
+        ),
+        Index("dueling_season_batteries_status_idx", "status", "season_id"),
+    )
+
+
+class DuelingSlicePreparation(Base):
+    """One run's generator slice: the private half of a bench v16+ dataset.
+
+    Keyed ``(season_id, run_seed)``: every lease of the same seed in a season
+    (quorum validators, re-leases, retries, CRN participants) reuses the same
+    bytes, and existing pinned bytes always win. A missing slice reserves a
+    ``pending`` row in its own transaction and the lease answers 503 with
+    ``Retry-After``; the trusted generator scorer leases it, builds the slice,
+    and posts the canonical ``dittobench-dueling-slice/v1`` bytes with their
+    SHA-256. ``slice_bytes`` stay in Platform-private storage until every
+    contributing generator's source is released and the dispute window has
+    passed; after that only ``slice_sha256`` is kept (``bytes_pruned_at``).
+    """
+
+    __tablename__ = "dueling_slice_preparations"
+
+    id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    season_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_seed: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    lease_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    slice_sha256: Mapped[str | None] = mapped_column(Text)
+    slice_bytes: Mapped[bytes | None] = mapped_column(LargeBinary)
+    columns: Mapped[list | None] = mapped_column(_NULLABLE_JSON_VARIANT)
+    error: Mapped[str | None] = mapped_column(Text)
+    scorer_version: Mapped[str | None] = mapped_column(Text)
+    requested_by: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    first_leased_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    ready_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    failed_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+    bytes_pruned_at: Mapped[datetime | None] = mapped_column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint(
+            "season_id", "run_seed", name="dueling_slice_preparations_seed_key"
+        ),
+        ForeignKeyConstraint(["season_id"], ["dueling_seasons.id"], ondelete="CASCADE"),
+        CheckConstraint("run_seed >= 0", name="dueling_slice_preparations_seed_check"),
+        CheckConstraint(
+            "status IN ('pending', 'leased', 'ready', 'failed')",
+            name="dueling_slice_preparations_status_check",
+        ),
+        CheckConstraint(
+            "(lease_id IS NULL) = (lease_expires_at IS NULL) AND "
+            "(status <> 'leased' OR lease_id IS NOT NULL)",
+            name="dueling_slice_preparations_lease_check",
+        ),
+        CheckConstraint(
+            "(status = 'ready') = (slice_sha256 IS NOT NULL) AND "
+            "(status <> 'ready' OR slice_bytes IS NOT NULL "
+            "OR bytes_pruned_at IS NOT NULL)",
+            name="dueling_slice_preparations_ready_check",
+        ),
+        CheckConstraint(
+            "slice_sha256 IS NULL OR slice_sha256 ~ '^[0-9a-f]{64}$'",
+            name="dueling_slice_preparations_digest_check",
+        ),
+        CheckConstraint(
+            "slice_bytes IS NULL OR (octet_length(slice_bytes) BETWEEN 1 AND "
+            "33554432 AND slice_sha256 = encode(sha256(slice_bytes), 'hex'))",
+            name="dueling_slice_preparations_bytes_check",
+        ),
+        CheckConstraint(
+            "attempts >= 0", name="dueling_slice_preparations_attempts_check"
+        ),
+        Index("dueling_slice_preparations_status_idx", "status", "created_at"),
+    )
+
+
+class AgentDistinctiveItems(Base):
+    """Distinctive-item index of one artifact for the unreleased-copy signal.
+
+    ``item_keys`` is the sorted set of item keys left after the packaged public
+    corpus is removed (:mod:`ditto.api_server.distinctive_content`; the low
+    three bits of each key carry its kind). Written at upload, or by the
+    sentinel's backfill for artifacts uploaded before the index existed. A row
+    with ``error`` set marks an artifact that could not be read, so it is never
+    retried forever and never blocks evaluation of later uploads. Paths and
+    text are deliberately not stored: evidence is re-extracted from the artifact
+    for the few pairs an operator reads.
+    """
+
+    __tablename__ = "agent_distinctive_items"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    items_version: Mapped[str] = mapped_column(Text, nullable=False)
+    item_keys: Mapped[list[int]] = mapped_column(ARRAY(BigInteger), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    indexed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class UnreleasedCopySignal(Base):
+    """One evaluation of the unreleased-copy signal for one agent and version.
+
+    Recorded by the sentinel in ``shadow`` mode: the score, the best matches
+    with their release state, and ``path:line`` evidence on both sides. A
+    shadow row never changes agent status, a hold, or a review. ``evidence`` is
+    the operator-only payload :func:`ditto.db.queries.unreleased_copy.signal_payload`
+    builds; it names other owners' unreleased files and is never public.
+    """
+
+    __tablename__ = "unreleased_copy_signals"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    signal_version: Mapped[str] = mapped_column(Text, primary_key=True)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    flagged: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    top_score: Mapped[float] = mapped_column(Float, nullable=False)
+    top_matched_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    compared_agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    candidate_item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+        CheckConstraint(
+            "mode IN ('shadow', 'enforce')", name="unreleased_copy_signals_mode_check"
+        ),
+        Index(
+            "unreleased_copy_signals_flagged_idx",
+            "signal_version",
+            "flagged",
+            "top_score",
+        ),
+    )
+
+
+class CompetitionImprovementDaily(Base):
+    """One UTC day of one bench version's competition frontier (measurement only).
+
+    Written by :mod:`ditto.api_server.competition_improvement_job`. A day is
+    ``closed`` once it is at least two days old; a closed row is never
+    rewritten under the same ``metrics_version``, so it records what the
+    frontier was rather than what a later re-score made it. ``backfilled``
+    marks a row first written after its day had already closed. ``detail``
+    holds the owner-deduplicated top-N, the day's new highs with their
+    driver, and the release and fork agent ids that landed that day.
+    """
+
+    __tablename__ = "competition_improvement_daily"
+
+    bench_version: Mapped[int] = mapped_column(Integer, primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    frontier_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    frontier_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_agent_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    champion_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_n_mean: Mapped[float | None] = mapped_column(Float, nullable=True)
+    top_n_min: Mapped[float | None] = mapped_column(Float, nullable=True)
+    finalized_agent_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    new_high_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    releases_on_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    releases_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    forks_on_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    forks_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    thin_forks_to_date: Mapped[int] = mapped_column(Integer, nullable=False)
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    detail: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    closed: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    backfilled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
+class CompetitionSourceRelease(Base):
+    """One exact-SHA public source handoff, as the improvement job last saw it."""
+
+    __tablename__ = "competition_source_releases"
+
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    released_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    uploaded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    embargo_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    disclosure: Mapped[str] = mapped_column(Text, nullable=False)
+    base_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(["agent_id"], ["agents.agent_id"], ondelete="CASCADE"),
+    )
+
+
+class CompetitionReleaseFork(Base):
+    """One detected fork of one source release: lag, size of change and delta."""
+
+    __tablename__ = "competition_release_forks"
+
+    base_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    fork_agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    metrics_version: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    released_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    fork_uploaded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    lag_hours: Mapped[float] = mapped_column(Float, nullable=False)
+    containment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    novel_fraction: Mapped[float | None] = mapped_column(Float, nullable=True)
+    declared: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    thin: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    base_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    fork_composite: Mapped[float | None] = mapped_column(Float, nullable=True)
+    delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    shared_seed_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    shared_seed_delta: Mapped[float | None] = mapped_column(Float, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["base_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        ForeignKeyConstraint(
+            ["fork_agent_id"], ["agents.agent_id"], ondelete="CASCADE"
+        ),
+        Index("competition_release_forks_fork_idx", "fork_agent_id"),
+    )
+
+
+class UnreleasedCopySettingsRevision(Base):
+    """Append-only, operator-audited mode and threshold of the unreleased-copy signal.
+
+    No revision means ``shadow`` at the default threshold. ``enforce`` routes a
+    flag on an agent uploaded after enforcement took effect into a copy-kind
+    ATH hold for an operator ruling; it never rejects.
+    """
+
+    __tablename__ = "unreleased_copy_settings_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    mode: Mapped[str] = mapped_column(Text, nullable=False)
+    threshold: Mapped[float] = mapped_column(Float, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "mode IN ('off', 'shadow', 'enforce')",
+            name="unreleased_copy_settings_mode_check",
+        ),
+        CheckConstraint(
+            "threshold > 0 AND threshold <= 100000",
+            name="unreleased_copy_settings_threshold_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8", name="unreleased_copy_settings_reason_check"
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="unreleased_copy_settings_actor_check",
+        ),
+        UniqueConstraint("parent_revision", name="unreleased_copy_settings_parent_key"),
     )

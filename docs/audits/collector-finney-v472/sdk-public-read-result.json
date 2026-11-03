@@ -1,0 +1,19 @@
+{
+  "sdk": "10.5.0",
+  "role": "registration",
+  "observation": {
+    "block": 9203512,
+    "block_hash": "0x0d6da2d7450be50a7ba0a55a4a61e9afde6b606a5ba6044fed3815642f928795",
+    "uid": null,
+    "burn_rao": 500000,
+    "collector_free_rao": 73839580,
+    "delegate_free_rao": 0,
+    "alpha_rao": 0
+  },
+  "runtime_filter_and_genesis_guards": "passed",
+  "unsigned_policy_only": true,
+  "keys_loaded": 0,
+  "signed_operations": 0,
+  "transactions_submitted": 0,
+  "elapsed_seconds": 4.48
+}

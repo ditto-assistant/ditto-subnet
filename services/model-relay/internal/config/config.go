@@ -46,6 +46,19 @@ const (
 	RoutingModeAdaptive            = "adaptive"
 )
 
+// Scored aggregate provider routing, selected live from the operator's
+// scored_provider_routing board field (never from the environment).
+//
+//   - throughput: OpenRouter sorts the eligible ZDR providers by throughput.
+//   - bf16_price_order_canary: benchmark_canary tickets use the bf16 price
+//     order; every other ticket keeps throughput.
+//   - bf16_price_order: every scored chat call uses the bf16 price order.
+const (
+	ScoredProviderRoutingThroughput     = "throughput"
+	ScoredProviderRoutingBF16PriceOrder = "bf16_price_order"
+	ScoredProviderRoutingBF16Canary     = "bf16_price_order_canary"
+)
+
 // Lookup resolves one environment variable, reporting presence. It matches
 // os.LookupEnv so tests can substitute a map.
 type Lookup func(key string) (string, bool)
@@ -226,6 +239,10 @@ type ChainConfig struct {
 	DevAllowUnpermittedValidator bool
 }
 
+// NetuidInt32 is NETUID as a Postgres int4. Load rejects any value outside
+// [0, 2147483647], so the conversion never truncates.
+func (c ChainConfig) NetuidInt32() int32 { return int32(c.Netuid) }
+
 // InferenceProxyConfig mirrors the Python InferenceProxyConfig (section 10 of
 // the DB contract / section 9 of the API contract). All limits validated with
 // the same bounds; non-numeric numerics fail boot.
@@ -244,6 +261,8 @@ type InferenceProxyConfig struct {
 	AllowedModels []string // DITTO_INFERENCE_ALLOWED_MODELS csv, 1..4 entries
 	Provider      string   // DITTO_INFERENCE_PROVIDER, default nebius
 	RoutingMode   string   // DITTO_INFERENCE_ROUTING_MODE
+	// Optional provider cache affinity; independent generations remain separate.
+	OpenRouterSessionAffinity bool // DITTO_INFERENCE_OPENROUTER_SESSION_AFFINITY, default false
 
 	RequestBudget int   // DB-policy fallback default 16384, max 32768
 	TokenBudget   int64 // DB-policy fallback default 25_000_000, max 200_000_000
@@ -251,14 +270,26 @@ type InferenceProxyConfig struct {
 	TicketConcurrency    int // DB-policy fallback default 16
 	ValidatorConcurrency int // DB-policy fallback default 48
 	GlobalConcurrency    int // DB-policy fallback default 96, cap 128
-	TicketRPM            int // DITTO_INFERENCE_TICKET_RPM, default 240
-	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 960
-	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 2880, cap 100000
+	TicketRPM            int // DITTO_INFERENCE_TICKET_RPM, default 1920
+	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 7680
+	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 23040, cap 100000
 
 	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 4 MiB, max 8 MiB
 	ResponseBodyBytes int64 // DITTO_INFERENCE_RESPONSE_BODY_BYTES, default 2 MiB, max 8 MiB
 	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
 	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 32768, max 65536
+
+	// ConfirmationBackpressureRetry lets a confirmation lane re-dispatch a
+	// provably receipt-free provider rejection once, instead of parking the
+	// whole bundle for an operator retry.
+	//
+	// It is default-off and deliberately a gate rather than a fix: the
+	// confirmation lane is single-shot by design, because re-dispatching a
+	// frozen scored request changes what the shadow evidence attests. The
+	// retry cannot duplicate provider work or billing -- that is enforced by
+	// the receipt-free proof -- but whether a scored run may silently absorb a
+	// provider 429 at all is an owner decision, not a relay default.
+	ConfirmationBackpressureRetry bool
 
 	// Coding inference is a separate, shadow-only capability. It never
 	// inherits ordinary aggregate routing merely because the normal proxy is
@@ -286,6 +317,26 @@ type InferenceProxyConfig struct {
 
 	EmbeddingRequestBodyBytes  int64 // DITTO_EMBEDDING_REQUEST_BODY_BYTES, default+max 1 MiB
 	EmbeddingResponseBodyBytes int64 // DITTO_EMBEDDING_RESPONSE_BODY_BYTES, default+max 16 MiB
+
+	// Decision lane (TypeSafe Jev via OpenRouter System One). Authenticated
+	// with OPENROUTER_API_KEY; no separate credential exists. The URL is a
+	// credential boundary like the other OpenRouter pins. Whether the lane is
+	// on, and its rails, come from the operator's decision_lane board
+	// (applySettings); these are the off-by-default fallbacks.
+	DecisionUpstreamURL          string // DITTO_DECISION_UPSTREAM_URL
+	DecisionEnabled              bool   // DB-policy only, default false
+	DecisionTicketConcurrency    int    // DB-policy fallback default 8
+	DecisionValidatorConcurrency int    // DB-policy fallback default 32
+	DecisionGlobalConcurrency    int    // DB-policy fallback default 64
+	DecisionTicketRPM            int    // DB-policy fallback default 600
+	DecisionValidatorRPM         int    // DB-policy fallback default 2400
+	DecisionGlobalRPM            int    // DB-policy fallback default 6000
+
+	// ScoredProviderRouting is the board's scored_provider_routing value
+	// (applySettings). The chat handler resolves the canary mode against the
+	// ticket purpose before the provider call, so completeChatWithRecovery
+	// only ever sees throughput or bf16_price_order. Empty means throughput.
+	ScoredProviderRouting string
 }
 
 type envReader struct {
@@ -437,6 +488,9 @@ func Load(lookup Lookup) (*Config, error) {
 		IdentityToken:                r.str("PYLON_IDENTITY_TOKEN", ""),
 		DevAllowUnpermittedValidator: r.boolval("DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR", false),
 	}
+	if cfg.Chain.Netuid < 0 || cfg.Chain.Netuid > 2147483647 {
+		r.fail("NETUID must be between 0 and 2147483647, got %d", cfg.Chain.Netuid)
+	}
 	if (cfg.Chain.IdentityName == "") != (cfg.Chain.IdentityToken == "") {
 		r.fail("PYLON_IDENTITY_NAME and PYLON_IDENTITY_TOKEN must be provided together")
 	}
@@ -536,8 +590,9 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		EmbeddingUpstreamURL: r.str("DITTO_EMBEDDING_UPSTREAM_URL", "https://openrouter.ai/api/v1/embeddings"),
 		EmbeddingFallbackURL: r.str("DITTO_EMBEDDING_FALLBACK_URL", "https://api.perplexity.ai/v1/embeddings"),
 
-		Provider:    r.str("DITTO_INFERENCE_PROVIDER", "nebius"),
-		RoutingMode: r.str("DITTO_INFERENCE_ROUTING_MODE", RoutingModeAggregateThroughput),
+		Provider:                  r.str("DITTO_INFERENCE_PROVIDER", "nebius"),
+		RoutingMode:               r.str("DITTO_INFERENCE_ROUTING_MODE", RoutingModeAggregateThroughput),
+		OpenRouterSessionAffinity: r.boolval("DITTO_INFERENCE_OPENROUTER_SESSION_AFFINITY", false),
 
 		RequestBudget: 16384,
 		TokenBudget:   25_000_000,
@@ -545,14 +600,16 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		TicketConcurrency:    16,
 		ValidatorConcurrency: 48,
 		GlobalConcurrency:    96,
-		TicketRPM:            r.intval("DITTO_INFERENCE_TICKET_RPM", 240),
-		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 960),
-		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 2880),
+		TicketRPM:            r.intval("DITTO_INFERENCE_TICKET_RPM", 1920),
+		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 7680),
+		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 23040),
 
 		RequestBodyBytes:  r.int64val("DITTO_INFERENCE_REQUEST_BODY_BYTES", 4*1024*1024),
 		ResponseBodyBytes: r.int64val("DITTO_INFERENCE_RESPONSE_BODY_BYTES", 2*1024*1024),
 		TimeoutSeconds:    r.intval("DITTO_INFERENCE_TIMEOUT_SECONDS", 90),
 		MaxOutputTokens:   r.intval("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", 32768),
+
+		ConfirmationBackpressureRetry: r.boolval("DITTO_CONFIRMATION_BACKPRESSURE_RETRY", false),
 
 		CodingEnabled: r.boolval("DITTO_CODING_INFERENCE_ENABLED", false),
 		CodingAccountGuardrail: r.str(
@@ -579,6 +636,14 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 
 		EmbeddingRequestBodyBytes:  r.int64val("DITTO_EMBEDDING_REQUEST_BODY_BYTES", 1*1024*1024),
 		EmbeddingResponseBodyBytes: r.int64val("DITTO_EMBEDDING_RESPONSE_BODY_BYTES", 16*1024*1024),
+
+		DecisionUpstreamURL:          r.str("DITTO_DECISION_UPSTREAM_URL", "https://openrouter.ai/api/v1/systemone"),
+		DecisionTicketConcurrency:    8,
+		DecisionValidatorConcurrency: 32,
+		DecisionGlobalConcurrency:    64,
+		DecisionTicketRPM:            600,
+		DecisionValidatorRPM:         2400,
+		DecisionGlobalRPM:            6000,
 	}
 
 	models := strings.Split(r.str("DITTO_INFERENCE_ALLOWED_MODELS", "qwen/qwen3-32b,openai/gpt-oss-20b"), ",")
@@ -636,6 +701,8 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 		"openrouter.ai", "/api/v1/embeddings", "OpenRouter embeddings")
 	validateProviderURL("DITTO_EMBEDDING_FALLBACK_URL", ip.EmbeddingFallbackURL,
 		"api.perplexity.ai", "/v1/embeddings", "Perplexity embeddings")
+	validateProviderURL("DITTO_DECISION_UPSTREAM_URL", ip.DecisionUpstreamURL,
+		"openrouter.ai", "/api/v1/systemone", "OpenRouter System One")
 	if ip.RoutingMode != RoutingModeAggregateThroughput && ip.RoutingMode != RoutingModeAdaptive {
 		r.fail("DITTO_INFERENCE_ROUTING_MODE must be %q or %q, got %q",
 			RoutingModeAggregateThroughput, RoutingModeAdaptive, ip.RoutingMode)

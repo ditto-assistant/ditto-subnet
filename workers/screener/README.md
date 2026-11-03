@@ -40,10 +40,11 @@ private IPC, bounded local logs, and a locked
 are rejected. An image is never exported if
 it only boots as root or depends on writing elsewhere in its root filesystem.
 
-Production builds use a dedicated rootless Docker daemon. The worker verifies
-Docker's advertised `rootless` security option before accepting work when
-`SCREENER_REQUIRE_ROOTLESS_DOCKER=1`; a missing or rootful endpoint becomes a
-retryable infrastructure result, never a miner failure. The build receives no
+Production builds use a dedicated rootless Docker daemon. Rootless verification
+is enabled by default, including for standalone workers. The worker checks
+Docker's advertised `rootless` security option before accepting work; a missing
+or rootful endpoint becomes a retryable infrastructure result, never a miner
+failure. The build receives no
 credentials, cannot request host networking or insecure BuildKit entitlements,
 and non-root host traffic is denied access to cloud metadata except DNS.
 
@@ -217,7 +218,9 @@ Required values are supplied through the production host's protected
   remain off until its overhead and evidence profile have been calibrated.
   A source hold before runtime leaves these checks `not_recorded`.
 - `SCREENER_L2_REVIEW_MODE`: `off` (default), `shadow`, or `enforce`.
-- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; legacy
+- `SCREENER_L2_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`;
+  `openai/gpt-6.1-terra` is also accepted (Platform revisions may select it
+  for L2 and L3); legacy
   `moonshotai/kimi-k3` remains accepted only for a deliberate rollback.
   `SCREENER_L2_FALLBACK_MODELS` is the ordered OpenRouter model-failover chain
   (`z-ai/glm-5.2` by default). A fallback is used only after a
@@ -226,7 +229,8 @@ Required values are supplied through the production host's protected
   critic/adjudicator after L2. `false` keeps L1 routing and the L2 analyst
   active while making the L2 result authoritative. Platform review-settings
   revisions can change this between leases without a worker restart.
-- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol`; both layers use
+- `SCREENER_L3_REVIEW_MODEL`: defaults to `openai/gpt-6-sol` (or
+  `openai/gpt-6.1-terra`); both layers use
   OpenRouter ZDR routing and deny data collection.
 - `SCREENER_L2_ANALYZER_IMAGE`: locked to the updater-built
   `ditto-screener-l2-analyzer:active` image.

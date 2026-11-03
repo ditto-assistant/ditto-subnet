@@ -1,6 +1,6 @@
 ---
 name: ditto-subnet-bench-version-bump
-description: Ship a new DittoBench contract version (bench_version bump) across every layer without stranding it. Use whenever adding, activating, or auditing a bench version — new contract, version pins, scorer/validator/platform/screener/frontend wiring, generated artifacts, gate postures, and rollout. Also use to audit an EXISTING version for pins that silently exclude it.
+description: Ship a new DittoBench contract version (bench_version bump) across every layer without stranding it. Use whenever adding, activating, or auditing a bench version — new contract, version pins, scorer/validator/platform/screener/frontend wiring, generated artifacts, gate postures, and rollout. Also use to audit an EXISTING version for pins that silently exclude it, and for the matching generator pack version (tandem upgrade) that every activated bench version needs.
 ---
 
 # Bench version bump
@@ -46,6 +46,9 @@ rg -n 'BenchVersionV|SUPPORTED_BENCH_VERSIONS|CONFIRMATION_BENCH_VERSIONS|Curren
 
 Read `.agents/skills/ditto-subnet-benchmark` for scoring semantics, and
 `research/dittobench-datagen/docs/bench-versions.md` for what each version *is*.
+A bump is two competitions moving together: read
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md)
+before step 10 or any activation.
 
 ## The bump checklist
 
@@ -136,9 +139,11 @@ Not an opt-in per-version feature: every new `bench_version` is expected to run 
 
 ### 8. Miner rehearsal (otherwise miners keep scoring v(N-1) locally)
 
-- `miners/dittobench-starter-kit/scripts/local-rehearsal.py` `LIVE_SCORING_BENCH_VERSION` and `MAX_BENCH_VERSION`
+- `miners/dittobench-starter-kit/scripts/local-rehearsal.py` `MAX_BENCH_VERSION` on support; the offline-fallback
+  `LIVE_SCORING_BENCH_VERSION` on activation (the default itself reads the public rollout `active_version`;
+  `DITTO_LIVE_CHECKS=1 python3 scripts/test_local_rehearsal.py` compares the fallback with live)
 - `miners/dittobench-starter-kit/src/protocol.rs` `MAX_SUPPORTED_BENCH_VERSION` (accept the new version on `/run`; do not change `ACTIVE_BENCH_VERSION` unless cargo-evaluate should follow)
-- `.agents/skills/mine/SKILL.md` live bench number
+- `.agents/skills/mine/SKILL.md` live bench number and run-size envelope, plus the starter-kit `README.md`/`AGENTS.md`/`CLAUDE.md` and `docs/MINER.md` live-bench mentions
 
 A kit that 400s the new `bench_version` on `/run` looks like "scoring is broken" to miners.
 
@@ -149,6 +154,50 @@ A kit that 400s the new `bench_version` on `/run` looks like "scoring is broken"
   (dev tooling included), or `test_release_plan.py` fails.
 - Stale "unsupported version" placeholders in tests (`12` used as *the invalid version*) must
   move to `N+1`.
+
+### 10. Generator pack version N (tandem upgrade — required, even with an unchanged grader)
+
+One number for both competitions: bench version N is the agent contract, the generator-round
+runtime, **and** pack grading policy N. Every bench version that will be activated ships a pack
+policy N in the same contract release, even when `grade/` does not change (grading is by floor,
+so policy N grades like N-1). Detail and rationale:
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md).
+
+- `research/dittobench-datagen/challenge/pack.go` — `GradingBenchVersionVN` appended to
+  `supportedGradingBenchVersions`, plus any new pack validation rule gated to policy N (v14
+  added `v14_rendered_text`).
+- `GENERATOR_ROUND_BENCH_VERSIONS` in `ditto/api_models/generator_round_validator.py` (Platform
+  and validator copies) gains N. `test_generator_round_contracts_match_pack_grading_and_scorer_mode`
+  in `ditto/tests/test_bench_version_pins.py` fails if the tuple and the Go list disagree.
+- dittobench-api `generator-round-v1` advertises `generator-round-bench-N`; Platform leases a
+  round at N only to validators forwarding N in `scorer_benchmarks.generator_round_bench_versions`.
+- Generator scorer (`challenge-scorer`) carries `bench_version` on round and qualification work.
+  It **advertises its supported policies explicitly** (`grading_bench_versions` on every poll,
+  `challenge-scorer/6`; derived from `challenge.SupportedGradingBenchVersions`, so adding N to
+  the pack contract advertises it). A scorer that advertises nothing is treated as **v13-only**,
+  never inferred from `scorer_version`; Backroom `get_generator_scorer` shows
+  `supports_round_contract`.
+- `miners/dittobench-generator-starter-kit` declares N when offered
+  (`req.NewestAccepted(...)`, rehearse `-round-bench N-1` and `-round-bench N`); bump its
+  version, keep the N-1 output byte-identical apart from the version string, add a README
+  migration note, and re-register the public default generator after release.
+- Do **not** move the request baseline (`challenge.GradingBenchVersion`). The two-version window
+  (`challenge.GradingPolicyWindow`, Platform `accepted_grading_versions`) retires N-2 for rounds
+  at N on its own; announce that 14 days before N activates.
+- `test_every_activatable_bench_version_has_a_generator_pack_version` fails while a shipped
+  `benchmark_contract.py` entry N has no pack policy N and round contract.
+
+Standing decisions (operator, 2026-10-27):
+
+| Decision | Rule |
+|---|---|
+| Pack version per bench version | Every activated bench version gets a matching pack policy, grader changed or not. |
+| Support window | Two policies: a round at N accepts N and N-1 (`GradingPolicyWindow = 2`, enforced and pinned). Today {13, 14}, baseline 13. |
+| Who picks a column's policy | The generator, from the request. Platform never forces one. |
+| Legacy retry | Keep the once-only retry on the baseline request (`legacy_retry`) for now. |
+| Round switch | Rounds move to N only once a **validator quorum** can run N, symmetrical with the agent rollout quorum. The quorum gate is the generator setting `min_round_validators` (default 3 = the agent rollout's `SCORING_QUORUM`); read the live value from Backroom `preview_generator_round` before assuming it. Until the quorum is met, rounds stay on the previous round's version with a recorded reason. |
+| During an open rollout | Rounds and qualification stay on the active version; they pay generators. |
+| Qualification probes at N during rollout | **Open.** The agent side lets the top agents retest into the new version so a board exists at activation; the generator migration story is undecided. Do not build or assume one without an operator decision. |
 
 ## Validation ladder
 
@@ -190,3 +239,52 @@ genuine champions → activate. Fail-closed gates (LongMem confirmation enforce)
 their evidence is actually qualifying, or the board empties.
 
 Never enforce retroactively (the bunny ruling): fix the gate forward.
+
+## Activate (both competitions)
+
+**Never call `start_benchmark_rollout` without explicit operator approval in this conversation**,
+and only after the version's qualification gates (for v14,
+[`benchmark-v14-rollout.md`](../../../docs/benchmark-v14-rollout.md) "Open activation blockers")
+are closed or waived by the operator. The full ordered runbook is "Runbook: activating v14 for
+both competitions" in
+[`tandem-upgrades.md`](../../../research/dittobench-datagen/docs/tandem-upgrades.md); in short:
+
+1. **Release is live, layer by layer** (`$ditto-subnet-release-ops`): Platform
+   `preview_generator_round` lists N in `bench_contract.round_contracts`; Backroom
+   `get_generator_scorer` shows the **deployed** generator scorer build supports N (and the
+   governing `cases_per_seed`); `get_validator_fleet` shows validators forwarding N in
+   `generator_round_bench_versions`.
+2. **Default generator**: package the bumped generator starter kit and register it
+   (`create_default_generator_upload`, `register_default_generator`).
+3. **Announce** to generator miners at least 7 days before activation (template in the doc).
+4. **Readiness**: `preview_generator_round` `capable_validators["N"]` meets the round quorum.
+5. **Open the agent rollout** only on approval. Rounds stay on N-1 while it is open.
+6. **After activation**, verify in order: `preview_generator_round` (active N, bench N, no
+   reason); the first round opened after (`get_generator_round`: `bench_version` N, per-column
+   `grading_bench_version`, `legacy_retry` count); round panel leases only to validators reporting
+   N (`list_validator_assignments`); the next qualification run (`get_generator_run`).
+7. **Watch** the first three rounds at N: column validity versus the last three at N-1, the
+   `legacy_retry` count falling, and new-policy validation rejections at qualification.
+8. **Rollback** sends the next round back to N-1; void an in-flight round at N whose validators
+   were drained (`void_generator_round`).
+
+Bump the miner rehearsal live fallback and the `mine` skill's live bench in the same activation
+PR (checklist step 8; `test_miner_docs_quote_the_rehearsal_live_fallback` enforces it).
+
+### Generator scorer bounds and reinstatement (lesson from 2026-10-27)
+
+Before raising generator `cases_per_seed` (or activating a version whose rounds need more cases),
+confirm the **deployed** generator scorer build supports it with Backroom `get_generator_scorer`
+— not the merged source. A stale scorer still capped at 64 cases voided a round and wrongly
+rejected six generators; the fix was redeploying the scorer and reinstating them. Reinstate a
+rejection that was not the generator's fault with `reinstate_generator_submission` (confirmation
+`REINSTATE GENERATOR SUBMISSION`, `expectedStatus: rejected`, the exact `expectedStatusReason`).
+It is blocked when the hotkey has a newer upload or another active submission; check
+`get_generator_submission` `reinstate_blockers` first.
+
+## Starter kits
+
+Agent and generator starter kits are improved continuously, not only at bumps. An improvement
+derived from a miner's submission ships only after that submission is public under the Backroom
+source-disclosure setting (`get_source_release_policy`, `get_agent_source_release_evidence`).
+Never name the miner, hotkey, agent or generator in the kit or its commit.

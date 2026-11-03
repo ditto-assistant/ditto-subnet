@@ -1,0 +1,62 @@
+---
+# Controller-only policy tests: import validation, never account/SSH tasks.
+- name: Verify screener logs key admission before host changes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: A fully keyed team is accepted
+      ansible.builtin.include_role:
+        name: screener_logs_access
+        tasks_from: validate
+      vars:
+        team_members: [alice, bob]
+        team_ssh_keys:
+          alice: [fixture-alice-key]
+          bob: [fixture-bob-key]
+
+    - name: Reject partial key maps without rewriting any account keys
+      vars:
+        team_members: [alice, bob]
+        team_ssh_keys:
+          alice: [fixture-alice-key]
+      block:
+        - name: Evaluate a partial team key map
+          ansible.builtin.include_role:
+            name: screener_logs_access
+            tasks_from: validate
+        - name: Record an incorrectly admitted partial key map
+          ansible.builtin.set_fact:
+            partial_key_map_admitted: true
+      rescue:
+        - name: Require the intended admission assertion
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require managed public keys for the read-only logs account'
+    - name: Assert the partial map was rejected
+      ansible.builtin.assert:
+        that:
+          - not (partial_key_map_admitted | default(false))
+
+    - name: Reject a privileged logs identity
+      vars:
+        team_members: [logs]
+        team_ssh_keys:
+          logs: [fixture-key]
+      block:
+        - name: Evaluate logs as a privileged team member
+          ansible.builtin.include_role:
+            name: screener_logs_access
+            tasks_from: validate
+        - name: Record an incorrectly admitted privileged logs identity
+          ansible.builtin.set_fact:
+            privileged_logs_admitted: true
+      rescue:
+        - name: Require the intended privilege assertion
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name == 'Require managed public keys for the read-only logs account'
+    - name: Assert the privileged identity was rejected
+      ansible.builtin.assert:
+        that:
+          - not (privileged_logs_admitted | default(false))

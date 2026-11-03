@@ -33,6 +33,7 @@ func v13StoryPlans(t *testing.T, w World) []QuestionPlan {
 }
 
 func TestStoryV2ArcsAreTypedEventDAGsWithRevisions(t *testing.T) {
+	t.Parallel()
 	kindsSeen := map[StoryEventKind]bool{}
 	for seed := int64(1); seed <= 20; seed++ {
 		w := v13World(seed)
@@ -552,6 +553,7 @@ func TestStoryV2DoesNotDisturbTheV8Script(t *testing.T) {
 // seed-keyed people permutation, 59/60 scale-1 seeds failed validation and one
 // panicked inside generation.
 func TestStoryV13PlansValidateAtEveryScale(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct{ scale, cases int }{{1, 11}, {2, 77}} {
 		for seed := int64(1); seed <= 30; seed++ {
 			w := GenerateForVersion(seed, tc.scale, protocol.BenchVersionV13)
@@ -582,10 +584,13 @@ func TestStoryV13PlansValidateAtEveryScale(t *testing.T) {
 // always resolves to a value >= 1 (an expected "0" is a bounded-token grading
 // hazard and a nonsensical question), and the baked Value always equals the
 // oracle's recomputation from the stated operands, at every scale.
+// A per-arc invariant: 60 seeds per scale (originally 200) still draw every
+// quantity kind many times.
 func TestStoryV2QuantitiesArePositiveAndRecomputable(t *testing.T) {
+	t.Parallel()
 	quantities := 0
 	for _, scale := range []int{1, 2, 3} {
-		for seed := int64(1); seed <= 200; seed++ {
+		for seed := int64(1); seed <= 60; seed++ {
 			w := GenerateForVersion(seed, scale, protocol.BenchVersionV13)
 			for i, arc := range w.StoryArcs {
 				q := arc.V2.Quantity

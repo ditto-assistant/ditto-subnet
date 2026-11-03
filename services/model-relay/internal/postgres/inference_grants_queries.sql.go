@@ -21,6 +21,7 @@ SET bearer_digest = $1::text,
     expires_at = $4::timestamptz,
     active_requests = 0,
     embedding_active_requests = 0,
+    decision_active_requests = 0,
     updated_at = $5::timestamptz
 WHERE grant_id = $6::uuid
 `
@@ -99,7 +100,7 @@ SET active_requests = $1::integer,
     cost_microusd = cost_microusd + $4::bigint,
     updated_at = $5::timestamptz
 WHERE grant_id = $6::uuid
-RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version
+RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests
 `
 
 type ApplyGrantChatSettlementParams struct {
@@ -166,6 +167,95 @@ func (q *Queries) ApplyGrantChatSettlement(ctx context.Context, arg ApplyGrantCh
 		&i.EmbeddingCostMicrousd,
 		&i.EmbeddingActiveRequests,
 		&i.UsageAccountingVersion,
+		&i.DecisionModel,
+		&i.DecisionInputMicrousdPerMtok,
+		&i.DecisionRequestBudget,
+		&i.DecisionTokenBudget,
+		&i.DecisionRequestCount,
+		&i.DecisionTokens,
+		&i.DecisionCostMicrousd,
+		&i.DecisionActiveRequests,
+	)
+	return i, err
+}
+
+const applyGrantDecisionSettlement = `-- name: ApplyGrantDecisionSettlement :one
+UPDATE inference_grants
+SET decision_active_requests = $1::integer,
+    decision_tokens = decision_tokens + $2::bigint,
+    decision_cost_microusd = decision_cost_microusd + $3::bigint,
+    updated_at = $4::timestamptz
+WHERE grant_id = $5::uuid
+RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests
+`
+
+type ApplyGrantDecisionSettlementParams struct {
+	DecisionActiveRequests int32              `json:"decisionActiveRequests"`
+	DecisionTokens         int64              `json:"decisionTokens"`
+	DecisionCostMicrousd   int64              `json:"decisionCostMicrousd"`
+	Now                    pgtype.Timestamptz `json:"now"`
+	GrantID                pgtype.UUID        `json:"grantId"`
+}
+
+// Decision-lane settle accounting. decision_cost_microusd is LEDGER cost
+// (receipted input tokens x the grant-stamped price), never the provider
+// bill, so a per-run dollar ceiling can sum it with the other lanes. No
+// exhaustion rule: a spent decision wall must not take chat down with it.
+func (q *Queries) ApplyGrantDecisionSettlement(ctx context.Context, arg ApplyGrantDecisionSettlementParams) (InferenceGrant, error) {
+	row := q.db.QueryRow(ctx, applyGrantDecisionSettlement,
+		arg.DecisionActiveRequests,
+		arg.DecisionTokens,
+		arg.DecisionCostMicrousd,
+		arg.Now,
+		arg.GrantID,
+	)
+	var i InferenceGrant
+	err := row.Scan(
+		&i.GrantID,
+		&i.AgentID,
+		&i.BenchVersion,
+		&i.ValidatorHotkey,
+		&i.SlotID,
+		&i.TicketDeadline,
+		&i.Status,
+		&i.BearerDigest,
+		&i.BrokerPublicKey,
+		&i.Generation,
+		&i.AllowedModels,
+		&i.RequestBudget,
+		&i.TokenBudget,
+		&i.RequestCount,
+		&i.PromptTokens,
+		&i.CompletionTokens,
+		&i.CostMicrousd,
+		&i.ActiveRequests,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.RouteProvider,
+		&i.RouteProfile,
+		&i.RouteQuantization,
+		&i.RoutePromptPricePerToken,
+		&i.RouteCompletionPricePerToken,
+		&i.EmbeddingModel,
+		&i.EmbeddingProfile,
+		&i.EmbeddingProvider,
+		&i.EmbeddingDimensions,
+		&i.EmbeddingRequestBudget,
+		&i.EmbeddingTokenBudget,
+		&i.EmbeddingRequestCount,
+		&i.EmbeddingTokens,
+		&i.EmbeddingCostMicrousd,
+		&i.EmbeddingActiveRequests,
+		&i.UsageAccountingVersion,
+		&i.DecisionModel,
+		&i.DecisionInputMicrousdPerMtok,
+		&i.DecisionRequestBudget,
+		&i.DecisionTokenBudget,
+		&i.DecisionRequestCount,
+		&i.DecisionTokens,
+		&i.DecisionCostMicrousd,
+		&i.DecisionActiveRequests,
 	)
 	return i, err
 }
@@ -177,7 +267,7 @@ SET embedding_active_requests = $1::integer,
     embedding_cost_microusd = embedding_cost_microusd + $3::bigint,
     updated_at = $4::timestamptz
 WHERE grant_id = $5::uuid
-RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version
+RETURNING grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests
 `
 
 type ApplyGrantEmbeddingSettlementParams struct {
@@ -237,6 +327,14 @@ func (q *Queries) ApplyGrantEmbeddingSettlement(ctx context.Context, arg ApplyGr
 		&i.EmbeddingCostMicrousd,
 		&i.EmbeddingActiveRequests,
 		&i.UsageAccountingVersion,
+		&i.DecisionModel,
+		&i.DecisionInputMicrousdPerMtok,
+		&i.DecisionRequestBudget,
+		&i.DecisionTokenBudget,
+		&i.DecisionRequestCount,
+		&i.DecisionTokens,
+		&i.DecisionCostMicrousd,
+		&i.DecisionActiveRequests,
 	)
 	return i, err
 }
@@ -301,7 +399,7 @@ func (q *Queries) CountFreshValidatorActiveRequests(ctx context.Context, arg Cou
 
 const getInferenceGrant = `-- name: GetInferenceGrant :one
 
-SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version FROM inference_grants
+SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests FROM inference_grants
 WHERE grant_id = $1::uuid
 `
 
@@ -358,12 +456,20 @@ func (q *Queries) GetInferenceGrant(ctx context.Context, grantID pgtype.UUID) (I
 		&i.EmbeddingCostMicrousd,
 		&i.EmbeddingActiveRequests,
 		&i.UsageAccountingVersion,
+		&i.DecisionModel,
+		&i.DecisionInputMicrousdPerMtok,
+		&i.DecisionRequestBudget,
+		&i.DecisionTokenBudget,
+		&i.DecisionRequestCount,
+		&i.DecisionTokens,
+		&i.DecisionCostMicrousd,
+		&i.DecisionActiveRequests,
 	)
 	return i, err
 }
 
 const getInferenceGrantForUpdate = `-- name: GetInferenceGrantForUpdate :one
-SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version FROM inference_grants
+SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version, decision_model, decision_input_microusd_per_mtok, decision_request_budget, decision_token_budget, decision_request_count, decision_tokens, decision_cost_microusd, decision_active_requests FROM inference_grants
 WHERE grant_id = $1::uuid
 FOR UPDATE
 `
@@ -411,6 +517,14 @@ func (q *Queries) GetInferenceGrantForUpdate(ctx context.Context, grantID pgtype
 		&i.EmbeddingCostMicrousd,
 		&i.EmbeddingActiveRequests,
 		&i.UsageAccountingVersion,
+		&i.DecisionModel,
+		&i.DecisionInputMicrousdPerMtok,
+		&i.DecisionRequestBudget,
+		&i.DecisionTokenBudget,
+		&i.DecisionRequestCount,
+		&i.DecisionTokens,
+		&i.DecisionCostMicrousd,
+		&i.DecisionActiveRequests,
 	)
 	return i, err
 }
@@ -432,6 +546,25 @@ type IncrementGrantChatAdmissionParams struct {
 // admitted and in flight. Grant row is locked by the caller.
 func (q *Queries) IncrementGrantChatAdmission(ctx context.Context, arg IncrementGrantChatAdmissionParams) error {
 	_, err := q.db.Exec(ctx, incrementGrantChatAdmission, arg.Now, arg.GrantID)
+	return err
+}
+
+const incrementGrantDecisionAdmission = `-- name: IncrementGrantDecisionAdmission :exec
+UPDATE inference_grants
+SET decision_request_count = decision_request_count + 1,
+    decision_active_requests = decision_active_requests + 1,
+    updated_at = $1::timestamptz
+WHERE grant_id = $2::uuid
+`
+
+type IncrementGrantDecisionAdmissionParams struct {
+	Now     pgtype.Timestamptz `json:"now"`
+	GrantID pgtype.UUID        `json:"grantId"`
+}
+
+// Decision-lane twin of IncrementGrantChatAdmission.
+func (q *Queries) IncrementGrantDecisionAdmission(ctx context.Context, arg IncrementGrantDecisionAdmissionParams) error {
+	_, err := q.db.Exec(ctx, incrementGrantDecisionAdmission, arg.Now, arg.GrantID)
 	return err
 }
 
@@ -513,6 +646,25 @@ type SetGrantChatActiveRequestsParams struct {
 // decrement).
 func (q *Queries) SetGrantChatActiveRequests(ctx context.Context, arg SetGrantChatActiveRequestsParams) error {
 	_, err := q.db.Exec(ctx, setGrantChatActiveRequests, arg.ActiveRequests, arg.Now, arg.GrantID)
+	return err
+}
+
+const setGrantDecisionActiveRequests = `-- name: SetGrantDecisionActiveRequests :exec
+UPDATE inference_grants
+SET decision_active_requests = $1::integer,
+    updated_at = $2::timestamptz
+WHERE grant_id = $3::uuid
+`
+
+type SetGrantDecisionActiveRequestsParams struct {
+	DecisionActiveRequests int32              `json:"decisionActiveRequests"`
+	Now                    pgtype.Timestamptz `json:"now"`
+	GrantID                pgtype.UUID        `json:"grantId"`
+}
+
+// Decision-lane twin of SetGrantChatActiveRequests.
+func (q *Queries) SetGrantDecisionActiveRequests(ctx context.Context, arg SetGrantDecisionActiveRequestsParams) error {
+	_, err := q.db.Exec(ctx, setGrantDecisionActiveRequests, arg.DecisionActiveRequests, arg.Now, arg.GrantID)
 	return err
 }
 

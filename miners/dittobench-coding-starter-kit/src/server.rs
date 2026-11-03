@@ -9,7 +9,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use ditto_harness::{ChatChunk, Model};
 
-use crate::agent::{AgentError, CodingAgent};
+use crate::agent::{wall_time_deadline, AgentError, CodingAgent};
 use crate::memory::{MemoryError, MemoryRegistry};
 use crate::model::{LunaChatModel, ScriptedLunaModel};
 use crate::protocol::{
@@ -183,6 +183,9 @@ impl CodingService {
     /// Returns an error when validation, retrieval, model setup, workspace
     /// transport, or agent execution fails.
     pub async fn run(&self, request: CodingRunRequest) -> Result<CodingRunResponse, ServiceError> {
+        // Retrieval and setup spend the same wall-time budget the validator
+        // is already counting, so the deadline starts here.
+        let started = tokio::time::Instant::now();
         request.validate().map_err(ServiceError::Invalid)?;
         let query = format!(
             "{}\n{}\n{}",
@@ -219,7 +222,8 @@ impl CodingService {
             )
             .map_err(|error| ServiceError::Invalid(error.to_string()))?;
             let agent = CodingAgent::new(model, workspace.tools());
-            let outcome = agent.run(&request, &claim.memories).await?;
+            let deadline = wall_time_deadline(started, request.budgets.wall_time_seconds);
+            let outcome = agent.run_until(&request, &claim.memories, deadline).await?;
             Ok(CodingRunResponse {
                 case_id: request.case_id.clone(),
                 final_report: CodingFinalReport {
@@ -471,6 +475,25 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         panic!("cancelled run left its case claimed");
+    }
+
+    #[tokio::test]
+    async fn wall_time_report_arrives_before_the_validator_deadline() {
+        // The model never answers, so only the wall-time budget ends the run.
+        let service = CodingService::new(Arc::new(BlockingFactory {
+            started: Arc::new(Notify::new()),
+            release: Arc::new(Notify::new()),
+        }));
+        service.seed(seed_request()).await.unwrap();
+        let mut request = run_request();
+        request.budgets.wall_time_seconds = 1;
+        // The validator bounds the whole request by exactly the budget.
+        let outcome =
+            tokio::time::timeout(std::time::Duration::from_secs(1), service.run(request)).await;
+        assert!(
+            matches!(outcome, Ok(Ok(_))),
+            "degraded wall-time report must arrive before the validator deadline"
+        );
     }
 
     #[tokio::test]

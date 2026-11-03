@@ -37,3 +37,65 @@ API key directly from Secret Manager secret
 `SUBTENSOR_ARCHIVE_RPC_SECRET_ID` / `SUBTENSOR_ARCHIVE_RPC_SECRET_PROJECT`). If
 the secret is absent or the configured provider fails, the same request falls
 through to the credential-free archives.
+
+## Recovering stalled champion source releases
+
+The source-emission collector reads the same try list. It needs an archive
+that replays historical blocks faster than Finney finalizes them (roughly five
+per minute); the free public archives throttle long before that. See #2850 for
+the backlog and #2851 for provider selection.
+
+Production uses Taostats. Its configuration needs no separate archive secret:
+
+1. In the `prod` GitHub Environment, set `SUBTENSOR_ARCHIVE_RPC_URL` to
+   `wss://api.taostats.io/api/v1/rpc/ws/finney_archive` and leave
+   `SUBTENSOR_ARCHIVE_RPC_AUTH_MODE` unset or `query`. For that exact URL,
+   Platform reuses `DITTO_TAOSTATS_API_KEY`, which deploys already load from
+   `platform-taostats-api-key`. Do not create
+   `platform-subtensor-archive-rpc-api-key` for Taostats; an explicit archive
+   key takes precedence over the reused one.
+2. Deploy Platform, then read `get_source_release_policy` through Backroom.
+   `release_gate.archive_provider` should report host `api.taostats.io`, auth
+   mode `query`, and `credential_configured: true`. It never returns the URL
+   or key, and it describes the served configuration rather than provider
+   health; absence means a Platform release that predates the field.
+3. Compare successive `collector_cursor_block` readings and
+   `collector_blocked_reason`. Catch-up requires sustained advancement faster
+   than the chain, without rate-limit blocking reasons. The reason is cleared
+   by each successful sweep, so read it several times. `server rejected
+   WebSocket connection: HTTP 401` from the first provider, while Taostats
+   validator-name enrichment still refreshes, means the key is valid but its
+   plan does not include archive RPC (a paid tier); the collector then falls
+   through to the throttled public archives.
+4. Once the cursor passes a champion's completed payout, verify the exact
+   agent ID and artifact SHA in the payout receipt rows, then the agent's
+   public artifact status. Release time remains the verified payout timestamp
+   plus the configured embargo; collection delay does not restart it, and
+   crown age or positive weights never substitute for the proof.
+
+Configuring a provider does not reset the durable cursor, synthesize a payout,
+or change source-disclosure policy.
+
+## Sparse catch-up replay
+
+When the collector is more than 1,000 blocks behind, it plans each catch-up
+range of up to 720 blocks before reading it (#2939):
+
+1. One batched `chain_getBlockHash` fetches every hash in the range.
+2. The runtime code hash, `MechanismCountCurrent`, `CommitRevealWeightsEnabled`
+   and the `Keys` map are compared at the two ends of the range. Any
+   difference, or an invalid value at either end, runs the unchanged
+   per-block scan for that range.
+3. Otherwise each block costs one `state_queryStorageAt` for `System.Events`
+   and `LastMechansimStepBlock`. Only payout blocks, blocks with a
+   netuid-scoped `WeightsSet`, `TimelockedWeightsRevealed` or
+   `IncentiveAlphaEmittedToMiners`, `System.CodeUpdated`, or a structural
+   SubtensorModule event (swap, registration or deregistration, dissolution,
+   pruning) get the full
+   per-block reader. Every other block commits as part of one cursor skip.
+4. Two sampled skipped blocks per range are re-read in full. Any disagreement
+   fails the sweep closed without moving the cursor.
+
+A provider that rejects any of these calls falls back to the per-block scan.
+`LastUpdate` cannot replace the event filter: under commit-reveal, a reveal
+write does not update it.

@@ -17,6 +17,8 @@ from ditto_screener.l2_review import (
     _l2_tools_for_policy,
 )
 
+from .markers import non_root_only
+
 
 def test_shell_is_offered_only_with_isolated_harness() -> None:
     isolated = IsolatedCodingHarness(docker_bin="docker", image="analyzer:test")
@@ -28,6 +30,7 @@ def test_shell_is_offered_only_with_isolated_harness() -> None:
     assert "shell" not in {tool["name"] for tool in _l2_tools_for_policy(13)}
 
 
+@non_root_only
 async def test_shell_container_has_read_only_source_and_no_credentials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -103,6 +106,7 @@ def _workspace(tmp_path: Path) -> Path:
     return workspace
 
 
+@non_root_only
 async def test_shell_output_over_bound_returns_truncated_observation(
     tmp_path: Path,
 ) -> None:
@@ -119,6 +123,7 @@ async def test_shell_output_over_bound_returns_truncated_observation(
     _removed_container(log, "shell")
 
 
+@non_root_only
 async def test_shell_stderr_over_bound_returns_truncated_observation(
     tmp_path: Path,
 ) -> None:
@@ -134,6 +139,7 @@ async def test_shell_stderr_over_bound_returns_truncated_observation(
     _removed_container(log, "shell")
 
 
+@non_root_only
 async def test_shell_timeout_returns_observation_and_removes_container(
     tmp_path: Path,
 ) -> None:
@@ -149,6 +155,7 @@ async def test_shell_timeout_returns_observation_and_removes_container(
     _removed_container(log, "shell")
 
 
+@non_root_only
 async def test_shell_deadline_exhaustion_raises_lease_budget_error(
     tmp_path: Path,
 ) -> None:
@@ -166,6 +173,7 @@ async def test_shell_deadline_exhaustion_raises_lease_budget_error(
     _removed_container(log, "shell")
 
 
+@non_root_only
 async def test_non_shell_analyzer_timeout_names_and_removes_container(
     tmp_path: Path,
 ) -> None:
@@ -178,6 +186,7 @@ async def test_non_shell_analyzer_timeout_names_and_removes_container(
     _removed_container(log, "read-file")
 
 
+@non_root_only
 async def test_non_shell_analyzer_output_over_budget_returns_observation(
     tmp_path: Path,
 ) -> None:
@@ -192,6 +201,7 @@ async def test_non_shell_analyzer_output_over_budget_returns_observation(
     }
 
 
+@non_root_only
 async def test_non_shell_analyzer_cancel_removes_container(tmp_path: Path) -> None:
     docker, log = _fake_docker(tmp_path, "sleep 30")
     task = asyncio.create_task(
@@ -199,8 +209,13 @@ async def test_non_shell_analyzer_cancel_removes_container(tmp_path: Path) -> No
             _workspace(tmp_path), "search", {"query": "model"}
         )
     )
-    while not log.exists():
+    # Bounded, because an unbounded wait for a side effect that never arrives
+    # blocks the whole suite instead of reporting one broken test.
+    for _ in range(500):
+        if log.exists():
+            break
         await asyncio.sleep(0.01)
+    assert log.exists(), "the analyzer never invoked the docker stand-in"
     task.cancel()
 
     with pytest.raises(asyncio.CancelledError):

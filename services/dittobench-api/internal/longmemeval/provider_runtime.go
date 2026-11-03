@@ -26,11 +26,41 @@ const (
 	maxProviderResponseBytes        = 16 << 20
 	readerRejectionProvenanceHeader = "X-Ditto-Reader-Rejection-Provenance"
 	readerRejectionPreReservation   = "pre-reservation"
-	officialJudgeMaxTokens          = 10
-	officialJudgeModel              = "openai/gpt-4o-2024-08-06"
-	officialJudgeRevision           = "longmemeval-official-gpt4o-azure-zdr-v2"
-	officialJudgeRouteProvider      = "azure"
-	officialJudgeReceiptProvider    = "Azure"
+	// officialJudgeMaxTokens is the per-call completion bound for the judge.
+	//
+	// LongMemEval rev 9e0b455f pins max_tokens=10, which is correct only for a
+	// non-reasoning judge: gpt-4o answers this prompt in 1-2 tokens. A reasoning
+	// judge spends the budget on reasoning tokens and returns content="" with
+	// finish_reason="length" -- upstream then scores 'yes' in "" as false, so
+	// every case silently becomes "no". This runtime refuses that response as
+	// malformed instead (see officialProviderJudge.Judge), which converts the
+	// silent bias into a loud bundle failure, so the bound has to be large
+	// enough that truncation does not happen.
+	//
+	// 8192 is set from measurement, not convention. Over the 76 probes that
+	// truncated deepseek-v4.1-flash at a 1024 bound, re-run at 8192 x3 reps,
+	// the observed completion maximum was 2907 tokens with zero truncations
+	// (docs/longmemeval-benchmark/judge-study/). 8192 is ~2.8x that worst case
+	// on a worst-case-enriched probe set. The bound is a cap, not a charge:
+	// mean observed completion is 62 tokens, so cost is unchanged. It does
+	// consume lane reservation headroom -- reserveProviderBudget reserves the
+	// full cap per in-flight call -- which is why the judge lane's
+	// max_completion_tokens in scripts/generate_confirmation_installation.py
+	// is sized for it.
+	officialJudgeMaxTokens = 8192
+	officialJudgeModel     = "deepseek/deepseek-v4.1-flash"
+	officialJudgeRevision  = "longmemeval-deepseek-v41-flash-together-v1"
+	// Routing is pinned to exactly one provider with allow_fallbacks=false, so
+	// the provider is part of the frozen contract. OpenRouter served this model
+	// from 23 distinct providers when fallbacks were left on; agreement with
+	// gpt-4o ranged 95.3%-100% across them, so an unpinned measurement does not
+	// describe any lane we actually run. Together was selected on operational
+	// grounds: over a 346-probe pinned pilot it returned zero truncations and
+	// zero errors, and its agreement sat within 0.6pp of every other working
+	// provider. Baidu is specifically excluded -- it returned HTTP 429 on 43%
+	// of pinned calls, and with allow_fallbacks=false a single 429 ends a bundle.
+	officialJudgeRouteProvider   = "together"
+	officialJudgeReceiptProvider = "Together"
 	platformConfirmationChatPath    = "/api/v1/inference/confirmation/chat/completions"
 )
 
@@ -465,13 +495,7 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 		"temperature":           0,
 		"max_completion_tokens": officialJudgeMaxTokens,
 		"stream":                false,
-		"provider": map[string]any{
-			"only":               []string{lane.config.RouteProvider},
-			"order":              []string{lane.config.RouteProvider},
-			"allow_fallbacks":    false,
-			"require_parameters": true,
-			"data_collection":    "deny",
-		},
+		"provider":              judgeProviderRouting(lane.config.RouteProvider),
 	})
 	if err != nil {
 		return false, errors.New("encode official LongMemEval judge request")
@@ -490,11 +514,23 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 			Message struct {
 				Content string `json:"content"`
 			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(raw, &response); err != nil || len(response.Choices) != 1 ||
 		strings.TrimSpace(response.Choices[0].Message.Content) == "" {
 		return false, errors.New("official LongMemEval judge response is malformed")
+	}
+	// A verdict cut off at the completion bound is not a verdict. The substring
+	// test below cannot tell "yes" from a truncated "yes, if you also count..."
+	// or from reasoning that was about to conclude "no", so a partial response
+	// silently becomes a confident label. Refusing it makes an under-budgeted
+	// or runaway judge a loud failure instead of a wrong score -- the same
+	// class as the empty completion rejected above.
+	if strings.EqualFold(strings.TrimSpace(response.Choices[0].FinishReason), "length") {
+		return false, errors.New(
+			"official LongMemEval judge response was truncated at the completion bound",
+		)
 	}
 	// Match the pinned official evaluator at LongMemEval revision
 	// 9e0b455f4ef0e2ab8f2e582289761153549043fc: its label is true when the
@@ -504,6 +540,27 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 		strings.ToLower(strings.TrimSpace(response.Choices[0].Message.Content)),
 		"yes",
 	), nil
+}
+
+// judgeProviderRouting is the provider block the judge lane sends upstream.
+//
+// zdr is included here because the judge lane may address OpenRouter directly
+// rather than through the Platform confirmation proxy, which appends it in
+// endpoints/inference.py. On a direct route the block is the only thing
+// constraining the endpoint, and only: pinning `only`/`order` to a provider
+// and denying data collection does not ask for a zero-data-retention endpoint.
+// The proxied route merges an identical value, so sending it is a no-op there
+// rather than a divergence. integrations/longmemeval/judge_evaluator.py mirrors
+// this block and test_judge_evaluator.py compares the two key for key.
+func judgeProviderRouting(routeProvider string) map[string]any {
+	return map[string]any{
+		"only":               []string{routeProvider},
+		"order":              []string{routeProvider},
+		"allow_fallbacks":    false,
+		"require_parameters": true,
+		"data_collection":    "deny",
+		"zdr":                true,
+	}
 }
 
 func officialJudgePrompt(input JudgeInput) (string, error) {

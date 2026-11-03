@@ -1,0 +1,68 @@
+name: Collector custody refusal controls
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'scripts/collector_delegate_key.py'
+      - 'scripts/check-treasury-manual-mode.sh'
+      - 'scripts/test-treasury-manual-systemd.sh'
+      - 'infra/systemd/sn118-treasury-manual.service'
+      - 'infra/systemd/sn118-collector@.timer'
+      - 'scripts/manual-mailbox-input.py'
+      - 'scripts/test-collector-custody.sh'
+      - 'ditto/tests/test_collector_delegate_ceremony.py'
+      - 'infra/terraform/stacks/gcp-collector-custody/**'
+      - 'infra/terraform/stacks/gcp-gamma-custody/**'
+      - 'infra/terraform/stacks/gcp-gamma-custody-bootstrap/**'
+      - 'ditto/tests/test_gamma_custody_isolation.py'
+      - 'scripts/collector-custody-phase-input.py'
+      - 'ditto/tests/test_collector_custody_phase_input.py'
+      - 'scripts/check-collector-custody-plan.py'
+      - 'ditto/tests/test_collector_custody_scope.py'
+      - '.github/workflows/infra-plan-apply.yml'
+      - 'infra/terraform/tests/collector-custody/**'
+      - 'infra/terraform/tests/gamma-custody/**'
+      - 'infra/terraform/tests/collector-backend/**'
+      - 'infra/terraform/stacks/gcp-preview/**'
+      - '.github/workflows/collector-custody.yml'
+permissions:
+  contents: read
+jobs:
+  custody:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e
+        with:
+          terraform_version: 1.13.5
+      - name: No-key ceremony controls
+        run: python3 -m unittest discover -s ditto/tests -p test_collector_delegate_ceremony.py -v
+      - name: Isolated custody state and plan scope controls
+        run: python3 -m unittest discover -s ditto/tests -p test_collector_custody_scope.py -v
+      - name: Isolated Gamma project refusal controls
+        run: python3 -m unittest discover -s ditto/tests -p test_gamma_custody_isolation.py -v
+      - name: Typed Gamma phase inputs
+        run: python3 -m unittest discover -s ditto/tests -p test_collector_custody_phase_input.py -v
+      - name: Credentials-free concrete resource and IAM plans
+        run: bash scripts/test-collector-custody.sh
+  manual-mode:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Manual consumer survives attempted recurring activation
+        run: bash scripts/test-treasury-manual-systemd.sh
+  bootstrap:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Debian13 rendered bootstrap and public-fixture SDK path
+        run: bash infra/terraform/tests/collector-custody/test-bootstrap.sh

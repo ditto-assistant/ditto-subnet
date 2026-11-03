@@ -90,7 +90,10 @@ withheld generation, the owner's best withheld generation becomes the pin's
 * It is served as `LedgerResponse.provisional_incumbent`, *not* in `entries`,
   with `crown_incumbent_agent_id` set to its id. It is built exactly like a
   payable entry (the one it would carry with the gate off) and it is part of
-  the pin's digest.
+  the pin's digest. That includes its signed quorum `score_proofs` (and any v9
+  confirmation receipt): validators verify it exactly like a payable entry and
+  reject the whole ledger, leaving weights unchanged that epoch, when it does
+  not verify.
 * The fold -- the validator's, and the Platform's projections of it -- adds it
   to the pool as the crown incumbent and derives the champion, tail, tie
   pooling and score-ceiling cohort exactly as for any entry. **Every share it

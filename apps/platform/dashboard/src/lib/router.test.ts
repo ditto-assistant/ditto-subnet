@@ -46,11 +46,11 @@ describe("PAGES registry", () => {
   it("keeps page titles and wayfinding subtitles explicit", () => {
     expect(PAGES.overview).toEqual({
       title: "Overview",
-      sub: "Subnet snapshot and the full leaderboard · ranked by composite",
+      sub: "Subnet snapshot and the full leaderboard · ranked by official score",
     });
     expect(PAGES.leaderboard).toEqual({
       title: "Leaderboard",
-      sub: "Every scored miner · canonical ranks · sortable by any metric",
+      sub: "Every scored miner · ranked by official score · sortable by any metric",
     });
     expect(PAGES.pipeline).toEqual({
       title: "Submission pipeline",
@@ -71,6 +71,10 @@ describe("PAGES registry", () => {
     expect(PAGES.ath).toEqual({
       title: "ATH reviews",
       sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
+    });
+    expect(PAGES.bounties).toEqual({
+      title: "Bounties",
+      sub: "Paid build bounties · open slots, claims, reviews, awards, and payments",
     });
     expect(PAGES.benchmark).toEqual({
       title: "Benchmark",
@@ -113,6 +117,9 @@ describe("PAGES registry", () => {
       "ditto",
       "reason",
       "attempt",
+      "bounty",
+      "generator",
+      "round",
     ]);
   });
 });

@@ -1,7 +1,8 @@
 """Operator-tunable admission policy for the hosted v7 inference lanes.
 
-This board governs both hosted lanes: chat completions and embeddings through
-the platform proxy.
+This board governs the hosted lanes: chat completions and embeddings through
+the platform proxy, plus the dark decision-model lane (``decision_lane``),
+which is off by default and carries no score.
 
 * The chat lane's **concurrency** and **request-per-minute** limits are live
   admission controls here. RPM used to be a boot-time rail so widening
@@ -159,6 +160,13 @@ MAX_BENCHMARK_CASE_CONCURRENCY = 64
 DEFAULT_RELAY_DELAY_FINGERPRINT_MIN_MS = 25
 DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS = 250
 MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
+# The harness memory cap every validator applies, issued on the lease so one
+# host's DITTOBENCH_SANDBOX_MEMORY_LIMIT can no longer decide whether an agent
+# scores. 6 GiB clears the v13 retrieval agents that were OOM-killed at the
+# historical 3 GiB host default on two validators and scored on a third.
+DEFAULT_SANDBOX_MEMORY_LIMIT_MIB = 6_144
+MIN_SANDBOX_MEMORY_LIMIT_MIB = 512
+MAX_SANDBOX_MEMORY_LIMIT_MIB = 32_768
 
 
 class BenchmarkRuntimeSettings(BaseModel):
@@ -166,7 +174,8 @@ class BenchmarkRuntimeSettings(BaseModel):
 
     These defaults overlap four /run calls per ticket. Relay delay fingerprinting
     stays off. The object is additive on both the settings JSON and validator
-    job wire. Backroom can raise case_concurrency up to 64.
+    job wire. Backroom can raise case_concurrency up to 64 and sets the harness
+    memory cap every validator applies (sandbox_memory_limit_mib).
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
@@ -181,6 +190,10 @@ class BenchmarkRuntimeSettings(BaseModel):
     relay_delay_fingerprint_max_ms: Annotated[
         int, Field(ge=0, le=MAX_RELAY_DELAY_FINGERPRINT_MS)
     ] = DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS
+    sandbox_memory_limit_mib: Annotated[
+        int,
+        Field(ge=MIN_SANDBOX_MEMORY_LIMIT_MIB, le=MAX_SANDBOX_MEMORY_LIMIT_MIB),
+    ] = DEFAULT_SANDBOX_MEMORY_LIMIT_MIB
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:
@@ -190,6 +203,116 @@ class BenchmarkRuntimeSettings(BaseModel):
                 "relay_delay_fingerprint_max_ms"
             )
         return self
+
+
+# Decision lane: TypeSafe Jev served by OpenRouter's System One endpoint
+# (``typesafe/jev-1.14``, ``typesafe/jev-1.13``). Jev lists $0.042 per million
+# input tokens and does not bill output, so the stamped price is micro-USD per
+# million input tokens: 42_000. The walls are sized so a
+# run cannot spend more than ~$1 on decisions at that price before the token
+# wall binds, and the request wall survives a loop of tiny calls.
+DEFAULT_DECISION_INPUT_MICROUSD_PER_MTOK = 42_000
+MAX_DECISION_INPUT_MICROUSD_PER_MTOK = 100_000_000
+DEFAULT_DECISION_REQUEST_BUDGET = 4_096
+MAX_DECISION_REQUEST_BUDGET = 32_768
+DEFAULT_DECISION_TOKEN_BUDGET = 25_000_000
+MAX_DECISION_TOKEN_BUDGET = 200_000_000
+DEFAULT_DECISION_PER_TICKET_CONCURRENCY = 8
+DEFAULT_DECISION_PER_VALIDATOR_CONCURRENCY = 32
+DEFAULT_DECISION_GLOBAL_CONCURRENCY = 64
+MAX_DECISION_CONCURRENCY = 512
+DEFAULT_DECISION_PER_TICKET_REQUESTS_PER_MINUTE = 600
+DEFAULT_DECISION_PER_VALIDATOR_REQUESTS_PER_MINUTE = 2_400
+DEFAULT_DECISION_GLOBAL_REQUESTS_PER_MINUTE = 6_000
+DECISION_MODEL_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
+
+
+class DecisionLaneSettings(BaseModel):
+    """The operator knob for the dark decision-model lane. Off by default.
+
+    ``enabled`` and ``model`` are read at grant mint: a grant minted while the
+    lane is off carries no decision model and zero walls, which is the
+    pre-lane grant exactly. ``model`` is ONE pinned OpenRouter model version
+    chosen by the operator, e.g. ``typesafe/jev-1.14`` (there is no miner
+    allow-list, and a floating ``-latest`` alias is refused); the relay sends
+    it upstream and treats a different served version as an infrastructure
+    failure. How a harness uses the lane is unrestricted: the controls are the
+    pin, metering, the walls and this switch.
+
+    The price and walls are stamped onto the grant at mint, so a later revision
+    never changes a live lease. Concurrency and requests-per-minute are live
+    admission rails, like the chat and embedding ones. ``enabled`` is also a
+    live kill switch at the relay: turning it off refuses new decision calls
+    fleet-wide within the settings refresh interval.
+
+    This lane carries no score. Scored use folds into bench v15.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    enabled: bool = False
+    model: Annotated[str, Field(pattern=DECISION_MODEL_PATTERN)] | None = None
+    input_microusd_per_mtok: Annotated[
+        int, Field(ge=0, le=MAX_DECISION_INPUT_MICROUSD_PER_MTOK)
+    ] = DEFAULT_DECISION_INPUT_MICROUSD_PER_MTOK
+    request_budget: Annotated[int, Field(ge=1, le=MAX_DECISION_REQUEST_BUDGET)] = (
+        DEFAULT_DECISION_REQUEST_BUDGET
+    )
+    token_budget: Annotated[int, Field(ge=1, le=MAX_DECISION_TOKEN_BUDGET)] = (
+        DEFAULT_DECISION_TOKEN_BUDGET
+    )
+    per_ticket_concurrency: Annotated[int, Field(ge=1, le=MAX_DECISION_CONCURRENCY)] = (
+        DEFAULT_DECISION_PER_TICKET_CONCURRENCY
+    )
+    per_validator_concurrency: Annotated[
+        int, Field(ge=1, le=MAX_DECISION_CONCURRENCY)
+    ] = DEFAULT_DECISION_PER_VALIDATOR_CONCURRENCY
+    global_concurrency: Annotated[int, Field(ge=1, le=MAX_DECISION_CONCURRENCY)] = (
+        DEFAULT_DECISION_GLOBAL_CONCURRENCY
+    )
+    per_ticket_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_DECISION_PER_TICKET_REQUESTS_PER_MINUTE
+    per_validator_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_DECISION_PER_VALIDATOR_REQUESTS_PER_MINUTE
+    global_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_DECISION_GLOBAL_REQUESTS_PER_MINUTE
+
+    @model_validator(mode="after")
+    def _coherent(self) -> DecisionLaneSettings:
+        if self.enabled and self.model is None:
+            raise ValueError("an enabled decision lane must pin a model version")
+        if self.model is not None and self.model.endswith("latest"):
+            raise ValueError(
+                "pin an exact decision model version (e.g. typesafe/jev-1.14), "
+                "never a floating -latest alias"
+            )
+        if not (
+            self.per_ticket_concurrency
+            <= self.per_validator_concurrency
+            <= self.global_concurrency
+        ):
+            raise ValueError(
+                "decision concurrency must satisfy per_ticket <= per_validator "
+                "<= global"
+            )
+        if not (
+            self.per_ticket_requests_per_minute
+            <= self.per_validator_requests_per_minute
+            <= self.global_requests_per_minute
+        ):
+            raise ValueError(
+                "decision requests-per-minute must satisfy per_ticket <= "
+                "per_validator <= global"
+            )
+        return self
+
+
+ScoredProviderRouting = Literal[
+    "throughput", "bf16_price_order_canary", "bf16_price_order"
+]
 
 
 class InferenceConcurrencySettings(BaseModel):
@@ -323,6 +446,23 @@ class InferenceConcurrencySettings(BaseModel):
     )
     """Safe, lease-stamped v10 case scheduling and delay-observation policy."""
 
+    decision_lane: DecisionLaneSettings = Field(default_factory=DecisionLaneSettings)
+    """The dark decision-model lane: pin, price, walls and rails. Off by default."""
+
+    scored_provider_routing: ScoredProviderRouting = "throughput"
+    """OpenRouter provider preference for the aggregate scored chat route.
+
+    ``throughput`` is the historical route: OpenRouter sorts every eligible ZDR
+    provider (CoreWeave excluded) by throughput, which lands most traffic on
+    Bedrock. ``bf16_price_order`` sends an explicit order -- DeepInfra bf16,
+    then Bedrock, Groq and DekaLLM bf16 -- with ``only`` pinning that set,
+    fallbacks on, ZDR and ``data_collection: deny`` unchanged.
+    ``bf16_price_order_canary`` applies the price order to ``benchmark_canary``
+    tickets only. The model, reasoning contract and route profile identity do
+    not change, so no calibration or validator release is involved. Live
+    within the relay's five-second refresh; set ``throughput`` to revert.
+    """
+
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
@@ -447,12 +587,13 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         changed one number. ``expected_revision`` cannot catch that -- they hold
         the current revision, they just under-specified the body.
         """
-        # ``benchmark_runtime`` was added after this whole-object board shipped.
-        # A pre-upgrade Backroom is allowed to omit only that additive object;
-        # the endpoint preserves its current value instead of resetting it.
+        # ``benchmark_runtime``, ``decision_lane`` and ``scored_provider_routing``
+        # were added after this whole-object board shipped. A pre-upgrade
+        # Backroom may omit only those additive fields; the endpoint preserves
+        # their current values instead of resetting them.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
-            - {"benchmark_runtime"}
+            - {"benchmark_runtime", "decision_lane", "scored_provider_routing"}
             - self.settings.model_fields_set
         )
         if missing:

@@ -6,7 +6,7 @@
 
 -- name: ConsumeValidatorNonce :exec
 -- Consume a validator request nonce. used_at/expires_at are computed by the
--- application (now, now + exchange max age), matching the Python
+-- application (max(now, requested_at) + max age + margin), matching the Python
 -- consume_validator_nonce. A duplicate-key error on the nonce PK signals a
 -- replayed exchange (mapped to HTTP 409 by the endpoint).
 INSERT INTO validator_request_nonces (nonce, validator_hotkey, used_at, expires_at)

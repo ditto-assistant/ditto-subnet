@@ -267,6 +267,128 @@ def test_local_rehearsal_range_tracks_the_supported_set() -> None:
     assert values["LIVE_SCORING_BENCH_VERSION"] in golden["supported_bench_versions"]
 
 
+def test_miner_docs_quote_the_rehearsal_live_fallback() -> None:
+    """The mine skill states the live bench; it must match the rehearsal's
+    offline fallback so an activation PR that bumps one bumps the other."""
+    fallback = int(
+        re.search(  # type: ignore[union-attr]
+            r"^LIVE_SCORING_BENCH_VERSION = (\d+)$", LOCAL_REHEARSAL.read_text(), re.M
+        ).group(1)
+    )
+    skill = (ROOT / ".agents/skills/mine/SKILL.md").read_text()
+    quoted = re.search(r"Live scoring is \*\*bench (\d+)\*\*", skill)
+    assert quoted, "mine SKILL.md no longer states 'Live scoring is **bench N**'"
+    assert int(quoted.group(1)) == fallback, (
+        "mine SKILL.md live bench and local-rehearsal.py "
+        "LIVE_SCORING_BENCH_VERSION disagree; bump both on activation"
+    )
+
+
+# --- generator rounds ----------------------------------------------------------
+
+
+def _go_pack_grading_versions() -> tuple[int, list[int]]:
+    """The pack contract's baseline policy and ordered supported policies,
+    resolved from ``challenge/pack.go`` constant names to version numbers."""
+    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
+    consts = {
+        name: int(version)
+        for name, version in re.findall(
+            r"const (GradingBenchVersion\w*) = protocol\.BenchVersionV(\d+)", pack
+        )
+    }
+    assert "GradingBenchVersion" in consts, (
+        "challenge.GradingBenchVersion is no longer a V-constant"
+    )
+    listed = re.search(r"supportedGradingBenchVersions = \[\]int\{([^}]*)\}", pack)
+    assert listed, "challenge.supportedGradingBenchVersions is no longer a literal"
+    names = [name.strip() for name in listed.group(1).split(",") if name.strip()]
+    assert all(name in consts for name in names), names
+    return consts["GradingBenchVersion"], [consts[name] for name in names]
+
+
+def test_generator_round_contracts_match_pack_grading_and_scorer_mode() -> None:
+    """A round freezes a version from ``GENERATOR_ROUND_BENCH_VERSIONS``; the
+    pack contract must grade at it and the scorer's round mode must run it.
+    Widening the tuple without both (or the reverse) strands rounds."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+        LEGACY_ROUND_BENCH_VERSION,
+        LEGACY_SCORER_ROUND_BENCH_VERSIONS,
+    )
+
+    baseline, supported = _go_pack_grading_versions()
+    assert supported == sorted(set(supported)) and supported[0] == baseline
+    assert list(GENERATOR_ROUND_BENCH_VERSIONS) == supported
+    # A scorer that advertises no round versions runs the original mode: the
+    # baseline policy, which every pre-v14 generator emits.
+    assert (baseline,) == LEGACY_SCORER_ROUND_BENCH_VERSIONS
+    assert baseline == LEGACY_ROUND_BENCH_VERSION
+    scorer = (
+        ROOT / "services/dittobench-api/cmd/dittobench-api/generator_round.go"
+    ).read_text()
+    assert "return challenge.SupportsGradingBenchVersion(v)" in scorer, (
+        "generator-round-v1 must run every pack grading policy"
+    )
+    assert not re.search(r"req\.BenchVersion != protocol\.BenchVersionV\d+", scorer), (
+        "generator-round-v1 pins one bench version again"
+    )
+    assert set(GENERATOR_ROUND_BENCH_VERSIONS) <= set(SUPPORTED_BENCH_VERSIONS)
+
+
+def test_every_activatable_bench_version_has_a_generator_pack_version() -> None:
+    """Operator policy (2026-10-27): one number for both competitions. Every
+    bench version a rollout can target from the first generator-round version
+    on -- a shipped Platform benchmark contract, or a version the validator
+    stack supports -- has a pack grading policy of the same number, even when
+    its grader is unchanged. Shipping bench v15 without pack policy 15 (and the
+    round contract that runs it) fails here, before it can be activated."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+    )
+
+    _, pack_versions = _go_pack_grading_versions()
+    first = min(GENERATOR_ROUND_BENCH_VERSIONS)
+    shipped = {
+        int(v)
+        for v in re.findall(
+            r"^\s*(\d+): BenchmarkContract\(", PLATFORM_CONTRACTS.read_text(), re.M
+        )
+    }
+    activatable = {
+        v for v in shipped | set(_golden()["supported_bench_versions"]) if v >= first
+    }
+    missing = sorted(activatable - set(pack_versions))
+    assert not missing, (
+        f"bench version(s) {missing} can be rolled out but have no generator pack "
+        "grading policy: add GradingBenchVersionV<N> to challenge/pack.go "
+        "supportedGradingBenchVersions and N to GENERATOR_ROUND_BENCH_VERSIONS "
+        "(research/dittobench-datagen/docs/tandem-upgrades.md)"
+    )
+    # Versions are consecutive, so the two-version window is always {N-1, N}.
+    assert pack_versions == list(range(first, max(pack_versions) + 1))
+
+
+def test_generator_grading_policy_window_is_two_versions() -> None:
+    """Operator policy (2026-10-27): a round at N accepts packs at N and N-1
+    only. Go and Python must agree on the window."""
+    from ditto.api_models.generator_round_validator import (
+        GENERATOR_ROUND_BENCH_VERSIONS,
+        GRADING_POLICY_WINDOW,
+        accepted_grading_versions,
+    )
+
+    pack = (ROOT / "research/dittobench-datagen/challenge/pack.go").read_text()
+    go_window = re.search(r"const GradingPolicyWindow = (\d+)", pack)
+    assert go_window, "challenge.GradingPolicyWindow is no longer a literal"
+    assert int(go_window.group(1)) == GRADING_POLICY_WINDOW == 2
+    for version in GENERATOR_ROUND_BENCH_VERSIONS:
+        accepted = accepted_grading_versions(version)
+        assert accepted[-1] == version
+        assert len(accepted) <= GRADING_POLICY_WINDOW
+        assert all(version - v < GRADING_POLICY_WINDOW for v in accepted)
+
+
 # --- TypeScript mirrors (hand-written and generated) --------------------------
 
 

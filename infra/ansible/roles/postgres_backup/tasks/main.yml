@@ -1,0 +1,89 @@
+---
+- name: Configure online encrypted PostgreSQL backups
+  when: postgres_backup_enabled | bool
+  block:
+    - name: Require the exact production database host and Debian 13 package pins
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'ditto-pg-platform'
+          - postgres_backup_secret_project == 'ditto-subnet'
+          - ansible_facts.distribution == 'Debian'
+          - ansible_facts.distribution_major_version == '13'
+          - ansible_facts.architecture == 'x86_64'
+          - postgres_backup_secret_ids == {'access-key-id':'platform-pg-backup-hippius-access-key-id','secret-access-key':'platform-pg-backup-hippius-secret-access-key','age-recipient':'platform-pg-backup-age-recipient'}
+        quiet: true
+
+    - name: Install pinned encryption and S3 clients
+      ansible.builtin.apt:
+        name: "{{ postgres_backup_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Create private backup directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      loop:
+        - /etc/ditto-pg-backup
+        - /usr/local/lib/ditto-pg-backup
+        - /var/lib/ditto-pg-backup
+
+    - name: Fetch only writer credentials and the public age recipient
+      # The production DB has no attached GCE service account. Consume secrets
+      # on the authorized Ansible controller, without changing its VM identity
+      # or interrupting PostgreSQL. Only the three protected files go to the VM.
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv: [gcloud, secrets, versions, access, latest, "--project={{ postgres_backup_secret_project }}", "--secret={{ item.value }}"]
+      loop: "{{ postgres_backup_secret_ids | dict2items }}"
+      register: postgres_backup_secret_reads
+      changed_when: false
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Materialize protected backup files without returning their values
+      ansible.builtin.copy:
+        content: "{{ item.stdout }}\n"
+        dest: "/etc/ditto-pg-backup/{{ item.item.key }}"
+        owner: root
+        group: root
+        mode: "0600"
+      loop: "{{ postgres_backup_secret_reads.results }}"
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Install online encrypted backup executable
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - {src: ditto-postgres-backup, dest: /usr/local/sbin/ditto-postgres-backup, mode: "0755"}
+        - {src: backup.py, dest: /usr/local/lib/ditto-pg-backup/backup.py, mode: "0644"}
+
+    - name: Render backup units with credential paths only
+      ansible.builtin.template:
+        src: "{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - ditto-postgres-backup.service
+        - ditto-postgres-backup.timer
+        - ditto-postgres-backup-failed.service
+      notify: reload systemd (postgres backup)
+
+    - name: Enable the nightly backup timer
+      ansible.builtin.systemd:
+        name: ditto-postgres-backup.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+      when: not ansible_check_mode

@@ -1,0 +1,21 @@
+{
+  "source": "c904afec616b2763aa158332e8d37a26dec2eb4b",
+  "definitions": {
+    "google_storage_bucket.leases": "36b0ab7ef2ed10b9e4b19855e84511bca06c17b4729efba616fcebf30152aad9",
+    "google_storage_bucket.snapshots": "552c40fb3c2ca0f337598d210e8ffe6ceaa4231bfd4aa44c6a60e2d6f3ac9653",
+    "google_service_account.controller": "c4cee17509a137dadecd82153119f2fe761cf56886a6659bc625d593ddcd4c3f",
+    "google_service_account.runtime": "a9c2e81ace640e96217858748fb1c5a8b259fce016c67174dce492632feac464",
+    "google_project_iam_member.controller_compute": "2f5b5988e708208cf35829b00bde216ab1ad32e85fdd555f802c42a1b1f73182",
+    "google_service_account_iam_member.controller_act_as_runtime": "1792b91b2a497241570a9e7cbc7065b044d2fef5837f8e56772fb30d2917b182",
+    "google_storage_bucket_iam_member.controller_leases": "3fff28899a504bd9d59921fdacc9ac6485a83f17ce93d5e108757dc5508552c1",
+    "google_storage_bucket_iam_member.controller_snapshots": "c76a268ac38bf525958069c44580035814896921f87a90b59a0f7d7b5e1674e9",
+    "google_storage_bucket_iam_member.snapshot_writer": "8a0a64c3be92a9b18afb1728eb8b8891c4e134d05f1798e0c20c2700a3e43939",
+    "google_service_account_iam_member.controller_wif": "3282705a78ed32ef55ccf934dcababb0e716854e5d5c869c34820d4f360d4032",
+    "google_service_account_iam_member.controller_signs_urls": "f4f94bad7239fc0a10b810b454e04053421989a971bca989696a5f88f4f027b1",
+    "google_compute_network.preview": "24704dcc65e5ae555bb1d6d716a3d767c399be8653e0e5f90d3c117d6ee96a50",
+    "google_compute_subnetwork.preview": "aa1ddae480007bb75e2379183d95b61dc92809b4cba4fe7484bf19f09672d6ab",
+    "google_compute_firewall.web": "caa009a4458822e56762cdb459b3c9e7ebc2c7bd912ad01a0fef2c10ba9d65e4",
+    "google_compute_firewall.deny_internal": "f507e5ed0da33e80c7ee96e236911cde90f940c777cfe15679d22b432e4097e2",
+    "google_compute_firewall.allow_internet": "737659a324a6afb0ff8240cdee0cc16735ffa22536988e56cdfcbe297d6c0c14"
+  }
+}

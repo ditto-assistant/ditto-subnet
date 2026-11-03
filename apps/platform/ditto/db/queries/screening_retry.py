@@ -1,4 +1,4 @@
-"""Shared SQL predicates for operator-authorized screening retries."""
+"""Shared SQL predicates and grants for screening retries."""
 
 from __future__ import annotations
 
@@ -7,7 +7,11 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, exists, select
 from sqlalchemy.sql.selectable import ScalarSelect
 
-from ditto.db.models import Agent, ScreeningAttempt, ScreeningRetryOverride
+from ditto.db.models import (
+    Agent,
+    ScreeningAttempt,
+    ScreeningRetryOverride,
+)
 
 
 def latest_screening_attempt_id() -> ScalarSelect[UUID]:

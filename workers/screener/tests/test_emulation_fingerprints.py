@@ -17,6 +17,38 @@ import pytest
 
 from ditto_screener.source_signals import find_benchmark_emulation_fingerprints
 
+
+@pytest.mark.parametrize("decoy_count", [6, 60])
+def test_comment_padding_cannot_hide_late_high_fingerprints(decoy_count: int) -> None:
+    files = [
+        (f"src/a{index:03}.py", "# phrasing probe-selected over trial N\n" * 4)
+        for index in range(decoy_count)
+    ] + [("src/zz.rs", _RUST_EMULATOR)]
+    report: dict[str, object] = {}
+
+    findings = find_benchmark_emulation_fingerprints(files, selection_report=report)
+
+    kinds = [finding["kind"] for finding in findings]
+    assert {"bench-version-equality-gate", "zero-token-answer-constructor"} <= set(
+        kinds
+    )
+    assert kinds.count("self-reported-benchmark-fitting") == 6
+    assert len(findings) <= 24
+    severities = [finding["severity"] for finding in findings]
+    assert severities == sorted(severities, key={"high": 0, "medium": 1, "low": 2}.get)
+    assert report["truncated"] is True
+    assert report["omitted_count"] == report["candidate_count"] - len(findings)
+    assert report["omitted_by_kind"]["self-reported-benchmark-fitting"] == (
+        4 * decoy_count - 6
+    )
+    assert [lead["saturated_kind"] for lead in report["saturation_leads"]] == [
+        "self-reported-benchmark-fitting"
+    ]
+    # Input order cannot affect the selected dossier, and no source is exposed.
+    assert findings == find_benchmark_emulation_fingerprints(reversed(files))
+    assert "phrasing" not in json.dumps(report)
+
+
 _RUST_EMULATOR = """\
 // Ported from universe/world.go and the conversational.go generator so we
 // mirror the world-canary and world-injection-resistance families.
@@ -1445,3 +1477,625 @@ def test_cfg_test_items_stay_fingerprinted_whatever_the_build_shows(
     assert "zero-token-answer-constructor" in {
         finding["kind"] for finding in find_benchmark_emulation_fingerprints(files)
     }
+
+
+# Policy-v13 I7 executor and router shapes from the 2026-10-02 ATH sweep. Each
+# emulator mirrors a rejected artifact's served code; each honest twin keeps the
+# permitted look-alike (exact-repeat stop with a model authorizer, a full-catalog
+# advisory route, plain field documentation) and must stay silent.
+
+_PY_TOOL_NAME_CAP = """
+MAX_SAME_TOOL = 3
+
+def dispatch(calls, tool_counts, messages):
+    for name, args in calls:
+        if tool_counts.get(name, 0) >= MAX_SAME_TOOL:
+            note = f"{name} will not run again; answer from the results above."
+            messages.append({"role": "tool", "content": note})
+            continue
+        execute(name, args)
+"""
+
+_PY_EXACT_REPEAT_STOP = """
+def dispatch(calls, ledger, repeat_authorizer):
+    for name, args in calls:
+        key = (name, canonical(args))
+        if key in completed and not repeat_authorizer(name, args):
+            record_blocked(name, args, "blocked_before_execution: unsafe exact repeat")
+            continue
+        execute(name, args)
+"""
+
+_PY_SUCCESS_MEMO = """
+async def execute(self, call):
+    prior_success = self.successful.get(key)
+    if prior_success is not None:
+        note = "Not sent again: identical to an earlier successful call."
+        return ToolResult(call.call_id, note)
+    return await self._endpoint(call)
+"""
+
+_PY_SUCCESS_MEMO_WITH_AUTHORIZER = _PY_SUCCESS_MEMO.replace(
+    "    if prior_success is not None:",
+    "    if prior_success is not None and not self.repeat_authorizer(call):",
+)
+
+_PY_CATALOG_RETIRED = """
+READ_COMPLETE_PROMPT = (
+    "For this single-lookup request no further capability is offered."
+)
+
+def boundary(state, completed):
+    for call, resp in completed:
+        if state.retire_after_read and call.name in EXTERNAL_READS:
+            _disable_tools(state)
+            return READ_COMPLETE_PROMPT
+"""
+
+_PY_STICKY_VETO = """
+# Once declined, this stays true for the rest of the request.
+coordinate_declined = False
+for item in prepared:
+    if item.name in outward_lookups and (coordinate_declined or seeks_coordinate(item)):
+        coordinate_declined = True
+        result = "That value is in the records or nowhere."
+"""
+
+_RUST_UNSURE_ROUTE = r"""
+const ROUTE_POLICY: &str = "Classify the message as records or action. \
+If you are unsure, write records, since that route can still search memory.";
+"""
+
+_RUST_UNSURE_ROUTE_HONEST = r"""
+const ROUTE_POLICY: &str = "Classify the message. \
+If you are unsure, keep the complete catalog and let the deciding model choose.";
+"""
+
+_PY_ARGUMENT_GRAMMAR = """
+_UPDATE_MEMORY_CONTENT_DESCRIPTION = (
+    "This wire grammar is mandatory: never omit the copula. "
+    "SCALAR OUTPUT SHAPE: <changed subject> is/are <new value>."
+)
+"""
+
+_PY_FIELD_DOCS = """
+_UPDATE_MEMORY_CONTENT_DESCRIPTION = (
+    "The replacement text for the selected record; "
+    "the record id chooses the destination."
+)
+"""
+
+_PY_REVIEW_TEMPLATE = """
+WRITE_REVIEW_PROMPT = (
+    "Reduce the assertion to '<the thing> is <value>.' and compare word for word."
+)
+REVIEW_TURNS = {"update_memory": WRITE_REVIEW_PROMPT}
+"""
+
+_PY_FITTING_COMMENT = """
+# Advisory router wording (probe-selected; see experiments/declarative_ack_20260918).
+ROUTER_GUIDANCE = "Answer from the records."
+"""
+
+
+@pytest.mark.parametrize(
+    ("kind", "path", "emulator", "honest"),
+    [
+        (
+            "tool-name-execution-cap",
+            "agent.py",
+            _PY_TOOL_NAME_CAP,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "successful-duplicate-suppression",
+            "app/executor.py",
+            _PY_SUCCESS_MEMO,
+            _PY_SUCCESS_MEMO_WITH_AUTHORIZER,
+        ),
+        (
+            "catalog-retired-after-step",
+            "loop.py",
+            _PY_CATALOG_RETIRED,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "sticky-capability-veto",
+            "app/service.py",
+            _PY_STICKY_VETO,
+            _PY_EXACT_REPEAT_STOP,
+        ),
+        (
+            "uncertainty-narrows-route",
+            "src/agent/tool_policy.rs",
+            _RUST_UNSURE_ROUTE,
+            _RUST_UNSURE_ROUTE_HONEST,
+        ),
+        (
+            "tool-argument-grammar-sheet",
+            "catalog_compat.py",
+            _PY_ARGUMENT_GRAMMAR,
+            _PY_FIELD_DOCS,
+        ),
+        (
+            "review-turn-argument-template",
+            "agent2.py",
+            _PY_REVIEW_TEMPLATE,
+            _PY_FIELD_DOCS,
+        ),
+        (
+            "self-reported-benchmark-fitting",
+            "agent2.py",
+            _PY_FITTING_COMMENT,
+            _PY_FIELD_DOCS,
+        ),
+    ],
+)
+def test_policy_v13_executor_and_router_shapes_are_leads(
+    kind: str, path: str, emulator: str, honest: str
+) -> None:
+    assert kind in _kinds(find_benchmark_emulation_fingerprints([(path, emulator)]))
+    assert kind not in _kinds(find_benchmark_emulation_fingerprints([(path, honest)]))
+
+
+def test_executor_shape_leads_carry_locations_not_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints([("agent.py", _PY_TOOL_NAME_CAP)])
+    cap = [f for f in findings if f["kind"] == "tool-name-execution-cap"]
+    assert cap and cap[0]["severity"] == "high"
+    assert "will not run" not in json.dumps(cap)
+
+
+# --- ATH sweep 2026-10-15..18 (#3009, #3010) ---------------------------------
+
+_PY_LENGTH_CUT_DRAFT_FALLBACK = """
+async def deliberate(self, brief_for, records):
+    first = await self.model(brief_for(records))
+    draft_1 = first.content
+    output = ""
+    brief = brief_for(records, drafts=[draft_1])
+    for attempt in range(2):
+        deciding = await self.model(brief)
+        if deciding.finish_reason == "length":
+            if attempt == 0 and first.finish_reason != "length":
+                continue
+            log.info("deciding reply cut at the length limit, draft 1 ships")
+            break
+        output = deciding.content
+        break
+    if not output:
+        output = draft_1
+    return output
+"""
+
+_RUST_LENGTH_CUT_DRAFT_FALLBACK = r"""
+async fn deliberate(&self, records: &[Record]) -> Result<String> {
+    let mut output = self.first_reply(records).await?;
+    let draft1 = std::mem::take(&mut output);
+    let brief = brief_drafts(records, &[draft1.as_str()]);
+    let mut retried = false;
+    loop {
+        let choice = self.complete(&brief).await?;
+        if choice.finish_reason.as_deref() == Some("length") {
+            if !retried {
+                retried = true;
+                continue;
+            }
+            tracing::info!("deciding reply cut at the length limit, draft 1 ships");
+            break;
+        }
+        output = choice.message.content.unwrap_or_default();
+        break;
+    }
+    if output.is_empty() {
+        output = draft1.clone();
+    }
+    Ok(output)
+}
+"""
+
+# The cleared sibling: the length retry runs only on an empty deciding reply.
+_PY_EMPTY_ONLY_DRAFT_FALLBACK = _PY_LENGTH_CUT_DRAFT_FALLBACK.replace(
+    '        if deciding.finish_reason == "length":\n'
+    '            if attempt == 0 and first.finish_reason != "length":\n'
+    "                continue\n"
+    '            log.info("deciding reply cut at the length limit, draft 1 ships")\n'
+    "            break\n",
+    '        if deciding.finish_reason == "length" and not deciding.content.strip():\n'
+    "            continue\n",
+)
+
+# The deciding reply is kept whenever it has content, checked before the branch.
+_PY_CONTENT_FIRST_DRAFT_FALLBACK = _PY_LENGTH_CUT_DRAFT_FALLBACK.replace(
+    '        if deciding.finish_reason == "length":\n'
+    '            if attempt == 0 and first.finish_reason != "length":\n'
+    "                continue\n"
+    '            log.info("deciding reply cut at the length limit, draft 1 ships")\n'
+    "            break\n"
+    "        output = deciding.content\n",
+    '        content = (deciding.content or "").strip()\n'
+    "        if content:\n"
+    "            output = content\n"
+    "            break\n"
+    '        if deciding.finish_reason == "length" and attempt == 0:\n'
+    "            continue\n"
+    "        output = deciding.content\n",
+)
+
+_RUST_INNER_EMPTY_CHECK_DRAFT_FALLBACK = _RUST_LENGTH_CUT_DRAFT_FALLBACK.replace(
+    '        if choice.finish_reason.as_deref() == Some("length") {\n'
+    "            if !retried {",
+    "        let text = choice.message.content.clone().unwrap_or_default();\n"
+    '        if choice.finish_reason.as_deref() == Some("length") {\n'
+    "            if text.trim().is_empty() && !retried {",
+)
+
+# Both retry and break must be gated on empty deciding content. The inner
+# check above only gates continue and still discards a nonempty length reply.
+_RUST_EMPTY_ONLY_DRAFT_FALLBACK = _RUST_INNER_EMPTY_CHECK_DRAFT_FALLBACK.replace(
+    'if choice.finish_reason.as_deref() == Some("length") {',
+    'if choice.finish_reason.as_deref() == Some("length") && text.trim().is_empty() {',
+)
+
+
+@pytest.mark.parametrize(
+    "nearby",
+    [
+        "        # answer_line(deciding) is not called\n",
+        '        note = "answer_line(deciding) is not called"\n',
+        "        if other_reply.content:\n"
+        '            log.info("other reply was nonempty")\n',
+        "        if deciding.content:\n"
+        '            log.info("content exists but will be discarded")\n',
+    ],
+)
+def test_nearby_content_mentions_do_not_hide_length_discard(nearby: str) -> None:
+    source = _PY_LENGTH_CUT_DRAFT_FALLBACK.replace(
+        "        if deciding.finish_reason",
+        nearby + "        if deciding.finish_reason",
+        1,
+    )
+    assert "length-cut-draft-fallback" in _kinds(
+        find_benchmark_emulation_fingerprints([("agent.py", source)])
+    )
+
+
+def test_rust_inner_content_check_does_not_guard_unconditional_discard() -> None:
+    assert "length-cut-draft-fallback" in _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("agent.rs", _RUST_INNER_EMPTY_CHECK_DRAFT_FALLBACK)]
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    "path,source,assignment",
+    [
+        (
+            "agent.py",
+            _PY_EMPTY_ONLY_DRAFT_FALLBACK,
+            "        output = deciding.content",
+        ),
+        (
+            "agent.rs",
+            _RUST_EMPTY_ONLY_DRAFT_FALLBACK,
+            "        output = choice.message.content",
+        ),
+    ],
+)
+def test_empty_branch_guard_does_not_hide_a_later_unconditional_break(
+    path: str, source: str, assignment: str
+) -> None:
+    broken = source.replace(
+        assignment,
+        "        break" + (";" if path.endswith("rs") else "") + "\n" + assignment,
+    )
+    assert "length-cut-draft-fallback" in _kinds(
+        find_benchmark_emulation_fingerprints([(path, broken)])
+    )
+
+
+def test_content_first_exit_must_preserve_the_served_output() -> None:
+    source = _PY_CONTENT_FIRST_DRAFT_FALLBACK.replace(
+        "output = content", "other = content"
+    )
+    assert "length-cut-draft-fallback" in _kinds(
+        find_benchmark_emulation_fingerprints([("agent.py", source)])
+    )
+
+
+# Inline loop (the passed sibling).
+_PY_PROMPT_ONLY_DEDUPE_INLINE = """
+def render_records(records):
+    ordered = sorted(records, key=lambda r: r["timestamp"])
+    seen = set()
+    lines = []
+    for r in ordered:
+        k = " ".join(r["prompt"].lower().split())
+        if k in seen:
+            continue
+        seen.add(k)
+        lines.append(f"User: {r['prompt']}\\nAssistant: {r['response']}")
+    return "\\n".join(lines)
+"""
+
+# Refactored into a helper whose consumer renders far below (the rejected one).
+_PY_PROMPT_ONLY_DEDUPE_HELPER = (
+    """
+def _first_per_prompt(records):
+    seen: set[str] = set()
+    kept = []
+    for record in sorted(records, key=lambda r: r.created_at):
+        key = _normalize(record.prompt)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(record)
+    return kept
+"""
+    + "\n".join(f"UNRELATED_{index} = {index}" for index in range(60))
+    + """
+
+def render(records):
+    return "\\n\\n".join(
+        f"Q: {r.prompt}\\nA: {r.response}" for r in _first_per_prompt(records)
+    )
+"""
+)
+
+_RUST_PROMPT_ONLY_DEDUPE = r"""
+fn render_records(records: &[Record]) -> Vec<String> {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut rendered = Vec::new();
+    for rec in records.iter() {
+        let key = normalize(&rec.prompt);
+        if !seen.insert(key) {
+            continue;
+        }
+        rendered.push(format!("user: {}\nassistant: {}", rec.prompt, rec.response));
+    }
+    rendered
+}
+"""
+
+_PY_KEEP_EVERY_RECORD = """
+def render_records(records):
+    ordered = sorted(records, key=lambda r: r["timestamp"])
+    return "\\n".join(
+        f"User: {r['prompt']}\\nAssistant: {r['response']}" for r in ordered
+    )
+"""
+
+_PY_PAIR_KEYED_DEDUPE = _PY_PROMPT_ONLY_DEDUPE_INLINE.replace(
+    'k = " ".join(r["prompt"].lower().split())',
+    'k = (r["prompt"], r["response"])',
+)
+
+_PY_ID_KEYED_DEDUPE = _PY_PROMPT_ONLY_DEDUPE_INLINE.replace(
+    'k = " ".join(r["prompt"].lower().split())',
+    'k = r["pair_id"]',
+)
+
+_PY_TYPO_CUE_DOCSTRING = '''
+"""Owner, email and correction cues.
+
+The records are generated with deliberate typos, so cue words are matched
+loosely.
+"""
+import re
+
+OWNER_CUE = re.compile(r"owne?rs?hi?p of (.+?) mo?ved to (\\w+)")
+'''
+
+_PY_PRACTICE_EXAM_ROUTER = '''
+class RequestRouter:
+    """Nearest-example request router.
+
+    The labelled examples are requests from practice exams generated locally
+    with the public dataset generator on public seeds.
+    """
+'''
+
+_RUST_QUOTED_RECORD_SENTENCE = r"""
+// Former employers arrive as "X used to work at Org" and the old address as
+// "Back when they were at Org, the email was ...".
+fn previous_employer(text: &str) -> Option<&str> {
+    text.split(" at ").nth(1)
+}
+"""
+
+_PY_PLAIN_RECORD_DOCSTRING = '''
+"""Owner, email and correction cues read from retrieved records."""
+import re
+
+OWNER_CUE = re.compile(r"owner of (.+?) is (\\w+)")
+'''
+
+
+@pytest.mark.parametrize(
+    ("kind", "path", "source"),
+    [
+        (
+            "length-cut-draft-fallback",
+            "agent/deliberate.py",
+            _PY_LENGTH_CUT_DRAFT_FALLBACK,
+        ),
+        (
+            "length-cut-draft-fallback",
+            "src/deliberate.rs",
+            _RUST_LENGTH_CUT_DRAFT_FALLBACK,
+        ),
+        (
+            "prompt-only-record-dedupe",
+            "agent/records.py",
+            _PY_PROMPT_ONLY_DEDUPE_INLINE,
+        ),
+        (
+            "prompt-only-record-dedupe",
+            "agent/records.py",
+            _PY_PROMPT_ONLY_DEDUPE_HELPER,
+        ),
+        ("prompt-only-record-dedupe", "src/records.rs", _RUST_PROMPT_ONLY_DEDUPE),
+        ("generator-construction-admission", "agent/cues.py", _PY_TYPO_CUE_DOCSTRING),
+        (
+            "generator-construction-admission",
+            "agent/router.py",
+            _PY_PRACTICE_EXAM_ROUTER,
+        ),
+        (
+            "generator-construction-admission",
+            "src/people.rs",
+            _RUST_QUOTED_RECORD_SENTENCE,
+        ),
+    ],
+)
+def test_ath_sweep_sibling_shapes_are_leads(kind: str, path: str, source: str) -> None:
+    findings = find_benchmark_emulation_fingerprints([(path, source)])
+    matched = [finding for finding in findings if finding["kind"] == kind]
+    assert matched
+    assert all(finding["severity"] == "medium" for finding in matched)
+
+
+@pytest.mark.parametrize(
+    ("kind", "path", "source"),
+    [
+        (
+            "length-cut-draft-fallback",
+            "agent/deliberate.py",
+            _PY_EMPTY_ONLY_DRAFT_FALLBACK,
+        ),
+        (
+            "length-cut-draft-fallback",
+            "agent/deliberate.py",
+            _PY_CONTENT_FIRST_DRAFT_FALLBACK,
+        ),
+        (
+            "length-cut-draft-fallback",
+            "src/deliberate.rs",
+            _RUST_EMPTY_ONLY_DRAFT_FALLBACK,
+        ),
+        ("prompt-only-record-dedupe", "agent/records.py", _PY_KEEP_EVERY_RECORD),
+        ("prompt-only-record-dedupe", "agent/records.py", _PY_PAIR_KEYED_DEDUPE),
+        ("prompt-only-record-dedupe", "agent/records.py", _PY_ID_KEYED_DEDUPE),
+        (
+            "generator-construction-admission",
+            "agent/cues.py",
+            _PY_PLAIN_RECORD_DOCSTRING,
+        ),
+    ],
+)
+def test_ath_sweep_permitted_look_alikes_stay_silent(
+    kind: str, path: str, source: str
+) -> None:
+    assert kind not in _kinds(find_benchmark_emulation_fingerprints([(path, source)]))
+
+
+def test_length_cut_fallback_cites_every_role() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [("src/deliberate.rs", _RUST_LENGTH_CUT_DRAFT_FALLBACK)]
+    )
+    lead = next(f for f in findings if f["kind"] == "length-cut-draft-fallback")
+    roles = {location["role"] for location in lead["locations"]}
+    assert roles == {
+        "length-finish-branch",
+        "earlier-draft-holder",
+        "served-output-cleared",
+        "draft-served-fallback",
+    }
+    assert "draft 1 ships" not in json.dumps(findings)
+
+
+def test_prompt_dedupe_helper_lead_points_at_the_far_render() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [("agent/records.py", _PY_PROMPT_ONLY_DEDUPE_HELPER)]
+    )
+    lead = next(f for f in findings if f["kind"] == "prompt-only-record-dedupe")
+    lines = {location["role"]: location["line"] for location in lead["locations"]}
+    assert lines["response-rendered"] - lines["prompt-derived-key"] > 60
+
+
+@pytest.mark.parametrize("access", ["client.response", "record.response"])
+def test_unrelated_response_access_does_not_complete_dedupe_lead(access: str) -> None:
+    helper_only = _PY_PROMPT_ONLY_DEDUPE_HELPER.split("def render(records):")[0]
+    source = helper_only + f"\ndef unrelated(client, record):\n    return {access}\n"
+    assert "prompt-only-record-dedupe" not in _kinds(
+        find_benchmark_emulation_fingerprints([("records.py", source)])
+    )
+
+
+def test_unrelated_nearby_function_does_not_complete_dedupe_lead() -> None:
+    source = _PY_PROMPT_ONLY_DEDUPE_HELPER.split("def render(records):")[0]
+    source = "\n".join(
+        line for line in source.splitlines() if not line.startswith("UNRELATED_")
+    )
+    source += "\ndef other(record):\n    return record.response\n"
+    assert "prompt-only-record-dedupe" not in _kinds(
+        find_benchmark_emulation_fingerprints([("records.py", source)])
+    )
+
+
+_ATH_SWEEP_KINDS = {
+    "length-cut-draft-fallback",
+    "prompt-only-record-dedupe",
+    "generator-construction-admission",
+}
+
+
+@pytest.mark.parametrize(
+    "kit_name", ["dittobench-starter-kit", "dittobench-coding-starter-kit"]
+)
+def test_starter_kits_trip_no_ath_sweep_lead(kit_name: str) -> None:
+    kit = Path(__file__).resolve().parents[3] / "miners" / kit_name
+    files = [
+        (str(path.relative_to(kit)), path.read_text(encoding="utf-8"))
+        for path in sorted(kit.rglob("*"))
+        if path.is_file()
+        and "target" not in path.relative_to(kit).parts
+        and path.suffix in {".rs", ".py", ".ts", ".go", ".md"}
+    ]
+    assert files
+    kinds = _kinds(find_benchmark_emulation_fingerprints(files))
+    assert not kinds & _ATH_SWEEP_KINDS
+
+
+_GO_PROMPT_ONLY_DEDUPE = """
+func renderRecords(records []Record) []string {
+	seen := map[string]struct{}{}
+	var rendered []string
+	for _, rec := range records {
+		key := normalize(rec.Prompt)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		rendered = append(rendered, "user: "+rec.Prompt+"\\nassistant: "+rec.Response)
+	}
+	return rendered
+}
+"""
+
+_GO_PROMPT_AND_RESPONSE_COUNTER = """
+func countTexts(pairs []Pair) map[string]int {
+	seen := make(map[string]int)
+	for _, pair := range pairs {
+		if pair.Prompt != "" {
+			seen[pair.Prompt]++
+		}
+		if pair.Response != "" {
+			seen[pair.Response]++
+		}
+	}
+	return seen
+}
+"""
+
+
+def test_go_prompt_only_dedupe_is_a_lead_but_a_counter_is_not() -> None:
+    kind = "prompt-only-record-dedupe"
+    assert kind in _kinds(
+        find_benchmark_emulation_fingerprints([("records.go", _GO_PROMPT_ONLY_DEDUPE)])
+    )
+    assert kind not in _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("records.go", _GO_PROMPT_AND_RESPONSE_COUNTER)]
+        )
+    )

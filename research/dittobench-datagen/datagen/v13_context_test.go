@@ -9,6 +9,7 @@ import (
 )
 
 func TestV13ContextDoesNotEncodeDecision(t *testing.T) {
+	t.Parallel()
 	for seed := int64(1); seed <= 40; seed++ {
 		world := universe.GenerateForVersion(seed, 3, protocol.BenchVersionV13)
 		for _, family := range []v13RestraintFamily{v13FamilyEffort, v13FamilyCalendar, v13FamilyEmail} {

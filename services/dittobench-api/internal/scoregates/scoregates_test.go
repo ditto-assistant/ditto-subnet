@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 func validModelInput() ModelUseInput {
@@ -572,7 +574,7 @@ func TestValidateRejectsUnsupportedEvidenceVersions(t *testing.T) {
 		{name: "zero schema", mutate: func(e *Evidence) { e.SchemaVersion = 0 }},
 		{name: "future schema", mutate: func(e *Evidence) { e.SchemaVersion++ }},
 		{name: "v8", mutate: func(e *Evidence) { e.BenchVersion = 8 }},
-		{name: "future bench", mutate: func(e *Evidence) { e.BenchVersion = BenchVersionV14 + 1 }},
+		{name: "future bench", mutate: func(e *Evidence) { e.BenchVersion = protocol.NewestGeneratableBenchVersion() + 1 }},
 	}
 
 	for _, tt := range tests {
@@ -869,7 +871,7 @@ func TestApplyForVersionContracts(t *testing.T) {
 		{name: "v10 passing exact", version: 10, evidence: &passingV10, want: score},
 		{name: "v10 rejects v9-stamped evidence", version: 10, evidence: &passing, is: ErrInvalidEvidence},
 		{name: "v9 rejects v10-stamped evidence", version: 9, evidence: &passingV10, is: ErrInvalidEvidence},
-		{name: "future version rejected", version: BenchVersionV14 + 1, evidence: &passingV10, is: ErrUnsupportedVersion},
+		{name: "future version rejected", version: protocol.NewestGeneratableBenchVersion() + 1, evidence: &passingV10, is: ErrUnsupportedVersion},
 	}
 
 	for _, tt := range tests {

@@ -5,6 +5,7 @@ import math
 import pytest
 from bittensor_wallet import Keypair
 
+from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 from ditto.validator.treasury_weights import fold_treasury_weights
 from ditto_screening_protocol.treasury import TreasuryEmissionPolicy
 from ditto_screening_protocol.treasury_approval import (
@@ -14,24 +15,26 @@ from ditto_screening_protocol.treasury_approval import (
 from ditto_screening_protocol.treasury_enforcement import (
     EnforcingTreasuryPin,
     TreasuryFleetMember,
+    treasury_follower_capability,
 )
 
 
-def fixture(*, service_bps=1000):
+def fixture(*, service_bps=1000, signed_range=None, pinned_bps=None):
     coldkey = Keypair.create_from_uri("//Alice")
+    bucket = {
+        "bucket_id": "gamma",
+        "allocation_bps": service_bps,
+        "holding_coldkey": Keypair.create_from_uri("//Charlie").ss58_address,
+    }
+    if signed_range is not None:
+        bucket["min_allocation_bps"], bucket["max_allocation_bps"] = signed_range
     policy = TreasuryEmissionPolicy(
         revision=1,
         genesis_hash="0x" + "11" * 32,
         collector_hotkey=Keypair.create_from_uri("//Bob").ss58_address,
         collector_coldkey=coldkey.ss58_address,
         collector_policy_digest="c" * 64,
-        buckets=[
-            {
-                "bucket_id": "gamma",
-                "allocation_bps": service_bps,
-                "holding_coldkey": Keypair.create_from_uri("//Charlie").ss58_address,
-            }
-        ],
+        buckets=[bucket],
     )
     approval = TreasuryPolicyApproval(
         policy=policy,
@@ -39,7 +42,7 @@ def fixture(*, service_bps=1000):
     )
     member = TreasuryFleetMember(
         validator_hotkey=Keypair.create_from_uri("//Eve").ss58_address,
-        protocol_version=30,
+        protocol_version=HEARTBEAT_PROTOCOL_VERSION,
         treasury_pin_version=2,
         treasury_dispatch_version=2,
         approved_policy_digest=policy.digest,
@@ -54,6 +57,9 @@ def fixture(*, service_bps=1000):
         policy_digest=policy.digest,
         approval=approval,
         fleet=[member],
+        allocations=None
+        if pinned_bps is None
+        else [{"bucket_id": "gamma", "allocation_bps": pinned_bps}],
         identity={
             "genesis_hash": policy.genesis_hash,
             "finalized_block": 101,
@@ -88,6 +94,56 @@ def fixture(*, service_bps=1000):
     }
 
 
+def test_independent_follower_uses_same_signed_service_allocation():
+    pin, args = fixture()
+    expected = fold_treasury_weights({"miner": 1}, **args)
+    args["local_capability"] = treasury_follower_capability(
+        pin,
+        validator_hotkey=Keypair.create_from_uri("//Dave").ss58_address,
+        protocol_version=HEARTBEAT_PROTOCOL_VERSION,
+    )
+    assert args["local_capability"] not in pin.fleet
+    assert fold_treasury_weights({"miner": 1}, **args) == expected
+
+
+@pytest.mark.parametrize("allocation", [2500, 7500, 10000])
+def test_larger_allocation_cannot_reuse_previous_policy_signature(allocation):
+    previous, _ = fixture()
+    pin, args = fixture(service_bps=allocation)
+    args["pin"] = pin.model_copy(
+        update={
+            "approval": pin.approval.model_copy(
+                update={"signature": previous.approval.signature}
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        fold_treasury_weights({"miner": 1}, **args)
+
+
+@pytest.mark.parametrize("pinned_bps", [0, 2500, 7500])
+def test_signed_range_folds_the_epoch_pinned_gamma_not_the_default(pinned_bps):
+    pin, args = fixture(signed_range=(0, 7500), pinned_bps=pinned_bps)
+    result = fold_treasury_weights({"miner": 1}, **args)
+    assert pin.policy.service_bps == 1000
+    assert result.get(pin.policy.collector_hotkey, 0) == pinned_bps / 10_000
+    assert result.get("miner", 0) == pytest.approx(1 - pinned_bps / 10_000)
+
+
+def test_signed_range_cannot_reuse_a_fixed_policy_signature():
+    fixed, _ = fixture()
+    pin, args = fixture(signed_range=(0, 7500), pinned_bps=5000)
+    args["pin"] = pin.model_copy(
+        update={
+            "approval": pin.approval.model_copy(
+                update={"signature": fixed.approval.signature}
+            )
+        }
+    )
+    with pytest.raises(ValueError):
+        fold_treasury_weights({"miner": 1}, **args)
+
+
 @pytest.mark.parametrize("burn", [0, 0.2, 0.5, 1])
 @pytest.mark.parametrize("paid", [0, 0.3, 1])
 def test_service_reserved_before_burn_and_unpaid_remainder(burn, paid):
@@ -102,14 +158,14 @@ def test_service_reserved_before_burn_and_unpaid_remainder(burn, paid):
         assert result[args["burn_hotkey"]] == 0.9
 
 
-@pytest.mark.parametrize("service_bps", [0, 1000])
+@pytest.mark.parametrize("service_bps", [0, 1000, 2500, 7500, 10000])
 def test_collector_is_excluded_from_competition_even_with_zero_pool(service_bps):
     pin, args = fixture(service_bps=service_bps)
     result = fold_treasury_weights(
         {"miner": 1, pin.policy.collector_hotkey: 10**100}, **args
     )
     assert result.get(pin.policy.collector_hotkey, 0) == service_bps / 10_000
-    assert result["miner"] == pytest.approx(1 - service_bps / 10_000)
+    assert result.get("miner", 0) == pytest.approx(1 - service_bps / 10_000)
 
 
 def test_empty_miner_vector_does_not_enlarge_service_pool():
@@ -139,7 +195,7 @@ def test_empty_miner_vector_does_not_enlarge_service_pool():
         "wrong_first_block",
         "legacy_dispatch",
         "legacy_protocol",
-        "absent_self",
+        "wrong_follower_policy",
         "empty_fleet",
         "mixed_fleet",
         "burn_collector",
@@ -204,9 +260,12 @@ def test_refusal_preserves_caller_vector(fault):
         args["local_capability"] = args["local_capability"].model_copy(
             update={key: value}
         )
-    elif fault == "absent_self":
+    elif fault == "wrong_follower_policy":
         args["local_capability"] = args["local_capability"].model_copy(
-            update={"validator_hotkey": args["burn_hotkey"]}
+            update={
+                "validator_hotkey": args["burn_hotkey"],
+                "approved_policy_digest": "f" * 64,
+            }
         )
     elif fault == "empty_fleet":
         args["pin"] = pin.model_copy(update={"fleet": ()})

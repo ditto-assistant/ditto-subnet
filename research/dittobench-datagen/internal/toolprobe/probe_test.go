@@ -36,6 +36,7 @@ func TestOutcomeSignatureBindsArgumentsAndServedResult(t *testing.T) {
 }
 
 func TestV10ModelFreeAndArgumentExposureGates(t *testing.T) {
+	t.Parallel()
 	result, err := Run(protocol.BenchVersionV10, "full", 1, 30, 10)
 	if err != nil {
 		t.Fatal(err)

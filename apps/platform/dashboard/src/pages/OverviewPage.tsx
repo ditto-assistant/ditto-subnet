@@ -16,6 +16,7 @@ import type { JSX } from "solid-js";
 import { CrownHistory } from "../components/board/CrownHistory";
 import { LeaderboardBlock } from "../components/board/LeaderboardBlock";
 import { leaderboardStore } from "../components/board/leaderboard-data";
+import { GeneratorOverviewCard } from "../components/generators/GeneratorOverviewCard";
 import { ChampionBox } from "../components/overview/ChampionBox";
 import { HarnessComparison } from "../components/overview/HarnessComparison";
 import { SnapshotLedger } from "../components/overview/SnapshotLedger";
@@ -81,6 +82,7 @@ export function OverviewPage(
           aria-label="Memory timeline, scrolls separately from the leaderboard"
         >
           <HarnessComparison store={store} />
+          <GeneratorOverviewCard epoch={epoch} />
         </aside>
         <div
           class="overview-main"

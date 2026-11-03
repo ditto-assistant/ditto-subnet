@@ -33,6 +33,14 @@ from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     STRICT_TWO_OUTCOME_POLICY_VERSION,
 )
+from ditto_screening_protocol.models import (
+    SourceReviewFinding,
+    SourceReviewInvariantDisposition,
+)
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
+    SOURCE_REVIEW_CONFIRMED_VIOLATION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -272,6 +280,11 @@ class SourceReviewObservation:
     finding: Mapping[str, object] | None = None
     failure_disposition: str = "retryable_infra"
     clearance_certified: bool = False
+    violation_certified: bool = False
+    """An elevated finding whose causal proof is complete and which an
+    independent L3 violation adjudicator confirmed (it could have refuted it).
+    L2 alone, an L3 disagreement, timeout, or missing L3 verdict never set it.
+    At policy v13 a certified breach is a terminal reject, not a held lead."""
     review_audit: Mapping[str, object] | None = None
     # Structured model submission exposed only by the non-authoritative L2
     # canary report. It contains no source text or model-authored prose.
@@ -284,6 +297,54 @@ class SourceReviewObservation:
     """Typed in-progress determinations (SourceReviewNote shape). Recorded
     DURING review so a budget- or fault-terminated attempt still ships the
     evidence it accumulated; at exhaustion they decide the gradient verdict."""
+    failure_subcode: str | None = None
+    """Bounded slug naming why a failed review stopped: the provider's own
+    error code behind ``l3-adjudicator-model-provider-fault``, an incomplete
+    response reason behind ``*-model-response-contract``, or joined clearance
+    gaps. Private diagnostics only; it never changes the outcome."""
+
+
+# Joined clearance-gap subcodes use ``+`` (``models:a+b``); keep them whole.
+_FAILURE_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
+
+
+_INFRA_UNAVAILABLE_DETAIL = "screener error: private policy infrastructure unavailable"
+# Review failures that park as retryable but are not our infrastructure: the
+# reviewer model misbehaved (malformed tool call, unusable response,
+# self-inconsistent verdict, turn timeout), the submitted archive could not be
+# read, or the review outran its lease. They keep their exact reason code and
+# stay on the operator retry; only the private detail stops claiming an
+# infrastructure outage, which sent operators chasing the fleet for a model
+# fault (DrPresident v20, 2026-10-29).
+_MODEL_FAULT_CODE_PREFIXES = (
+    "source-review-model-",
+    "source-review-inconsistent-verdict",
+)
+_ARCHIVE_UNREADABLE_CODE = "source-review-archive-invalid"
+# L2 ran past its deadline: the layer's own ``timeout_seconds`` or the attempt
+# lease, whichever is earlier. The subcode names which one fired.
+_LATE_RESULT_CODE = "l2-late-result"
+
+
+def _retryable_detail(reason_code: str | None) -> str:
+    """Name a parked retryable failure's owner without claiming an outage."""
+    if reason_code is not None and reason_code.startswith(_MODEL_FAULT_CODE_PREFIXES):
+        return "screener error: private source review model fault, not infrastructure"
+    if reason_code == _ARCHIVE_UNREADABLE_CODE:
+        return "screener error: private source review could not read the archive"
+    if reason_code == _LATE_RESULT_CODE:
+        return "screener error: private review ran past its review deadline"
+    return _INFRA_UNAVAILABLE_DETAIL
+
+
+def _failure_subcode_suffix(subcode: str | None) -> str:
+    """Render a failure subcode for the private detail, or nothing if unsafe."""
+    if subcode is None:
+        return ""
+    normalized = subcode.strip().lower()
+    if not _FAILURE_SUBCODE_RE.fullmatch(normalized):
+        return ""
+    return f" (subcode={normalized})"
 
 
 def source_review_low_clearance_allowed(
@@ -340,6 +401,7 @@ class ModuleResult:
     review_audit: Mapping[str, object] | None = None
     adjudication: Mapping[str, object] | None = None
     review_notes: tuple[Mapping[str, object], ...] = ()
+    failure_subcode: str | None = None
 
 
 class PolicyModule(Protocol):
@@ -619,7 +681,7 @@ _COURT_KEY_UNAVAILABLE = "adjudicator-key-unavailable"
 # ``source-review-unavailable``, which an archive the court cannot open or read,
 # or a screen whose source reviewer never started, also produces and which
 # therefore stays on the operator retry.
-SOURCE_REVIEW_KEY_UNAVAILABLE_CODE = "source-review-adjudicator-key-unavailable"
+SOURCE_REVIEW_KEY_UNAVAILABLE_CODE = SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE
 
 
 def _court_unavailable(adjudication: Mapping[str, object]) -> bool:
@@ -791,6 +853,7 @@ class AgenticSourceReviewModule(_BaseModule):
                     finding=observation.finding,
                     review_audit=observation.review_audit,
                     review_notes=review_notes,
+                    failure_subcode=observation.failure_subcode,
                 )
             disposition = (
                 ModuleDisposition.INCONCLUSIVE
@@ -808,6 +871,7 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
                 review_audit=observation.review_audit,
                 review_notes=review_notes,
+                failure_subcode=observation.failure_subcode,
             )
         if observation.risk_level == "low" and set(observation.categories) <= (
             {"none"} | _ADVISORY_SOURCE_CATEGORIES
@@ -850,7 +914,9 @@ class AgenticSourceReviewModule(_BaseModule):
                 ),
                 review_notes=review_notes,
             )
-        code, summary = _source_review_reason(observation.categories)
+        code, summary = _source_review_reason_for(
+            observation, policy_version=context.policy_version
+        )
         return ModuleResult(
             ModuleDisposition.TRIPWIRE,
             (
@@ -1248,6 +1314,7 @@ class PolicyEngine:
         pass_inconclusive = False
         selected_reason_code: str | None = None
         pass_inconclusive_code: str | None = None
+        pass_inconclusive_subcode: str | None = None
         # The mechanical lane does not collect source-review evidence. The
         # selector phase owns that work (source review, fingerprint, and timing
         # tripwires), so skip it entirely. Mechanical failures from the gate's
@@ -1268,6 +1335,9 @@ class PolicyEngine:
                             result.evidence[0].code
                             if result.evidence
                             else "source-review-inconclusive"
+                        )
+                        pass_inconclusive_subcode = (
+                            pass_inconclusive_subcode or result.failure_subcode
                         )
                         continue
                     return self._decision(
@@ -1292,6 +1362,7 @@ class PolicyEngine:
                             if result.evidence
                             else f"policy-{terminal.value.replace('_', '-')}"
                         ),
+                        failure_subcode=result.failure_subcode,
                     )
                 if result.disposition == ModuleDisposition.TRIPWIRE:
                     selected = True
@@ -1440,6 +1511,7 @@ class PolicyEngine:
                 review_notes=review_notes,
                 policy_version=context.policy_version,
                 reason_code=pass_inconclusive_code,
+                failure_subcode=pass_inconclusive_subcode,
             )
 
         return self._decision(
@@ -1463,17 +1535,23 @@ class PolicyEngine:
         review_notes: tuple[Mapping[str, object], ...] = (),
         policy_version: int = SCREENING_POLICY_VERSION,
         reason_code: str | None = None,
+        failure_subcode: str | None = None,
     ) -> ScreeningDecision:
         bounded = _bounded_reason_evidence(evidence, reason_code=reason_code)
         detail = ""
         if outcome == ScreeningOutcome.RETRYABLE_INFRA:
-            detail = "screener error: private policy infrastructure unavailable"
+            detail = _retryable_detail(reason_code)
         elif outcome == ScreeningOutcome.QUARANTINE:
             detail = "private policy quarantine pending operator review"
         elif outcome == ScreeningOutcome.INCONCLUSIVE:
             detail = "private policy audit inconclusive"
         elif outcome == ScreeningOutcome.PASS_INCONCLUSIVE:
             detail = "bounded source review inconclusive; admitted for scoring"
+        if detail and outcome != ScreeningOutcome.QUARANTINE:
+            # A parked review otherwise reaches Platform with no hint of why
+            # it stopped, so a deterministic provider rejection and a transient
+            # outage both read as the same opaque code.
+            detail += _failure_subcode_suffix(failure_subcode)
         # An enforced source adjudication may clear its module before a later,
         # independent module selects a different terminal outcome.  In that
         # case the adjudication is no longer the authority for the overall
@@ -1596,7 +1674,13 @@ class PolicyEngine:
                         "agentic-preexecution-review",
                         observation.error_code or "source-review-inconclusive",
                         (
-                            "private source review infrastructure was unavailable"
+                            (
+                                "private source review infrastructure was unavailable"
+                                if _retryable_detail(observation.error_code)
+                                == _INFRA_UNAVAILABLE_DETAIL
+                                else "private source review did not produce a "
+                                "usable result"
+                            )
                             if retryable
                             else "private source review could not resolve the lead"
                         ),
@@ -1607,6 +1691,7 @@ class PolicyEngine:
                 review_notes=observation.notes,
                 policy_version=policy_version,
                 reason_code=observation.error_code or "source-review-inconclusive",
+                failure_subcode=observation.failure_subcode,
             )
         if observation.risk_level == "low" and not source_review_low_clearance_allowed(
             observation, policy_version=policy_version
@@ -1629,7 +1714,9 @@ class PolicyEngine:
             )
         if observation.risk_level not in {"medium", "high"}:
             raise ValueError("pre-execution source decision requires elevated risk")
-        code, summary = _source_review_reason(observation.categories)
+        code, summary = _source_review_reason_for(
+            observation, policy_version=policy_version
+        )
         return self._decision(
             ScreeningOutcome.QUARANTINE,
             (
@@ -1772,6 +1859,37 @@ def _module_terminal(disposition: ModuleDisposition) -> ScreeningOutcome | None:
     }.get(disposition)
 
 
+CONFIRMED_VIOLATION_CODE = SOURCE_REVIEW_CONFIRMED_VIOLATION
+
+
+def _source_review_reason_for(
+    observation: SourceReviewObservation, *, policy_version: int
+) -> tuple[str, str]:
+    """Name a confirmed v13 breach for Platform's reject, else the held lead."""
+    if (
+        policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION
+        and observation.violation_certified
+        and _names_invariant_breach(observation.finding)
+    ):
+        return (
+            CONFIRMED_VIOLATION_CODE,
+            "independent L2 and L3 source review confirmed an invariant breach",
+        )
+    return _source_review_reason(observation.categories)
+
+
+def _names_invariant_breach(finding: Mapping[str, object] | None) -> bool:
+    try:
+        parsed = SourceReviewFinding.model_validate(finding)
+    except (TypeError, ValueError):
+        return False
+    assessment = parsed.invariant_assessment
+    return assessment is not None and any(
+        decision.disposition == SourceReviewInvariantDisposition.BREACH
+        for decision in assessment.decisions
+    )
+
+
 def _source_review_reason(categories: Sequence[str]) -> tuple[str, str]:
     category_set = set(categories)
     if category_set & _MALICIOUS_SOURCE_CATEGORIES:
@@ -1797,7 +1915,7 @@ def _source_review_reason(categories: Sequence[str]) -> tuple[str, str]:
         )
     return (
         "source-safety-behavioral-risk",
-        "private source analysis selected a bounded behavioral audit",
+        "private source analysis found a behavioral-integrity risk",
     )
 
 

@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Platform database backup
+
+[Timer]
+OnCalendar=*-*-* 06:30:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=ditto-postgres-backup.service
+
+[Install]
+WantedBy=timers.target

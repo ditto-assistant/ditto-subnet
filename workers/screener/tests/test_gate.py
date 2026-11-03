@@ -24,6 +24,7 @@ import pytest
 
 from ditto_screener import gate as gate_module
 from ditto_screener.config import ScreenerConfig
+from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.gate import (
     _MAX_ARCHIVE_MEMBERS,
     _MAX_SCREENED_IMAGE_BYTES,
@@ -64,6 +65,7 @@ from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ScoredRuntimeEvidenceLease,
 )
+from ditto_screening_protocol.reason_codes import ReasonCodeClass, reason_code_class
 
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _ATTEMPT = UUID("7c5df3f9-3ea7-47ba-92d1-1bbcf4c5f300")
@@ -1338,7 +1340,50 @@ async def test_publish_failure_demotes_pass_with_dedicated_reason(
         )
     assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
     assert result.evidence[-1].code == "image-upload-failed"
+    assert reason_code_class(result.evidence[-1].code) == ReasonCodeClass.OPERATOR_RETRY
     assert "object storage unavailable" in result.detail
+
+
+async def test_publish_platform_outage_is_fleet_infra(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    saved_archive, _, _ = _oci_image_save_archive()
+
+    async def run(args: list[str], *, stdin: Any = None, **_: Any) -> tuple[int, str]:
+        if args[0] == "build":
+            if stdin is not None:
+                stdin.read()
+            _write_iidfile(args)
+        elif args[:4] == ["image", "inspect", "--format", "{{.Id}}"]:
+            return 0, "sha256:" + "34" * 32
+        elif args[:3] == ["image", "inspect", "--format"]:
+            if "Config.Volumes" in args[3]:
+                return 0, ""
+            return 0, str(len(saved_archive))
+        elif args[:3] == ["image", "save", "--output"]:
+            Path(args[3]).write_bytes(saved_archive)
+        return 0, ""
+
+    async def fail_publish(_image: Any) -> None:
+        raise ScreenedImageUploadUnavailable("image upload initiate rejected (502): ")
+
+    gate = _gate_with(make_config(), run, tarball=tarball)
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            publish_image=fail_publish,
+        )
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    # Platform retries this code automatically (FLEET_INFRA).
+    assert result.evidence[-1].code == "image-upload-platform-unavailable"
+    assert reason_code_class(result.evidence[-1].code) == ReasonCodeClass.FLEET_INFRA
+    assert "initiate rejected (502)" in result.detail
 
 
 async def test_publish_uses_stable_agent_ref_with_attempt_scoped_build(
@@ -2565,7 +2610,8 @@ async def test_fake_gateway_is_internal_and_resource_capped(
     assert ca_mount.endswith(",readonly")
     assert "SSL_CERT_FILE=/run/dittobench/openrouter-shim-ca.pem" in harness
     assert "fake-gateway" not in " ".join(harness)
-    assert {"--memory", "3g", "--pids-limit", "512"} <= set(harness)
+    # The published envelope cap when Platform stamps none; never a stale 3g.
+    assert {"--memory", "8192m", "--memory-swap", "--pids-limit", "512"} <= set(harness)
     assert {"--init", "--user", "65532:65532", "--read-only"} <= set(harness)
     assert {"--ipc", "none", "--log-driver", "local"} <= set(harness)
     assert {"max-size=8m", "max-file=1", "compress=false"} <= set(harness)
@@ -3806,10 +3852,27 @@ async def test_seed_probe_reports_the_memory_cap_when_the_container_is_oom_kille
         tarball=tarball,
     )
     async with gate._client:
-        result = await _screen(gate, hashlib.sha256(tarball).hexdigest())
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            bench_version=12,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            sandbox_memory_limit_mib=6144,
+        )
 
     assert result.outcome == ScreeningOutcome.DETERMINISTIC_REJECT
-    assert "memory cap" in result.detail
+    # The probe ran at the live cap Platform stamped, and the rejection names
+    # that cap rather than claiming a parity it does not have.
+    harness = next(
+        call
+        for call in calls
+        if "--network-alias" in call
+        and call[call.index("--network-alias") + 1] == "harness"
+    )
+    assert harness[harness.index("--memory") + 1] == "6144m"
+    assert "6144 MiB sandbox memory cap" in result.detail
     assert any(item.code == "seed-memory-cap" for item in result.evidence)
 
 
@@ -3849,7 +3912,7 @@ async def test_envelope_usage_is_recorded_for_a_passing_image(
     # A passing image is exactly the case rejections cannot answer: how much of
     # the envelope the fleet actually uses.
     assert "393 MiB" in usage.summary
-    assert "3g" in usage.summary
+    assert "8192 MiB" in usage.summary
     assert "12 MiB" in usage.summary
 
 
@@ -4011,3 +4074,10 @@ def test_gate_threads_l2_turn_timeout_to_the_reviewer(make_config) -> None:  # t
         tarball=_valid_tar(),
     )
     assert explicit._source_reviewer._l2._max_completion_request_seconds == 300.0
+
+
+def test_gate_retries_a_relayed_provider_body_fault_once(make_config) -> None:  # type: ignore[no-untyped-def]
+    # 2026-10-02/03: four L3 adjudications lost every completed turn to one
+    # relayed provider fault and parked as l3-adjudicator-model-provider-fault.
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    assert gate._source_reviewer._l2._retry_provider_body_fault_once is True

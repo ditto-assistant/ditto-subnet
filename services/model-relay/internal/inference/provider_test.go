@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -170,7 +171,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 			if tc.retryAfter != "" {
 				header.Set("Retry-After", tc.retryAfter)
 			}
-			if got := confirmationReaderBackpressureDelay(header); got != tc.want {
+			if got := confirmationBackpressureDelay(header); got != tc.want {
 				t.Fatalf("delay: got %s want %s", got, tc.want)
 			}
 		})
@@ -178,7 +179,7 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 	multiple := make(http.Header)
 	multiple.Add("Retry-After", "1")
 	multiple.Add("Retry-After", "60")
-	if got := confirmationReaderBackpressureDelay(multiple); got != 10*time.Second {
+	if got := confirmationBackpressureDelay(multiple); got != 10*time.Second {
 		t.Fatalf("duplicate Retry-After: got %s want 10s", got)
 	}
 }
@@ -208,10 +209,9 @@ func TestConfirmationReaderBackpressureDoesNotWaitForRetryDeadline(t *testing.T)
 		1024,
 		5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     elapsedBudget,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              elapsedBudget,
 		},
 		func(_ context.Context, delay time.Duration) { slept = delay },
 	)
@@ -239,10 +239,9 @@ func TestConfirmationReader503KeepsOrdinaryAttemptCap(t *testing.T) {
 		context.Background(), upstream.Client(), upstream.URL,
 		map[string]any{"model": "fixed/model"}, nil, 1024, 5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     confirmationReaderBackpressureMaxElapsed,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              confirmationBackpressureMaxElapsed,
 		},
 		func(context.Context, time.Duration) {},
 	)
@@ -268,10 +267,9 @@ func TestConfirmationReaderBackpressureDoesNotScheduleCancellationWait(t *testin
 		ctx, upstream.Client(), upstream.URL,
 		map[string]any{"model": "fixed/model"}, nil, 1024, 5,
 		providerRetryPolicy{
-			retryBackpressure:              true,
-			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
-			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     confirmationReaderBackpressureMaxElapsed,
+			retryBackpressure:       true,
+			backpressureMaxAttempts: confirmationBackpressureMaxAttempts,
+			maxElapsed:              confirmationBackpressureMaxElapsed,
 		},
 		func(context.Context, time.Duration) { cancel() },
 	)
@@ -294,53 +292,55 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 		body string
 		want bool
 	}{
-		"string error is not canonical":  {body: `{"error":"rate limited"}`},
-		"canonical object error":         {body: `{"error":{"code":429,"message":"rate limited"}}`, want: true},
-		"canonical route metadata":       {body: `{"error":{"code":429,"message":"rate limited"},` + canonicalMetadata + `}`, want: true},
-		"missing error":                  {body: `{}`},
-		"malformed":                      {body: `{"error":`},
-		"non-finite number":              {body: `{"error":{"code":429,"message":"rate limited"},"value":NaN}`},
-		"positive infinity":              {body: `{"error":{"code":429,"message":"rate limited"},"value":Infinity}`},
-		"negative infinity":              {body: `{"error":{"code":429,"message":"rate limited"},"value":-Infinity}`},
-		"duplicate error":                {body: `{"error":"first","error":"second"}`},
-		"missing code":                   {body: `{"error":{"message":"rate limited"}}`},
-		"mismatched code":                {body: `{"error":{"code":503,"message":"rate limited"}}`},
-		"missing message":                {body: `{"error":{"code":429}}`},
-		"empty message":                  {body: `{"error":{"code":429,"message":""}}`},
-		"unknown error field":            {body: `{"error":{"code":429,"message":"rate limited","provider_name":"DeepInfra"}}`},
-		"unknown billing object":         {body: `{"error":{"code":429,"message":"rate limited"},"billing":{"amount_microusd":0}}`},
-		"unknown response id":            {body: `{"error":{"code":429,"message":"rate limited"},"response_id":"r"}`},
-		"unknown token usage":            {body: `{"error":{"code":429,"message":"rate limited"},"token_usage":{}}`},
-		"top level usage":                {body: `{"error":{"code":429,"message":"rate limited"},"usage":{}}`},
-		"nested usage":                   {body: `{"error":{"code":429,"message":"rate limited","metadata":{"usage":{}}}}`},
-		"cost":                           {body: `{"error":{"code":429,"message":"rate limited"},"cost":0}`},
-		"generation":                     {body: `{"error":{"code":429,"message":"rate limited"},"generation":"gen-1"}`},
-		"generation id":                  {body: `{"error":{"code":429,"message":"rate limited"},"generation_id":"gen-1"}`},
-		"provider":                       {body: `{"error":{"code":429,"message":"rate limited"},"provider":"DeepInfra"}`},
-		"choices":                        {body: `{"error":{"code":429,"message":"rate limited"},"choices":[]}`},
-		"receipt":                        {body: `{"error":{"code":429,"message":"rate limited"},"receipt":{"id":"r"}}`},
-		"receipt id":                     {body: `{"error":{"code":429,"message":"rate limited"},"receipt_id":"r"}`},
-		"billed flag":                    {body: `{"error":{"code":429,"message":"rate limited"},"billed":false}`},
-		"nested charged flag":            {body: `{"error":{"code":429,"message":"rate limited","metadata":{"charged":false}}}`},
-		"nested provider":                {body: `{"error":{"code":429,"message":"rate limited","metadata":{"provider":"DeepInfra"}}}`},
-		"nested cost in list":            {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"cost":0}]}}`},
-		"nested receipt":                 {body: `{"error":{"code":429,"message":"rate limited","metadata":{"receipt":"r"}}}`},
-		"nested choices in list":         {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"choices":[]}]}}`},
-		"metadata attempt one":           {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":1`, 1) + `}`},
-		"metadata negative zero attempt": {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":-0`, 1) + `}`},
-		"metadata attempts present":      {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0,`, `"attempt":0,"attempts":[],`, 1) + `}`},
-		"metadata endpoint selected":     {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"selected":false`, `"selected":true`, 1) + `}`},
-		"metadata requested mismatch":    {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"requested":"fixed/model"`, `"requested":"other/model"`, 1) + `}`},
-		"metadata model mismatch":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"model":"fixed/model"`, `"model":"other/model"`, 1) + `}`},
-		"metadata provider mismatch":     {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1) + `}`},
-		"metadata null":                  {body: `{"error":{"code":429,"message":"rate limited"},"openrouter_metadata":null}`},
+		"string error is not canonical":    {body: `{"error":"rate limited"}`},
+		"bare error without routing proof": {body: `{"error":{"code":429,"message":"rate limited"}}`},
+		"canonical route metadata":         {body: `{"error":{"code":429,"message":"rate limited"},` + canonicalMetadata + `}`, want: true},
+		"missing error":                    {body: `{}`},
+		"malformed":                        {body: `{"error":`},
+		"non-finite number":                {body: `{"error":{"code":429,"message":"rate limited"},"value":NaN}`},
+		"positive infinity":                {body: `{"error":{"code":429,"message":"rate limited"},"value":Infinity}`},
+		"negative infinity":                {body: `{"error":{"code":429,"message":"rate limited"},"value":-Infinity}`},
+		"duplicate error":                  {body: `{"error":"first","error":"second"}`},
+		"missing code":                     {body: `{"error":{"message":"rate limited"}}`},
+		"mismatched code":                  {body: `{"error":{"code":503,"message":"rate limited"}}`},
+		"missing message":                  {body: `{"error":{"code":429}}`},
+		"empty message":                    {body: `{"error":{"code":429,"message":""}}`},
+		"unknown error field":              {body: `{"error":{"code":429,"message":"rate limited","provider_name":"DeepInfra"}}`},
+		"unknown billing object":           {body: `{"error":{"code":429,"message":"rate limited"},"billing":{"amount_microusd":0}}`},
+		"unknown response id":              {body: `{"error":{"code":429,"message":"rate limited"},"response_id":"r"}`},
+		"unknown token usage":              {body: `{"error":{"code":429,"message":"rate limited"},"token_usage":{}}`},
+		"top level usage":                  {body: `{"error":{"code":429,"message":"rate limited"},"usage":{}}`},
+		"nested usage":                     {body: `{"error":{"code":429,"message":"rate limited","metadata":{"usage":{}}}}`},
+		"cost":                             {body: `{"error":{"code":429,"message":"rate limited"},"cost":0}`},
+		"generation":                       {body: `{"error":{"code":429,"message":"rate limited"},"generation":"gen-1"}`},
+		"generation id":                    {body: `{"error":{"code":429,"message":"rate limited"},"generation_id":"gen-1"}`},
+		"provider":                         {body: `{"error":{"code":429,"message":"rate limited"},"provider":"DeepInfra"}`},
+		"choices":                          {body: `{"error":{"code":429,"message":"rate limited"},"choices":[]}`},
+		"receipt":                          {body: `{"error":{"code":429,"message":"rate limited"},"receipt":{"id":"r"}}`},
+		"receipt id":                       {body: `{"error":{"code":429,"message":"rate limited"},"receipt_id":"r"}`},
+		"billed flag":                      {body: `{"error":{"code":429,"message":"rate limited"},"billed":false}`},
+		"nested charged flag":              {body: `{"error":{"code":429,"message":"rate limited","metadata":{"charged":false}}}`},
+		"nested provider":                  {body: `{"error":{"code":429,"message":"rate limited","metadata":{"provider":"DeepInfra"}}}`},
+		"nested cost in list":              {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"cost":0}]}}`},
+		"nested receipt":                   {body: `{"error":{"code":429,"message":"rate limited","metadata":{"receipt":"r"}}}`},
+		"nested choices in list":           {body: `{"error":{"code":429,"message":"rate limited","metadata":[{"choices":[]}]}}`},
+		"metadata attempt one":             {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":1`, 1) + `}`, want: true},
+		"metadata attempt two":             {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":2`, 1) + `}`},
+		"metadata negative zero attempt":   {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0`, `"attempt":-0`, 1) + `}`},
+		"metadata attempts present":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"attempt":0,`, `"attempt":0,"attempts":[],`, 1) + `}`},
+		"metadata endpoint selected":       {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"selected":false`, `"selected":true`, 1) + `}`},
+		"metadata requested mismatch":      {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"requested":"fixed/model"`, `"requested":"other/model"`, 1) + `}`},
+		"metadata model mismatch":          {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"model":"fixed/model"`, `"model":"other/model"`, 1) + `}`},
+		"unselected other provider":        {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1) + `}`, want: true},
+		"selected other provider":          {body: `{"error":{"code":429,"message":"rate limited"},` + strings.Replace(strings.Replace(canonicalMetadata, `"provider":"DeepInfra"`, `"provider":"Azure"`, 1), `"selected":false`, `"selected":true`, 1) + `}`},
+		"metadata null":                    {body: `{"error":{"code":429,"message":"rate limited"},"openrouter_metadata":null}`},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			got := providerBackpressureIsReceiptFree(&providerHTTPResult{
 				status: http.StatusTooManyRequests,
 				body:   []byte(tc.body),
-			}, "fixed/model", "deepinfra")
+			}, "fixed/model")
 			if got != tc.want {
 				t.Fatalf("receipt-free classification: got %v want %v", got, tc.want)
 			}
@@ -349,7 +349,7 @@ func TestProviderBackpressureReceiptProofFailsClosed(t *testing.T) {
 	if providerBackpressureIsReceiptFree(&providerHTTPResult{
 		status: http.StatusInternalServerError,
 		body:   []byte(`{"error":"boom"}`),
-	}, "fixed/model", "deepinfra") {
+	}, "fixed/model") {
 		t.Fatal("non-429/503 response was classified as receipt-free backpressure")
 	}
 }
@@ -409,6 +409,65 @@ func TestPublicProviderResponseKeepsEmptyToolCallsArray(t *testing.T) {
 	}
 }
 
+// providerBodyReasoning is the provider body behind the shared golden relay
+// response in testdata/public_response_reasoning_usage.json. Platform's
+// Python mirror and the dittobench-api broker read the same file.
+const providerBodyReasoning = `{
+	"id":"gen-1","object":"chat.completion","created":1755000000,
+	"model":"openai/gpt-oss-20b",
+	"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
+		"message":{"role":"assistant","content":"hi"}}],
+	"usage":{"prompt_tokens":10,"completion_tokens":1500,"cost":0.01,
+		"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}}
+}`
+
+// #2972: the v13 cost ledger books answer tokens as completion minus
+// reasoning, so the relay passes the provider's reasoning count through. It is
+// optional, so a missing or invalid count is left out rather than failing the
+// call.
+func TestPublicProviderResponseCarriesBoundedReasoningTokens(t *testing.T) {
+	render := func(t *testing.T, body string) string {
+		t.Helper()
+		payload := decodeProviderBody(t, body)
+		public, herr := publicProviderResponse(payload, []byte(body))
+		if herr != nil {
+			t.Fatalf("unexpected error: %v", herr.message)
+		}
+		raw, err := compactJSON(public)
+		if err != nil {
+			t.Fatalf("encode: %v", err)
+		}
+		return string(raw)
+	}
+	golden, err := os.ReadFile("testdata/public_response_reasoning_usage.json")
+	if err != nil {
+		t.Fatalf("read golden: %v", err)
+	}
+	if got, want := render(t, providerBodyReasoning), strings.TrimSpace(string(golden)); got != want {
+		t.Fatalf("relay response = %s\nwant %s", got, want)
+	}
+
+	const plain = `"usage":{"prompt_tokens":10,"completion_tokens":1500,"total_tokens":1510}}`
+	const reported = `"completion_tokens_details":{"reasoning_tokens":1200,"audio_tokens":0}`
+	for _, details := range []string{
+		`"no_details":true`,
+		`"completion_tokens_details":null`,
+		`"completion_tokens_details":{}`,
+		`"completion_tokens_details":{"reasoning_tokens":null}`,
+		`"completion_tokens_details":{"reasoning_tokens":-1}`,
+		`"completion_tokens_details":{"reasoning_tokens":1501}`,
+		`"completion_tokens_details":{"reasoning_tokens":12.0}`,
+		`"completion_tokens_details":{"reasoning_tokens":true}`,
+		`"completion_tokens_details":{"reasoning_tokens":"12"}`,
+		`"completion_tokens_details":[1200]`,
+	} {
+		body := strings.Replace(providerBodyReasoning, reported, details, 1)
+		if got := render(t, body); !strings.HasSuffix(got, plain) {
+			t.Fatalf("details %s: usage must stay plain, got %s", details, got)
+		}
+	}
+}
+
 const structuredOutputFailureBody = `{"error":{"message":"Upstream error from Groq: Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.","code":502}}`
 const unexpectedToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool choice is none, but model called a tool","code":502}}`
 const undeclaredToolFailureBody = `{"error":{"message":"Upstream error from Groq: Tool call validation failed: tool call validation failed: attempted to call tool 'calendar_search_events' which was not in request.tools","code":502}}`
@@ -432,7 +491,7 @@ func aggregateChatConfig(upstreamURL string) config.InferenceProxyConfig {
 }
 
 func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *testing.T) {
-	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "")
+	aggregate := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", "")
 	if aggregate["sort"] != "throughput" || aggregate["allow_fallbacks"] != true ||
 		aggregate["data_collection"] != "deny" || aggregate["zdr"] != true {
 		t.Fatalf("aggregate provider preferences: %v", aggregate)
@@ -441,9 +500,39 @@ func TestAggregateProviderPreferencesKeepThroughputAndPrivacyWithBackups(t *test
 	if !ok || len(ignored) != 1 || ignored[0] != "coreweave" {
 		t.Fatalf("aggregate ignored providers: %v", aggregate["ignore"])
 	}
-	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8")
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "fp8", "")
 	if adaptive["allow_fallbacks"] != false {
 		t.Fatalf("adaptive provider unexpectedly gained fallbacks: %v", adaptive)
+	}
+}
+
+func TestBF16PriceOrderPinsBF16ProvidersWithPrivacyAndFallbacks(t *testing.T) {
+	preferences := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "",
+		config.ScoredProviderRoutingBF16PriceOrder)
+	if _, sorted := preferences["sort"]; sorted {
+		t.Fatalf("bf16 price order must not also sort: %v", preferences)
+	}
+	if preferences["allow_fallbacks"] != true || preferences["data_collection"] != "deny" ||
+		preferences["zdr"] != true {
+		t.Fatalf("bf16 price order lost fallbacks or privacy: %v", preferences)
+	}
+	want := "deepinfra,amazon-bedrock,groq,dekallm"
+	for _, key := range []string{"order", "only"} {
+		got, _ := preferences[key].([]string)
+		if strings.Join(got, ",") != want {
+			t.Fatalf("%s = %v, want %s", key, got, want)
+		}
+	}
+	// Adaptive routing and the canary mode (resolved before this call) never
+	// reach the price order.
+	for _, routing := range []string{"", config.ScoredProviderRoutingThroughput, config.ScoredProviderRoutingBF16Canary} {
+		if got := providerPreferences(config.RoutingModeAggregateThroughput, "openrouter", "", routing); got["sort"] != "throughput" {
+			t.Fatalf("routing %q: %v", routing, got)
+		}
+	}
+	adaptive := providerPreferences(config.RoutingModeAdaptive, "deepinfra", "bf16", config.ScoredProviderRoutingBF16PriceOrder)
+	if only, _ := adaptive["only"].([]string); len(only) != 1 || only[0] != "deepinfra" {
+		t.Fatalf("adaptive route changed: %v", adaptive)
 	}
 }
 
@@ -551,7 +640,7 @@ func TestGenerationErrorWithReceiptMetadataIsClassifiedWithoutReplay(t *testing.
 			if got := chatProviderFailure(exhausted).headers[minerRecoverableFailureHeader]; got != minerRecoverableGeneration {
 				t.Fatalf("failure class=%q", got)
 			}
-			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b", "openrouter") {
+			if providerFailureIsReceiptFree(&providerHTTPResult{status: status, body: []byte(body)}, "openai/gpt-oss-20b") {
 				t.Fatal("receipt-bearing failure must never authorize replay")
 			}
 		})
@@ -587,7 +676,7 @@ func TestReceiptFree429RetriesOnceAndRecovers(t *testing.T) {
 		if calls == 1 {
 			w.Header().Set("Retry-After", "2")
 			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
+			_, _ = w.Write([]byte(receiptFreeEnvelope(429, "openai/gpt-oss-20b")))
 			return
 		}
 		_, _ = w.Write([]byte(validAggregateChatBody))
@@ -619,7 +708,7 @@ func TestReceiptFreeHTTP502RetriesOnceAndRecovers(t *testing.T) {
 		calls++
 		if calls == 1 {
 			w.WriteHeader(http.StatusBadGateway)
-			_, _ = w.Write([]byte(`{"error":{"code":502,"message":"bad gateway"}}`))
+			_, _ = w.Write([]byte(receiptFreeEnvelope(502, "openai/gpt-oss-20b")))
 			return
 		}
 		_, _ = w.Write([]byte(validAggregateChatBody))

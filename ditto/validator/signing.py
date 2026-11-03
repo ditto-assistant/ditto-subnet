@@ -70,7 +70,9 @@ from ditto.api_models.stack_health import (
     validator_stack_health_signing_token,
 )
 from ditto.api_models.system_health import (
+    HostSpecs,
     SystemMetrics,
+    host_specs_signing_token,
     system_metrics_signing_token,
 )
 from ditto.api_models.validator_capabilities import (
@@ -1150,6 +1152,7 @@ def v9_confirmation_fail_signing_message(
     requested_at: datetime,
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
 ) -> bytes:
     """Bind one hand-back, and its diagnostics when the reporter sent any.
 
@@ -1158,12 +1161,21 @@ def v9_confirmation_fail_signing_message(
     the allowlisted class and stage into the signature so a persisted diagnostic
     is exactly what the reporter signed — an unsigned advisory field could be
     forged or stripped by anything on the path, and this one is read by
-    operators deciding whether to spend the next bounded canary.
+    operators deciding whether to spend the next bounded canary. v3 adds the
+    scorer's bounded status alongside a scorer-forwarded class.
+
+    The version is chosen by what the reporter actually sent, never by what it
+    is capable of sending, so all three remain simultaneously valid during a
+    rolling fleet upgrade. Platform rebuilds the same string from the fields it
+    received: a stripped status downgrades the rebuild to v2 and fails the
+    signature rather than silently persisting a diagnostic nobody signed.
     """
     if requested_at.tzinfo is None:
         raise ValueError("confirmation failure timestamp must include a timezone")
     if (failure_class is None) != (failure_stage is None):
         raise ValueError("confirmation failure class and stage must travel together")
+    if failure_status is not None and failure_class is None:
+        raise ValueError("confirmation failure status requires a failure class")
     requested = (
         requested_at.astimezone(UTC)
         .isoformat(timespec="microseconds")
@@ -1174,10 +1186,16 @@ def v9_confirmation_fail_signing_message(
             "validator-v9-confirmation-fail:v1:"
             f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
         ).encode()
+    if failure_status is None:
+        return (
+            "validator-v9-confirmation-fail:v2:"
+            f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
+            f"{failure_class}:{failure_stage}:{nonce}:{requested}"
+        ).encode()
     return (
-        "validator-v9-confirmation-fail:v2:"
+        "validator-v9-confirmation-fail:v3:"
         f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
-        f"{failure_class}:{failure_stage}:{nonce}:{requested}"
+        f"{failure_class}:{failure_stage}:{failure_status}:{nonce}:{requested}"
     ).encode()
 
 
@@ -1192,12 +1210,14 @@ def sign_v9_confirmation_fail(
     requested_at: datetime,
     failure_class: str | None = None,
     failure_stage: str | None = None,
+    failure_status: int | None = None,
 ) -> str:
     return keypair.sign(
         v9_confirmation_fail_signing_message(
             validator_hotkey=validator_hotkey,
             failure_class=failure_class,
             failure_stage=failure_stage,
+            failure_status=failure_status,
             bundle_id=bundle_id,
             ticket_id=ticket_id,
             reason=reason,
@@ -1542,11 +1562,14 @@ def heartbeat_signing_message(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
     if weights_fold is not None and protocol_version < 27:
         raise ValueError("weights fold requires heartbeat protocol v27")
+    if host_specs is not None and protocol_version < 32:
+        raise ValueError("host specs require heartbeat protocol v32")
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
@@ -1572,6 +1595,24 @@ def heartbeat_signing_message(
             # The fold report changes the signed bytes only when present, so a
             # v27 validator that has not folded yet (or a v27 Platform verifying
             # a fold-less v27 heartbeat) stays on the v23 domain byte-for-byte.
+            # v32 hardware announcement. Like the fold, it changes the signed
+            # bytes only when present, so a probe failure stays on v23/v27.
+            if host_specs is not None:
+                return (
+                    "ditto-validator-heartbeat:v32:"
+                    f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                    f"{code_digest}:{state}:{active_agent_id or ''}:"
+                    f"{system_metrics_signing_token(system_metrics)}:"
+                    f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                    f"{validator_identity_signing_token(capabilities, stack)}:"
+                    f"{validator_stack_health_signing_token(stack_health)}:"
+                    f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                    f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                    f"{validator_updater_status_signing_token(updater_status)}:"
+                    f"{weights_fold_signing_token(weights_fold)}:"
+                    f"{host_specs_signing_token(host_specs)}:"
+                    f"{timestamp}"
+                ).encode()
             if weights_fold is not None:
                 return (
                     "ditto-validator-heartbeat:v27:"
@@ -1716,6 +1757,7 @@ def sign_heartbeat(
     confirmation_progress: list[ConfirmationProgress] | None = None,
     updater_status: ValidatorUpdaterStatus | None = None,
     weights_fold: WeightsFold | None = None,
+    host_specs: HostSpecs | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -1735,6 +1777,7 @@ def sign_heartbeat(
         confirmation_progress=confirmation_progress,
         updater_status=updater_status,
         weights_fold=weights_fold,
+        host_specs=host_specs,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

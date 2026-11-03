@@ -45,6 +45,12 @@ from ditto.db.queries.benchmark_rollout import (
     maybe_activate_rollout,
     open_rollout,
 )
+from ditto.db.queries.stranded_admission import (
+    StrandedAdmissionTarget,
+    append_stranded_admission,
+    lock_stranded_admission,
+    resolve_stranded_admission,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -768,3 +774,121 @@ async def refresh_rolling_qualification(
             ),
         )
     return appended
+
+
+@dataclass(frozen=True)
+class StrandedAdmissionResult:
+    agent_id: UUID
+    rollout_id: UUID
+    bench_version: int
+    position: int
+    dataset_sha256: str
+    seed_source: str
+    rendered: bool
+
+
+async def admit_stranded_previous_era_agent(
+    session: AsyncSession,
+    *,
+    generator: DatasetGenerator,
+    now: datetime,
+    agent_id: UUID,
+    expected_active_version: int,
+    expected_sha256: str,
+    expected_previous_score_count: int,
+    actor: str,
+    reason: str,
+) -> StrandedAdmissionResult:
+    """Admit ONE stranded previous-era submission onto the activated era.
+
+    Same two-phase shape as :func:`expand_rolling_qualification`: every guard is
+    checked and the dataset input resolved in a first transaction, the dataset
+    is rendered outside any transaction, and a second transaction re-checks
+    every guard and the resolved input before writing anything. See
+    :mod:`ditto.db.queries.stranded_admission` for what admission writes and
+    why it is leasable straight out of ``scored``.
+    """
+
+    async def resolve() -> StrandedAdmissionTarget:
+        return await resolve_stranded_admission(
+            session,
+            agent_id=agent_id,
+            expected_active_version=expected_active_version,
+            expected_sha256=expected_sha256,
+            expected_previous_score_count=expected_previous_score_count,
+        )
+
+    async with session.begin():
+        target = await resolve()
+        member = RolloutSnapshotMember(
+            agent_id,
+            target.agent.miner_hotkey,
+            target.stranded.previous_median_composite or 0.0,
+        )
+        candidate, blocker = await qualification_candidate(
+            session,
+            source_bench_version=target.rollout.from_version,
+            target_bench_version=target.rollout.desired_version,
+            member=member,
+            generator_run_size=generator.run_size,
+        )
+        if candidate is None:
+            raise RolloutConflictError(
+                f"agent {agent_id} cannot pin a "
+                f"v{target.rollout.desired_version} dataset: {blocker}"
+            )
+        desired_version = target.rollout.desired_version
+
+    sha256 = candidate.existing_sha256 or await generator.generate(
+        candidate.seed, bench_version=desired_version
+    )
+
+    async with session.begin():
+        await lock_stranded_admission(
+            session, rollout_id=target.rollout.rollout_id, agent_id=agent_id
+        )
+        current = await resolve()
+        if current.rollout.rollout_id != target.rollout.rollout_id:
+            raise RolloutConflictError(
+                "admission rollout changed while the dataset was rendered"
+            )
+        current_candidate, _blocker = await qualification_candidate(
+            session,
+            source_bench_version=current.rollout.from_version,
+            target_bench_version=current.rollout.desired_version,
+            member=RolloutSnapshotMember(
+                agent_id,
+                current.agent.miner_hotkey,
+                current.stranded.previous_median_composite or 0.0,
+            ),
+            generator_run_size=generator.run_size,
+        )
+        if current_candidate != candidate:
+            raise RolloutConflictError(
+                "admission dataset input changed while the dataset was rendered"
+            )
+        admitted = await append_stranded_admission(
+            session,
+            target=current,
+            dataset=DatasetPin(
+                seed=candidate.seed,
+                sha256=sha256,
+                run_size=candidate.run_size,
+                seed_block=candidate.seed_block,
+                seed_block_hash=candidate.seed_block_hash,
+            ),
+            seed_source=candidate.seed_source,
+            actor=actor,
+            reason=reason,
+            now=now,
+        )
+        result = StrandedAdmissionResult(
+            agent_id=agent_id,
+            rollout_id=current.rollout.rollout_id,
+            bench_version=desired_version,
+            position=admitted.position,
+            dataset_sha256=sha256,
+            seed_source=candidate.seed_source,
+            rendered=candidate.existing_sha256 is None,
+        )
+    return result

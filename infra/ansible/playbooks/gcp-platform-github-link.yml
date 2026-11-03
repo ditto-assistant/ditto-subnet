@@ -1,0 +1,17 @@
+---
+# GitHub OAuth activation only; preserves all other .env settings. Requires the
+# secret container/IAM apply and its payload first. Restart through the exact
+# revision Platform deployment workflow after a successful converge.
+- ansible.builtin.import_playbook: require-hosts.yml
+  vars:
+    required_group: role_platform_app
+
+- name: Configure Platform GitHub identity linking
+  hosts: role_platform_app
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Configure only GitHub linking
+      ansible.builtin.include_role:
+        name: platform_app
+        tasks_from: github-link.yml

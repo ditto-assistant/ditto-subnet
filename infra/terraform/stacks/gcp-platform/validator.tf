@@ -99,6 +99,7 @@ module "validator_vm" {
   # Keep validator code outside the platform inference secret's IAM boundary.
   service_account_email = var.validator_dedicated_identity_attached ? google_service_account.validator[0].email : local.run_sa_email
   labels                = { env = "dev", role = "validator", managed = "terraform" }
+  desired_status        = var.dev_environment_running ? "RUNNING" : "TERMINATED"
 }
 
 # --- Secret containers (values added out of band; see the runbook). ---

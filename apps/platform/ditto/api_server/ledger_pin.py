@@ -14,8 +14,8 @@ Two invariants this module keeps:
   the pin cannot be produced, the previous pin flagged ``stale`` -- to every
   validator alike. The live time-based read is reached only when no pin has
   ever been taken (bootstrap).
-* **Failures are never cached.** A chain read or materialization error leaves
-  no state behind; the next caller retries.
+* **Failed pins are never cached.** A chain read or materialization error stores
+  no pin; the next caller retries. Bounded diagnostic evidence remains visible.
 """
 
 from __future__ import annotations
@@ -24,20 +24,43 @@ import asyncio
 import hashlib
 import json
 import logging
-from contextlib import suppress
+import math
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from time import monotonic
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from ditto.api_models import LedgerEntry, LedgerResponse
+from ditto.api_models.treasury_readiness import (
+    LedgerPinFailure,
+    LedgerPinFailureKind,
+    LedgerPinLoopDiagnostic,
+    LedgerPinProducerDiagnostic,
+    LedgerPinStage,
+)
 from ditto.api_models.validator import ConfirmationSeedAnchorPin
-from ditto.api_server.koth import koth_entries_from_ledger, project_koth
+from ditto.api_server.koth import (
+    TOP5_MAX_CONFIRMATION_SEEDS,
+    CrownGate,
+    crown_gate_marker,
+    koth_entries_from_ledger,
+    project_koth,
+)
+from ditto.api_server.treasury_read_diagnostics import record_treasury_read
 from ditto.api_server.treasury_shadow import observe_shadow_treasury
-from ditto.chain.errors import ChainError
+from ditto.chain.errors import (
+    ChainConnectionError,
+    ChainError,
+    ChainTimeoutError,
+    ChainTreasuryActivationReadError,
+    ChainTreasuryReadTimeoutError,
+)
+from ditto.db.queries.emission_allocation import latest_emission_allocation_number
 from ditto.db.queries.ledger_epochs import (
     LedgerPinDraft,
     get_pin,
@@ -65,6 +88,54 @@ DEFAULT_SCHEDULE_TIMEOUT_SECONDS = 8.0
 # Two blocks. The worker commits at boundary + 270 blocks, so a pin landing
 # within a few blocks of the boundary leaves the whole fleet folding it.
 DEFAULT_LEDGER_PIN_LOOP_INTERVAL_SECONDS = 24.0
+
+
+def _diagnostic_failure(error: Exception) -> LedgerPinFailure:
+    """Return no messages, locals, provider paths, SQL or validation inputs."""
+    if isinstance(error, ChainTreasuryActivationReadError):
+        error = error.read_error
+    read_step = (
+        error.read_step if isinstance(error, ChainTreasuryReadTimeoutError) else None
+    )
+    kind: LedgerPinFailureKind = "other"
+    labels: tuple[tuple[type[Exception], LedgerPinFailureKind], ...] = (
+        (TimeoutError, "timeout"),
+        (ChainTimeoutError, "timeout"),
+        (ConnectionError, "connection"),
+        (ChainConnectionError, "connection"),
+        (SQLAlchemyError, "database"),
+        (ValidationError, "validation"),
+        (ValueError, "value"),
+        (TypeError, "type"),
+        (KeyError, "key"),
+        (RuntimeError, "runtime"),
+        (ChainError, "chain"),
+    )
+    for error_type, label in labels:
+        if isinstance(error, error_type):
+            kind = label
+            break
+    location = None
+    traceback = error.__traceback__
+    while traceback is not None:
+        try:
+            path = (
+                Path(traceback.tb_frame.f_code.co_filename)
+                .resolve()
+                .relative_to(Path(__file__).resolve().parents[1])
+            )
+        except ValueError:
+            path = None
+        if path is not None and path.parts[0] in {"api_server", "chain", "db"}:
+            relative = "ditto/" + path.as_posix()
+            if (
+                relative.endswith(".py")
+                and len(relative) < 240
+                and all(c.isascii() and (c.isalnum() or c in "/_.-") for c in relative)
+            ):
+                location = f"{relative}:{traceback.tb_lineno}"
+        traceback = traceback.tb_next
+    return LedgerPinFailure(kind=kind, location=location, read_step=read_step)
 
 
 @dataclass(frozen=True)
@@ -130,6 +201,95 @@ def ledger_digest(entries_json: list[dict], served_context: dict[str, Any]) -> s
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
+def served_rank_shares(served: dict[str, Any]) -> list[float] | None:
+    """The protocol-31 payout curve frozen with a pin, or ``None`` for the frozen one.
+
+    Anything other than five positive shares summing to one is treated as
+    absent, exactly as validators do, so the board never projects a curve the
+    fleet would refuse.
+    """
+    raw = served.get("rank_shares")
+    if not isinstance(raw, list) or len(raw) != 5:
+        return None
+    try:
+        shares = [float(share) for share in raw]
+    except (TypeError, ValueError):
+        return None
+    if any(not math.isfinite(share) or share <= 0.0 for share in shares):
+        return None
+    if not math.isclose(sum(shares), 1.0, rel_tol=0.0, abs_tol=1e-12):
+        return None
+    return shares
+
+
+def served_crown_gate(served: dict[str, Any]) -> CrownGate | None:
+    """The protocol-34 crown rules frozen with a pin, or ``None`` for none.
+
+    Validated exactly as validators validate ``LedgerResponse.crown_gate``:
+    anything malformed folds the pre-34 walk on every side.
+    """
+    raw = served.get("crown_gate")
+    if not isinstance(raw, dict):
+        return None
+    min_seeds = raw.get("min_dethrone_confirmations")
+    standing = raw.get("champion_standing_rank")
+    if (
+        isinstance(min_seeds, bool)
+        or isinstance(standing, bool)
+        or not isinstance(min_seeds, int)
+        or not isinstance(standing, int)
+        or not 2 <= min_seeds <= TOP5_MAX_CONFIRMATION_SEEDS
+        or not 1 <= standing <= 5
+    ):
+        return None
+    return CrownGate(min_shared_seeds=min_seeds, standing_rank=standing)
+
+
+def served_track_shares(served: dict[str, Any]) -> dict[str, int]:
+    """The protocol-33 track split frozen with a pin, or ``{}`` for none.
+
+    Anything validators would refuse (non-integer or out-of-range bps, an
+    over-cap sum) reads as absent, exactly as ``resolve_track_shares`` folds it.
+    """
+    raw = served.get("track_shares_bps")
+    if not isinstance(raw, dict) or not raw:
+        return {}
+    shares: dict[str, int] = {}
+    for track, bps in raw.items():
+        if (
+            not isinstance(track, str)
+            or not track
+            or isinstance(bps, bool)
+            or not isinstance(bps, int)
+            or not 0 <= bps <= 10_000
+        ):
+            return {}
+        shares[track] = bps
+    if sum(shares.values()) > 10_000:
+        return {}
+    # A validator reads a missing memory share as the full pool, so any other
+    # positive share is over the cap and folds the compiled split instead.
+    if "memory" not in shares and any(bps > 0 for bps in shares.values()):
+        return {}
+    return shares
+
+
+def pin_generator_fraction(served: dict[str, Any]) -> float:
+    """The share of the paid miner pool a pin's split can route to generators.
+
+    ``0.0`` without a served generator share. Otherwise the generator's bps
+    over the bps memory and generator claim together: a validator folds memory
+    at exactly that complement when generators are paid, and at the full pool
+    when none is eligible (the generator share falls back to memory).
+    """
+    shares = served_track_shares(served)
+    generator = shares.get("generator", 0)
+    memory = shares.get("memory", 10_000)
+    if generator <= 0 or generator + memory <= 0:
+        return 0.0
+    return generator / (generator + memory)
+
+
 def pin_provisional_incumbent(served: dict[str, Any]) -> LedgerEntry | None:
     """The crown-only incumbent a pin froze (protocol 28), or ``None``.
 
@@ -167,11 +327,14 @@ def response_from_pin(pin: LedgerPin, *, stale: bool, now: datetime) -> LedgerRe
         tie_weighting_mode=served.get("tie_weighting_mode"),
         dethrone_band_mode=served.get("dethrone_band_mode"),
         statistical_band_mode=served.get("statistical_band_mode"),
+        crown_gate=crown_gate_marker(served_crown_gate(served)),
+        rank_shares=served_rank_shares(served),
         count=len(pin.entries),
         generated_at=pin.pinned_at,
         stale=stale,
         age_seconds=age,
         burn_share=float(served.get("burn_share", 0.0)),
+        track_shares_bps=served_track_shares(served),
         continual_retest_cohort_size=int(served.get("continual_retest_cohort_size", 5)),
         ledger_snapshot_id=pin.snapshot_id,
         epoch_index=pin.epoch_index,
@@ -287,12 +450,77 @@ def pin_expected_treasury_vector(pin: Any, *, burn_hotkey: str) -> dict[str, flo
     shares = _pin_competitive_shares(pin)
     return service_first_weights(
         shares or {},
-        service_bps=treasury.policy.service_bps,
+        service_bps=treasury.service_bps,
         burn_share=pin.context["served"]["burn_share"],
         paid_miner_fraction=sum(shares.values()) if shares else 0,
         collector_hotkey=treasury.policy.collector_hotkey,
         collector_verified=True,
         burn_hotkey=burn_hotkey,
+    )
+
+
+def treasury_vector_matches_pin(
+    weights: dict[str, int | float],
+    pin: Any,
+    *,
+    burn_hotkey: str,
+    generator_fraction: float = 0.0,
+    tolerance: float = PIN_SHARE_TOLERANCE,
+) -> bool:
+    """Whether a V2 (enforcing treasury) vector is the one the pin prescribes.
+
+    The memory-only service-first projection must match recipient by
+    recipient. With a served generator share (``generator_fraction``, see
+    :func:`pin_generator_fraction`) validators fold the generator ledger the
+    pin does not freeze, so the exact projection cannot name those
+    recipients. The vector then also matches when the collector holds exactly
+    the service share, the burn holds exactly the generator-paid residual, and
+    the miner part matches the pin's memory shares with the generator slice on
+    top, as :func:`classify_vector_against_pins` checks for legacy vectors.
+    """
+    total = sum(weights.values())
+    if total <= 0:
+        return False
+    normalized = {hotkey: value / total for hotkey, value in weights.items()}
+    prescribed = pin_expected_treasury_vector(pin, burn_hotkey=burn_hotkey)
+    if all(
+        abs(normalized.get(hotkey, 0) - prescribed.get(hotkey, 0)) <= tolerance
+        for hotkey in set(normalized) | set(prescribed)
+    ):
+        return True
+    if not 0.0 < generator_fraction < 1.0:
+        return False
+    projection = pin if isinstance(pin, LedgerPin) else LedgerPin.from_row(pin)
+    treasury = treasury_pin_from_context(projection)
+    if not isinstance(treasury, EnforcingTreasuryPin):
+        return False
+    collector = treasury.policy.collector_hotkey
+    shares = _pin_competitive_shares(pin)
+    # A treasury role holding a memory share has no generator-paid reading
+    # here; only the exact projection above may accept it.
+    if not shares or {collector, burn_hotkey} & set(shares):
+        return False
+    service = treasury.service_bps / 10_000
+    burn_share = projection.context["served"]["burn_share"]
+    paid = (1.0 - generator_fraction) * sum(shares.values()) + generator_fraction
+    miner = (1.0 - service) * (1.0 - burn_share) * paid
+    if abs(normalized.get(collector, 0) - service) > tolerance:
+        return False
+    if abs(normalized.get(burn_hotkey, 0) - (1.0 - service - miner)) > tolerance:
+        return False
+    miners = {
+        hotkey: value for hotkey, value in normalized.items() if hotkey != collector
+    }
+    return (
+        classify_vector_against_pins(
+            miners,
+            expected_current=shares,
+            expected_previous=None,
+            burn_hotkey=burn_hotkey,
+            tolerance=tolerance,
+            generator_current=generator_fraction,
+        )
+        == "current"
     )
 
 
@@ -330,6 +558,7 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
         incumbent_agent_id=(
             pin.incumbent_agent_id if served.get("crown_mode") == "incumbent" else None
         ),
+        crown_gate=served_crown_gate(served),
     )
     if projection is None:
         return None
@@ -339,6 +568,7 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
         tie_pooling=tie_pooling,
         ceiling_band_clamp=clamp,
         statistical_band_cap=statistical_cap,
+        rank_shares=served_rank_shares(served),
     )
     total = sum(allocation.shares)
     if total <= 0.0:
@@ -353,15 +583,27 @@ def _pin_competitive_shares(pin: Any) -> dict[str, float] | None:
     return shares
 
 
-def pin_expected_burn(burn_share: float, expected: dict[str, float] | None) -> float:
+def pin_expected_burn(
+    burn_share: float,
+    expected: dict[str, float] | None,
+    *,
+    generator_fraction: float = 0.0,
+) -> float:
     """The owner-burn fraction a pin's fold puts on chain.
 
     ``burn_share`` of the vector, plus -- under a provisional incumbent
     (protocol 28) -- every miner-pool share the pin leaves unpaid, which
     :func:`pin_expected_shares` reports as paid shares summing below one. For
     any other pin the paid shares sum to one and this is ``burn_share``.
+
+    ``generator_fraction`` (:func:`pin_generator_fraction`) is the slice of the
+    pool a served track split pays generators. Only memory carries an unpaid
+    incumbent share, so a paid generator slice shrinks the burned remainder.
+    ``0.0`` is the memory-only fold, which is also what validators fold when no
+    generator is eligible.
     """
     paid = sum(expected.values()) if expected else 1.0
+    paid = (1.0 - generator_fraction) * paid + generator_fraction
     return 1.0 - (1.0 - burn_share) * paid
 
 
@@ -372,6 +614,8 @@ def classify_vector_against_pins(
     expected_previous: dict[str, float] | None,
     burn_hotkey: str | None,
     tolerance: float = PIN_SHARE_TOLERANCE,
+    generator_current: float = 0.0,
+    generator_previous: float = 0.0,
 ) -> str:
     """Whether a revealed on-chain vector matches the current or previous pin.
 
@@ -380,6 +624,14 @@ def classify_vector_against_pins(
     validator on an older burn setting would otherwise read as diverged on
     every miner. Remaining shares are renormalized and compared recipient by
     recipient within ``tolerance``.
+
+    ``generator_current``/``generator_previous`` are each pin's
+    :func:`pin_generator_fraction`. The pin does not freeze the generator
+    ledger, so with a served generator share a vector also matches when its
+    memory recipients hold at least their memory slice (``1 - fraction`` of the
+    pin's shares) and everything above that, on them or on other hotkeys, sums
+    to the generator slice. A vector that pays memory alone (no eligible
+    generator, so the share fell back to memory) still matches exactly.
     """
     miners = {
         hotkey: float(value)
@@ -402,11 +654,42 @@ def classify_vector_against_pins(
         scale = paid if 1.0 - paid > tolerance else 1.0
         return all(abs(actual[h] - expected[h] / scale) <= tolerance for h in expected)
 
-    if matches(expected_current):
+    def matches_with_generators(expected: dict[str, float], fraction: float) -> bool:
+        if fraction <= 0.0 or not set(expected) <= set(actual):
+            return False
+        memory = 1.0 - fraction
+        paid = sum(expected.values())
+        # Paid fraction of the miner vector: memory's paid slice plus the
+        # generator slice (only memory can carry an unpaid incumbent share).
+        denominator = memory * paid + fraction
+        if denominator <= 0.0:
+            return False
+        floor = {h: memory * expected[h] / denominator for h in expected}
+        if any(actual[h] < floor[h] - tolerance for h in expected):
+            return False
+        extra = sum(actual.values()) - sum(floor.values())
+        return abs(extra - fraction / denominator) <= tolerance * max(1, len(actual))
+
+    if matches(expected_current) or matches_with_generators(
+        expected_current, generator_current
+    ):
         return "current"
-    if expected_previous is not None and matches(expected_previous):
+    if expected_previous is not None and (
+        matches(expected_previous)
+        or matches_with_generators(expected_previous, generator_previous)
+    ):
         return "previous"
     return "diverged"
+
+
+@dataclass(frozen=True)
+class LedgerScheduleRead:
+    """One fresh schedule read; fixed labels never contain provider messages."""
+
+    schedule: EpochSchedule | None
+    failure_kind: (
+        Literal["timeout", "connection", "reader_unavailable", "unavailable"] | None
+    ) = None
 
 
 class LedgerPinMaterializer:
@@ -425,6 +708,19 @@ class LedgerPinMaterializer:
         self._timeout = max(1.0, schedule_timeout_seconds)
         self._lock = asyncio.Lock()
         self._current: LedgerPin | None = None
+        self._diagnostic = LedgerPinProducerDiagnostic()
+        self._started_clock: float | None = None
+
+    def diagnostic(self) -> LedgerPinProducerDiagnostic:
+        value = self._diagnostic
+        if value.in_progress and self._started_clock is not None:
+            return value.model_copy(
+                update={"elapsed_seconds": monotonic() - self._started_clock}
+            )
+        return value
+
+    def _stage(self, stage: LedgerPinStage) -> None:
+        self._diagnostic = self._diagnostic.model_copy(update={"stage": stage})
 
     @property
     def newest_known(self) -> LedgerPin | None:
@@ -433,18 +729,45 @@ class LedgerPinMaterializer:
 
     async def read_schedule(self, app_state: Any) -> EpochSchedule | None:
         """The chain's current epoch position, or ``None`` when unreadable."""
+        return (await self.inspect_schedule(app_state)).schedule
+
+    async def inspect_schedule(self, app_state: Any) -> LedgerScheduleRead:
+        """Read the exact serving clock with its unchanged deadline and no pin write."""
+        started = monotonic()
         chain = getattr(app_state, "chain", None)
         if chain is None:
-            return None
+            record_treasury_read(
+                app_state,
+                "epoch_schedule",
+                elapsed=monotonic() - started,
+                failure_kind="unavailable",
+                failure_stage="epoch_schedule",
+            )
+            return LedgerScheduleRead(None, "reader_unavailable")
         netuid = app_state.config.chain.netuid
         try:
             async with asyncio.timeout(self._timeout):
-                return await chain.read_epoch_schedule(netuid)
-        except (ChainError, TimeoutError, OSError) as error:
-            logger.warning(
-                "epoch schedule unavailable for netuid=%s: %s", netuid, error
+                schedule = await chain.read_epoch_schedule(netuid)
+            record_treasury_read(
+                app_state, "epoch_schedule", elapsed=monotonic() - started
             )
-            return None
+            return LedgerScheduleRead(schedule)
+        except (ChainError, TimeoutError, OSError) as error:
+            kind: Literal["timeout", "connection", "unavailable"]
+            if isinstance(error, (TimeoutError, ChainTimeoutError)):
+                kind = "timeout"
+            elif isinstance(error, (ChainConnectionError, ConnectionError)):
+                kind = "connection"
+            else:
+                kind = "unavailable"
+            record_treasury_read(
+                app_state,
+                "epoch_schedule",
+                elapsed=monotonic() - started,
+                failure_kind=kind,
+                failure_stage="epoch_schedule",
+            )
+            return LedgerScheduleRead(None, kind)
 
     async def ensure(
         self,
@@ -466,28 +789,67 @@ class LedgerPinMaterializer:
         cached = self._current
         if cached is not None and cached.epoch_index == schedule.subnet_epoch_index:
             return cached
+        waiting = monotonic()
         async with self._lock:
             cached = self._current
             if cached is not None and cached.epoch_index == schedule.subnet_epoch_index:
                 return cached
+            self._started_clock = monotonic()
+            self._diagnostic = LedgerPinProducerDiagnostic(
+                in_progress=True,
+                epoch_index=schedule.subnet_epoch_index,
+                stage="load_or_build",
+                started_at=datetime.now(UTC),
+                lock_wait_seconds=self._started_clock - waiting,
+                last_success_epoch=self._diagnostic.last_success_epoch,
+                last_success_at=self._diagnostic.last_success_at,
+            )
             try:
                 pin = await self._load_or_build(
                     app_state, session_maker, schedule, now=now
                 )
-            except SQLAlchemyError:
+            except SQLAlchemyError as error:
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={"outcome": "error", "failure": _diagnostic_failure(error)}
+                )
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="db_error").inc()
                 logger.exception(
                     "ledger pin for epoch %d could not be read or written",
                     schedule.subnet_epoch_index,
                 )
                 return None
-            except Exception:  # noqa: BLE001 - the pin path must never raise upward
+            except Exception as error:  # noqa: BLE001 - the pin path must never raise upward
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={"outcome": "error", "failure": _diagnostic_failure(error)}
+                )
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="error").inc()
                 logger.exception(
                     "ledger pin for epoch %d failed to materialize",
                     schedule.subnet_epoch_index,
                 )
                 return None
+            except asyncio.CancelledError:
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={"outcome": "cancelled"}
+                )
+                raise
+            finally:
+                self._diagnostic = self._diagnostic.model_copy(
+                    update={
+                        "in_progress": False,
+                        "finished_at": datetime.now(UTC),
+                        "elapsed_seconds": monotonic() - self._started_clock,
+                    }
+                )
+            updates: dict[str, Any] = {
+                "outcome": "pinned" if pin is not None else "unavailable"
+            }
+            if pin is not None:
+                updates.update(
+                    last_success_epoch=pin.epoch_index,
+                    last_success_at=self._diagnostic.finished_at,
+                )
+            self._diagnostic = self._diagnostic.model_copy(update=updates)
             if pin is not None and (
                 self._current is None or pin.epoch_index >= self._current.epoch_index
             ):
@@ -519,7 +881,15 @@ class LedgerPinMaterializer:
         now: datetime,
     ) -> LedgerPin | None:
         netuid = schedule.netuid
+        from ditto.api_server.treasury_runtime import (
+            lock_runtime,
+            pinned_allocations,
+            treasury_runtime,
+        )
+
+        self._stage("runtime")
         async with session_maker() as session:
+            runtime = await treasury_runtime(session, app_state.config)
             existing = await get_pin(
                 session, netuid=netuid, epoch_index=schedule.subnet_epoch_index
             )
@@ -544,7 +914,9 @@ class LedgerPinMaterializer:
         )
 
         async with session_maker() as session:
+            self._stage("ledger_context")
             context = await resolve_ledger_context(app_state, session, now=now)
+            self._stage("ledger_snapshot")
             snapshot = await materialize_ledger_snapshot(
                 app_state,
                 session,
@@ -552,17 +924,22 @@ class LedgerPinMaterializer:
                 now=now,
                 requesting_validator_hotkey=None,
             )
+        self._stage("treasury_observation")
         treasury: TreasuryPin | None = await observe_shadow_treasury(
-            app_state, schedule
+            app_state, schedule, runtime=runtime
         )
-        if getattr(app_state.config, "treasury_weight_enforcement", False):
+        if runtime.treasury_weight_enforcement and (
+            runtime.activation_epoch is None
+            or schedule.subnet_epoch_index >= runtime.activation_epoch
+        ):
             from ditto.api_server.treasury_weights import enforcing_pin_from_observation
 
             if treasury is None:
                 raise ValueError("enforcing treasury requires finalized observation")
             async with session_maker() as session:
+                self._stage("treasury_authorization")
                 treasury = await enforcing_pin_from_observation(
-                    app_state, session, treasury, schedule, now=now
+                    app_state, session, treasury, schedule, runtime=runtime
                 )
         if treasury is not None:
             # Preserve the shared snapshot cache; this observation belongs only
@@ -581,6 +958,7 @@ class LedgerPinMaterializer:
                         if e.miner_hotkey != collector
                     ],
                 )
+        self._stage("draft")
         draft = build_pin_draft(
             schedule,
             snapshot=snapshot,
@@ -588,9 +966,32 @@ class LedgerPinMaterializer:
             previous_champion_owner_root=previous_owner_root,
             now=now,
         )
+        self._stage("insert")
         async with session_maker() as session:
             try:
                 async with session.begin():
+                    await lock_runtime(session)
+                    if await treasury_runtime(session, app_state.config) != runtime:
+                        raise ValueError(
+                            "Gamma control changed during epoch materialization"
+                        )
+                    if isinstance(
+                        treasury, EnforcingTreasuryPin
+                    ) and treasury.allocations != await pinned_allocations(
+                        session, treasury.policy
+                    ):
+                        raise ValueError(
+                            "Gamma allocation changed during epoch materialization"
+                        )
+                    if await latest_emission_allocation_number(session) != getattr(
+                        context.policy, "allocation_revision", 0
+                    ):
+                        # Serialized with the allocation writer by the lock
+                        # above: the burn share and track map in this draft
+                        # must come from the allocation in force at insert.
+                        raise ValueError(
+                            "emission allocation changed during epoch materialization"
+                        )
                     row = await insert_pin(session, draft)
                 await session.refresh(row)
                 LEDGER_PIN_MATERIALIZATIONS.labels(outcome="pinned").inc()
@@ -650,6 +1051,26 @@ def build_pin_draft(
         served["treasury_pin"] = treasury.model_dump(mode="json")
     if getattr(snapshot, "statistical_band_mode", None) == "capped":
         served["statistical_band_mode"] = "capped"
+    # Keyed only when the protocol-34 crown gate is served, so every pin taken
+    # without it keeps its digest byte for byte.
+    crown_gate = getattr(snapshot, "crown_gate", None)
+    if crown_gate is not None:
+        served["crown_gate"] = {
+            "min_dethrone_confirmations": crown_gate.min_shared_seeds,
+            "champion_standing_rank": crown_gate.standing_rank,
+        }
+    # Keyed only when a fleet-ready operator curve is served, so every pin taken
+    # on the frozen curve keeps its digest byte for byte.
+    rank_shares = getattr(snapshot, "rank_shares", None)
+    if rank_shares is not None:
+        served["rank_shares"] = [float(share) for share in rank_shares]
+    # Keyed only when a fleet-ready split is served, so every pin taken without
+    # one keeps its digest byte for byte.
+    track_shares = getattr(snapshot, "track_shares_bps", None)
+    if track_shares:
+        served["track_shares_bps"] = {
+            str(track): int(bps) for track, bps in track_shares.items()
+        }
     # Bench v13+: freeze the pinned confirmation seed anchors with the pin so a
     # validator re-deriving the champion-anchored family from a pin sees the
     # same binding a live read would have served. Keyed only when present, so
@@ -719,6 +1140,7 @@ def build_pin_draft(
         statistical_band_cap=getattr(snapshot, "statistical_band_mode", None)
         == "capped",
         incumbent_agent_id=(incumbent if snapshot.crown_mode == "incumbent" else None),
+        crown_gate=crown_gate,
     )
     champion_id = projection.champion.agent_id if projection is not None else None
     context = {
@@ -786,6 +1208,20 @@ class LedgerPinLoop:
         self._interval_seconds = interval_seconds
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._diagnostic = LedgerPinLoopDiagnostic(task_state="not_started")
+
+    def diagnostic(self) -> LedgerPinLoopDiagnostic:
+        task = self._task
+        state = (
+            "not_started"
+            if task is None
+            else "cancelled"
+            if task.cancelled()
+            else "done"
+            if task.done()
+            else "running"
+        )
+        return self._diagnostic.model_copy(update={"task_state": state})
 
     async def start(self) -> None:
         if self._task is not None:
@@ -801,6 +1237,25 @@ class LedgerPinLoop:
 
     async def sweep(self, *, now: datetime | None = None) -> LedgerPin | None:
         """Ensure the current epoch's pin exists; exposed for real-DB tests."""
+        self._diagnostic = LedgerPinLoopDiagnostic(
+            task_state="running",
+            in_progress=True,
+            stage="settings",
+            started_at=datetime.now(UTC),
+        )
+        try:
+            return await self._sweep(now=now)
+        except Exception as error:
+            self._diagnostic = self._diagnostic.model_copy(
+                update={"failure": _diagnostic_failure(error)}
+            )
+            raise
+        finally:
+            self._diagnostic = self._diagnostic.model_copy(
+                update={"in_progress": False, "finished_at": datetime.now(UTC)}
+            )
+
+    async def _sweep(self, *, now: datetime | None = None) -> LedgerPin | None:
         started = monotonic()
         settings = await self._app_state.continual_retest_settings.resolve(
             self._session_maker
@@ -808,6 +1263,7 @@ class LedgerPinLoop:
         if settings.ledger_pin_mode != "epoch":
             LEDGER_PIN_LOOP_RUNS.labels(outcome="disabled").inc()
             return None
+        self._diagnostic = self._diagnostic.model_copy(update={"stage": "materializer"})
         pin = await self._materializer.ensure(
             self._app_state, self._session_maker, now=now or datetime.now(UTC)
         )
@@ -817,8 +1273,10 @@ class LedgerPinLoop:
 
     async def _run(self) -> None:
         while not self._stop.is_set():
-            with suppress(Exception):
+            try:
                 await self.sweep()
+            except Exception:
+                logger.exception("ledger pin background sweep failed")
             try:
                 await asyncio.wait_for(
                     self._stop.wait(), timeout=self._interval_seconds
@@ -839,7 +1297,11 @@ __all__ = [
     "classify_vector_against_pins",
     "pin_expected_burn",
     "pin_expected_shares",
+    "pin_generator_fraction",
     "pin_provisional_incumbent",
+    "served_crown_gate",
+    "served_rank_shares",
+    "served_track_shares",
     "ledger_digest",
     "response_from_pin",
 ]

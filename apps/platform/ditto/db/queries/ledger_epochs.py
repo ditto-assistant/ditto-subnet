@@ -73,15 +73,22 @@ async def latest_pin(
 
 
 async def list_pins(
-    session: AsyncSession, *, netuid: int, limit: int
+    session: AsyncSession,
+    *,
+    netuid: int,
+    limit: int,
+    max_epoch_index: int | None = None,
 ) -> Sequence[LedgerEpochSnapshot]:
-    """Newest pins first, bounded; the per-epoch crown history read."""
-    result = await session.scalars(
+    """Newest pins first, bounded by an optional snapshot epoch before LIMIT."""
+    statement = (
         select(LedgerEpochSnapshot)
         .where(LedgerEpochSnapshot.netuid == netuid)
         .order_by(LedgerEpochSnapshot.epoch_index.desc())
         .limit(max(1, limit))
     )
+    if max_epoch_index is not None:
+        statement = statement.where(LedgerEpochSnapshot.epoch_index <= max_epoch_index)
+    result = await session.scalars(statement)
     return result.all()
 
 

@@ -20,10 +20,20 @@ import gzip
 import hashlib
 import logging
 import tarfile
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 
 from ditto.miner_cli.errors import TarStructureError
 from ditto.miner_cli.models import PreflightCheckResult, PreflightResult
+from ditto_screening_protocol.source_limits import (
+    SOURCE_LIMITS_EFFECTIVE_AT,
+    SourceLimitViolation,
+    check_source_stream,
+    is_source_path,
+    read_chunks,
+    source_limits_enforced,
+    vendored_upstream_digests,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +57,7 @@ MAX_ARCHIVE_MEMBERS = 20_000
 MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 
 
-def run_preflight(tar_path: Path) -> PreflightResult:
+def run_preflight(tar_path: Path, *, now: datetime | None = None) -> PreflightResult:
     """Run every pre-flight check and aggregate results.
 
     Always returns a :class:`PreflightResult`; per-check failures are
@@ -75,6 +85,7 @@ def run_preflight(tar_path: Path) -> PreflightResult:
     checks.append(tar_opens)
     if tar_opens.passed:
         checks.append(_check_archive_contract(tar_path))
+        checks.append(_check_source_limits(tar_path, now or datetime.now(UTC)))
 
     # Deferred checks (logged, not gating, pending external artifacts)
     checks.extend(_deferred_checks())
@@ -140,6 +151,39 @@ def _check_tar_opens(tar_path: Path) -> PreflightCheckResult:
         passed=True,
         detail=f"{len(names)} entries",
     )
+
+
+def _dockerfile_instructions(text: str) -> list[tuple[str, str]]:
+    """Parse a Dockerfile into (INSTRUCTION, remainder) pairs.
+
+    Line continuations are joined and standalone comment lines are dropped.
+    This is a bounded static parse, not a full Dockerfile grammar.
+
+    A verbatim copy of the screener's parser in
+    ``workers/screener/ditto_screener/gate.py``, so ``ditto verify`` reads the
+    Dockerfile exactly as screening will; ``test_archive_contract_pins`` fails
+    if the two drift apart.
+    """
+    logical: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not buffer and (not stripped or stripped.startswith("#")):
+            continue
+        buffer = f"{buffer} {stripped}".strip() if buffer else stripped
+        if buffer.endswith("\\"):
+            buffer = buffer[:-1].rstrip()
+            continue
+        logical.append(buffer)
+        buffer = ""
+    if buffer:
+        logical.append(buffer)
+    instructions: list[tuple[str, str]] = []
+    for line in logical:
+        parts = line.split(None, 1)
+        if parts:
+            instructions.append((parts[0].upper(), parts[1] if len(parts) > 1 else ""))
+    return instructions
 
 
 def _contract_failure(code: str, problem: str, fix: str) -> PreflightCheckResult:
@@ -221,13 +265,23 @@ def _check_archive_contract(tar_path: Path) -> PreflightCheckResult:
                     "recreate the archive from readable regular files",
                 )
             try:
-                handle.read().decode("utf-8")
+                dockerfile_text = handle.read().decode("utf-8")
             except UnicodeDecodeError:
                 return _contract_failure(
                     "SCR-CONTRACT-003",
                     "Dockerfile is not valid UTF-8 text",
                     "commit a readable UTF-8 Dockerfile that builds the harness",
                 )
+            for instruction, remainder in _dockerfile_instructions(dockerfile_text):
+                lowered = remainder.casefold()
+                if instruction == "RUN" and (
+                    "--security=insecure" in lowered or "--network=host" in lowered
+                ):
+                    return _contract_failure(
+                        "SCR-CONTRACT-004",
+                        "Dockerfile requests an insecure build entitlement",
+                        "remove RUN --security=insecure and RUN --network=host",
+                    )
     except (tarfile.TarError, EOFError, OSError):
         return _contract_failure(
             "SCR-ARCHIVE-006",
@@ -238,6 +292,77 @@ def _check_archive_contract(tar_path: Path) -> PreflightCheckResult:
         name="archive_contract",
         passed=True,
         detail=f"{len(members)} paths; root Dockerfile present",
+    )
+
+
+# Shown per run; the rest are summarized so one generated tree cannot flood
+# the terminal.
+_MAX_REPORTED_SOURCE_VIOLATIONS = 5
+
+
+def _check_source_limits(tar_path: Path, now: datetime) -> PreflightCheckResult:
+    """Apply Platform's per-file source limits (ditto_screening_protocol).
+
+    Uploads before ``SOURCE_LIMITS_EFFECTIVE_AT`` are grandfathered, so until
+    then a breach is reported but does not block the upload.
+    """
+    # Load the packaged allowlist before the archive handler below, so a broken
+    # installation reads as a failed check rather than an unreadable archive.
+    try:
+        vendored_upstream_digests()
+    except Exception as error:  # noqa: BLE001 - run_preflight reports, never raises
+        return PreflightCheckResult(
+            name="source_limits",
+            passed=False,
+            detail=(
+                f"vendored-upstream allowlist could not be loaded ({error}); "
+                "reinstall ditto-subnet and retry"
+            ),
+        )
+    violations: list[SourceLimitViolation] = []
+    unpacked = 0
+    try:
+        with tarfile.open(tar_path, "r:gz") as tar:
+            for member in tar:
+                unpacked += max(member.size, 0)
+                if unpacked > MAX_UNPACKED_BYTES:
+                    # The archive contract check already fails this archive.
+                    return PreflightCheckResult(
+                        name="source_limits",
+                        passed=True,
+                        detail="skipped: archive exceeds the unpacked-size cap",
+                    )
+                name = member.name.removeprefix("./")
+                if not member.isfile() or not is_source_path(name):
+                    continue
+                handle = tar.extractfile(member)
+                if handle is None:
+                    continue
+                violation = check_source_stream(name, read_chunks(handle))
+                if violation is not None:
+                    violations.append(violation)
+    except (tarfile.TarError, EOFError, OSError):
+        # The archive contract check already reports an unreadable archive.
+        return PreflightCheckResult(
+            name="source_limits", passed=True, detail="skipped: archive unreadable"
+        )
+    if not violations:
+        return PreflightCheckResult(
+            name="source_limits", passed=True, detail="every source file within limits"
+        )
+    shown = "; ".join(v.message for v in violations[:_MAX_REPORTED_SOURCE_VIOLATIONS])
+    more = len(violations) - _MAX_REPORTED_SOURCE_VIOLATIONS
+    if more > 0:
+        shown += f"; and {more} more"
+    if source_limits_enforced(now):
+        return PreflightCheckResult(name="source_limits", passed=False, detail=shown)
+    return PreflightCheckResult(
+        name="source_limits",
+        passed=True,
+        detail=(
+            f"WARNING, enforced for uploads from "
+            f"{SOURCE_LIMITS_EFFECTIVE_AT:%Y-%m-%d %H:%M} UTC: {shown}"
+        ),
     )
 
 

@@ -40,6 +40,24 @@ def pin_payload():
     }
 
 
+@pytest.mark.parametrize("allocation", [0, 2500, 7500, 10000])
+def test_emission_policy_supports_full_percentage_range(allocation):
+    raw = pin_payload()["policy"]
+    previous = TreasuryEmissionPolicy.model_validate(raw)
+    raw["buckets"][0]["allocation_bps"] = allocation
+    policy = TreasuryEmissionPolicy.model_validate(raw)
+    assert policy.service_bps == allocation
+    assert policy.digest != previous.digest
+
+
+@pytest.mark.parametrize("allocation", [-1, 10001, True, 7500.0])
+def test_emission_policy_refuses_invalid_percentage(allocation):
+    raw = pin_payload()["policy"]
+    raw["buckets"][0]["allocation_bps"] = allocation
+    with pytest.raises(ValidationError):
+        TreasuryEmissionPolicy.model_validate(raw)
+
+
 def test_known_field_digest_and_immutable_bucket_order():
     raw = pin_payload()
     expected = TreasuryLedgerPin.model_validate(raw)
@@ -114,6 +132,7 @@ def test_invalid_service_pool_rejected(change):
     raw = pin_payload()["policy"]
     bucket = deepcopy(raw["buckets"][0])
     if change == "overflow":
+        raw["buckets"][0]["allocation_bps"] = 10000
         bucket.update(
             bucket_id="beta", allocation_bps=1, holding_coldkey="5" + "E" * 47
         )

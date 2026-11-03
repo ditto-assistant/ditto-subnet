@@ -5,12 +5,41 @@ from __future__ import annotations
 import pytest
 
 from ditto.api_server.hippius import (
+    _parse_list_objects,
     _should_retry,
     ensure_https,
     normalize_object_key,
     parse_hippius_config_from_env,
 )
 from ditto.api_server.storage.errors import StorageConfigurationError
+
+
+@pytest.mark.parametrize(
+    ("encoding", "key", "expected"),
+    [
+        (
+            "url",
+            "daily%2F2026%2F10%2F09%2Fmanifest.json",
+            "daily/2026/10/09/manifest.json",
+        ),
+        ("url", "literal%252Fplus%2Bname", "literal%2Fplus+name"),
+        ("", "literal%2Fplus+name", "literal%2Fplus+name"),
+    ],
+)
+def test_listing_decodes_url_keys_once_and_preserves_cursor(
+    encoding: str, key: str, expected: str
+) -> None:
+    body = (
+        '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        f"<Contents><Key>{key}</Key><Size>248</Size>"
+        "<LastModified>2026-10-09T01:26:50Z</LastModified></Contents>"
+        f"<EncodingType>{encoding}</EncodingType><IsTruncated>true</IsTruncated>"
+        "<NextContinuationToken>opaque%2Fcursor+value</NextContinuationToken>"
+        "</ListBucketResult>"
+    ).encode()
+    objects, cursor = _parse_list_objects(body)
+    assert objects[0].key == expected
+    assert cursor == "opaque%2Fcursor+value"
 
 
 def test_missing_env_disables_hippius(monkeypatch: pytest.MonkeyPatch) -> None:

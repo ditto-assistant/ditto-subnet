@@ -150,6 +150,7 @@ Put the generated value in `PYLON_TOKEN`, then fill these values in `.env`:
 | `VALIDATOR_DISK_PERCENT_CEILING` | Stop claiming tickets at or above this disk usage (default `95`). `0` disables; otherwise a multiple of 5 in `[50, 100]`. |
 | `VALIDATOR_MEMORY_PERCENT_CEILING` | Same, for memory (default `95`). |
 | `VALIDATOR_CPU_PERCENT_CEILING` | Same, for CPU. Defaults to `0` (disabled) -- a pinned CPU is a working benchmark host, not a failing one. |
+| `VALIDATOR_HOST_MEMORY_RESERVE_MIB` | Host memory held back from harness caps (default `1024`). The worker offers at most `(host RAM - reserve) // live harness cap` benchmark slots, and always at least one when the host has the cap plus 1 GiB. With the live 8192 MiB cap: 8 GiB host 0, 16 GiB 1, 32 GiB 3, 64 GiB 7. Platform never lets the generator-round reservation take a host's only healthy slot. See [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md). |
 | `DITTOBENCH_REQUIRE_TICKET_INFERENCE` | Keep `true`; v7/v8 scoring fails closed without a ticket session. |
 | `VALIDATOR_INFERENCE_PROXY_REQUIRED` | Keep `true`; the validator must not claim work without the platform proxy. |
 
@@ -365,6 +366,17 @@ to be visible.
   after changing it.
 - **Updater reports a transaction:** keep the timer disabled, verify the
   validator and all sidecars, then use `recover`.
+- **The validator is running but its heartbeat is stale or logs stopped:**
+  capture a live dump before restarting anything:
+  `docker kill --signal=QUIT src-ditto-subnet-1`. It logs every asyncio task's
+  await chain and every thread's stack, and the worker keeps running. (`USR1`
+  and `USR2` are the updater's drain and resume signals, so do not use them
+  for this.) A worker that makes no heartbeat attempt for
+  `VALIDATOR_LIVENESS_WATCHDOG_SECONDS` (default 600, `0` disables) logs the
+  same dump and exits with code 70, and `restart: unless-stopped` brings it
+  back. While a drain waits for in-flight work, logs show `drain requested;
+  waiting for quiescence: ...` every five minutes and the heartbeat stays
+  fresh.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose
   and updater status. Do not add PM2 or another systemd service for the stack.
 - **Disk use grows:** inspect `sandbox-docker`. Its nested daemon prunes unused
@@ -374,11 +386,16 @@ to be visible.
   `docker system prune`, never removes containers, volumes, networks, or
   third-party images, and never forces removal of an image still referenced by
   a container. Do not run broad cleanup against the host Docker daemon.
-- **Sandbox resource failure (`sandbox_oom`, `sandbox_tmpfs_exhausted`):**
-  these are validator-infrastructure classifications, not miner verdicts; the
-  worker stops claiming work and the ticket expires safely. Fix the resource
-  issue, then ask the Ditto team for the audited single-agent retry; never
-  bulk retry or alter accepted scores.
+- **Sandbox resource failure (`host_memory_pressure`, `harness_killed_137`,
+  `sandbox_tmpfs_exhausted`, legacy `sandbox_oom`):** these are
+  validator-infrastructure classifications, not miner verdicts; the worker
+  blocks that slot, stops claiming work for the sweep, and the ticket is parked
+  without charging the miner. Fix the resource issue (usually too many slots for
+  the host's RAM; see `VALIDATOR_HOST_MEMORY_RESERVE_MIB`), then ask the Ditto
+  team for the audited single-agent retry; never bulk retry or alter accepted
+  scores. Only `harness_oom` -- an OOM kill at the harness's own published cap
+  while the host kept headroom -- is charged to the miner. The rules are in
+  [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md).
 
 ## Automatic full-stack updates (recommended)
 
@@ -559,8 +576,12 @@ identical weights across asynchronous validator upgrades.
 
 ## Optional observability
 
-Add the shared `WANDB_API_KEY` supplied by Ditto to `.env`, or set
-`WANDB_MODE=disabled`. Never commit the key.
+W&B telemetry is optional and defaults to `WANDB_MODE=disabled`. Enable it only
+after obtaining a dedicated, independently revocable write credential for this
+validator. Set that validator's `WANDB_API_KEY` locally and switch
+`WANDB_MODE=online`; never commit the key or reuse a team-wide key. Operators
+must revoke or rotate the dedicated credential when a validator leaves the
+fleet. Scoring does not depend on W&B telemetry.
 
 The validator also sends a signed public heartbeat with its version, source
 digest, phase, and coarse health; the platform uses it to route compatible
@@ -667,8 +688,10 @@ otherwise ineligible newer generation cannot shadow an older eligible winner.
 
 ### Evidence-tied emission shares
 
-Protocol 20 adds an operator-gated alternative to the fixed
-`65% / 14% / 10% / 7% / 4%` KOTH shares. When the ledger carries
+Protocol 20 adds an operator-gated alternative to the configured KOTH shares
+(frozen default `65% / 14% / 10% / 7% / 4%`; from protocol 31 the ledger may
+serve an operator curve as `rank_shares`, withheld until every recently-live
+weight setter reports v31). When the ledger carries
 `tie_weighting_mode: pool`, validators group contiguous recipients that are
 evidence-tied, pool only the rank shares those recipients occupy, and divide
 that pool equally. Four tied tail recipients therefore receive `8.75%` each;
@@ -769,6 +792,38 @@ no force override, and `crown_incumbent_mode: disabled` is the exact
 rollback. A pin taken while the marker is off records no incumbent, so a
 flip lands at the next pin for the whole fleet.
 
+### Crown gate (protocol 34)
+
+Incumbency stops a senior lineage from retaking the crown, but it still let
+any challenger that cleared the band take it on an **unpaired** comparison:
+a newcomer's unretested three-seed canonical against the incumbent's
+retest-folded official score. On 2026-10-29/30 that moved the crown five
+times in a day, including to entries with zero shared-seed confirmations and
+to one ranked eighth on the board.
+
+Under the operator policy `crown_gate_mode: fleet_ready` each pin carries
+`crown_gate: {min_dethrone_confirmations, champion_standing_rank}` (defaults
+3 and 3, operator settings on the continual retest board). The fold then:
+
+1. Ranks the pool exactly as the tail does (official quality first). If the
+   opening champion is outside the top `champion_standing_rank`, the crown
+   passes to the highest-ranked standing entry that shares at least
+   `min_dethrone_confirmations` seeds with it, or to rank 1 when none does.
+2. Walks only standing challengers in `first_seen` order. A challenger
+   dethrones only through the paired shared-seed statistic, and only with at
+   least `min_dethrone_confirmations` shared seeds. An unpaired or flat
+   comparison never moves the crown.
+
+The rule is symmetric and deterministic: both entries' seed maps and the
+served ranking are on the pin, so every validator computes the same King.
+Activation follows the earlier fold markers: served only after every
+recently-live weight setter reports protocol 34, a sub-34 requester gets 428
+while a pinned gate is served, the stale path refuses rather than replays it,
+and `crown_gate_mode: disabled` is the exact rollback. The public board shows
+the King, each challenger's shared seeds vs `min_dethrone_confirmations`, the
+paired lead or deficit, and what it still needs, under `emissions.king` and
+`emissions.challengers`.
+
 ### Provisional incumbent (protocol 28)
 
 Holding the crown and being paid are separate facts. When the operator's
@@ -779,6 +834,16 @@ If that artifact is the incumbent -- the previous pin's champion's owner has
 no payable generation, only its best withheld one -- the pin serves it as
 `provisional_incumbent`, with `crown_incumbent_agent_id` set to its id. It is
 the only withheld entry that can reach the fold.
+
+Being unpaid does not exempt it from score proofs. It still decides who holds
+the crown and the tail, so the validator verifies it exactly like a payable
+row: at least three signed quorum receipts from distinct validators, each
+bound to this agent, its lease and its benchmark version, with the row equal
+to the lower-median receipt, plus the same v9 confirmation checks. If any of
+that fails, the validator rejects the whole ledger and leaves its weights
+unchanged for the epoch, as it would for an unverifiable entry. It never drops
+the field and folds the rest, because that would quietly crown and pay the
+runner-up.
 
 The fold adds it to the pool as the crown incumbent and derives the champion,
 tail, tie pooling and score-ceiling cohort exactly as above. Every share it is
@@ -791,3 +856,43 @@ Platform only filters a held incumbent out of `entries` after every
 recently-live weight-setting validator reports protocol 28; until then
 `enforce` behaves exactly like `shadow`, because a protocol-27 validator would
 ignore the field and crown and pay the runner-up.
+
+### Generator track (protocol 33)
+
+The weight vector is folded per competition track and blended by basis-point
+share. Protocol 33 ships the DittoBench generator competition's track as
+`active` and weight-eligible, and reads the generator ledger
+(`GET /scoring/generator-ledger`) by default. Setting
+`VALIDATOR_GENERATOR_LEDGER_READ_ENABLED=false` now refuses to boot, because a
+validator that skips the read would fold a different vector from the fleet.
+
+Shipping the track active changes no emission by itself. Two Platform-owned
+switches gate every payment:
+
+- **A governed share.** The scoring ledger may serve `track_shares_bps`, for
+  example `{"memory": 9000, "generator": 1000}`. Without it the compiled split
+  gives memory the whole pool and the generator nothing. Platform withholds the
+  field until every recently-live weight-setting validator reports protocol 33,
+  because a protocol-32 validator folds the generator in shadow and would burn
+  its share. Operators set the map, `burn_share` and the Gamma service bucket
+  together through one Platform emission allocation (Backroom
+  `set_emission_allocation`, SN-350): basis points of total emission for burn,
+  each track and each Gamma bucket, summing to 10000. Platform derives
+  `burn_share = burn / (10000 - Gamma)` and a map that claims the whole pool,
+  so validators fold the same three fields as before and need no release.
+- **Eligible entries.** The fold pays only generator ledger entries Platform
+  marked `weight_eligible`, which it does only under generator settings
+  `mode=enforce`, for qualified miner generators. The public default generator
+  never appears on the ledger.
+
+When the generator track holds a share but folds no payable entry, its share
+moves to the memory track instead of burning. The served example above with no
+eligible generator therefore folds exactly as memory alone. Other tracks keep
+the original rule: an eligible track with no payable miner burns its share.
+When the generator ledger cannot be read while the generator holds a share,
+the validator leaves its weights unchanged for that epoch. Without a share, an
+unreadable generator ledger changes nothing.
+
+Generators split their share by the generator rank curve
+(`40% / 25% / 15% / 12% / 8%` of the generator share), best latest round score
+first, one slot per hotkey, and only currently registered hotkeys.

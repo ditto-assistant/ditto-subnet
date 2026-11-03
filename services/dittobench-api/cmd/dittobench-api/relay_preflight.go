@@ -696,6 +696,16 @@ func (s *server) relayRunStart(ctx context.Context, runID string, benchVersion i
 }
 
 func (s *server) relayRunResult(ctx context.Context, runID string, start relayHealthSnapshot, gateway, sessionID string) (protocol.TokenUsage, relayExecutionSummary, bool) {
+	usage, execution, _, ok := s.relayRunInterval(ctx, runID, start, gateway, sessionID)
+	return usage, execution, ok
+}
+
+// relayRunInterval is relayRunResult that also returns the end snapshot. A
+// bench >= 16 run reads it once at the datagen/slice boundary: the datagen
+// half's usage and execution are the interval up to that point, so token
+// accounting, the signed model-use evidence and efficiency see the datagen
+// half only, while the whole-run interval still decides relay health.
+func (s *server) relayRunInterval(ctx context.Context, runID string, start relayHealthSnapshot, gateway, sessionID string) (protocol.TokenUsage, relayExecutionSummary, relayHealthSnapshot, bool) {
 	var end relayHealthSnapshot
 	var err error
 	if sessionID != "" {
@@ -708,19 +718,19 @@ func (s *server) relayRunResult(ctx context.Context, runID string, start relayHe
 	}
 	if err != nil {
 		s.failRelayUnavailableForContext(ctx, runID, err)
-		return protocol.TokenUsage{}, relayExecutionSummary{}, false
+		return protocol.TokenUsage{}, relayExecutionSummary{}, relayHealthSnapshot{}, false
 	}
 	usage, usageErr := relayUsageSince(start, end)
 	if usageErr != nil {
 		s.failRelayUnavailableForContext(ctx, runID, usageErr)
-		return protocol.TokenUsage{}, relayExecutionSummary{}, false
+		return protocol.TokenUsage{}, relayExecutionSummary{}, relayHealthSnapshot{}, false
 	}
 	execution, executionErr := relayExecutionSince(start, end)
 	if executionErr != nil {
 		s.failRelayUnavailableForContext(ctx, runID, executionErr)
-		return protocol.TokenUsage{}, relayExecutionSummary{}, false
+		return protocol.TokenUsage{}, relayExecutionSummary{}, relayHealthSnapshot{}, false
 	}
-	return usage, execution, true
+	return usage, execution, end, true
 }
 
 // handleRelayPreflight lets an off-netns caller verify the locked model relay is
@@ -1078,6 +1088,22 @@ func trustedSeedingInfrastructureFailure(err error) *store.Failure {
 		return &store.Failure{
 			Kind:      "validator_infrastructure",
 			Code:      "seed_store_lock_timeout",
+			Retryable: true,
+		}
+	}
+	if errors.Is(err, runner.ErrSeedDeadlineExceeded) {
+		// The harness did not acknowledge /seed within the scorer's own
+		// deadline. That is ambiguous: an overloaded validator host and a
+		// harness that embeds too slowly look identical from here, and in
+		// production the same artifacts seed in minutes on peer validators.
+		// So it gets a named code instead of an anonymous scoring_error, but
+		// deliberately NOT one of the validator's no-fault
+		// `_SANDBOX_INFRASTRUCTURE_CODES`: like `route_proof_unavailable`, it
+		// re-runs inside the ordinary bounded attempt budget and never mints a
+		// grant, so a genuinely slow harness still runs out of attempts.
+		return &store.Failure{
+			Kind:      "validator_infrastructure",
+			Code:      "seed_deadline_exceeded",
 			Retryable: true,
 		}
 	}

@@ -5,7 +5,6 @@ import {
   Activity,
   Bot,
   CircleDollarSign,
-  Code2,
   Copy,
   Flame,
   FlaskConical,
@@ -22,18 +21,13 @@ import {
   TimerReset,
   Timer,
   Zap,
+  Wallet,
 } from 'lucide-react'
 import type { BackroomUser } from '../lib/auth.types'
 import { logout } from '../server/auth.functions'
 import { CommandPalette } from './CommandPalette'
 
 const navigation = [
-  {
-    to: '/coding-control' as const,
-    label: 'Coding Bench',
-    description: 'Private release & shadow launch',
-    icon: Code2,
-  },
   {
     to: '/miner-fees' as const,
     label: 'Miner fees',
@@ -54,9 +48,15 @@ const navigation = [
   },
   {
     to: '/burn' as const,
-    label: 'Emissions & treasury',
-    description: 'Burn & service wallet policy',
+    label: 'Emissions & burn',
+    description: 'Miner burn weight policy',
     icon: Flame,
+  },
+  {
+    to: '/gamma' as const,
+    label: 'Gamma & transfers',
+    description: 'Collector transfers & service wallets',
+    icon: Wallet,
   },
   {
     to: '/continual-retests' as const,

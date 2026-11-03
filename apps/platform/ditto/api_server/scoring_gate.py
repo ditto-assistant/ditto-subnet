@@ -50,7 +50,7 @@ from datetime import UTC, datetime
 from math import ceil
 from typing import TYPE_CHECKING
 
-from ditto.api_server.fingerprint import content_similarity
+from ditto.api_server.fingerprint import content_similarity, line_similarity
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -106,6 +106,17 @@ _DEFAULT_CONTAINMENT_TOL = 0.95
 # cardinality floor, the opposite of padding. Jaccard is undirected and
 # unchanged; missing ``card`` silences containment.
 _DEFAULT_COPY_PADDING_RATIO = 1.15
+# Line sub-sketch thresholds (``fingerprint._line_shingles``). The copy rule
+# reads this channel beside the window channel above so a copy refactored across
+# modules still holds: one-line shingles survive the module split and qualified
+# call rewrites that break every 4-line window. It keeps the window channel's
+# bars and padding direction. Measured 2026-10-03 on 27 fingerprintable board
+# agents (351 pairs), exact sets: ira-1 ``4d44841b`` vs lets_638 ``8d3208ad``
+# scored line Jaccard 0.908 (window channel 0.55 / 0.73, unheld); the closest
+# independent-owner pair, taowolf v16 / agiorin v12, scored 0.653 (window 0.68),
+# and every other pair stayed under 0.41.
+_DEFAULT_LINE_JACCARD_TOL = 0.75
+_DEFAULT_LINE_CONTAINMENT_TOL = 0.95
 # Resubmission thresholds (:func:`evaluate_rejected_resubmission`). Deliberately
 # NOT the copy thresholds above, which is the one thing the rule got wrong when
 # it shipped: it reused them "so one lexical bar governs the codebase", but the
@@ -339,6 +350,11 @@ def _lexical_strength(
     does not contribute. Comparing raw Jaccard against raw containment would
     not be meaningful; comparing the two normalized margins is.
 
+    The line sub-sketch is a second lexical channel on its own bars
+    (``_DEFAULT_LINE_*``); the pair's strength is the larger of the two, so a
+    copy refactored across modules ranks, withdraws, and attributes exactly like
+    one edited in place.
+
     Returns ``0.0`` for an uncomparable pair (missing / cross-version /
     cross-corpus sketch), which is what :func:`content_similarity` already
     reports and what "no evidence" should score.
@@ -347,6 +363,19 @@ def _lexical_strength(
     strength = j / jaccard_tol
     if _copy_residual_is_padded(a, b):
         strength = max(strength, c / containment_tol)
+    return max(strength, _line_strength(a, b))
+
+
+def _line_sketch(fingerprint: dict | None) -> dict | None:
+    return fingerprint.get("lines") if fingerprint else None
+
+
+def _line_strength(a: dict | None, b: dict | None) -> float:
+    """Threshold-normalized closeness of the line sub-sketch, as above."""
+    j, c = line_similarity(a, b)
+    strength = j / _DEFAULT_LINE_JACCARD_TOL
+    if _copy_residual_is_padded(_line_sketch(a), _line_sketch(b)):
+        strength = max(strength, c / _DEFAULT_LINE_CONTAINMENT_TOL)
     return strength
 
 
@@ -410,13 +439,27 @@ def _copy_lexical_match(
     ``candidate_card >= ceil(matched_card * _DEFAULT_COPY_PADDING_RATIO)``.
     When either sketch omits ``card`` the direction is unknown and this arm
     stays silent; Jaccard still covers the pair.
+
+    The line sub-sketch fires the rule the same way on its own bars, so a copy
+    split across modules (which breaks windows but not lines) is held too. The
+    returned pair is then the line channel's, which :func:`_line_note` names.
     """
     j, c = content_similarity(candidate, matched)
     if j >= jaccard_tol:
         return (j, c)
     if _copy_residual_is_padded(candidate, matched) and c >= containment_tol:
         return (j, c)
+    if _line_strength(candidate, matched) >= 1.0:
+        return line_similarity(candidate, matched)
     return None
+
+
+def _line_note(candidate: dict | None, matched: dict | None) -> str:
+    """Audit suffix naming the line channel's measure when it is comparable."""
+    j, c = line_similarity(candidate, matched)
+    if not j and not c:
+        return ""
+    return f"; line jaccard {j:.3f}, containment {c:.3f}"
 
 
 def _resubmission_lexical_match(
@@ -1011,6 +1054,7 @@ def evaluate_duplicate_signals(
             f"content near-duplicate of agent {target.agent_id}: "
             f"composite delta {abs(composite - target.composite):.4f}, "
             f"jaccard {j:.3f}, containment {c:.3f}"
+            + _line_note(content_fingerprint, target.content_fingerprint)
             + _structural_note(
                 structural_fingerprint,
                 target,

@@ -4,7 +4,13 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from ditto.chain.errors import TreasuryReceiptReadPhase
 from ditto_screening_protocol.treasury import Block, Digest, Hash
+from ditto_screening_protocol.treasury_manual import ManualSourceClaim, Nonnegative
+
+
+class TreasurySourceClaim(ManualSourceClaim):
+    epoch_index: Nonnegative
 
 
 class TreasuryReceiptSelector(BaseModel):
@@ -14,6 +20,7 @@ class TreasuryReceiptSelector(BaseModel):
     epoch_index: Block
     bucket_id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]
     source_block: Annotated[int, Field(gt=0)] | None = None
+    source_claims: Annotated[list[TreasurySourceClaim], Field(max_length=512)] = []
     block: Annotated[int, Field(gt=0)]
     block_hash: Hash
     extrinsic_index: Annotated[int, Field(ge=0)]
@@ -27,6 +34,19 @@ class TreasuryReceiptSelector(BaseModel):
 
     @model_validator(mode="after")
     def stage_links(self) -> "TreasuryReceiptSelector":
+        if self.source_claims:
+            blocks = [s.source_block for s in self.source_claims]
+            if (
+                self.stage != "service_distribution"
+                or blocks != sorted(set(blocks))
+                or self.source_block != blocks[0]
+                or self.epoch_index != self.source_claims[0].epoch_index
+                or sum(s.amount_rao for s in self.source_claims) != self.amount_atomic
+                or any(s.source_block > self.block for s in self.source_claims)
+            ):
+                raise ValueError(
+                    "aggregate receipt requires exact ordered source claims"
+                )
         if len(self.reason.strip()) < 8:
             raise ValueError("receipt audit reason is required")
         if self.stage == "service_distribution":
@@ -51,6 +71,7 @@ class TreasuryReceiptResult(BaseModel):
     bucket_id: str
     policy_digest: Digest
     source_block: int | None
+    source_claims: list[TreasurySourceClaim] = []
     block: int
     block_hash: Hash
     extrinsic_index: int
@@ -67,3 +88,17 @@ class TreasuryReceiptResult(BaseModel):
 class TreasuryReceiptPage(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
     items: list[TreasuryReceiptResult]
+
+
+class TreasuryReceiptPreflight(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    ready: bool
+    receipt_id: Digest | None = None
+    already_recorded: bool = False
+    refusal: Literal["unavailable", "invalid_or_unsupported", "conflict"] | None = None
+    read_phase: TreasuryReceiptReadPhase | None = None
+    attempt_count: int = Field(default=0, ge=0)
+    timed_out: bool = False
+    publication: Literal["not_performed"] = "not_performed"
+    spending_authority: Literal["none"] = "none"
+    provider_credit_status: Literal["not_proven"] = "not_proven"

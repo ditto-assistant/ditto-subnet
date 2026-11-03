@@ -47,6 +47,7 @@ from ditto.api_server.dependencies import (
 )
 from ditto.api_server.middleware.error_envelope import ERROR_CODE_PAYMENT_REPLAYED
 from ditto.api_server.payment_verifier import VerifiedPayment
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -218,8 +219,8 @@ async def _truncate_between_tests() -> AsyncIterator[None]:
 
     engine = create_db_engine()
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE TABLE evaluation_payments CASCADE"))
-        await conn.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(conn, "evaluation_payments")
+        await truncate_test_tables(conn, "agents")
     await engine.dispose()
     yield
 

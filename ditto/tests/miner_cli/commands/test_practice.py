@@ -55,6 +55,29 @@ def test_rehearsal_argv_forwards_the_v13_gate_replay(tmp_path: Path) -> None:
     assert "--keep-artifacts" not in without_dir
 
 
+def _assert_runner_rejects_before_work(command: list[str], message: str) -> None:
+    flag = message.split()[0]
+    assert flag in command
+    completed = subprocess.run(
+        command, capture_output=True, text=True, timeout=60, check=False
+    )
+    assert completed.returncode == 2
+    assert message in completed.stderr
+
+
+def test_keep_artifacts_without_gates_fails_fast(tmp_path: Path) -> None:
+    command = practice.rehearsal_argv(_args(keep_artifacts=tmp_path / "kept"))
+    _assert_runner_rejects_before_work(command, "--keep-artifacts requires --gates")
+    assert not (tmp_path / "kept").exists()
+
+
+def test_longmem_limit_without_longmem_eval_fails_fast() -> None:
+    command = practice.rehearsal_argv(_args(longmem_limit=50))
+    _assert_runner_rejects_before_work(
+        command, "--longmem-limit requires --longmem-eval"
+    )
+
+
 def test_rehearsal_argv_forwards_every_reproducibility_option(tmp_path: Path) -> None:
     command = practice.rehearsal_argv(
         _args(

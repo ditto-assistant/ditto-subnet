@@ -45,10 +45,10 @@ func newBrokerTestReaderSession(t *testing.T, upstreamStatus int) (*longmemeval.
 			profile.ProviderLanes[index].ProfileRevision = "fixture-reader-v1"
 			profile.ProviderLanes[index].Model = "openai/gpt-oss-20b"
 		} else {
-			profile.ProviderLanes[index].RouteProvider = "azure"
-			profile.ProviderLanes[index].ReceiptProvider = "Azure"
-			profile.ProviderLanes[index].ProfileRevision = "longmemeval-official-gpt4o-azure-zdr-v2"
-			profile.ProviderLanes[index].Model = "openai/gpt-4o-2024-08-06"
+			profile.ProviderLanes[index].RouteProvider = "together"
+			profile.ProviderLanes[index].ReceiptProvider = "Together"
+			profile.ProviderLanes[index].ProfileRevision = "longmemeval-deepseek-v41-flash-together-v1"
+			profile.ProviderLanes[index].Model = "deepseek/deepseek-v4.1-flash"
 		}
 	}
 	readerModel := ""
@@ -1702,6 +1702,100 @@ func TestInferenceControlPlaneRequiresLoopbackOrBearer(t *testing.T) {
 	}
 }
 
+// The published Compose default is a literal in a public repository. Under
+// enforce the broker must treat it as "no token configured" and refuse every
+// non-loopback control call, matching controlTokenFromEnv on the control plane.
+func TestInferenceControlPlaneEnforceRejectsPublicDefaultToken(t *testing.T) {
+	t.Setenv("DITTOBENCH_BROKER_CONTROL_TOKEN", insecureDefaultControlToken)
+	t.Setenv("DITTOBENCH_CONTROL_AUTH_MODE", "enforce")
+	broker := newInferenceBroker(1)
+	if broker.controlAuthMode != controlAuthEnforce {
+		t.Fatalf("broker mode = %q, want enforce from DITTOBENCH_CONTROL_AUTH_MODE", broker.controlAuthMode)
+	}
+
+	for _, header := range []string{"Bearer " + insecureDefaultControlToken, "", "Bearer "} {
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+		request.RemoteAddr = "172.18.0.4:4321"
+		if header != "" {
+			request.Header.Set("Authorization", header)
+		}
+		recorder := httptest.NewRecorder()
+		broker.prepare(recorder, request)
+		if recorder.Code != http.StatusUnauthorized || len(broker.sessions) != 0 {
+			t.Fatalf("enforce with public default, Authorization=%q: status=%d sessions=%d",
+				header, recorder.Code, len(broker.sessions))
+		}
+	}
+
+	// cancel and activate share the same gate.
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodDelete, "/v1/inference/session/id", nil),
+		httptest.NewRequest(http.MethodPost, "/v1/inference/session/id/activate", nil),
+	} {
+		request.RemoteAddr = "172.18.0.4:4321"
+		request.Header.Set("Authorization", "Bearer "+insecureDefaultControlToken)
+		if broker.controlAuthorized(request) {
+			t.Fatalf("enforce admitted the public default on %s %s", request.Method, request.URL.Path)
+		}
+	}
+}
+
+// Shadow is stage 1 and the default: every validator that never set a per-host
+// token presents the published default, so the broker keeps admitting it there
+// rather than failing every ticket at prepare.
+func TestInferenceControlPlaneShadowStillAdmitsPublicDefaultToken(t *testing.T) {
+	t.Setenv("DITTOBENCH_BROKER_CONTROL_TOKEN", insecureDefaultControlToken)
+	t.Setenv("DITTOBENCH_CONTROL_AUTH_MODE", "")
+	broker := newInferenceBroker(1)
+	if broker.controlAuthMode != controlAuthShadow {
+		t.Fatalf("broker mode = %q, want shadow by default", broker.controlAuthMode)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "172.18.0.4:4321"
+	request.Header.Set("Authorization", "Bearer "+insecureDefaultControlToken)
+	recorder := httptest.NewRecorder()
+	broker.prepare(recorder, request)
+	if recorder.Code != http.StatusCreated || len(broker.sessions) != 1 {
+		t.Fatalf("shadow prepare status=%d sessions=%d", recorder.Code, len(broker.sessions))
+	}
+
+	// Shadow is not a bypass: a wrong or missing bearer is still refused.
+	for _, header := range []string{"Bearer wrong", ""} {
+		request = httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+		request.RemoteAddr = "172.18.0.4:4321"
+		if header != "" {
+			request.Header.Set("Authorization", header)
+		}
+		if broker.controlAuthorized(request) {
+			t.Fatalf("shadow admitted Authorization=%q", header)
+		}
+	}
+}
+
+// A real per-host secret behaves identically in both modes.
+func TestInferenceControlPlaneEnforceAdmitsPerHostToken(t *testing.T) {
+	t.Setenv("DITTOBENCH_BROKER_CONTROL_TOKEN", "per-host-control-secret")
+	t.Setenv("DITTOBENCH_CONTROL_AUTH_MODE", "enforce")
+	broker := newInferenceBroker(1)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "172.18.0.4:4321"
+	request.Header.Set("Authorization", "Bearer per-host-control-secret")
+	recorder := httptest.NewRecorder()
+	broker.prepare(recorder, request)
+	if recorder.Code != http.StatusCreated || len(broker.sessions) != 1 {
+		t.Fatalf("per-host prepare status=%d sessions=%d", recorder.Code, len(broker.sessions))
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/inference/session", nil)
+	request.RemoteAddr = "172.18.0.4:4321"
+	request.Header.Set("Authorization", "Bearer "+insecureDefaultControlToken)
+	if broker.controlAuthorized(request) {
+		t.Fatal("a broker configured with a per-host secret admitted the public default")
+	}
+}
+
 func TestInferenceActivationRequiresConfiguredExactProxyAndBoundedExpiry(t *testing.T) {
 	broker := newInferenceBroker(1)
 	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
@@ -2315,6 +2409,8 @@ func TestNormalizeV9ReasoningStrategy(t *testing.T) {
 		{name: "nested low", body: `{"reasoning":{"effort":"low"}}`, wantEffort: "low"},
 		{name: "nested medium", body: `{"reasoning":{"effort":"medium"}}`, wantEffort: "medium"},
 		{name: "nested high", body: `{"reasoning":{"effort":"high"}}`, wantEffort: "high"},
+		{name: "pinned privacy low", body: `{"reasoning":{"effort":"low","exclude":true}}`, wantEffort: "low"},
+		{name: "pinned privacy high", body: `{"reasoning":{"effort":"high","exclude":true}}`, wantEffort: "high"},
 		{name: "equal aliases", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"high"}`, wantEffort: "high"},
 		{name: "conflicting aliases prefer nested", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"low"}`, wantEffort: "high"},
 	}
@@ -2342,6 +2438,25 @@ func TestNormalizeV9ReasoningStrategy(t *testing.T) {
 	}
 }
 
+func TestNormalizeV13PinnedReasoningPrivacy(t *testing.T) {
+	body := []byte(`{"model":"stale","messages":[{"role":"user","content":"synthetic request"}],"temperature":0,"seed":7,"max_tokens":8000,"reasoning":{"effort":"medium","exclude":true}}`)
+	got, err := normalizeChatRequest(body, llm.V7HarnessModel, protocol.BenchVersionV13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	reasoning := decoded["reasoning"].(map[string]any)
+	if len(reasoning) != 2 || reasoning["effort"] != "medium" || reasoning["exclude"] != true {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+	if decoded["model"] != llm.V7HarnessModel || decoded["temperature"] != float64(0) || decoded["seed"] != float64(7) {
+		t.Fatalf("request fields changed: %#v", decoded)
+	}
+}
+
 func TestNormalizeV9ReasoningRejectsInvalidAndConflictingInputs(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2358,7 +2473,12 @@ func TestNormalizeV9ReasoningRejectsInvalidAndConflictingInputs(t *testing.T) {
 		{name: "empty nested", body: `{"reasoning":{}}`, want: "invalid reasoning"},
 		{name: "unknown nested", body: `{"reasoning":{"effort":"minimal"}}`, want: "invalid reasoning effort"},
 		{name: "boolean nested", body: `{"reasoning":{"effort":true}}`, want: "invalid reasoning effort"},
-		{name: "caller exclude", body: `{"reasoning":{"effort":"medium","exclude":true}}`, want: "invalid reasoning"},
+		{name: "caller exposes reasoning", body: `{"reasoning":{"effort":"medium","exclude":false}}`, want: "invalid reasoning"},
+		{name: "null privacy", body: `{"reasoning":{"effort":"medium","exclude":null}}`, want: "invalid reasoning"},
+		{name: "string privacy", body: `{"reasoning":{"effort":"medium","exclude":"true"}}`, want: "invalid reasoning"},
+		{name: "numeric privacy", body: `{"reasoning":{"effort":"medium","exclude":1}}`, want: "invalid reasoning"},
+		{name: "privacy without effort", body: `{"reasoning":{"exclude":true}}`, want: "invalid reasoning"},
+		{name: "pinned privacy with provider control", body: `{"reasoning":{"effort":"medium","exclude":true,"enabled":true}}`, want: "invalid reasoning"},
 		{name: "caller enabled", body: `{"reasoning":{"effort":"medium","enabled":true}}`, want: "invalid reasoning"},
 		{name: "caller budget", body: `{"reasoning":{"effort":"medium","max_tokens":1}}`, want: "invalid reasoning"},
 	}
@@ -2461,10 +2581,13 @@ func TestV9BrokerNormalizesReasoningBeforePlatformAndAccountsRejections(t *testi
 	if response := call(`{"model":"openai/gpt-oss-20b","reasoning":{"effort":"high","exclude":false}}`); response.Code != http.StatusBadRequest {
 		t.Fatalf("provider-control status=%d body=%s", response.Code, response.Body.String())
 	}
-	if len(delivered) != 2 {
-		t.Fatalf("provider received %d requests, want 2", len(delivered))
+	if response := call(`{"model":"stale","reasoning":{"effort":"high","exclude":true}}`); response.Code != http.StatusOK {
+		t.Fatalf("pinned privacy status=%d body=%s", response.Code, response.Body.String())
 	}
-	for index, effort := range []string{"low", "medium"} {
+	if len(delivered) != 3 {
+		t.Fatalf("provider received %d requests, want 3", len(delivered))
+	}
+	for index, effort := range []string{"low", "medium", "high"} {
 		if _, present := delivered[index]["reasoning_effort"]; present {
 			t.Fatalf("request %d retained flat alias", index)
 		}
@@ -2477,9 +2600,9 @@ func TestV9BrokerNormalizesReasoningBeforePlatformAndAccountsRejections(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Requests != 2 || snapshot.Successes != 2 || snapshot.UsageAvailable != 2 ||
-		snapshot.PromptTokens != 6 || snapshot.CompletionTokens != 8 ||
-		snapshot.AgentRequestRejections != 1 || snapshot.UpstreamAttempts != 2 {
+	if snapshot.Requests != 3 || snapshot.Successes != 3 || snapshot.UsageAvailable != 3 ||
+		snapshot.PromptTokens != 9 || snapshot.CompletionTokens != 12 ||
+		snapshot.AgentRequestRejections != 1 || snapshot.UpstreamAttempts != 3 {
 		t.Fatalf("v9 reasoning accounting = %+v", snapshot)
 	}
 }

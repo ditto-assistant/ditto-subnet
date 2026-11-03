@@ -167,6 +167,12 @@ def _copy_source(source: Path, destination: Path) -> set[str]:
                 continue
             if name in _CACHE_DIRECTORIES:
                 continue
+            # Platform and the hosted runner reject .env / .env.* as any path
+            # component, so a credential directory must fail here, not later.
+            if name == ".env" or name.startswith(".env."):
+                raise CorpusError(
+                    f"source snapshot contains a credential path: {relative}"
+                )
             safe_relative_path(relative)
             retained_directories.append(name)
         directories[:] = retained_directories

@@ -1,10 +1,24 @@
 // All network access goes through here: GET/POST against the configured API
-// base with an 8s abort timeout, plus a small promise pool for fan-out.
+// base with bounded abort timeouts, plus a small promise pool for fan-out.
 
 import { API_BASE } from "./config";
 import { sharedOperationsJSON } from "../data/operations-cache";
 
 const TIMEOUT_MS = 8000;
+// A cold public board read can take longer than the write/auth deadline. If
+// the browser aborts it first, a successful response becomes "Data unavailable"
+// and the next poll may start the same expensive read all over again.
+const PUBLIC_READ_TIMEOUT_MS = 30_000;
+// Public, user-agnostic GET prefixes that get the longer deadline. The
+// generator competition's board and rounds are public reads like the rest;
+// on the 8s write deadline a slow board read rendered as a missing section.
+const PUBLIC_READ_PREFIXES = ["/public/", "/generator/"] as const;
+
+function readTimeoutMs(path: string): number {
+  return PUBLIC_READ_PREFIXES.some((prefix) => path.startsWith(prefix))
+    ? PUBLIC_READ_TIMEOUT_MS
+    : TIMEOUT_MS;
+}
 
 export class HTTPError extends Error {
   constructor(public readonly status: number) {
@@ -23,7 +37,7 @@ async function fetchJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   else signal?.addEventListener("abort", abortFromCaller, { once: true });
   const to = setTimeout(() => {
     ctrl.abort();
-  }, TIMEOUT_MS);
+  }, readTimeoutMs(path));
   let response: Response;
   try {
     response = await fetch(API_BASE + path, {

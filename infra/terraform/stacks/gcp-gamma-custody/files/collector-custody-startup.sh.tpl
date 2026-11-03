@@ -1,0 +1,1 @@
+../../gcp-collector-custody/files/collector-custody-startup.sh.tpl

@@ -66,7 +66,15 @@ describe("status vocabulary (row 10)", () => {
     expect(activityStage("below_score_floor")).toEqual(["Low-priority completion", "warn"]);
     expect(activityStage("not_queued")).toEqual(["Historical · not queued", ""]);
     expect(activityStage("retired")).toEqual(["Retired · earlier benchmark", ""]);
-    expect(activityStage("under_review")).toEqual(["Deferred source review", "warn"]);
+    // Source review runs before scoring; only a row Platform deferred until a
+    // score qualified names the deferred branch.
+    expect(activityStage("under_review")).toEqual(["Under review", "warn"]);
+    expect(
+      activityStage("under_review", {
+        status: "under_review",
+        deferred_review_triggers: ["top_five"],
+      }),
+    ).toEqual(["Deferred source review", "warn"]);
     expect(activityStage("rejected")).toEqual(["Rejected", "bad"]);
     expect(activityStage("nonsense")).toEqual(["Pending", ""]);
   });
@@ -123,7 +131,7 @@ describe("status vocabulary (row 10)", () => {
     // A hold without an automated conclusion (copy review, older API) keeps
     // the previous warn chip and adds no summary line.
     expect(activityStage("under_review", { status: "under_review" })).toEqual([
-      "Deferred source review",
+      "Under review",
       "warn",
     ]);
     expect(deferredReviewSummary({ status: "under_review" })).toBe("");
@@ -137,16 +145,19 @@ describe("status vocabulary (row 10)", () => {
     expect(deferredReviewSummary({ ...held, status: "scored" })).toBe("");
   });
 
-  it("names the quick filters with the deferred-review vocabulary", () => {
-    expect(ACTIVITY_FILTER_LABELS.under_review).toBe("Deferred review");
+  it("names the held filter without claiming the review was deferred", () => {
+    expect(ACTIVITY_FILTER_LABELS.under_review).toBe("Under review");
     expect(ACTIVITY_FILTER_LABELS.waiting_validator).toBe("Waiting for validators");
   });
 
   it("explains a review hold without claiming the screener is idle", () => {
     expect(validationDetail({ status: "under_review" })).toBe(
-      "This submission is held for deferred source review. Existing scores do not clear the hold. " +
+      "This submission is held for review. Holding is not a finding, and existing scores do not clear the hold. " +
         "The screening history below shows whether a deep review is running or an operator decision is pending.",
     );
+    expect(
+      validationDetail({ status: "under_review", deferred_review_triggers: ["anomaly"] }),
+    ).toContain("This submission is held for deferred source review.");
   });
 
   it("says 'ran out of budget' only for a recorded budget exhaustion", () => {
@@ -283,9 +294,9 @@ describe("policy screening label (#623 + row 14 chip)", () => {
     ).toBe("");
   });
 
-  it("names the deferred integrity branch for a full review in screening", () => {
+  it("names a full source review in screening", () => {
     expect(policyScreeningLabel({ status: "screening", screening_build_only: false })).toBe(
-      "Deferred source review",
+      "Full source review",
     );
   });
 

@@ -1,4 +1,4 @@
-FROM python:3.12-slim@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+FROM python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y bash coreutils findutils ripgrep sed \
@@ -9,6 +9,7 @@ RUN groupadd --gid 65532 analyzer \
 
 COPY --chown=65532:65532 tools/l2_analyzer.py /opt/l2_analyzer.py
 COPY --chown=65532:65532 ditto_screener/data/starter-kit-provenance-*.json /opt/starter-manifests/
+COPY --chown=65532:65532 ditto_screener/data/vendored-upstream-allowlist.json /opt/starter-manifests/
 # Fleet release staging inherits a private umask. The rootless analyzer runs
 # as container root so its bind-mounted source maps to the daemon identity;
 # make only these immutable, repository-owned inputs readable by that identity.

@@ -1,0 +1,8 @@
+{
+  "function_body_count": 7791,
+  "differing_code_body_index": 1952,
+  "changed_i64_const_instructions": 22,
+  "other_function_bodies_and_sections_identical": true,
+  "unmodified_rebuild_byte_identical": false,
+  "authority": "none; evidence only"
+}

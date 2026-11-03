@@ -10,6 +10,18 @@ This document defines where the maintenance treasury gets its money, who holds
 it, what it may pay for, and how every movement is recorded. It sets policy
 only. It does not register keys, change weights, or approve a bounty.
 
+**Build bounties v1 (#2942)** implement the claim, review and settlement
+workflow in rehearsal funding, so no funds move. They differ from this proposal
+in three ways. Entry fees, reward pools and awards are in alpha, not TAO. Each
+bounty revision names its own reward pool and a dedicated fee escrow coldkey
+and hotkey. Approval thresholds are a revisioned payout policy in Platform,
+which sets how many distinct operators (one or two) an amount needs and
+refuses larger amounts, instead of the TAO tiers below. The claim contract is
+[bounty-claims.md](bounty-claims.md), and contributors start from the
+[contributor guide](bounty-guide.md). Live funding, custody and signatories
+still need the approvals listed under
+[Decisions that need approval](#decisions-that-need-approval).
+
 **Open denominator decision:** This earlier proposal makes treasury and burn
 additive shares of the full miner vector (`1 - burn_share - treasury_share`).
 The separate SN118 GM/bounty prototype proposes 25 bps for each purpose from
@@ -440,9 +452,9 @@ cap.
 
 | Work | Owner issue |
 |---|---|
-| Hotkey-signed claim payload, reservation, handoff, and appeal ([bounty-claims.md](bounty-claims.md)) | #2045 |
+| Hotkey-signed claim payload, paid slots, review and appeal ([bounty-claims.md](bounty-claims.md)); v1 in rehearsal, with handoffs deferred | #2045, #2942 |
 | `TreasurySettings` revision API and `treasury_share_bps` on the ledger; validator fold and constants; ledger tables and hash chain; payout verifier variant; reconciliation job; Backroom MCP read tools for treasury policy, balance, and ledger | #2046 |
-| Board views, bounty template fields (`policy revision`, `reward revision`, `reviewer`, `expiry`, `conflicts`), contributor guide | #2047 |
+| Board views and the contributor guide ([bounty-guide.md](bounty-guide.md)); v1 board at `/bounties` | #2047, #2942 |
 
 Every Platform setting above must also be readable through Backroom MCP, not
 only shown in the UI, as required by the repository's operator-visibility rule.

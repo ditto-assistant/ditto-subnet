@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
+from ditto.api_server.cla import CLA_REQUIRED_ERROR_CODE, ClaConsentRequired
 from ditto.api_server.endpoints.inference import InferenceDeclinedError
 from ditto.api_server.endpoints.retrieval import (
     AgentNotFoundError,
@@ -68,6 +69,10 @@ ERROR_CODE_HTTP_EXCEPTION = 3002
 # 429 + Retry-After from the opt-in per-client-IP limit on unauthenticated
 # routes (middleware/public_rate_limit.py). Retryable once the wait elapses.
 ERROR_CODE_RATE_LIMITED = 3003
+# 413 from the transport-level body cap (middleware/request_body_limit.py),
+# answered before the endpoint parses or authenticates the request. Endpoint
+# caps tighter than the transport cap keep answering 413 with 3002.
+ERROR_CODE_REQUEST_TOO_LARGE = 3004
 ERROR_CODE_PRICING = 3100
 ERROR_CODE_ORACLE_UNREACHABLE = 3101
 ERROR_CODE_MALFORMED_PRICE = 3102
@@ -215,24 +220,41 @@ def envelope_response(
     message: str,
     *,
     headers: dict[str, str] | None = None,
+    detail: dict[str, Any] | None = None,
 ) -> JSONResponse:
     """Build the canonical JSON response with the request id echoed on a header.
 
     Header is set here as backup so error responses still carry the id
     even on code paths where ``RequestIDMiddleware`` cannot set it.
+    ``detail`` is explicit route-owned execution metadata, never an exception
+    object or arbitrary HTTPException.detail.
     """
     rid = request_id_var.get()
     response_headers = dict(headers or {})
     response_headers[REQUEST_ID_HEADER] = rid
+    # No error is cacheable: it can carry a request id, an auth answer or a
+    # transient refusal. Every error path (route exceptions, validation and
+    # routing failures, 413/429 middleware and the 500 handler) builds its
+    # response here, so this one default covers them all. A handler that
+    # declares its own Cache-Control keeps it.
+    if not any(name.lower() == "cache-control" for name in response_headers):
+        response_headers["Cache-Control"] = "no-store"
     return JSONResponse(
         status_code=status_code,
-        content=_envelope(error_code, message),
+        content={
+            **_envelope(error_code, message),
+            **({"detail": detail} if detail is not None else {}),
+        },
         headers=response_headers,
     )
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach the three envelope handlers to ``app``."""
+
+    @app.exception_handler(ClaConsentRequired)
+    async def _cla_required(_request: Request, exc: ClaConsentRequired) -> JSONResponse:
+        return envelope_response(403, CLA_REQUIRED_ERROR_CODE, str(exc))
 
     @app.exception_handler(StarletteHTTPException)
     async def _http_exception_handler(
@@ -267,7 +289,9 @@ def register_exception_handlers(app: FastAPI) -> None:
         return envelope_response(
             429,
             ERROR_CODE_SUBMISSION_COOLDOWN,
-            submission_cooldown_message(exc.retry_at),
+            submission_cooldown_message(
+                exc.retry_at, owner_override=exc.owner_override
+            ),
             headers={"Retry-After": str(retry_after)},
         )
 
@@ -516,5 +540,13 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _unhandled_exception_handler(
         _request: Request, _exc: Exception
     ) -> JSONResponse:
-        logger.exception("unhandled exception in request handler")
-        return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        # The outer error handler runs after request middleware unwinds. Its
+        # ContextVar has been reset, but the request still owns the validated ID.
+        token = request_id_var.set(
+            getattr(_request.state, "request_id", request_id_var.get())
+        )
+        try:
+            logger.exception("unhandled exception in request handler")
+            return envelope_response(500, ERROR_CODE_UNHANDLED, "internal server error")
+        finally:
+            request_id_var.reset(token)

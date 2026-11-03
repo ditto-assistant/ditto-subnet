@@ -575,7 +575,11 @@ func validatePublicationAcknowledgement(
 			acknowledgement.RunRowID != authority.RunRowID || acknowledgement.TicketID != record.Binding.TicketID ||
 			acknowledgement.CodingRunID != authority.CodingRunID ||
 			acknowledgement.AuthoringEvidenceSHA256 != authority.EvidenceSHA256 ||
-			acknowledgement.FrozenAt.IsZero() || acknowledgement.FrozenAt.Unix() < publication.PreparedAtUnix ||
+			// frozen_at is Platform's clock; PreparedAtUnix is this host's.
+			// Bound it only by the Platform-issued ticket deadline so clock
+			// skew cannot reject every replay of a genuine acknowledgement.
+			acknowledgement.FrozenAt.IsZero() ||
+			acknowledgement.FrozenAt.Before(record.Binding.Deadline.Add(-maximumBindingLifetime)) ||
 			acknowledgement.FrozenAt.After(record.Binding.Deadline) ||
 			!acceptedShadowAcknowledgement(acknowledgement.Accepted, acknowledgement.Idempotent,
 				acknowledgement.WeightEligible) {

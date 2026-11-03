@@ -48,7 +48,7 @@ from ditto.api_models.private_dataset import (
     PrivateDatasetRequest as PrivateDatasetRequest,
 )
 from ditto.api_models.stack_health import ValidatorStackHealth
-from ditto.api_models.system_health import SystemMetrics
+from ditto.api_models.system_health import HostSpecs, SystemMetrics
 from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
@@ -111,11 +111,15 @@ from ditto_screening_protocol.confirmation import (
 from ditto_screening_protocol.confirmation import (
     V9ConfirmationEvidenceRoot,
 )
+from ditto_screening_protocol.dueling import DuelingReport
 from ditto_screening_protocol.treasury_enforcement import TreasuryPin
 
 _CODE_DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 _SOFTWARE_VERSION_PATTERN = r"^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$"
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_DUELING_IDENT_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$"
+# Base64 of at most ``challenge.MaxRoundDatasetBytes`` (32 MiB) slice bytes.
+DUELING_SLICE_MAX_BASE64_CHARS = 4 * (((32 << 20) + 2) // 3)
 ValidatorRuntimeState = Literal[
     "polling",
     "running_benchmark",
@@ -330,6 +334,8 @@ class BenchmarkRuntimeSettings(BaseModel):
     relay_delay_fingerprint_mode: Literal["off", "shadow"] = "off"
     relay_delay_fingerprint_min_ms: Annotated[int, Field(ge=0, le=5_000)] = 25
     relay_delay_fingerprint_max_ms: Annotated[int, Field(ge=0, le=5_000)] = 250
+    # Platform-issued harness memory cap, applied identically by every scorer.
+    sandbox_memory_limit_mib: Annotated[int, Field(ge=512, le=32_768)] = 6_144
 
     @model_validator(mode="after")
     def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:
@@ -422,6 +428,50 @@ class JobResponse(BaseModel):
             description="Hash of ``dataset_seed_block``; lets the validator "
             "re-derive the seed itself and refuse a ground ticket "
             "(ditto/validator/onchain_seed.py).",
+        ),
+    ] = None
+    # Bench >= 16 (dueling) generator slice, served in the lease body. All five
+    # fields arrive together on a dueling ticket and are absent otherwise, so a
+    # pre-16 lease serializes exactly as before. The validator forwards the
+    # slice to ``/v2/score`` and refuses a >= 16 lease that lacks them or whose
+    # bytes do not hash to ``expected_slice_sha256``.
+    dueling_slice_mode: Literal["dueling-slice-v1"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    dueling_slice_bytes: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=DUELING_SLICE_MAX_BASE64_CHARS,
+            exclude_if=lambda value: value is None,
+            description="Base64 of the season's frozen slice for this run seed.",
+        ),
+    ] = None
+    expected_slice_sha256: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_SHA256_PATTERN,
+            exclude_if=lambda value: value is None,
+            description="SHA-256 of the decoded slice bytes (tamper pin).",
+        ),
+    ] = None
+    dueling_owner_key: Annotated[
+        str | None,
+        Field(
+            default=None,
+            max_length=256,
+            exclude_if=lambda value: value is None,
+            description="Scored agent's owner key; the scorer self-masks it.",
+        ),
+    ] = None
+    dueling_season_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_DUELING_IDENT_PATTERN,
+            exclude_if=lambda value: value is None,
+            description="Dueling season the slice belongs to.",
         ),
     ] = None
 
@@ -617,6 +667,17 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    host_specs: Annotated[
+        HostSpecs | None,
+        Field(
+            default=None,
+            description=(
+                "Fixed host hardware (CPUs, RAM, disk, architecture) sampled once "
+                "per boot, under heartbeat protocol v32. Null when the probe failed "
+                "or on older validators."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -638,6 +699,8 @@ class ValidatorHeartbeatRequest(BaseModel):
             raise ValueError("treasury weight guard requires heartbeat protocol v30")
         if self.weights_fold is not None and self.protocol_version < 27:
             raise ValueError("weights fold requires heartbeat protocol v27")
+        if self.host_specs is not None and self.protocol_version < 32:
+            raise ValueError("host specs require heartbeat protocol v32")
         return self
 
     @model_validator(mode="after")
@@ -802,9 +865,9 @@ class ValidatorHeartbeatResponse(BaseModel):
 class ArtifactResponse(BaseModel):
     """Returned by ``GET /validator/agent/{agent_id}/artifact``.
 
-    ``download_url`` is a short-lived pre-signed object-store URL the
-    daemon GETs to stream the tarball. ``sha256`` lets the daemon verify
-    the bytes it pulls against what the miner registered.
+    ``download_url`` is a short-lived pre-signed object-store URL to the
+    source tarball. It is ``None`` for a validator whose scorer runs the
+    screened image without source; ``sha256`` still names the artifact.
     """
 
     agent_id: Annotated[UUID, Field(description="Echoes the path-param id.")]
@@ -812,8 +875,14 @@ class ArtifactResponse(BaseModel):
         str, Field(description="Expected SHA-256 of the tarball, lowercase hex.")
     ]
     download_url: Annotated[
-        str, Field(description="Pre-signed URL to GET the tarball bytes.")
-    ]
+        str | None,
+        Field(
+            description=(
+                "Pre-signed source tarball URL; null when the validator scores "
+                "the screened image without source."
+            )
+        ),
+    ] = None
     expires_at: Annotated[
         datetime, Field(description="When ``download_url`` stops being valid (UTC).")
     ]
@@ -1531,6 +1600,16 @@ class ConfirmationScoreRecord(BaseModel):
             default=None, description="Validator's hex sr25519 signature, if stored."
         ),
     ] = None
+    dueling: DuelingReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench >= 16 only: this seed's signed ``details.dueling`` "
+            "aggregates. The KOTH fold recomputes the seed's composite with "
+            "both compared agents' owners masked; a v16 record without them "
+            "carries no paired evidence."
+        ),
+    )
 
 
 class LedgerScoreProof(BaseModel):
@@ -1859,8 +1938,60 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    dueling_season_id: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_DUELING_IDENT_PATTERN,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Bench >= 16 only: the dueling season this row was scored in. "
+                "The fold compares v16 rows only within one "
+                "``(bench_version, dueling_season_id)``; a v16 row without it "
+                "never ranks or pays."
+            ),
+        ),
+    ] = None
+    dueling: DuelingReport | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Bench >= 16 only: the authoritative score's signed "
+            "``details.dueling`` aggregates (owner key, datagen half, slice "
+            "columns). A v16 row without them never ranks or pays."
+        ),
+    )
     status: Annotated[
         AgentStatus, Field(description="Agent lifecycle state (always ``scored``).")
+    ]
+
+
+class CrownGateMarker(BaseModel):
+    """Protocol-34 crown rules a validator applies to the KOTH walk."""
+
+    model_config = ConfigDict(frozen=True)
+
+    min_dethrone_confirmations: Annotated[
+        int,
+        Field(
+            ge=2,
+            le=15,
+            description=(
+                "Shared-seed confirmations a challenger must hold against the "
+                "champion before the paired comparison may move the crown."
+            ),
+        ),
+    ]
+    champion_standing_rank: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=5,
+            description=(
+                "Only an entry inside this many places of the fold's official "
+                "ranking may hold or take the crown."
+            ),
+        ),
     ]
 
 
@@ -1955,6 +2086,33 @@ class LedgerResponse(BaseModel):
                 "Protocol-29 consensus marker. When capped, paired tie and "
                 "unpaired dethrone statistics are limited to twice the KOTH "
                 "margin before decay. Absent preserves the legacy fold."
+            ),
+        ),
+    ] = None
+    crown_gate: Annotated[
+        CrownGateMarker | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-34 consensus marker. When present, a challenger "
+                "dethrones only on the paired shared-seed statistic with at "
+                "least min_dethrone_confirmations shared seeds, and the crown "
+                "must sit inside the top champion_standing_rank official "
+                "places. Absent preserves the pre-34 walk."
+            ),
+        ),
+    ] = None
+    rank_shares: Annotated[
+        list[float] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Protocol-31 operator payout curve: the champion's share, then "
+                "each tail slot's, summing to 1. Served only once every "
+                "recently-live weight setter reports v31. Absent keeps the "
+                "frozen 65/14/10/7/4 curve."
             ),
         ),
     ] = None
@@ -2053,7 +2211,8 @@ class LedgerResponse(BaseModel):
         default_factory=dict,
         description=(
             "Optional per-track emission share in basis points (0-10000), "
-            "keyed by track id (``memory``/``coding``/``router``). The "
+            "keyed by track id (``memory``/``coding``/``router``/"
+            "``generator``). The "
             "operator-owned governance knob for the multi-competition split, "
             "served already-resolved like ``burn_share`` so the whole fleet "
             "folds one decided allocation. Absent (an older platform) or "
@@ -2152,7 +2311,10 @@ class LedgerResponse(BaseModel):
                 "terminal-review emission gate withholds its exact artifact: it "
                 "is deliberately NOT in entries, because it may not be paid, and "
                 "is served only on an epoch pin whose crown_mode is incumbent, "
-                "with crown_incumbent_agent_id equal to its agent_id. The fold "
+                "with crown_incumbent_agent_id equal to its agent_id. It must "
+                "carry the same verifiable quorum score_proofs (and v9 "
+                "confirmation, when enforced) as any entry; a validator rejects "
+                "the whole ledger when it does not verify. The fold "
                 "adds it to the pool as the incumbent, derives champion, tail, "
                 "tie pooling and the score-ceiling cohort exactly as for any "
                 "entry, then burns every share it allocated to this entry "

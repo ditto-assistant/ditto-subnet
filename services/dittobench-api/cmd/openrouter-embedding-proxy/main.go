@@ -88,6 +88,11 @@ type proxyStats struct {
 
 type inflightCall struct {
 	done chan struct{}
+	// body and err are the leader's outcome, written before done closes.
+	// Waiters read them directly: the disk cache is optional and best-effort,
+	// so it cannot be how a coalesced request learns the result.
+	body []byte
+	err  error
 }
 
 type proxy struct {
@@ -193,7 +198,7 @@ func (p *proxy) store(key string, body []byte) error {
 	return os.Rename(temporaryName, filepath.Join(p.cacheDir, key+".json"))
 }
 
-func (p *proxy) resolve(ctx context.Context, request openRouterRequest) ([]byte, error) {
+func (p *proxy) resolve(ctx context.Context, request openRouterRequest) (body []byte, err error) {
 	key, _, err := cacheKey(request)
 	if err != nil {
 		return nil, err
@@ -213,11 +218,10 @@ func (p *proxy) resolve(ctx context.Context, request openRouterRequest) ([]byte,
 		p.mu.Unlock()
 		select {
 		case <-call.done:
-			if body, ok := p.cached(key); ok {
-				p.stats.CacheHits.Add(1)
-				return body, nil
+			if call.err != nil {
+				return nil, fmt.Errorf("coalesced embedding request failed: %w", call.err)
 			}
-			return nil, errors.New("coalesced embedding request failed")
+			return call.body, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -227,6 +231,7 @@ func (p *proxy) resolve(ctx context.Context, request openRouterRequest) ([]byte,
 	p.stats.CacheMisses.Add(1)
 	p.mu.Unlock()
 	defer func() {
+		call.body, call.err = body, err
 		p.mu.Lock()
 		delete(p.inflight, key)
 		close(call.done)

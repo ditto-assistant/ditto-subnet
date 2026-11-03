@@ -36,6 +36,20 @@ variable "bake_environment" {
   default     = "preview-bake"
 }
 
+# The actual existing preview state (serial 4, observed Oct 1) contains none
+# of the staged bake SA/compute/WIF resources. Preserve that absence by default.
+variable "enable_preview_bake" {
+  description = "Separately reviewed creation of all three preview bake prerequisites."
+  type        = bool
+  default     = false
+}
+
+variable "enable_collector_custody_backend" {
+  description = "Reviewed exact-object grants to initialize and lock custody state."
+  type        = bool
+  default     = false
+}
+
 variable "snapshot_writer_service_account" {
   description = "Existing main-only deploy identity used by the scheduled sanitizer."
   type        = string

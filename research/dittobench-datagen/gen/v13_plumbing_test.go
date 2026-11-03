@@ -210,6 +210,7 @@ func assertNoToolCaseKey(t *testing.T, surface string, body []byte, key string) 
 // and exactly 250 memory cases (224 primary-envelope + 9 isolation), and v13
 // does not inherit v10's 251-case envelope.
 func TestV13ProfileAndEnvelope(t *testing.T) {
+	t.Parallel()
 	want := map[string]Profile{
 		"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
 		"medium": {Tools: 48, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},
@@ -270,6 +271,7 @@ func TestV13ProfileAndEnvelope(t *testing.T) {
 // v10 entry point still works, and from v13 correction/join families count as
 // computed even when the final token is verbatim in the evidence.
 func TestMemoryExposureAuditIsVersionExplicit(t *testing.T) {
+	t.Parallel()
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV10)
 	v10, err := GenerateDataset(41, prof, protocol.BenchVersionV10)
 	if err != nil {

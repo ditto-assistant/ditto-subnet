@@ -56,7 +56,8 @@ async def test_all_diagnostics_use_the_revealed_matrix_hash(install_substrate_mo
     substrate.get_block_hash = AsyncMock(side_effect=lambda b: hashes[b])
     substrate.query_map.return_value = AsyncRows([(25_025, [LEGACY, STATEFUL])])
     client = SimpleNamespace(
-        get_weights=AsyncMock(return_value=snapshot), _substrate_url=lambda: "ws://test"
+        get_weights=AsyncMock(return_value=snapshot),
+        _live_substrate_urls=lambda: ("ws://test",),
     )
     result = await read_weight_diagnostics(client, 118)
     assert result.validator_trust == (65534, 60947)
@@ -100,7 +101,8 @@ async def test_unreadable_commit_timestamp_degrades_one_row(install_substrate_mo
     substrate.get_block_hash = AsyncMock(return_value="0x" + "cd" * 32)
     substrate.query_map.return_value = AsyncRows([(25_024, [STATEFUL])])
     client = SimpleNamespace(
-        get_weights=AsyncMock(return_value=snapshot), _substrate_url=lambda: "ws://test"
+        get_weights=AsyncMock(return_value=snapshot),
+        _live_substrate_urls=lambda: ("ws://test",),
     )
     result = await read_weight_diagnostics(client, 118)
     (row,) = result.pending

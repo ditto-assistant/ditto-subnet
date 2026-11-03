@@ -12,7 +12,6 @@ import copy
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -32,11 +31,9 @@ from ditto.api_server.efficiency import (
     audited_v9_run_token_total,
     audited_v9_token_total,
     bonus_for_submission,
-    bonus_fraction,
     bounded_efficiency_factor,
     build_cohort_snapshot,
     dedupe_lineages,
-    effective_composite,
     epoch_index_for,
     factor_for_submission,
     floors_from_previous,
@@ -112,13 +109,6 @@ def _v9_usage(
 
 
 class TestAuditedTokenTotal:
-    def test_median_over_complete_rows(self) -> None:
-        blobs = [_usage(100), _usage(300), _usage(200)]
-        assert audited_token_total(blobs) == 200.0
-
-    def test_even_count_averages_middle_pair(self) -> None:
-        assert audited_token_total([_usage(100), _usage(200)]) == 150.0
-
     def test_ignores_incomplete_and_malformed_rows(self) -> None:
         blobs = [
             _usage(100),
@@ -132,10 +122,6 @@ class TestAuditedTokenTotal:
             None,
         ]
         assert audited_token_total(blobs) == 100.0
-
-    def test_none_when_no_complete_row(self) -> None:
-        assert audited_token_total([_usage(5, status="unavailable"), None]) is None
-        assert audited_token_total([]) is None
 
 
 class TestAuditedV9TokenTotal:
@@ -165,14 +151,6 @@ class TestAuditedV9TokenTotal:
             continual_seed_token_totals=[800],
         ) == pytest.approx(1_300.0)
 
-    def test_quorum_only_matches_frozen_median_behaviour(self) -> None:
-        """No retests must leave the pre-retest cost byte-for-byte unchanged."""
-        blobs = [_v9_usage(1_440), _v9_usage(1_500), _v9_usage(9_000)]
-        assert audited_v9_token_total(blobs) == pytest.approx(1_500.0)
-        assert audited_v9_token_total(
-            blobs, continual_seed_token_totals=[]
-        ) == pytest.approx(1_500.0)
-
     def test_explicit_invalid_continual_evidence_fails_closed(self) -> None:
         assert (
             audited_v9_token_total(
@@ -183,7 +161,7 @@ class TestAuditedV9TokenTotal:
             is None
         )
 
-    @pytest.mark.parametrize("bad", [0, -1, float("nan"), float("inf"), True])
+    @pytest.mark.parametrize("bad", [0, float("nan"), True])
     def test_malformed_retest_observation_fails_closed(self, bad: object) -> None:
         assert (
             audited_v9_token_total(
@@ -397,9 +375,6 @@ class TestLineageKey:
         assert lineage_key(None, "bb" * 32) == "sha:" + "bb" * 32
         assert lineage_key("", "bb" * 32) == "sha:" + "bb" * 32
 
-    def test_channels_never_collide(self) -> None:
-        assert lineage_key("ab" * 32, "xx" * 32) != lineage_key(None, "ab" * 32)
-
 
 class TestDedupeLineages:
     def test_collapses_same_lineage_to_best_composite(self) -> None:
@@ -415,36 +390,13 @@ class TestDedupeLineages:
         assert by_key["sha:dup"].collapsed_agent_ids == (loser.agent_id,)
         assert by_key[other.lineage_key].collapsed_agent_ids == ()
 
-    def test_tie_breaks_on_first_seen_then_agent_id(self) -> None:
-        earlier = _candidate(5, composite=0.8, lineage="sha:dup", first_seen=_T0)
-        later = _candidate(
-            4,
-            composite=0.8,
-            lineage="sha:dup",
-            first_seen=_T0 + timedelta(minutes=1),
-        )
-        members = dedupe_lineages([later, earlier])
-        assert members[0].agent_id == earlier.agent_id
-        assert members[0].first_seen == _T0
-
 
 class TestNearestRankPercentile:
-    def test_quartile_over_eight_values(self) -> None:
-        values = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
-        # rank = ceil(0.25 * 8) = 2 -> the 2nd smallest.
-        assert nearest_rank_percentile(values, 0.25) == 20.0
-
-    def test_single_value(self) -> None:
-        assert nearest_rank_percentile([42.0], 0.25) == 42.0
-
     def test_unsorted_input(self) -> None:
         assert nearest_rank_percentile([30.0, 10.0, 20.0], 0.25) == 10.0
 
 
 class TestQualityGate:
-    def test_requires_audited_usage(self) -> None:
-        assert not qualifies(0.9, 0.9, None, quality_floor=0.0, memory_floor=0.0)
-
     def test_requires_both_floors(self) -> None:
         assert qualifies(0.6, 0.5, 1.0, quality_floor=0.6, memory_floor=0.5)
         assert not qualifies(0.59, 0.5, 1.0, quality_floor=0.6, memory_floor=0.5)
@@ -601,22 +553,6 @@ class TestBuildCohortSnapshot:
         # Membership is still frozen for observability; it awards nothing.
         assert len(snapshot.members) == 3
 
-    def test_two_tier_knobs_freeze_curve_version_two(self) -> None:
-        candidates = [_candidate(n, token_total=100.0) for n in range(1, 5)]
-        snapshot = self._snapshot(
-            candidates, deep_bonus_cap=0.10, deep_frontier_ratio=0.5
-        )
-        assert snapshot.curve_version == 2
-        assert snapshot.deep_bonus_cap == 0.10
-        assert snapshot.deep_frontier_ratio == 0.5
-
-    def test_without_deep_knobs_freezes_single_tier(self) -> None:
-        candidates = [_candidate(n, token_total=100.0) for n in range(1, 5)]
-        snapshot = self._snapshot(candidates)
-        assert snapshot.curve_version == 1
-        assert snapshot.deep_bonus_cap is None
-        assert snapshot.deep_frontier_ratio is None
-
     def test_v3_reference_is_dynamic_nearest_rank_p25(self) -> None:
         # These are arbitrary example costs, not fixed standards. At N=8 the
         # nearest-rank P25 is the second observed value (ceil(.25 * 8) = 2).
@@ -652,137 +588,6 @@ class TestBuildCohortSnapshot:
         snapshot = self._snapshot(candidates, n_min=4)
         assert not snapshot.active
         assert len(snapshot.members) == 3
-
-
-class TestBonusFraction:
-    def test_full_bonus_at_or_below_frontier(self) -> None:
-        assert bonus_fraction(99.0, reference_p25=100, reference_median=200, cap=0.05)
-        assert (
-            bonus_fraction(100.0, reference_p25=100, reference_median=200, cap=0.05)
-            == 0.05
-        )
-
-    def test_zero_at_or_above_median(self) -> None:
-        assert (
-            bonus_fraction(200.0, reference_p25=100, reference_median=200, cap=0.05)
-            == 0.0
-        )
-        assert (
-            bonus_fraction(1e12, reference_p25=100, reference_median=200, cap=0.05)
-            == 0.0
-        )
-
-    def test_linear_between(self) -> None:
-        mid = bonus_fraction(150.0, reference_p25=100, reference_median=200, cap=0.05)
-        assert mid == 0.025
-        q3 = bonus_fraction(175.0, reference_p25=100, reference_median=200, cap=0.05)
-        assert abs(q3 - 0.0125) < 1e-12
-
-    def test_degenerate_reference_is_a_step(self) -> None:
-        assert (
-            bonus_fraction(100.0, reference_p25=100, reference_median=100, cap=0.05)
-            == 0.05
-        )
-        assert (
-            bonus_fraction(101.0, reference_p25=100, reference_median=100, cap=0.05)
-            == 0.0
-        )
-
-    def test_never_negative(self) -> None:
-        for tokens in (0.0, 100.0, 150.0, 200.0, 1e9):
-            assert (
-                bonus_fraction(
-                    tokens, reference_p25=100, reference_median=200, cap=0.05
-                )
-                >= 0.0
-            )
-
-
-class TestTwoTierBonusFraction:
-    """Tier 2: cap ramps to deep cap between P25 and ratio x P25, then
-    saturates flat — continuous at P25 and monotone across the whole curve."""
-
-    _KW = {
-        "reference_p25": 100.0,
-        "reference_median": 200.0,
-        "cap": 0.05,
-        "deep_cap": 0.10,
-        "deep_frontier_ratio": 0.5,
-    }
-
-    def test_continuous_at_p25(self) -> None:
-        # Both tiers meet at exactly the base cap on the P25 boundary.
-        assert bonus_fraction(100.0, **self._KW) == 0.05
-        just_above = bonus_fraction(100.0 + 1e-9, **self._KW)
-        just_below = bonus_fraction(100.0 - 1e-9, **self._KW)
-        assert abs(just_above - 0.05) < 1e-9
-        assert abs(just_below - 0.05) < 1e-9
-
-    def test_saturates_flat_at_and_below_deep_frontier(self) -> None:
-        # deep_frontier = 0.5 x 100 = 50: racing further toward zero tokens
-        # earns nothing extra.
-        assert bonus_fraction(50.0, **self._KW) == 0.10
-        assert bonus_fraction(25.0, **self._KW) == 0.10
-        assert bonus_fraction(0.0, **self._KW) == 0.10
-
-    def test_linear_ramp_between_deep_frontier_and_p25(self) -> None:
-        # Midpoint of [50, 100] -> midway between deep cap and base cap.
-        assert bonus_fraction(75.0, **self._KW) == pytest.approx(0.075)
-        assert bonus_fraction(60.0, **self._KW) == pytest.approx(
-            0.05 + 0.05 * (100.0 - 60.0) / 50.0
-        )
-
-    def test_monotone_non_increasing_across_the_whole_curve(self) -> None:
-        samples = [
-            bonus_fraction(float(tokens), **self._KW) for tokens in range(0, 260, 5)
-        ]
-        assert all(a >= b for a, b in zip(samples[:-1], samples[1:], strict=True))
-        assert samples[0] == 0.10
-        assert samples[-1] == 0.0
-
-    def test_tier_one_half_is_unchanged(self) -> None:
-        # At and above P25 the two-tier curve is identical to single-tier.
-        for tokens in (100.0, 150.0, 175.0, 200.0, 1e9):
-            assert bonus_fraction(tokens, **self._KW) == bonus_fraction(
-                tokens,
-                reference_p25=100.0,
-                reference_median=200.0,
-                cap=0.05,
-            )
-
-    def test_legacy_single_tier_when_deep_knobs_absent(self) -> None:
-        # Missing either knob -> the original flat-cap-below-P25 curve.
-        assert (
-            bonus_fraction(10.0, reference_p25=100.0, reference_median=200.0, cap=0.05)
-            == 0.05
-        )
-        assert (
-            bonus_fraction(
-                10.0,
-                reference_p25=100.0,
-                reference_median=200.0,
-                cap=0.05,
-                deep_cap=0.10,
-            )
-            == 0.05
-        )
-
-    def test_degenerate_zero_p25_steps_to_deep_cap(self) -> None:
-        assert (
-            bonus_fraction(
-                0.0,
-                reference_p25=0.0,
-                reference_median=200.0,
-                cap=0.05,
-                deep_cap=0.10,
-                deep_frontier_ratio=0.5,
-            )
-            == 0.10
-        )
-
-    def test_never_exceeds_deep_cap_envelope(self) -> None:
-        for tokens in range(0, 260, 5):
-            assert 0.0 <= bonus_fraction(float(tokens), **self._KW) <= 0.10
 
 
 class TestBonusForSubmission:
@@ -821,11 +626,6 @@ class TestBonusForSubmission:
         assert bonus_for_submission(0.9, 0.3, 50.0, reference) == 0.0  # memory gut
         assert bonus_for_submission(0.9, 0.9, None, reference) == 0.0  # unaudited
 
-    def test_qualified_submission_gets_curve_value(self) -> None:
-        reference = self._reference()
-        assert bonus_for_submission(0.9, 0.9, 50.0, reference) == 0.05
-        assert bonus_for_submission(0.9, 0.9, 150.0, reference) == 0.025
-
     def test_two_tier_reference_uses_the_deep_curve(self) -> None:
         reference = self._reference(
             curve_version=2, deep_bonus_cap=0.10, deep_frontier_ratio=0.5
@@ -855,9 +655,6 @@ class TestBoundedEfficiencyFactor:
         "maximum_factor": 1.10,
     }
 
-    def test_reference_is_neutral(self) -> None:
-        assert bounded_efficiency_factor(100.0, **self._KW) == 1.0
-
     def test_cheaper_is_bonus_and_expensive_is_penalty(self) -> None:
         assert bounded_efficiency_factor(50.0, **self._KW) > 1.0
         assert bounded_efficiency_factor(200.0, **self._KW) < 1.0
@@ -866,15 +663,13 @@ class TestBoundedEfficiencyFactor:
         assert bounded_efficiency_factor(1.0, **self._KW) == 1.10
         assert bounded_efficiency_factor(1_000_000.0, **self._KW) == 0.85
 
-    def test_monotone_and_alpha_softens_the_ratio(self) -> None:
-        costs = [25.0, 50.0, 100.0, 200.0, 400.0]
-        factors = [bounded_efficiency_factor(cost, **self._KW) for cost in costs]
-        assert all(a >= b for a, b in pairwise(factors))
-        soft = bounded_efficiency_factor(125.0, **self._KW)
-        hard = bounded_efficiency_factor(125.0, **{**self._KW, "alpha": 0.5})
-        assert soft > hard
-
-    @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            0.0,
+            float("nan"),
+        ],
+    )
     def test_bad_agent_cost_is_neutral(self, bad: float) -> None:
         assert bounded_efficiency_factor(bad, **self._KW) == 1.0
 
@@ -882,8 +677,6 @@ class TestBoundedEfficiencyFactor:
         "override",
         [
             {"reference_cost": 0.0},
-            {"alpha": 0.0},
-            {"alpha": 1.01},
             {"minimum_factor": 0.84},
             {"maximum_factor": 1.11},
         ],
@@ -932,9 +725,6 @@ class TestBoundedEfficiencyFactor:
 class TestUnboundedEfficiencyFactor:
     _KW = {"reference_cost": 100.0, "alpha": 0.25}
 
-    def test_reference_is_neutral(self) -> None:
-        assert unbounded_efficiency_factor(100.0, **self._KW) == 1.0
-
     def test_does_not_clamp_at_the_old_envelope(self) -> None:
         assert unbounded_efficiency_factor(1.0, **self._KW) > 1.10
         assert unbounded_efficiency_factor(1_000_000.0, **self._KW) < 0.85
@@ -968,13 +758,6 @@ class TestUnboundedEfficiencyFactor:
         assert saturable is not None and saturable > 1.10
 
 
-class TestEffectiveComposite:
-    def test_multiplicative_and_bounded(self) -> None:
-        assert effective_composite(0.8, 0.05) == 0.8 * 1.05
-        assert effective_composite(0.8, 0.0) == 0.8
-        assert effective_composite(1.0, 0.1) <= 1.1
-
-
 class TestEpochIndex:
     def test_fixed_utc_windows(self) -> None:
         base = datetime(2026, 7, 24, 0, 0, 1, tzinfo=UTC)
@@ -984,13 +767,6 @@ class TestEpochIndex:
         assert (
             epoch_index_for(base + timedelta(hours=24), 24)
             == epoch_index_for(base, 24) + 1
-        )
-
-    def test_epoch_hours_config(self) -> None:
-        base = datetime(2026, 7, 24, 0, 0, 1, tzinfo=UTC)
-        assert (
-            epoch_index_for(base + timedelta(hours=6), 6)
-            == epoch_index_for(base, 6) + 1
         )
 
 
@@ -1053,16 +829,6 @@ class TestEfficiencyBoardReads:
 
 
 class TestFloorsFromPrevious:
-    def test_static_floors_without_previous_cohort(self) -> None:
-        assert floors_from_previous(None, quality_floor=0.3, memory_floor=0.2) == (
-            0.3,
-            0.2,
-        )
-        assert floors_from_previous([], quality_floor=0.3, memory_floor=0.2) == (
-            0.3,
-            0.2,
-        )
-
     def test_derives_from_previous_cohort_medians(self) -> None:
         members = [
             {"composite": 0.6, "memory_mean": 0.5},

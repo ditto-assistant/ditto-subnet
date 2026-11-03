@@ -35,7 +35,7 @@ type ConsumeValidatorNonceParams struct {
 // run this inside a savepoint (pgx nested transaction) so the replay does
 // not poison the outer /exchange transaction.
 // Consume a validator request nonce. used_at/expires_at are computed by the
-// application (now, now + exchange max age), matching the Python
+// application (max(now, requested_at) + max age + margin), matching the Python
 // consume_validator_nonce. A duplicate-key error on the nonce PK signals a
 // replayed exchange (mapped to HTTP 409 by the endpoint).
 func (q *Queries) ConsumeValidatorNonce(ctx context.Context, arg ConsumeValidatorNonceParams) error {

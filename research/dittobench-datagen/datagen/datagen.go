@@ -1347,12 +1347,7 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 	if len(cases) == 0 {
 		return
 	}
-	scale := 1
-	if len(cases) >= 80 {
-		scale = 3
-	} else if len(cases) >= 30 {
-		scale = 2
-	}
+	scale := ToolWorldScale(len(cases), benchVersion)
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	routes := toolMixRNG(seed, protocol.BenchVersionV10, len(cases), "state-dependent-route")
 	projectIndex := 0
@@ -1493,12 +1488,7 @@ func applyWorldActions(seed int64, cases []protocol.ToolCase, preserveSemanticFl
 			remainingByCategory[tc.Category]++
 		}
 	}
-	scale := 1
-	if len(cases) >= 80 {
-		scale = 3
-	} else if len(cases) >= 30 {
-		scale = 2
-	}
+	scale := ToolWorldScale(len(cases), benchVersion)
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	storyPairs := make(map[string]bool, len(world.Stories))
 	initialPairs := world.InitialPairs(world.StagedCorrectionMembership(world.V13Allocation(0)))
@@ -2380,10 +2370,15 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		applyV10StateDependentActions(seed, benchVersion, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV13 {
-		applyV13ToolBench(seed, cases)
+		applyV13ToolBenchForVersion(seed, benchVersion, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV13 && !v13SkipToolSemantics {
 		applyV13ToolSemantics(seed, benchVersion, cases)
+	}
+	if benchVersion >= protocol.BenchVersionV16 {
+		// v16: linked-connector, unlinked-probe and named-product cases
+		// (datagen/v16.go), after every v13 pass so none of their slots move.
+		applyV16ConnectorBench(seed, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV8 && benchVersion < protocol.BenchVersionV13 {
 		// v13 moves writing noise to the artifact surface pass (gen/v13_surface.go),

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
@@ -18,14 +19,41 @@ import (
 )
 
 const (
-	providerMaxAttempts                        = 1
-	providerSafeRetryMaxAttempts               = 2
-	providerGatewayRetryDelay                  = 100 * time.Millisecond
-	providerRetryAfterMaxSeconds               = 5
-	confirmationReaderBackpressureMaxAttempts  = 1
-	confirmationReaderBackpressureMaxElapsed   = 80 * time.Second
-	confirmationReaderRetryAfterMaxSeconds     = 60
-	confirmationReaderRetryAfterDefaultSeconds = 10
+	providerMaxAttempts          = 1
+	providerSafeRetryMaxAttempts = 2
+	providerGatewayRetryDelay    = 100 * time.Millisecond
+	providerRetryAfterMaxSeconds = 5
+	// Every confirmation lane gets one re-dispatch of a provably receipt-free
+	// provider rejection. A bundle makes ~144 serial provider calls with
+	// allow_fallbacks false, so a single uncovered 429 ends a 48-case run.
+	confirmationBackpressureMaxAttempts  = 2
+	confirmationBackpressureMaxElapsed   = 80 * time.Second
+	confirmationRetryAfterMaxSeconds     = 60
+	confirmationRetryAfterDefaultSeconds = 10
+
+	// Transient-failure retry for confirmation: a provably receipt-free 5xx,
+	// or a connection that never opened. Measured 2026-10-29: about 1 reader
+	// call in 120 failed before OpenRouter selected a provider, and with no
+	// retry one failure ends a ~281-call bundle (~10% of bundles complete).
+	// Four attempts take that to ~99.9999% if failures are independent. The
+	// backoff is exponential with full jitter -- a uniform wait in
+	// [0, base*2^(n-1)] -- so concurrent bundles spread out instead of
+	// re-dispatching in step, and the cumulative ceiling (2+4+8 = 14s) rides
+	// over a short outage without holding a slot past the elapsed cap.
+	// Whether 14s is long enough is an empirical question: it is the share of
+	// failures that outlast the window, which confirmation_inference_requests
+	// now records. Timeouts are deliberately NOT retried: a request that timed
+	// out may still complete and be billed upstream.
+	confirmationTransientMaxAttempts = 4
+	confirmationTransientBaseDelay   = 2 * time.Second
+	confirmationTransientMaxDelay    = 16 * time.Second
+	// confirmationGrantRetryBudget bounds the retries one grant (one lane of one
+	// bundle attempt) may spend across all its calls. A bundle averages 2.3
+	// failing reader calls, so on independent blips the budget is reached less
+	// than once in a million bundles; it exists for the degraded upstream that
+	// fails often but not always, where per-call caps alone would let a single
+	// bundle multiply its load several-fold for its whole run.
+	confirmationGrantRetryBudget = 12
 
 	pplxEmbedContractModel = "perplexity/pplx-embed-v1-0.6b"
 	pplxEmbedResponseModel = "pplx-embed-v1-0.6b"
@@ -70,18 +98,110 @@ type providerHTTPResult struct {
 type providerCallError struct {
 	attempts int
 	timedOut bool
+	// neverSent is true only when the final failure was a dial error: the
+	// connection never opened, so the request provably never reached the
+	// gateway. Every other transport failure may have been received and acted
+	// on, including a timeout, so it is not evidence that nothing was billed.
+	neverSent bool
 }
 
 func (e *providerCallError) Error() string { return "provider request failed" }
 
 type providerRetryPolicy struct {
-	retryBackpressure              bool
-	retryPreProviderNotFoundModel  string
-	backpressureMaxAttempts        int
-	requireReceiptFreeBackpressure bool
-	receiptFreeExpectedModel       string
-	receiptFreeExpectedProvider    string
-	maxElapsed                     time.Duration
+	retryBackpressure             bool
+	retryPreProviderNotFoundModel string
+	backpressureMaxAttempts       int
+	receiptFreeExpectedModel      string
+	maxElapsed                    time.Duration
+	// retryTransient re-dispatches a receipt-free 5xx and a dial failure, up to
+	// transientMaxAttempts, with jittered exponential backoff. It never relaxes
+	// the receipt-free proof, and never retries a timeout or a reset after the
+	// request was written, where the provider may already be doing work.
+	retryTransient       bool
+	transientMaxAttempts int
+	// jitter returns a duration in [0, ceiling]. Nil means uniform full jitter;
+	// tests inject a deterministic one.
+	jitter func(ceiling time.Duration) time.Duration
+}
+
+// providerIsTransientServerError reports a gateway or upstream server failure
+// that is worth re-dispatching once proven receipt-free. A 503 that carries
+// Retry-After is backpressure and is handled by that path instead; a 501 or
+// 505 is a permanent protocol fault, not a transient one.
+func providerIsTransientServerError(status int, header http.Header) bool {
+	switch status {
+	case 500, 502, 504:
+		return true
+	case 503:
+		return !providerIsBackpressure(status, header)
+	}
+	return false
+}
+
+// confirmationTransientErrorEnvelope reports whether a 2xx response is
+// OpenRouter's documented in-body failure -- an error object with no choices,
+// usage or provider -- carrying a transient error code, and returns that code.
+//
+// OpenRouter sends 200 as soon as a provider accepts a request, before any
+// token is produced, and a status is final once sent; a failure after that
+// point (including every provider failing over) arrives as a 200 whose JSON
+// body holds only {"id","error":{"code","message","metadata"}}. Measured
+// 2026-10-30 on bundle 7fa29ad3: the confirmation path, which had no such
+// check, recorded this as identity_mismatch (no model field) and ended a
+// bundle 28 of 48 cases in. The ordinary scoring lane already classifies the
+// same envelope as provider_unavailable and moves on to its next attempt.
+//
+// This is NOT a receipt-free proof. OpenRouter documents that the upstream may
+// still charge for prompt processing even when no content is generated, and the
+// envelope reports no usage to record. Re-dispatching it trades that bounded,
+// unrecorded prompt cost for completing the bundle -- the same trade the
+// ordinary lane already makes -- and is capped by the per-call attempt limit
+// and the per-grant retry budget like every other confirmation retry. A
+// permanent code (a 4xx other than 408/429) is never retried.
+func confirmationTransientErrorEnvelope(result *providerHTTPResult) (int64, bool) {
+	if result == nil || result.status < 200 || result.status > 299 || result.bodyOverLimit {
+		return 0, false
+	}
+	decoded, ok := decodeJSONNumbersRejectDuplicateKeys(result.body)
+	if !ok {
+		return 0, false
+	}
+	payload, ok := decoded.(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	code, _, ok := providerErrorEnvelope(payload)
+	if !ok {
+		return 0, false
+	}
+	switch code {
+	case 408, 429, 500, 502, 503, 504:
+		return code, true
+	}
+	return code, false
+}
+
+// confirmationTransientDelay is the full-jitter backoff before attempt n+1,
+// given n attempts so far: uniform in [0, min(max, base*2^(n-1))].
+func confirmationTransientDelay(policy providerRetryPolicy, attempts int) time.Duration {
+	ceiling := confirmationTransientBaseDelay
+	for i := 1; i < attempts && ceiling < confirmationTransientMaxDelay; i++ {
+		ceiling *= 2
+	}
+	if ceiling > confirmationTransientMaxDelay {
+		ceiling = confirmationTransientMaxDelay
+	}
+	if policy.jitter != nil {
+		delay := policy.jitter(ceiling)
+		if delay < 0 {
+			return 0
+		}
+		if delay > ceiling {
+			return ceiling
+		}
+		return delay
+	}
+	return time.Duration(rand.Int64N(int64(ceiling) + 1))
 }
 
 // providerRetryAfterSeconds mirrors _provider_retry_after_seconds: a bounded
@@ -158,31 +278,115 @@ func postProviderWithRetry(ctx context.Context, client *http.Client, url string,
 		}, sleep)
 }
 
-// postProviderWithRetryPolicy retains the legacy policy-shaped API for rolling
-// compatibility, but every live lane is structurally single-shot.
+// postProviderWithRetryPolicy performs one provider request and, when the
+// policy allows it, re-dispatches the identical frozen request for a provider
+// rejection that is provably receipt-free.
+//
+// A retry here is an accounting boundary, not a convenience. The request may
+// only be sent again when the response proves that no provider endpoint was
+// selected and no receipt was issued, so the retry cannot duplicate provider
+// work or billing. Transport failures and timeouts are never retried: an
+// ambiguous outcome may already have been charged. A caller that leaves
+// backpressureMaxAttempts at providerMaxAttempts stays single-shot.
 func postProviderWithRetryPolicy(ctx context.Context, client *http.Client, url string, payload any,
 	headers map[string]string, maxBody int64, timeoutSeconds int, policy providerRetryPolicy,
 	sleep sleepFunc) (*providerHTTPResult, *providerCallError) {
 
-	_ = policy
-	_ = sleep
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return nil, &providerCallError{attempts: 1, timedOut: false}
 	}
-	if ctx.Err() != nil {
-		return nil, &providerCallError{attempts: 1, timedOut: true}
+	maxAttempts := policy.backpressureMaxAttempts
+	if maxAttempts < 1 {
+		maxAttempts = 1
 	}
-	result, requestErr := postOnce(ctx, client, url, encoded, headers, maxBody, timeoutSeconds)
-	if requestErr != nil {
-		_, timedOut := classifyTransportError(requestErr)
-		return nil, &providerCallError{attempts: 1, timedOut: timedOut}
+	started := time.Now()
+	attempts := 0
+	var last *providerHTTPResult
+	for {
+		if ctx.Err() != nil {
+			// A rejection already in hand is the truthful outcome. Discarding it
+			// for a transport error would convert a clean provider 429 into an
+			// internal server error and lose the settlement's real cause.
+			if last != nil {
+				return last, nil
+			}
+			failed := attempts
+			if failed < 1 {
+				failed = 1
+			}
+			return nil, &providerCallError{attempts: failed, timedOut: true}
+		}
+		result, requestErr := postOnce(ctx, client, url, encoded, headers, maxBody, timeoutSeconds)
+		attempts++
+		if requestErr != nil {
+			dial, timedOut := classifyTransportError(requestErr)
+			// A dial failure means the connection never opened, so no request
+			// reached the gateway and nothing can have been billed. Any other
+			// transport failure -- a timeout, a reset after the body was written
+			// -- may have been received and acted on, so it is final.
+			if dial && policy.retryTransient && attempts < policy.transientMaxAttempts {
+				delay := confirmationTransientDelay(policy, attempts)
+				if policy.maxElapsed <= 0 || time.Since(started)+delay <= policy.maxElapsed {
+					sleep(ctx, delay)
+					continue
+				}
+			}
+			return nil, &providerCallError{attempts: attempts, timedOut: timedOut, neverSent: dial}
+		}
+		result.attempts = attempts
+		last = result
+		delay, retry := providerRetryDelay(policy, result, attempts, maxAttempts)
+		if !retry {
+			return result, nil
+		}
+		if policy.maxElapsed > 0 && time.Since(started)+delay > policy.maxElapsed {
+			return result, nil
+		}
+		sleep(ctx, delay)
 	}
-	result.attempts = 1
-	return result, nil
 }
 
-func confirmationReaderBackpressureDelay(header http.Header) time.Duration {
+// providerRetryDelay decides whether a received response may be re-dispatched
+// and how long to wait first. Both paths require the unconditional receipt-free
+// proof -- positive evidence that no provider endpoint was selected -- because
+// the cost of being wrong is a duplicated provider charge against a frozen grant.
+func providerRetryDelay(policy providerRetryPolicy, result *providerHTTPResult, attempts, backpressureMax int) (time.Duration, bool) {
+	backpressure := policy.retryBackpressure && attempts < backpressureMax &&
+		providerIsBackpressure(result.status, result.header)
+	transient := policy.retryTransient && attempts < policy.transientMaxAttempts &&
+		providerIsTransientServerError(result.status, result.header)
+	if policy.retryTransient && attempts < policy.transientMaxAttempts {
+		// The documented 200-with-error-body failure. Deliberately outside the
+		// receipt-free proof below: see confirmationTransientErrorEnvelope.
+		if _, envelope := confirmationTransientErrorEnvelope(result); envelope {
+			return confirmationTransientDelay(policy, attempts), true
+		}
+	}
+	if !backpressure && !transient {
+		return 0, false
+	}
+	if !providerFailureIsReceiptFree(result, policy.receiptFreeExpectedModel) {
+		return 0, false
+	}
+	if backpressure {
+		delay := confirmationBackpressureDelay(result.header)
+		if policy.retryTransient {
+			// Never sooner than the provider asked, but never in lockstep either:
+			// a short Retry-After ("1") alone rides out only about a second, which
+			// is how bundle 0fb48285 ended on 2026-10-31 -- a receipt-free 429
+			// re-sent once after ~1s, still rate-limited, case 1 of 48. Take the
+			// longer of the provider's floor and the jittered exponential backoff.
+			if jittered := confirmationTransientDelay(policy, attempts); jittered > delay {
+				delay = jittered
+			}
+		}
+		return delay, true
+	}
+	return confirmationTransientDelay(policy, attempts), true
+}
+
+func confirmationBackpressureDelay(header http.Header) time.Duration {
 	values := header.Values("Retry-After")
 	raw := ""
 	if len(values) == 1 {
@@ -201,21 +405,27 @@ func confirmationReaderBackpressureDelay(header http.Header) time.Duration {
 		err = strconv.ErrSyntax
 	}
 	if errors.Is(err, strconv.ErrRange) {
-		seconds = confirmationReaderRetryAfterMaxSeconds
+		seconds = confirmationRetryAfterMaxSeconds
 	} else if err != nil || seconds == 0 {
-		seconds = confirmationReaderRetryAfterDefaultSeconds
+		seconds = confirmationRetryAfterDefaultSeconds
 	}
-	if seconds > confirmationReaderRetryAfterMaxSeconds {
-		seconds = confirmationReaderRetryAfterMaxSeconds
+	if seconds > confirmationRetryAfterMaxSeconds {
+		seconds = confirmationRetryAfterMaxSeconds
 	}
 	return time.Duration(seconds) * time.Second
 }
 
-// providerFailureIsReceiptFree fails closed unless the response is one strict
-// JSON error object without any OpenRouter completion, usage, cost, provider,
-// or receipt fields. Duplicate keys are rejected so contradictory metadata
-// cannot authorize another billed attempt.
-func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
+// providerFailureIsReceiptFree fails closed unless the response proves that no
+// provider endpoint was selected and no completion, usage, cost, provider
+// identity or receipt field was returned. Duplicate keys are rejected so
+// contradictory metadata cannot authorize another billed attempt.
+//
+// The gateway adds informational fields to its error envelope over time
+// (user_id, error.metadata, region, summary, generation_time, is_byok have all
+// appeared). Those carry no receipt, so an exact-key allowlist over the whole
+// envelope only guarantees that the classifier stops recognizing real
+// rejections; the receipt walk below is the durable guard.
+func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel string) bool {
 	if result == nil {
 		return false
 	}
@@ -227,12 +437,29 @@ func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel, exp
 	if !ok {
 		return false
 	}
-	if len(payload) < 1 || len(payload) > 2 || !onlyJSONKeys(payload, "error", "openrouter_metadata") {
+	// Bounded allowlists stay: an unrecognized sibling of "error" may carry
+	// billing, so it must fail closed. They are extended to the fields the
+	// gateway actually returns, and provider_envelope_test.go pins that exact
+	// envelope so the next drift fails a test instead of silently disabling
+	// every receipt-free retry.
+	if len(payload) < 1 || !onlyJSONKeys(payload, "error", "openrouter_metadata", "user_id") {
 		return false
 	}
 	errorPayload, ok := payload["error"].(map[string]any)
-	if !ok || len(errorPayload) != 2 || !onlyJSONKeys(errorPayload, "code", "message") {
+	if !ok || !onlyJSONKeys(errorPayload, "code", "message", "metadata") {
 		return false
+	}
+	// error.metadata is diagnostic, but an unrecognized member of it could
+	// describe provider work, so its keys are bounded to the observed set
+	// rather than left to the receipt walk alone.
+	if rawErrMeta, present := errorPayload["metadata"]; present {
+		errMeta, isMap := rawErrMeta.(map[string]any)
+		if !isMap || !onlyJSONKeys(errMeta,
+			"headers", "is_byok", "limit_source", "provider_error_code",
+			"provider_name", "raw", "remedy_hint",
+			"retry_after_seconds", "retry_after_seconds_raw") {
+			return false
+		}
 	}
 	errorCode, ok := errorPayload["code"].(json.Number)
 	if !ok {
@@ -246,7 +473,7 @@ func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel, exp
 	if !ok || strings.TrimSpace(message) == "" {
 		return false
 	}
-	if !providerBackpressureMetadataIsPreProvider(payload, expectedModel, expectedProvider) {
+	if !providerBackpressureMetadataIsPreProvider(payload, expectedModel) {
 		return false
 	}
 	withoutMetadata := make(map[string]any, len(payload))
@@ -258,39 +485,78 @@ func providerFailureIsReceiptFree(result *providerHTTPResult, expectedModel, exp
 	return !providerReceiptFieldPresent(withoutMetadata)
 }
 
-func providerBackpressureIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
+func providerBackpressureIsReceiptFree(result *providerHTTPResult, expectedModel string) bool {
 	return result != nil &&
 		(result.status == http.StatusTooManyRequests || result.status == http.StatusServiceUnavailable) &&
-		providerFailureIsReceiptFree(result, expectedModel, expectedProvider)
+		providerFailureIsReceiptFree(result, expectedModel)
 }
 
-func providerGatewayIsReceiptFree(result *providerHTTPResult, expectedModel, expectedProvider string) bool {
+func providerGatewayIsReceiptFree(result *providerHTTPResult, expectedModel string) bool {
 	return result != nil && result.status == http.StatusBadGateway &&
-		providerFailureIsReceiptFree(result, expectedModel, expectedProvider)
+		providerFailureIsReceiptFree(result, expectedModel)
 }
 
-func providerBackpressureMetadataIsPreProvider(payload map[string]any, expectedModel, expectedProvider string) bool {
+// providerBackpressureMetadataIsPreProvider proves from the routing metadata
+// that no provider endpoint was selected for this request.
+//
+// `selected` is the proof, not `attempt`. The gateway reports attempt 1 for a
+// first dispatch, so a billed success and an unbilled pre-provider rejection
+// carry the same attempt value and attempt alone cannot separate them; only a
+// value above 1 shows that an endpoint was already tried.
+//
+// `endpoints.total` counts the model's whole endpoint catalogue while
+// `available` counts the endpoints this request's provider constraints permit.
+// They are equal only for an unconstrained single-endpoint model, so they must
+// not be compared: a ZDR- or provider-pinned profile legitimately reports
+// total 2 with one available endpoint.
+//
+// Provider identity is deliberately not part of this proof. A grant's route
+// provider may be a routing strategy rather than a provider name ("throughput"),
+// and when nothing was selected there is no provider to agree with. Identity is
+// asserted on success, where a receipt exists to check it against.
+func providerBackpressureMetadataIsPreProvider(payload map[string]any, expectedModel string) bool {
+	// Absence fails closed. "No receipt visible" is strictly weaker than
+	// "provably no endpoint selected", and only the latter licenses sending a
+	// billable request again: a bare error envelope carries no statement about
+	// whether the gateway reached a provider. The cost of being wrong is a
+	// duplicated provider charge against a frozen scored grant, so a retry
+	// requires positive routing evidence, not merely the lack of contrary
+	// evidence. Callers that only park or open a circuit lose nothing by this.
 	raw, present := payload["openrouter_metadata"]
 	if !present {
-		return true
+		return false
 	}
 	metadata, ok := raw.(map[string]any)
-	if !ok || !onlyJSONKeys(metadata, "requested", "strategy", "attempt", "endpoints") {
+	if !ok || !onlyJSONKeys(metadata,
+		"requested", "strategy", "attempt", "endpoints",
+		"generation_time", "is_byok", "region", "summary") {
 		return false
 	}
 	requested, requestedOK := metadata["requested"].(string)
 	strategy, strategyOK := metadata["strategy"].(string)
-	attempt, attemptOK := metadata["attempt"].(json.Number)
-	if !requestedOK || requested != expectedModel || !strategyOK || strategy != "direct" || !attemptOK || attempt.String() != "0" {
+	if !requestedOK || requested != expectedModel || !strategyOK || strategy != "direct" {
+		return false
+	}
+	// A negative attempt is contradictory metadata and fails closed; 0 and 1
+	// both mean "first dispatch" across gateway versions, and anything above 1
+	// means an endpoint was already tried and may have been billed.
+	attempt, attemptOK := isIntLiteral(metadata["attempt"])
+	if !attemptOK || strings.HasPrefix(attempt.String(), "-") {
+		return false
+	}
+	attemptValue, attemptErr := attempt.Int64()
+	if attemptErr != nil || attemptValue > 1 {
+		return false
+	}
+	if _, present := metadata["attempts"]; present {
 		return false
 	}
 	endpoints, ok := metadata["endpoints"].(map[string]any)
 	if !ok || !onlyJSONKeys(endpoints, "total", "available") {
 		return false
 	}
-	total, totalOK := endpoints["total"].(json.Number)
 	available, availableOK := endpoints["available"].([]any)
-	if !totalOK || !availableOK || len(available) == 0 || total.String() != strconv.Itoa(len(available)) {
+	if !availableOK || len(available) == 0 || len(available) > 100 {
 		return false
 	}
 	for _, rawEndpoint := range available {
@@ -298,10 +564,9 @@ func providerBackpressureMetadataIsPreProvider(payload map[string]any, expectedM
 		if !ok || !onlyJSONKeys(endpoint, "provider", "model", "selected") {
 			return false
 		}
-		provider, providerOK := endpoint["provider"].(string)
 		model, modelOK := endpoint["model"].(string)
 		selected, selectedOK := endpoint["selected"].(bool)
-		if !providerOK || !strings.EqualFold(provider, expectedProvider) || !modelOK || model != expectedModel || !selectedOK || selected {
+		if !modelOK || model != expectedModel || !selectedOK || selected {
 			return false
 		}
 	}
@@ -326,6 +591,7 @@ func providerReceiptFieldPresent(value any) bool {
 		"id": {}, "generation": {}, "generation_id": {}, "provider": {},
 		"choices": {}, "usage": {}, "cost": {}, "receipt": {}, "receipt_id": {},
 		"attempt": {}, "attempts": {}, "selected": {}, "billed": {}, "charged": {},
+		"billing": {}, "invoice": {},
 	}
 	var walk func(any) bool
 	walk = func(current any) bool {
@@ -380,6 +646,9 @@ func isRetryablePreProviderNotFound(result *providerHTTPResult, expectedModel st
 	if !ok || metadata["requested"] != expectedModel {
 		return false
 	}
+	// The 404 "no allowed providers" envelope is a different response shape and
+	// no live sample of it has been captured, so its attempt base stays pinned
+	// at 0. Relaxing it would be inference from the 429 envelope, not evidence.
 	attempt, ok := isIntLiteral(metadata["attempt"])
 	if !ok || attempt.String() != "0" {
 		return false
@@ -532,8 +801,29 @@ func openrouterHeaders(apiKey string, includeMetadata bool) map[string]string {
 	return headers
 }
 
-// providerPreferences mirrors _provider_preferences.
-func providerPreferences(routingMode, provider string, quantization string) map[string]any {
+// bf16PriceOrderProviders is the scored bf16_price_order route: DeepInfra's
+// bf16 endpoint (the cheapest high-capacity ZDR endpoint) first, then the
+// two providers that carried the throughput route (Bedrock, Groq), then
+// DekaLLM's bf16 endpoint, which also serves logprobs. "only" pins the same
+// set, so a fallback can never land on a 4-bit or fp8 endpoint (AkashML,
+// Parasail, SiliconFlow, CoreWeave) the way the throughput sort can.
+var bf16PriceOrderProviders = []string{"deepinfra", "amazon-bedrock", "groq", "dekallm"}
+
+// providerPreferences mirrors _provider_preferences. scoredRouting is the
+// resolved scored_provider_routing (throughput or bf16_price_order) and only
+// affects the aggregate route.
+func providerPreferences(routingMode, provider string, quantization string, scoredRouting string) map[string]any {
+	if routingMode == config.RoutingModeAggregateThroughput &&
+		scoredRouting == config.ScoredProviderRoutingBF16PriceOrder {
+		return map[string]any{
+			"order":           append([]string{}, bf16PriceOrderProviders...),
+			"only":            append([]string{}, bf16PriceOrderProviders...),
+			"ignore":          []string{"coreweave"},
+			"allow_fallbacks": true,
+			"data_collection": "deny",
+			"zdr":             true,
+		}
+	}
 	if routingMode == config.RoutingModeAggregateThroughput {
 		return map[string]any{
 			"sort":            "throughput",
@@ -700,6 +990,24 @@ func boundedUsage(payload map[string]any) (prompt, completion int64, ok bool) {
 		return 0, 0, false
 	}
 	return p, c, true
+}
+
+// boundedReasoningTokens mirrors _bounded_reasoning_tokens: the provider's
+// usage.completion_tokens_details.reasoning_tokens when it is an integer in
+// [0, completion], else nil. Optional, so an invalid value is omitted, never a
+// 502.
+func boundedReasoningTokens(payload map[string]any, completion int64) *publicCompletionTokensDetails {
+	usage, _ := payload["usage"].(map[string]any)
+	details, _ := usage["completion_tokens_details"].(map[string]any)
+	n, ok := isIntLiteral(details["reasoning_tokens"])
+	if !ok {
+		return nil
+	}
+	reasoning, err := n.Int64()
+	if err != nil || reasoning < 0 || reasoning > completion {
+		return nil
+	}
+	return &publicCompletionTokensDetails{ReasoningTokens: reasoning}
 }
 
 // boundedProviderCost mirrors _bounded_provider_cost: usage.cost as bounded
@@ -884,6 +1192,15 @@ type publicChatUsage struct {
 	PromptTokens     int64 `json:"prompt_tokens"`
 	CompletionTokens int64 `json:"completion_tokens"`
 	TotalTokens      int64 `json:"total_tokens"`
+	// The v13 cost ledger books answer tokens as completion_tokens minus the
+	// reasoning tokens counted inside them (#2972). Optional: absent when the
+	// provider omitted it or reported anything but an integer in
+	// [0, completion_tokens].
+	CompletionTokensDetails *publicCompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type publicCompletionTokensDetails struct {
+	ReasoningTokens int64 `json:"reasoning_tokens"`
 }
 
 type publicChatResponse struct {
@@ -1010,9 +1327,10 @@ func publicProviderResponse(payload map[string]any, rawBody []byte) (*publicChat
 			Logprobs:     rawChoiceLogprobs(rawBody),
 		}},
 		Usage: publicChatUsage{
-			PromptTokens:     prompt,
-			CompletionTokens: completion,
-			TotalTokens:      prompt + completion,
+			PromptTokens:            prompt,
+			CompletionTokens:        completion,
+			TotalTokens:             prompt + completion,
+			CompletionTokensDetails: boundedReasoningTokens(payload, completion),
 		},
 	}, nil
 }
@@ -1093,11 +1411,13 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	for k, v := range payload {
 		primary[k] = v
 	}
-	preferences := providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization)
+	preferences := providerPreferences(cfg.RoutingMode, expectedProvider, expectedQuantization,
+		cfg.ScoredProviderRouting)
 	adaptProviderRequestCompatibility(primary, preferences)
 	primary["provider"] = preferences
 	phases := []phaseSpec{{phase: 0, payload: primary}}
 	headers := openrouterHeaders(cfg.OpenRouterAPIKey, true)
+	attachOpenRouterSessionHeader(ctx, headers)
 
 	totalAttempts := 0
 	routerAttempts := 0
@@ -1163,9 +1483,9 @@ phaseLoop:
 				traced = append(traced, trace)
 				retryDelay := time.Duration(0)
 				if result.status == http.StatusTooManyRequests &&
-					providerBackpressureIsReceiptFree(result, model, expectedProvider) {
+					providerBackpressureIsReceiptFree(result, model) {
 					retryDelay = time.Duration(providerRetryAfterSeconds(result.header)) * time.Second
-				} else if providerGatewayIsReceiptFree(result, model, expectedProvider) {
+				} else if providerGatewayIsReceiptFree(result, model) {
 					retryDelay = providerGatewayRetryDelay
 				}
 				if retryDelay > 0 && safeAttempt < providerSafeRetryMaxAttempts {

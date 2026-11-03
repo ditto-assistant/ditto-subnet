@@ -60,3 +60,113 @@ it("reports unavailable policy instead of rendering default funding", async () =
   expect(screen.queryByRole("table")).not.toBeInTheDocument();
   expect(screen.queryByText(/effective service share/)).not.toBeInTheDocument();
 });
+
+it.each([
+  ["enforce", "Gamma enforcement is armed for epoch 25549."],
+  ["observe", "Gamma is observing the approved policy; enforcement is not armed."],
+  ["pause", "Gamma enforcement is paused. Earlier chain actions may remain effective."],
+  ["unavailable", "Gamma runtime control could not be verified."],
+])("shows %s control separately from finalized funding", async (mode, message) => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 2,
+    allocation_version: 2,
+    service_bps: 1000,
+    effective_service_share: 0,
+    forecast_service_share: 0.1,
+    forecast_burn_share: 0.9,
+    forecast_miner_share: 0,
+    buckets: [],
+    runtime: {
+      revision: 2,
+      mode,
+      activation_epoch: mode === "enforce" ? 25549 : null,
+      allocation_matches: mode === "unavailable" ? null : true,
+    },
+  });
+  render(() => <GammaPage />);
+  await screen.findByText(message);
+  expect(screen.getByText(/Recorded control does not prove/)).toBeInTheDocument();
+  expect(screen.queryByText(/Funding is not activated/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/effective service share is 0%/)).not.toBeInTheDocument();
+});
+
+it("flags an allocation that differs from the recorded runtime", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 3,
+    allocation_version: 2,
+    service_bps: 1000,
+    forecast_service_share: 0.1,
+    forecast_burn_share: 0.9,
+    forecast_miner_share: 0,
+    buckets: [],
+    runtime: { revision: 2, mode: "enforce", activation_epoch: 25549, allocation_matches: false },
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "This allocation differs from the approved runtime policy.",
+  );
+});
+
+it("reports active routing with the share validators fold", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 4,
+    allocation_version: 2,
+    mode: "enforce",
+    routing_status: "active",
+    routing_epoch: 25800,
+    service_bps: 6500,
+    effective_service_share: 0.65,
+    forecast_service_share: 0.65,
+    forecast_burn_share: 0,
+    forecast_miner_share: 0.35,
+    buckets: [],
+    runtime: { revision: 8, mode: "enforce", activation_epoch: 25708, allocation_matches: true },
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByText(/Gamma routing is active/)).toHaveTextContent(
+    "fold 65% of miner emission to the collector hotkey (ledger epoch 25800)",
+  );
+  expect(screen.getByText("Services, routed")).toBeInTheDocument();
+  expect(screen.queryByText(/enforcement is armed/)).not.toBeInTheDocument();
+});
+
+it("shows the routed share and active routing even without a recorded runtime", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 4,
+    allocation_version: 2,
+    mode: "shadow",
+    routing_status: "active",
+    routing_epoch: 25800,
+    service_bps: 6500,
+    effective_service_share: 0.6,
+    forecast_service_share: 0.65,
+    forecast_burn_share: 0,
+    forecast_miner_share: 0.35,
+    buckets: [],
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByText(/Gamma routing is active/)).toBeInTheDocument();
+  expect(screen.getByText("Services, routed").nextElementSibling).toHaveTextContent("60%");
+  expect(screen.queryByText(/Funding is not activated/)).not.toBeInTheDocument();
+});
+
+it("warns when the newest enforcing pin is stale", async () => {
+  vi.mocked(getJSON).mockResolvedValue({
+    policy_revision: 4,
+    allocation_version: 2,
+    mode: "enforce",
+    routing_status: "stale",
+    routing_epoch: 25700,
+    service_bps: 6500,
+    effective_service_share: 0,
+    forecast_service_share: 0.65,
+    forecast_burn_share: 0,
+    forecast_miner_share: 0.35,
+    buckets: [],
+    runtime: { revision: 8, mode: "enforce", activation_epoch: 25708, allocation_matches: true },
+  });
+  render(() => <GammaPage />);
+  expect(await screen.findByRole("alert")).toHaveTextContent("ledger epoch 25700");
+  expect(screen.queryByText(/Gamma routing is active/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/enforcement is armed/)).not.toBeInTheDocument();
+});

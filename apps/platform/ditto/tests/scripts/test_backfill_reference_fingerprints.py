@@ -8,6 +8,10 @@ import scripts.backfill_reference_fingerprints as backfill
 from ditto.api_server.fingerprint import reference_corpus_provenance
 
 
+def _current(corpus: str) -> dict:
+    return {"v": 2, "corpus": corpus, "lines": {"v": "l1", "corpus": corpus}}
+
+
 def _agent(agent_id: int, content: dict | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         agent_id=agent_id,
@@ -22,8 +26,13 @@ def _agent(agent_id: int, content: dict | None = None) -> SimpleNamespace:
 
 def test_is_current_requires_algorithm_and_corpus_identity() -> None:
     corpus = reference_corpus_provenance()["corpus_id"]
-    assert backfill._is_current(_agent(1, {"v": 2, "corpus": corpus}))
+    assert backfill._is_current(_agent(1, _current(corpus)))
     assert not backfill._is_current(_agent(1, {"v": 2}))
+    # A pre-line-sketch fingerprint is stale: the copy rule's line channel
+    # cannot compare it, so a module-split copy of it would pass unheld.
+    assert not backfill._is_current(_agent(1, {"v": 2, "corpus": corpus}))
+    stale_lines = {**_current(corpus), "lines": {"v": "l0", "corpus": corpus}}
+    assert not backfill._is_current(_agent(1, stale_lines))
     assert not backfill._is_current(_agent(1, {"v": 1, "corpus": corpus}))
 
 
@@ -48,7 +57,7 @@ def test_store_updates_only_fingerprint_metadata() -> None:
 async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
     corpus = reference_corpus_provenance()["corpus_id"]
     stale_a, stale_b = _agent(1), _agent(2)
-    current = _agent(3, {"v": 2, "corpus": corpus})
+    current = _agent(3, _current(corpus))
 
     class Result:
         def __init__(self, rows):
@@ -61,6 +70,7 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
         def __init__(self):
             self.calls = 0
             self.commits = 0
+            self.expunged = 0
 
         async def __aenter__(self):
             return self
@@ -77,6 +87,9 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
 
         async def commit(self):
             self.commits += 1
+
+        def expunge_all(self):
+            self.expunged += 1
 
     class Storage:
         async def __aenter__(self):
@@ -102,7 +115,7 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
     monkeypatch.setattr(
         backfill,
         "compute_content_fingerprint",
-        lambda _data: {"v": 2, "corpus": corpus, "card": 8, "m": ["aggregate"]},
+        lambda _data: {**_current(corpus), "card": 8, "m": ["aggregate"]},
     )
     monkeypatch.setattr(
         backfill,
@@ -118,6 +131,7 @@ async def test_run_uses_bounded_batches_and_is_idempotent(monkeypatch) -> None:
     assert await backfill._run(apply=True, limit=None, batch_size=2) == 0
     assert session.calls == 3
     assert session.commits == 2
+    assert session.expunged == 2
     assert backfill._is_current(stale_a)
     assert backfill._is_current(stale_b)
     assert current.normalized_source_hash == "legacy"

@@ -160,6 +160,20 @@ a read-only root filesystem,
 all capabilities dropped, `no-new-privileges`, bounded CPU/memory/PIDs, and a
 small no-exec scratch tmpfs.
 
+The dossier's L1 lead packet groups concern notes by exact
+`(path, line, area, category)` site. Each grouped lead keeps every original
+note index, its occurrence count, and its maximum confidence, and the signed
+raw L1 note ledger is unchanged. Since dossier revision
+`language-neutral-source-v19`, the untrusted diagnostic summaries shown at one
+site are bounded: an exact or near-paraphrase restatement (normalized
+content-word Jaccard similarity of at least 0.6 against an earlier summary at
+that site) is folded into that earlier diagnostic's `repeated_note_indices`
+instead of being repeated. Lower-overlap summaries stay separate, so distinct
+mechanisms at one source line, and every distinct site or category, still reach
+the model. Folding changes presentation only: L2 must still disposition the
+whole lead with an exact source citation covering all occurrences, and the
+existing 0.98 confidence floor and clearance gates are unchanged.
+
 The absolute screening lease deadline bounds every dossier and model-requested
 analyzer process as well as every gateway call. Directory/header traversal,
 analyzer calls, outputs, and file sizes are independently capped; any omitted

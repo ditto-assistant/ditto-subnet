@@ -73,8 +73,16 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-27-no-retry-v8"
-LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v4"
+# These revision strings are part of the operator-visible contract, and the
+# confirmation-bundle settings pin a (profile_revision, profile_checksum) pair.
+# Any change to the frozen profile -- judge model, provider, or lane rails --
+# rolls the checksum, so the revision string MUST be bumped with it. Leaving the
+# name fixed while the bytes move produces two different contracts sharing one
+# name, and the live settings then pin a checksum the release no longer
+# installs: issuance silently stops while the settings still read mode=shadow,
+# issuance_active=true. Re-pin the settings after deploying a change here.
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-10-25-deepseek-judge-v9"
+LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v5"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-6-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
 STARTER_MAX_AGENT_TURNS = 24
@@ -208,14 +216,38 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             ProviderLanePolicy(
                 lane="judge",
                 provider="openrouter",
-                route_provider="azure",
-                receipt_provider="Azure",
-                profile_revision="longmemeval-official-gpt4o-azure-zdr-v2",
-                model="openai/gpt-4o-2024-08-06",
+                # Pinned to one provider with allow_fallbacks=false, so the
+                # provider is part of the frozen contract. Together returned
+                # zero truncations and zero errors over a 346-probe pinned
+                # pilot. Baidu is excluded: 43% HTTP 429 under the same pin,
+                # and one 429 ends a bundle when fallbacks are off.
+                route_provider="together",
+                receipt_provider="Together",
+                profile_revision="longmemeval-deepseek-v41-flash-together-v1",
+                model="deepseek/deepseek-v4.1-flash",
                 max_requests=48,
-                max_prompt_tokens=80_000,
-                max_completion_tokens=24_000,
-                max_total_tokens=104_000,
+                # The judge is a reasoning model, so these rails are sized from
+                # the measured completion distribution rather than the 10-token
+                # bound the upstream evaluator assumes. See
+                # officialJudgeMaxTokens in internal/longmemeval/provider_runtime.go.
+                #
+                # reserveProviderBudget reserves the FULL per-call cap while a
+                # call is in flight, and the executor judges serially, so the
+                # binding condition is (worst-case actual) + (one 8,192 cap).
+                # Worst observed completion was 2,907 tokens on a probe set
+                # enriched for exactly the cases that truncate: 48 x 2,907 +
+                # 8,192 = 147,728. 200,000 leaves ~35% margin.
+                #
+                # Prompt reservation uses len(body) in BYTES as a token proxy
+                # (~1,500 per judge request), so 48 requests need ~72,000 --
+                # the previous 80,000 rail had under 11% headroom. Raised to
+                # 160,000.
+                max_prompt_tokens=160_000,
+                max_completion_tokens=200_000,
+                max_total_tokens=400_000,
+                # Unchanged, and now far oversized: 48 calls bill about
+                # $0.0032 at deepseek-v4.1-flash pricing versus $0.0153 for
+                # gpt-4o. Left generous so the cap cannot falsely exhaust.
                 max_cost_usd_micros=4_000_000,
             ),
         ),

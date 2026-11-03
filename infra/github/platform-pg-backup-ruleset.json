@@ -1,0 +1,61 @@
+{
+  "name": "Platform PostgreSQL recovery independent code review",
+  "target": "branch",
+  "enforcement": "active",
+  "bypass_actors": [
+    {
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    },
+    {
+      "actor_type": "RepositoryRole",
+      "actor_id": 5,
+      "bypass_mode": "always"
+    }
+  ],
+  "conditions": {
+    "ref_name": {
+      "include": [
+        "refs/heads/main"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "pull_request",
+      "parameters": {
+        "allowed_merge_methods": [
+          "squash"
+        ],
+        "dismiss_stale_reviews_on_push": true,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_approving_review_count": 0,
+        "required_review_thread_resolution": true,
+        "required_reviewers": [
+          {
+            "reviewer": {
+              "id": 12645310,
+              "type": "Team"
+            },
+            "minimum_approvals": 1,
+            "file_patterns": [
+              ".github/workflows/platform-pg-restore-drill.yml",
+              ".github/workflows/infra-plan-apply.yml",
+              "infra/scripts/platform-pg-restore-drill.py",
+              "infra/scripts/pg-restore/**",
+              "infra/scripts/check-subnet-recovery-plan.py",
+              "infra/scripts/check-postgres-snapshot-plan.py",
+              "infra/scripts/test-platform-pg-backup-workflow.py",
+              "infra/ansible/roles/postgres_backup/**",
+              "infra/terraform/stacks/gcp-subnet-bootstrap/**",
+              "infra/terraform/stacks/gcp-subnet-recovery/**",
+              "infra/github/platform-pg-backup-ruleset.json"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

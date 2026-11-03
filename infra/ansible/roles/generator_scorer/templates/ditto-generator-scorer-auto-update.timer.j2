@@ -1,0 +1,11 @@
+[Unit]
+Description=Check for generator scorer releases every minute
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=1min
+RandomizedDelaySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

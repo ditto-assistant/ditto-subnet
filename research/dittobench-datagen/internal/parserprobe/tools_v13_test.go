@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/ditto-assistant/dittobench-datagen/catalog"
-	"github.com/ditto-assistant/dittobench-datagen/gen"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/ditto-assistant/dittobench-datagen/toolexec"
 )
@@ -38,17 +37,12 @@ func TestV13DecoyControlUsesDeliveredCatalog(t *testing.T) {
 	}
 }
 
+// Every generated control case must be covered, so a handful of seeds is
+// enough to catch a catalog or link family the parser no longer resolves.
 func TestV13DecoyAndLinkControlGeneratedPublicCases(t *testing.T) {
-	profile, _ := gen.ProfileForVersion("full", 13)
-	seeds := []int64{4242}
-	for seed := int64(1); seed <= 40; seed++ {
-		seeds = append(seeds, seed)
-	}
-	for _, seed := range seeds {
-		artifact, err := gen.GenerateDataset(seed, profile, 13)
-		if err != nil {
-			t.Fatal(err)
-		}
+	t.Parallel()
+	for _, artifact := range probeArtifacts(t, 13, append([]int64{4242}, seedRange(1, 6)...)...) {
+		seed := artifact.Seed
 		parser := newToolParser(13)
 		parser.addV13WireCatalog(artifact.Catalog)
 		covered, total := 0, 0

@@ -25,12 +25,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import text
-
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.onchain_seed import derive_seed
+from ditto.db.history_guards import truncate_past_guards
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -142,10 +141,11 @@ async def wipe_all(session: AsyncSession) -> None:
     """TRUNCATE every simulator-owned table (CASCADE), inside the caller's txn.
 
     Leaves ``alembic_version`` untouched. Identity sequences restart so the
-    audit-log ``seq`` starts at 1 on every fresh scenario.
+    audit-log ``seq`` starts at 1 on every fresh scenario. The cascade reaches
+    append-only history such as ``agent_cla_bindings``, whose TRUNCATE guards
+    are held off for this local wipe and restored in the same transaction.
     """
-    tables = ", ".join(SIMULATOR_TABLES)
-    await session.execute(text(f"TRUNCATE TABLE {tables} RESTART IDENTITY CASCADE"))
+    await truncate_past_guards(session, SIMULATOR_TABLES, restart_identity=True)
 
 
 class Fabric:

@@ -5,7 +5,7 @@ bound public API adapter. Private test files, private helpers, expected values a
 report counts are not compiler inputs. `_test.go` files are rejected explicitly.
 
 The compiler runs as the candidate UID with an empty supplementary group list,
-fixed Go 1.26.6 tools, cgo disabled, internal linking, read-only module operation,
+fixed Go 1.27.3 tools, cgo disabled, internal linking, read-only module operation,
 no build VCS stamping, no user Go environment, local-only toolchain selection and
 disabled module/VCS network access. It never runs `go test` or `go generate`.
 Compiler groups are killed/reaped before export data and executable output are

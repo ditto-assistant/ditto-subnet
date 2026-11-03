@@ -5,6 +5,21 @@
     email {{ platform_caddy_email }}
 }
 
+# `ditto-api` is one fork-mode pm2 process, so every deploy is a stop/start
+# with ~6s of refused connections (scripts/update.sh, ecosystem.config.js).
+# Without a try window Caddy answers each of those requests with an immediate
+# 502, which validators saw on artifact fetches, ticket hand-backs and
+# confirmation claims (SN-426). Holding the request and re-dialing until the
+# new process listens turns the restart into latency instead.
+#
+# Caddy only retries a request whose upstream DIAL failed, so a request that
+# reached the old process is never replayed. The window stays below the
+# validator's 30s HTTP timeout so a genuinely dead API still surfaces as a 502.
+(ditto_api_restart_handover) {
+    lb_try_duration {{ platform_api_restart_try_duration }}
+    lb_try_interval 250ms
+}
+
 {{ ([platform_domain] + platform_alias_domains) | join(', ') }} {
     encode zstd gzip
 
@@ -57,6 +72,9 @@
 {% if platform_upload_admission_relay_enabled | bool and platform_public_rate_limit_per_minute | int == 0 %}
     @goUploadAdmission path /api/v1/upload/eval-pricing /api/v1/upload/check
     handle @goUploadAdmission {
+        request_body {
+            max_size {{ platform_request_body_max_size }}
+        }
         reverse_proxy {% for port in platform_inference_relay_ports %}localhost:{{ port }} {% endfor %}{
             lb_policy least_conn
             fail_duration 10s
@@ -67,6 +85,9 @@
 {% endif %}
 
     handle /api/v1/inference/* {
+        request_body {
+            max_size {{ platform_request_body_max_size }}
+        }
         reverse_proxy {% for port in platform_inference_relay_ports %}localhost:{{ port }} {% endfor %}{
             lb_policy least_conn
             fail_duration 10s
@@ -76,11 +97,54 @@
     }
 
     handle {
-        reverse_proxy localhost:{{ platform_api_port }}
+        request_body {
+            max_size {{ platform_request_body_max_size }}
+        }
+{% if platform_api_standby_port | default(0) | int > 0 %}
+        # Primary owns singleton loops. Passive failure detection sends new
+        # requests to the standby while a PM2 fork-mode reload stops primary;
+        # the restart handover keeps re-dialing if both are down at once.
+        reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+            lb_policy first
+            fail_duration 10s
+            max_fails 1
+            import ditto_api_restart_handover
+        }
+{% else %}
+        reverse_proxy localhost:{{ platform_api_port }} {
+            import ditto_api_restart_handover
+        }
+{% endif %}
     }
 {% else %}
-    reverse_proxy localhost:{{ platform_api_port }}
+    request_body {
+        max_size {{ platform_request_body_max_size }}
+    }
+{% if platform_api_standby_port | default(0) | int > 0 %}
+    reverse_proxy localhost:{{ platform_api_port }} localhost:{{ platform_api_standby_port }} {
+        lb_policy first
+        fail_duration 10s
+        max_fails 1
+        import ditto_api_restart_handover
+    }
+{% else %}
+    reverse_proxy localhost:{{ platform_api_port }} {
+        import ditto_api_restart_handover
+    }
 {% endif %}
+{% endif %}
+
+    # request_body bounds streamed reads while proxying. Format these edge
+    # errors consistently across every proxy above; other statuses keep
+    # Caddy's default error handler. Route-specific app limits still apply.
+    handle_errors 413 {
+        header Content-Type application/json
+        header Connection close
+        header X-Request-ID {err.id}
+        respond `{"error_code":3004,"message":"request body exceeds {{ platform_request_body_max_size }}","request_id":"{err.id}"}` 413 {
+            close
+        }
+    }
 
     log {
         output file /opt/ditto/logs/caddy/platform.log {

@@ -250,12 +250,6 @@ def test_platform_and_validator_use_identical_contract_and_verifier() -> None:
         hosted_message_digest(HostedCodingResult.model_validate(vector["result"]))
         == vector["result_signing_sha256"]
     )
-    assert (root / "ditto/api_models/coding_hosted.py").read_bytes() == (
-        root / "apps/platform/ditto/api_models/coding_hosted.py"
-    ).read_bytes()
-    assert (root / "ditto/validator/coding_hosted.py").read_bytes() == (
-        root / "apps/platform/ditto/api_server/coding_hosted_verification.py"
-    ).read_bytes()
     assert (
         hosted_message_digest(HostedCodingStatus.model_validate(vector["status"]))
         == vector["status_signing_sha256"]

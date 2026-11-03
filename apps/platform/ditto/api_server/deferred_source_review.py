@@ -20,6 +20,7 @@ from ditto_screening_protocol.models import (
     SourceReviewNote,
     source_review_notes_digest,
 )
+from ditto_screening_protocol.reason_codes import SOURCE_REVIEW_INCONCLUSIVE
 from ditto_screening_protocol.review_ledger import concern_threshold_reached
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 DEFERRED_REVIEW_KIND = "deferred_source_review"
 DEFERRED_REVIEW_REASON = "Score qualified this submission for deferred source review"
 DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
-INCONCLUSIVE_REASON_CODE = "source-review-inconclusive"
+INCONCLUSIVE_REASON_CODE = SOURCE_REVIEW_INCONCLUSIVE
 # Public text written with INCONCLUSIVE_REASON_CODE. Clients classify a hold by
 # ``review_conclusion`` (see ``public_review_conclusion``), never by this text.
 SOURCE_REVIEW_INCONCLUSIVE_PUBLIC_REASON = (

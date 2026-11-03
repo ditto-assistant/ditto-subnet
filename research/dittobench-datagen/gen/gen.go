@@ -172,9 +172,16 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 		// v11 and v12 keep v10's run-size envelopes; their difficulty comes
 		// from the generator contract, not from scale.
 		profiles = profilesV10
-	case protocol.BenchVersionV13, protocol.BenchVersionV14:
-		// v14 changes only action-scoped over-call scoring and seed identity.
+	case protocol.BenchVersionV13, protocol.BenchVersionV14, protocol.BenchVersionV15:
+		// v14 changes only action-scoped over-call scoring and seed identity;
+		// v15 scales the tool surface and opens the decision lane, not the
+		// run size.
 		profiles = profilesV13
+	case protocol.BenchVersionV16:
+		// v16 is the dueling contract: this module generates only the
+		// datagen half (gen/v16_envelope.go); Platform delivers the
+		// generator slice columns.
+		profiles = profilesV16
 	default:
 		return Profile{}, false
 	}

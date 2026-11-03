@@ -108,7 +108,25 @@ CPU observed while py-spy is attached includes `ptrace` sampling overhead. Use
 a separate post-detach CPU window when deciding whether the application itself
 is saturated.
 
+For treasury reads, distinguish decoded runtime metadata from authorization
+observations. Platform reuses at most four decoded SDK runtimes per ChainClient,
+keyed by endpoint, genesis and the freshly resolved specVersion. Each new
+connection still reads its own finalized head, runtime version and storage;
+an upgrade or genesis change requires another decode. This cache does not retain
+epoch schedules, collector identities or validator permissions. Compare cold
+and warm calls separately and confirm actual RPC/read latency on the deployed
+host before extrapolating a peer-host measurement.
+
 ## Comparison loop
+
+Platform database connections disable JIT at asyncpg startup. Complex admission
+plans can have high estimated cost while their actual executor work is short;
+compiling LLVM code then dominates latency and holds claim transactions open.
+The PostgreSQL server default remains unchanged. For a read-only comparison,
+run the same captured SELECT through `explain_analyze_prod_db.sh`, then repeat
+with `DITTO_DB_DISABLE_JIT=1`. Report JIT compilation, executor and planning
+times separately; remove `FOR UPDATE` only for this read-only plan measurement
+and validate real claim concurrency independently.
 
 1. Capture a representative profile while the target route is under normal or
    reproduced load, recording the exact process commit.

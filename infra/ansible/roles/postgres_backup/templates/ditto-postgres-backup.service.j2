@@ -1,0 +1,22 @@
+[Unit]
+Description=Online encrypted Platform PostgreSQL backup to private Hippius
+After=postgresql.service network-online.target
+Wants=network-online.target
+OnFailure=ditto-postgres-backup-failed.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/ditto-postgres-backup
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=90min
+SyslogIdentifier=ditto-postgres-backup
+UMask=0077
+# PrivateTmp would redirect /var/tmp to another mount; staging must remain on disk.
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/tmp /var/lib/ditto-pg-backup /run/lock
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true

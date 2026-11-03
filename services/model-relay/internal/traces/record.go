@@ -48,6 +48,7 @@ const (
 const (
 	KindChat      = "chat"
 	KindEmbedding = "embedding"
+	KindDecision  = "decision" // the dark decision-model lane (System One)
 )
 
 // Record is one captured call. Fields are JSON with stable snake_case names;

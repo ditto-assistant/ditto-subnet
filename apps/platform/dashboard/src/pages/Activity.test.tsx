@@ -68,8 +68,8 @@ it("distinguishes service allocation from vendor payment and unproved provider c
               epoch_index: 9,
               denominator: "collector_liquid_emission",
               deposit_asset: "SN118_ALPHA",
-              deposit_amount_atomic: "40",
-              allocated_alpha_rao: "40",
+              deposit_amount_atomic: "15",
+              allocated_alpha_rao: "15",
               source_alpha_rao: "40",
             },
             {
@@ -96,6 +96,9 @@ it("distinguishes service allocation from vendor payment and unproved provider c
   ).toBeInTheDocument();
   expect(screen.getByText("Alpha funding/conversion attribution unproven")).toBeInTheDocument();
   expect(screen.getByText("Source liquid earning")).toBeInTheDocument();
+  expect(
+    screen.getByText(/Configured allocation 25 bps · transferred 15 alpha rao/),
+  ).toBeInTheDocument();
   expect(screen.queryByText("Source spent")).not.toBeInTheDocument();
   expect(screen.queryByText("GM credits confirmed")).not.toBeInTheDocument();
   expect(screen.getByText("gamma")).toBeInTheDocument();

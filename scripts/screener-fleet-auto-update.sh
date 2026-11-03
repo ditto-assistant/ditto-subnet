@@ -41,6 +41,15 @@ fi
 HELD_WORKERS="$STATE_DIR/held-workers"
 DRAIN_POLL_SECONDS="${SCREENER_FLEET_DRAIN_POLL_SECONDS:-3}"
 PROC_ROOT="${SCREENER_FLEET_PROC_ROOT:-/proc}"
+# `rolling` (default) keeps idle workers claiming while busy ones finish their
+# reviews; `drain-all` restores the whole-fleet drain for every release.
+ROLLOUT_MODE="${SCREENER_FLEET_ROLLOUT_MODE:-rolling}"
+# A rolled worker counts as started once one process has stayed active this
+# long on the candidate; it must get there within the start window.
+ROLL_SETTLE_SECONDS="${SCREENER_FLEET_ROLL_SETTLE_SECONDS:-30}"
+ROLL_START_SECONDS="${SCREENER_FLEET_ROLL_START_SECONDS:-300}"
+ANALYZER_CONTEXT_REL="src/workers/screener"
+ANALYZER_DOCKERFILE_REL="$ANALYZER_CONTEXT_REL/deploy/l2-analyzer.Dockerfile"
 # The release checkout being prepared. errexit skips RETURN traps, so the EXIT
 # trap owns its removal; it is cleared once the checkout is promoted.
 STAGING_DIR=''
@@ -283,13 +292,9 @@ held_worker_still_running() {
   grep -qx "$index $pid" "$HELD_WORKERS" 2>/dev/null
 }
 
-stop_fleet() {
-  local index decision bound state waiting
-  : >"$HELD_WORKERS"
-  DRAIN_STARTED_AT="$(date +%s)"
-  write_drain_status draining
-  # A previous release may still have the producerless lane agent installed.
-  # Retire it before switching the worker release, including on rollback.
+# A previous release may still have the producerless lane agent installed.
+# Retire it before switching the worker release, including on rollback.
+retire_fleet_agent() {
   timeout 60 "$SYSTEMCTL" stop ditto-screener-fleet-agent.service || true
   if "$SYSTEMCTL" is-active --quiet ditto-screener-fleet-agent.service; then
     die "retired fleet agent is still active"
@@ -298,6 +303,14 @@ stop_fleet() {
     "$SYSTEMCTL" disable ditto-screener-fleet-agent.service || \
       die "retired fleet agent could not be disabled"
   fi
+}
+
+stop_fleet() {
+  local index decision bound state waiting
+  : >"$HELD_WORKERS"
+  DRAIN_STARTED_AT="$(date +%s)"
+  write_drain_status draining
+  retire_fleet_agent
 
   for index in $(worker_indexes); do
     signal_worker_main "$index"
@@ -428,6 +441,316 @@ disarm_fleet_restore() {
   arm_staging_cleanup
 }
 
+# Name of the releases/<sha> a live process started from. systemd resolves the
+# `current` WorkingDirectory at exec, so /proc cwd pins the process's release.
+process_release() {
+  local pid="$1" releases path name
+  releases="$(readlink -f "$RELEASES_DIR")" || return 1
+  path="$(readlink -e "$PROC_ROOT/$pid/cwd")" || return 1
+  case "$path" in
+    "$releases"/*) name="${path#"$releases"/}"; name="${name%%/*}" ;;
+    *) return 1 ;;
+  esac
+  [[ "$name" =~ ^[0-9a-f]{40}$ ]] || return 1
+  printf '%s' "$name"
+}
+
+# Both build contexts hold byte-identical regular files for one COPY source.
+analyzer_source_matches() {
+  local left="$1" right="$2" pattern="$3" path
+  local -a left_files right_files
+  mapfile -t left_files < <(cd "$left" && compgen -G "$pattern" | LC_ALL=C sort)
+  mapfile -t right_files < <(cd "$right" && compgen -G "$pattern" | LC_ALL=C sort)
+  [ "${#left_files[@]}" -gt 0 ] || return 1
+  [ "${left_files[*]}" = "${right_files[*]}" ] || return 1
+  for path in "${left_files[@]}"; do
+    [ -f "$left/$path" ] && [ ! -L "$left/$path" ] || return 1
+    [ -f "$right/$path" ] && [ ! -L "$right/$path" ] || return 1
+    cmp -s "$left/$path" "$right/$path" || return 1
+  done
+}
+
+# Succeeds only when two releases provably build the analyzer from identical
+# inputs: the same Dockerfile, .dockerignore, and every file a COPY names.
+# Anything this parser does not understand counts as a difference.
+analyzer_inputs_match() {
+  local left="$1" right="$2" line token source count=0
+  local -a words sources
+  cmp -s "$left/$ANALYZER_DOCKERFILE_REL" "$right/$ANALYZER_DOCKERFILE_REL" || return 1
+  if [ -e "$left/$ANALYZER_CONTEXT_REL/.dockerignore" ] || \
+    [ -e "$right/$ANALYZER_CONTEXT_REL/.dockerignore" ]; then
+    cmp -s "$left/$ANALYZER_CONTEXT_REL/.dockerignore" \
+      "$right/$ANALYZER_CONTEXT_REL/.dockerignore" || return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    # A parser directive can change the line-continuation character.
+    [[ ! "${line,,}" =~ ^#[[:space:]]*escape[[:space:]]*= ]] || return 1
+    read -r -a words <<<"$line"
+    [ "${#words[@]}" -gt 0 ] || continue
+    case "${words[0]^^}" in
+      ADD) return 1 ;;
+      COPY) ;;
+      *) continue ;;
+    esac
+    # A continued or heredoc COPY is not parsed; treat it as a difference.
+    [[ ! "$line" =~ \\[[:space:]]*$ ]] || return 1
+    [[ "$line" != *'<<'* ]] || return 1
+    sources=()
+    for token in "${words[@]:1}"; do
+      case "$token" in
+        --from|--from=*) return 1 ;;
+        --*) continue ;;
+      esac
+      sources+=("$token")
+    done
+    [ "${#sources[@]}" -ge 2 ] || return 1
+    unset 'sources[-1]'
+    for source in "${sources[@]}"; do
+      [[ "$source" =~ ^[A-Za-z0-9_][A-Za-z0-9_.*/-]*$ ]] || return 1
+      [[ "$source" != *..* ]] || return 1
+      analyzer_source_matches "$left/$ANALYZER_CONTEXT_REL" \
+        "$right/$ANALYZER_CONTEXT_REL" "$source" || return 1
+      count=$((count + 1))
+    done
+  done <"$left/$ANALYZER_DOCKERFILE_REL"
+  [ "$count" -gt 0 ]
+}
+
+# Sets ROLLING_BLOCKER to why this activation must drain the whole fleet, or
+# to nothing when a rolling activation is safe. The rootless
+# ditto-screener-l2-analyzer:active tag is the only release artifact a running
+# worker resolves after it starts, so rolling also requires every release a
+# live worker still runs from to share the candidate's analyzer inputs.
+rolling_check() {
+  local revision="$1" previous="$2" indexes index pid state name
+  local -A live=()
+  ROLLING_BLOCKER=''
+  if [ "$ROLLOUT_MODE" != rolling ]; then
+    ROLLING_BLOCKER="rollout mode is $ROLLOUT_MODE"
+    return 0
+  fi
+  if ! [[ "$previous" =~ ^releases/[0-9a-f]{40}$ ]] || \
+    [ ! -d "$RELEASES_DIR/${previous#releases/}/src" ]; then
+    ROLLING_BLOCKER='no previous release to roll from'
+    return 0
+  fi
+  live["${previous#releases/}"]=1
+  if ! indexes="$(worker_indexes)"; then
+    ROLLING_BLOCKER='workers could not be listed'
+    return 0
+  fi
+  for index in $indexes; do
+    state="$(worker_state "$index")"
+    worker_process_running "$state" || continue
+    if [ "$index" -gt "$WORKER_PROCESSES" ]; then
+      ROLLING_BLOCKER="worker $index is above the requested count"
+      return 0
+    fi
+    pid="$(worker_main_pid "$index")"
+    if ! [[ "$pid" =~ ^[1-9][0-9]*$ ]] || ! name="$(process_release "$pid")"; then
+      ROLLING_BLOCKER="worker $index release is unknown"
+      return 0
+    fi
+    live["$name"]=1
+  done
+  for name in "${!live[@]}"; do
+    [ "$name" != "$revision" ] || continue
+    if ! analyzer_inputs_match "$RELEASES_DIR/$name" "$RELEASES_DIR/$revision"; then
+      ROLLING_BLOCKER="analyzer inputs differ from live release $name"
+      return 0
+    fi
+  done
+}
+
+# Move every requested worker onto release $1 without a fleet stop. Each
+# process that predates the roll gets SIGTERM on its main PID only: an idle
+# worker exits at once and Restart=always starts it again from `current`,
+# while a busy one posts its signed verdict first and takes no further claim.
+# The updater never stops, kills, or restarts a running worker here, so idle
+# workers keep claiming on the new release while reviews finish.
+#
+# Returns 0 when every worker is settled on the target or still finishing a
+# pre-roll review, and with $2=1 at least one worker has settled on the
+# target. Returns 1 when a worker cannot settle within the start window and 2
+# when the drain bound passes first. Callers use `||`, so errexit is off here.
+roll_workers() {
+  local target="$1" require_started="$2" index pid state name now bound
+  local started pending finishing
+  local -A pre_pid=() seen_pid=() seen_at=() since=()
+  for index in $(seq 1 "$WORKER_PROCESSES"); do
+    pid="$(worker_main_pid "$index")"
+    [[ "$pid" =~ ^[0-9]+$ ]] || pid=0
+    pre_pid[$index]="$pid"
+    [ "$pid" = 0 ] || signal_worker_main "$index"
+  done
+  bound=$(($(date +%s) + DRAIN_BOUND_SECONDS))
+  while :; do
+    now="$(date +%s)"
+    started=0
+    pending=0
+    finishing=''
+    : >"$HELD_WORKERS"
+    for index in $(seq 1 "$WORKER_PROCESSES"); do
+      state="$(worker_state "$index")"
+      pid="$(worker_main_pid "$index")"
+      [[ "$pid" =~ ^[0-9]+$ ]] || pid=0
+      if worker_process_running "$state" && [ "$pid" != 0 ]; then
+        if [ "$pid" = "${pre_pid[$index]}" ]; then
+          # Idempotent for a draining worker; it finishes on its own release.
+          signal_worker_main "$index"
+          since[$index]=''
+          finishing+=" $index:$(lease_decision "$index")"
+          printf '%s %s\n' "$index" "$pid" >>"$HELD_WORKERS"
+          continue
+        fi
+        if name="$(process_release "$pid")" && [ "$name" != "$target" ]; then
+          # Started from another release; let it finish and come back.
+          pre_pid[$index]="$pid"
+          signal_worker_main "$index"
+          since[$index]=''
+          finishing+=" $index:$(lease_decision "$index")"
+          printf '%s %s\n' "$index" "$pid" >>"$HELD_WORKERS"
+          continue
+        fi
+        if [ "${seen_pid[$index]:-}" != "$pid" ]; then
+          seen_pid[$index]="$pid"
+          seen_at[$index]="$now"
+        fi
+        if [ -n "${name:-}" ] && [ "$state" = active ] && \
+          [ $((now - ${seen_at[$index]})) -ge "$ROLL_SETTLE_SECONDS" ]; then
+          started=$((started + 1))
+          since[$index]=''
+          continue
+        fi
+      else
+        case "$state" in
+          inactive|failed)
+            "$SYSTEMCTL" start --no-block "ditto-screener-worker@$index.service" \
+              >/dev/null 2>&1 || true
+            ;;
+        esac
+      fi
+      [ -n "${since[$index]:-}" ] || since[$index]="$now"
+      if [ $((now - ${since[$index]})) -ge "$ROLL_START_SECONDS" ]; then
+        log "worker $index did not start on release $target"
+        return 1
+      fi
+      pending=1
+    done
+    if [ "$pending" -eq 0 ] && { [ "$require_started" -eq 0 ] || [ "$started" -gt 0 ]; }; then
+      ROLL_FINISHING="${finishing# }"
+      return 0
+    fi
+    [ "$now" -lt "$bound" ] || return 2
+    write_drain_status rolling "started=$started finishing:${finishing:- none}"
+    sleep "$DRAIN_POLL_SECONDS"
+  done
+}
+
+# Put back the link, analyzer tag, and release env captured before a rolling
+# activation. Never stops or kills a worker.
+restore_previous_release() {
+  local status=0
+  if ! ln -sfn "$PREV_TARGET" "$NEW_LINK" || ! mv -Tf "$NEW_LINK" "$CURRENT_LINK"; then
+    status=1
+  fi
+  if [ -n "$PREV_L2_IMAGE" ]; then
+    run_rootless_as_service docker tag "$PREV_L2_IMAGE" "$L2_ANALYZER_ACTIVE" || status=1
+  else
+    run_rootless_as_service docker image rm --force "$L2_ANALYZER_ACTIVE" \
+      >/dev/null 2>&1 || true
+  fi
+  if [ -n "$PREV_BUILDER" ]; then
+    write_release_env "$RELEASE_ENV" "$PREV_BUILDER" "$PREV_REVISION" \
+      "$PREV_VERSION" || status=1
+  fi
+  return "$status"
+}
+
+# An abort after the rolling flip (a failed command under `set -e`, or
+# systemd's TimeoutStartSec SIGTERM) restores the previous release. Every
+# worker is asked, by SIGTERM to its main process only, to come back on it once
+# any review it holds is finished.
+restore_roll_after_abort() {
+  local status=$? index
+  trap - EXIT TERM INT
+  set +e
+  log "rolling update aborted (exit $status); restoring the previous release"
+  restore_previous_release || log "previous release could not be fully restored"
+  for index in $(seq 1 "$WORKER_PROCESSES"); do
+    signal_worker_main "$index"
+    "$SYSTEMCTL" start --no-block "ditto-screener-worker@$index.service"
+  done
+  write_drain_status aborted "exit $status"
+  cleanup_staging_on_exit
+  exit "$status"
+}
+
+arm_roll_restore() {
+  trap restore_roll_after_abort EXIT
+  trap 'exit 143' TERM
+  trap 'exit 130' INT
+}
+
+# Rolling activation: flip the release, then let each worker move over as soon
+# as it is idle. The previous-release state comes from remember_previous_release.
+roll_release() {
+  local revision="$1" builder="$2" exact="$3" l2_candidate="$4" version="$5"
+  local index result=0
+  DRAIN_STARTED_AT="$(date +%s)"
+  : >"$HELD_WORKERS"
+  write_drain_status rolling "from ${PREV_TARGET#releases/}"
+  retire_fleet_agent
+  ensure_worker_state
+  for index in $(seq 1 "$WORKER_PROCESSES"); do
+    "$SYSTEMCTL" enable "ditto-screener-worker@$index.service"
+  done
+  # rolling_check refused any running worker above the requested count. A stop
+  # job is only ever issued to a unit with no worker process; one that started
+  # since that check ends this run before anything has changed.
+  for index in $(worker_indexes); do
+    if [ "$index" -gt "$WORKER_PROCESSES" ]; then
+      if worker_process_running "$(worker_state "$index")"; then
+        die "worker $index above the requested count started during activation"
+      fi
+      cancel_worker_restart "$index"
+      "$SYSTEMCTL" disable "ditto-screener-worker@$index.service"
+    fi
+  done
+  arm_roll_restore
+  run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
+  mv -Tf "$NEW_LINK" "$CURRENT_LINK"
+  write_release_env "$RELEASE_ENV" "$builder" "$revision" "$version"
+  ROLL_FINISHING=''
+  roll_workers "$revision" 1 || result=$?
+  if [ "$result" -eq 0 ]; then
+    disarm_fleet_restore
+    if [ -n "$ROLL_FINISHING" ]; then
+      write_drain_status active "finishing on the previous release: $ROLL_FINISHING"
+      log "workers still finishing a review on the previous release: $ROLL_FINISHING"
+    else
+      write_drain_status active
+    fi
+    return 0
+  fi
+  if [ "$result" -eq 1 ]; then
+    log "candidate failed to start; restoring the previous release"
+  else
+    log "no worker started on the candidate before the drain bound; restoring the previous release"
+  fi
+  restore_previous_release || die "previous release could not be restored"
+  roll_workers "${PREV_TARGET#releases/}" 0 || \
+    die "candidate and rollback release both failed to start"
+  disarm_fleet_restore
+  if [ "$result" -eq 1 ]; then
+    printf '%s\n' "$exact" >"$FAILED_CANDIDATE_FILE"
+    write_drain_status rolled_back "candidate failed to start"
+  else
+    write_drain_status rolled_back "no worker became idle before the drain bound; retried next run"
+  fi
+  return 1
+}
+
 # Keep the activated release, the previous one (the next update's rollback
 # target), and any release a live worker still runs from: a held review keeps
 # its pre-flip checkout until it exits. Workers start in `current`, so their
@@ -507,17 +830,28 @@ prune_activated_release() {
   prune_analyzer_images || log "analyzer image pruning failed"
 }
 
-activate_release() {
-  local revision="$1" builder="$2" exact="$3" l2_candidate="$4" release_dir
-  release_dir="$RELEASES_DIR/$revision"
-  local old_target='' old_builder='' old_l2_image='' new_link="$FLEET_ROOT/.current.$$"
-  [ ! -L "$CURRENT_LINK" ] || old_target="$(readlink "$CURRENT_LINK")"
-  [ ! -f "$RELEASE_ENV" ] || old_builder="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
-  local old_revision="" old_version=""
-  [ ! -f "$RELEASE_ENV" ] || old_revision="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_REVISION)"
-  [ ! -f "$RELEASE_ENV" ] || old_version="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_VERSION)"
-  old_l2_image="$(run_rootless_as_service docker image inspect --format '{{.Id}}' \
+# Capture what a rollback must restore: the link, analyzer image, and env.
+remember_previous_release() {
+  PREV_TARGET=''
+  PREV_BUILDER=''
+  PREV_REVISION=''
+  PREV_VERSION=''
+  [ ! -L "$CURRENT_LINK" ] || PREV_TARGET="$(readlink "$CURRENT_LINK")"
+  if [ -f "$RELEASE_ENV" ]; then
+    PREV_BUILDER="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_BUILDER_IMAGE)"
+    PREV_REVISION="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_REVISION)"
+    PREV_VERSION="$(manifest_value "$RELEASE_ENV" SCREENER_FLEET_VERSION)"
+  fi
+  PREV_L2_IMAGE="$(run_rootless_as_service docker image inspect --format '{{.Id}}' \
     "$L2_ANALYZER_ACTIVE" 2>/dev/null || true)"
+  NEW_LINK="$FLEET_ROOT/.current.$$"
+}
+
+activate_release() {
+  local revision="$1" builder="$2" exact="$3" l2_candidate="$4" release_dir version
+  release_dir="$RELEASES_DIR/$revision"
+  version="$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)"
+  remember_previous_release
   install -o root -g root -m 0755 \
     "$release_dir/src/scripts/screener-fleet-auto-update.sh" \
     "$SELF_PATH"
@@ -527,39 +861,46 @@ activate_release() {
   install -o root -g root -m 0755 \
     "$release_dir/src/scripts/screener-fleet-release-hold.sh" \
     "$(dirname "$SELF_PATH")/screener-fleet-release-hold"
-  ln -s "releases/$revision" "$new_link"
+  ln -s "releases/$revision" "$NEW_LINK"
   TARGET_REVISION="$revision"
-  arm_fleet_restore
-  stop_fleet
-  run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
-  mv -Tf "$new_link" "$CURRENT_LINK"
-  write_release_env "$RELEASE_ENV" "$builder" "$revision" \
-    "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)"
-  if ! start_fleet; then
-    log "candidate failed to start; restoring the previous release"
-    stop_fleet || true
-    if [ -n "$old_target" ]; then
-      ln -s "$old_target" "$new_link"
-      mv -Tf "$new_link" "$CURRENT_LINK"
+  rolling_check "$revision" "$PREV_TARGET"
+  if [ -z "$ROLLING_BLOCKER" ]; then
+    log "rolling activation: idle workers move to $revision while reviews finish"
+    # A plain call keeps errexit; a rollback returns 1 and ends this run.
+    roll_release "$revision" "$builder" "$exact" "$l2_candidate" "$version"
+  else
+    log "draining every worker before activation: $ROLLING_BLOCKER"
+    arm_fleet_restore
+    stop_fleet
+    run_rootless_as_service docker tag "$l2_candidate" "$L2_ANALYZER_ACTIVE"
+    mv -Tf "$NEW_LINK" "$CURRENT_LINK"
+    write_release_env "$RELEASE_ENV" "$builder" "$revision" "$version"
+    if ! start_fleet; then
+      log "candidate failed to start; restoring the previous release"
+      stop_fleet || true
+      if [ -n "$PREV_TARGET" ]; then
+        ln -s "$PREV_TARGET" "$NEW_LINK"
+        mv -Tf "$NEW_LINK" "$CURRENT_LINK"
+      fi
+      if [ -n "$PREV_L2_IMAGE" ]; then
+        run_rootless_as_service docker tag "$PREV_L2_IMAGE" "$L2_ANALYZER_ACTIVE"
+      else
+        run_rootless_as_service docker image rm --force "$L2_ANALYZER_ACTIVE" \
+          >/dev/null 2>&1 || true
+      fi
+      [ -z "$PREV_BUILDER" ] || write_release_env "$RELEASE_ENV" "$PREV_BUILDER" \
+        "$PREV_REVISION" "$PREV_VERSION"
+      start_fleet || die "candidate and rollback release both failed to start"
+      disarm_fleet_restore
+      printf '%s\n' "$exact" >"$FAILED_CANDIDATE_FILE"
+      return 1
     fi
-    if [ -n "$old_l2_image" ]; then
-      run_rootless_as_service docker tag "$old_l2_image" "$L2_ANALYZER_ACTIVE"
-    else
-      run_rootless_as_service docker image rm --force "$L2_ANALYZER_ACTIVE" \
-        >/dev/null 2>&1 || true
-    fi
-    [ -z "$old_builder" ] || write_release_env "$RELEASE_ENV" "$old_builder" \
-      "$old_revision" "$old_version"
-    start_fleet || die "candidate and rollback release both failed to start"
     disarm_fleet_restore
-    printf '%s\n' "$exact" >"$FAILED_CANDIDATE_FILE"
-    return 1
   fi
-  disarm_fleet_restore
   umask 077
   printf 'DESCRIPTOR=%s\nREVISION=%s\nVERSION=%s\nBUILDER_IMAGE=%s\nPREVIOUS_RELEASE=%s\nUPDATED_AT=%s\n' \
-    "$exact" "$revision" "$(manifest_value "$STATE_DIR/candidate.env" FLEET_VERSION)" \
-    "$builder" "${old_target:-none}" "$(date +%s)" >"$MANAGED_FILE"
+    "$exact" "$revision" "$version" \
+    "$builder" "${PREV_TARGET:-none}" "$(date +%s)" >"$MANAGED_FILE"
   rm -f "$FAILED_CANDIDATE_FILE"
   run_rootless_as_service docker image rm "$l2_candidate" >/dev/null 2>&1 || true
   log "activated $revision from authenticated descriptor $exact"
@@ -600,6 +941,21 @@ case "${SCREENER_FLEET_TEST_ENTRYPOINT:-}" in
     ;;
   prune_activated_release)
     prune_activated_release
+    exit 0
+    ;;
+  rolling_check)
+    rolling_check "$SCREENER_FLEET_TEST_REVISION" "${SCREENER_FLEET_TEST_PREVIOUS:-}"
+    printf '%s\n' "${ROLLING_BLOCKER:-eligible}"
+    exit 0
+    ;;
+  roll_release)
+    arm_staging_cleanup
+    remember_previous_release
+    ln -s "releases/$SCREENER_FLEET_TEST_REVISION" "$NEW_LINK"
+    TARGET_REVISION="$SCREENER_FLEET_TEST_REVISION"
+    roll_release "$SCREENER_FLEET_TEST_REVISION" "$SCREENER_FLEET_TEST_BUILDER" \
+      "$SCREENER_FLEET_TEST_DESCRIPTOR" \
+      "ditto-screener-l2-analyzer:candidate-$SCREENER_FLEET_TEST_REVISION" 1.2.3
     exit 0
     ;;
   *) die "unknown test entrypoint" ;;

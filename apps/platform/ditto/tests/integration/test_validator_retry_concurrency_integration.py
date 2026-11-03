@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_models.admin_validation_retry import AdminValidationRetryRequest
@@ -21,6 +21,7 @@ from ditto.api_server.endpoints.admin_validation_retry import (
 from ditto.db import create_db_engine
 from ditto.db.models import Agent, ValidatorRetryRecovery, ValidatorTicket
 from ditto.db.queries.tickets import MAX_ATTEMPTS_PER_VERSION
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -32,7 +33,7 @@ async def test_concurrent_recoveries_have_one_winner() -> None:
     engine = create_db_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
     async with maker() as session, session.begin():
-        await session.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(session, "agents")
         session.add(
             Agent(
                 agent_id=_AGENT,

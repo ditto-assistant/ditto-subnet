@@ -96,6 +96,14 @@ async def list_first_score_quorums(
     return result
 
 
+# Statuses whose king source the public routes release. A ban does not withhold
+# a king's source; the crown, verified completed winner emissions for the exact
+# submission, and the embargo still gate it. Rejected submissions never release.
+SOURCE_RELEASE_STATUSES = frozenset(
+    {AgentStatus.SCORED, AgentStatus.LIVE, AgentStatus.BANNED}
+)
+
+
 async def list_public_source_releases(
     session: AsyncSession,
     *,
@@ -112,7 +120,7 @@ async def list_public_source_releases(
     Missing audit records do not prove publication, and legacy weight-only
     confirmations remain insufficient without an actual public fetch receipt.
     """
-    releases = await _list_eligible_source_releases(
+    releases = await list_eligible_source_releases(
         session, agent_ids=agent_ids, quorum=quorum, policy=policy
     )
     if not agent_ids:
@@ -137,21 +145,26 @@ async def list_public_source_releases(
     return releases
 
 
-async def _list_eligible_source_releases(
+async def list_eligible_source_releases(
     session: AsyncSession,
     *,
     agent_ids: list[UUID] | set[UUID] | tuple[UUID, ...],
     quorum: int,
     policy: ArtifactReleasePolicy,
 ) -> dict[UUID, datetime]:
-    """Return ``agent_id -> when its source became publicly downloadable``.
+    """Return source eligibility times derived from currently recorded facts.
+
+    This is not historical handoff proof: emission confirmation can arrive
+    late with an earlier payout-block time. A derived time before a candidate
+    upload does not establish that the route could serve source at that time.
 
     The current predicate the public routes serve, expressed for consumers that
     need the *fact* of publication rather than a wire projection: source release
     is **king-only** and its clock starts at completed winner emissions, not at
     upload or score quorum. An agent is present here only when it (1) completed
     a same-version score quorum, (2) held the crown and earned confirmed winner
-    emissions in a completed tempo, and (3) is currently ``scored`` or ``live``;
+    emissions in a completed tempo, and (3) is currently in
+    ``SOURCE_RELEASE_STATUSES`` (``scored``, ``live`` or ``banned``);
     ``available_at`` is ``emission_confirmed_at + policy.embargo_hours``. Agents
     that never reigned — the overwhelming majority — are simply absent.
 
@@ -163,7 +176,7 @@ async def _list_eligible_source_releases(
     can only preserve a copy hold, never create a false exemption:
 
     * status is read as it stands now, so an artifact that was downloadable and
-      has since been banned or reopened for review does not count;
+      has since been rejected or reopened for review does not count;
     * one policy revision is applied to the whole window, so a release that
       opened under a shorter embargo and was re-closed by a later, longer one is
       not credited to the shorter revision.
@@ -200,7 +213,7 @@ async def _list_eligible_source_releases(
             await session.execute(
                 select(Agent.agent_id).where(
                     Agent.agent_id.in_(confirmed),
-                    Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                    Agent.status.in_(SOURCE_RELEASE_STATUSES),
                 )
             )
         )
@@ -244,7 +257,7 @@ async def available_public_source_agent_ids(
                     if include_pending
                     else [AgentKingship.emission_confirmed_at <= cutoff]
                 ),
-                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+                Agent.status.in_(SOURCE_RELEASE_STATUSES),
             )
         )
     )

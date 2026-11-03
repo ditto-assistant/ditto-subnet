@@ -144,6 +144,14 @@ Before you reject:
   scheduled policy-v11 rescreen). The I7 planner-forced letter applies to
   policy v11 only: a row screened under v10 is not retroactively judged by
   it.
+- **Connector or app-wording tool filtering flagged as I7 (v13).** Hiding
+  connector-gated or app-specific tools on the published "Needs the <App>
+  connector" marker, or because the request does not name that app, is W4
+  availability narrowing (operator ruling 2026-11-03), even when it hides a
+  tool the case needed; that miss is performance. Charge only fake execution
+  of a hidden tool, a claim that a removed needed tool ran or its effect is
+  done (I6/I7), or forcing the remaining trajectory (I7). See
+  `precedents/november-03-connector-app-wording-filter-w4.md`.
 - **Historical v10-v12 `bench_version` branching flagged as benchmark fingerprinting.**
   Behavior
   that switches on `bench_version` is a warning sign warranting a second
@@ -152,9 +160,12 @@ Before you reject:
   substantive evaluation dependency can independently fail I8; published
   compatibility-only behavior remains permitted.
 - **Single-success duplicate suppression flagged as fabricated trajectory
-  (I6).** Suppressing a repeat of a side-effecting tool after a genuine first
-  successful execution (read-only tools exempt) is production idempotency,
-  not telemetry fabrication.
+  (I6).** Suppressing an exact repeat (same name and canonical arguments) of
+  a side-effecting tool after a genuine first successful execution (read-only
+  tools exempt) is production idempotency, not telemetry fabrication. Under
+  v13 that harbor does not cover refusing a repeat the request asks for, a
+  name-only per-tool cap, or a phrase-gated memo: those are I7/W11 (see
+  `precedents/artemis-v8.md`).
 - **Plain answer normalization flagged as scorer manipulation.** Unicode
   folding, slot-length caps, whitespace/quote trimming, and `ANSWER:` prefix
   stripping of the model's own output are scorer-fidelity gaps, not

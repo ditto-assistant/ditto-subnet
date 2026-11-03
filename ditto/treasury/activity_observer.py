@@ -22,6 +22,12 @@ import httpx
 
 from ditto.treasury.activity_export import export_finalized_distributions
 from ditto.treasury.collector import canonical
+from ditto.treasury.selector_handoff import (
+    SelectorHandoff,
+    acknowledge_pages,
+    fsync_directory,
+    import_pages,
+)
 from ditto_screening_protocol.treasury_approval import (
     TreasuryPolicyApproval,
     verify_policy_approval,
@@ -84,6 +90,7 @@ def run_observer(
     once=False,
     sleep=time.sleep,
     emit=lambda _value: None,
+    initialize_selector_state=False,
 ):
     """Reconnect with bounded backoff; semantic/identity refusals still halt.
 
@@ -93,6 +100,8 @@ def run_observer(
     if not config.enabled:
         emit({"status": "disabled", "authority": "none"})
         return
+    if initialize_selector_state and not once:
+        raise ValueError("selector initialization requires one explicit tick")
     mcp = None
     delay = 15
     try:
@@ -106,6 +115,7 @@ def run_observer(
                     transfer_journal=transfer_journal,
                     chain=chain,
                     mcp=mcp,
+                    initialize_selector_state=initialize_selector_state,
                 )
                 emit(result)
                 delay = 15
@@ -196,7 +206,14 @@ class PublicActivityMCP:
         if not notification:
             body["id"] = self.next_id
         with self.client.stream(
-            "POST", PUBLIC_MCP, headers=self.headers, json=body
+            "POST",
+            PUBLIC_MCP,
+            headers=self.headers,
+            json=body,
+            timeout=130
+            if method == "tools/call"
+            and params.get("name") == "record_treasury_receipt"
+            else 60,
         ) as response:
             if response.status_code not in {200, 202, 204}:
                 if response.status_code == 429 or response.status_code >= 500:
@@ -278,6 +295,7 @@ class ActivityObserverConfig:
     enabled: bool = False
     max_blocks: int = 16
     max_deliveries: int = 100
+    selector_handoff: SelectorHandoff | None = None
 
     def __post_init__(self):
         if (
@@ -293,24 +311,37 @@ class ActivityObserverConfig:
         if len(self.settings_checksum) != 64:
             raise ValueError("immutable historical settings checksum absent")
         bytes.fromhex(self.settings_checksum)
+        if self.selector_handoff is not None and (
+            self.selector_handoff.collector_policy_digest
+            != self.approval.policy.collector_policy_digest
+        ):
+            raise ValueError("selector handoff collector policy differs")
 
     @property
     def digest(self):
-        return hashlib.sha256(
-            canonical(
-                {
-                    "policy": self.approval.policy.digest,
-                    "settings": self.settings_checksum,
-                    "start_block": self.start_block,
-                }
-            ).encode()
-        ).hexdigest()
+        body = {
+            "policy": self.approval.policy.digest,
+            "settings": self.settings_checksum,
+            "start_block": self.start_block,
+        }
+        if self.selector_handoff is not None:
+            body["selector_handoff"] = self.selector_handoff.digest
+        return hashlib.sha256(canonical(body).encode()).hexdigest()
 
 
 class ActivityQueue:
     """Private pending selections survive unknown delivery without new money effects."""
 
-    def __init__(self, path: Path, config: ActivityObserverConfig):
+    def __init__(self, path: Path, config: ActivityObserverConfig, *, initialize=False):
+        handoff = config.selector_handoff
+        if initialize and handoff is None:
+            raise ValueError("selector initialization requires approved handoff")
+        if handoff is not None:
+            handoff.directories()
+            if os.geteuid() != handoff.observer_uid:
+                raise ValueError("observer selector identity differs")
+            if initialize and any(Path(handoff.acknowledgments).iterdir()):
+                raise ValueError("existing acknowledgments require recovery, not reset")
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         directory = path.parent.lstat()
         if (
@@ -319,11 +350,17 @@ class ActivityQueue:
             or directory.st_uid != os.geteuid()
         ):
             raise ValueError("observer state directory must be private and owned")
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        flags = os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK
+        if handoff is None:
+            flags |= os.O_CREAT
+        elif initialize:
+            flags |= os.O_CREAT | os.O_EXCL
+        fd = os.open(path, flags, 0o600)
         try:
             info = os.fstat(fd)
             if (
                 not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
                 or info.st_mode & 0o077
                 or info.st_uid != os.geteuid()
             ):
@@ -335,14 +372,46 @@ class ActivityQueue:
         self.fd = fd
         try:
             self.db = sqlite3.connect(path, isolation_level=None)
-            self._initialize(config)
+            self._initialize(
+                config, existing_handoff=handoff is not None and not initialize
+            )
+            if initialize:
+                fsync_directory(path.parent)
         except BaseException:
             if hasattr(self, "db"):
                 self.db.close()
             os.close(self.fd)
             raise
 
-    def _initialize(self, config: ActivityObserverConfig):
+    def _initialize(self, config: ActivityObserverConfig, *, existing_handoff=False):
+        if existing_handoff:
+            # Never recreate tables after interrupted initialization or state
+            # loss: missing pending/page history cannot be safely inferred.
+            required = {
+                "pin": "digest",
+                "cursor": "id,block,hash",
+                "journal_cursor": "id,operation",
+                "block_progress": "id,block,hash,event_offset",
+                "pending": "id,body,receipt_id",
+                "selector_pages": "id,body",
+            }
+            tables = {
+                row[0]
+                for row in self.db.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            error = "selector observer state lost or changed; recovery required"
+            if not required.keys() <= tables:
+                raise ValueError(error)
+            try:
+                for table, columns in required.items():
+                    self.db.execute(f"SELECT {columns} FROM {table} LIMIT 1")
+                pins = self.db.execute("SELECT digest FROM pin").fetchall()
+            except sqlite3.DatabaseError as exc:
+                raise ValueError(error) from exc
+            if pins != [(config.digest,)]:
+                raise ValueError(error)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript(
@@ -364,6 +433,10 @@ class ActivityQueue:
                 "observer historical policy changed; explicit recovery required"
             )
         self.db.execute("INSERT OR IGNORE INTO pin VALUES(1,?)", (config.digest,))
+        if config.selector_handoff is not None and not existing_handoff:
+            self.db.execute(
+                "CREATE TABLE selector_pages(id TEXT PRIMARY KEY,body TEXT NOT NULL)"
+            )
 
     def close(self):
         self.db.close()
@@ -401,9 +474,12 @@ def observer_tick(
     transfer_journal: Path | None,
     chain: Any,
     mcp: Any,
+    initialize_selector_state: bool = False,
 ) -> dict:
     if not config.enabled:
         return {"status": "disabled", "authority": "none"}
+    if config.selector_handoff is not None and transfer_journal is not None:
+        raise ValueError("separate observer cannot also read private transfer journal")
     policy = verify_policy_approval(
         config.approval,
         expected_policy_digest=config.approval.policy.digest,
@@ -427,16 +503,16 @@ def observer_tick(
         settings.get("allocation_version") != 2
         or (settings.get("treasury_hotkey"), settings.get("treasury_coldkey"))
         != (policy.collector_hotkey, policy.collector_coldkey)
-        or sorted(
-            (b["bucket_id"], b["holding_coldkey"], b["allocation_bps"]) for b in buckets
-        )
-        != sorted(
-            (b.bucket_id, b.holding_coldkey, b.allocation_bps) for b in policy.buckets
-        )
+        or sorted((b["bucket_id"], b["holding_coldkey"]) for b in buckets)
+        != sorted((b.bucket_id, b.holding_coldkey) for b in policy.buckets)
+        # Exact for a fixed signed bucket; inside the signed range otherwise.
+        or not policy.admits({b["bucket_id"]: b["allocation_bps"] for b in buckets})
     ):
         raise ValueError("observer destinations differ from historical offline policy")
-    queue = ActivityQueue(state_path, config)
+    queue = ActivityQueue(state_path, config, initialize=initialize_selector_state)
     try:
+        if config.selector_handoff is not None:
+            import_pages(queue, config.selector_handoff)
         cursor = queue.db.execute("SELECT block,hash FROM cursor WHERE id=1").fetchone()
         if cursor and chain.block_hash(cursor[0]) != cursor[1]:
             raise ValueError(
@@ -632,6 +708,8 @@ def observer_tick(
                 (result["receipt_id"], identity),
             )
             delivered += 1
+        if config.selector_handoff is not None:
+            acknowledge_pages(queue, config.selector_handoff)
         return {
             "status": "observed",
             "delivered": delivered,

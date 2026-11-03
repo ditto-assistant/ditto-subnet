@@ -651,6 +651,57 @@ func TestChatUpstreamFailureDoesNotChargeReservation(t *testing.T) {
 	if routeStatus != "degraded" || !cooldownSet {
 		t.Fatalf("route must degrade on failure: %s cooldown=%v", routeStatus, cooldownSet)
 	}
+	var circuits int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT count(*) FROM provider_outage_circuits WHERE provider = 'openrouter'`,
+	).Scan(&circuits); err != nil {
+		t.Fatalf("read provider circuit: %v", err)
+	}
+	if circuits != 0 {
+		t.Fatalf("an ordinary provider 500 opened the fleet circuit: count=%d", circuits)
+	}
+}
+
+func TestChatGatewayCreditExhaustionOpensProviderCircuit(t *testing.T) {
+	broke := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write([]byte(gatewayCreditBody))
+	}))
+	defer broke.Close()
+	f := newPGFixture(t, chatTestConfig(t, broke.URL))
+	f.seedRoute(t)
+
+	nonce := uuid.New()
+	body := []byte(chatBody)
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, nonce, body)))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("credit refusal status=%d: %s", w.Code, w.Body.String())
+	}
+
+	ctx := t.Context()
+	var status, terminal string
+	var prompt int64
+	if err := f.pool.QueryRow(ctx,
+		`SELECT status, terminal_error_code, prompt_tokens FROM inference_requests
+		 WHERE grant_id = $1 AND nonce = $2`, f.grantID, nonce).Scan(&status, &terminal, &prompt); err != nil {
+		t.Fatalf("read request: %v", err)
+	}
+	if status != "failed" || terminal != "upstream_http_402" || prompt != 0 {
+		t.Fatalf("credit refusal settle: %s %s %d", status, terminal, prompt)
+	}
+	// Platform parks every scoring lease off this row, so a scored run can no
+	// longer complete against an empty balance and be accepted as the agent's.
+	var state, lastCode string
+	var lastStatus int
+	if err := f.pool.QueryRow(ctx,
+		`SELECT state, last_status, last_error_code FROM provider_outage_circuits WHERE provider = 'openrouter'`,
+	).Scan(&state, &lastStatus, &lastCode); err != nil {
+		t.Fatalf("read provider circuit: %v", err)
+	}
+	if state != "open" || lastStatus != http.StatusPaymentRequired || lastCode != "upstream_http_402" {
+		t.Fatalf("credit refusal circuit = %s/%d/%s, want open/402/upstream_http_402", state, lastStatus, lastCode)
+	}
 }
 
 func TestExchangeFullFlowAndNonceReplay(t *testing.T) {
@@ -1032,5 +1083,50 @@ func TestEmbeddingSettingsBoardRaisesTicketLimit(t *testing.T) {
 	w := serve(f.deps, proxyRequest("/api/v1/inference/embeddings", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
 	if w.Code != 200 {
 		t.Fatalf("raised board must admit: got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestChatScoredProviderRoutingCanaryMovesOnlyCanaryTickets(t *testing.T) {
+	var captured map[string]any
+	upstream := fakeChatUpstream(t, &captured)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO inference_concurrency_settings_revisions
+		    (parent_revision, scope, settings, checksum, reason, actor)
+		 VALUES (0, '*', $1::jsonb, repeat('a', 64), $2, 'test')`,
+		`{"scored_provider_routing": "bf16_price_order_canary"}`,
+		"canary the bf16 price order")
+	if err := f.deps.Settings.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh settings: %v", err)
+	}
+
+	send := func() map[string]any {
+		t.Helper()
+		body := []byte(chatBody)
+		w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body),
+			f.signedProxyHeaders(1, uuid.New(), body)))
+		if w.Code != 200 {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+		provider, _ := captured["provider"].(map[string]any)
+		return provider
+	}
+
+	// The fixture ticket is not a canary: it keeps the throughput sort.
+	if provider := send(); provider["sort"] != "throughput" {
+		t.Fatalf("non-canary ticket left the throughput route: %v", provider)
+	}
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE validator_tickets SET purpose = 'benchmark_canary' WHERE agent_id = $1`, f.agentID)
+	provider := send()
+	if _, sorted := provider["sort"]; sorted || provider["zdr"] != true ||
+		provider["allow_fallbacks"] != true || provider["data_collection"] != "deny" {
+		t.Fatalf("canary ticket did not take the bf16 price order: %v", provider)
+	}
+	order, _ := provider["order"].([]any)
+	if len(order) == 0 || order[0] != "deepinfra" {
+		t.Fatalf("canary order: %v", provider["order"])
 	}
 }

@@ -113,6 +113,29 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
+    page: "bounties",
+    label: "Bounties",
+    desc: () => "Paid build work & claims",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="8" />
+        <path d="M12 8v8M9.5 10.5c0-1 1.1-1.8 2.5-1.8s2.5.8 2.5 1.8-1.1 1.5-2.5 1.5-2.5.6-2.5 1.6 1.1 1.7 2.5 1.7 2.5-.7 2.5-1.7" />
+      </svg>
+    ),
+  },
+  {
+    page: "generators",
+    label: "Generators",
+    desc: () => "Case-generator competition",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <path d="M12 3v4M12 17v4M3 12h4M17 12h4" />
+        <circle cx="12" cy="12" r="3" />
+        <path d="m5.6 5.6 2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+      </svg>
+    ),
+  },
+  {
     page: "activity",
     label: "Admin activity",
     desc: () => "Backroom action history",

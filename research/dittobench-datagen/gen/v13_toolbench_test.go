@@ -14,6 +14,7 @@ import (
 // catalog (with the seed's decoys) and versioned fixtures, while a v12 artifact
 // carries neither (its bytes are pinned by TestV12KnownVector).
 func TestV13ArtifactPinsSeededCatalog(t *testing.T) {
+	t.Parallel()
 	prof, ok := ProfileForVersion("full", protocol.BenchVersionV13)
 	if !ok {
 		t.Fatal("v13 has no full profile")

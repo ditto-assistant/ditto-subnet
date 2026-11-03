@@ -22,6 +22,23 @@ def alembic(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     )
 
 
+@pytest.fixture(autouse=True)
+async def receipt_migration_schema(engine: AsyncEngine):
+    """Exercise this historical revision and restore the current worker schema.
+
+    Alembic commits each revision separately. A refusal in this revision can
+    follow a successful rollback of a newer empty table, so leaving the worker
+    at HEAD poisons the next test's current-head reset. Keep the historical
+    refusal assertions unchanged and restore the actual head even on failure.
+    """
+    assert engine.dialect.name == "postgresql"
+    try:
+        alembic("downgrade", HEAD)
+        yield
+    finally:
+        alembic("upgrade", "head")
+
+
 async def schema(engine: AsyncEngine) -> list[tuple]:
     async with engine.connect() as conn:
         return [

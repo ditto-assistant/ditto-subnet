@@ -20,6 +20,46 @@ func (q *Queries) DeleteUploadAdmission(ctx context.Context, minerColdkey string
 	return err
 }
 
+const getClaUploadGate = `-- name: GetClaUploadGate :one
+WITH policy AS (
+    SELECT mode FROM cla_settings_revisions ORDER BY revision DESC LIMIT 1
+), current_version AS (
+    SELECT version, sha256 FROM cla_versions
+    WHERE effective_at <= $3::timestamptz
+    ORDER BY version DESC LIMIT 1
+)
+SELECT policy.mode, current_version.version,
+    EXISTS (
+        SELECT 1 FROM cla_signatures AS signature
+        WHERE signature.netuid = $1
+          AND signature.hotkey = $2
+          AND signature.cla_version = current_version.version
+          AND signature.cla_sha256 = current_version.sha256
+    ) AS has_signature
+FROM policy LEFT JOIN current_version ON true
+`
+
+type GetClaUploadGateParams struct {
+	Netuid     int32              `json:"netuid"`
+	Hotkey     string             `json:"hotkey"`
+	ObservedAt pgtype.Timestamptz `json:"observedAt"`
+}
+
+type GetClaUploadGateRow struct {
+	Mode         string      `json:"mode"`
+	Version      pgtype.Int4 `json:"version"`
+	HasSignature bool        `json:"hasSignature"`
+}
+
+// The migration seeds audited mode=off. Missing policy is invalid state and
+// must fail closed, matching Python, rather than silently disabling consent.
+func (q *Queries) GetClaUploadGate(ctx context.Context, arg GetClaUploadGateParams) (GetClaUploadGateRow, error) {
+	row := q.db.QueryRow(ctx, getClaUploadGate, arg.Netuid, arg.Hotkey, arg.ObservedAt)
+	var i GetClaUploadGateRow
+	err := row.Scan(&i.Mode, &i.Version, &i.HasSignature)
+	return i, err
+}
+
 const getLatestSubmissionDepositAddress = `-- name: GetLatestSubmissionDepositAddress :one
 SELECT payment_address
 FROM submission_deposit_address_revisions
@@ -215,6 +255,16 @@ func (q *Queries) IsHotkeyBanned(ctx context.Context, hotkey string) (bool, erro
 	var banned bool
 	err := row.Scan(&banned)
 	return banned, err
+}
+
+const lockClaPolicy = `-- name: LockClaPolicy :exec
+SELECT pg_advisory_xact_lock_shared(hashtextextended('cla-policy', 0))
+`
+
+// Readers share the policy lock; Platform publication takes it exclusively.
+func (q *Queries) LockClaPolicy(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, lockClaPolicy)
+	return err
 }
 
 const lockUploadAdmissionColdkey = `-- name: LockUploadAdmissionColdkey :exec

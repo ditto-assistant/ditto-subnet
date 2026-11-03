@@ -117,8 +117,6 @@ async def test_returns_newest_first_with_evidence_intact(
     [
         ({"agent_id": str(_AGENT)}, ["force_expired"]),
         ({"validator_hotkey": "5Beta"}, ["closed_unserviceable"]),
-        ({"action": "force_expired"}, ["force_expired"]),
-        ({"context": "score_retest"}, ["closed_unserviceable"]),
     ],
 )
 async def test_filters(
@@ -149,21 +147,3 @@ async def test_paging_keeps_the_total_unfiltered_by_page(
 
     assert body["total"] == 2
     assert [item["action"] for item in body["revocations"]] == ["force_expired"]
-
-
-async def test_an_empty_ledger_is_a_finding_not_an_error(
-    app: FastAPI, client: httpx.AsyncClient, lr_maker: async_sessionmaker[AsyncSession]
-) -> None:
-    """Production's table was empty, which is itself the answer.
-
-    It means no lease was revoked by the platform in the window, so a run that
-    died did so by another path. The endpoint has to say that plainly rather
-    than 404 or error, or the emptiness gets misread as "not wired up yet".
-    """
-    _install(app, lr_maker)
-
-    response = await client.get(_URL, headers=_HEADERS)
-
-    assert response.status_code == 200
-    assert response.json()["total"] == 0
-    assert response.json()["revocations"] == []

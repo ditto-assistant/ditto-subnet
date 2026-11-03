@@ -106,7 +106,7 @@ handoff is not grounds to retry without confinement or report a synthetic succes
 
 ## Evidence and limits
 
-The Dockerfile is a public **fixture-only** image, pinned to Go 1.26.6, Rust 1.98.0
+The Dockerfile is a public **fixture-only** image, pinned to Go 1.27.3, Rust 1.98.0
 and the existing Python 3.13.14 base digest. It lacks a production supervisor
 contract/driver and carries the fixture label. Its synthetic Go file has a build
 ignore tag so repository-wide `go test ./...` cannot execute its `init` on a host.

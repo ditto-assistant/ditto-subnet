@@ -38,8 +38,10 @@ services:
       # This repository is SN118; netuid is not an operator setting. Pylon
       # reuses the validator settings for its network, wallet, and hotkey. One
       # PYLON_TOKEN guards both the open-access reads and the identity write.
-      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
-      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      # SUBTENSOR_RPC_URL optionally names a (paid) provider for the same chain;
+      # the public entrypoint refuses handshakes with HTTP 429 under load.
+      PYLON_BITTENSOR_NETWORK: ${SUBTENSOR_RPC_URL:-${SUBTENSOR_NETWORK:-finney}}
+      PYLON_BITTENSOR_ARCHIVE_NETWORK: ${SUBTENSOR_RPC_URL:-${SUBTENSOR_NETWORK:-finney}}
       PYLON_OPEN_ACCESS_TOKEN: ${PYLON_TOKEN}
       PYLON_IDENTITIES: '["ditto"]'
       PYLON_ID_DITTO_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
@@ -48,8 +50,18 @@ services:
       PYLON_ID_DITTO_TOKEN: ${PYLON_TOKEN}
       PYLON_DATABASE_PATH: /data/pylon.db
       PYLON_METRICS_TOKEN: ${PYLON_METRICS_TOKEN:-}
+      DITTO_TREASURY_WEIGHT_ENFORCEMENT: ${DITTO_TREASURY_WEIGHT_ENFORCEMENT:-false}
+      # Public coldkey-signed Gamma policy only. Default off/empty; both
+      # trusted processes independently verify the same immutable proof.
+      DITTO_TREASURY_SHADOW_APPROVAL_FILE: ${DITTO_TREASURY_SHADOW_APPROVAL_FILE:-}
+      DITTO_TREASURY_APPROVED_POLICY_DIGEST: ${DITTO_TREASURY_APPROVED_POLICY_DIGEST:-}
+      DITTO_TREASURY_COLLECTOR_POLICY_DIGEST: ${DITTO_TREASURY_COLLECTOR_POLICY_DIGEST:-}
     security_opt:
       - no-new-privileges:true
+    secrets:
+      - source: treasury-emission-approval
+        target: treasury-emission-approval.json
+        mode: 0444
     # Pylon runs as root, but operator hotkeys are normally mode 0600 and may
     # be owned by a non-root host user. Restore only the capability needed to
     # traverse/read the read-only wallet mount after dropping all capabilities.
@@ -169,7 +181,7 @@ services:
       # These are immutable files inside the image, not host mounts, cloud
       # identities, Secret Manager references, or provider credentials.
       DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE: /opt/ditto/confirmation/confirmation_installation_v9_shadow.json
-      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: 62c5daa7326166ade81cea09eb4486bcb0e82f8e8552f2154a8219d16b1ae26c
+      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: a030d095ba74543fd22e0ea905b787bdd857ea9ad2f077cb839d4196b8ad4436
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being
@@ -212,6 +224,12 @@ services:
       # /health). Same anchor as VALIDATOR_DITTOBENCH_CONTROL_TOKEN on the
       # validator.
       DITTOBENCH_BROKER_CONTROL_TOKEN: *broker-control-token
+      # Control-plane auth posture: `shadow` (default) logs what enforcement
+      # would reject and serves the call; `enforce` returns 401 instead. Under
+      # enforce the published default token above counts as unset, so set a
+      # per-host DITTOBENCH_BROKER_CONTROL_TOKEN first or the scorer refuses to
+      # start.
+      DITTOBENCH_CONTROL_AUTH_MODE: ${DITTOBENCH_CONTROL_AUTH_MODE:-shadow}
       # The broker refuses an activation whose proxy_url does not byte-match
       # this value, and treats an unset/malformed value as "refuse everything"
       # (configuredPlatformProxyURL returns "" -> activate always 401s). It
@@ -269,7 +287,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "30"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "34"
     restart: unless-stopped
     # Longest live ticket plus five minutes for a signed final report:
     # 4h confirmation outlives the canonical scoring lease (Backroom
@@ -280,6 +298,7 @@ services:
     environment:
       NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
+      SUBTENSOR_RPC_URL: ${SUBTENSOR_RPC_URL:-}
       VALIDATOR_PLATFORM_API_URL: ${VALIDATOR_PLATFORM_API_URL}
       VALIDATOR_DITTOBENCH_API_URL: http://sandbox-docker:8000
       VALIDATOR_DITTOBENCH_CAPABILITIES_TIMEOUT_SECONDS: "3"
@@ -318,6 +337,11 @@ services:
       VALIDATOR_SANDBOX_DOCKER_PROBE_URL: http://sandbox-docker:8000/health
       VALIDATOR_STACK_PROBE_TIMEOUT_SECONDS: "2"
       VALIDATOR_STACK_HEALTH_CACHE_SECONDS: "60"
+      # Public coldkey-signed Gamma policy only. Default off/empty; both
+      # trusted processes independently verify the same immutable proof.
+      DITTO_TREASURY_SHADOW_APPROVAL_FILE: ${DITTO_TREASURY_SHADOW_APPROVAL_FILE:-}
+      DITTO_TREASURY_APPROVED_POLICY_DIGEST: ${DITTO_TREASURY_APPROVED_POLICY_DIGEST:-}
+      DITTO_TREASURY_COLLECTOR_POLICY_DIGEST: ${DITTO_TREASURY_COLLECTOR_POLICY_DIGEST:-}
       VALIDATOR_HOTKEY: ${VALIDATOR_HOTKEY}
       VALIDATOR_WALLET_NAME: ${VALIDATOR_WALLET_NAME}
       VALIDATOR_WALLET_HOTKEY: ${VALIDATOR_WALLET_HOTKEY}
@@ -358,6 +382,12 @@ services:
       # because heartbeat host metrics ride a five-point grid.
       VALIDATOR_DISK_PERCENT_CEILING: ${VALIDATOR_DISK_PERCENT_CEILING:-95}
       VALIDATOR_MEMORY_PERCENT_CEILING: ${VALIDATOR_MEMORY_PERCENT_CEILING:-95}
+      # Host-memory admission. The worker claims at most
+      # (host RAM - this reserve) // live harness memory cap slots, so the sum
+      # of harness caps never exceeds what the host can back and an in-cap
+      # harness is never OOM-killed by its neighbours. The default is the
+      # published runtime envelope's (docs/RUNTIME-ENVELOPE.md).
+      VALIDATOR_HOST_MEMORY_RESERVE_MIB: ${VALIDATOR_HOST_MEMORY_RESERVE_MIB:-1024}
       # A pinned CPU is a working benchmark host, not a failing one.
       VALIDATOR_CPU_PERCENT_CEILING: ${VALIDATOR_CPU_PERCENT_CEILING:-0}
       VALIDATOR_INFERENCE_PROXY_REQUIRED: "true"
@@ -430,6 +460,9 @@ services:
     cap_drop:
       - ALL
     secrets:
+      - source: treasury-emission-approval
+        target: treasury-emission-approval.json
+        mode: 0444
       - source: coding-executor-validator-ca
         target: coding-executor-validator-ca.pem
         mode: 0400
@@ -462,6 +495,10 @@ volumes:
   validator-update-bootstrap:
 
 secrets:
+  # /dev/null supplies an inert mount on ordinary installations. Operators
+  # install only the public emission_approval object, never custody packets.
+  treasury-emission-approval:
+    file: ${DITTO_TREASURY_APPROVAL_HOST_PATH:-/dev/null}
   coding-executor-validator-ca:
     file: ${VALIDATOR_CODING_EXECUTOR_CA_HOST_PATH:-/dev/null}
   coding-executor-validator-client-cert:

@@ -537,6 +537,79 @@ tools. Both leads skip Rust items restricted to the test build. A hit is a
 review lead, never a reject: trace the gate to the served `/run` prompt or
 routing effect before citing I5.
 
+The 2026-10-02 policy-v13 ATH sweep (I7 rejects of dittoreader v7, Artemis
+v8, delta v5 and Pentagon45; I5 rejects of clear v42, lets_634 and lets_635)
+adds eight executor, router and catalog leads:
+
+- `tool-name-execution-cap` (high) fires when a counter keyed on the tool name
+  alone (or `MAX_SAME_TOOL` / `per_tool_limit`) sits within eight lines of a
+  pre-execution refusal ("will not run again", "cap reached", "answer from the
+  results"). A name-only cap refuses a requested call with different arguments.
+- `successful-duplicate-suppression` (medium) fires when a success memo lookup
+  sits within twenty-four lines of a refusal note ("not sent again", "identical
+  to an earlier successful"). A model-visible repeat authorizer suppresses it.
+- `catalog-retired-after-step` (high) fires when a `_disable_tools` /
+  `tool_defs.clear()` call co-occurs with single-step completion wording
+  (`retire_after_read`, "single-lookup", "no further capability").
+- `sticky-capability-veto` (medium) fires when a `*_declined = True` flag
+  co-occurs with "rest of the request" / "records or nowhere" wording.
+- `uncertainty-narrows-route` (medium) fires on router prose sending an unsure
+  classification to a narrowed route ("If you are unsure, write records").
+- `tool-argument-grammar-sheet` (medium) fires when a `*_DESCRIPTION` constant
+  carries argument-shape grammar ("wire grammar", "OUTPUT SHAPE", "never omit
+  the", `<subject> is <value>`).
+- `review-turn-argument-template` (medium) fires when a `REVIEW_TURNS` table
+  sits near a `<thing> is <value>` or "word for word" pass test.
+- `self-reported-benchmark-fitting` (medium) fires on a probe-selected
+  experiment citation or an accuracy-on-recorded-turns comment.
+
+The permitted look-alikes stay silent: a stop after executed identical calls
+keyed on name plus canonical arguments, a model-authorized repeat (Thief v24,
+lets_636, lets_637), an unsure route that keeps the complete catalog, and plain
+field documentation. Each hit is a location for the reviewer, not a reject.
+
+The 2026-10-15 to 10-18 ATH board sweeps found shapes that L2/L3 confirmed on
+one sibling version after the screener had passed the same mechanism on an
+earlier one. Three more leads automate them:
+
+- `length-cut-draft-fallback` (medium, I3) fires when a `finish_reason ==
+  "length"` branch, an earlier-draft holder (`draft_1`, `first_reply`, a
+  `drafts` push), a cleared served output (`output = ""`, `mem::take`), and a
+  served-text writer that assigns the draft (`output = draft_1`) co-occur
+  within sixty lines. Discarding a nonempty deciding reply, ANSWER line
+  included, on length metadata alone is the I3 shape. Narrow structural guards
+  drop the lead when the entire length branch is gated on the same reply's
+  empty content, or a preceding Python content-first exit saves that reply to
+  the served output. A nearby comment, unrelated reply test, logging branch,
+  or inner retry guard followed by an unconditional discard does not qualify.
+  Unrecognized control-flow forms retain a routing lead for review; this
+  matcher is not a general program proof or a policy verdict.
+- `prompt-only-record-dedupe` (medium, I2) fires when a seen-set or map key
+  computed from a record's prompt or question field drops later records
+  within twelve lines, and the same file renders the record's response field.
+  A later record with the same prompt and a different response never reaches
+  the deciding model. A Python render may sit far away when it explicitly
+  iterates the dedupe helper's return value; otherwise roles must share the
+  record scope (one function in Python or one loop in brace languages), with
+  matching record receivers. An unrelated response access elsewhere in the
+  file cannot complete the lead. The inline loop and its helper refactor both
+  fire. A key that includes the response or
+  a record id, a counter, and retrieval that keeps every selected record stay
+  silent.
+- `generator-construction-admission` (medium) fires on a comment or string
+  saying the code was fitted to how the benchmark generator builds its data:
+  "generated with deliberate typos", "records are generated", "practice exams
+  generated", "dataset generator", "the generator renders/writes/stamps/
+  permutes", or a comment quoting a v13 record sentence ("X used to work at
+  Org", "Back when they were at Org"). It is the generator-side sibling of
+  `self-reported-benchmark-fitting`. The public starter kits describe the
+  benchmark in READMEs, which are not scanned, and their source wording does
+  not match.
+
+An admission is a reason to read the path, not a finding: trace the cited cue,
+example file, or quoted sentence to the served `/run` decision before citing
+I5 or I8.
+
 Live schema-driven retrieval/reranking, runtime-described semantics, generic
 state reconstruction, and bounded shape-only correction remain allowed through
 their published pass clauses. Prompt specialization and tool routing do not

@@ -42,6 +42,7 @@ import ditto.api_server.fingerprint as fingerprint_module
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.fingerprint import (
     _file_shingles,
+    _line_shingles,
     _normalized_source,
     _normalized_source_shingles,
     _prompt_shingles,
@@ -173,6 +174,7 @@ def kit_reference(monkeypatch: pytest.MonkeyPatch) -> None:
         "prompt": array(
             "Q", sorted(int(s, 16) for s in _prompt_shingles(_KIT_BASELINE))
         ),
+        "line": array("Q", sorted(int(s, 16) for s in _line_shingles(_KIT_BASELINE))),
     }
     monkeypatch.setattr(fingerprint_module, "_reference_shingles", corpus.__getitem__)
 

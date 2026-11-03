@@ -11,7 +11,7 @@ func TestFrozenProfileChecksum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "32263d22b82e45151bc49308c69603ae9ef269c381421877b863c643eff3c268"
+	const want = "91527597a57097741a3065693b556be9561d17be97ab4420fb6a5003b2c907ae"
 	if got != want {
 		t.Fatalf("profile checksum changed: got %s want %s", got, want)
 	}

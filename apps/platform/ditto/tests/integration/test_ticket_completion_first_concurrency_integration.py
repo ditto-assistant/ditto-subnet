@@ -6,7 +6,7 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -21,6 +21,7 @@ from ditto.db.models import (
     ValidatorTicket,
 )
 from ditto.db.queries.tickets import issue_ticket
+from ditto.tests.pgharness import truncate_test_tables
 
 pytestmark = pytest.mark.integration
 
@@ -83,7 +84,7 @@ async def test_same_validator_slots_walk_the_fifo_head_downwards() -> None:
     newer = uuid4()
     newest = uuid4()
     async with maker() as session, session.begin():
-        await session.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(session, "agents")
         rows: list[object] = []
         for index, (agent_id, label, letter) in enumerate(
             [
@@ -163,7 +164,7 @@ async def test_same_owner_partial_scores_converge_on_one_generation(
     now = datetime.now(UTC).replace(microsecond=0)
     agents = [uuid4(), uuid4()]
     async with maker() as session, session.begin():
-        await session.execute(text("TRUNCATE TABLE agents CASCADE"))
+        await truncate_test_tables(session, "agents")
         for index, agent_id in enumerate(agents):
             miner_hotkey = (
                 "mixed-owner-hotkey"

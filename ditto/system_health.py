@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import platform
+import re
 import subprocess
 import time
 from collections.abc import Callable
@@ -11,7 +13,7 @@ from typing import Any
 
 import psutil
 
-from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.api_models.system_health import DockerHealth, HostSpecs, SystemMetrics
 
 SYSTEM_METRICS_SAMPLE_SECONDS = 120.0
 _CONTAINER_MARKERS = (Path("/.dockerenv"), Path("/run/.containerenv"))
@@ -77,6 +79,49 @@ def probe_docker_health() -> DockerHealth:
     )
 
 
+_MIB = 1024**2
+_GIB = 1024**3
+
+
+def _sanitized_architecture(machine: str) -> str:
+    """Coerce ``platform.machine()`` into the signed architecture charset.
+
+    Sanitized rather than validated: an unfamiliar arch string should cost the
+    architecture label, never the CPU/RAM/disk numbers next to it.
+    """
+    cleaned = re.sub(r"[^a-zA-Z0-9_.-]", "-", machine or "")[:32].strip("-")
+    return cleaned or "unknown"
+
+
+def collect_host_specs(
+    *,
+    cpu_count: Callable[..., int | None] = psutil.cpu_count,
+    virtual_memory: Callable[[], Any] = psutil.virtual_memory,
+    disk_usage: Callable[[str], Any] = psutil.disk_usage,
+    machine: Callable[[], str] = platform.machine,
+) -> HostSpecs | None:
+    """Describe this host once, or return None if it cannot be described.
+
+    Mirrors ``ditto_screener.heartbeat.collect_host_specs``. A probe failure
+    omits the specs from the heartbeat rather than dropping the heartbeat.
+    """
+    try:
+        logical = cpu_count()
+        if not logical:
+            # Unknown is omitted, never reported as a one-CPU host.
+            return None
+        physical = cpu_count(logical=False)
+        return HostSpecs(
+            cpu_count=int(logical),
+            cpu_physical_cores=int(physical) if physical else None,
+            memory_total_mib=max(1, int(virtual_memory().total) // _MIB),
+            disk_total_gib=max(1, int(disk_usage("/").total) // _GIB),
+            architecture=_sanitized_architecture(machine()),
+        )
+    except Exception:  # noqa: BLE001 - fleet telemetry never blocks scoring
+        return None
+
+
 class SystemMetricsCollector:
     """Cache one coarse, allowlisted sample for a two-minute reporting cadence."""
 
@@ -90,6 +135,7 @@ class SystemMetricsCollector:
         virtual_memory: Callable[[], Any] = psutil.virtual_memory,
         disk_usage: Callable[[str], Any] = psutil.disk_usage,
         docker_probe: Callable[[], DockerHealth] = probe_docker_health,
+        host_specs_probe: Callable[[], HostSpecs | None] = collect_host_specs,
     ) -> None:
         self._sample_seconds = sample_seconds
         self._monotonic = monotonic
@@ -98,6 +144,9 @@ class SystemMetricsCollector:
         self._virtual_memory = virtual_memory
         self._disk_usage = disk_usage
         self._docker_probe = docker_probe
+        self._host_specs_probe = host_specs_probe
+        self._host_specs: HostSpecs | None = None
+        self._host_specs_probed = False
         self._last_sampled = float("-inf")
         self._cached: SystemMetrics | None = None
 
@@ -116,3 +165,10 @@ class SystemMetricsCollector:
         self._cached = sample
         self._last_sampled = now
         return sample
+
+    def host_specs(self) -> HostSpecs | None:
+        """Return this host's fixed hardware, probed once per process."""
+        if not self._host_specs_probed:
+            self._host_specs = self._host_specs_probe()
+            self._host_specs_probed = True
+        return self._host_specs

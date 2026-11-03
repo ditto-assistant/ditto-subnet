@@ -35,6 +35,7 @@ from ditto_screener.errors import (
     PlatformAuthUnavailable,
     PlatformError,
     PlatformRejected,
+    ScreenedImageUploadUnavailable,
 )
 from ditto_screener.heartbeat import (
     ScreenerHeartbeatRequest,
@@ -42,6 +43,7 @@ from ditto_screener.heartbeat import (
 )
 from ditto_screener.review_settings import (
     EffectiveReviewSettings,
+    ProbeBatteryObservationRequest,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
@@ -50,6 +52,7 @@ from ditto_screener.review_settings import (
 from ditto_screening_protocol import (
     SCREENING_POLICY_VERSION,
     ArtifactResponse,
+    ReviewLineagePacket,
     ScreenedImageCompletedPart,
     ScreenedImagePartUploadRequest,
     ScreenedImagePartUploadResponse,
@@ -62,6 +65,8 @@ from ditto_screening_protocol import (
     ScreenerQueueResponse,
     ScreenerReviewSettingsOverride,
     ScreenEvidenceItem,
+    ScreeningReviewUsageRequest,
+    ScreeningReviewUsageResponse,
     ScreenResultOutcome,
     ScreenResultRequest,
     ScreenResultResponse,
@@ -70,7 +75,6 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
     SourceReviewNote,
 )
-from ditto_screening_protocol.v13_private_receipt import V13ReplayPrivateReceipt
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -79,7 +83,16 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
-_IMAGE_INIT_RETRY_DELAYS = (0.5, 1.0)
+# Initiation is idempotent on ``image_upload_id`` (Platform answers a replay
+# with the session it already opened), so it can wait out an API restart.
+# Production 2026-11-01: a Platform deploy reloaded the single ditto-api process
+# at 19:27:43Z and it served again at 19:28:05Z; the old 0.5s + 1.0s budget
+# spent all three tries inside that window and failed the screen with 502.
+_IMAGE_INIT_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
+# Completion hashes the whole stored image server-side, so a gateway can drop
+# the response (502) while Platform finishes the work. Platform answers a replay
+# of a completed session as verified, so wait long enough for that to land.
+_IMAGE_COMPLETE_RETRY_DELAYS = (5.0, 15.0, 30.0, 60.0)
 _TRANSIENT_PLATFORM_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 15.0, 30.0)
 _ROTATION_WINDOW = timedelta(minutes=15)
 _CREDENTIAL_LOCK_GRACE_SECONDS = 30.0
@@ -225,70 +238,6 @@ class PlatformClient:
                 f"conversation control returned HTTP {response.status_code}"
             )
         return response.json()
-
-    async def submit_replay_private_receipt(
-        self, receipt: V13ReplayPrivateReceipt
-    ) -> dict[str, Any]:
-        """One authenticated report-only dispatch; never retry uncertain writes."""
-        response = await self._client.post(
-            self._base
-            + _PREFIX
-            + f"/verification-replays/{receipt.binding.replay_id}/private-receipt",
-            json=receipt.model_dump(mode="json"),
-            headers=await self._auth_headers(),
-            timeout=30,
-        )
-        if response.status_code != 200:
-            raise PlatformError(
-                f"replay private receipt returned HTTP {response.status_code}"
-            )
-        body = response.json()
-        if (
-            type(body) is not dict
-            or body.get("policy_verification_complete") is not False
-            or body.get("status") != "recorded_unverified"
-        ):
-            raise PlatformError("replay private receipt response invalid")
-        return body
-
-    async def replay_private_inputs(self, replay_id: UUID) -> dict[str, Any]:
-        """Fetch current short-lived image URLs and immutable role bindings."""
-        response = await self._client.get(
-            self._base + _PREFIX + f"/verification-replays/{replay_id}/private-inputs",
-            headers=await self._auth_headers(),
-            timeout=30,
-        )
-        if response.status_code != 200:
-            raise PlatformError(
-                f"replay private inputs returned HTTP {response.status_code}"
-            )
-        body = response.json()
-        if (
-            type(body) is not dict
-            or body.get("replay_id") != str(replay_id)
-            or body.get("policy_verification_complete") is not False
-        ):
-            raise PlatformError("replay private inputs response invalid")
-        return body
-
-    async def renew_verification_replay(self, replay_id: UUID) -> dict[str, Any]:
-        response = await self._client.post(
-            self._base + _PREFIX + f"/verification-replays/{replay_id}/renew",
-            headers=await self._auth_headers(),
-            timeout=30,
-        )
-        if response.status_code != 200:
-            raise PlatformError(
-                f"replay lease renewal returned HTTP {response.status_code}"
-            )
-        body = response.json()
-        if (
-            type(body) is not dict
-            or body.get("replay_id") != str(replay_id)
-            or body.get("status") != "running"
-        ):
-            raise PlatformError("replay lease renewal response invalid")
-        return body
 
     async def _refresh_auth_headers(self, path: Path) -> dict[str, str]:
         """Serialize credential rotation across every worker on one node."""
@@ -497,6 +446,44 @@ class PlatformClient:
             )
         return ShadowReviewObservationResponse.model_validate(resp.json())
 
+    async def submit_review_usage(
+        self, agent_id: UUID, request: ScreeningReviewUsageRequest
+    ) -> ScreeningReviewUsageResponse:
+        """Persist the attempt's model usage telemetry; never changes outcome."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-usage"
+        try:
+            resp = await self._client.post(
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"review usage submission failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"review usage rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ScreeningReviewUsageResponse.model_validate(resp.json())
+
+    async def submit_probe_battery(
+        self, agent_id: UUID, request: ProbeBatteryObservationRequest
+    ) -> ShadowReviewObservationResponse:
+        """Persist report-only probe battery leads without changing outcome."""
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/probe-battery"
+        try:
+            resp = await self._client.post(
+                url,
+                json=request.model_dump(mode="json"),
+                headers=await self._auth_headers(),
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"probe battery submission failed: {error}") from error
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"probe battery rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        return ShadowReviewObservationResponse.model_validate(resp.json())
+
     async def get_required_policy_version(self) -> int:
         """Read the platform policy without claiming or mutating queue state."""
         url = f"{self._base}{_PREFIX}/queue"
@@ -573,6 +560,41 @@ class PlatformClient:
                 )
                 raise ClaimResponseInvalid(message, ()) from error
             raise ClaimResponseInvalid(message, tuple(refs)) from error
+
+    async def get_review_lineage(
+        self, agent_id: UUID, *, attempt_id: UUID, artifact_sha256: str
+    ) -> ReviewLineagePacket:
+        """Fetch and bind the lineage-scoped review packet for one leased attempt.
+
+        The packet must name exactly this agent, attempt and artifact; anything
+        else is refused so a stale or crossed packet can never scope a review.
+        """
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/review-lineage"
+        try:
+            resp = await self._client.post(
+                url,
+                headers=await self._auth_headers(),
+                params={"attempt_id": str(attempt_id)},
+            )
+        except httpx.HTTPError as e:
+            raise PlatformError(f"lineage packet fetch failed: {e}") from e
+        if resp.status_code != 200:
+            raise PlatformError(
+                f"lineage packet rejected ({resp.status_code}): {resp.text[:200]}"
+            )
+        try:
+            packet = ReviewLineagePacket.model_validate(resp.json())
+        except (ValueError, ValidationError) as error:
+            # json.JSONDecodeError is a ValueError; the worker's lineage
+            # fallback keys on PlatformError.
+            raise PlatformError("lineage packet response is invalid") from error
+        if (
+            packet.agent_id != agent_id
+            or packet.attempt_id != attempt_id
+            or packet.artifact_sha256 != artifact_sha256.lower()
+        ):
+            raise PlatformError("lineage packet does not match the claimed attempt")
+        return packet
 
     async def get_artifact(
         self, agent_id: UUID, *, attempt_id: UUID | None = None
@@ -875,6 +897,7 @@ class PlatformClient:
                 json=request.model_dump(mode="json"),
                 headers=await self._auth_headers(),
                 transient_retry_delays=_IMAGE_INIT_RETRY_DELAYS,
+                fleet_owned=True,
             )
             upload = ScreenedImageUploadResponse.model_validate(response.json())
             if upload.image_upload_id != request.image_upload_id:
@@ -905,6 +928,7 @@ class PlatformClient:
                         json=part_request.model_dump(mode="json"),
                         headers=await self._auth_headers(),
                         transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
+                        fleet_owned=True,
                     )
                     part_upload = ScreenedImagePartUploadResponse.model_validate(
                         part_response.json()
@@ -917,6 +941,7 @@ class PlatformClient:
                         headers=part_upload.required_headers,
                         accepted=frozenset({200, 201, 204}),
                         transient_retry_delays=_TRANSIENT_PLATFORM_RETRY_DELAYS,
+                        fleet_owned=True,
                     )
                     etag = stored.headers.get("etag")
                     if not etag:
@@ -949,6 +974,7 @@ class PlatformClient:
                 operation="image upload complete",
                 json=complete.model_dump(mode="json"),
                 headers=await self._auth_headers(),
+                transient_retry_delays=_IMAGE_COMPLETE_RETRY_DELAYS,
             )
             ScreenedImageUploadCompleteResponse.model_validate(
                 completed_response.json()
@@ -974,9 +1000,16 @@ class PlatformClient:
         operation: str,
         accepted: frozenset[int] = frozenset({200}),
         transient_retry_delays: tuple[float, ...] = (),
+        fleet_owned: bool = False,
         **kwargs: Any,
     ) -> httpx.Response:
-        """Retry only explicitly idempotent calls on transient failures."""
+        """Retry only explicitly idempotent calls on transient failures.
+
+        With ``fleet_owned`` (a step whose work does not depend on the
+        submission), a transport failure or a 5xx left after the retries raises
+        :class:`ScreenedImageUploadUnavailable`, which Platform retries
+        automatically. Every other failure is a plain :class:`PlatformError`.
+        """
         for attempt in range(len(transient_retry_delays) + 1):
             try:
                 response = await self._client.request(
@@ -989,7 +1022,10 @@ class PlatformClient:
                 if attempt < len(transient_retry_delays):
                     await asyncio.sleep(transient_retry_delays[attempt])
                     continue
-                raise PlatformError(f"{operation} failed: {error}") from error
+                transport_error = (
+                    ScreenedImageUploadUnavailable if fleet_owned else PlatformError
+                )
+                raise transport_error(f"{operation} failed: {error}") from error
             if response.status_code in accepted:
                 return response
             if attempt < len(transient_retry_delays) and _is_transient_platform_status(
@@ -997,9 +1033,12 @@ class PlatformClient:
             ):
                 await asyncio.sleep(transient_retry_delays[attempt])
                 continue
-            raise PlatformError(
+            message = (
                 f"{operation} rejected ({response.status_code}): {response.text[:200]}"
             )
+            if fleet_owned and response.status_code >= 500:
+                raise ScreenedImageUploadUnavailable(message)
+            raise PlatformError(message)
         raise AssertionError("image request retry loop exhausted")
 
     async def _abort_screened_image_upload(

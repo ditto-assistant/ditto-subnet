@@ -449,6 +449,30 @@ func TestLoadScreenedImageAcceptsGzipArchive(t *testing.T) {
 	}
 }
 
+func TestBuildRunsScreenedImageWithoutSource(t *testing.T) {
+	archive, imageID := makeScreenedImageArchive(t)
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		_, _ = w.Write(archive)
+	}))
+	defer server.Close()
+	installFakeDocker(t, "", imageID)
+	src := screenedImageSource(server.URL+"/image.tar", archive, imageID)
+	src.TarballURL = ""
+	src.TarballSHA256 = strings.Repeat("a", 64) // digest-only provenance
+	image, _, fingerprint, err := (&LocalDocker{AllowPrivate: true}).Build(context.Background(), src)
+	if err != nil || image == "" {
+		t.Fatalf("source-free build = %q, %v", image, err)
+	}
+	if fingerprint != nil {
+		t.Fatal("source-free build produced a structural fingerprint")
+	}
+	if len(paths) != 1 || paths[0] != "/image.tar" {
+		t.Fatalf("source-free build fetched %v, want only the screened image", paths)
+	}
+}
+
 func TestValidateDockerSaveArchiveAcceptsBoundedAttestations(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

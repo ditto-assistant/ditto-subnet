@@ -10,13 +10,16 @@ actionable reason:
   ever been claimed yet; the item is waiting on screener capacity.
 * ``screening``         -- the current attempt is claimed and running.
 * ``screening_failed``  -- the current attempt ended non-terminal
-  (``retryable_infra``/``inconclusive``); fail-closed policy parks it until an
-  operator authorizes one exact retry (see
-  ``ditto.db.queries.screening_retry``). This is the "infrastructure backoff"
-  reason: a technical parking state, not a content judgment.
-* ``quarantined``       -- an active anti-cheat hold
-  (:class:`~ditto.db.models.ScreeningQuarantine`, ``status='active'``); this
-  is the "escalation" reason, a human judgment call on the artifact itself.
+  (``retryable_infra``, or an infrastructure fault the worker carried as
+  ``inconclusive``); fail-closed policy parks it until an operator authorizes
+  one exact retry (see ``ditto.db.queries.screening_retry``). This is the
+  "infrastructure backoff" reason: a technical parking state, not a content
+  judgment.
+* ``quarantined``       -- an active anti-cheat or review hold
+  (:class:`~ditto.db.models.ScreeningQuarantine`, ``status='active'``),
+  including a reviewer-inconclusive screening held for operator review
+  (``ditto.api_server.screening_inconclusive``); this is the "escalation"
+  reason, a human judgment call on the artifact itself.
 
 Stronger top-agent review, copy review, ATH review, and human escalation (the
 other four review classes #2042 names) are explicitly OUT of scope here. They
@@ -32,9 +35,9 @@ completely different ``AgentStatus`` value reached from a completely
 different code path, it can never appear in the query below: no filtering
 against "top_five"/"copy"/"ath" trigger metadata is needed to keep this slice
 "ordinary", because those other classes structurally cannot produce a row in
-``ORDINARY_REVIEW_ACTIONABLE_STATUSES``. ATH review needs its own
-review-state predicate over ``ath_reviews`` in a follow-up PR; this module
-does not attempt one.
+``ORDINARY_REVIEW_ACTIONABLE_STATUSES``. ATH review, including copy review
+and the top-five integrity double-check, has its own review-state predicate
+over ``ath_reviews`` in :mod:`ditto.db.queries.ath_review_queue_slo`.
 
 Current-attempt selection reuses the exact "latest, non-superseded attempt"
 ordering as

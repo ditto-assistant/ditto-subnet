@@ -397,6 +397,51 @@ class ReceiptImageTests(unittest.IsolatedAsyncioTestCase):
             )
             self.assertTrue(ack["acknowledged"])
 
+    async def test_independent_v2_request_queues_without_managed_deploy_file(self):
+        from ditto_screening_protocol.treasury_enforcement import EnforcingTreasuryPin
+
+        pin = EnforcingTreasuryPin.model_validate_json(
+            Path("/tmp/treasury-v2.json").read_text()
+        )
+        self.assertNotIn(HOTKEY, {m.validator_hotkey for m in pin.fleet})
+        data = body()
+        data.update(
+            schema_version=2,
+            treasury_pin=pin.model_dump(mode="json"),
+            weights={pin.policy.collector_hotkey: 0.1, "burn": 0.9},
+        )
+        data["provenance"].update(
+            epoch_index=pin.epoch_index,
+            champion_agent_id=None,
+            champion_artifact_sha256=None,
+            vector_digest=receipt.canonical_digest(data["weights"]),
+        )
+        authority = patch(
+            "ditto_screening_protocol.treasury_approval.SN118_FOLLOWER_AUTHORITY",
+            (pin.policy.genesis_hash, pin.policy.netuid, pin.policy.collector_coldkey),
+        )
+        self.addCleanup(authority.stop)
+        authority.start()
+        with patch.dict(
+            os.environ,
+            {
+                "DITTO_TREASURY_WEIGHT_ENFORCEMENT": "false",
+                "DITTO_TREASURY_SHADOW_APPROVAL_FILE": "",
+                "DITTO_TREASURY_APPROVED_POLICY_DIGEST": "",
+                "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST": "",
+            },
+        ):
+            request_id = str(uuid4())
+            row = await receipt.create_request(self.service, 118, request_id, data)
+            replay = await receipt.create_request(self.service, 118, request_id, data)
+            self.assertEqual(replay["task_id"], row["task_id"])
+            async with receipt.record_task(row["task_id"], HOTKEY):
+                self.assertEqual(receipt.treasury_task_body(), (data, HOTKEY))
+            data["treasury_pin"]["approval"]["signature"] = "0x" + "00" * 64
+            with self.assertRaises(HTTPException) as caught:
+                await receipt.create_request(self.service, 118, str(uuid4()), data)
+            self.assertEqual(caught.exception.status_code, 409)
+
     async def test_identity_and_ack_are_scoped(self):
         row = await self.create()
         other = SimpleNamespace(identity=SimpleNamespace(identity_name="other"))

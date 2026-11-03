@@ -1,7 +1,7 @@
 # Restricted Node/TypeScript test-driver image
 
 `Dockerfile.coding-node` implements the `node-call-ast-v2` runtime-image candidate.
-It contains the existing Go supervisor, pinned Node 24.20.0, integrity-locked
+It contains the existing Go supervisor, pinned Node 24.22.1, integrity-locked
 TypeScript 5.9.3, a closed trusted assertion interpreter and a separate non-root
 candidate API bridge. It neither runs the original suite as JavaScript nor
 imports candidate code into the trusted parent.

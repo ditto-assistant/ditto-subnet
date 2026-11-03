@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
@@ -54,7 +55,7 @@ def test_resolve_single_wallet_confirms(
 ) -> None:
     _touch_wallet(tmp_path, "miner", "default")
     answers = iter(["y", "y"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
     assert resolve_wallet_names(
         coldkey_name=None,
         hotkey_name=None,
@@ -67,7 +68,7 @@ def test_resolve_declining_search_cancels(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _touch_wallet(tmp_path, "miner", "default")
-    monkeypatch.setattr("builtins.input", lambda _prompt: "n")
+    monkeypatch.setattr("builtins.input", lambda: "n")
     with pytest.raises(WalletSelectionCancelledError):
         resolve_wallet_names(
             coldkey_name=None,
@@ -84,10 +85,31 @@ def test_resolve_numbered_picker(
     _touch_wallet(tmp_path, "old", "vali")
     monkeypatch.setattr("ditto.miner_cli.wallet._pick_with_fzf", lambda _pairs: None)
     answers = iter(["y", "2"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("builtins.input", lambda: next(answers))
     assert resolve_wallet_names(
         coldkey_name=None,
         hotkey_name=None,
         interactive=True,
         root=tmp_path,
     ) == ("old", "vali")
+
+
+@pytest.mark.parametrize("multiple", [True, False])
+def test_wallet_discovery_keeps_prompts_off_stdout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, multiple: bool
+) -> None:
+    _touch_wallet(tmp_path, "miner", "default")
+    if multiple:
+        _touch_wallet(tmp_path, "old", "vali")
+    monkeypatch.setattr("ditto.miner_cli.wallet._pick_with_fzf", lambda _pairs: None)
+    monkeypatch.setattr("sys.stdin", io.StringIO("y\n2\n" if multiple else "y\ny\n"))
+    assert resolve_wallet_names(
+        coldkey_name=None,
+        hotkey_name=None,
+        interactive=True,
+        root=tmp_path,
+    ) == (("old", "vali") if multiple else ("miner", "default"))
+    output = capsys.readouterr()
+    assert not output.out
+    assert "Search" in output.err
+    assert ("Select a wallet" if multiple else "Use miner / default") in output.err

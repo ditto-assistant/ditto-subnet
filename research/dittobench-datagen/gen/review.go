@@ -82,7 +82,7 @@ func GenerateDatasetReview(seed int64, prof Profile, benchVersion int) (DatasetR
 	world := universe.GenerateForVersion(seed, scale, benchVersion)
 	var plans []universe.QuestionPlan
 	if benchVersion >= protocol.BenchVersionV13 {
-		envelope, ok := v13EnvelopeFor(prof.Mem)
+		envelope, ok := memoryEnvelopeForVersion(prof.Mem, benchVersion)
 		if !ok {
 			return DatasetReview{}, fmt.Errorf("generate review annotations: no v13 envelope for %d memory cases", prof.Mem)
 		}

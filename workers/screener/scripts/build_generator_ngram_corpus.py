@@ -46,7 +46,10 @@ CORPUS_PATH = (
 SOURCE_FILES = (
     "datagen/datagen.go",
     "datagen/grammars.go",
+    "datagen/grammars_v13.go",
+    "datagen/v13_tool_semantics.go",
     "gen/abstention.go",
+    "gen/abstention_v13.go",
     "gen/conversational.go",
     "gen/memory_v2.go",
     "universe/questions.go",

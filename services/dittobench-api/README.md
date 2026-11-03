@@ -28,8 +28,11 @@ A subnet validator scores miner submissions and sets on-chain weights from the
 results. This repo is the scoring half of that job. Per submission it:
 
 1. Loads the exact language-neutral OCI image built by the trusted screener.
-   The source tarball is unpacked only for bounded, cross-language anti-copy
-   fingerprinting; V7/V8 validator tickets never rebuild miner source.
+   Validators never receive miner source: the scorer advertises
+   `screened-image-source-free-v1`, and Platform then sends only the screened
+   image and the artifact digest. Platform computes the structural anti-copy
+   fingerprint from the trusted upload. A legacy request that still carries
+   `tarball_url` is fingerprinted here as before; no ticket rebuilds source.
 2. Generates a fresh randomized DittoBench dataset, so no two evaluations match
    and a memorized lookup table cannot score.
 3. Seeds the harness, runs every tool and memory case, and grades each case
@@ -192,7 +195,10 @@ Before switching a deployment to `enforce`, watch for
 — those are the calls that will start failing. Under `enforce` the process
 refuses to start without a credential rather than 401ing every caller, and the
 published Compose default token is treated as unset, so enforcement requires a
-real per-host secret.
+real per-host secret. The inference-session broker follows the same mode: it
+still admits the published default under `shadow` (logging one would-reject
+line), and refuses it under `enforce`. In ditto-subnet's Compose stack, set
+`DITTOBENCH_CONTROL_AUTH_MODE` in `.env` and recreate `dittobench-api`.
 
 ## Endpoints
 
@@ -455,9 +461,12 @@ on the on-chain validator.
 ## Anti-copy
 
 Duplicate detection is a platform-side gate, not part of any score computed here.
-This engine forwards two inputs to it: the `structural_fingerprint` sketch in the
-`ScoreReport` and the observed tool-call trajectory (see `PROTOCOL.md`, Anti-copy
-signals). The gate holds a suspected copy for review, with first-seen protecting
+Platform computes the structural sketch itself at upload
+(`apps/platform/ditto/api_server/structural_fingerprint.py`, a parity port of
+`internal/astfp`). This engine forwards the observed tool-call trajectory, plus a
+`structural_fingerprint` only on legacy source-bearing requests, which Platform
+uses to fill a missing sketch and never to replace a stored one (see
+`PROTOCOL.md`, Anti-copy signals). The gate holds a suspected copy for review, with first-seen protecting
 the original author, and requires agreement across independent signals before
 flagging, so independent convergence on the shared reference harness is not
 penalized.
@@ -497,10 +506,10 @@ caller-supplied harness URLs, so it guards against abuse:
   API refuses to start when both are truthy.
   Imported archive and local runner tags are removed after each run so validator
   disks do not accumulate submission images.
-- Benchmark v7 and v8 require the screener-built, digest- and image-ID-bound
-  archive; the source-build fallback is retired. That contract governs
-  validator-side builds, so it applies to `git_url` and `tarball_url` on every
-  deployment. A `harness_url` practice submission builds nothing — the miner
+- Canonical scoring requires the screener-built, digest- and image-ID-bound
+  archive for every benchmark version. The sandbox also rejects a missing image
+  before fetching source, unless a local development caller explicitly enables
+  source builds in code. A `harness_url` practice submission builds nothing — the miner
   runs their own harness and this engine only drives and scores it — so it is
   outside the contract and remains the supported v8 practice path. The canonical
   validator path (`POST /v2/score`) still requires the screened image for every

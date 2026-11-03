@@ -24,12 +24,14 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated
 
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import UUID4
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -44,6 +46,12 @@ from ditto.api_models.upload import (
     _SIGNATURE_HEX_PATTERN,
     _SS58_PATTERN,
 )
+from ditto.api_server.cla import (
+    CLA_REQUIRED_ERROR_CODE,
+    ClaConsentRequired,
+    evaluate_cla_gate,
+    record_shadow_upload,
+)
 from ditto.api_server.dependencies import (
     get_chain_client,
     get_embedder,
@@ -51,8 +59,10 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.distinctive_content import extract_items
 from ditto.api_server.embedding import Embedder
 from ditto.api_server.fingerprint import (
+    _excluded_from_fingerprints,
     compute_content_fingerprint,
     compute_embedding_input,
     compute_normalized_source_hash,
@@ -69,20 +79,23 @@ from ditto.api_server.source_inspect import (
     validate_upload_archive,
 )
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
 from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
-from ditto.db.models import AgentStatus
+from ditto.db.models import AgentClaBinding, AgentStatus
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
-    get_submission_retry_at,
     insert_agent,
+    submission_cooldown_decision,
 )
 from ditto.db.queries.bans import is_hotkey_banned
+from ditto.db.queries.contributor_identity import lock_identity_writes
 from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     consume_evaluation_credit,
     get_agent_for_payment_proof,
     get_evaluation_payment_for_proof,
+    get_generator_payment_for_proof,
     get_same_owner_agent_by_sha,
     insert_evaluation_payment,
 )
@@ -92,12 +105,15 @@ from ditto.db.queries.submission_settings import (
     effective_submission_settings,
     get_upload_admission,
     get_upload_admission_for_coldkey,
+    lock_upload_admission_coldkey,
     release_upload_admission_for_exact_retry,
     reserve_upload_admission,
 )
+from ditto.db.queries.unreleased_copy import store_items as store_distinctive_items
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
+    from ditto.db.models import Agent
 
 logger = logging.getLogger(__name__)
 
@@ -171,11 +187,15 @@ def _as_utc(timestamp: datetime) -> datetime:
     return timestamp.replace(tzinfo=UTC) if timestamp.tzinfo is None else timestamp
 
 
+def _payment_recovery_expired(block_timestamp: datetime) -> bool:
+    return _as_utc(block_timestamp) + UPLOAD_ADMISSION_TTL <= datetime.now(UTC)
+
+
 def _ensure_payment_recovery_fresh(block_timestamp: datetime) -> None:
-    timestamp = _as_utc(block_timestamp)
-    if timestamp + UPLOAD_ADMISSION_TTL <= datetime.now(UTC):
+    if _payment_recovery_expired(block_timestamp):
         raise PaymentRecoveryExpired(
-            f"payment at {timestamp.isoformat()} is outside the 24-hour window"
+            f"payment at {_as_utc(block_timestamp).isoformat()} is outside the "
+            "24-hour window"
         )
 
 
@@ -198,6 +218,40 @@ async def eval_pricing(request: Request, session: SessionDep) -> EvalPricingResp
         amount_rao=settings.fee_amount_rao,
         send_address=settings.payment_address,
     )
+
+
+async def _cla_check_message(
+    session: AsyncSession, *, body: UploadCheckRequest, netuid: int
+) -> str | None:
+    cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=body.hotkey)
+    if cla.allowed:
+        return None
+    if body.payment_block_hash is None or body.payment_extrinsic_index is None:
+        return cla.message
+    # Mirror the multipart commit, which settles the proof itself before its
+    # CLA gate: an exact retry returns the original artifact, while another
+    # upload's proof or another hotkey's credit is a 3207 replay, and an
+    # expired credit is a payment-recovery-expired refusal; signing cannot fix
+    # either. The proof check below reports those, so consent is never the
+    # answer for such a proof.
+    if await get_agent_for_payment_proof(
+        session,
+        block_hash=body.payment_block_hash,
+        extrinsic_index=body.payment_extrinsic_index,
+    ):
+        return None
+    credit = await get_evaluation_payment_for_proof(
+        session,
+        block_hash=body.payment_block_hash,
+        extrinsic_index=body.payment_extrinsic_index,
+    )
+    if credit and (
+        credit.agent_id is not None
+        or credit.miner_hotkey != body.hotkey
+        or _payment_recovery_expired(credit.timestamp)
+    ):
+        return None
+    return cla.message
 
 
 @router.post("/check", response_model=UploadCheckResponse)
@@ -257,6 +311,16 @@ async def check(
     if banned:
         codes.append(ERROR_CODE_HOTKEY_BANNED)
         messages.append("hotkey is banned from submitting")
+
+    # Consent is checked before admission or a new payment. An exact retry of
+    # an already accepted artifact is not a new contribution. The optional name
+    # is a dry-run hint for newer clients; reservations bind hotkey/SHA, and
+    # the multipart commit always rechecks the exact stored name.
+    if signature_valid and not banned:
+        cla_message = await _cla_check_message(session, body=body, netuid=netuid)
+        if cla_message is not None:
+            codes.append(CLA_REQUIRED_ERROR_CODE)
+            messages.append(cla_message)
 
     # 5. Stop the common accidental duplicate before the miner pays. A second
     # independently seeded run remains available, but it must be explicit.
@@ -326,10 +390,13 @@ async def check(
                     block_hash=body.payment_block_hash,
                     extrinsic_index=body.payment_extrinsic_index,
                 )
+                # Pre-CLA clients omit the optional name; the multipart commit
+                # still compares the stored one.
                 if not (
                     existing is not None
                     and existing.miner_hotkey == body.hotkey
                     and existing.sha256 == body.sha256
+                    and (body.name is None or existing.name == body.name)
                 ):
                     raise PaymentReplayedError("payment proof already used")
                 recovery_payment_verified = True
@@ -341,6 +408,14 @@ async def check(
                 _ensure_payment_recovery_fresh(payment_record.timestamp)
                 recovery_payment_verified = True
         else:
+            if await get_generator_payment_for_proof(
+                session,
+                block_hash=body.payment_block_hash,
+                extrinsic_index=body.payment_extrinsic_index,
+            ):
+                raise PaymentReplayedError(
+                    "payment proof already funded a generator upload"
+                )
             # The replay lookup autobegins a read transaction. Do not hold a
             # pooled connection across the recovery proof's chain reads.
             if session.in_transaction():
@@ -377,14 +452,20 @@ async def check(
         and owner_coldkey is not None
         and not recovery_payment_verified
     ):
-        retry_at = await get_submission_retry_at(
+        decision = await submission_cooldown_decision(
             session,
             miner_coldkey=owner_coldkey,
+            miner_hotkey=body.hotkey,
             cooldown=timedelta(seconds=settings.cooldown_seconds),
         )
-        if retry_at is not None:
+        if decision is not None:
+            retry_at = decision.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(submission_cooldown_message(retry_at))
+            messages.append(
+                submission_cooldown_message(
+                    retry_at, owner_override=decision.owner_override
+                )
+            )
 
     admission = None
     if not codes and body.reserve_submission_slot:
@@ -395,6 +476,15 @@ async def check(
                 await rollback_result
         try:
             async with session.begin():
+                await lock_identity_writes(session, namespace="cla-policy", shared=True)
+                # Evaluate consent after the coldkey wait: an agreement that took
+                # effect while this check waited applies to it.
+                await lock_upload_admission_coldkey(session, owner_coldkey)
+                cla_message = await _cla_check_message(
+                    session, body=body, netuid=netuid
+                )
+                if cla_message is not None:
+                    raise ClaConsentRequired(cla_message)
                 settings = await effective_submission_settings(
                     session,
                     default_payment_address=request.app.state.config.upload_payment_address,
@@ -407,10 +497,15 @@ async def check(
                     settings=settings,
                     replace_existing=recovery_payment_verified,
                 )
+        except ClaConsentRequired as exc:
+            codes.append(CLA_REQUIRED_ERROR_CODE)
+            messages.append(str(exc))
         except SubmissionCooldownError as exc:
             retry_at = exc.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(submission_cooldown_message(retry_at))
+            messages.append(
+                submission_cooldown_message(retry_at, owner_override=exc.owner_override)
+            )
 
     payment_required = not codes and not recovery_payment_verified
     return UploadCheckResponse(
@@ -555,54 +650,63 @@ async def upload_agent(
     # commit. Authenticate and re-hash first, then recover only an *exact* retry.
     # The payment proof remains non-transferable: changing hotkey, name, or bytes
     # keeps the existing 3207 replay rejection.
+    retry_identity = _RetryIdentity(
+        payment_block_hash=payment_block_hash,
+        payment_extrinsic_index=payment_extrinsic_index,
+        hotkey=hotkey,
+        name=name,
+        sha256=sha256,
+        admission_token=admission_token,
+    )
     existing = await get_agent_for_payment_proof(
         session,
         block_hash=payment_block_hash,
         extrinsic_index=payment_extrinsic_index,
     )
     if existing:
-        if (
-            existing.miner_hotkey == hotkey
-            and existing.name == name
-            and existing.sha256 == sha256
-        ):
-            assert existing.version is not None
-            existing_agent_id = existing.agent_id
-            existing_version = existing.version
-            existing_status = existing.status
-            if admission_token is not None:
-                await release_upload_admission_for_exact_retry(
-                    session,
-                    token=admission_token,
-                    miner_hotkey=hotkey,
-                    sha256=sha256,
-                )
-                await session.commit()
-            logger.info(
-                "upload retry recovered hotkey=%s agent_id=%s version=%s block_hash=%s",
-                hotkey,
-                existing_agent_id,
-                existing_version,
-                payment_block_hash,
-            )
-            return UploadAgentResponse(
-                agent_id=existing_agent_id,
-                version=existing_version,
-                status=existing_status,
-            )
+        recovered = await _exact_retry_of_accepted_upload(
+            session, retry_identity, existing=existing
+        )
+        if recovered is not None:
+            return recovered
         raise PaymentReplayedError("payment proof already used by a different upload")
 
+    # From here on, a concurrent identical request that commits first can
+    # cause a refusal (consent, the proof, the admission). Every such refusal
+    # goes through the exact-retry check so the loser reports the original.
+    # Refusals about the proof itself come before consent: signing the CLA
+    # cannot make another upload's proof, another hotkey's credit or an expired
+    # credit usable, so the caller must learn that first (the 3207 replay
+    # contract).
     payment_record = await get_evaluation_payment_for_proof(
         session,
         block_hash=payment_block_hash,
         extrinsic_index=payment_extrinsic_index,
     )
     if payment_record and payment_record.agent_id is not None:
-        raise PaymentReplayedError("payment proof already used by a different upload")
+        return await _refuse_unless_exact_retry(
+            session,
+            PaymentReplayedError("payment proof already used by a different upload"),
+            retry_identity,
+        )
+    if payment_record is None and await get_generator_payment_for_proof(
+        session,
+        block_hash=payment_block_hash,
+        extrinsic_index=payment_extrinsic_index,
+    ):
+        raise PaymentReplayedError("payment proof already funded a generator upload")
     if payment_record and payment_record.miner_hotkey != hotkey:
         raise PaymentReplayedError("payment credit belongs to a different hotkey")
     if payment_record:
-        _ensure_payment_recovery_fresh(payment_record.timestamp)
+        try:
+            _ensure_payment_recovery_fresh(payment_record.timestamp)
+        except PaymentRecoveryExpired as exc:
+            return await _refuse_unless_exact_retry(session, exc, retry_identity)
+    cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
+    if not cla.allowed:
+        return await _refuse_unless_exact_retry(
+            session, ClaConsentRequired(cla.message), retry_identity
+        )
     using_credit = bool(payment_record)
     credit_owner_coldkey = payment_record.miner_coldkey if payment_record else None
     admission = (
@@ -643,9 +747,14 @@ async def upload_agent(
     try:
         await asyncio.to_thread(validate_upload_archive, tar_bytes)
     except SourceInspectError as exc:
-        raise HTTPException(
-            status_code=400, detail=_UPLOAD_ARCHIVE_DETAILS.get(exc.code, exc.code)
-        ) from exc
+        # A per-file limit names the miner's own file and the fix; every other
+        # archive code keeps its fixed public sentence.
+        detail = (
+            str(exc)
+            if exc.code == "source-file-limit"
+            else _UPLOAD_ARCHIVE_DETAILS.get(exc.code, exc.code)
+        )
+        raise HTTPException(status_code=400, detail=detail) from exc
 
     # 6. Chain-side verification. Typed PaymentVerifierError subclasses
     # are mapped to 3201-3206 by the envelope handler; we re-raise them
@@ -700,6 +809,11 @@ async def upload_agent(
                         credit_for_agent_id=duplicate_agent_id,
                     )
             except PaymentReplayedError:
+                recovered = await _exact_retry_of_accepted_upload(
+                    session, retry_identity
+                )
+                if recovered is not None:
+                    return recovered
                 raced = await get_evaluation_payment_for_proof(
                     session,
                     block_hash=payment_block_hash,
@@ -756,6 +870,12 @@ async def upload_agent(
     # calibration/retroactive analysis; not yet a hold trigger. Same offload +
     # best-effort None contract.
     prompt_fingerprint = await asyncio.to_thread(compute_prompt_fingerprint, tar_bytes)
+    # 7d'. structural (AST-shape) sketch for the anti-copy gate. Platform owns
+    # this so validators never need the source tarball; same offload +
+    # best-effort None contract.
+    structural_fingerprint = await asyncio.to_thread(
+        compute_structural_fingerprint, tar_bytes
+    )
     # 7e. code embedding (shadow mode): build the canonical input (CPU-bound,
     # offloaded) then embed via the self-hosted service. Disabled by default
     # (null embedder -> None) and best-effort: a slow/unreachable embedder yields a
@@ -765,6 +885,17 @@ async def upload_agent(
     embed_input = await asyncio.to_thread(compute_embedding_input, tar_bytes)
     code_embedding = await embedder.embed(embed_input) if embed_input else None
     code_embed_model = embedder.model_tag if code_embedding is not None else None
+    # 7f. distinctive-item index for the unreleased-copy signal (shadow): the
+    # language-agnostic literal/identifier items a cross-language port keeps.
+    # Best-effort like the channels above: on failure the row is simply absent
+    # and the sentinel indexes the artifact from storage on its next tick.
+    try:
+        distinctive_items = await asyncio.to_thread(
+            extract_items, tar_bytes, excluded=_excluded_from_fingerprints
+        )
+    except Exception:
+        logger.exception("distinctive-item extraction failed")
+        distinctive_items = None
 
     if session.in_transaction():
         rollback_result = session.rollback()
@@ -776,6 +907,9 @@ async def upload_agent(
     # (3207) and the envelope handler maps it to HTTP 402.
     try:
         async with session.begin():
+            # Match Python/Go reservation order: policy before the coldkey lock
+            # acquired by admission consumption. Hold both through commit.
+            await lock_identity_writes(session, namespace="cla-policy", shared=True)
             settings = await effective_submission_settings(
                 session,
                 default_payment_address=request.app.state.config.upload_payment_address,
@@ -807,9 +941,18 @@ async def upload_agent(
                 content_fingerprint=content_fingerprint,
                 normalized_source_hash=normalized_source_hash,
                 prompt_fingerprint=prompt_fingerprint,
+                structural_fingerprint=structural_fingerprint,
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
             )
+            if distinctive_items is not None:
+                try:
+                    async with session.begin_nested():
+                        await store_distinctive_items(
+                            session, agent_id=agent_id, extracted=distinctive_items
+                        )
+                except SQLAlchemyError:
+                    logger.exception("distinctive-item index write failed")
             if using_credit:
                 locked_credit = await get_evaluation_payment_for_proof(
                     session,
@@ -830,26 +973,37 @@ async def upload_agent(
                 await insert_evaluation_payment(
                     session, verified=verified, agent_id=agent_id
                 )
-    except PaymentReplayedError:
-        # A concurrent identical retry may have passed the first lookup before
-        # the winning request committed. The transaction context has rolled this
-        # request back, so perform one final exact-identity lookup.
-        existing = await get_agent_for_payment_proof(
-            session,
-            block_hash=payment_block_hash,
-            extrinsic_index=payment_extrinsic_index,
-        )
-        if existing and (
-            existing.miner_hotkey == hotkey
-            and existing.name == name
-            and existing.sha256 == sha256
-        ):
-            assert existing.version is not None
-            return UploadAgentResponse(
-                agent_id=existing.agent_id,
-                version=existing.version,
-                status=existing.status,
+            # Decide consent last, after every write that can wait on a lock
+            # (the series lock, the credit row, the payment key), so a version
+            # that becomes effective during those waits is not missed. The
+            # shared policy lock held since the start blocks policy writes, and
+            # a refusal rolls every write above back.
+            final_cla = await evaluate_cla_gate(session, netuid=netuid, hotkey=hotkey)
+            if not final_cla.allowed:
+                raise ClaConsentRequired(final_cla.message)
+            # Only shadow and enforce return a signature, so an upload while
+            # the gate is off binds nothing and stays deletable.
+            if final_cla.signature_id is not None:
+                session.add(
+                    AgentClaBinding(
+                        agent_id=agent_id, signature_id=final_cla.signature_id
+                    )
+                )
+                await session.flush()
+            # Shadow observations count accepted unsigned artifacts only, so they
+            # commit or roll back with this upload.
+            await record_shadow_upload(
+                session, netuid=netuid, hotkey=hotkey, decision=final_cla
             )
+    except (PaymentReplayedError, SubmissionCooldownError, ClaConsentRequired):
+        # A concurrent identical retry may have passed the first lookup before
+        # the winning request committed; the winner then also consumed the
+        # admission (cooldown) or a policy change landed in between. The
+        # transaction rolled this request back, so report the original upload
+        # if this request is its exact retry.
+        recovered = await _exact_retry_of_accepted_upload(session, retry_identity)
+        if recovered is not None:
+            return recovered
         raise
 
     logger.info(
@@ -863,6 +1017,78 @@ async def upload_agent(
         status=AgentStatus.UPLOADED,
         payment_disposition="credit_consumed" if using_credit else "consumed",
     )
+
+
+@dataclass(frozen=True)
+class _RetryIdentity:
+    """What makes a request an exact retry of an accepted upload."""
+
+    payment_block_hash: str
+    payment_extrinsic_index: int
+    hotkey: str
+    name: str
+    sha256: str
+    # The temporary reservation a recovery check issued for this retry.
+    admission_token: uuid.UUID | None
+
+
+async def _refuse_unless_exact_retry(
+    session: AsyncSession, refusal: Exception, identity: _RetryIdentity
+) -> UploadAgentResponse:
+    """Report the original upload if this request repeats it, else refuse."""
+    recovered = await _exact_retry_of_accepted_upload(session, identity)
+    if recovered is not None:
+        return recovered
+    raise refusal
+
+
+async def _exact_retry_of_accepted_upload(
+    session: AsyncSession, identity: _RetryIdentity, *, existing: Agent | None = None
+) -> UploadAgentResponse | None:
+    """The original agent when this request exactly repeats an accepted upload.
+
+    The proof stays non-transferable: a different hotkey, name or SHA is not a
+    retry. Used by the first proof lookup and after any refusal that a
+    concurrent identical request can cause by committing first (the proof, its
+    admission or a policy change), so every recovery behaves the same: it
+    releases the reservation the retry carried, so that never blocks the next
+    upload, and reports the original upload instead of the refusal.
+    """
+    if existing is None:
+        existing = await get_agent_for_payment_proof(
+            session,
+            block_hash=identity.payment_block_hash,
+            extrinsic_index=identity.payment_extrinsic_index,
+        )
+    if not existing or (existing.miner_hotkey, existing.name, existing.sha256) != (
+        identity.hotkey,
+        identity.name,
+        identity.sha256,
+    ):
+        return None
+    assert existing.version is not None
+    # Read the row before a commit expires it.
+    recovered = UploadAgentResponse(
+        agent_id=existing.agent_id,
+        version=existing.version,
+        status=existing.status,
+    )
+    if identity.admission_token is not None:
+        await release_upload_admission_for_exact_retry(
+            session,
+            token=identity.admission_token,
+            miner_hotkey=identity.hotkey,
+            sha256=identity.sha256,
+        )
+        await session.commit()
+    logger.info(
+        "upload retry recovered hotkey=%s agent_id=%s version=%s block_hash=%s",
+        identity.hotkey,
+        recovered.agent_id,
+        recovered.version,
+        identity.payment_block_hash,
+    )
+    return recovered
 
 
 def _verify_upload_signature(

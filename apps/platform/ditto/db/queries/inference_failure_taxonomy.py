@@ -65,6 +65,7 @@ _CLASSIFIED_SQL = f"""
            left(r.terminal_error_code, 120) AS terminal_error_code,
            CASE
              WHEN r.upstream_provider = 'ditto-router'             THEN 'ditto-router'
+             WHEN r.request_kind = 'decision'                      THEN 'openrouter'
              WHEN r.request_kind = 'chat' AND r.fallback_phase = 0 THEN 'openrouter'
              WHEN r.request_kind = 'chat'                          THEN 'reliable'
              WHEN r.fallback_phase = 0                             THEN 'direct'
@@ -80,7 +81,7 @@ _CLASSIFIED_SQL = f"""
              WHEN r.upstream_provider = 'ditto-router'                    THEN 'router_internal'
              WHEN r.upstream_provider IS NULL OR r.upstream_provider = '' THEN 'unknown'
              WHEN r.upstream_provider !~ '{_SAFE_PROVIDER_RE}'            THEN 'unrecognized'
-             WHEN r.request_kind = 'embedding'                            THEN 'configured'
+             WHEN r.request_kind IN ('embedding', 'decision')             THEN 'configured'
              WHEN r.status = 'completed'                                  THEN 'confirmed_selected'
              ELSE 'last_attempted'
            END AS route_basis,

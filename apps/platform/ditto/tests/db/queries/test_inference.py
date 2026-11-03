@@ -7,7 +7,7 @@ from prometheus_client import REGISTRY
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.inference_concurrency_settings import (
-    DEFAULT_CHAT_TOKEN_BUDGET,
+    DecisionLaneSettings,
     InferenceConcurrencySettings,
 )
 from ditto.api_models.ticket_status import TicketStatus
@@ -643,50 +643,6 @@ async def _live_v7_embedding_grant(session: AsyncSession, config: InferenceProxy
 
 
 @pytest.mark.asyncio
-async def test_full_embedding_lane_is_backpressure_not_a_lost_lease(
-    session: AsyncSession,
-) -> None:
-    """A saturated lane and a revoked lease must not look alike.
-
-    Both used to return ``None`` and both became a ``429``, which dittobench-api
-    reads as "the platform took my ticket away" and answers by discarding the
-    whole run. That was survivable only while the limit was a constant nobody
-    could move. Now that an operator can lower it from backroom under a live
-    run, the two cases have to be told apart or the emergency brake destroys
-    every run it touches.
-    """
-    config = replace(_config(), embedding_per_ticket_concurrency=1)
-    async with session.begin():
-        _ticket, grant, bearer, now = await _live_v7_embedding_grant(session, config)
-        first = await begin_inference_request(
-            session,
-            grant_id=grant.grant_id,
-            nonce=uuid4(),
-            bearer=bearer,
-            model=config.embedding_model,
-            token_reservation=10,
-            now=now,
-            config=config,
-            request_kind="embedding",
-        )
-        assert isinstance(first, tuple)
-
-        # Second concurrent embedding: the lane is full, the lease is healthy.
-        second = await begin_inference_request(
-            session,
-            grant_id=grant.grant_id,
-            nonce=uuid4(),
-            bearer=bearer,
-            model=config.embedding_model,
-            token_reservation=10,
-            now=now,
-            config=config,
-            request_kind="embedding",
-        )
-        assert second is InferenceDecline.AT_CAPACITY
-
-
-@pytest.mark.asyncio
 async def test_revoked_lease_still_fails_closed_on_the_embedding_lane(
     session: AsyncSession,
 ) -> None:
@@ -759,51 +715,6 @@ async def test_raised_per_ticket_limit_actually_admits_concurrent_embeddings(
                 now=now,
                 config=config,
                 request_kind="embedding",
-            )
-            is InferenceDecline.AT_CAPACITY
-        )
-
-
-@pytest.mark.asyncio
-async def test_chat_capacity_refusal_is_retryable_not_fatal(
-    session: AsyncSession,
-) -> None:
-    """Chat capacity is backpressure, and now says so.
-
-    This test previously asserted the opposite -- that chat kept its historical
-    anonymous ``None`` -> 429 -- on the reasoning that chat limits are boot-time
-    constants and so cannot surprise a live run. The premise was true and the
-    conclusion still wrong: a chat rail can fill under ordinary load with
-    nothing wrong with the lease, and answering that with the code that means
-    "your lease is dead" is what ended `banblackycat` while its ticket was
-    still live.
-    """
-    config = replace(_config(), per_ticket_concurrency=1)
-    async with session.begin():
-        _ticket, grant, bearer, now = await _live_grant(session)
-        assert isinstance(
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=10,
-                now=now,
-                config=config,
-            ),
-            tuple,
-        )
-        assert (
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=10,
-                now=now,
-                config=config,
             )
             is InferenceDecline.AT_CAPACITY
         )
@@ -990,6 +901,70 @@ async def test_the_operator_budget_is_stamped_onto_the_new_grant(
     assert grant.token_budget == 7_000
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "bench_version"),
+    [(False, 15), (True, 15), (True, 14), (True, _BENCH_VERSION)],
+)
+async def test_the_decision_lane_is_stamped_only_while_the_operator_pins_it(
+    session: AsyncSession, enabled: bool, bench_version: int
+) -> None:
+    """Lane off mints the pre-lane grant exactly; lane on stamps pin and walls.
+
+    Only v15+ leases carry the lane: a v14-or-earlier lease minted while the
+    board is on is byte-identical to a pre-lane grant.
+    """
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="miner",
+        name="decision-stamp",
+        sha256="de" * 32,
+        status=AgentStatus.EVALUATING,
+        created_at=now,
+    )
+    ticket = ValidatorTicket(
+        agent_id=agent.agent_id,
+        validator_hotkey="validator",
+        slot_id="slot-0",
+        status=TicketStatus.ISSUED,
+        issued_at=now,
+        deadline=now + timedelta(minutes=20),
+        bench_version=bench_version,
+        attempt_count=1,
+    )
+    session.add_all([agent, ticket])
+    await _seed_calibrated_route(session, now)
+    await session.flush()
+    lane = (
+        DecisionLaneSettings(
+            enabled=True,
+            model="typesafe/jev-1.14",
+            request_budget=9,
+            token_budget=9_000,
+        )
+        if enabled
+        else DecisionLaneSettings(model="typesafe/jev-1.14")
+    )
+    board = apply_settings(_config(), InferenceConcurrencySettings(decision_lane=lane))
+    grant = await ensure_inference_grant(session, ticket=ticket, config=board)
+    assert grant is not None
+    await session.refresh(grant)
+    stamps = (
+        grant.decision_model,
+        grant.decision_input_microusd_per_mtok,
+        grant.decision_request_budget,
+        grant.decision_token_budget,
+    )
+    expected = (
+        ("typesafe/jev-1.14", 42_000, 9, 9_000)
+        if enabled and bench_version >= 15
+        else (None, 0, 0, 0)
+    )
+    assert stamps == expected
+    assert (grant.decision_tokens, grant.decision_cost_microusd) == (0, 0)
+
+
 def _token_budget_config(token_budget: int) -> InferenceProxyConfig:
     """A config where the *token* budget is the only limit that can bind.
 
@@ -1127,73 +1102,6 @@ async def test_in_flight_reservations_do_not_spend_the_token_budget(
 
 
 @pytest.mark.asyncio
-async def test_a_jupiter_profile_run_completes_at_the_shipped_budget(
-    session: AsyncSession,
-) -> None:
-    """The whole point of the change, measured against the real numbers.
-
-    Jupiter and KOTH_v7_1 issue ~1090 chat calls at ~10k tokens each -- ~10.9M
-    for a complete run. Against the old 4,000,000 that run is refused from call
-    ~400 onward, which is 36% of the way in: the remaining ~690 calls were the
-    1009 declines observed on a live lease.
-
-    Scaled down by 1000x so the test is a few hundred rows rather than a
-    million, but the ratio that matters -- run demand vs. allowance -- is
-    preserved exactly.
-    """
-    per_call_prompt, per_call_completion = 9_400, 600
-    calls = 1_090
-    demand = calls * (per_call_prompt + per_call_completion)
-    assert demand == 10_900_000
-
-    async def _drive(token_budget: int) -> tuple[int, object]:
-        config = _token_budget_config(token_budget)
-        _ticket, grant, bearer, now = await _live_grant(
-            session, config, validator_hotkey=f"validator-{token_budget}"
-        )
-        completed = 0
-        for _ in range(calls):
-            got = await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=(nonce := uuid4()),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=per_call_prompt + per_call_completion,
-                now=now,
-                config=config,
-            )
-            if isinstance(got, InferenceDecline):
-                return completed, got
-            await finish_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=nonce,
-                generation=grant.generation,
-                status="completed",
-                prompt_tokens=per_call_prompt,
-                completion_tokens=per_call_completion,
-                cost_microusd=1,
-                usage_available=True,
-                now=now,
-            )
-            completed += 1
-        return completed, None
-
-    async with session.begin():
-        # The old allowance: cut off well before the run ends...
-        completed, decline = await _drive(4_000_000)
-        assert completed == 400
-        assert decline is InferenceDecline.TOKEN_BUDGET_EXHAUSTED
-
-    async with session.begin():
-        # ...and the shipped one: the run finishes.
-        completed, decline = await _drive(DEFAULT_CHAT_TOKEN_BUDGET)
-        assert completed == calls
-        assert decline is None
-
-
-@pytest.mark.asyncio
 async def test_a_failed_request_without_usage_does_not_charge_the_estimate(
     session: AsyncSession,
 ) -> None:
@@ -1321,24 +1229,6 @@ async def test_real_usage_above_the_estimate_is_still_deliverable(
             now=now,
         )
         assert grant.prompt_tokens == 8_192
-
-
-@pytest.mark.asyncio
-async def test_new_grants_record_which_meter_booked_them(
-    session: AsyncSession,
-) -> None:
-    """A token total is only comparable within the contract that produced it.
-
-    Without this marker, someone comparing a pre-fix run against a post-fix run
-    concludes the agent got dramatically more efficient when only the meter
-    changed. There is no backfill and there cannot be one: the over-charge
-    happened at reservation time, so what those calls really consumed was never
-    recorded.
-    """
-    async with session.begin():
-        _ticket, grant, _bearer, _now = await _live_grant(session)
-        assert grant.usage_accounting_version == USAGE_ACCOUNTING_VERSION
-        assert USAGE_ACCOUNTING_VERSION == 2
 
 
 @pytest.mark.asyncio

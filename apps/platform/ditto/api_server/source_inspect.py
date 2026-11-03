@@ -21,11 +21,20 @@ from __future__ import annotations
 
 import codecs
 import fnmatch
+import hashlib
 import io
 import re
 import tarfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
+
+from ditto_screening_protocol.source_limits import (
+    check_source_stream,
+    is_source_path,
+    read_chunks,
+    source_limits_enforced,
+)
 
 MAX_LISTING_FILES = 512
 MAX_OPAQUE_BLOBS = 128
@@ -365,6 +374,32 @@ class TarSourceInspector:
         """
         return self._read_text(self._text_member(path))
 
+    def member_digests(self) -> dict[str, str]:
+        """``path -> sha256`` for every inventoried member, in one stream pass.
+
+        Lets a lineage diff tell an unchanged opaque blob (model weights) or an
+        unread text file from a changed one without loading either as text.
+        """
+        wanted = {member.index: member for member in self._members.values()}
+        digests: dict[str, str] = {}
+        with tarfile.open(fileobj=io.BytesIO(self._tar_bytes), mode="r|gz") as archive:
+            for index, member in enumerate(archive):
+                inventoried = wanted.get(index)
+                if inventoried is None:
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                hasher = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    hasher.update(chunk)
+                digests[inventoried.name] = hasher.hexdigest()
+        return digests
+
+    def opaque_paths(self) -> set[str]:
+        """Members that are not bounded UTF-8 text."""
+        return {member.name for member in self._members.values() if not member.is_text}
+
     def _text_member(self, path: str) -> _Member:
         """The UTF-8 text member at ``path``, or a typed inspect error."""
         normalized = path.removeprefix("./")
@@ -530,14 +565,19 @@ class TarSourceInspector:
             return extracted.read(TEXT_SIZE_LIMIT + 1).decode("utf-8")
 
 
-def validate_upload_archive(tar_bytes: bytes) -> None:
+def validate_upload_archive(tar_bytes: bytes, *, now: datetime | None = None) -> None:
     """Reject an upload that is not a bounded gzip tar with a root Dockerfile.
 
     One sequential pass mirroring the screener's archive contract. Member
     count and unpacked size use the screener's caps. Unsafe paths, links, and
     special files are rejected rather than skipped. Import allowlisting stays
     with the screener: there is no upload-time crate allowlist yet.
+
+    From ``SOURCE_LIMITS_EFFECTIVE_AT`` each source file must also fit the
+    shared per-file limits (``ditto_screening_protocol.source_limits``), so a
+    file no reviewer can read is refused here instead of parking in screening.
     """
+    enforce_source_limits = source_limits_enforced(now or datetime.now(UTC))
     if not tar_bytes.startswith(b"\x1f\x8b"):
         raise SourceInspectError("archive-not-gzip", "archive is not gzip-compressed")
     count = 0
@@ -594,6 +634,22 @@ def validate_upload_archive(tar_bytes: bytes) -> None:
                         f"archive exceeds {UPLOAD_MAX_UNPACKED_BYTES} unpacked bytes",
                     )
                 seen.add(canonical_name)
+                if (
+                    enforce_source_limits
+                    and member.isfile()
+                    and is_source_path(canonical_name)
+                ):
+                    source = archive.extractfile(member)
+                    # Streamed in bounded chunks: an oversized member is never
+                    # materialized before it is refused.
+                    violation = (
+                        check_source_stream(canonical_name, read_chunks(source))
+                        if source is not None
+                        else None
+                    )
+                    if violation is not None:
+                        raise SourceInspectError("source-file-limit", violation.message)
+                    continue
                 if canonical_name != "Dockerfile" or not member.isfile():
                     continue
                 extracted = archive.extractfile(member)

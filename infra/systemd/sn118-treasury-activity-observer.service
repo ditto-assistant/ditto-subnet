@@ -34,7 +34,7 @@ TimeoutStopSec=90
 WantedBy=multi-user.target
 
 # No signing key, GCP signer service account or transfer journal access. This
-# unit scans holding-wallet payments. Service distributions require the
-# separately reviewed selector handoff described in the activation packet.
+# unit scans holding-wallet payments. The separately approved selector handoff
+# drop-in adds a read-only group and ACK writable path, never a private journal.
 # Transport retry is internal and bounded; semantic/auth refusals stop the unit
 # without automatic restart. Release never installs/enables this unit.

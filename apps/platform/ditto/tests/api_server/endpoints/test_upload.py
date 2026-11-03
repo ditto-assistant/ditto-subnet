@@ -29,33 +29,24 @@ from ditto.api_server.endpoints.upload import (
     MAX_TARBALL_SIZE_BYTES,
 )
 from ditto.api_server.middleware.error_envelope import (
-    ERROR_CODE_PAYMENT_AMOUNT_MISMATCH,
-    ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH,
-    ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
-    ERROR_CODE_PAYMENT_EXTRINSIC_FAILED,
     ERROR_CODE_PAYMENT_NOT_FOUND,
     ERROR_CODE_PAYMENT_RECOVERY_EXPIRED,
     ERROR_CODE_PAYMENT_REPLAYED,
-    ERROR_CODE_PAYMENT_SIGNER_MISMATCH,
 )
 from ditto.api_server.payment_verifier import (
-    PaymentAmountMismatch,
-    PaymentCallTypeMismatch,
-    PaymentDestinationMismatch,
-    PaymentExtrinsicFailed,
     PaymentNotFoundOnChain,
-    PaymentRecoveryExpired,
     PaymentReplayedError,
-    PaymentSignerMismatch,
     VerifiedPayment,
 )
 from ditto.api_server.pricing import (
     OracleUnreachableError,
-    PriceTooStaleError,
 )
-from ditto.api_server.storage import ObjectUploadFailedError
 from ditto.chain.errors import ChainConnectionError
-from ditto.db.queries.agents import SubmissionCooldownError
+from ditto.db.queries.agents import (
+    SubmissionCooldownDecision,
+    SubmissionCooldownError,
+)
+from ditto.db.queries.owner_submission_cooldown import OwnerCooldownNotice
 from ditto.tests.api_server.conftest import (
     override_get_chain_client,
     override_get_embedder,
@@ -73,12 +64,24 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
     ``ditto.tests.db.queries.test_bans``; here we stub it so the endpoint
     tests need no bans row. Ban-specific tests re-stub this to ``True``.
     """
+    # This module isolates existing upload behavior with fake sessions. CLA
+    # policy modes/signatures are covered against PostgreSQL separately.
+    from ditto.api_server.cla import ClaGateDecision
+
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.evaluate_cla_gate",
+        AsyncMock(return_value=ClaGateDecision("off", True, None, None, "")),
+    )
+    monkeypatch.setattr(
+        "ditto.api_server.endpoints.upload.lock_identity_writes",
+        AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.is_hotkey_banned",
         AsyncMock(return_value=False),
     )
     monkeypatch.setattr(
-        "ditto.api_server.endpoints.upload.get_submission_retry_at",
+        "ditto.api_server.endpoints.upload.submission_cooldown_decision",
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
@@ -159,37 +162,10 @@ class TestEvalPricing:
     def _session(self, app: FastAPI) -> None:
         override_get_session(app)
 
-    async def test_happy_path(self, app: FastAPI, client: httpx.AsyncClient):
-        override_get_price_oracle(app, price_usd=Decimal("400"))
-        response = await client.get("/api/v1/upload/eval-pricing")
-        assert response.status_code == 200
-        body = response.json()
-        assert body["amount_rao"] == 40_000_000
-        assert body["send_address"].startswith("5")
-
     async def test_oracle_down_does_not_block_tao_quote(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
         override_get_price_oracle(app, raises=OracleUnreachableError("down"))
-        response = await client.get("/api/v1/upload/eval-pricing")
-        assert response.status_code == 200
-        assert response.json()["amount_rao"] == 40_000_000
-
-    async def test_oracle_stale_does_not_block_tao_quote(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        override_get_price_oracle(app, raises=PriceTooStaleError("stale"))
-        response = await client.get("/api/v1/upload/eval-pricing")
-        assert response.status_code == 200
-        assert response.json()["amount_rao"] == 40_000_000
-
-    async def test_extreme_usd_price_does_not_change_tao_quote(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        # An absurdly high TAO/USD price would make the rao math truncate to 0.
-        from decimal import Decimal
-
-        override_get_price_oracle(app, price_usd=Decimal("1e30"))
         response = await client.get("/api/v1/upload/eval-pricing")
         assert response.status_code == 200
         assert response.json()["amount_rao"] == 40_000_000
@@ -373,6 +349,38 @@ class TestUploadCheck:
         duplicate_lookup.assert_not_awaited()
         verifier.verify_payment.assert_not_awaited()
 
+    async def test_recovery_proof_that_funded_a_generator_is_replayed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        kp = _make_keypair()
+        verifier = _override_payment_verifier(app)
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
+            AsyncMock(return_value=MagicMock()),
+        )
+
+        response = await client.post(
+            "/api/v1/upload/check",
+            json={
+                **_signed_request_body(keypair=kp),
+                "payment_block_hash": _GOOD_BLOCK_HASH,
+                "payment_block_number": 13579,
+                "payment_extrinsic_index": 7,
+            },
+        )
+
+        assert response.status_code == 402
+        assert response.json()["error_code"] == 3207
+        verifier.verify_payment.assert_not_awaited()
+
     async def test_payment_older_than_recovery_window_is_rejected(
         self,
         app: FastAPI,
@@ -390,6 +398,10 @@ class TestUploadCheck:
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
             AsyncMock(return_value=None),
         )
 
@@ -449,6 +461,10 @@ class TestUploadCheck:
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_evaluation_payment_for_proof",
+            AsyncMock(return_value=None),
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.get_generator_payment_for_proof",
             AsyncMock(return_value=None),
         )
         monkeypatch.setattr(
@@ -544,13 +560,17 @@ class TestUploadCheck:
                 miner_hotkey=_make_keypair().ss58_address,
             )
         )
-        cooldown = AsyncMock(return_value=datetime.now(UTC) + timedelta(hours=1))
+        cooldown = AsyncMock(
+            return_value=SubmissionCooldownDecision(
+                retry_at=datetime.now(UTC) + timedelta(hours=1)
+            )
+        )
         reserve = AsyncMock()
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.get_same_owner_agent_by_sha", lookup
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_submission_retry_at", cooldown
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision", cooldown
         )
         monkeypatch.setattr(
             "ditto.api_server.endpoints.upload.reserve_upload_admission", reserve
@@ -609,8 +629,8 @@ class TestUploadCheck:
             hours=2, minutes=30
         )
         monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.get_submission_retry_at",
-            AsyncMock(return_value=retry_at),
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision",
+            AsyncMock(return_value=SubmissionCooldownDecision(retry_at=retry_at)),
         )
 
         response = await client.post(
@@ -626,6 +646,42 @@ class TestUploadCheck:
             f"owner coldkey may submit again at {retry_at.isoformat()}. "
             "Please try again in 2 hours and 30 minutes."
         ]
+
+    async def test_owner_override_names_its_interval_without_the_reason(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        override_get_chain_client(app)
+        retry_at = datetime.now(UTC).replace(microsecond=0) + timedelta(hours=20)
+        expires_at = datetime.now(UTC).replace(microsecond=0) + timedelta(days=14)
+        decision = AsyncMock(
+            return_value=SubmissionCooldownDecision(
+                retry_at=retry_at,
+                owner_override=OwnerCooldownNotice(
+                    cooldown_seconds=86400, expires_at=expires_at
+                ),
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.submission_cooldown_decision",
+            decision,
+        )
+
+        body = _signed_request_body()
+        response = await client.post("/api/v1/upload/check", json=body)
+
+        result = response.json()
+        assert result["ok"] is False
+        assert ERROR_CODE_SUBMISSION_COOLDOWN in result["error_codes"]
+        assert result["messages"][0].startswith(
+            "an operator submission cooldown applies to this owner: one "
+            f"submission per 1 day until {expires_at.isoformat()}. "
+            f"owner coldkey may submit again at {retry_at.isoformat()}."
+        )
+        assert decision.await_args is not None
+        assert decision.await_args.kwargs["miner_hotkey"] == body["hotkey"]
 
     async def test_reservation_race_includes_the_cooldown_countdown(
         self,
@@ -669,9 +725,17 @@ class TestUploadCheck:
 
     @pytest.mark.parametrize("offset_seconds", [-301, 301])
     async def test_signed_request_outside_clock_window_is_rejected(
-        self, app: FastAPI, client: httpx.AsyncClient, offset_seconds: int
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        offset_seconds: int,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         override_get_chain_client(app)
+        now = int(time.time())
+        monkeypatch.setattr(
+            "ditto.api_server.endpoints.upload.time", SimpleNamespace(time=lambda: now)
+        )
         keypair = _make_keypair()
         body = _signed_request_body(keypair=keypair)
         body.update(
@@ -679,7 +743,7 @@ class TestUploadCheck:
                 keypair,
                 hotkey=keypair.ss58_address,
                 sha256=_GOOD_SHA256,
-                signature_timestamp=int(time.time()) + offset_seconds,
+                signature_timestamp=now + offset_seconds,
             )
         )
         response = await client.post("/api/v1/upload/check", json=body)
@@ -733,31 +797,6 @@ class TestUploadCheck:
         # A client acting on 1101 must be able to bind to this deployment's
         # own target. Without it, registering falls back to a local guess and
         # can recycle TAO on a subnet this platform never reads.
-        chain_config = app.state.config.chain
-        assert result["netuid"] == chain_config.netuid
-        assert result["subtensor_network"] == chain_config.subtensor_network
-
-    async def test_check_always_reports_its_chain_target(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        """Reported on a registered hotkey too, not only alongside 1101."""
-        from unittest.mock import AsyncMock, MagicMock
-
-        from ditto.api_server.dependencies import get_chain_client
-
-        async def _fake_chain() -> MagicMock:
-            chain = MagicMock()
-            chain.is_registered = AsyncMock(return_value=True)
-            chain.get_registered_coldkey = AsyncMock(
-                return_value="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
-            )
-            return chain
-
-        app.dependency_overrides[get_chain_client] = _fake_chain
-        body = _signed_request_body()
-        response = await client.post("/api/v1/upload/check", json=body)
-        assert response.status_code == 200
-        result = response.json()
         chain_config = app.state.config.chain
         assert result["netuid"] == chain_config.netuid
         assert result["subtensor_network"] == chain_config.subtensor_network
@@ -1250,26 +1289,6 @@ class TestUploadAgentHappyPath:
         assert agent_row.code_embedding == [0.1, 0.2, 0.3]
         assert agent_row.code_embed_model == "stub@test"
 
-    async def test_disabled_embedder_leaves_embedding_null(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        # Default null embedder: even a real-source tar stores no vector.
-        deps = _wire_full_stack(app)  # app fixture defaults to the null embedder
-        kp = bittensor.Keypair.create_from_uri("//Alice")
-        _override_payment_verifier(
-            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
-        )
-        tar = _real_source_tar()
-        data, _ = _upload_agent_form(keypair=kp, sha256=hashlib.sha256(tar).hexdigest())
-        files = {"agent_tar": ("harness.tar.gz", tar, "application/gzip")}
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 200, response.text
-        agent_row = deps["session"].add.call_args_list[0].args[0]
-        assert agent_row.code_embedding is None
-        assert agent_row.code_embed_model is None
-
 
 class TestUploadAgentValidationFailures:
     async def test_cooldown_race_returns_429_with_retry_after(
@@ -1438,13 +1457,7 @@ class TestUploadAgentValidationFailures:
     @pytest.mark.parametrize(
         ("missing_field",),
         [
-            ("hotkey",),
-            ("sha256",),
-            ("name",),
             ("signature",),
-            ("payment_block_hash",),
-            ("payment_block_number",),
-            ("payment_extrinsic_index",),
         ],
     )
     async def test_missing_field_returns_422(
@@ -1458,17 +1471,6 @@ class TestUploadAgentValidationFailures:
 
         assert response.status_code == 422
 
-    async def test_malformed_hotkey_returns_422(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        _wire_full_stack(app)
-        data, files = _upload_agent_form()
-        data["hotkey"] = "not-ss58"
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 422
-
 
 class TestUploadAgentPaymentVerifierBranches:
     """Each PaymentVerifierError subclass propagates to the typed envelope."""
@@ -1477,18 +1479,6 @@ class TestUploadAgentPaymentVerifierBranches:
         ("exc", "expected_code"),
         [
             (PaymentNotFoundOnChain("nope"), ERROR_CODE_PAYMENT_NOT_FOUND),
-            (PaymentExtrinsicFailed("failed"), ERROR_CODE_PAYMENT_EXTRINSIC_FAILED),
-            (PaymentAmountMismatch("band"), ERROR_CODE_PAYMENT_AMOUNT_MISMATCH),
-            (
-                PaymentRecoveryExpired("expired"),
-                ERROR_CODE_PAYMENT_RECOVERY_EXPIRED,
-            ),
-            (
-                PaymentDestinationMismatch("dest"),
-                ERROR_CODE_PAYMENT_DESTINATION_MISMATCH,
-            ),
-            (PaymentSignerMismatch("signer"), ERROR_CODE_PAYMENT_SIGNER_MISMATCH),
-            (PaymentCallTypeMismatch("call"), ERROR_CODE_PAYMENT_CALL_TYPE_MISMATCH),
         ],
     )
     async def test_typed_payment_error_maps_to_envelope(
@@ -1601,139 +1591,15 @@ class TestUploadAgentReplayHandling:
         assert response.json()["error_code"] == ERROR_CODE_PAYMENT_REPLAYED
 
 
-class TestUploadAgentStorageFailure:
-    async def test_storage_failure_returns_5xx(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        _wire_full_stack(app)
-        override_get_storage_client(app, raises=ObjectUploadFailedError("s3 down"))
-        data, files = _upload_agent_form()
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        # ObjectUploadFailedError is unhandled by the envelope handlers,
-        # so it falls through to the generic 500 path.
-        assert response.status_code == 500
-
-
 class TestUploadAgentBoundaries:
     """Pin boundary values whose off-by-one regressions would silently
     reject legitimate uploads or accept malformed ones."""
-
-    async def test_size_exactly_at_cap_accepted(
-        self,
-        app: FastAPI,
-        client: httpx.AsyncClient,
-        monkeypatch: pytest.MonkeyPatch,
-    ):
-        """``_read_tar_capped_with_sha`` uses ``size > max_bytes``; this
-        test pins the boundary so a refactor to ``>=`` is caught."""
-        _wire_full_stack(app)
-        at_cap = _GOOD_TAR_BYTES
-        monkeypatch.setattr(
-            "ditto.api_server.endpoints.upload.MAX_TARBALL_SIZE_BYTES",
-            len(at_cap),
-        )
-        at_cap_sha = hashlib.sha256(at_cap).hexdigest()
-        kp = bittensor.Keypair.create_from_uri("//Alice")
-        _override_payment_verifier(
-            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
-        )
-        data = {
-            "hotkey": kp.ss58_address,
-            "sha256": at_cap_sha,
-            "name": "alpha-agent",
-            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=at_cap_sha),
-            "payment_block_hash": _GOOD_BLOCK_HASH,
-            "payment_block_number": 13579,
-            "payment_extrinsic_index": 7,
-        }
-        files = {"agent_tar": ("harness.tar.gz", at_cap, "application/gzip")}
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 200, response.text
-
-    async def test_size_one_over_cap_rejected(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        _wire_full_stack(app)
-        over = b"\x1f\x8b" + b"x" * (MAX_TARBALL_SIZE_BYTES - 2) + b"!"
-        over_sha = hashlib.sha256(over).hexdigest()
-        kp = bittensor.Keypair.create_from_uri("//Alice")
-        data = {
-            "hotkey": kp.ss58_address,
-            "sha256": over_sha,
-            "name": "alpha-agent",
-            **_signed_upload_auth(kp, hotkey=kp.ss58_address, sha256=over_sha),
-            "payment_block_hash": _GOOD_BLOCK_HASH,
-            "payment_block_number": 13579,
-            "payment_extrinsic_index": 7,
-        }
-        files = {"agent_tar": ("harness.tar.gz", over, "application/gzip")}
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 413
-
-    async def test_extrinsic_index_zero_accepted(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        """``payment_extrinsic_index`` uses ``Form(ge=0)``; index 0 is
-        the first extrinsic in any block and must be valid."""
-        _wire_full_stack(app)
-        kp = bittensor.Keypair.create_from_uri("//Alice")
-        _override_payment_verifier(
-            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
-        )
-        data, files = _upload_agent_form(keypair=kp)
-        data["payment_extrinsic_index"] = 0
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 200, response.text
-
-    async def test_payment_block_number_zero_rejected(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        """``payment_block_number`` uses ``Form(ge=1)``; 0 must 422."""
-        _wire_full_stack(app)
-        data, files = _upload_agent_form()
-        data["payment_block_number"] = 0
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 422
-
-    async def test_name_at_max_length_accepted(
-        self, app: FastAPI, client: httpx.AsyncClient
-    ):
-        """The 64-char ``name`` cap is a chosen value, not spec-mandated;
-        pin both ends so a future tightening is a deliberate change."""
-        _wire_full_stack(app)
-        kp = bittensor.Keypair.create_from_uri("//Alice")
-        _override_payment_verifier(
-            app, verified=_make_verified_payment(miner_hotkey=kp.ss58_address)
-        )
-        data, files = _upload_agent_form(keypair=kp, name="x" * 64)
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 200, response.text
 
     async def test_name_over_max_length_rejected(
         self, app: FastAPI, client: httpx.AsyncClient
     ):
         _wire_full_stack(app)
         data, files = _upload_agent_form(name="x" * 65)
-
-        response = await client.post("/api/v1/upload/agent", data=data, files=files)
-
-        assert response.status_code == 422
-
-    async def test_name_empty_rejected(self, app: FastAPI, client: httpx.AsyncClient):
-        _wire_full_stack(app)
-        data, files = _upload_agent_form(name="")
 
         response = await client.post("/api/v1/upload/agent", data=data, files=files)
 

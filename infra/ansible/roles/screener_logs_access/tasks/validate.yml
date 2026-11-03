@@ -1,0 +1,13 @@
+---
+- name: Require managed public keys for the read-only logs account
+  ansible.builtin.assert:
+    that:
+      - screener_logs_public_keys | length > 0
+      - "'logs' not in (team_members | default([]))"
+      - >-
+        team_members | default([])
+        | difference(team_ssh_keys | default({}) | dict2items
+                     | selectattr('value') | map(attribute='key') | list)
+        | length == 0
+    fail_msg: Supply managed keys for every team member; logs must never be a privileged team member.
+

@@ -816,8 +816,10 @@ func confirmationEmbeddingRouteIsLocal(raw string) bool {
 
 func validateScreenedConfirmationSource(identity confirmationRuntimeIdentity) error {
 	source := identity.Source
+	// The source URL is optional provenance: a source-free validator receives
+	// none, and confirmation never fetches it. The digest stays mandatory.
 	if !canonicalConfirmationSHA256(identity.ArtifactSHA256) || identity.ArtifactSHA256 != source.TarballSHA256 ||
-		strings.TrimSpace(source.TarballURL) == "" || source.GitURL != "" || source.GitRef != "" || source.GitSubdir != "" {
+		source.GitURL != "" || source.GitRef != "" || source.GitSubdir != "" {
 		return errors.New("confirmation source provenance is incomplete")
 	}
 	if !canonicalConfirmationSHA256(source.ScreenedImageSHA256) || strings.TrimSpace(source.ScreenedImageURL) == "" ||
@@ -825,6 +827,9 @@ func validateScreenedConfirmationSource(identity confirmationRuntimeIdentity) er
 		return errors.New("confirmation screened image identity is incomplete")
 	}
 	for _, raw := range []string{source.TarballURL, source.ScreenedImageURL} {
+		if raw == "" {
+			continue // the absent source URL; the image URL is required above
+		}
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
 			return errors.New("confirmation artifact URL is invalid")

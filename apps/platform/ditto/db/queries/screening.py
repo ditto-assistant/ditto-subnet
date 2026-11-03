@@ -17,6 +17,7 @@ from sqlalchemy import (
     exists,
     false,
     func,
+    lateral,
     or_,
     select,
     true,
@@ -54,6 +55,7 @@ from ditto.db.queries.benchmark_admission import (
     validator_queue_admission_predicate,
 )
 from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.review_lineage import select_lineage_parent
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.screening_infra_retry import (
     InfraRetryDecision,
@@ -73,6 +75,7 @@ from ditto.screener_policy_state import (
     effective_scored_rescreen_policy_version,
     effective_screening_policy_version,
 )
+from ditto_screening_protocol import reason_codes
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -115,7 +118,7 @@ _ADJUDICATED_NEGATIVE_OWNER_STATUSES = (
 # A platform-raised quarantine has no screener finding, but the row's
 # manifest_digest is NOT NULL and shown verbatim in the operator console. This
 # stable sentinel marks the origin as "platform, attempts exhausted".
-EXHAUSTED_REASON_CODE = "repeatedly-inconclusive"
+EXHAUSTED_REASON_CODE = reason_codes.REPEATEDLY_INCONCLUSIVE
 """Public alias: the emission-eligibility gate
 (:mod:`ditto.api_server.emission_eligibility`) classifies this code as
 inconclusive, and must not carry its own copy of the string."""
@@ -125,31 +128,24 @@ _EXHAUSTED_PUBLIC_REASON = (
 )
 _DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 POLICY_ONLY_RESCREEN_REASON = "policy-only-rescreen"
-_ORPHANED_ATTEMPT_REASON_CODE = "worker-lease-orphaned"
+_ORPHANED_ATTEMPT_REASON_CODE = reason_codes.WORKER_LEASE_ORPHANED
 _ORPHANED_ATTEMPT_REASON = (
     "Screening worker stopped reporting this attempt; manual retry required"
 )
 # Unlike an orphan, an expiry still counts toward ``MAX_SCREENING_EXPIRIES`` and
 # backs off by status, so this code joins no retry or backoff set.
-LEASE_EXPIRED_REASON_CODE = "screening-lease-expired"
+LEASE_EXPIRED_REASON_CODE = reason_codes.SCREENING_LEASE_EXPIRED
 _LEASE_EXPIRED_REASON = "Screening lease expired"
 # Provider/reviewer failures held on reclaim for ``FAILED_ATTEMPT_RETRY_BACKOFF`` and,
 # with peer-pass evidence, counted toward ``MAX_SCREENING_EXPIRIES``
 # (``_inconclusive_attempt_count``). Do not add a code that should retry
 # automatically WITHOUT counting: those live in
 # ``screening_infra_retry.INFRA_AUTO_RETRY_REASON_CODES``, which has its own
-# backoff/breaker and never feeds the park cap.
-PROVIDER_BACKOFF_REASON_CODES = (
-    "targon-build-unavailable",
-    "targon-runtime-unavailable",
-    "targon-source-review-unavailable",
-    "cloudrun-build-unavailable",
-    "cloudrun-runtime-unavailable",
-    # An L1 model turn timed out while the lease still had time (lease expiry
-    # reports source-review-lease-budget-exhausted instead); immediate reclaim
-    # would hot-loop against the same broken court, so hold the retry briefly
-    # before re-queueing.
-    "source-review-model-timeout",
+# backoff/breaker and never feeds the park cap. The codes are the
+# ``PROVIDER_BACKOFF`` class of the shared screening registry
+# (``ditto_screening_protocol.reason_codes``), which records why each is here.
+PROVIDER_BACKOFF_REASON_CODES: tuple[str, ...] = (
+    reason_codes.PROVIDER_BACKOFF_REASON_CODES
 )
 # How long a provider-backoff failure waits after its FAILURE before the agent
 # is claimable again, capped by the attempt deadline. Backing off to the full
@@ -510,7 +506,54 @@ def screening_last_served_at() -> ColumnElement[Any]:
     return func.coalesce(latest_attempt, Agent.created_at)
 
 
-def screening_priority_order() -> tuple[ColumnElement[Any], ...]:
+def screening_score_aggregates() -> tuple[Any, Any]:
+    """One LATERAL aggregate pair per candidate agent, outerjoined by callers.
+
+    The three aggregates the screening order needs (accepted-score count,
+    average composite, and the latest current-policy screening-consumption
+    timestamp) were previously three separate correlated scalar subqueries
+    inside the ORDER BY, so PostgreSQL re-evaluated each of them for every
+    candidate row on every sort term — the production audit measured an empty
+    claim spending 6.5-13.7 s inside the claim transaction. Grouping them per
+    agent once and joining the result fixed that, but a plain grouped relation
+    has no WHERE on the candidate set, so every claim aggregated the entire
+    ``scores`` table. Each aggregate is now LATERAL: correlated on the outer
+    agent, so the planner probes one agent's rows per candidate (an index
+    lookup against the claimable set) instead of one whole-table aggregation
+    pass per claim, while each aggregate still runs exactly once per row.
+    """
+    score_count = lateral(
+        select(
+            func.count(Score.composite).label("score_count"),
+            func.avg(Score.composite).label("provisional_composite"),
+        )
+        .where(Score.agent_id == Agent.agent_id)
+        .correlate(Agent)
+        .subquery()
+    )
+    last_served = lateral(
+        select(
+            func.max(
+                func.coalesce(
+                    ScreeningAttempt.finished_at,
+                    ScreeningAttempt.deadline,
+                    ScreeningAttempt.started_at,
+                )
+            ).label("last_served_at"),
+        )
+        .where(
+            ScreeningAttempt.agent_id == Agent.agent_id,
+            ScreeningAttempt.policy_version == effective_screening_policy_version(),
+        )
+        .correlate(Agent)
+        .subquery()
+    )
+    return (score_count, last_served)
+
+
+def screening_priority_order(
+    aggregates: tuple[Any, Any] | None = None,
+) -> tuple[ColumnElement[Any], ...]:
     """Prioritize finalists while interleaving bounded screening retries.
 
     A policy bump can return stale non-scored work, while an existing board
@@ -521,15 +564,31 @@ def screening_priority_order() -> tuple[ColumnElement[Any], ...]:
     backlog, but it remains ahead of submissions arriving later. This prevents
     either retries or fresh arrivals from monopolizing the worker while
     preserving the existing score and age tie-breakers.
+
+    ``aggregates`` is the optional pair of precomputed grouped relations from
+    :func:`screening_score_aggregates`; pass it (and outerjoin it onto the
+    caller's select) so the per-agent aggregates are computed once per claim
+    rather than re-evaluated per row per ORDER BY term. Omitting it falls back
+    to the correlated scalar subqueries, which stays correct but slow — only
+    for callers that cannot restructure their select.
     """
-    score_count = screening_score_count()
-    last_served_at = screening_last_served_at()
-    provisional_composite = (
-        select(func.avg(Score.composite))
-        .where(Score.agent_id == Agent.agent_id)
-        .correlate(Agent)
-        .scalar_subquery()
-    )
+    score_count: ColumnElement[Any]
+    last_served_at: ColumnElement[Any]
+    provisional_composite: ColumnElement[Any]
+    if aggregates is None:
+        score_count = screening_score_count()
+        last_served_at = screening_last_served_at()
+        provisional_composite = (
+            select(func.avg(Score.composite))
+            .where(Score.agent_id == Agent.agent_id)
+            .correlate(Agent)
+            .scalar_subquery()
+        )
+    else:
+        score_counts, last_served = aggregates
+        score_count = func.coalesce(score_counts.c.score_count, 0)
+        last_served_at = func.coalesce(last_served.c.last_served_at, Agent.created_at)
+        provisional_composite = score_counts.c.provisional_composite
     in_completion_lane = case(
         (score_count >= SCORING_QUORUM - 1, 1),
         else_=0,
@@ -1161,6 +1220,7 @@ async def claim_screening_attempts(
     review_settings_enrolled_node_id: str | None = None,
     canary_policy_version: int | None = None,
     claim_lock_held: bool = False,
+    lineage_reference_mode: str = "same_owner_version",
 ) -> list[tuple[Agent, ScreeningAttempt, UUID | None]]:
     """Claim completion-lane contenders, then least-scored eligible work.
 
@@ -1249,6 +1309,9 @@ async def claim_screening_attempts(
     missing_dataset, prerequisite_admitted = await prerequisite_screening_predicates(
         session
     )
+    # Per-agent score aggregates are computed once per claim rather
+    # than re-evaluated per candidate row per ORDER BY term.
+    score_aggregates = screening_score_aggregates()
     pending_deferred_review = exists(
         select(AthReview.review_id).where(
             AthReview.agent_id == Agent.agent_id,
@@ -1432,6 +1495,9 @@ async def claim_screening_attempts(
     agents = list(
         await session.scalars(
             select(Agent)
+            # LATERAL aggregates carry their own correlation; no ON clause.
+            .outerjoin(score_aggregates[0], onclause=true())
+            .outerjoin(score_aggregates[1], onclause=true())
             .outerjoin(
                 candidate_payment,
                 candidate_payment.agent_id == Agent.agent_id,
@@ -1442,7 +1508,7 @@ async def claim_screening_attempts(
                 ~earlier_pending,
                 canary_revision_usable,
             )
-            .order_by(*screening_priority_order())
+            .order_by(*screening_priority_order(score_aggregates))
             # Surplus probe candidates only exist to be skipped below; widen the
             # window so they cannot crowd out claimable work behind them.
             .limit(limit + infra_plan.surplus_probe_candidates)
@@ -1525,6 +1591,8 @@ async def claim_screening_attempts(
         # into grounds for condemning a later identical submission. Once an
         # operator reviews that park and resolves it "reject", the rejection
         # branch below picks it up -- that IS a human judgement for cause.
+        # A policy v13 V2 reject is likewise no finding: verification did not
+        # complete, so it records violation_proven false.
         refused_for_cause = or_(
             owner.status == AgentStatus.BANNED,
             exists(
@@ -1533,7 +1601,11 @@ async def claim_screening_attempts(
                     or_(
                         (ScreeningQuarantine.status == "active")
                         & (ScreeningQuarantine.reason_code != _EXHAUSTED_REASON_CODE),
-                        ScreeningQuarantine.resolution == "reject",
+                        (ScreeningQuarantine.resolution == "reject")
+                        & (
+                            ScreeningQuarantine.reason_code
+                            != reason_codes.VERIFICATION_INCOMPLETE_UNREVIEWABLE
+                        ),
                     ),
                 )
             ),
@@ -1767,10 +1839,25 @@ async def claim_screening_attempts(
                 )
             )
         )
+        # A same-hotkey prior version scopes the model review to its diff and
+        # review history. Duplicates, mechanical rebuilds, canaries and forced
+        # full reviews keep the ordinary full review.
+        lineage_parent = (
+            await select_lineage_parent(session, agent, mode=lineage_reference_mode)
+            if not build_only
+            and duplicate_of is None
+            # A canary or integrity double-check pins its own posture.
+            and attempt_review_settings_binding == review_settings_binding
+            and not force_full_review
+            else None
+        )
         attempt = ScreeningAttempt(
             attempt_id=uuid4(),
             agent_id=agent.agent_id,
             artifact_sha256=agent.sha256,
+            lineage_parent_agent_id=(
+                lineage_parent.agent_id if lineage_parent is not None else None
+            ),
             screener_hotkey=screener_hotkey,
             policy_version=attempt_policy_version,
             status="running",

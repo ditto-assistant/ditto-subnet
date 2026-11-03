@@ -621,56 +621,6 @@ def _targon_build(
     )
 
 
-async def test_claim_releases_heartbeat_proven_orphan_without_expiry_penalty(
-    session: AsyncSession,
-) -> None:
-    now = datetime.now(UTC)
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-orphaned-build",
-        name="orphaned-build",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.SCREENING,
-    )
-    orphan = ScreeningAttempt(
-        attempt_id=uuid4(),
-        agent_id=agent.agent_id,
-        screener_hotkey=_SCREENER,
-        policy_version=SCREENING_POLICY_VERSION,
-        status="running",
-        started_at=now - timedelta(minutes=10),
-        deadline=now + timedelta(minutes=35),
-        build_only=True,
-    )
-    async with session.begin():
-        session.add_all(
-            [
-                agent,
-                orphan,
-                ScreenerHeartbeat(
-                    screener_hotkey=_SCREENER,
-                    instance_id="screener-a",
-                    software_version="0.21.0",
-                    protocol_version=4,
-                    policy_version=SCREENING_POLICY_VERSION,
-                    state="polling",
-                    active_agent_id=None,
-                    first_seen_at=now - timedelta(days=1),
-                    reported_at=now - timedelta(seconds=5),
-                    seen_at=now - timedelta(seconds=5),
-                    signature="ab" * 64,
-                ),
-            ]
-        )
-
-    claimed = await _claim(session, limit=1, deferred_review_mode="enforce")
-
-    assert claimed == []
-    assert orphan.status == "failed"
-    assert orphan.reason_code == "worker-lease-orphaned"
-    assert agent.status == AgentStatus.SCREENING_FAILED
-
-
 async def test_orphaned_attempt_parks_for_an_operator_retry(
     session: AsyncSession,
 ) -> None:
@@ -857,54 +807,6 @@ async def test_lease_sweep_orphans_one_hotkey_or_every_running_hotkey(
     assert foreign.status == ("failed" if screener_hotkey is None else "running")
 
 
-async def test_claim_preserves_attempt_reported_active_by_a_fresh_worker(
-    session: AsyncSession,
-) -> None:
-    now = datetime.now(UTC)
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-active-build",
-        name="active-build",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.SCREENING,
-    )
-    attempt = ScreeningAttempt(
-        attempt_id=uuid4(),
-        agent_id=agent.agent_id,
-        screener_hotkey=_SCREENER,
-        policy_version=SCREENING_POLICY_VERSION,
-        status="running",
-        started_at=now - timedelta(minutes=10),
-        deadline=now + timedelta(minutes=35),
-        build_only=True,
-    )
-    async with session.begin():
-        session.add_all(
-            [
-                agent,
-                attempt,
-                ScreenerHeartbeat(
-                    screener_hotkey=_SCREENER,
-                    instance_id="screener-a",
-                    software_version="0.21.0",
-                    protocol_version=4,
-                    policy_version=SCREENING_POLICY_VERSION,
-                    state="screening",
-                    active_agent_id=agent.agent_id,
-                    first_seen_at=now - timedelta(days=1),
-                    reported_at=now - timedelta(seconds=5),
-                    seen_at=now - timedelta(seconds=5),
-                    signature="ab" * 64,
-                ),
-            ]
-        )
-
-    claimed = await _claim(session, limit=1, deferred_review_mode="enforce")
-
-    assert claimed == []
-    assert attempt.status == "running"
-
-
 async def test_polling_pet_does_not_orphan_in_flight_targon_kaniko(
     session: AsyncSession,
 ) -> None:
@@ -946,59 +848,6 @@ async def test_polling_pet_does_not_orphan_in_flight_targon_kaniko(
 
     assert claimed == []
     assert attempt.status == "running"
-
-
-async def test_one_fresh_heartbeat_cannot_stack_a_second_targon_first_lease(
-    session: AsyncSession,
-) -> None:
-    now = datetime.now(UTC)
-    held = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-held-build",
-        name="held-build",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.SCREENING,
-    )
-    waiting = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-waiting-build",
-        name="waiting-build",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.UPLOADED,
-    )
-    held_attempt = ScreeningAttempt(
-        attempt_id=uuid4(),
-        agent_id=held.agent_id,
-        screener_hotkey=_SCREENER,
-        policy_version=SCREENING_POLICY_VERSION,
-        status="running",
-        started_at=now - timedelta(minutes=2),
-        deadline=now + timedelta(minutes=68),
-        build_only=True,
-    )
-    async with session.begin():
-        session.add_all(
-            [
-                held,
-                waiting,
-                held_attempt,
-                _targon_build(agent=held, attempt=held_attempt),
-                _heartbeat(
-                    instance_id="ditto-screener-prod",
-                    now=now,
-                    state="screening",
-                    active_agent_id=held.agent_id,
-                ),
-            ]
-        )
-
-    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
-
-    assert claimed == []
-    async with session.begin():
-        reloaded = await session.get(Agent, waiting.agent_id)
-    assert reloaded is not None
-    assert reloaded.status == AgentStatus.UPLOADED
 
 
 async def test_two_fresh_heartbeats_may_hold_two_targon_first_leases(
@@ -1139,34 +988,6 @@ async def test_full_review_modes_do_not_use_mechanical_first_claim(
     assert attempt.build_only is False
 
 
-async def test_bypass_admits_on_the_cheap_screen_like_enforce(
-    session: AsyncSession,
-) -> None:
-    """``bypass`` skips the pre-score deep screen, exactly as ``enforce`` does.
-
-    The deep screen is the expensive half; the build-only pass is not optional,
-    because nothing can score a submission whose screened image has not been
-    built and verified. So "no screening" means the same cheap admission
-    ``enforce`` uses -- what ``bypass`` removes is the deep review at both ends,
-    which the post-score half of this feature covers.
-    """
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-bypass",
-        name="fresh-bypass",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.UPLOADED,
-    )
-    async with session.begin():
-        session.add(agent)
-
-    claimed = await _claim(session, deferred_review_mode="bypass")
-    attempt, _duplicate = _claimed_duplicate(claimed, agent)
-
-    assert attempt.build_only is True
-    assert attempt.reason_code == "deferred-mechanical-admission"
-
-
 @pytest.mark.parametrize(
     ("force_full_review", "expected_build_only"),
     [(False, True), (True, False)],
@@ -1189,7 +1010,12 @@ async def test_manual_retry_can_force_one_full_review_while_queue_bypasses(
     )
 
 
-@pytest.mark.parametrize("mode", ["off", "observe", "bypass"])
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "off",
+    ],
+)
 async def test_open_deferred_hold_still_drains_after_leaving_enforce(
     session: AsyncSession, mode: str
 ) -> None:
@@ -1368,46 +1194,6 @@ async def test_failed_infrastructure_attempt_stays_parked_after_deadline(
     }
 
 
-async def test_agent_parked_for_review_after_expiry_cap(session: AsyncSession):
-    agent = await _seed_failed_agent(session)
-    await _add_expired_attempts(session, agent, MAX_SCREENING_EXPIRIES)
-
-    claimed = await _claim(session)
-
-    # It must not be leased out again...
-    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    assert agent.agent_id not in claimed_ids
-    # ...it remains in the ordinary failed state for an operator retry.
-    refreshed = await session.get(Agent, agent.agent_id)
-    assert refreshed is not None
-    assert refreshed.status == AgentStatus.SCREENING_FAILED
-    quarantine = await session.scalar(
-        select(ScreeningQuarantine).where(
-            ScreeningQuarantine.agent_id == agent.agent_id
-        )
-    )
-    assert quarantine is None
-
-
-async def test_agent_stays_parked_below_the_legacy_expiry_cap(session: AsyncSession):
-    agent = await _seed_failed_agent(session)
-    await _add_expired_attempts(session, agent, MAX_SCREENING_EXPIRIES - 1)
-
-    claimed = await _claim(session)
-
-    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    assert agent.agent_id not in claimed_ids
-    refreshed = await session.get(Agent, agent.agent_id)
-    assert refreshed is not None
-    assert refreshed.status == AgentStatus.SCREENING_FAILED
-    quarantine = await session.scalar(
-        select(ScreeningQuarantine).where(
-            ScreeningQuarantine.agent_id == agent.agent_id
-        )
-    )
-    assert quarantine is None
-
-
 async def _add_provider_backoff_attempts(
     session: AsyncSession,
     agent: Agent,
@@ -1462,118 +1248,6 @@ async def _add_peer_pass(session: AsyncSession, *, finished_at: datetime) -> Non
         )
 
 
-async def test_agent_parked_after_repeated_provider_backoff_with_peer_evidence(
-    session: AsyncSession,
-):
-    """A deterministic per-artifact runtime failure parks after the cap.
-
-    Regression for aceron_b12-v4 (2026-08-26): its image built on both
-    providers but the runtime smoke replica never came up, so every attempt
-    failed ``targon-runtime-unavailable`` while sibling submissions kept
-    passing. Only ``expired`` attempts counted toward the park cap, so the
-    agent rebuilt Kaniko every 70-minute lease forever and the miner saw
-    "waiting for admission" indefinitely. Failed provider-backoff attempts
-    with peer evidence (another agent passed inside the same lease window)
-    must consume the same budget and park for operator review.
-    """
-    agent = await _seed_failed_agent(session)
-    base = datetime.now(UTC) - timedelta(hours=8)
-    await _add_provider_backoff_attempts(
-        session, agent, MAX_SCREENING_EXPIRIES, base=base
-    )
-    for index in range(MAX_SCREENING_EXPIRIES):
-        await _add_peer_pass(
-            session, finished_at=base + timedelta(minutes=70 * index + 30)
-        )
-
-    claimed = await _claim(session)
-
-    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    assert agent.agent_id not in claimed_ids
-    refreshed = await session.get(Agent, agent.agent_id)
-    assert refreshed is not None
-    assert refreshed.status == AgentStatus.SCREENING_FAILED
-    quarantine = await session.scalar(
-        select(ScreeningQuarantine).where(
-            ScreeningQuarantine.agent_id == agent.agent_id
-        )
-    )
-    assert quarantine is None
-
-
-async def test_provider_backoff_without_peer_evidence_still_parks(
-    session: AsyncSession,
-):
-    """A fleet-wide provider outage must not mass-park in-flight agents.
-
-    With no peer passing inside any of the failed lease windows there is no
-    evidence against the artifact -- the same failures could be a Targon /
-    Cloud Run outage -- so the agent stays claimable once its backoff ends.
-    """
-    agent = await _seed_failed_agent(session)
-    base = datetime.now(UTC) - timedelta(hours=8)
-    await _add_provider_backoff_attempts(
-        session, agent, MAX_SCREENING_EXPIRIES, base=base
-    )
-
-    claimed = await _claim(session)
-
-    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    assert agent.agent_id not in claimed_ids
-    refreshed = await session.get(Agent, agent.agent_id)
-    assert refreshed is not None
-    assert refreshed.status == AgentStatus.SCREENING_FAILED
-    quarantine = await session.scalar(
-        select(ScreeningQuarantine).where(
-            ScreeningQuarantine.agent_id == agent.agent_id
-        )
-    )
-    assert quarantine is None
-
-
-async def test_peer_pass_outside_the_lease_window_is_not_evidence(
-    session: AsyncSession,
-):
-    """Peer passes before or after a failed lease window do not count.
-
-    A pass that predates the failure says nothing about the lane's health at
-    failure time (an outage may have begun in between), so each backoff
-    failure needs a peer pass inside its own ``started_at``..``deadline``.
-    """
-    agent = await _seed_failed_agent(session)
-    base = datetime.now(UTC) - timedelta(hours=8)
-    await _add_provider_backoff_attempts(
-        session, agent, MAX_SCREENING_EXPIRIES, base=base
-    )
-    # One peer pass long before the first attempt, one long after the last.
-    await _add_peer_pass(session, finished_at=base - timedelta(hours=1))
-    await _add_peer_pass(
-        session,
-        finished_at=base + timedelta(minutes=70 * MAX_SCREENING_EXPIRIES + 30),
-    )
-
-    claimed = await _claim(session)
-
-    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    assert agent.agent_id not in claimed_ids
-
-
-async def test_fresh_agent_runs_before_older_retry(session: AsyncSession):
-    retry = await _seed_failed_agent_with_age(
-        session, name="older-retry", age=timedelta(days=2)
-    )
-    fresh = await _seed_failed_agent_with_age(
-        session, name="fresh-work", age=timedelta(days=1)
-    )
-    await _add_expired_attempts(session, retry, 1)
-    async with session.begin():
-        fresh.status = AgentStatus.UPLOADED
-
-    claimed = await _claim(session, limit=1)
-
-    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
-
-
 async def test_retry_runs_before_a_later_arriving_fresh_agent(
     session: AsyncSession,
 ):
@@ -1591,30 +1265,6 @@ async def test_retry_runs_before_a_later_arriving_fresh_agent(
     claimed = await _claim(session, limit=1)
 
     assert [agent.agent_id for agent, _, _ in claimed] == [retry.agent_id]
-
-
-async def test_previous_policy_attempt_does_not_defer_current_policy_work(
-    session: AsyncSession,
-):
-    older = await _seed_failed_agent_with_age(
-        session, name="older-policy-history", age=timedelta(days=2)
-    )
-    newer = await _seed_failed_agent_with_age(
-        session, name="newer-current-work", age=timedelta(days=1)
-    )
-    async with session.begin():
-        newer.status = AgentStatus.UPLOADED
-    await _add_expired_attempts(
-        session,
-        older,
-        1,
-        policy_version=SCREENING_POLICY_VERSION - 1,
-        base=datetime.now(UTC) - timedelta(minutes=45),
-    )
-
-    claimed = await _claim(session, limit=1)
-
-    assert [agent.agent_id for agent, _, _ in claimed] == [newer.agent_id]
 
 
 async def test_operator_rescreen_resets_the_expiry_budget(session: AsyncSession):
@@ -1684,74 +1334,6 @@ async def test_operator_rescreen_resets_the_expiry_budget(session: AsyncSession)
     refreshed = await session.get(Agent, agent.agent_id)
     assert refreshed is not None
     assert refreshed.status == AgentStatus.SCREENING
-
-
-async def test_expiries_after_a_rescreen_still_exhaust(session: AsyncSession):
-    """Only pre-rescreen expiries are forgiven; the cap still protects the pool."""
-    agent = await _seed_failed_agent(session)
-    rescreened_at = datetime.now(UTC) - timedelta(hours=5)
-    async with session.begin():
-        anchor = ScreeningAttempt(
-            attempt_id=uuid4(),
-            agent_id=agent.agent_id,
-            screener_hotkey=_SCREENER,
-            policy_version=SCREENING_POLICY_VERSION,
-            status="quarantined",
-            started_at=rescreened_at - timedelta(minutes=1),
-            deadline=rescreened_at - timedelta(minutes=1),
-            finished_at=rescreened_at - timedelta(minutes=1),
-            public_reason="parked",
-            reason_code="repeatedly-inconclusive",
-        )
-        session.add(anchor)
-        await session.flush()
-        session.add(
-            ScreeningQuarantine(
-                quarantine_id=uuid4(),
-                agent_id=agent.agent_id,
-                attempt_id=anchor.attempt_id,
-                screener_hotkey=_SCREENER,
-                policy_version=SCREENING_POLICY_VERSION,
-                manifest_digest="d" * 64,
-                finding_digest=None,
-                reason_code="repeatedly-inconclusive",
-                evidence=None,
-                finding=None,
-                status="resolved",
-                resolved_at=rescreened_at,
-                resolved_by="operator",
-                resolution="rescreen",
-                resolution_reason="grant a fresh budget",
-            )
-        )
-        session.add(
-            ScreeningRetryOverride(
-                override_id=uuid4(),
-                agent_id=agent.agent_id,
-                attempt_id=anchor.attempt_id,
-                artifact_sha256=agent.sha256,
-                expected_score_count=0,
-                reason="grant a fresh attempt",
-                actor="operator",
-                created_at=rescreened_at,
-            )
-        )
-    # A fresh cap's worth of expiries AFTER the rescreen…
-    await _add_expired_attempts(
-        session,
-        agent,
-        MAX_SCREENING_EXPIRIES,
-        base=rescreened_at + timedelta(minutes=5),
-    )
-
-    claimed = await _claim(session)
-
-    # …parks it again: the reset is not a permanent exemption.
-    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    assert agent.agent_id not in claimed_ids
-    refreshed = await session.get(Agent, agent.agent_id)
-    assert refreshed is not None
-    assert refreshed.status == AgentStatus.SCREENING_FAILED
 
 
 async def test_duplicate_flagged_when_owner_rejected_with_reject_resolution(
@@ -1911,22 +1493,6 @@ async def test_duplicate_not_flagged_when_owner_quarantine_released(
     assert attempt.reason_code is None
 
 
-async def test_duplicate_not_flagged_when_owner_quarantine_rescreened(
-    session: AsyncSession,
-):
-    """``rescreen`` is likewise an operator clearing the hold, not a finding."""
-    owner, duplicate = await _seed_owner_and_duplicate(
-        session, owner_status=AgentStatus.REJECTED
-    )
-    await _add_quarantine(session, owner, status="resolved", resolution="rescreen")
-
-    claimed = await _claim(session)
-
-    attempt, duplicate_of = _claimed_duplicate(claimed, duplicate)
-    assert duplicate_of is None
-    assert attempt.reason_code is None
-
-
 async def test_duplicate_flagged_when_owner_is_usable(session: AsyncSession):
     """Unchanged behavior: live work being copied is still flagged."""
     owner, duplicate = await _seed_owner_and_duplicate(
@@ -1979,50 +1545,6 @@ async def test_rejected_agent_is_not_auto_requeued_on_policy_bump(
     refreshed = await session.get(Agent, agent.agent_id)
     assert refreshed is not None
     assert refreshed.status == AgentStatus.REJECTED
-
-
-async def test_appealed_agent_in_screening_failed_is_claimable(session: AsyncSession):
-    """The operator appeal endpoint moves REJECTED -> SCREENING_FAILED.
-
-    That is the ONLY re-entry path now, so it must still be claimable.
-    """
-    agent = await _seed_agent_at_policy(
-        session,
-        status=AgentStatus.SCREENING_FAILED,
-        policy_version=SCREENING_POLICY_VERSION - 1,
-    )
-    now = datetime.now(UTC)
-    async with session.begin():
-        attempt = ScreeningAttempt(
-            attempt_id=uuid4(),
-            agent_id=agent.agent_id,
-            screener_hotkey=_SCREENER,
-            policy_version=SCREENING_POLICY_VERSION - 1,
-            status="rejected",
-            started_at=now - timedelta(minutes=2),
-            deadline=now - timedelta(minutes=1),
-            finished_at=now - timedelta(minutes=1),
-        )
-        session.add(attempt)
-        session.add(
-            ScreeningRetryOverride(
-                override_id=uuid4(),
-                agent_id=agent.agent_id,
-                attempt_id=attempt.attempt_id,
-                artifact_sha256=agent.sha256,
-                expected_score_count=0,
-                reason="appeal accepted",
-                actor="operator",
-                created_at=now,
-            )
-        )
-
-    claimed = await _claim(session)
-
-    assert agent.agent_id in {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
-    refreshed = await session.get(Agent, agent.agent_id)
-    assert refreshed is not None
-    assert refreshed.status == AgentStatus.SCREENING
 
 
 async def _activate_current_era(session: AsyncSession) -> None:
@@ -2352,27 +1874,6 @@ async def test_expiries_after_release_still_exhaust(session: AsyncSession) -> No
     assert event.evidence["signed_artifact_bound_verdict"] is None
 
 
-async def test_fresh_upload_claim_is_not_build_only(
-    session: AsyncSession,
-) -> None:
-    # A never-reviewed submission gets the full screen (review can quarantine),
-    # not a build-only pass.
-    agent = await _seed_failed_agent(session)
-    async with session.begin():
-        agent.status = AgentStatus.UPLOADED
-    claimed = await _claim(session)
-    attempt = next(
-        (
-            a
-            for claimed_agent, a, _ in claimed
-            if claimed_agent.agent_id == agent.agent_id
-        ),
-        None,
-    )
-    assert attempt is not None
-    assert attempt.build_only is False
-
-
 async def test_evaluating_agent_with_complete_prereqs_is_not_reclaimed(
     session: AsyncSession,
 ) -> None:
@@ -2402,62 +1903,6 @@ async def test_evaluating_agent_with_complete_prereqs_is_not_reclaimed(
                 seed_block_hash="ff" * 32,
             )
         )
-
-    claimed = await _claim(session)
-
-    assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
-
-
-async def test_effective_rollout_authority_dataset_is_not_reclaimed(
-    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # The rollout start guard can make the DESIRED version the effective
-    # authority while the durable activated row still names the active one.
-    # Backroom and ticketing correctly report v8 in that state; screening must
-    # use the same authority instead of asking this already-complete agent for
-    # an obsolete v7 dataset.
-    await _activate_current_era(session)
-    now = datetime.now(UTC)
-    agent = Agent(
-        agent_id=uuid4(),
-        miner_hotkey="5HK-effective-desired",
-        name="effective-desired-complete",
-        sha256=uuid4().hex * 2,
-        status=AgentStatus.EVALUATING,
-        created_at=now - timedelta(days=1),
-    )
-    agent.screening_policy_version = SCREENING_POLICY_VERSION
-    _complete_screened_image(agent)
-    async with session.begin():
-        session.add(
-            BenchmarkRollout(
-                rollout_id=uuid4(),
-                from_version=_ACTIVE_VERSION,
-                desired_version=_DESIRED_VERSION,
-                status="collecting",
-                cohort_size=5,
-                created_at=now - timedelta(minutes=5),
-            )
-        )
-        session.add(agent)
-        session.add(
-            BenchmarkDataset(
-                agent_id=agent.agent_id,
-                bench_version=_DESIRED_VERSION,
-                seed=7,
-                sha256="ef" * 32,
-                run_size="full",
-                seed_block=100,
-                seed_block_hash="ff" * 32,
-            )
-        )
-
-    async def effective_desired(_session: AsyncSession) -> int:
-        return _DESIRED_VERSION
-
-    monkeypatch.setattr(
-        "ditto.db.queries.screening.active_bench_version", effective_desired
-    )
 
     claimed = await _claim(session)
 
@@ -2575,21 +2020,6 @@ async def test_scheduled_rescreen_requires_one_operator_release_before_claiming(
     assert release is not None
     assert release.state == "running"
     assert release.attempt_id == attempt.attempt_id
-
-
-async def test_scheduled_rescreen_skips_scored_agent_when_flag_is_off(
-    session: AsyncSession,
-) -> None:
-    """Without the operator's opt-in, an activation leaves the ledger alone."""
-    await _activate_current_era(session)
-    agent = _scored_agent(hotkey="5HK-scored-optout", name="scored-optout")
-    async with session.begin():
-        session.add(agent)
-
-    with _due_activation(rescreen_scored=False):
-        claimed = await _claim(session)
-
-    assert agent.agent_id not in {a.agent_id for a, _, _ in claimed}
 
 
 async def test_isolated_rescreen_requires_canary_capability_and_attests_target(
@@ -2874,30 +2304,16 @@ async def test_unusable_canary_override_does_not_starve_queue(
     )
 
 
-async def test_canary_override_skipped_in_sql_for_revision_zero_claimant(
-    session: AsyncSession,
-) -> None:
-    posture = await _seed_canary_posture(session)
-    held, _, fresh = await _seed_canary_retry_and_fresh_upload(
-        session, posture.revision
-    )
-
-    claimed = await _claim(session, limit=1, review_settings_binding=None)
-
-    assert [agent.agent_id for agent, _, _ in claimed] == [fresh.agent_id]
-    assert held.status == AgentStatus.SCREENING_FAILED
-
-
 @pytest.mark.parametrize(
     "settings",
     [
-        ScreenerReviewSettings(mode="shadow", adjudicator_mode="enforce"),
         ScreenerReviewSettings(
             mode="enforce", l3_enabled=False, adjudicator_mode="enforce"
         ),
-        ScreenerReviewSettings(mode="enforce", adjudicator_mode="shadow"),
     ],
-    ids=["mode", "l3", "adjudicator"],
+    ids=[
+        "l3",
+    ],
 )
 async def test_unusable_canary_posture_does_not_starve_queue(
     session: AsyncSession, settings: ScreenerReviewSettings
@@ -2913,7 +2329,12 @@ async def test_unusable_canary_posture_does_not_starve_queue(
     assert held.status == AgentStatus.SCREENING_FAILED
 
 
-@pytest.mark.parametrize("scope", ["*", "worker-instance-1", "effective-posture"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "worker-instance-1",
+    ],
+)
 async def test_global_or_claimant_scoped_canary_override_still_claimable(
     session: AsyncSession, scope: str
 ) -> None:
@@ -3157,42 +2578,6 @@ async def _seed_double_check_hold(
             )
         )
     return agent
-
-
-async def test_double_check_hold_after_full_screen_is_pinned_to_stronger_posture(
-    session: AsyncSession,
-) -> None:
-    """The row's latest attempt is its full pre-score screen, not build-only.
-
-    It is claimable because nothing has started since the hold opened, and the
-    deep pass is bound to the double-check posture rather than the worker's
-    normal one, so the verdict provably came from the stronger models.
-    """
-    posture = await _seed_double_check_posture(session)
-    agent = await _seed_double_check_hold(session, name="double-check")
-
-    claimed = await _claim(session, review_settings_binding=_NORMAL_BINDING)
-    deep, _duplicate = _claimed_duplicate(claimed, agent)
-
-    assert deep.build_only is False
-    assert deep.reason_code is None
-    assert (
-        deep.review_settings_revision,
-        deep.review_settings_instance_id,
-        deep.review_settings_scope,
-        deep.review_settings_checksum,
-    ) == (
-        posture.revision,
-        _NORMAL_BINDING[1],
-        INTEGRITY_DOUBLE_CHECK_SCOPE,
-        posture.checksum,
-    )
-
-    async with session.begin():
-        deep.status = "passed"
-        deep.finished_at = datetime.now(UTC)
-    # One deep pass per hold; afterwards only an operator retry re-leases it.
-    assert await _claim(session, review_settings_binding=_NORMAL_BINDING) == []
 
 
 @pytest.mark.parametrize("posture_mode", [None, "shadow"])

@@ -39,6 +39,17 @@ logger = logging.getLogger(__name__)
 _RAO_PER_TAO = Decimal(1_000_000_000)
 
 
+def prompt_input(prompt: str) -> str:
+    """Read input without contaminating machine-readable stdout.
+
+    Flush stdout first: a piped stdout is block-buffered, and the preview a
+    miner is asked to approve must appear before the prompt that asks.
+    """
+    sys.stdout.flush()
+    print(prompt, file=sys.stderr, end="", flush=True)
+    return input()
+
+
 def confirm_payment(
     *,
     amount_rao: int,
@@ -46,6 +57,7 @@ def confirm_payment(
     hotkey_ss58: str,
     coldkey_name: str,
     skip: bool,
+    purpose: str | None = None,
 ) -> None:
     """Show a payment preview + prompt for confirmation.
 
@@ -57,6 +69,9 @@ def confirm_payment(
         coldkey_name: Wallet coldkey name (for display only).
         skip: When ``True`` the prompt is bypassed entirely. Used by
             the ``-y`` / ``--yes`` flag for scripted invocations.
+        purpose: Which competition's fee this is (each competition is
+            priced separately), shown so a miner never pays one lane's
+            quote believing it is another's.
 
     Raises:
         PaymentCancelledError: When the user does not answer ``y`` (any
@@ -65,6 +80,8 @@ def confirm_payment(
     tao = Decimal(amount_rao) / _RAO_PER_TAO
     print()
     print("Payment preview")
+    if purpose:
+        print(f"  For:     {purpose}")
     print(f"  Amount:  {tao} TAO  ({amount_rao} rao)")
     print(f"  To:      {dest_address}")
     print(f"  Coldkey: {coldkey_name}")
@@ -76,7 +93,7 @@ def confirm_payment(
         return
 
     try:
-        response = input("Confirm payment? [y/N]: ").strip().lower()
+        response = prompt_input("Confirm payment? [y/N]: ").strip().lower()
     except EOFError as e:
         raise PaymentCancelledError("payment cancelled: EOF on stdin") from e
 
@@ -132,7 +149,7 @@ def confirm_registration(*, quote: RegistrationQuote, skip: bool) -> None:
         return
 
     try:
-        response = input("Register this hotkey now? [y/N]: ").strip().lower()
+        response = prompt_input("Register this hotkey now? [y/N]: ").strip().lower()
     except EOFError as e:
         raise RegistrationCancelledError("registration cancelled: EOF on stdin") from e
 
@@ -213,7 +230,7 @@ def confirm_attestation(
         return
 
     try:
-        response = input("Submit this attestation? [y/N]: ").strip().lower()
+        response = prompt_input("Submit this attestation? [y/N]: ").strip().lower()
     except EOFError as e:
         raise AttestationCancelledError("attestation cancelled: EOF on stdin") from e
 
@@ -252,7 +269,7 @@ def confirm_name_action(
         return
 
     try:
-        response = input(f"Submit this name {action}? [y/N]: ").strip().lower()
+        response = prompt_input(f"Submit this name {action}? [y/N]: ").strip().lower()
     except EOFError as e:
         raise NameClaimCancelledError(f"name {action} cancelled: EOF on stdin") from e
 
@@ -288,7 +305,7 @@ def confirm_avatar_action(
         return
 
     try:
-        response = input(f"Submit this avatar {action}? [y/N]: ").strip().lower()
+        response = prompt_input(f"Submit this avatar {action}? [y/N]: ").strip().lower()
     except EOFError as e:
         raise AvatarCancelledError(f"avatar {action} cancelled: EOF on stdin") from e
 
@@ -328,7 +345,7 @@ def confirm_login_action(
         return
 
     try:
-        response = input("Approve this login? [y/N]: ").strip().lower()
+        response = prompt_input("Approve this login? [y/N]: ").strip().lower()
     except EOFError as e:
         raise LoginCancelledError("login cancelled: EOF on stdin") from e
 

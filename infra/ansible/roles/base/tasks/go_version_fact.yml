@@ -1,0 +1,21 @@
+---
+# Derive the installed Go release from the registered `go version` result.
+#
+# Input: `go_version_check` (registered command result with `rc` and `stdout`).
+# Output: `current_go_version`, e.g. "1.27.3" for
+# "go version go1.27.3 linux/amd64"; "" when the command failed or printed
+# nothing recognisable, which forces a reinstall.
+#
+# Deliberately regex-free: a regex_search group backreference inside a folded
+# scalar raised "'NoneType' object has no attribute 'group'" on ansible-core 2.21,
+# blocking every host that converges `base`. Pick the first whitespace token
+# that starts with "go<digit>" and drop the two-character "go" prefix.
+# Exercised by infra/ansible/tests/base-go-version.yml.
+- name: Detect current Go version string
+  ansible.builtin.set_fact:
+    current_go_version: >-
+      {{
+        ((go_version_check.stdout | default('') | string | split
+          | select('match', 'go[0-9]') | first | default('go'))[2:])
+        if (go_version_check.rc | default(1)) == 0 else ''
+      }}

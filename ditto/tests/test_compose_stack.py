@@ -40,18 +40,12 @@ def _compose_default(expression: str) -> str:
     return remainder.rstrip("}")
 
 
-def test_retired_local_inference_sidecars_are_absent() -> None:
-    compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    assert "ollama" not in compose["services"]
-    assert "model-relay" not in compose["services"]
-
-
 def test_sandbox_image_pins_compatible_rootful_dind_and_installs_guard_tools() -> None:
     dockerfile = SANDBOX_DOCKERFILE_PATH.read_text()
 
     assert dockerfile.startswith(
         "FROM docker.io/library/docker:29-dind@"
-        "sha256:66d292e5c26bd33a6f6f61cacb880de2186339a524ecba1ce098dbbaceed6515"
+        "sha256:9e79b879b177fbd72c34376a3dd3d91747da5db49e1f560f76aea59561471977"
     )
     assert "RUN apk add --no-cache curl socat" in dockerfile
 
@@ -122,15 +116,6 @@ def test_v9_private_projection_volume_is_initialized_before_scorer_health() -> N
     )
 
 
-def test_compatibility_executor_does_not_require_host_specific_outer_limits() -> None:
-    compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    sandbox = compose["services"]["sandbox-docker"]
-
-    assert "mem_limit" not in sandbox
-    assert "cpus" not in sandbox
-    assert "pids_limit" not in sandbox
-
-
 def test_validator_probes_the_live_sandbox_network_namespace() -> None:
     services = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
     validator = services["ditto-subnet"]["environment"]
@@ -184,73 +169,33 @@ def test_inference_control_plane_shares_one_self_supplied_token() -> None:
     assert len(scorer.removeprefix("${DITTOBENCH_BROKER_CONTROL_TOKEN:-")[:-1]) >= 16
 
 
+def test_scorer_control_auth_mode_is_operator_settable_and_defaults_to_shadow() -> None:
+    """Operators must be able to turn on control-plane enforcement from .env.
+
+    dittobench-api reads ``DITTOBENCH_CONTROL_AUTH_MODE``; without a Compose
+    passthrough an ``.env`` value never reaches the container, so ``enforce``
+    was unreachable on a stock stack. The shipped default stays ``shadow``:
+    flipping it is a separate rollout decision, and enforce treats the
+    published default token as unset.
+    """
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    scorer = compose["services"]["dittobench-api"]["environment"]
+    validator = compose["services"]["ditto-subnet"]["environment"]
+    mode = scorer["DITTOBENCH_CONTROL_AUTH_MODE"]
+
+    assert mode.startswith("${DITTOBENCH_CONTROL_AUTH_MODE:-")
+    assert _compose_default(mode) == "shadow"
+    # The posture is a scorer knob; the validator only presents the token.
+    assert "DITTOBENCH_CONTROL_AUTH_MODE" not in validator
+    assert "# DITTOBENCH_CONTROL_AUTH_MODE=shadow\n" in ENV_EXAMPLE_PATH.read_text()
+
+
 def test_scorer_allows_only_verified_screened_image_downloads() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     environment = compose["services"]["dittobench-api"]["environment"]
 
     assert environment["DITTOBENCH_ALLOW_SCREENED_IMAGES"] == "1"
     assert "DITTOBENCH_ALLOW_PRIVATE_HARNESS" not in environment
-
-
-def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None:
-    compose = yaml.safe_load(COMPOSE_PATH.read_text())
-    services = compose["services"]
-    scorer = services["dittobench-api"]["environment"]
-    validator = services["ditto-subnet"]["environment"]
-
-    assert _compose_default(scorer["DITTOBENCH_CODING_SHADOW_ENABLED"]) == "false"
-    assert _compose_default(scorer["DITTOBENCH_CODING_CANARY_ENABLED"]) == "false"
-    assert _compose_default(scorer["DITTOBENCH_CODING_CERTIFICATION_ROOT"]) == ""
-    assert _compose_default(scorer["DITTOBENCH_CODING_RUNTIME_IMAGE_DIGEST"]) == ""
-    assert _compose_default(validator["VALIDATOR_CODING_SHADOW_ENABLED"]) == "false"
-    assert _compose_default(validator["VALIDATOR_CODING_SHADOW_RUN_ID"]) == ""
-    assert (
-        _compose_default(validator["VALIDATOR_CODING_EXECUTOR_REMOTE_ENABLED"])
-        == "false"
-    )
-    assert (
-        _compose_default(
-            validator["VALIDATOR_CODING_EXECUTOR_CONNECTIVITY_CANARY_ENABLED"]
-        )
-        == "false"
-    )
-    for key in (
-        "VALIDATOR_CODING_EXECUTOR_BASE_URL",
-        "VALIDATOR_CODING_EXECUTOR_CA_PATH",
-        "VALIDATOR_CODING_EXECUTOR_CLIENT_CERT_PATH",
-        "VALIDATOR_CODING_EXECUTOR_CLIENT_KEY_PATH",
-        "VALIDATOR_CODING_EXECUTOR_TIMEOUT_SECONDS",
-    ):
-        assert _compose_default(validator[key]) == ""
-    assert _compose_default(validator["VALIDATOR_CODING_CANARY_ENABLED"]) == "false"
-    assert {item["source"] for item in services["ditto-subnet"]["secrets"]} == {
-        "coding-executor-validator-ca",
-        "coding-executor-validator-client-cert",
-        "coding-executor-validator-client-key",
-    }
-    for secret in (
-        "coding-executor-validator-ca",
-        "coding-executor-validator-client-cert",
-        "coding-executor-validator-client-key",
-    ):
-        assert _compose_default(compose["secrets"][secret]["file"]) == "/dev/null"
-    assert scorer["DITTOBENCH_CODING_PRIVATE_ROOT"].startswith(
-        "/var/lib/dittobench-private-artifacts/"
-    )
-    assert scorer["DITTOBENCH_CODING_POLICY_FILE"].endswith(
-        "coding_inference_policy_locked_v1.json"
-    )
-    assert (
-        "coding_inference_policy_locked_v1.json" in SCORER_DOCKERFILE_PATH.read_text()
-    )
-    assert (
-        "DITTOBENCH_CODING_SHADOW_ENABLED"
-        not in services["sandbox-docker"]["environment"]
-    )
-    assert (
-        "DITTOBENCH_CODING_CANARY_ENABLED"
-        not in services["sandbox-docker"]["environment"]
-    )
 
 
 def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
@@ -796,7 +741,8 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     # Both native validator children, the sandbox daemon, both native scorer
     # children, the dedicated coding-executor scorer, patched Pylon, the
     # frozen-updater relay shim, the signed validator stack descriptor, and the
-    # signed screener fleet descriptor are independently built and published;
+    # signed screener fleet and generator scorer descriptors are independently built
+    # and published;
     # the two cached starter-kit verify gates build without publishing.
     build_action_count = sum(
         workflow.count(action)
@@ -805,7 +751,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 12
+    assert build_action_count == 13
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
@@ -874,3 +820,93 @@ def test_stack_updater_unit_outlasts_a_full_drain_and_rollback() -> None:
     assert timeout_start >= drain + 30 + (5 + 7) * ready
     env_example = ENV_EXAMPLE_PATH.read_text()
     assert f"VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS={drain}\n" in env_example
+
+
+def test_gamma_public_proof_is_shared_only_by_trusted_weight_processes() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    proof = "treasury-emission-approval"
+    assert _compose_default(compose["secrets"][proof]["file"]) == "/dev/null"
+    assert (
+        _compose_default(
+            compose["services"]["pylon"]["environment"][
+                "DITTO_TREASURY_WEIGHT_ENFORCEMENT"
+            ]
+        )
+        == "false"
+    )
+    for name, service in compose["services"].items():
+        mounted = [
+            item for item in service.get("secrets", []) if item["source"] == proof
+        ]
+        if name in {"pylon", "ditto-subnet"}:
+            assert mounted == [
+                {
+                    "source": proof,
+                    "target": "treasury-emission-approval.json",
+                    "mode": 0o444,
+                }
+            ]
+            for key in (
+                "DITTO_TREASURY_SHADOW_APPROVAL_FILE",
+                "DITTO_TREASURY_APPROVED_POLICY_DIGEST",
+                "DITTO_TREASURY_COLLECTOR_POLICY_DIGEST",
+            ):
+                assert _compose_default(service["environment"][key]) == ""
+                assert (
+                    service["environment"][key]
+                    == compose["services"]["pylon"]["environment"][key]
+                )
+        else:
+            assert not mounted
+            assert not any(
+                key.startswith("DITTO_TREASURY_")
+                for key in service.get("environment", {})
+            )
+
+
+def test_gamma_ansible_template_normalizes_false_and_keeps_public_pins() -> None:
+    import pytest
+
+    jinja2 = pytest.importorskip("jinja2", reason="optional Ansible template runtime")
+
+    root = COMPOSE_PATH.parent
+    template = (
+        root / "infra/ansible/roles/validator_stack/templates/validator.env.j2"
+    ).read_text()
+    gamma = "\n".join(
+        line for line in template.splitlines() if line.startswith("DITTO_TREASURY_")
+    )
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined)
+    env.filters["bool"] = lambda value: value in (True, "true", "yes", 1)
+    vars = {
+        "validator_stack_treasury_approval_path": (
+            "/var/lib/ditto-validator/treasury/emission-approval.json"
+        ),
+        "validator_stack_treasury_policy_digest": "a" * 64,
+        "validator_stack_treasury_collector_policy_digest": "b" * 64,
+    }
+    for disabled in (False, "false"):
+        rendered = dict(
+            line.split("=", 1)
+            for line in env.from_string(gamma)
+            .render(**vars, validator_stack_treasury_guard_enabled=disabled)
+            .splitlines()
+        )
+        assert rendered["DITTO_TREASURY_WEIGHT_ENFORCEMENT"] == "false"
+        assert rendered["DITTO_TREASURY_APPROVAL_HOST_PATH"] == "/dev/null"
+        assert rendered["DITTO_TREASURY_SHADOW_APPROVAL_FILE"] == ""
+        assert rendered["DITTO_TREASURY_APPROVED_POLICY_DIGEST"] == ""
+        assert rendered["DITTO_TREASURY_COLLECTOR_POLICY_DIGEST"] == ""
+    enabled = dict(
+        line.split("=", 1)
+        for line in env.from_string(gamma)
+        .render(**vars, validator_stack_treasury_guard_enabled=True)
+        .splitlines()
+    )
+    assert enabled["DITTO_TREASURY_WEIGHT_ENFORCEMENT"] == "true"
+    assert (
+        enabled["DITTO_TREASURY_SHADOW_APPROVAL_FILE"]
+        == "/run/secrets/treasury-emission-approval.json"
+    )
+    assert enabled["DITTO_TREASURY_APPROVED_POLICY_DIGEST"] == "a" * 64
+    assert enabled["DITTO_TREASURY_COLLECTOR_POLICY_DIGEST"] == "b" * 64

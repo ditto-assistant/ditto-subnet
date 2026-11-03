@@ -1,0 +1,441 @@
+"""Operator reads and the audited rotation for dueling-bench seasons (v16+).
+
+- ``GET /admin/generator-competition/dueling/seasons``: the dueling target
+  (version, shadow, why nothing can open), the open season(s), the committed
+  next season(s), and recent closed/revealed/void ones.
+- ``GET /admin/generator-competition/dueling/seasons/{season_id}``: one season
+  with its commitment, frozen columns, battery results, per-column means
+  across in-season scores and slice counts.
+- ``GET /admin/generator-competition/dueling/slices``: slice preparations with
+  status, attempts, latency and digests (never the bytes).
+- ``POST /admin/generator-competition/dueling/rotate``: close the open season
+  at the next round boundary, or now with ``immediate``, under the
+  confirmation ``ROTATE DUELING SEASON`` and an audited reason.
+
+The season secret and seed are served only once a season is revealed.
+"""
+
+from __future__ import annotations
+
+import statistics
+from datetime import UTC, datetime
+from typing import Annotated, Any
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import Float, func, select, true
+from sqlalchemy import column as sa_column
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ditto.api_models.dueling import (
+    DUELING_COLUMN_FLOOR,
+    ROTATE_DUELING_SEASON_CONFIRMATION,
+    AdminDuelingRotateRequest,
+    AdminDuelingSeasonsResponse,
+    AdminDuelingSlicesResponse,
+    DuelingBatteryView,
+    DuelingColumnMean,
+    DuelingSeasonView,
+    DuelingSliceStatus,
+    DuelingSliceView,
+    DuelingTargetView,
+)
+from ditto.api_server.dependencies import get_session
+from ditto.api_server.dueling_seasons import dueling_target, open_season
+from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.generator_competition import load_settings
+from ditto.db.models import (
+    ConfirmationScore,
+    DuelingSeason,
+    DuelingSeasonBattery,
+    DuelingSlicePreparation,
+    Score,
+)
+from ditto.db.queries.generator import record_operator_action
+from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION
+
+router = APIRouter(prefix="/admin/generator-competition/dueling", tags=["admin"])
+SessionDep = Annotated[AsyncSession, Depends(get_session)]
+AdminDep = Annotated[None, Depends(require_admin)]
+
+_RECENT = 10
+_PRIVATE_DETAIL_KEYS = frozenset({"fallback"})
+
+
+async def _column_means(
+    session: AsyncSession, season: DuelingSeason
+) -> list[DuelingColumnMean]:
+    """Each pinned column's mean case score across the season's scores."""
+    if not season.columns:
+        return []
+    totals: dict[str, list[float]] = {
+        column["column_id"]: [0, 0.0, 0] for column in season.columns
+    }
+    # Aggregated in PostgreSQL: one row per column, whatever the season's
+    # score count.
+    element = (
+        func.jsonb_array_elements(Score.dueling["columns"])
+        .table_valued(sa_column("value", JSONB))
+        .alias("element")
+    )
+    column_id_label = element.c.value["column_id"].astext.label("column_id")
+    for column_id, cases, total, scores in await session.execute(
+        select(
+            column_id_label,
+            func.sum(element.c.value["n"].astext.cast(Float)),
+            func.sum(element.c.value["sum"].astext.cast(Float)),
+            func.count(),
+        )
+        .select_from(Score)
+        .join(element, true())
+        .where(Score.dueling_season_id == season.id, Score.dueling.is_not(None))
+        .group_by(column_id_label)
+    ):
+        bucket = totals.get(str(column_id))
+        if bucket is not None:
+            bucket[0] = float(cases or 0)
+            bucket[1] = float(total or 0.0)
+            bucket[2] = int(scores or 0)
+    means = {
+        cid: (bucket[1] / bucket[0]) if bucket[0] else None
+        for cid, bucket in totals.items()
+    }
+    defaults = [
+        means[c["column_id"]]
+        for c in season.columns
+        if c.get("public_default") and means[c["column_id"]] is not None
+    ]
+    anchor = statistics.fmean(defaults) if defaults else None  # type: ignore[arg-type]
+    out: list[DuelingColumnMean] = []
+    for column in season.columns:
+        cid = column["column_id"]
+        mean = means[cid]
+        out.append(
+            DuelingColumnMean(
+                column_id=cid,
+                submission_id=str(column["submission_id"]),
+                owner_key=str(column.get("owner_key") or ""),
+                public_default=bool(column.get("public_default")),
+                scores=int(totals[cid][2]),
+                cases=int(totals[cid][0]),
+                mean=mean,
+                default_gap=(None if mean is None or anchor is None else mean - anchor),
+                below_floor=mean is not None and mean < DUELING_COLUMN_FLOOR,
+            )
+        )
+    return out
+
+
+async def _view(
+    session: AsyncSession, season: DuelingSeason, *, full: bool
+) -> DuelingSeasonView:
+    revealed = season.status == "revealed"
+    detail = season.detail or {}
+    view: dict[str, Any] = {
+        "id": season.id,
+        "bench_version": season.bench_version,
+        "season_index": season.season_index,
+        "shadow": season.shadow,
+        "status": season.status,
+        "commitment": season.commitment,
+        "committed_at": season.committed_at,
+        "rounds_per_season": season.rounds_per_season,
+        "settings_revision": season.settings_revision,
+        "anchor_block": season.anchor_block,
+        "anchor_block_hash": season.anchor_block_hash,
+        "opened_at": season.opened_at,
+        "closes_at_round": season.closes_at_round,
+        "closed_at": season.closed_at,
+        "reveal_at_epoch": season.reveal_at_epoch,
+        "revealed_at": season.revealed_at,
+        "void_reason": season.void_reason,
+        "rotation_requested_at": season.rotation_requested_at,
+        "rotation_immediate": season.rotation_immediate,
+        "rotation_actor": season.rotation_actor,
+        "rotation_reason": season.rotation_reason,
+        "columns": season.columns,
+        "fallback": detail.get("fallback"),
+        "detail": {
+            key: value
+            for key, value in detail.items()
+            if key not in _PRIVATE_DETAIL_KEYS
+        }
+        or None,
+        "secret_hex": season.secret.hex() if revealed else None,
+        "season_seed": season.season_seed if revealed else None,
+    }
+    if full:
+        view["batteries"] = [
+            DuelingBatteryView(
+                submission_id=row.submission_id,
+                miner_hotkey=row.miner_hotkey,
+                owner_key=row.owner_key,
+                tree_sha256=row.tree_sha256,
+                rank=row.rank,
+                evidence=row.evidence,
+                status=row.status,  # type: ignore[arg-type]
+                attempts=row.attempts,
+                grading_bench_version=row.grading_bench_version,
+                error=row.error,
+                scorer_version=row.scorer_version,
+                finished_at=row.finished_at,
+            )
+            for row in await session.scalars(
+                select(DuelingSeasonBattery)
+                .where(DuelingSeasonBattery.season_id == season.id)
+                .order_by(DuelingSeasonBattery.rank)
+            )
+        ]
+        view["column_means"] = await _column_means(session, season)
+        view["slices"] = {
+            str(status): int(count)
+            for status, count in await session.execute(
+                select(DuelingSlicePreparation.status, func.count())
+                .where(DuelingSlicePreparation.season_id == season.id)
+                .group_by(DuelingSlicePreparation.status)
+            )
+        }
+    return DuelingSeasonView(**view)
+
+
+@router.get("/seasons", response_model=AdminDuelingSeasonsResponse)
+async def admin_dueling_seasons(
+    _admin: AdminDep, session: SessionDep
+) -> AdminDuelingSeasonsResponse:
+    """The dueling target, the open and committed seasons, and recent ones."""
+    resolved = await load_settings(session)
+    target = await dueling_target(session, resolved.settings)
+
+    async def _status(*statuses: str, limit: int | None = None) -> list[DuelingSeason]:
+        stmt = (
+            select(DuelingSeason)
+            .where(DuelingSeason.status.in_(statuses))
+            .order_by(
+                DuelingSeason.season_index.desc(), DuelingSeason.created_at.desc()
+            )
+        )
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(await session.scalars(stmt))
+
+    floor = DUELING_MIN_BENCH_VERSION
+    missing = await session.scalar(
+        select(func.count())
+        .select_from(Score)
+        .where(
+            Score.bench_version >= floor,
+            (Score.dueling_season_id.is_(None)) | (Score.dueling.is_(None)),
+        )
+    )
+    missing_confirmations = await session.scalar(
+        select(func.count())
+        .select_from(ConfirmationScore)
+        .where(
+            ConfirmationScore.bench_version >= floor,
+            (ConfirmationScore.dueling_season_id.is_(None))
+            | (ConfirmationScore.dueling.is_(None)),
+        )
+    )
+    return AdminDuelingSeasonsResponse(
+        scores_without_dueling=int(missing or 0),
+        confirmation_scores_without_dueling=int(missing_confirmations or 0),
+        target=DuelingTargetView(
+            bench_version=target.bench_version,
+            shadow=target.shadow,
+            blocked=target.blocked,
+            live_versions=sorted(target.live_versions),
+        ),
+        current=[await _view(session, s, full=True) for s in await _status("open")],
+        next=[await _view(session, s, full=True) for s in await _status("committed")],
+        recent=[
+            await _view(session, s, full=False)
+            for s in await _status("closed", "revealed", "void", limit=_RECENT)
+        ],
+    )
+
+
+@router.get("/seasons/{season_id}", response_model=DuelingSeasonView)
+async def admin_dueling_season(
+    season_id: UUID, _admin: AdminDep, session: SessionDep
+) -> DuelingSeasonView:
+    season = await session.get(DuelingSeason, season_id)
+    if season is None:
+        raise HTTPException(status_code=404, detail="unknown dueling season")
+    return await _view(session, season, full=True)
+
+
+@router.get("/slices", response_model=AdminDuelingSlicesResponse)
+async def admin_dueling_slices(
+    _admin: AdminDep,
+    session: SessionDep,
+    season_id: UUID | None = None,
+    status: DuelingSliceStatus | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+) -> AdminDuelingSlicesResponse:
+    """Slice preparations, newest first, with latency and digests."""
+    filters = []
+    if season_id is not None:
+        filters.append(DuelingSlicePreparation.season_id == season_id)
+    if status is not None:
+        filters.append(DuelingSlicePreparation.status == status)
+    rows = (
+        await session.execute(
+            select(
+                DuelingSlicePreparation.id,
+                DuelingSlicePreparation.season_id,
+                DuelingSlicePreparation.run_seed,
+                DuelingSlicePreparation.status,
+                DuelingSlicePreparation.attempts,
+                DuelingSlicePreparation.slice_sha256,
+                func.octet_length(DuelingSlicePreparation.slice_bytes).label("size"),
+                DuelingSlicePreparation.bytes_pruned_at,
+                DuelingSlicePreparation.columns,
+                DuelingSlicePreparation.error,
+                DuelingSlicePreparation.scorer_version,
+                DuelingSlicePreparation.created_at,
+                DuelingSlicePreparation.first_leased_at,
+                DuelingSlicePreparation.ready_at,
+                DuelingSlicePreparation.failed_at,
+                DuelingSeason.season_index,
+                DuelingSeason.bench_version,
+            )
+            .join(DuelingSeason, DuelingSeason.id == DuelingSlicePreparation.season_id)
+            .where(*filters)
+            .order_by(
+                DuelingSlicePreparation.created_at.desc(), DuelingSlicePreparation.id
+            )
+            .offset(offset)
+            .limit(limit)
+        )
+    ).all()
+    counts = {
+        str(state): int(count)
+        for state, count in await session.execute(
+            select(DuelingSlicePreparation.status, func.count())
+            .where(*filters)
+            .group_by(DuelingSlicePreparation.status)
+        )
+    }
+    views: list[DuelingSliceView] = []
+    latencies: list[float] = []
+    for row in rows:
+        finished = row.ready_at or row.failed_at
+        latency = (
+            (finished - row.created_at).total_seconds()
+            if finished is not None
+            else None
+        )
+        if row.ready_at is not None and latency is not None:
+            latencies.append(latency)
+        views.append(
+            DuelingSliceView(
+                id=row.id,
+                season_id=row.season_id,
+                season_index=row.season_index,
+                bench_version=row.bench_version,
+                run_seed=str(row.run_seed),
+                status=row.status,
+                attempts=row.attempts,
+                slice_sha256=row.slice_sha256,
+                size_bytes=row.size,
+                bytes_pruned=row.bytes_pruned_at is not None,
+                columns=row.columns,
+                error=row.error,
+                scorer_version=row.scorer_version,
+                created_at=row.created_at,
+                first_leased_at=row.first_leased_at,
+                ready_at=row.ready_at,
+                failed_at=row.failed_at,
+                latency_seconds=latency,
+            )
+        )
+    p95 = None
+    if latencies:
+        ordered = sorted(latencies)
+        p95 = ordered[min(len(ordered) - 1, int(0.95 * (len(ordered) - 1) + 0.5))]
+    return AdminDuelingSlicesResponse(
+        slices=views,
+        counts=counts,
+        latency_p50_seconds=statistics.median(latencies) if latencies else None,
+        latency_p95_seconds=p95,
+    )
+
+
+@router.post("/rotate", response_model=DuelingSeasonView)
+async def admin_rotate_dueling_season(
+    payload: AdminDuelingRotateRequest, _admin: AdminDep, session: SessionDep
+) -> DuelingSeasonView:
+    """Rotate the open season: it closes at the next round boundary (or now,
+    with ``immediate``) and the next season opens at the following boundary
+    on a fresh battery. Never swaps columns in place."""
+    if payload.confirmation != ROTATE_DUELING_SEASON_CONFIRMATION:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {ROTATE_DUELING_SEASON_CONFIRMATION}",
+        )
+    reason = payload.reason.strip()
+    actor = payload.actor.strip()
+    if len(reason) < 8 or not actor:
+        raise HTTPException(
+            status_code=422, detail="a rotation needs a reason (8+ chars) and an actor"
+        )
+    if payload.season_id is not None:
+        season = await session.scalar(
+            select(DuelingSeason)
+            .where(DuelingSeason.id == payload.season_id)
+            .with_for_update()
+        )
+    else:
+        resolved = await load_settings(session)
+        target = await dueling_target(session, resolved.settings)
+        season = (
+            await open_season(session, target.bench_version, for_update=True)
+            if target.bench_version is not None
+            else None
+        )
+    if season is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "unknown dueling season"
+                if payload.season_id is not None
+                else "no open dueling season to rotate"
+            ),
+        )
+    if season.status != "open":
+        raise HTTPException(
+            status_code=409,
+            detail=f"season is {season.status}; only an open season rotates",
+        )
+    if season.rotation_requested_at is not None and (
+        season.rotation_immediate or not payload.immediate
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"season already rotated by {season.rotation_actor} at "
+                f"{season.rotation_requested_at.isoformat()}"
+            ),
+        )
+    now = datetime.now(UTC)
+    season.rotation_requested_at = now
+    season.rotation_immediate = payload.immediate
+    season.rotation_actor = actor[:120]
+    season.rotation_reason = reason
+    record_operator_action(
+        session,
+        action="rotate_dueling_season",
+        subject=f"dueling_season:{season.id}",
+        actor=actor,
+        reason=reason,
+        detail={
+            "season_index": season.season_index,
+            "bench_version": season.bench_version,
+            "immediate": payload.immediate,
+        },
+    )
+    await session.commit()
+    await session.refresh(season)
+    return await _view(session, season, full=True)

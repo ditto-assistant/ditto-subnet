@@ -44,7 +44,7 @@ ALL_SCOPES: Final[tuple[Scope, ...]] = (
     "challenges",
 )
 DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read",)
-OAUTH_DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read",)
+OAUTH_DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read", "download")
 SessionLabel = Literal["dashboard", "mcp", "cli"]
 
 _X_HOSTS: Final = ("x.com", "www.x.com", "twitter.com", "www.twitter.com")

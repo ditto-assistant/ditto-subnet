@@ -1,7 +1,13 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
+import type {
+  AthReviewKind,
+  CopyReviewConsoleItem,
+  CopyReviewGeneration,
+  CopyReviewLanguageInventory,
+  CopyReviewResolution,
+} from '../lib/admin.schemas'
 import { decideCopyReview, listCopyReviews, openAthReview } from '../server/admin.functions'
 import { CopyReviewSourceDiff } from './CopyReviewSourceDiff'
 import { Modal } from './Modal'
@@ -20,6 +26,74 @@ function formatDate(value: string) {
 
 function formatSimilarity(value: number | null | undefined) {
   return typeof value === 'number' ? value.toFixed(3) : '—'
+}
+
+function rankedLanguages(inventory: CopyReviewLanguageInventory) {
+  return Object.entries(inventory.bytes)
+    .filter(([, bytes]) => bytes > 0)
+    .sort(([a, left], [b, right]) => right - left || a.localeCompare(b))
+}
+
+function formatLanguageMix(inventory: CopyReviewLanguageInventory | null | undefined) {
+  if (!inventory) return 'not recorded'
+  const ranked = rankedLanguages(inventory)
+  const total = ranked.reduce((sum, [, bytes]) => sum + bytes, 0)
+  const files = Object.values(inventory.files).reduce((sum, count) => sum + count, 0)
+  const fileCount = `${files} file${files === 1 ? '' : 's'}`
+  if (total === 0) return files > 0 ? `${fileCount} (0 bytes)` : 'no authored files'
+  const shown = ranked
+    .slice(0, 3)
+    .map(([language, bytes]) => `${language} ${Math.round((bytes / total) * 100)}%`)
+  const more = ranked.length > 3 ? ` +${ranked.length - 3} more` : ''
+  return `${shown.join(' · ')}${more} (${fileCount})`
+}
+
+// Labels that say nothing about which language the code is written in: an
+// unclassified file, or documentation, data, config and build files that any
+// agent may ship in bulk (a JSON registry, a Markdown prompt, Cargo.toml, a
+// Makefile or Dockerfile).
+const NON_CODE_LANGUAGES = new Set([
+  'unknown',
+  'markdown',
+  'restructuredtext',
+  'text',
+  'json',
+  'toml',
+  'yaml',
+  'ini',
+  'requirements',
+  'dotenv',
+  'dockerfile',
+  'make',
+])
+
+// The normalized-source and prompt channels canonicalize Rust/C-style syntax.
+// Flag a comparison where either side's code is mostly another language, by
+// byte majority over code labels only, so a miss on those channels is not read
+// as exculpatory. A tie, or a side with no classified code, does not qualify.
+function mostlyNonRust(
+  ...inventories: Array<CopyReviewLanguageInventory | null | undefined>
+) {
+  return inventories.some((inventory) => {
+    if (!inventory) return false
+    let codeBytes = 0
+    let nonRustBytes = 0
+    for (const [language, bytes] of Object.entries(inventory.bytes)) {
+      if (bytes <= 0 || NON_CODE_LANGUAGES.has(language)) continue
+      codeBytes += bytes
+      if (language !== 'rust') nonRustBytes += bytes
+    }
+    return nonRustBytes * 2 > codeBytes
+  })
+}
+
+// Inventories recorded under different detection rules are not like-for-like.
+function inventoryVersionMismatch(
+  candidate: CopyReviewLanguageInventory | null | undefined,
+  reference: CopyReviewLanguageInventory | null | undefined,
+) {
+  if (!candidate || !reference || candidate.version === reference.version) return null
+  return `candidate ${candidate.version} vs reference ${reference.version}`
 }
 
 function comparisonLabel(item: CopyReviewConsoleItem) {
@@ -699,9 +773,36 @@ export function CopyReviewPanel({
                     <dt className="text-[var(--muted)]">Similarity (Jaccard / containment)</dt>
                     <dd className="mt-1 flex flex-wrap gap-x-4 gap-y-1 font-mono">
                       <span>lexical {formatSimilarity(selected.current_comparison.lexical?.jaccard)} / {formatSimilarity(selected.current_comparison.lexical?.containment)}</span>
+                      <span>line {formatSimilarity(selected.current_comparison.line?.jaccard)} / {formatSimilarity(selected.current_comparison.line?.containment)}</span>
                       <span>structural {formatSimilarity(selected.current_comparison.structural?.jaccard)} / {formatSimilarity(selected.current_comparison.structural?.containment)}</span>
                       <span>prompt {formatSimilarity(selected.current_comparison.prompt?.jaccard)} / {formatSimilarity(selected.current_comparison.prompt?.containment)}</span>
                     </dd>
+                  </div>
+                  <div>
+                    <dt className="text-[var(--muted)]">Languages (authored bytes)</dt>
+                    <dd className="mt-1 space-y-1 font-mono">
+                      <p>candidate {formatLanguageMix(selected.current_comparison.candidate_languages)}</p>
+                      <p>reference {formatLanguageMix(selected.current_comparison.reference_languages)}</p>
+                    </dd>
+                    {mostlyNonRust(
+                      selected.current_comparison.candidate_languages,
+                      selected.current_comparison.reference_languages,
+                    ) ? (
+                      <p className="mt-1 text-[var(--amber)]">
+                        Mostly non-Rust source: normalized-source and prompt canonicalization is Rust-shaped, so a miss there is not exculpatory.
+                      </p>
+                    ) : null}
+                    {(() => {
+                      const mismatch = inventoryVersionMismatch(
+                        selected.current_comparison.candidate_languages,
+                        selected.current_comparison.reference_languages,
+                      )
+                      return mismatch ? (
+                        <p className="mt-1 text-[var(--muted)]">
+                          Inventories recorded under different detection rules ({mismatch}); the mixes are not like-for-like.
+                        </p>
+                      ) : null
+                    })()}
                   </div>
                 </dl>
               )}

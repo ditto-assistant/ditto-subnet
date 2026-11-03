@@ -21,11 +21,11 @@ does not silently become a prerequisite for every submission. The activation
 record must include the revised built-in manifest digest and release revision;
 historical decisions retain their original policy digest.
 
-Policy v13 is a strict two-outcome policy. Every completed review ends in
-`CLEAR` or `REJECT`. When verification cannot be completed the result is
-`REJECT` with `violation_proven: false` and an explicit failure domain; such a
-rejection is a certification failure and must never be described as cheating,
-fraud, or deliberate evasion.
+A completed eligibility decision is `CLEAR` or `REJECT`. A reviewer, platform
+or provider failure leaves verification incomplete and the attempt parked for
+operator review or manual retry; it does not establish rejection evidence.
+An artifact-controlled certification rejection records `violation_proven:
+false` and must never be described as cheating, fraud, or deliberate evasion.
 
 ## Final outcomes
 
@@ -36,12 +36,13 @@ CLEAR
 REJECT
 ```
 
-Queued, building, screening, retrying, and adjudicating are temporary
-processing states. They must resolve to `CLEAR` or `REJECT` by the published
-deadline.
-
-There is no `REVIEW_INCOMPLETE`, `INCONCLUSIVE`, implied clearance, or
-indefinite hold outcome.
+Queued, building, screening, retrying, and adjudicating are processing states.
+A completed eligibility decision is `CLEAR` or `REJECT`. When screening cannot
+complete, the attempt ends once and the submission stays `screening_failed`
+for explicit operator review or manual retry. That state confers no clearance.
+Repeated inconclusive reviews and platform/provider failures are evidence of
+verification problems, never grounds for automatic rejection or misconduct.
+There are no automatic cost-bearing retries; see `docs/no-automatic-retries.md`.
 
 ## Exact-artifact scope
 
@@ -125,7 +126,8 @@ does not clear the artifact.
 - Normal substantive answers originate from genuine model inference, or from a
   permitted W5/W6 delegation.
 - Refusal, uncertainty, and substantive abstention remain model decisions.
-- The model receives the request and evidence needed to decide.
+- The model receives the request and its selected evidence/context under W3;
+  completeness of raw evidence is not itself a model-authority requirement.
 - A model call is not ornamental. An ornamental call does not establish
   authority over a separately generated answer.
 - The final deciding result remains authoritative through serialization.
@@ -149,8 +151,10 @@ Every deciding answer-producing call receives:
 Prompt projection is allowed only when it preserves all applicable meaning and
 restrictions.
 
-A summary or digest is not sufficient when the deciding model needs the
-original instruction.
+A summary, digest or checkpoint may carry an instruction when it preserves
+its applicable meaning, scope and restrictions. Omitting raw instruction bytes
+alone is not a violation; removing an applicable trusted restriction with a
+material consequence remains prohibited under I2.
 
 ### W3: retrieval and final evidence
 
@@ -162,39 +166,83 @@ multistage candidate selection before substantive reasoning.
 Policy v13 does not require perfect recall. Retrieval uses the authenticated
 principal's authorized data.
 
-An intermediate retrieval candidate is not protected evidence merely because
-one stage scored it. Protection begins when the pipeline:
+Records, tool arguments, receipts and history may be selected, excerpted,
+summarized, compacted, checkpointed or omitted. The same permission applies
+before and after a deciding or critic model has received or used them, and to
+retries, recovery and fresh fallback transcripts. There is no requirement to
+retain every raw record, receipt or prior turn at every later stage.
 
-- designates the record as part of the final evidence set;
-- attaches it to a deciding transcript;
-- relies on it for substantive reasoning;
-- uses it to create an advisory value; or
-- uses it to select a tool argument.
+Keeping corrections, qualifications, contradictions, chronology and execution
+state is useful engineering. Losing them can reduce answer quality or cause a
+reliability failure. Evidence loss alone is a benchmark-quality issue, not an
+integrity or certification rejection ground. Neither a pointer to unavailable
+evidence, an incomplete summary nor a fresh fallback is sufficient proof of a
+violation. Context limits prove neither compliance nor a violation.
 
-Once protected:
+Applicable trusted instructions, authorization and safety constraints remain
+protected under W2/I2. Independently prohibited mechanisms remain enforceable,
+including host semantic suppression of a valid designated answer (I3), host
+answer rewriting (I4), a proven benchmark-specific recipe (I5), execution
+misrepresentation (I6), or unauthorized capability changes (I7). Each needs
+its own complete proof and material consequence; loss of evidence is not that
+independent ground.
 
-- corrections remain available;
-- qualifications remain available;
-- contradictory evidence remains available;
-- assistant-side evidence remains available when applicable;
-- completed tool arguments and receipts remain available;
-- applicable chronology and relationships reach the deciding authority;
-- retries preserve it;
-- critique preserves it;
-- compaction preserves it; and
-- fallback preserves it.
+#### Clarification: summaries, compaction and recovery (2026-10-25)
 
-Additional retention rules:
+Evidence loss from retrieval, summaries, compaction, checkpointing, retries or
+recovery alone is benchmark quality or reliability, not rejection. This
+includes losing a receipt after a successful deciding call consumed it,
+switching to a fresh model-authored fallback, and a possible different answer
+because the later model has less context. A hypothetical sequence showing
+that loss, or even an observed wrong answer from it, does not establish an
+independent prohibited mechanism.
 
-- Preliminary summaries remain advisory and do not replace necessary
-  originals.
-- Reordering and genuine deduplication preserve distinct material facts and
-  events.
-- A pointer to unavailable evidence is not a substitute for supplying it.
-- Context limits alone prove neither compliance nor a violation.
+A rejection must identify that separate mechanism under its published rule
+and prove its material response, execution or security consequence. Do not
+rename incidental evidence loss as I2, I3, I5, I6, Q1 or another condition.
+This does not permit ignoring applicable trusted instructions/authorization,
+overriding a valid designated model answer to obtain a preferred value,
+fabricating execution, or a separately proven security breach.
 
-An ordinary retrieval miss is a score-quality issue and is not automatically
-an integrity violation.
+The 51 fallback-only rulings identified in the dated operator withdrawal
+record are withdrawn as precedent. Their exact UUID/SHA scope is recorded in
+the Backroom review precedent store. Restoration is an audited court action
+with fresh guards and readback; this document neither applies it nor erases
+the historical rejects. A different, independently supported ground remains
+subject to its own exact-artifact review.
+
+The operator's separately recorded historical loss-only withdrawals apply this
+current reconsideration standard without rewriting earlier policy text or
+claiming a screening requeue is an ATH clear.
+
+#### Clarification: over-budget retrieval and record selection (2026-10-23)
+
+Choosing which retrieved records reach the deciding input is retrieval
+quality, not, by itself, a rejection ground under W3, I2 or any other
+condition. This covers a size budget that drops an oversized record, keeps an
+excerpt or its opening lines, or leaves an ID or pointer in its place. It
+also covers deduplication or collapsing of similar records (even one that
+drops a later distinct record), identifier pinning that shows only matching
+records, event projections or summaries in place of records, field
+projections that strip a field such as the saved timestamp from every record,
+and top-k selection. These are design choices, often poor ones. Making them costly is
+the benchmark's job (bench v14 will reward keeping such records), not the
+screener's. The model, not the host, still authors the graded value or tool
+call. A content-dependent selector is not automatically a breach either;
+prove an independent prohibited mechanism and material consequence under the
+October 25 clarification rather than inferring them from an omitted record.
+
+Independent grounds that still reject:
+
+- the host writes, rewrites or overrides the graded value or a dissenting model
+  answer, or presents host-derived state as authoritative (I3, I4);
+- execution is fabricated or misreported (I6);
+- tool capabilities are removed or forced (I7); or
+- a separate benchmark recipe (I5).
+
+The 2026-10 rejections that rested only on record selection are withdrawn as
+precedent. A rejection that also proved an independent ground keeps that
+ground.
 
 ### W4: routing and optimization
 
@@ -222,6 +270,45 @@ an integrity violation.
 - Poor routing that does not displace model authority remains a performance
   issue.
 
+#### Clarification: connector and app-wording tool filtering (2026-11-03)
+
+A harness may hide connector-gated or app-specific tools from the catalog its
+deciding model sees. This is W4 availability narrowing, not, by itself, a
+rejection ground under I7 or any other condition. It covers:
+
+- filtering on the published connector marker, the tool description that says
+  the tool needs a connector (for example one ending "Needs the <App>
+  connector to be linked in Settings."); and
+- filtering on the request's app-name wording, for example hiding an app's
+  tools when the request does not name that app.
+
+Guessing which tools apply from the request's wording is an allowed approach.
+The filter may be hand-written rules, regular expressions or a small model
+declared under W13, and may run before the deciding model sees the catalog. It
+needs no proof that a hidden tool was logically impossible, and the W4
+conditions on exact request correctness, entity names, ambiguity and low
+confidence do not apply to it. When the filter hides a tool a case needed, the
+honest result is a missing call or a worse answer, which the benchmark scores.
+That over-filtering is a performance issue, not a violation. Hiding tools this
+way does not by itself manufacture a singleton under W10. A call to a hidden
+tool may be refused when it is recorded honestly as blocked (W11). Tools the
+model is shown keep their names, descriptions and schemas (W10).
+
+It is still a violation when the harness:
+
+- answers or reports as if a hidden or removed tool ran, or fabricates its
+  call, result, receipt or success (I6);
+- removes a tool the case needs and then claims it ran or reports its effect
+  as done (I6, I7); or
+- uses the filter to force or pin the remaining trajectory, for example by
+  pinning `tool_choice`, replacing the catalog with a host plan, or refusing a
+  valid call the deciding model selected from the tools it was shown (I7).
+
+A reviewer that finds only this narrowing resolves those I7 leads as refuted
+under this clarification rather than leaving them unresolved. The other I7
+grounds, such as planning takeover, forced trajectories, execution after
+revocation and duplicate handling, are unchanged.
+
 ### W5: financial formulas and calculators
 
 Financial, statistical, temporal, scientific, and conversion calculations are
@@ -238,7 +325,8 @@ allowed when:
 - the host does not extract authoritative operands from narrative text;
 - the calculator performs only the advertised arithmetic;
 - the result is labelled as a receipt for supplied inputs;
-- complete applicable evidence remains available;
+- the model may inspect the selected evidence/context under W3; no mandatory
+  raw-record retention is inferred from this calculator safe harbor;
 - the final model may reject, revise, or recompute the result;
 - no expected-value gate prefers agreement and no hidden expected-answer
   comparison selects the final answer; and
@@ -287,7 +375,8 @@ benchmark-specific operands.
   are not shape failures, and recovery does not classify them as syntax.
 - A declared genuine critic may produce the final answer.
 - The critic receives the original request, applicable evidence, and relevant
-  drafts.
+  drafts, which may be summarized or checkpointed under W3. Losing a raw
+  receipt or draft alone does not turn a declared critic into a violation.
 - The critic may retain refusal or uncertainty, and may reject any suggested
   correction.
 - The first valid designated final result ships without host semantic
@@ -322,8 +411,8 @@ counting unit, the measurement point, the affected field, and the overflow
 behavior. Raw UTF-8 bytes are the preferred counting unit.
 
 Overflow neither infers abstention nor selects a likely-scoring substring. A
-permitted length-only model reserialization receives complete evidence and no
-expected semantic answer; its first compliant result ships.
+permitted length-only model reserialization uses selected/summarized context
+under W3 and no expected semantic answer; its first compliant result ships.
 
 A miner-defined threshold cannot delete or move a scorer-visible field, or
 change the precedence of one.
@@ -522,32 +611,72 @@ genuine deciding authority.
 - Provider failure activates a deterministic scored-answer fallback.
 - A benchmark answer lookup is represented as genuine model output.
 
-### I2: instruction or evidence loss
+### I2: applicable trusted instruction or authorization loss
 
-Reject when applicable trusted instructions or protected final evidence are
-removed before a deciding, retry, critic, or fallback model.
+Reject when a deciding, retry, critic or fallback stage loses the applicable
+meaning of a trusted instruction, authorization boundary or safety constraint,
+and that loss has a proven material consequence. Meaning-preserving summaries,
+projection and checkpoints are allowed. Raw evidence/history loss alone is
+not I2, including after a model has successfully consumed a receipt (W3).
 
-- Protected applicable evidence or an applicable trusted instruction is
-  removed or altered before decision.
-- A derived interpretation remains while necessary support or contradiction is
-  removed.
-- Recovery or finalization loses a material correction, qualification, record,
-  or receipt.
-- Expected-answer agreement or a preferred conclusion controls retention.
+A rule that suppresses a valid designated model result because it disagrees
+with an expected answer must independently satisfy I3. A rule that forges or
+misreports execution must independently satisfy I6. Neither may be inferred
+from a less complete fallback transcript alone.
 
 Required proof:
 
 1. exact UUID and SHA;
-2. exact instruction, record, argument, or receipt;
-3. why it is applicable;
-4. where it entered the final evidence set;
-5. where it was removed;
-6. the deciding input lacking it; and
-7. the material alternative that can no longer be evaluated.
+2. exact trusted instruction, authorization or safety constraint;
+3. why it applies to the actual served stage;
+4. where its meaning entered the request;
+5. where that meaning or restriction was removed or changed;
+6. the actual deciding input and effective execution guard lacking it; and
+7. the resulting material response, execution or security consequence.
 
 The proof also names the reachable path. Ordinary relevance ranking, an
-isolated miss, or a hypothetical retrieval miss is insufficient. A controlled
-exact-artifact reproduction is sufficient.
+isolated miss, receipt omission or a hypothetical retrieval/recovery miss is
+insufficient. Controlled exact-artifact reproduction may prove a reachable
+mechanism and consequence; it does not turn evidence loss alone into I2.
+
+#### Clarification: which instructions I2 protects (2026-10-19)
+
+I2 protects instructions that the served request actually carries. It is
+not a requirement that every model call repeat the system prompt.
+
+- **Name the instruction.** An I2 trusted-instruction finding quotes the exact
+  instruction text from the request being served and shows why it applies to
+  the stage that lost it. Naming a category of instruction that a request
+  could carry ("scope, disclosure, temporal, authorization or output") is
+  hypothetical, the same as a hypothetical retrieval miss, and is
+  insufficient.
+- **The deciding input decides the question.** W2 requires the instruction at
+  every deciding answer-producing call. A model stage before that call (a
+  draft, reading, ordering, extraction or lookup pass) whose output reaches a
+  deciding call that still carries the instruction breaches I2 only when the
+  proof shows a material alternative that the deciding call can no longer
+  evaluate. Show that the named instruction would have changed that stage's
+  output, or reproduce the change on the exact artifact. Labelling the stage
+  "advisory" is neither a defense nor a breach.
+- **What the request carries.** In Bench v13, every scored `/run` carries the
+  validator-authored system prompt "You are Ditto, a helpful assistant with
+  access to tools. Call a tool only when it is the right action for the
+  user's request." A tool-less model stage cannot breach that instruction's
+  tool rule. Confirmation lanes can carry other system prompts, such as the
+  LongMemEval current date. Cite the lane and text that apply.
+- **`/seed` is out of scope for this clause.** The seed request carries no
+  system prompt, so seed-time processing cannot lose a trusted instruction.
+  Model-written notes, extraction, indexing and summaries built during
+  `/seed` are permitted on this axis. They remain subject to W3, I5 and the
+  other independently applicable conditions; missing originals alone do not
+  establish an instruction-loss breach.
+
+Passing the request system prompt to every `/run`-time model stage remains
+good practice. Omitting it is a lead to examine, not a finding.
+
+The 2026-10 board holdings that charged I2 for a preliminary model stage
+without naming an applicable instruction from the served request do not meet
+this standard. They are withdrawn as precedent.
 
 ### I3: model-dissent suppression
 
@@ -564,6 +693,63 @@ certainty, or refusal state.
   truth.
 
 Genuine model-led refinement satisfying W7 is permitted.
+
+#### Clarification: one-time reply drafts and reply checks (2026-10-28)
+
+A one-time **reply-draft** or **pre-send reply-check** step is a W7
+model-led critic, not an I3 violation, when the only thing it does is return
+an advisory note to the deciding model. In a reply-draft step, separate model
+drafts of the next step are sampled. In a reply-check step, a separate model
+call reads the reply before it is sent. Either may run after the deciding
+model writes a reply, including a parseable reply with no tool call. If the
+drafts propose a call, or the check says a call is still needed, the host adds
+the model's reply and a note listing what was proposed, and asks the deciding
+model again. This holds when all of the following are true:
+
+- the deciding model can take another step or send its reply unchanged, and
+  the note says so;
+- each step fires at most once per turn: once for the request, not once per
+  model turn and not until a draft or check agrees;
+- after the step, the deciding model's own next reply ships, with only the
+  typography or shape normalization W8 allows; and
+- host code never chooses, rewrites, or withholds and replaces the reply, and
+  never retries it on its own.
+
+Holding a no-call reply back for one extra deciding turn with an advisory note
+that lists the drafted calls is not "withholding a valid reply" or replacing
+"a valid final no-call decision" under I3, when the deciding model can send
+the same reply again and that reply then ships. The deciding model still makes
+the final call. A W7 critic's "first valid result ships" condition is met by
+the deciding model's reply after the note; it does not require the reply that
+came before the note to ship, and "reopening" that reply for the one advisory
+turn is not a ground on its own. A draft or check that sees the request, the records and the
+catalog is a declared critic under W7, which allows advisory input that the
+deciding model may reject. The host acting on the draft or check result to
+decide whether a note is shown is not, by itself, semantic selection.
+
+These elements are one behavior. A reply-draft step and a reply-check step
+together, each once, are not a second factor.
+
+It is still a violation when host code:
+
+- discards the deciding model's reply, or ships a draft's call or text in its
+  place (I3, I4);
+- forces a tool, pins `tool_choice` or narrows the catalog to the drafted call
+  (I7);
+- loops, re-drafts or re-checks until a draft or check agrees, or until the
+  model takes a call (I3); or
+- acts on the check result without the deciding model choosing, for example
+  by executing a drafted call or blocking the reply (I3, I7).
+
+A reviewer that finds only this resolves those I3 leads as refuted under this
+clarification rather than leaving them unresolved. A reject of a submission
+that has such a step needs an independent ground, proven under its own
+condition.
+
+The 2026-10 screening rejects that rested only on this mechanism (the
+`drafted_steps` / `reply_drafts` / `REPLY_DRAFTS_NOTE` / `REPLY_CHECK_NOTE`
+action-lane step first released in dan0l v24 and v25) are withdrawn as
+precedent. A holding that also proved an independent ground keeps that ground.
 
 ### I4: unauthorized authority transfer
 
@@ -585,6 +771,59 @@ direction, or other scorer-visible value.
 
 Preserving original words elsewhere does not cure changing their authoritative
 field.
+
+#### Clarification: reused drafts and earlier replies as prompt text (2026-10-29)
+
+A reused, model-sampled draft of the answer, or an earlier model reply, that
+reaches the deciding model **only as prompt text** is not an I4 violation, and
+not an I3 violation, when the deciding model's own reply then ships. A typical
+case is a draft written once by a genuine model call over the same user's
+notes and reused when the same question is reworded over those notes. This
+holds even when the note:
+
+- labels the draft as the model's own earlier reply or as "the reply" to the
+  question;
+- tells the model to keep to it, give the same answer, or agree with it unless
+  the notes plainly show it wrong; or
+- has no clause saying the model may disagree.
+
+I4 covers host processing that changes a finalized field. Prescriptive prompt
+wording that asks the deciding model to agree with a draft is not host
+processing of a finalized field: the deciding model still writes the reply,
+and nothing in host code enforces the agreement. A new deciding call that
+reads such a note is that model's free decision for I3 and I4 purposes.
+Content-keyed reuse of the draft (for example by user, the notes shown and the
+asked words) is caching, not semantic selection. Carrying an earlier answer
+onto a question about a different state is a quality risk for the benchmark's
+scoring to penalize, not an integrity ground.
+
+A fallback that fires only when the final reply is missing or empty, and then
+ships a model-authored reply from the same request, is W7 shape recovery, not
+substitution. Trace whether the fallback can carry content on the cited path;
+a fallback variable that stays empty on that path is not a reachable writer.
+
+It is still a violation when host code:
+
+- compares the reply against the draft, retries on disagreement, overwrites a
+  well-formed reply with the draft, or substitutes the draft's value
+  (I3, I4); or
+- rejects a well-formed model reply on a semantic test, or builds the final
+  text itself instead of forwarding the model's reply (I3, I4).
+
+For example, a host check that detects an echo of the user's sentence, sends
+the model back once, and on a second hit ships a host-built reply such as
+"Noted: your setting is now ..." from a separate value-only call is a
+violation (crown-v193).
+
+A reviewer that finds only this resolves those I3 and I4 leads as refuted
+under this clarification rather than leaving them unresolved. A reject of a
+submission that has such a note needs an independent ground, proven under its
+own condition.
+
+The 2026-10 screening rejects that rested only on this mechanism (a
+`SHARED_DRAFT_NOTE` reused-draft note on the short path, as in crown-v192,
+crown-v194 and nanodevs v6) are withdrawn as precedent. A holding that also
+proved an independent ground keeps that ground.
 
 ### I5: benchmark-shaped semantic compiler
 
@@ -611,6 +850,110 @@ domain behavior does not explain it. Common formulas, general product
 instructions, ordinary finite vocabularies, typo handling, ordinary product
 rules, prescriptive prose, and fixture references alone are insufficient
 unless they create a proven benchmark-specific procedure.
+
+#### Clarification: case-file currency rules (2026-10-23)
+
+Bench v13 case files shuffle their records and then stamp filing timestamps
+in shuffled order (`research/dittobench-datagen/universe/personal.go:561-580`,
+`universe/v13_contract.go:1056-1072`, `universe/v13_calendar.go:26-33`). A
+plain restatement can therefore be dated after the change note that replaced
+it, which ordinary conversation does not do. This is a benchmark realism
+defect tracked for Bench v14 in ditto-subnet#3088. Coping with it is not an
+I5 violation.
+
+A **case-file currency rule** is not, by itself, a rejection ground under I5,
+W3 or any other condition. Such a rule may:
+
+- treat a record that states its own change, correction, handover or
+  replacement as current over a plain restatement of the same topic, whatever
+  their filing dates;
+- tell the deciding model that filing dates may not show the order in which
+  things were said;
+- recognize change statements by change vocabulary, including wording that
+  matches the public generator's change rows;
+- scope the comparison to the records that share an identifier the request
+  names, such as a case-file id, and serve only those records when the request
+  itself limits the answer to them;
+- leave an aside that a record marks as separate or unrelated out of that
+  comparison;
+- show the deciding model a host-computed note or added turn naming the
+  "current" statement, what it "supersedes", or the resulting current list;
+- omit the filing times of the records in that scoped view, while their text
+  stays in the deciding input.
+
+These elements are one behavior. Combining several of them is not a second
+factor. A reject of a submission that carries such a rule needs an
+independent ground that stands with the rule removed, proven under its own
+condition. Examples:
+
+- the host writes or rewrites the graded value from the currency result
+  instead of the model authoring it (I4), or retries or overrides a model
+  answer that disagrees with the candidate (I3);
+- the currency result removes or forces tool capabilities (I7); or
+- a separate benchmark recipe, such as an answer-family or operand compiler
+  (I5).
+
+Outside the benchmark, a real save time is genuine chronology, so the rule can
+mislead a deployed agent. That is a product-quality lead, not an integrity
+finding.
+
+The 2026-10 board holdings that rejected a submission only for this shape
+(the "SN-215 shape" or "case-file currency recipe") are withdrawn as
+precedent. A holding that also proved an independent ground keeps that ground.
+
+#### Clarification: routed instruction guidance (2026-10-23)
+
+A request classifier or router that chooses which general instructions,
+examples, checklists or tool notes the deciding model sees is not, by itself,
+a rejection ground under I5 or any other condition. It may route by request
+type, tool family, answer form or the request's phrasing. Tailoring
+instructions to the kind of request is ordinary assistant engineering, and
+these mechanisms are useful product behavior. This holds when:
+
+- the deciding model still receives the request, the record text it needs and
+  the tool catalog, and authors the graded value or tool call itself;
+- the guidance is advisory text: the host does not act on the classifier
+  result by writing, rewriting, retrying or overriding the answer (I3, I4),
+  removing or forcing tools (I7), or stripping evidence a model already
+  received (W3); and
+- the guidance encodes no benchmark-private knowledge, such as hidden answers,
+  private case or seed values, or grader internals that the repository does
+  not publish.
+
+Guidance may state an outcome rule that the public generator or tool
+semantics publish. Examples: "if the stored setting already matches the
+request, say so instead of calling the setter; if the records leave the
+choice open, ask"; "search the calendar before adding an event that may
+already exist". These describe sensible assistant behavior. Telling the model
+about them is not I5, even when they match how the benchmark grades. The
+classifier may be hand-written rules, regular expressions or a small compiled
+model declared under W13. Several routed notes together are one behavior, and
+stacking them is not a second factor.
+
+The I5 phrase "a family classifier activates a fixed benchmark answer or
+interpretation recipe" therefore means host-enforced output or
+benchmark-private content, not advisory guidance the model may follow. A
+reviewer that finds only routed guidance resolves those I5 leads as refuted
+under this clarification rather than leaving them unresolved.
+
+A reject of a submission that routes guidance needs an independent ground,
+proven under its own condition. Examples:
+
+- host code parses benchmark event text into operands, steps, ordering or
+  answers and serves that result in place of the model's own reading (I5);
+- the host writes, edits or overrides the graded value or a dissenting model
+  answer (I3, I4);
+- the route removes, hides or forces tool capabilities beyond the W4
+  connector and app-wording narrowing (2026-11-03) (I7);
+- the guidance carries benchmark-private content.
+
+Guidance that misfires outside the benchmark is a product-quality lead, not an
+integrity finding.
+
+The 2026-10 holdings that rejected a submission only for routed decision
+notes, per-family instruction modules or settings-request predicates (the
+SN-214 settings predicates included) are withdrawn as precedent. A holding
+that also proved an independent ground keeps that ground.
 
 ### I6: execution misrepresentation
 
@@ -646,6 +989,15 @@ Reject when:
 - execution remains enabled after revocation;
 - planner authority is concealed or falsely described as advisory; or
 - strong fixed prompting effectively forces one trajectory.
+
+Connector and app-wording tool filtering that meets the W4 clarification
+(2026-11-03) is a valid W4 policy ground. Hiding a connector-gated or
+app-specific tool on the connector marker or on the request's app-name wording
+does not trigger the removal, wording or low-confidence items above, even when
+it hides a tool the case needed; that miss is performance. Answering or
+reporting as if a hidden or removed tool ran, or removing a needed tool and
+claiming it ran or that its effect is done, remains a violation (I6, I7). The
+other items above still apply to the tools the model is shown.
 
 Proof names the triggering request or state, the catalog, the authority
 source, the removed or enforced choice, the valid blocked alternative, and the
@@ -734,22 +1086,20 @@ exact accepted component path and digest.
 
 This is a certification failure, not proof of misconduct.
 
-### V2: platform verification not completed
+### Platform and provider verification not completed
 
-- A predefined mandatory verification remains incomplete after the published
-  retries and deadline because the platform could not complete it.
-- The missing verification and failure domain are recorded.
-- Platform failure is not represented as artifact misconduct.
-- Suspicion is not converted into an unpublished requirement.
+Historical V2/V3 rejections and the reason code
+`verification-incomplete-unreviewable` remain readable for audit. Do not issue
+new rejections from repeated incomplete reviews or infrastructure/provider
+failures. Counting reviews does not supply missing evidence or prove that the
+artifact violates a requirement.
 
-### V3: provider verification not completed
-
-- A provider failure prevents mandatory verification after the published retry
-  procedure.
-- The missing verification and failure domain are recorded.
-- Provider failure is not represented as artifact misconduct.
-
-V1, V2, and V3 rejections record `violation_proven: false`.
+- Record the exact missing verification, failure domain and retained evidence.
+- End the dispatched attempt and park it for operator review or manual retry.
+- Do not infer an unpublished submission requirement from reviewer difficulty.
+- Do not pass unread source or automatically schedule another billed review.
+- A rejection still requires independently supported artifact-controlled
+  contract failure (V1) or a proven integrity/security breach.
 
 ## Evidence standards
 
@@ -780,7 +1130,8 @@ observed incident.
 A null or omitted field in a score, leaderboard, or other compact projection
 proves only that the projection did not supply the field. It does not prove
 that an artifact-bound screening or challenge record is absent. Check the
-authoritative evidence store before assigning V1, V2, or V3.
+authoritative evidence store before assigning V1; V2/V3 are historical readback
+only.
 
 ## Mandatory verification
 
@@ -799,7 +1150,8 @@ Every artifact must complete:
 11. same-tool/different-argument execution;
 12. catalog fidelity and reordering;
 13. timeout and delivery-unknown reporting;
-14. fallback evidence retention;
+14. fallback instruction/authorization safety and truthful execution reporting
+    (not mandatory raw evidence/history retention);
 15. response-field and long-answer behavior;
 16. refusal and uncertainty preservation;
 17. complete token accounting;
@@ -895,13 +1247,9 @@ violation_proven: false
 failure_domain: platform
 ```
 
-The platform fails to complete mandatory verification after the published
-retry budget and deadline.
-
-This rejection does not allege a policy violation, does not establish
-malicious intent, cannot be cited against siblings, owners, or hotkeys,
-receives priority rescreen after platform recovery, and may be superseded by a
-later `CLEAR`.
+Platform verification did not complete. The failed attempt stays parked for
+operator review or explicit manual retry. It is neither clearance nor rejection
+evidence and cannot be cited against siblings, owners or hotkeys.
 
 #### D. Provider verification failure
 
@@ -910,9 +1258,8 @@ violation_proven: false
 failure_domain: provider
 ```
 
-Provider failure prevents mandatory verification after the published retry
-procedure. It has the same evidentiary limitations as a platform-failure
-rejection.
+Provider verification did not complete. Record that failure, end the attempt,
+and retain evidence for the same manual review/retry treatment.
 
 ### Non-decisive results
 
@@ -930,14 +1277,10 @@ may produce `CLEAR`, and none of them may submit a passing verdict:
   required targeted behavioral audit produced no usable observation; and
 - `source-review-unavailable` — review infrastructure was unreachable.
 
-Each resolves through the retry and deadline procedure and then terminates as:
-
-- `REJECT` / `V1` / `failure_domain: submission`, when the artifact itself
-  prevents a decision;
-- `REJECT` / `V2` / `failure_domain: platform`, when the screener or platform
-  could not complete the check; or
-- `REJECT` / `V3` / `failure_domain: provider`, when an upstream provider
-  could not complete the check.
+Each ends the dispatched attempt and remains parked without admission or
+rejection until an operator resolves it or issues a manual retry. A later
+artifact-controlled contract failure or proven breach must have its own
+supporting evidence; incompleteness alone cannot become one by repetition.
 
 An adjudicator that fails without a finding records only that adjudication did
 not complete. It is neither clearance evidence nor rejection evidence, and it
@@ -959,26 +1302,23 @@ exact reason codes and distinguishes proven violations from verification
 failures. No owner, hotkey, sibling, or lineage penalty follows automatically.
 Appeals produce a new recorded `CLEAR` or `REJECT` without erasing history.
 
-## Retry and deadline procedure
+## Manual retry and deadline procedure
 
-Before a verification-failure `REJECT`:
+A failure ends the dispatched attempt once. A retry requires an explicit
+Backroom authorization bound to the exact artifact and latest terminal attempt;
+classification as platform/provider failure is not retry authority.
 
-- attempt the published number of retries;
-- use at least one independent worker when available;
+For each manually authorized retry:
+
 - distinguish artifact, platform, and provider failures;
-- preserve bounded diagnostics;
-- verify the artifact SHA remains unchanged;
-- apply the published deadline;
-- record every attempt; and
-- avoid duplicate paid work when a valid artifact-bound result already exists.
+- preserve bounded diagnostics and every attempt;
+- verify the artifact SHA remains unchanged; and
+- avoid duplicate paid work when a valid conclusive artifact-bound result exists.
 
-Recommended defaults:
+The following is a recommendation for a future explicitly activated review
+window, not an active failure-to-rejection rule:
 
 ```text
-artifact-controlled failure retries: 1
-provider failure retries: 2
-platform failure retries: 2
-independent worker required for platform/provider failure: yes
 maximum verification window: 24 hours
 ```
 
@@ -994,7 +1334,9 @@ window from a later activation. Its transition requires a separate published
 rule and exact-artifact review. A deadline alone never supplies evidence for
 `CLEAR` or a verification-failure `REJECT`.
 
-At the end of the window, the result must be `CLEAR` or `REJECT`.
+At the end of a review window, unfinished attempts remain parked for an
+operator. Elapsed time and repeated inconclusive reviews supply neither
+clearance nor rejection authority.
 
 ## Required reason codes
 
@@ -1002,8 +1344,6 @@ At the end of the window, the result must be `CLEAR` or `REJECT`.
 I1.model_authority_bypass
 
 I2.trusted_instruction_removed
-I2.final_evidence_removed
-I2.receipt_or_history_removed
 
 I3.semantic_retry_or_selection
 I3.valid_no_call_suppressed
@@ -1040,6 +1380,10 @@ V1.required_submission_evidence_missing
 V2.platform_verification_failed
 V3.provider_verification_failed
 ```
+
+Historical `I2.final_evidence_removed` and `I2.receipt_or_history_removed`
+records remain readable for audit. They are not grounds for a new rejection
+based only on retrieval, summarization, compaction or fallback evidence loss.
 
 ## Required decision record
 
@@ -1123,11 +1467,11 @@ An operator override is an administrative action, not a third review outcome.
   `pass_inconclusive` and transports bounded review exhaustion as the
   non-passing `inconclusive` processing state. Historical v10-v12 attempts
   retain their signed compatibility behavior.
-- Implement the deadline finalizer that converts unresolved v13 processing
-  states into `REJECT` with V1, V2, or V3, the correct failure domain, complete
-  retry evidence, and no misconduct allegation.
+- Expire unresolved attempts into a parked failure with its actual failure
+  domain and retained evidence. Do not turn a reviewer/provider failure or a
+  count of inconclusive reviews into rejection.
 - Raise the separately enforced screening-policy activation ceiling from v12
-  only after the deadline finalizer and every other prerequisite above are
+  only after the attempt finalizer and every other prerequisite above are
   released and verified. Record: the ceiling moved to v13 on 2026-09-14, after
   #1801 shipped the strict two-outcome contract and both production screeners
   reported builtin policy 13 on release 0.264.0. Raising the ceiling makes v13
@@ -1142,6 +1486,8 @@ An operator override is an administrative action, not a third review outcome.
 - BM25-only retrieval.
 - Lexical-first retrieval with semantic fallback.
 - Imperfect but general retrieval.
+- Summaries, checkpoints, compaction, retries and fresh model fallbacks that
+  omit prior raw records/receipts, without a separate prohibited mechanism.
 - A general financial calculator using model-selected inputs.
 - An opaque reranker covered by the artifact SHA and required declarations.
 - A classifier that only reorders the complete catalog.
@@ -1152,7 +1498,6 @@ An operator override is an administrative action, not a third review outcome.
 ### REJECT with violation proven
 
 - Dropping a trusted system restriction before finalization.
-- Removing a record after it entered the final evidence set.
 - A narrow benchmark phrase router supplying a fixed interpretation and
   response procedure.
 - Suppressing every tool for an exact request that plausibly maps to a
@@ -1169,9 +1514,6 @@ An operator override is an administrative action, not a third review outcome.
 
 ### REJECT without violation proven
 
-- The platform cannot complete mandatory testing after two retries and 24
-  hours.
-- A provider remains unavailable after the published retry procedure.
 - The submission omits mandatory opaque-component declarations.
 - Required endpoint or archive verification cannot complete for
   submission-controlled reasons.

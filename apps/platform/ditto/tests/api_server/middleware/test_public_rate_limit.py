@@ -124,6 +124,42 @@ class TestRateLimitKey:
 
 
 class TestPublicRateLimitMiddleware:
+    async def test_cla_signing_is_refused_before_the_endpoint_runs(self):
+        app = _build(_Clock(), per_minute=1)
+        calls = []
+
+        @app.post("/api/v1/cla/sign")
+        async def sign_cla():
+            calls.append(True)
+            return {}
+
+        async with _client(app) as client:
+            assert (await client.post("/api/v1/cla/sign")).status_code == 200
+            limited = await client.post("/api/v1/cla/sign")
+            assert limited.status_code == 429
+            assert limited.headers["Retry-After"] == "60"
+            assert limited.json()["error_code"] == ERROR_CODE_RATE_LIMITED
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/api/v1/public/github-link/fixture",
+            "/api/v1/public/github-account/100",
+            "/api/v1/public/cla/status/fixture",
+        ],
+    )
+    async def test_contributor_reads_already_share_public_prefix_budget(self, path):
+        app = _build(_Clock(), per_minute=1)
+
+        @app.get(path)
+        async def contributor_read():
+            return {}
+
+        async with _client(app) as client:
+            assert (await client.get(path)).status_code == 200
+            assert (await client.get(path)).status_code == 429
+
     async def test_limit_answers_429_in_the_error_envelope(self) -> None:
         clock = _Clock()
         before = _refusals("upload")

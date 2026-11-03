@@ -34,6 +34,14 @@ overwrite or delete that object. The preview grants are managed by the
 already-live `gcp-platform` root so the preview root does not require an
 out-of-band bootstrap.
 
+The dedicated subnet recovery root follows the same pattern: two exact-object
+grants for `gcp-subnet-recovery/default.tflock` and its initial `default.tfstate`
+are owned by `gcp-platform`. Its new-project CI authority requires the separate
+owner bootstrap documented in
+[`subnet-recovery-project.md`](subnet-recovery-project.md). Recovery secret
+containers and the restore identity then use protected `gcp-subnet-recovery`
+plan/apply. The owner bootstrap is not a public workflow root choice.
+
 ## `infra-apply`
 
 - deployment branches: protected `main` only

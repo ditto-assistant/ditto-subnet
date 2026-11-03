@@ -19,6 +19,14 @@ operationalizes existing v13 safeguards for every effective engine and deciding
 call. The v14 draft remains prospective; do not infer activation from its
 presence. These govern over the historical examples below:
 
+- The [October 25 recovery withdrawal](precedents/october-25-fallback-recovery-withdrawal.md)
+  supersedes evidence-retention-only examples, including loss after a model
+  already consumed a receipt. Summaries, compaction, checkpoints, retries and
+  fresh fallbacks alone are quality/reliability issues. A reject needs a
+  separate prohibited mechanism and material consequence; applicable trusted
+  instructions and authorization remain protected. Reconcile exact prior
+  CLEARs and miner assurances before ruling; unread code is not proof.
+
 - Evaluate I1–I8 and S1–S3 independently, with exact-artifact evidence and all
   applicable safe harbors and mandatory verification requirements.
 - I8 can independently reject substantive evaluation-dependent retrieval,
@@ -27,9 +35,26 @@ presence. These govern over the historical examples below:
 - I7 permits a declared authoritative model planner satisfying W9, including
   faithful staged execution. An advisory planner must remain overridable.
   Do not carry the historical blanket forced-planner rule into v13.
+- W4 permits hiding connector-gated or app-specific tools from the deciding
+  catalog on the published "Needs the <App> connector" marker or on the
+  request's app-name wording (operator ruling 2026-11-03). Guessing from
+  wording is allowed; hiding a tool the case needed is performance, not I7.
+  Fake execution of a hidden tool, or removing a needed tool and claiming it
+  ran or its effect is done, stays I6/I7, and forcing the remaining trajectory
+  stays I7 ([precedent](precedents/november-03-connector-app-wording-filter-w4.md)).
 - W5/W6 permit qualifying calculators and model-authored programs, including
   explicit semantic delegation. I5 needs a proven benchmark-shaped semantic
   mechanism; formulas, labels, or prescriptive prose alone are insufficient.
+- Before calling a rule grader-shaped, read the v13 grader itself. Since #1872
+  (2026-09-15), `v13ArgSatisfied` routes any argument with a
+  `RequiredArgClaims` entry to `argClaimSatisfied`. That includes the
+  `update_memory` handoff content (`v13FactUpdateClaim`, the `fact_update`
+  kind). That kind accepts paraphrase: `v13FactCarried` needs only the slot
+  word plus the value. A "subject + copula" wording rule alone is therefore not
+  fitted to the v13 grader. Charge only independent grounds, such as a W10
+  merge into host schema descriptions, deleting existing content, or a semantic
+  retry. The exact-phrase `argValueEqual` path applies only to arguments with no
+  claim.
 - I4/W8 govern finalized fields and protocol-defined overflow. Historical
   references to slot-length caps do not authorize arbitrary field deletion,
   relocation, rescaling, or vocabulary mapping.
@@ -145,7 +170,8 @@ path for I4/I5/I7.
   runtime-described generic engines pass. Zero hits on `WORKED OUT` or
   remainder-sheet names is a search lead, not an I5 keep.
 - **I7 — model tool planning.** Policy/safety/authorization filtering and a
-  natural singleton capability class pass. Request-keyed rules, trained
+  natural singleton capability class pass. Under v13, connector-marker and
+  app-name-wording narrowing is W4 availability narrowing, not removal. Request-keyed rules, trained
   heads, or an **enforced plan authored by a separate planner turn** that
   preselect the exact tool count/set/order inside a multi-tool class, replace
   the request catalog with that plan, or expose only the host-selected next
@@ -229,8 +255,11 @@ re-adjudicated by the scheduled v11 rescreen with every other cohort member.
   apply I8 and W16 instead; a complete source-proven I8 breach needs no
   companion invariant.
 - **Single-success duplicate suppression — production behavior.** Suppressing
-  a repeat call after a genuine first successful side effect (read-only tools
-  exempt) is not trajectory manipulation.
+  an exact repeat (same name and canonical arguments) after a genuine first
+  successful side effect (read-only tools exempt) is not trajectory
+  manipulation, provided the request does not ask for that effect again or the
+  deciding model can authorize the repeat. A name-only cap or a memo that
+  refuses a requested repeat is I7/W11 under v13 (`precedents/artemis-v8.md`).
 - **Answer normalization — scorer gap only when request-independent and
   character-level.** Unicode folding, slot-length caps, whitespace/quote
   trimming, and `ANSWER:` prefix stripping of the model's own output are

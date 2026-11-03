@@ -40,9 +40,14 @@ func TestValidateScreenedImage(t *testing.T) {
 			}
 		})
 	}
+	// Source-free validators send the image and the artifact digest only.
 	valid.TarballURL = ""
+	if msg := validateScreenedImage(valid); msg != "" {
+		t.Fatalf("source-free screened image rejected: %s", msg)
+	}
+	valid.GitURL = "https://example.com/repo.git"
 	if msg := validateScreenedImage(valid); msg == "" {
-		t.Fatal("screened image without source tarball was accepted")
+		t.Fatal("screened image combined with git_url was accepted")
 	}
 }
 
@@ -68,8 +73,8 @@ func TestValidateBenchmarkImageContract(t *testing.T) {
 			t.Fatalf("benchmark v%d screened image rejected: %s", benchVersion, msg)
 		}
 	}
-	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV7, TarballURL: "https://example.com/source.tgz"}); msg != "" {
-		t.Fatalf("benchmark v7 source-build compatibility rejected: %s", msg)
+	if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: protocol.BenchVersionV7, TarballURL: "https://example.com/source.tgz"}); msg == "" {
+		t.Fatal("legacy benchmark source build bypassed the image contract")
 	}
 }
 
@@ -93,8 +98,14 @@ func TestSandboxStartInfraFailure(t *testing.T) {
 	if failure == nil {
 		t.Fatal("missing request-scoped image was not classified as infrastructure")
 	}
-	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "sandbox_image_unavailable" {
+	// It rides the fleet-recognized screened_image_unavailable code, because a
+	// validator that predates a dedicated code would charge the miner
+	// (ditto-subnet#2959); the precise cause stays in diagnostics.
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "screened_image_unavailable" {
 		t.Fatalf("unexpected missing-image classification: %+v", failure)
+	}
+	if failure.Diagnostics["sandbox_cause"] != "request_image_tag_missing" {
+		t.Fatalf("missing-image cause was not kept in diagnostics: %+v", failure.Diagnostics)
 	}
 	// An ordinary harness crash stays a submission failure (nil classifier).
 	if got := sandboxStartInfraFailure(errors.New("exit status 1: panic in harness")); got != nil {

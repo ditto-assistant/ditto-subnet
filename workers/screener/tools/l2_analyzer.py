@@ -213,6 +213,7 @@ def search(request: dict[str, object]) -> object:
     omitted: list[dict[str, object]] = []
     nontext: list[dict[str, object]] = []
     starter_models = _starter_model_digests()
+    vendored = _vendored_upstream_digests()
     needle = query.casefold()
     files, workspace_truncated = _files_with_truncation()
     for path in files:
@@ -221,7 +222,9 @@ def search(request: dict[str, object]) -> object:
             continue
         size = path.stat().st_size
         if size > MAX_FILE_BYTES:
-            model = _starter_model(path, relative, size, starter_models)
+            model = _starter_model(
+                path, relative, size, starter_models
+            ) or _vendored_upstream(path, relative, size, vendored)
             if model is not None:
                 nontext.append(model)
                 continue
@@ -278,6 +281,40 @@ def _starter_model_digests() -> set[str]:
         }
     except (OSError, ValueError):
         return set()
+
+
+# Unmodified upstream release files over the read cap, by exact SHA-256. A
+# copy of ditto_screening_protocol/data/vendored_upstream_allowlist.json; the
+# screener tests keep the two byte-identical.
+VENDORED_ALLOWLIST = "vendored-upstream-allowlist.json"
+
+
+def _vendored_upstream_digests() -> set[str]:
+    try:
+        payload = json.loads((MANIFESTS / VENDORED_ALLOWLIST).read_text())
+        return {str(entry["sha256"]) for entry in payload["files"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return set()
+
+
+def _vendored_upstream(
+    path: Path, relative: str, size: int, digests: set[str]
+) -> dict[str, object] | None:
+    """Account for an over-cap file only as an exact allowlisted upstream file."""
+    if not digests or size > MAX_DIGEST_BYTES:
+        return None
+    try:
+        digest = _file_sha256(path)
+    except OSError:
+        return None
+    if digest not in digests:
+        return None
+    return {
+        "path": relative,
+        "bytes": size,
+        "sha256": digest,
+        "provenance": "vendored_upstream_digest",
+    }
 
 
 def _starter_model(
@@ -434,11 +471,14 @@ def integrity_surfaces(_: dict[str, object]) -> object:
     omitted: list[dict[str, object]] = []
     nontext: list[dict[str, object]] = []
     starter_models = _starter_model_digests()
+    vendored = _vendored_upstream_digests()
     for path in files:
         relative = _relative(path)
         size = path.stat().st_size
         if size > MAX_FILE_BYTES:
-            model = _starter_model(path, relative, size, starter_models)
+            model = _starter_model(
+                path, relative, size, starter_models
+            ) or _vendored_upstream(path, relative, size, vendored)
             if model is not None:
                 nontext.append(model)
                 continue

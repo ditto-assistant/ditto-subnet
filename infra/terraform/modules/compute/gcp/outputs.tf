@@ -22,3 +22,10 @@ output "hostname" {
   description = "Instance name as configured."
   value       = google_compute_instance.this.name
 }
+output "snapshot_policy_disks" {
+  description = "Disks with an optional snapshot attachment; empty for unchanged callers."
+  value = concat(
+    [for attachment in google_compute_disk_resource_policy_attachment.boot_snapshot : attachment.disk],
+    [for attachment in google_compute_disk_resource_policy_attachment.data_snapshot : attachment.disk],
+  )
+}

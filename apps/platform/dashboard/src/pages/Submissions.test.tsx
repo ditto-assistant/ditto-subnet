@@ -136,7 +136,7 @@ describe("server-backed quick filters (row 10)", () => {
     expect(buttons).toEqual([
       ["all", "All 927", "true"],
       ["rejected", "Rejected 164", "false"],
-      ["under_review", "Deferred review 53", "false"],
+      ["under_review", "Under review 53", "false"],
       ["waiting_validator", "Waiting for validators 3", "false"],
       ["queued", "Queued work 3", "false"],
       ["downloadable", "Source releases 0", "false"],
@@ -906,7 +906,7 @@ describe("async agent evidence", () => {
     ["rejected", 2, "rejected this submission"],
     ["rejected", 3, "rejected this submission"],
     ["screening_failed", 3, "not a submission rejection"],
-    ["under_review", 3, "held for deferred source review"],
+    ["under_review", 3, "This submission is held for review."],
     ["screening", 3, "currently checking"],
   ])("shows %s ahead of %i historical scores", async (status, score_count, expected) => {
     render(() => (
@@ -1290,7 +1290,7 @@ describe("review-event evidence in the table (#622/#636)", () => {
     render(() => <SubmissionsPage />);
     await waitFor(() => expect(document.querySelector(".stage-cell .stage")).toBeTruthy());
     const cell = document.querySelector(".stage-cell") as HTMLElement;
-    expect(cell.querySelector(".stage")?.textContent).toBe("Deferred source review");
+    expect(cell.querySelector(".stage")?.textContent).toBe("Under review");
     const notes = Array.from(cell.querySelectorAll(".stage-note"), (note) => note.textContent);
     expect(notes[0]).toBe("Review reopened: manual re-check of tool-call provenance");
     expect(notes[1]).toBe("Initial hold: content near-duplicate of agent abc");

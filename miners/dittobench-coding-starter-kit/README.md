@@ -157,7 +157,9 @@ Live workspace observations may use the runner's full 32 KiB read bound.
 Context compaction separately evicts older complete tool-call/result pairs.
 Token, tool, turn, context, or wall-time exhaustion returns a bounded degraded
 final report rather than HTTP 5xx, so the validator can still freeze and grade
-the authoritative workspace.
+the authoritative workspace. The wall-time stop counts from when the request
+arrives and keeps back 5% of the budget (250 ms to 15 s), so the report lands
+before the validator's own request deadline of exactly `wall_time_seconds`.
 
 ## Validation
 

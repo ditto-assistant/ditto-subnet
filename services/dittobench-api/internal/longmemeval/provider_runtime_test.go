@@ -858,10 +858,20 @@ func TestOfficialJudgePreservesPinnedPromptAndRouting(t *testing.T) {
 	if _, exists := body["max_tokens"]; exists {
 		t.Fatalf("official judge retained unsupported max_tokens alias: %#v", body)
 	}
+	// The whole block, not a spot check. The relay compares it as a unit, and
+	// on a direct OpenRouter route it is the only thing constraining the
+	// endpoint -- there is no platform proxy to append zdr.
 	routing := body["provider"].(map[string]any)
-	if routing["allow_fallbacks"] != false || !reflect.DeepEqual(routing["only"], []any{officialJudgeRouteProvider}) ||
-		!reflect.DeepEqual(routing["order"], []any{officialJudgeRouteProvider}) {
-		t.Fatalf("official judge routing=%#v", routing)
+	wantRouting := map[string]any{
+		"only":               []any{officialJudgeRouteProvider},
+		"order":              []any{officialJudgeRouteProvider},
+		"allow_fallbacks":    false,
+		"require_parameters": true,
+		"data_collection":    "deny",
+		"zdr":                true,
+	}
+	if !reflect.DeepEqual(routing, wantRouting) {
+		t.Fatalf("official judge routing=%#v want=%#v", routing, wantRouting)
 	}
 	messages := body["messages"].([]any)
 	message := messages[0].(map[string]any)
@@ -966,10 +976,10 @@ func TestOfficialJudgeRejectsMalformedProviderResponses(t *testing.T) {
 		status int
 		body   string
 	}{
-		"HTTP failure":  {http.StatusServiceUnavailable, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0}}`},
-		"no choices":    {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
-		"two choices":   {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[{"message":{"content":"yes"}},{"message":{"content":"no"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
-		"empty content": {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"HTTP failure":  {http.StatusServiceUnavailable, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0}}`},
+		"no choices":    {http.StatusOK, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"two choices":   {http.StatusOK, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","choices":[{"message":{"content":"yes"}},{"message":{"content":"no"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"empty content": {http.StatusOK, `{"id":"j1","model":"deepseek/deepseek-v4.1-flash","provider":"Together","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
 	}
 	for name, testCase := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -981,6 +991,51 @@ func TestOfficialJudgeRejectsMalformedProviderResponses(t *testing.T) {
 			}, Hypothesis: "H"})
 			if err == nil {
 				t.Fatal("malformed official judge response accepted")
+			}
+		})
+	}
+}
+
+func TestOfficialJudgeRejectsAVerdictTruncatedAtTheCompletionBound(t *testing.T) {
+	// A response cut off at the bound is not a verdict: the substring label
+	// cannot tell "yes" from a truncated "yes, if you also count ..." or from
+	// reasoning about to conclude "no". Scoring it would turn an
+	// under-budgeted judge into a wrong score rather than a loud failure.
+	profile := runtimeProviderProfile(t)
+	tests := map[string]struct {
+		finish   string
+		content  string
+		rejected bool
+	}{
+		"truncated yes":        {"length", "yes", true},
+		"truncated no":         {"length", "The model response is incomplete because it omits the", true},
+		"truncated mixed case": {"LENGTH", "yes", true},
+		"complete stop":        {"stop", "yes", false},
+		"absent finish reason": {"", "yes", false},
+	}
+	for name, testCase := range tests {
+		t.Run(name, func(t *testing.T) {
+			upstream := newRuntimeUpstream(t)
+			upstream.next = func(_ int, _ map[string]any) (int, string) {
+				return http.StatusOK, fmt.Sprintf(
+					`{"id":"j1","model":%q,"provider":%q,"choices":[{"message":{"content":%q},"finish_reason":%q}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`,
+					officialJudgeModel, officialJudgeReceiptProvider, testCase.content, testCase.finish)
+			}
+			session, _ := newRuntimeProviderSession(t, profile, upstream)
+			correct, err := session.Judge().Judge(context.Background(), JudgeInput{Reference: DatasetCase{
+				QuestionID: "q", QuestionType: "multi-session", Question: "Q", Answer: "A",
+			}, Hypothesis: "H"})
+			if testCase.rejected {
+				if err == nil {
+					t.Fatalf("truncated verdict accepted as correct=%v", correct)
+				}
+				if !strings.Contains(err.Error(), "truncated") {
+					t.Fatalf("truncation error should name the cause: %v", err)
+				}
+				return
+			}
+			if err != nil || !correct {
+				t.Fatalf("complete verdict rejected: correct=%v err=%v", correct, err)
 			}
 		})
 	}

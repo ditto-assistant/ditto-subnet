@@ -18,17 +18,6 @@ import pytest
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
-from ditto.api_models.coding import (
-    CodingCapabilityCertificationReceipt,
-    CodingGradingLeaseRequest,
-    SubmitCodingAuthoringFreezeRequest,
-    SubmitCodingShadowResultRequest,
-    coding_authoring_freeze_signing_message,
-    coding_authoring_lease_signing_message,
-    coding_certification_signing_message,
-    coding_grading_lease_signing_message,
-    coding_shadow_result_signing_message,
-)
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
@@ -50,11 +39,6 @@ from ditto.validator.signing import (
     job_signing_message,
     ledger_signing_message,
     score_signing_message,
-    sign_coding_authoring_freeze,
-    sign_coding_authoring_lease,
-    sign_coding_certification,
-    sign_coding_grading_lease,
-    sign_coding_shadow_result,
     sign_heartbeat,
     sign_job_fail_request,
     sign_job_request,
@@ -132,166 +116,6 @@ def test_message_is_canonical_format() -> None:
             "2026-07-09T12:30:00.000000+00:00:run_1:0.82:8675309"
         ).encode()
     )
-
-
-def test_coding_certification_signature_matches_shared_message() -> None:
-    vector = json.loads(_CODING_CERTIFICATION_VECTOR.read_text(encoding="utf-8"))
-    expected = vector["expected"]
-    receipt = CodingCapabilityCertificationReceipt.model_validate_json(
-        json.dumps(vector["receipt"])
-    )
-    keypair = bittensor.Keypair.create_from_uri("//Alice")
-    signature = sign_coding_certification(
-        keypair,
-        validator_hotkey=keypair.ss58_address,
-        agent_id=UUID(expected["agent_id"]),
-        bench_version=expected["bench_version"],
-        lease_id=UUID(expected["lease_id"]),
-        screened_image_sha256=expected["screened_image_sha256"],
-        receipt=receipt,
-    )
-    message = coding_certification_signing_message(
-        validator_hotkey=keypair.ss58_address,
-        agent_id=UUID(expected["agent_id"]),
-        bench_version=expected["bench_version"],
-        lease_id=UUID(expected["lease_id"]),
-        screened_image_sha256=expected["screened_image_sha256"],
-        certification_sha256=receipt.certification_sha256,
-    )
-    assert keypair.verify(message, bytes.fromhex(signature))
-
-
-def test_coding_authoring_lease_signature_binds_request() -> None:
-    keypair = bittensor.Keypair.create_from_uri("//Alice")
-    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
-    nonce = UUID("77777777-7777-4777-8777-777777777777")
-    requested_at = datetime(2026, 8, 21, 12, tzinfo=UTC)
-    signature = sign_coding_authoring_lease(
-        keypair,
-        validator_hotkey=keypair.ss58_address,
-        ticket_id=ticket_id,
-        nonce=nonce,
-        requested_at=requested_at,
-    )
-    message = coding_authoring_lease_signing_message(
-        validator_hotkey=keypair.ss58_address,
-        ticket_id=ticket_id,
-        nonce=nonce,
-        requested_at=requested_at,
-    )
-    assert keypair.verify(message, bytes.fromhex(signature))
-
-
-def test_coding_authoring_freeze_signature_binds_request() -> None:
-    vector = json.loads(_CODING_AUTHORING_FREEZE_VECTOR.read_text(encoding="utf-8"))
-    request = SubmitCodingAuthoringFreezeRequest.model_validate_json(
-        json.dumps(vector["request"])
-    )
-    agent_id = UUID(vector["agent_id"])
-    keypair = bittensor.Keypair.create_from_uri("//Alice")
-    signature = sign_coding_authoring_freeze(
-        keypair,
-        validator_hotkey=keypair.ss58_address,
-        agent_id=agent_id,
-        bench_version=request.bench_version,
-        run_row_id=request.run_row_id,
-        ticket_id=request.ticket_id,
-        ticket_deadline=request.ticket_deadline,
-        coding_run_id=request.coding_run_id,
-        agent_artifact_sha256=request.agent_artifact_sha256,
-        screened_image_sha256=request.screened_image_sha256,
-        run_manifest_sha256=request.run_manifest_sha256,
-        task_set_manifest_sha256=request.task_set_manifest_sha256,
-        authoring_evidence_sha256=request.authoring_evidence_sha256,
-        authoring_transcript_object_key=request.authoring_transcript_object_key,
-        authoring_transcript_bytes=request.authoring_transcript_bytes,
-        authoring_event_count=request.authoring_event_count,
-        frozen_submission_object_key=request.frozen_submission_object_key,
-    )
-    message = coding_authoring_freeze_signing_message(
-        validator_hotkey=keypair.ss58_address,
-        agent_id=agent_id,
-        bench_version=request.bench_version,
-        run_row_id=request.run_row_id,
-        ticket_id=request.ticket_id,
-        ticket_deadline=request.ticket_deadline,
-        coding_run_id=request.coding_run_id,
-        agent_artifact_sha256=request.agent_artifact_sha256,
-        screened_image_sha256=request.screened_image_sha256,
-        run_manifest_sha256=request.run_manifest_sha256,
-        task_set_manifest_sha256=request.task_set_manifest_sha256,
-        authoring_evidence_sha256=request.authoring_evidence_sha256,
-        authoring_transcript_object_key=request.authoring_transcript_object_key,
-        authoring_transcript_bytes=request.authoring_transcript_bytes,
-        authoring_event_count=request.authoring_event_count,
-        frozen_submission_object_key=request.frozen_submission_object_key,
-    )
-    assert keypair.verify(message, bytes.fromhex(signature))
-
-
-def test_coding_grading_lease_signature_matches_shared_message() -> None:
-    vector = json.loads(_CODING_GRADING_LEASE_VECTOR.read_text(encoding="utf-8"))
-    request = CodingGradingLeaseRequest.model_validate_json(
-        json.dumps(vector["request"])
-    )
-    keypair = bittensor.Keypair.create_from_uri("//Alice")
-    signature = sign_coding_grading_lease(
-        keypair,
-        validator_hotkey=keypair.ss58_address,
-        agent_id=request.agent_id,
-        run_row_id=request.run_row_id,
-        ticket_id=request.ticket_id,
-        freeze_id=request.freeze_id,
-        claim_instance_id=request.claim_instance_id,
-        authoring_evidence_sha256=request.authoring_evidence_sha256,
-        nonce=request.nonce,
-        requested_at=request.requested_at,
-    )
-    message = coding_grading_lease_signing_message(
-        validator_hotkey=keypair.ss58_address,
-        agent_id=request.agent_id,
-        run_row_id=request.run_row_id,
-        ticket_id=request.ticket_id,
-        freeze_id=request.freeze_id,
-        claim_instance_id=request.claim_instance_id,
-        authoring_evidence_sha256=request.authoring_evidence_sha256,
-        nonce=request.nonce,
-        requested_at=request.requested_at,
-    )
-    assert keypair.verify(message, bytes.fromhex(signature))
-
-
-def test_coding_shadow_result_signature_matches_shared_message() -> None:
-    vector = json.loads(_CODING_SHADOW_RESULT_VECTOR.read_text(encoding="utf-8"))
-    request = SubmitCodingShadowResultRequest.model_validate_json(
-        json.dumps(vector["request"])
-    )
-    agent_id = UUID(vector["agent_id"])
-    keypair = bittensor.Keypair.create_from_uri("//Alice")
-    signature = sign_coding_shadow_result(
-        keypair,
-        validator_hotkey=keypair.ss58_address,
-        agent_id=agent_id,
-        run_row_id=request.run_row_id,
-        ticket_id=request.ticket_id,
-        bench_version=request.bench_version,
-        ticket_deadline=request.ticket_deadline,
-        agent_artifact_sha256=request.agent_artifact_sha256,
-        screened_image_sha256=request.screened_image_sha256,
-        run_evidence_sha256=request.run_evidence_sha256,
-    )
-    message = coding_shadow_result_signing_message(
-        validator_hotkey=keypair.ss58_address,
-        agent_id=agent_id,
-        run_row_id=request.run_row_id,
-        ticket_id=request.ticket_id,
-        bench_version=request.bench_version,
-        ticket_deadline=request.ticket_deadline,
-        agent_artifact_sha256=request.agent_artifact_sha256,
-        screened_image_sha256=request.screened_image_sha256,
-        run_evidence_sha256=request.run_evidence_sha256,
-    )
-    assert keypair.verify(message, bytes.fromhex(signature))
 
 
 def test_top5_confirmation_score_binds_all_seed_composite_pairs() -> None:
@@ -1741,4 +1565,56 @@ def test_protocol_v27_heartbeat_binds_the_weights_fold_only_when_present() -> No
     with pytest.raises(ValueError, match="requires heartbeat protocol v27"):
         heartbeat_signing_message(
             **{**common, "protocol_version": 26}, weights_fold=fold
+        )
+
+
+def test_protocol_v32_heartbeat_binds_host_specs_only_when_present() -> None:
+    from ditto.api_models.system_health import HostSpecs
+    from ditto.api_models.validator_weights_fold import WeightsFold
+
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 32
+    common = dict(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=BenchmarkCapacity(
+            configured_slots=2, healthy_slots=["slot-0", "slot-1"]
+        ),
+        confirmation_progress=[],
+        updater_status=ValidatorUpdaterStatus(
+            enabled=True, channel="compat-2", state="idle", observed_at=1_784_020_800
+        ),
+    )
+    # A failed probe signs exactly what a v31 validator signs.
+    assert heartbeat_signing_message(**common).startswith(
+        b"ditto-validator-heartbeat:v23:"
+    )
+    specs = HostSpecs(
+        cpu_count=16,
+        cpu_physical_cores=8,
+        memory_total_mib=64_000,
+        disk_total_gib=500,
+        architecture="x86_64",
+    )
+    message = heartbeat_signing_message(**common, host_specs=specs)
+    assert message.startswith(b"ditto-validator-heartbeat:v32:")
+    assert b":16,8,64000,500,x86_64:" in message
+    shrunk = specs.model_copy(update={"memory_total_mib": 128_000})
+    assert message != heartbeat_signing_message(**common, host_specs=shrunk)
+    # The fold token keeps its position; an absent fold signs as empty.
+    fold = WeightsFold(
+        epoch_index=1,
+        ledger_digest="cd" * 32,
+        vector_digest="ab" * 32,
+        folded_at=1_784_020_790,
+    )
+    assert message != heartbeat_signing_message(
+        **common, host_specs=specs, weights_fold=fold
+    )
+    with pytest.raises(ValueError, match="require heartbeat protocol v32"):
+        heartbeat_signing_message(
+            **{**common, "protocol_version": 31}, host_specs=specs
         )

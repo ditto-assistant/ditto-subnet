@@ -105,7 +105,7 @@ class TestAppendConfirmationScores:
                 select(func.count()).select_from(ConfirmationScore)
             )
             first = await session.get(
-                ConfirmationScore, (aid, _BENCH_VERSION, "5V1", 100)
+                ConfirmationScore, (aid, _BENCH_VERSION, "5V1", 100, 0)
             )
         assert total == 3
         # The first-written composite wins; a later resend never overwrites it.

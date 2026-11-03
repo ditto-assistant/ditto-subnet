@@ -1,0 +1,43 @@
+---
+- name: Validate GitHub linking configuration before reading secrets
+  ansible.builtin.assert:
+    that:
+      - platform_github_link_client_id is match('^[A-Za-z0-9_]*$')
+      - platform_github_link_timeout_seconds | int >= 1
+      - platform_github_link_timeout_seconds | int <= 60
+      - not (platform_github_link_enabled | bool) or platform_github_link_client_id | length > 0
+      - not (platform_github_link_enabled | bool) or secret_github_link_client_secret | length > 0
+      - not (platform_github_link_enabled | bool) or platform_github_link_redirect_url is match('^https://[A-Za-z0-9.:-]+/api/v1/miner-auth/github/callback$')
+      - "'\n' not in platform_github_link_redirect_url"
+      - "'\r' not in platform_github_link_redirect_url"
+    quiet: true
+    fail_msg: GitHub linking requires its dedicated client, Secret Manager id and exact HTTPS callback.
+
+- name: Read GitHub linking client secret from Secret Manager
+  ansible.builtin.command:
+    argv:
+      - gcloud
+      - secrets
+      - versions
+      - access
+      - latest
+      - "--secret={{ secret_github_link_client_secret }}"
+      - "--project={{ gcp_project }}"
+  register: platform_github_link_secret_read
+  changed_when: false
+  check_mode: false
+  no_log: true
+  when: secret_github_link_client_secret | length > 0
+
+- name: Validate the GitHub linking secret can safely enter the environment file
+  ansible.builtin.assert:
+    that:
+      - platform_github_link_secret_read.stdout is match('^[A-Za-z0-9_]+$')
+    quiet: true
+  no_log: true
+  when: secret_github_link_client_secret | length > 0
+
+- name: Assemble GitHub linking secret without retaining a previous value
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | default({}) | combine({'github_link_client_secret': platform_github_link_secret_read.stdout if secret_github_link_client_secret | length > 0 else ''}) }}"
+  no_log: true

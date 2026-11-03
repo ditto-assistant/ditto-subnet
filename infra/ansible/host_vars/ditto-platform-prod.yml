@@ -53,10 +53,14 @@ platform_trace_hippius_bucket: ditto-subnet-traces
 # Setting this back to [] and re-converging is the durable rollback: it restores
 # the byte-exact pre-relay Caddyfile.
 platform_inference_relay_ports: [8010, 8011]
+platform_api_standby_port: 8002
 
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
 secret_pylon_token: platform-prod-pylon-open-access-token
+# Payload version 1 exists. The protected Terraform apply grants runtime read
+# access before the managed app role consumes this shared proof binding.
+secret_backroom_platform_operator_proof: backroom-platform-operator-proof
 
 # Platform-operated screener auth: allowlist the dedicated prod screener hotkey
 # and share its bearer token (the same SCREENER_API_TOKEN configured on
@@ -64,12 +68,41 @@ secret_pylon_token: platform-prod-pylon-open-access-token
 # key holds no stake and needs no on-chain registration.
 platform_screener_hotkey: "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
 secret_screener_api_token: "screener-api-token-prod"
+# Operator-owned ditto-ops hotkey (no miner funds at stake). Only its own
+# shadow agents may be isolated and leased to one validator as a diagnostic,
+# e.g. the source-leak honeytoken; they are never scored, ranked, or paid.
+platform_operator_diagnostic_hotkeys: "5DqcqcAKouh1CQscxXwo87SiWtvH6A4oVtnMssQ8uTMLnvT6"
 # Terraform creates the secret container and grants the Platform identity read
 # access. Operators add the payload before converging this host.
 secret_screener_controller_api_token: "screener-controller-api-token-prod"
+# Same bearer the generator scorer VM presents (generator-scorer.tf).
+secret_generator_scorer_token: "generator-scorer-token-prod"
 
 # Publish the screening backlog (waiting_screening + screening) to Cloud
 # Monitoring every 60s — the prod screener fleet's autoscaling signal
 # (terraform infra/terraform/stacks/gcp-platform/screener-fleet.tf). Needs the metricWriter
 # grant from enable_screener_fleet applied first.
 screening_queue_metric_enabled: true
+
+# Manual-only Gamma mailbox: isolated custody keeps recurring transfer units
+# persistently masked. This enables preview/explicit confirmation, not a timer.
+platform_treasury_manual_enabled: true
+platform_treasury_manual_project: sn118-gamma-custody
+platform_treasury_manual_request_topic: sn118-manual-requests
+platform_treasury_manual_report_subscription: sn118-manual-reports
+
+# SN-49: separate read-only backup credentials; dev retains the disabled default.
+platform_database_backup_reader_enabled: true
+
+# Dedicated public-profile-only OAuth app, owned by ditto-assistant.
+platform_github_link_enabled: true
+platform_github_link_client_id: "Ov23lilTsAripA4MWrWS"
+platform_github_link_redirect_url: "https://dittobench.ai/api/v1/miner-auth/github/callback"
+secret_github_link_client_secret: "platform-github-link-client-secret"
+
+# Activated 2026-10-23. At bench 13 the LongMem confirmation lane lost 63 of 76
+# bundles (83%): ~1,200 serial calls run with allow_fallbacks false, so one
+# shared-pool 429 on the Azure-pinned judge ends the whole 48-case run, and each
+# failed attempt still settles its full ~$14 reservation. Only a rejection that
+# proves no endpoint was selected and no receipt was issued is re-dispatched.
+platform_confirmation_backpressure_retry: true

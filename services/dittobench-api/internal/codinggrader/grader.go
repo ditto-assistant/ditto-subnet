@@ -203,11 +203,14 @@ func grade(ctx context.Context, manifest Manifest, submission codingrunner.Froze
 				if err != nil {
 					controlPlaneFailure = true
 					failureCode = "grader_receipt_encode"
+				} else {
+					// Only an accepted, chained receipt can say how the build
+					// went; a rejected one keeps its control-plane failure code.
+					buildPassed = buildRun.Completed && !buildRun.TimedOut && buildRun.ReturnCode == 0
+					if !buildPassed {
+						failureCode = "build_failed"
+					}
 				}
-			}
-			buildPassed = buildRun.Completed && !buildRun.TimedOut && buildRun.ReturnCode == 0
-			if !buildPassed {
-				failureCode = "build_failed"
 			}
 		}
 	}

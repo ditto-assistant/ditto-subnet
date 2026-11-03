@@ -9,6 +9,7 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
@@ -16,7 +17,7 @@ import sys
 import tarfile
 import tempfile
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Protocol, cast
@@ -30,17 +31,27 @@ from ditto_screener.causal_evidence import (
     causal_summary,
     verify_causal_finding,
 )
+from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.review_lineage_prompt import lineage_dossier
+from ditto_screener.review_usage import (
+    l2_stage_for_role,
+    record_budget_stop,
+    record_usage,
+)
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
     _ALLOWED_CATEGORIES,
     _MULTI_LOCATION_CATEGORIES,
+    ROUTER_AUTH_RETRY_DELAYS_SECONDS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
     _body_signature,
     _http_error_signature,
+    _is_allowed,
     _retryable_model_error_type,
+    l1_verdict_unsettled,
     ledger_disposition,
     policy_v10_static_assessment,
     review_gateway_headers,
@@ -49,6 +60,8 @@ from ditto_screener.source_review import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    STRICT_TWO_OUTCOME_POLICY_VERSION,
+    ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
     ScreenReviewAudit,
     SourceReviewAuthorityTransition,
@@ -69,6 +82,11 @@ from ditto_screening_protocol.models import (
     source_review_invariants_for_policy,
     source_review_pass_clauses_for_policy,
 )
+from ditto_screening_protocol.reason_codes import (
+    L2_RUNTIME_EVIDENCE_UNAVAILABLE,
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
+)
+from ditto_screening_protocol.review_usage import ReviewBudgetLimit, ReviewBudgetStop
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +94,13 @@ L2_MODEL = "openai/gpt-5.6-terra"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
+# Ordered L3 fallbacks for a reviewer route that keeps failing. The first is the
+# previous production L3 reviewer; the second is another vendor, so one
+# provider's outage cannot park every L3 trajectory on a manual retry.
+L3_FALLBACK_MODELS = ("openai/gpt-5.6-sol", "moonshotai/kimi-k3")
+# A model that exhausted its in-turn fault retries is skipped by later turns for
+# this long, so a multi-turn trajectory does not re-pay the backoff every turn.
+_FAILED_MODEL_COOLDOWN_SECONDS = 600.0
 # HTTPX's read timeout is an inactivity timeout, so every L2/L3 model turn
 # also carries a wall-clock cap (tried at most twice). The cap must cover a
 # turn that legitimately spends the whole selected completion budget: the live
@@ -92,6 +117,22 @@ _COMPLETION_REQUEST_FLOOR_SECONDS = 45.0
 _COMPLETION_REQUEST_CEILING_SECONDS = 600.0
 _COMPLETION_REQUEST_MIN_TOKENS_PER_SECOND = 60.0
 _MAX_COMPLETION_REQUEST_ATTEMPTS = 2
+# A provider fault relayed in a 200 body (OpenRouter ``server_error``) arrives in
+# bursts: an immediate replay of the exact turn usually lands in the same burst
+# and parks the miner on a manual retry. Back off within the lease instead.
+PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
+# Never sleep into a lease that could not fit a short turn afterwards: this
+# floor, or the node's own turn cap when that is shorter. Reserving the full
+# cap (up to 600s) would disable the backoff late in a lease, where a parked
+# review costs the most.
+_PROVIDER_BODY_FAULT_MIN_TURN_SECONDS = 45.0
+
+
+# ``l2-late-result`` subcode: ``<bound>:<masked outcome code>``. It rides the
+# private failure detail, whose renderer accepts the same character class.
+_LATE_RESULT_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
+# ``ScreenReviewAudit.response_provider``; anything else is dropped.
+_AUDIT_PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}")
 
 
 def default_completion_request_seconds(max_completion_tokens: int) -> float:
@@ -115,35 +156,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v50-policy-v13"
+        return "l2-terra-source-review-v63-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v22-policy-v13"
+        return "l3-sol-adversarial-critic-v35-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v28-policy-v13"
+        return "l3-sol-violation-cause-v40-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v8-policy-v13"
+        return "l3-sol-cause-disagreement-v20-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v26-policy-v13"
+        return "l3-sol-safety-adjudicator-v38-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -172,7 +213,7 @@ def l2_prompt_cache_key(policy_version: int) -> str:
 
 
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v4"
-L2_DOSSIER_REVISION = "language-neutral-source-v18"
+L2_DOSSIER_REVISION = "language-neutral-source-v19"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_HARNESS_REVISION = "l2-isolated-coding-harness-v23"
@@ -183,6 +224,13 @@ L2_STARTER_MANIFESTS = tuple(
 _MAX_ARCHIVE_FILES = 512
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_AGGREGATE_RAW_INPUT_TOKENS = 50_000_000
+# The limit each budget failure code reports as tripped (the aggregate code
+# names its exceeded limits from usage instead).
+_BUDGET_STOP_LIMITS: dict[str, ReviewBudgetLimit] = {
+    "model-total-budget": "input",
+    "model-tool-budget": "tools",
+    "model-step-budget": "steps",
+}
 _MAX_TOOL_BYTES = 256_000
 _MAX_AUDIT_TAIL_BYTES = 64 * 1024 * 1024
 _ROLES = frozenset({"trigger", "decision", "effect", "sink", "context"})
@@ -343,7 +391,7 @@ _SUBMISSION_VALIDATION_HINTS = {
 }
 
 
-def _submission_validation_subcode(error: ValueError) -> str:
+def _submission_validation_subcode(error: TypeError | ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
     if "L2 scorer field rewrite requires I4 breach" in message:
@@ -737,6 +785,17 @@ def _analysis_requires_correction(output: str) -> bool:
 def _contains_truncation(value: object) -> bool:
     if isinstance(value, dict):
         for key, item in value.items():
+            if (
+                key in {"item_selection", "fingerprint_selection"}
+                and isinstance(item, dict)
+                and item.get("counts_after_per_rule_file_bounds") is True
+            ):
+                # Lead selection is an attention budget, not an incomplete
+                # analyzer read that retrying the same tool can repair. Keep
+                # every other nested error/scan-truncation marker authoritative.
+                item = {
+                    name: part for name, part in item.items() if name != "truncated"
+                }
             if (
                 key in {"truncated", "analysis_failed"} or key.endswith("_truncated")
             ) and item is True:
@@ -1232,13 +1291,16 @@ substantive retrieval, authority, capabilities, execution, or output. This
 includes `bench_version` activating learned routing, capability ordering, or
 other substantive behavior beyond the published compatibility contract; use
 evaluation_identity_authoritative only for a reachable source-proven branch.
-Behavioral degradation alone is inconclusive until controlled, post-commit,
-predeclared and replicated evidence attributes it to evaluation dependence.
+Behavioral degradation alone is a lead, never an I8 breach. Screening runs no
+separate behavioral test that could attribute it later, so decide I8 from the
+traced served path.
 
-For I2, identify the exact applicable evidence and its discard point; generic
-top-k selection or an ordinary retrieval miss is insufficient. For I3, separate
-shape repair from a genuine model critic/final selector that has necessary
-evidence and may preserve dissent. For I4, conditional deletion of unknown,
+For I2, identify the actual applicable trusted instruction/authorization,
+loss of its meaning and material consequence. Evidence loss from retrieval,
+summaries, compaction, checkpointing, retries or fresh fallback alone is not
+rejection, including after a successful model consumed a receipt. For I3, separate
+shape repair from a genuine model critic/final selector with selected/summarized
+context under W3 and real dissent. For I4, conditional deletion of unknown,
 none, n/a, or an overlength answer; prose-derived abstention; currency rescale;
 added equivalents; and grader-vocabulary mapping are scorer-field rewrites.
 For I5, conditionality is neither necessary nor sufficient: an always-on
@@ -1256,8 +1318,20 @@ actually imposes a benchmark-derived recipe. For a V13 I5 breach, submit
 causal_evidence schema_version 3 with i5_proof naming the concrete evaluation-
 dependent assumption, an evidence index for that assumption, and a distinct
 ordinary-product exclusion. Do not fill either field with a generic claim that
-prescriptive prose is benchmark-shaped. If the source does not support these
-proof obligations, mark I5 inconclusive; the finding remains held. For I6,
+prescriptive prose is benchmark-shaped. These are I5 BREACH proof obligations,
+not prerequisites for a supported I5 pass. Apply this V13 distinction to every
+I5 lead, including prompt recipes described in earlier policy text.
+After a complete digest-bound served-path trace positively refutes the alleged
+compiler, record I5 pass with the supported no_family_compiler or
+runtime_described_generic_engine clause. Trace the actual context, authority,
+effect and response sink; generic model use or clearing one dormant helper
+does not establish this refutation or clear other served branches.
+If the source leaves a specific causal edge unresolved, name that edge and
+mark I5 inconclusive. Missing breach proof alone warrants neither a pass nor
+an inconclusive hold. Zero findings, dossier_complete, model agreement and
+absence of a budget stop are not positive clearance evidence. Preserve an
+I5 breach when its evaluation-dependent assumption and served effect are
+proved; an inconclusive invariant cannot reject. For I6,
 trace the condition
 guarding each alleged fabricated tool result. A fallback that returns a
 local stub only when the request omits
@@ -1284,7 +1358,19 @@ identical effect suppressed without authority.
 For I7, reject unjustified removal of an applicable,
 authorized and available capability, including errors caused by quoted titles,
 compound requests, negation scope, setting-and-remember requests, or duplicate
-handling that removes unrelated pending tools.
+handling that removes unrelated pending tools. Executor and router shapes that
+remove a planned call are also I7: a per-tool cap keyed on the name alone, a
+successful-duplicate memo that refuses a repeat the request asks for (blanket
+or phrase-gated), a catalog disabled after one read, a sticky declined/vetoed
+flag that strips a capability for the rest of the request, and a router told
+to pick a narrowed route (records, read-only, no tools) when unsure. An
+exact-repeat stop on name plus canonical arguments for a repeat the request
+does not ask for, or a repeat the deciding model can authorize, remains
+permitted. Hiding connector-gated or app-specific tools on the published
+connector marker or the request's app-name wording is W4 availability
+narrowing, not this removal, even when it hides a tool the case needed; apply
+the I7 connector and app-wording safe harbor below and charge only fake
+execution of a hidden tool, a claim that a removed needed tool ran, or forcing.
 Judge tool guards against the identity and argument schema of the offered tool,
 then trace the model-selected call to its actual local implementation or
 request-supplied endpoint. A local memory tool may check ownership of its own
@@ -1315,8 +1401,8 @@ configuration, candidate boundary, input, output, or downstream authority.
 A genuine authoritative model planner may author a pinned plan; an advisory
 planner must remain rejectable. A user/model-authored program may directly
 return its result only when the delegation fixed inputs, operation, scope,
-units, and representation before execution. Neither permission cures evidence
-loss, host final-field rewriting, hidden expected trajectories, or missing
+units, and representation before execution. Neither permission cures host
+final-field rewriting, hidden expected trajectories, or missing
 authorization. Opaque-file presence, dead code, lineage, and labels are leads.
 On a scored v13 `/run`, the validator mints `inference_base_url` for that
 case. A harness may build a per-request model client from this field and
@@ -1330,7 +1416,9 @@ Trace the effective build and component role. Security findings use lifecycle
 reachability to an unauthorized data, execution, persistence, privilege, or
 material availability effect and do not require a model/scorer effect.
 """
-_L2_POLICY_TAILS[13] = _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM
+_L2_POLICY_TAILS[13] = (
+    _L2_POLICY_TAILS[12] + _L2_POLICY_V13_ADDENDUM + "\n" + DECISION_PATH_GUIDANCE
+)
 
 
 def _l2_review_system_prompt(policy_version: int) -> str:
@@ -1345,6 +1433,26 @@ def _l2_review_system_prompt(policy_version: int) -> str:
         ) from None
     prompt = _L2_SYSTEM_PROMPT_HEAD + tail + _L2_SYSTEM_PROMPT_TAIL
     if policy_version >= 13:
+        # Change the legacy I2/I4 context clauses, never arbitrary occurrences
+        # elsewhere in the assembled prompt or their authority safeguards.
+        prompt = prompt.replace(
+            "I2 requires complete applicable current-user records on the deciding\n"
+            "turn, while allowing a clearly non-authoritative "
+            "focused preliminary pass.",
+            "I2 protects applicable trusted instructions and authorization, with "
+            "material consequence proof; W3 permits selected/summarized context "
+            "and fresh fallback without mandatory raw receipt/history retention.",
+        ).replace(
+            "I4 is stricter than the legacy derive-as-prompt allowance. "
+            "A local value passes\nonly as an explicitly untrusted candidate "
+            "beside complete records, with records\npreferred on disagreement "
+            "and no accept gate.",
+            "I4 is stricter than the legacy derive-as-prompt allowance. "
+            "It protects model authority over a local candidate: it must stay "
+            "explicitly\nuntrusted/advisory, with no correctness gate and "
+            "freedom to disagree. Selected\nor summarized evidence/context "
+            "is permitted under W3; missing raw support alone is not I4.",
+        )
         prompt = (
             prompt.replace("every I1-I7 invariant", "every I1-I8 invariant")
             .replace("replaces I1-I7.", "replaces I1-I8.")
@@ -1368,6 +1476,28 @@ def _assert_l2_policy_tails_differ() -> None:
     assert _L2_POLICY_TAILS[12].startswith(_L2_POLICY_TAILS[11])
     assert _L2_POLICY_TAILS[12] != _L2_POLICY_TAILS[13]
     assert _L2_POLICY_TAILS[13].startswith(_L2_POLICY_TAILS[12])
+
+
+_INCONCLUSIVE_ANALYST_CRITIC_TASK = (
+    "The L2 analyst could not settle this artifact; its provisional result is "
+    "unresolved, not a clearance. Review the source independently and decide. "
+    "Submit safe only with a complete clearance certificate, violation only "
+    "with a grounded causal path, and inconclusive only when the shipped "
+    "source itself cannot settle an invariant. "
+)
+_V13_VIOLATION_FINALITY_TASK = """\
+Your confirmation is final under policy v13. A violation you confirm is a
+terminal reject of this exact artifact: no behavioral test, operator review, or
+later court runs after you. First decide independently whether the provisional
+violation is real at all. Refute it by submitting risk_level low with the safe
+resolution basis that fits when the cited mechanism is unreachable on a valid
+scored request, does not change the scorer-visible answer or trajectory,
+matches a published safe harbor, or rests on a location you could not confirm
+in source. Confirm only a breach you would defend from the cited source alone.
+Submit within your step and time budget: running out without a submission
+confirms nothing and leaves the artifact unresolved.
+
+"""
 
 
 _VIOLATION_CAUSE_TASK = """\
@@ -2827,6 +2957,10 @@ class TerraSolSourceReviewAgent:
         independent_analyst: bool = False,
         terminal_verdict_required: bool = False,
         retry_provider_body_fault_once: bool = False,
+        auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
+        provider_fault_retry_delays: Sequence[float] = (
+            PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS
+        ),
         analyst_provider: str | None = None,
         compact_review_packet: bool = False,
         analyst_reasoning_effort: str = "model_default",
@@ -2836,6 +2970,7 @@ class TerraSolSourceReviewAgent:
         l3_enabled: bool = True,
         critic_model: str = L3_MODEL,
         critic_provider: str | None = L3_PROVIDER,
+        critic_fallback_models: tuple[str, ...] = L3_FALLBACK_MODELS,
         transport: httpx.AsyncBaseTransport | None = None,
         local_address: str | None = None,
         workspace_root: str | None = None,
@@ -2875,6 +3010,14 @@ class TerraSolSourceReviewAgent:
             raise ValueError("terminal-only comparator cannot enable L3")
         self._terminal_verdict_required = terminal_verdict_required
         self._retry_provider_body_fault_once = retry_provider_body_fault_once
+        self._auth_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in auth_retry_delays
+        )
+        # The flag keeps its historical name because it is part of the review
+        # config digest; it now enables the bounded backoff below.
+        self._provider_fault_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in provider_fault_retry_delays
+        )
         self._analyst_provider = analyst_provider
         if compact_review_packet and not terminal_verdict_required:
             raise ValueError("compact review packet is report-only terminal mode")
@@ -2893,6 +3036,14 @@ class TerraSolSourceReviewAgent:
         self._l3_enabled = l3_enabled
         self._critic_model = critic_model
         self._critic_provider = critic_provider
+        # The chain only rides the OpenRouter router; a pinned provider cannot
+        # serve another vendor's model.
+        self._critic_fallback_models = (
+            tuple(dict.fromkeys(m for m in critic_fallback_models if m != critic_model))
+            if critic_provider == "openrouter"
+            else ()
+        )
+        self._failed_models: dict[str, float] = {}
         self._transport = transport
         self._local_address = local_address
         self._scorer_capabilities_url = scorer_capabilities_url
@@ -2928,9 +3079,11 @@ class TerraSolSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         bench_version: int | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
-        local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        review_started_at = asyncio.get_running_loop().time()
+        local_deadline = review_started_at + self._timeout_seconds
         effective_deadline = (
             local_deadline
             if deadline is None
@@ -2957,7 +3110,7 @@ class TerraSolSourceReviewAgent:
             )
             result = L2RunResult(
                 observation=_failure(
-                    "l2-runtime-evidence-unavailable",
+                    L2_RUNTIME_EVIDENCE_UNAVAILABLE,
                     "retryable_infra"
                     if _missing_lease_is_fleet_owned(
                         lease_rejection,
@@ -3022,7 +3175,7 @@ class TerraSolSourceReviewAgent:
                 logger.warning("L2 scorer runtime evidence unavailable: %s", error)
                 result = L2RunResult(
                     observation=_failure(
-                        "l2-runtime-evidence-unavailable", "pass_inconclusive"
+                        L2_RUNTIME_EVIDENCE_UNAVAILABLE, "pass_inconclusive"
                     ),
                     analyzed_files=(),
                     causal_path=(),
@@ -3049,17 +3202,20 @@ class TerraSolSourceReviewAgent:
             if runtime_evidence
             else "absent"
         )
+        lineage_digest = review_lineage.packet_sha256 if review_lineage else None
         cache_key = self._cache_key(
             artifact_sha256,
             l1_observation,
             policy_version,
             runtime_evidence_digest=evidence_digest,
+            lineage_digest=lineage_digest,
         )
         analyst_cache_key = self._analyst_cache_key(
             artifact_sha256,
             l1_observation,
             policy_version,
             runtime_evidence_digest=evidence_digest,
+            lineage_digest=lineage_digest,
         )
         self._cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self._cache_dir, 0o700)
@@ -3102,10 +3258,34 @@ class TerraSolSourceReviewAgent:
                     policy_version=policy_version,
                     on_l3_start=on_l3_start,
                     runtime_evidence=runtime_evidence,
+                    review_lineage=review_lineage,
                 )
-            if asyncio.get_running_loop().time() >= effective_deadline:
+            now = asyncio.get_running_loop().time()
+            if now >= effective_deadline:
+                late_audit, late_subcode = self._late_result_diagnostic(
+                    result,
+                    stage_bound=(deadline is None or local_deadline <= float(deadline)),
+                    budget_seconds=float(effective_deadline) - review_started_at,
+                    elapsed_seconds=now - review_started_at,
+                    policy_version=policy_version,
+                )
+                logger.warning(
+                    "L2 review ran past its deadline attempt_id=%s subcode=%s "
+                    "final_stage=%s steps=%d elapsed_s=%.0f budget_s=%.0f",
+                    attempt_id,
+                    late_subcode,
+                    late_audit.final_stage,
+                    late_audit.model_steps_observed or 0,
+                    now - review_started_at,
+                    float(effective_deadline) - review_started_at,
+                )
                 result = L2RunResult(
-                    observation=_failure("l2-late-result", "retryable_infra"),
+                    observation=replace(
+                        _failure("l2-late-result", "retryable_infra"),
+                        review_audit=late_audit.model_dump(mode="json"),
+                        failure_subcode=late_subcode,
+                    ),
+                    failure_subcode=late_subcode,
                     analyzed_files=result.analyzed_files,
                     causal_path=result.causal_path,
                     tools=result.tools,
@@ -3124,22 +3304,25 @@ class TerraSolSourceReviewAgent:
                     analyst_cache_hit=result.analyst_cache_hit,
                     critic_cache_hit=result.critic_cache_hit,
                 )
-            elif not result.cache_hit and (
-                result.observation.ok
-                or result.observation.failure_disposition == "inconclusive"
-            ):
+            elif not result.cache_hit and result.observation.ok:
                 self._store_cache(cache_key, result)
             if (
-                result.observation.error_code == "l2-only-clearance-unproven"
+                result.observation.error_code
+                in {"l2-only-clearance-unproven", "l3-adjudicator-incomplete"}
                 and result.dossier_incomplete_components
                 and result.observation.review_audit is None
             ):
                 # Fixed component labels identify which deterministic evidence
                 # was partial without signing source text or changing the hold.
+                l3_hold = result.observation.error_code == "l3-adjudicator-incomplete"
                 audit = ScreenReviewAudit(
                     stage="l2",
-                    reason_code="l2-only-clearance-unproven",
-                    prompt_revision=self._analyst_prompt_revision(policy_version),
+                    reason_code=result.observation.error_code,
+                    prompt_revision=(
+                        l2_safety_prompt_revision(policy_version)
+                        if l3_hold
+                        else self._analyst_prompt_revision(policy_version)
+                    ),
                     harness_revision=L2_HARNESS_REVISION,
                     max_steps=self._max_steps,
                     steps_used=min(len(result.response_models), self._max_steps),
@@ -3149,7 +3332,7 @@ class TerraSolSourceReviewAgent:
                     ),
                     model_steps_observed=len(result.response_models),
                     tool_calls_observed=len(result.tools),
-                    final_stage="analyst",
+                    final_stage="adjudicator" if l3_hold else "analyst",
                 )
                 result = replace(
                     result,
@@ -3238,6 +3421,7 @@ class TerraSolSourceReviewAgent:
                     model_steps_observed=len(result.response_models),
                     tool_calls_observed=len(result.tools),
                     budget_stop_reason="none",
+                    final_stage=_inconclusive_final_stage(result),
                 )
                 result = replace(
                     result,
@@ -3260,6 +3444,68 @@ class TerraSolSourceReviewAgent:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
+    def _late_result_diagnostic(
+        self,
+        result: L2RunResult,
+        *,
+        stage_bound: bool,
+        budget_seconds: float,
+        elapsed_seconds: float,
+        policy_version: int,
+    ) -> tuple[ScreenReviewAudit, str]:
+        """Fixed-label accounting for a review discarded at its deadline.
+
+        ``l2-late-result`` replaces whatever the trajectory returned, so the
+        masked outcome, the layer it reached and which bound fired (this
+        layer's own ``timeout_seconds`` or the renewable attempt lease) were
+        lost; the hfull-h3 v9 and crown-v197 attempts (2026-11-01/02) read as
+        lease misses although their leases had ten minutes left. The audit
+        carries only counts and fixed labels, never source or prompts.
+        """
+        bound = "stage_timeout" if stage_bound else "lease_deadline"
+        masked = (
+            result.observation.error_code
+            if not result.observation.ok
+            else f"completed-{result.observation.risk_level or 'unknown'}"
+        )
+        subcode = f"{bound}:{masked or 'unknown'}".lower()
+        if not _LATE_RESULT_SUBCODE_RE.fullmatch(subcode):
+            subcode = bound
+        usage = result.usage
+        cost = _billable_cost_usd(usage)
+        provider = next(
+            (
+                value
+                for value in reversed(result.response_providers)
+                if _AUDIT_PROVIDER_RE.fullmatch(value)
+            ),
+            None,
+        )
+        max_elapsed_ms = min(max(1, round(budget_seconds * 1000)), 3_600_000)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-late-result",
+            prompt_revision=self._analyst_prompt_revision(policy_version),
+            harness_revision=L2_HARNESS_REVISION,
+            max_steps=self._max_steps,
+            steps_used=min(len(result.response_models), self._max_steps),
+            max_input_tokens=self._max_input_tokens,
+            input_tokens_used=min(max(0, usage.input_tokens), 100_000_000),
+            max_output_tokens=self._max_output_tokens,
+            output_tokens_used=min(max(0, usage.output_tokens), 1_000_000),
+            max_cost_usd=self._max_cost_usd,
+            cost_usd_used=min(max(0.0, float(cost or 0.0)), 100.0),
+            dossier_complete=result.dossier_complete,
+            model_steps_observed=min(len(result.response_models), 10_000),
+            tool_calls_observed=min(len(result.tools), 10_000),
+            budget_stop_reason="time",
+            response_provider=provider,
+            final_stage=_inconclusive_final_stage(result),
+            max_elapsed_ms=max_elapsed_ms,
+            elapsed_ms=min(max(0, round(elapsed_seconds * 1000)), 3_600_000),
+        )
+        return audit, subcode
+
     async def _review_uncached(
         self,
         archive_path: str,
@@ -3271,6 +3517,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
         runtime_evidence: Mapping[str, object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         if self._workspace_root is not None:
             # A rootless analyzer daemon lives outside the worker service's
@@ -3298,6 +3545,7 @@ class TerraSolSourceReviewAgent:
                 policy_version=policy_version,
                 on_l3_start=on_l3_start,
                 runtime_evidence=runtime_evidence,
+                review_lineage=review_lineage,
             )
         except L2TrajectoryError as error:
             logger.warning("L2 model trajectory failed safely: %s", error.code)
@@ -3321,11 +3569,7 @@ class TerraSolSourceReviewAgent:
                     max_output_tokens=self._max_output_tokens,
                     output_tokens_used=error.usage.output_tokens,
                     max_cost_usd=self._max_cost_usd,
-                    cost_usd_used=(
-                        error.usage.reported_cost_usd
-                        if error.usage.reported_cost_usd is not None
-                        else error.usage.estimated_cost_usd
-                    ),
+                    cost_usd_used=_billable_cost_usd(error.usage),
                     model_steps_observed=error.steps_used,
                     tool_calls_observed=len(error.tools),
                     budget_stop_reason={
@@ -3373,7 +3617,16 @@ class TerraSolSourceReviewAgent:
                 usage=L2Usage(),
                 cache_hit=False,
             )
-        except (OSError, ValueError, tarfile.TarError, httpx.HTTPError) as error:
+        # TypeError joins the contract misses: an untrusted submission is
+        # shaped by the model, and a wrong JSON type there is a bad answer,
+        # not broken infrastructure (ditto-subnet#2987).
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            httpx.HTTPError,
+        ) as error:
             logger.warning(
                 "L2 review infrastructure failed: %s: %s",
                 type(error).__name__,
@@ -3403,6 +3656,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         on_l3_start: Callable[[], None] | None = None,
         runtime_evidence: Mapping[str, object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         api_key = _read_key(self._api_key_file)
         (
@@ -3419,6 +3673,7 @@ class TerraSolSourceReviewAgent:
             policy_version=policy_version,
             deadline=deadline,
             runtime_evidence=runtime_evidence,
+            review_lineage=review_lineage,
         )
         analyst_cache_hit = False
         analyst = self._load_cache(f"{analyst_cache_key}.analyst")
@@ -3509,7 +3764,9 @@ class TerraSolSourceReviewAgent:
             if on_l3_start is not None:
                 on_l3_start()
             if not (analyst.observation.ok and analyst.observation.risk_level == "low"):
-                if _needs_violation_adjudication(analyst, l1_observation):
+                if _needs_violation_adjudication(
+                    analyst, l1_observation, policy_version=policy_version
+                ):
                     provisional_violation = {
                         "finding_digest": analyst.observation.finding_digest,
                         "finding": _compressed_l1_finding(analyst.observation),
@@ -3533,7 +3790,7 @@ class TerraSolSourceReviewAgent:
                             role="violation_adjudicator",
                             reasoning_effort=L2_CAUSE_REASONING_EFFORT,
                             model=self._critic_model,
-                            fallback_models=(),
+                            fallback_models=self._critic_fallback_models,
                             provider=(
                                 None
                                 if self._critic_provider == "openrouter"
@@ -3704,7 +3961,7 @@ class TerraSolSourceReviewAgent:
                                 role="violation_tiebreaker",
                                 reasoning_effort=L2_CAUSE_REASONING_EFFORT,
                                 model=self._critic_model,
-                                fallback_models=(),
+                                fallback_models=self._critic_fallback_models,
                                 provider=(
                                     None
                                     if self._critic_provider == "openrouter"
@@ -3869,21 +4126,22 @@ class TerraSolSourceReviewAgent:
                         dossier_complete=adjudicator.dossier_complete,
                         analyst_cache_hit=analyst_cache_hit,
                     )
-                return L2RunResult(
-                    observation=analyst.observation,
-                    analyzed_files=analyst.analyzed_files,
-                    causal_path=analyst.causal_path,
-                    tools=dossier_tools + analyst.tools,
-                    usage=analyst.usage,
-                    cache_hit=False,
-                    analyst_tools=analyst.tools,
-                    response_models=analyst.response_models,
-                    response_providers=analyst.response_providers,
-                    resolution_basis=analyst.resolution_basis,
-                    clearance_path="l2_violation",
-                    dossier_complete=analyst.dossier_complete,
-                    analyst_cache_hit=analyst_cache_hit,
-                )
+                if not _routes_inconclusive_to_l3(analyst, policy_version):
+                    return L2RunResult(
+                        observation=analyst.observation,
+                        analyzed_files=analyst.analyzed_files,
+                        causal_path=analyst.causal_path,
+                        tools=dossier_tools + analyst.tools,
+                        usage=analyst.usage,
+                        cache_hit=False,
+                        analyst_tools=analyst.tools,
+                        response_models=analyst.response_models,
+                        response_providers=analyst.response_providers,
+                        resolution_basis=analyst.resolution_basis,
+                        clearance_path="l2_violation",
+                        dossier_complete=analyst.dossier_complete,
+                        analyst_cache_hit=analyst_cache_hit,
+                    )
             if (
                 _qualifies_for_direct_clear(
                     l1_observation, analyst, expected_model=self._model
@@ -3906,13 +4164,15 @@ class TerraSolSourceReviewAgent:
                     dossier_complete=analyst.dossier_complete,
                     analyst_cache_hit=analyst_cache_hit,
                 )
-            provisional_analyst_result = {
+            provisional_analyst_result: dict[str, object] = {
                 "finding_digest": analyst.observation.finding_digest,
                 "categories": list(analyst.observation.categories),
                 "resolution_basis": analyst.resolution_basis,
                 "analyzed_files": list(analyst.analyzed_files),
                 "causal_path": list(analyst.causal_path),
             }
+            if _routes_inconclusive_to_l3(analyst, policy_version):
+                provisional_analyst_result["analyst_disposition"] = "inconclusive"
             critic_cache_hit = False
             critic = self._load_cache(f"{analyst_cache_key}.critic")
             if critic is not None and not (
@@ -3932,7 +4192,7 @@ class TerraSolSourceReviewAgent:
                         role="critic",
                         reasoning_effort=self._critic_reasoning_effort,
                         model=self._critic_model,
-                        fallback_models=(),
+                        fallback_models=self._critic_fallback_models,
                         provider=(
                             None
                             if self._critic_provider == "openrouter"
@@ -4100,7 +4360,7 @@ class TerraSolSourceReviewAgent:
                     role="adjudicator",
                     reasoning_effort=safety_reasoning_effort,
                     model=self._critic_model,
-                    fallback_models=(),
+                    fallback_models=self._critic_fallback_models,
                     provider=(
                         None
                         if self._critic_provider == "openrouter"
@@ -4185,7 +4445,9 @@ class TerraSolSourceReviewAgent:
             adjudicator.observation.ok and adjudicator.observation.risk_level == "low"
         )
         clearance_gaps = _safety_clearance_gaps(
-            safety_evidence, adjudicator, expected_model=self._critic_model
+            safety_evidence,
+            adjudicator,
+            expected_models=(self._critic_model, *self._critic_fallback_models),
         )
         adjudicated_safe = claimed_safe and not clearance_gaps
         adjudicated_analyzed = _merge_digest_items(
@@ -4225,8 +4487,13 @@ class TerraSolSourceReviewAgent:
                 critic_cache_hit=critic_cache_hit,
             )
         if claimed_safe and not adjudicator.dossier_complete:
+            # The dossier is built by fixed analyzers over the artifact bytes,
+            # so a truncated component (a vendored file over the read cap, an
+            # oversized opaque inventory) recurs on every retry. Like the
+            # L2-only hold, this is an inconclusive outcome, never an
+            # infrastructure retry, and it names the partial components.
             return L2RunResult(
-                observation=_failure("l3-adjudicator-incomplete", "retryable_infra"),
+                observation=_failure("l3-adjudicator-incomplete", "inconclusive"),
                 analyzed_files=adjudicated_analyzed,
                 causal_path=adjudicator.causal_path,
                 tools=(
@@ -4252,6 +4519,8 @@ class TerraSolSourceReviewAgent:
                 resolution_basis=adjudicator.resolution_basis,
                 clearance_path="l3_adjudicator_incomplete",
                 dossier_complete=False,
+                dossier_incomplete_components=dossier_incomplete_components,
+                failure_subcode="+".join(dossier_incomplete_components) or None,
                 analyst_cache_hit=analyst_cache_hit,
                 critic_cache_hit=critic_cache_hit,
             )
@@ -4342,6 +4611,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int,
         deadline: float | None,
         runtime_evidence: Mapping[str, object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> tuple[dict[str, object], tuple[str, ...], bool, bool, tuple[str, ...]]:
         deterministic: dict[str, object] = {}
         tools: list[str] = []
@@ -4384,25 +4654,28 @@ class TerraSolSourceReviewAgent:
             if isinstance(starter_diff, Mapping)
             else self._starter_revision
         )
-        return (
-            {
-                "dossier_revision": L2_DOSSIER_REVISION,
-                "artifact_sha256": artifact_sha256,
-                "benchmark_contract": _benchmark_contract_capsule(policy_version),
-                "trusted_scored_runtime_env": runtime_evidence,
-                "starter_revision": selected_starter_revision,
-                "supported_starter_revisions": list(self._starter_revisions),
-                "l1": {
-                    "finding_digest": l1_observation.finding_digest,
-                    "risk": l1_observation.risk_level,
-                    "categories": list(l1_observation.categories),
-                    "evidence": _l1_evidence(l1_observation),
-                    "finding": _compressed_l1_finding(l1_observation),
-                    "leads": list(_l1_lead_packet(l1_observation)),
-                },
-                "deterministic": deterministic,
-                "bounded_source_inventory": inventory,
+        dossier: dict[str, object] = {
+            "dossier_revision": L2_DOSSIER_REVISION,
+            "artifact_sha256": artifact_sha256,
+            "benchmark_contract": _benchmark_contract_capsule(policy_version),
+            "trusted_scored_runtime_env": runtime_evidence,
+            "starter_revision": selected_starter_revision,
+            "supported_starter_revisions": list(self._starter_revisions),
+            "l1": {
+                "finding_digest": l1_observation.finding_digest,
+                "risk": l1_observation.risk_level,
+                "categories": list(l1_observation.categories),
+                "evidence": _l1_evidence(l1_observation),
+                "finding": _compressed_l1_finding(l1_observation),
+                "leads": list(_l1_lead_packet(l1_observation)),
             },
+            "deterministic": deterministic,
+            "bounded_source_inventory": inventory,
+        }
+        if review_lineage is not None:
+            dossier["review_lineage"] = lineage_dossier(review_lineage)
+        return (
+            dossier,
             tuple(tools),
             not incomplete_components,
             False,  # legacy report field; no language-specific graph is required
@@ -4479,6 +4752,11 @@ class TerraSolSourceReviewAgent:
                     )
         elif role == "critic":
             task = (
+                _INCONCLUSIVE_ANALYST_CRITIC_TASK
+                if isinstance(provisional_result, Mapping)
+                and provisional_result.get("analyst_disposition") == "inconclusive"
+                else ""
+            ) + (
                 "Adversarially falsify the provisional safe result, then try to "
                 "falsify your own proposed challenge against every legitimate "
                 "boundary. "
@@ -4494,9 +4772,15 @@ class TerraSolSourceReviewAgent:
                 "submit violation for a causal challenge; otherwise inconclusive."
             )
         elif role == "violation_adjudicator":
-            task = _VIOLATION_CAUSE_TASK
+            task = (
+                _V13_VIOLATION_FINALITY_TASK if policy_version >= 13 else ""
+            ) + _VIOLATION_CAUSE_TASK
         elif role == "violation_tiebreaker":
-            task = _VIOLATION_CAUSE_DISAGREEMENT_TASK + _VIOLATION_CAUSE_TASK
+            task = (
+                (_V13_VIOLATION_FINALITY_TASK if policy_version >= 13 else "")
+                + _VIOLATION_CAUSE_DISAGREEMENT_TASK
+                + _VIOLATION_CAUSE_TASK
+            )
         else:
             raw_l1 = dossier.get("l1")
             raw_categories = (
@@ -4662,6 +4946,20 @@ class TerraSolSourceReviewAgent:
             )
 
         def failure(code: str, subcode: str | None = None) -> L2TrajectoryError:
+            if code in _BUDGET_STOP_LIMITS:
+                # Telemetry only: which limit ended the review and at what
+                # aggregate usage, so Backroom can show the trip per attempt.
+                # It must never change the failure the review reports.
+                with contextlib.suppress(Exception):
+                    record_budget_stop(
+                        self._budget_stop(
+                            code,
+                            role=role,
+                            usage=_add_usage(usage_before, usage),
+                            steps_used=steps_used,
+                            max_steps=max_steps or self._max_steps,
+                        )
+                    )
             return L2TrajectoryError(
                 code,
                 usage=usage,
@@ -4785,8 +5083,24 @@ class TerraSolSourceReviewAgent:
                             ),
                         }
                     )
-                raise failure("model-response-contract") from error
+                raise failure(
+                    "model-provider-fault"
+                    if _relayed_provider_fault(payload)
+                    else "model-response-contract",
+                    _response_fault_subcode(payload),
+                ) from error
             usage = _add_usage(usage, turn_usage)
+            record_usage(
+                l2_stage_for_role(role),
+                started_at=turn_started,
+                model=response_model or model,
+                input_tokens=turn_usage.input_tokens,
+                output_tokens=turn_usage.output_tokens,
+                cached_input_tokens=turn_usage.cached_input_tokens,
+                reasoning_tokens=turn_usage.reasoning_tokens,
+                estimated_cost_usd=turn_usage.estimated_cost_usd,
+                reported_cost_usd=turn_usage.reported_cost_usd,
+            )
             if self._terminal_verdict_required:
                 self._audit.record(
                     {
@@ -4872,6 +5186,10 @@ class TerraSolSourceReviewAgent:
                     continue
                 logger.warning("L2 model-tool-contract: no tool call after corrections")
                 raise failure("model-tool-contract", "no_tool_call_after_corrections")
+            # The correction budget bounds consecutive empty turns. A turn that
+            # calls a tool is progress, so a long trajectory is not failed for
+            # two lapses many steps apart; the step budget still bounds it.
+            no_call_corrections = 0
             submitted = [
                 item for item in calls if item.get("name") == "submit_l2_review"
             ]
@@ -4944,7 +5262,7 @@ class TerraSolSourceReviewAgent:
                                 analyzed=analyzed,
                                 repository=repository,
                             )
-                    except (json.JSONDecodeError, ValueError) as error:
+                    except (json.JSONDecodeError, TypeError, ValueError) as error:
                         request_submit_correction(
                             submitted[0],
                             reason="validation",
@@ -5085,6 +5403,50 @@ class TerraSolSourceReviewAgent:
                 )
         raise failure("model-step-budget")
 
+    def _exceeded_budget(self, usage: L2Usage) -> list[ReviewBudgetLimit]:
+        """Every aggregate limit ``usage`` exceeds, in a fixed order."""
+        effective_input = _effective_input_tokens(usage)
+        exceeded: list[ReviewBudgetLimit] = []
+        if usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS:
+            exceeded.append("raw_input")
+        if effective_input > self._max_input_tokens:
+            exceeded.append("input")
+        if usage.output_tokens > self._max_output_tokens:
+            exceeded.append("output")
+        if _billable_cost_usd(usage) > self._max_cost_usd:
+            exceeded.append("cost")
+        return exceeded
+
+    def _budget_stop(
+        self,
+        code: str,
+        *,
+        role: str,
+        usage: L2Usage,
+        steps_used: int,
+        max_steps: int,
+    ) -> ReviewBudgetStop:
+        tripped = (
+            self._exceeded_budget(usage)
+            if code == "model-total-budget"
+            else [_BUDGET_STOP_LIMITS[code]]
+        )
+        return ReviewBudgetStop(
+            stage=l2_stage_for_role(role),  # type: ignore[arg-type]
+            code=code,  # type: ignore[arg-type]
+            tripped=tripped,
+            max_raw_input_tokens=_MAX_AGGREGATE_RAW_INPUT_TOKENS,
+            max_input_tokens=self._max_input_tokens,
+            max_output_tokens=self._max_output_tokens,
+            max_cost_usd=self._max_cost_usd,
+            max_steps=max_steps,
+            raw_input_tokens=usage.input_tokens,
+            effective_input_tokens=_effective_input_tokens(usage),
+            output_tokens=usage.output_tokens,
+            cost_usd=round(_billable_cost_usd(usage), 6),
+            steps_used=steps_used,
+        )
+
     def _require_budget(self, usage: L2Usage) -> None:
         if usage.cached_input_tokens > usage.input_tokens:
             raise ValueError("L2 cached input exceeds raw input")
@@ -5092,22 +5454,8 @@ class TerraSolSourceReviewAgent:
         # input is discounted by 90%; the separate raw ceiling bounds wire
         # traffic even when nearly every prompt prefix is cached. Spending is
         # independently bounded by max_cost_usd.
-        effective_input = (
-            usage.input_tokens
-            - usage.cached_input_tokens
-            + round(usage.cached_input_tokens * 0.1)
-        )
-        billable_cost = (
-            usage.reported_cost_usd
-            if usage.reported_cost_usd is not None
-            else usage.estimated_cost_usd
-        )
-        if (
-            usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS
-            or effective_input > self._max_input_tokens
-            or usage.output_tokens > self._max_output_tokens
-            or billable_cost > self._max_cost_usd
-        ):
+        effective_input = _effective_input_tokens(usage)
+        if self._exceeded_budget(usage):
             raise ValueError(
                 "L2 model exceeded token or cost budget "
                 f"raw_input={usage.input_tokens} "
@@ -5133,6 +5481,64 @@ class TerraSolSourceReviewAgent:
         deadline: float | None,
         policy_version: int = SCREENING_POLICY_VERSION,
     ) -> httpx.Response:
+        # A router blue/green deploy rejects valid keys with 401 for a few
+        # minutes. Wait it out within the lease instead of discarding every
+        # completed analyst/critic turn of this review.
+        auth_retries = 0
+        while True:
+            try:
+                return await self._post_turn(
+                    client,
+                    api_key,
+                    items,
+                    artifact_sha256=artifact_sha256,
+                    reasoning_effort=reasoning_effort,
+                    model=model,
+                    fallback_models=fallback_models,
+                    provider=provider,
+                    deadline=deadline,
+                    policy_version=policy_version,
+                )
+            except httpx.HTTPStatusError as error:
+                if error.response.status_code != 401 or auth_retries >= len(
+                    self._auth_retry_delays
+                ):
+                    raise
+                delay = self._auth_retry_delays[auth_retries]
+                if (
+                    deadline is not None
+                    and deadline - asyncio.get_running_loop().time() <= delay
+                ):
+                    raise
+                auth_retries += 1
+                logger.warning(
+                    "L2/L3 model key rejected; waiting out a router deploy: "
+                    "signature=%s retry=%d/%d delay_s=%.1f",
+                    _http_error_signature(error.response),
+                    auth_retries,
+                    len(self._auth_retry_delays),
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+    async def _post_turn(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        items: list[dict[str, object]],
+        *,
+        artifact_sha256: str,
+        reasoning_effort: str,
+        model: str,
+        fallback_models: tuple[str, ...],
+        provider: str | None,
+        deadline: float | None,
+        policy_version: int = SCREENING_POLICY_VERSION,
+    ) -> httpx.Response:
+        switchable = self._inference_provider == "openrouter" and provider is None
+        if switchable:
+            model, *rest = self._healthy_chain(model, fallback_models)
+            fallback_models = tuple(rest)
         tools = _l2_tools_for_policy(policy_version, shell_enabled=self._shell_enabled)
         if self._compact_review_packet:
             tools.insert(-1, _compact_dossier_tool())
@@ -5184,12 +5590,7 @@ class TerraSolSourceReviewAgent:
                 "require_parameters": provider is not None,
                 "data_collection": "deny",
             }
-            if fallback_models:
-                # The Responses API accepts an ordered model chain. The router
-                # advances only when the prior model returns a retryable routing
-                # failure; it does not run multiple successful completions.
-                request.pop("model")
-                request["models"] = [model, *fallback_models]
+            _route_models(request, model, fallback_models)
             if provider is not None:
                 request["provider"]["only"] = [provider]  # type: ignore[index]
                 if self._terminal_verdict_required and provider.startswith("azure"):
@@ -5204,7 +5605,10 @@ class TerraSolSourceReviewAgent:
         # HTTPX's read timeout is an inactivity timeout, not a wall-clock cap.
         # A provider can keep a broken response alive with occasional bytes, so
         # bound each turn and allow one fresh connection before escalating.
-        for attempt in range(_MAX_COMPLETION_REQUEST_ATTEMPTS):
+        timeout_attempts = 0
+        fault_retries = 0
+        while True:
+            attempt = timeout_attempts + fault_retries
             timeout = min(
                 self._turn_timeout(deadline),
                 self._max_completion_request_seconds,
@@ -5295,18 +5699,59 @@ class TerraSolSourceReviewAgent:
                             "turn_attempt": attempt + 1,
                         }
                     )
+                can_switch = (
+                    switchable
+                    and self._retry_provider_body_fault_once
+                    and bool(fallback_models)
+                )
+                # With a fallback ready, replay the faulted model once and then
+                # move on; the full backoff is for a model with no alternative.
+                retry_budget = (
+                    min(1, len(self._provider_fault_retry_delays))
+                    if can_switch
+                    else len(self._provider_fault_retry_delays)
+                )
                 if (
                     self._retry_provider_body_fault_once
                     and model_error is not None
-                    and attempt + 1 < _MAX_COMPLETION_REQUEST_ATTEMPTS
-                    and (
-                        deadline is None or asyncio.get_running_loop().time() < deadline
-                    )
+                    and fault_retries < retry_budget
                 ):
+                    delay = self._provider_fault_retry_delays[fault_retries]
+                    if (
+                        deadline is None
+                        or deadline - asyncio.get_running_loop().time()
+                        > delay
+                        + min(
+                            _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS,
+                            self._max_completion_request_seconds,
+                        )
+                    ):
+                        fault_retries += 1
+                        logger.warning(
+                            "L2/L3 provider body fault %s; retrying exact turn "
+                            "retry=%d/%d delay_s=%.1f",
+                            model_error,
+                            fault_retries,
+                            len(self._provider_fault_retry_delays),
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                if model_error is not None and switchable:
+                    # Cool the model down even when it is the last in the chain,
+                    # so the next turn prefers any model that has recovered.
+                    self._failed_models[model] = time.monotonic()
+                if model_error is not None and can_switch:
                     logger.warning(
-                        "L2/L3 provider body fault %s; retrying exact turn once",
+                        "L2/L3 model %s kept reporting provider fault %s; "
+                        "falling back to %s",
+                        model,
                         model_error,
+                        fallback_models[0],
                     )
+                    model, fallback_models = fallback_models[0], fallback_models[1:]
+                    _route_models(request, model, fallback_models)
+                    fault_retries = 0
                     continue
                 if model_error is not None:
                     logger.warning(
@@ -5317,7 +5762,8 @@ class TerraSolSourceReviewAgent:
                     )
                 return response
             except (TimeoutError, httpx.TimeoutException):
-                if attempt + 1 == _MAX_COMPLETION_REQUEST_ATTEMPTS:
+                timeout_attempts += 1
+                if timeout_attempts >= _MAX_COMPLETION_REQUEST_ATTEMPTS:
                     raise
                 if (
                     deadline is not None
@@ -5326,10 +5772,23 @@ class TerraSolSourceReviewAgent:
                     raise
                 logger.warning(
                     "L2/L3 model turn timed out; retrying attempt %d/%d",
-                    attempt + 1,
+                    timeout_attempts,
                     _MAX_COMPLETION_REQUEST_ATTEMPTS,
                 )
-        raise RuntimeError("L2/L3 model turn retry loop exhausted")
+
+    def _healthy_chain(
+        self, model: str, fallback_models: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """Drop models still cooling down from a fault; never return nothing."""
+        chain = tuple(dict.fromkeys((model, *fallback_models)))
+        now = time.monotonic()
+        healthy = tuple(
+            candidate
+            for candidate in chain
+            if now - self._failed_models.get(candidate, -math.inf)
+            >= _FAILED_MODEL_COOLDOWN_SECONDS
+        )
+        return healthy or chain
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:
@@ -5365,12 +5824,14 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         *,
         runtime_evidence_digest: str = "absent",
+        lineage_digest: str | None = None,
     ) -> str:
         value = self._cache_key_value(
             artifact_sha256,
             l1_observation,
             policy_version,
             runtime_evidence_digest=runtime_evidence_digest,
+            lineage_digest=lineage_digest,
         )
         value["cause_prompt_revision"] = l2_cause_prompt_revision(policy_version)
         # Final results from an older L3-off posture must never bypass the
@@ -5391,6 +5852,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         *,
         runtime_evidence_digest: str = "absent",
+        lineage_digest: str | None = None,
     ) -> str:
         """Keep cause-only retries from rerunning Terra or the critic."""
         value = self._cache_key_value(
@@ -5398,6 +5860,7 @@ class TerraSolSourceReviewAgent:
             l1_observation,
             policy_version,
             runtime_evidence_digest=runtime_evidence_digest,
+            lineage_digest=lineage_digest,
         )
         # Preserve the pre-split stage key so already verified Terra/critic
         # trajectories remain reusable when only adjudication changes.
@@ -5427,6 +5890,7 @@ class TerraSolSourceReviewAgent:
         policy_version: int = SCREENING_POLICY_VERSION,
         *,
         runtime_evidence_digest: str = "absent",
+        lineage_digest: str | None = None,
     ) -> dict[str, object]:
         value: dict[str, object] = {
             "artifact_sha256": artifact_sha256,
@@ -5445,6 +5909,7 @@ class TerraSolSourceReviewAgent:
             "fallback_models": list(self._fallback_models),
             "critic_model": self._critic_model,
             "critic_provider": self._critic_provider,
+            "critic_fallback_models": list(self._critic_fallback_models),
             "prompt_revision": self._analyst_prompt_revision(policy_version),
             "critic_prompt_revision": l2_critic_prompt_revision(policy_version),
             "safety_prompt_revision": l2_safety_prompt_revision(policy_version),
@@ -5476,6 +5941,10 @@ class TerraSolSourceReviewAgent:
                 "cost": self._max_cost_usd,
             },
         }
+        if lineage_digest is not None:
+            # Present only for a lineage-scoped review, so every ordinary
+            # review keeps its existing cache entries.
+            value["lineage_packet_sha256"] = lineage_digest
         return value
 
     def _try_lock_cache(self, key: str) -> int | None:
@@ -5502,6 +5971,11 @@ class TerraSolSourceReviewAgent:
                 observation_value.get("categories", ())
             )
             observation = SourceReviewObservation(**observation_value)
+            # Old workers persisted inconclusive finals for seven days. A
+            # manually issued retry must perform the unfinished review rather
+            # than replaying that attempt as another completed model review.
+            if not observation.ok:
+                return None
             usage = L2Usage(**value["usage"])
             return L2RunResult(
                 observation=observation,
@@ -5537,6 +6011,8 @@ class TerraSolSourceReviewAgent:
             return None
 
     def _store_cache(self, key: str, result: L2RunResult) -> None:
+        if not result.observation.ok:
+            return
         path = self._cache_dir / f"{key}.json"
         payload = {
             "observation": {
@@ -5642,6 +6118,7 @@ class TerraSolSourceReviewAgent:
                 "analyst_fallback_models": list(self._fallback_models),
                 "critic_model": self._critic_model,
                 "critic_provider": self._critic_provider,
+                "critic_fallback_models": list(self._critic_fallback_models),
                 "prompt_revision": self._analyst_prompt_revision(policy_version),
                 "review_mode": (
                     "report_only_single_layer_sol"
@@ -5792,10 +6269,10 @@ class LayeredSourceReviewAgent:
             # The pinned scorer cohort was unavailable at claim. Nothing
             # reviewed the artifact and no paid stage ran, so retry it as fleet
             # infrastructure instead of parking the submission as inconclusive.
-            return _failure("l2-runtime-evidence-unavailable", "retryable_infra")
+            return _failure(L2_RUNTIME_EVIDENCE_UNAVAILABLE, "retryable_infra")
         audit = ScreenReviewAudit(
             stage="l2",
-            reason_code="l2-runtime-evidence-unavailable",
+            reason_code=L2_RUNTIME_EVIDENCE_UNAVAILABLE,
             prompt_revision=l2_prompt_revision(policy_version),
             harness_revision=L2_HARNESS_REVISION,
             max_steps=self._l2._max_steps,
@@ -5817,7 +6294,7 @@ class LayeredSourceReviewAgent:
             elapsed_ms=0,
         )
         return replace(
-            _failure("l2-runtime-evidence-unavailable", "pass_inconclusive"),
+            _failure(L2_RUNTIME_EVIDENCE_UNAVAILABLE, "pass_inconclusive"),
             review_audit=audit.model_dump(mode="json"),
         )
 
@@ -5963,6 +6440,7 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         bench_version: int | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         hold = self._runtime_evidence_hold(
             scored_runtime_evidence,
@@ -6005,6 +6483,7 @@ class LayeredSourceReviewAgent:
             progress=report_l1 if progress is not None else None,
             deadline=l1_deadline,
             policy_version=policy_version,
+            review_lineage=review_lineage,
         )
         return await self.resolve_lead(
             archive_path,
@@ -6019,6 +6498,7 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
             scored_runtime_evidence_received_at=scored_runtime_evidence_received_at,
             bench_version=bench_version,
+            review_lineage=review_lineage,
         )
 
     async def resolve_lead(
@@ -6036,6 +6516,7 @@ class LayeredSourceReviewAgent:
         scored_runtime_evidence: ScoredRuntimeEvidenceLease | None = None,
         scored_runtime_evidence_received_at: int | None = None,
         bench_version: int | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
         requires_lease = self._requires_signed_runtime_lease(policy_version)
@@ -6065,8 +6546,18 @@ class LayeredSourceReviewAgent:
             or os.environ.get("SCREENER_L2_ALWAYS_ESCALATE", "").strip().lower()
             in {"1", "true", "yes", "on"}
         )
+        # An L1 that never produced a valid verdict carries its ledger but no
+        # decision. Under the two-outcome policy the deep review still owes
+        # one, so it escalates on the recorded notes rather than ending here.
+        unsettled_l1 = (
+            policy_version >= 13
+            and not l1.ok
+            and l1_verdict_unsettled(l1)
+            and _escalation_time_remains(review_deadline)
+        )
         should_escalate = (
             always_escalate
+            or unsettled_l1
             or l1.risk_level in {"medium", "high"}
             or (l1.risk_level == "low" and not l1.clearance_certified)
         )
@@ -6095,7 +6586,7 @@ class LayeredSourceReviewAgent:
             report(10)
             return adjudicated
 
-        if self._mode == "off" or not l1.ok or not should_escalate:
+        if self._mode == "off" or not (l1.ok or unsettled_l1) or not should_escalate:
             report(9)
             return await settle(l1)
         report(6)
@@ -6110,6 +6601,7 @@ class LayeredSourceReviewAgent:
             scored_runtime_evidence=scored_runtime_evidence,
             scored_runtime_evidence_received_at=scored_runtime_evidence_received_at,
             bench_version=bench_version,
+            review_lineage=review_lineage,
         )
         report(9)
         if self._capture_enforce_result:
@@ -6118,11 +6610,18 @@ class LayeredSourceReviewAgent:
             self._shadow_results[attempt_id] = result
             report(10)
             return l1
-        if result.observation.failure_disposition == "pass_inconclusive":
+        observation = result.observation
+        if (
+            not observation.ok
+            and result.failure_subcode
+            and observation.failure_subcode is None
+        ):
+            observation = replace(observation, failure_subcode=result.failure_subcode)
+        if observation.failure_disposition == "pass_inconclusive":
             # Preserve the original bounded L1 lead as partial evidence; the
             # exhausted L2 trajectory has no safe replacement finding.
             carried = replace(
-                result.observation,
+                observation,
                 finding_digest=l1.finding_digest,
                 categories=l1.categories,
                 finding=l1.finding,
@@ -6132,7 +6631,7 @@ class LayeredSourceReviewAgent:
         return await settle(
             _carry_l1_notes(
                 _enforce_causal_authority(
-                    result.observation, clearance_path=result.clearance_path
+                    observation, clearance_path=result.clearance_path
                 ),
                 l1,
             )
@@ -6216,8 +6715,19 @@ def _enforce_causal_authority(
         return observation
     verification = verify_causal_finding(finding)
     if verification.role_complete:
+        if clearance_path in _L3_CONFIRMED_VIOLATION_PATHS:
+            return replace(observation, violation_certified=True)
         return observation
     return _failure(f"l2-{verification.reason_code}", "inconclusive")
+
+
+# Only an independent L3 violation adjudicator that saw the L2 finding and
+# could have refuted it (a low-risk verdict is an L3 disagreement) certifies a
+# violation. ``l2_violation`` skipped L3, and every L3 timeout, disagreement,
+# or missing verdict leaves a different path, so none of them certify.
+_L3_CONFIRMED_VIOLATION_PATHS = frozenset(
+    {"l3_adjudicated_violation_cause", "l3_adjudicated_violation_cause_tiebreak"}
+)
 
 
 def _l1_concerns_resolved(notes: tuple[Mapping[str, object], ...]) -> bool:
@@ -6408,9 +6918,13 @@ def _safety_clearance_gaps(
     evidence_observation: SourceReviewObservation,
     adjudicator: L2RunResult,
     *,
-    expected_model: str = L3_MODEL,
+    expected_models: tuple[str, ...] = (L3_MODEL,),
 ) -> tuple[str, ...]:
-    """Name every mechanical certificate miss. Empty means the clearance holds."""
+    """Name every mechanical certificate miss. Empty means the clearance holds.
+
+    ``expected_models`` is the configured L3 chain: the primary reviewer and its
+    fallbacks may each certify, any other model may not.
+    """
     finding = adjudicator.observation.finding
     evidence_paths = {str(item["path"]) for item in _l1_evidence(evidence_observation)}
     analyzed_paths = {str(item.get("path")) for item in adjudicator.analyzed_files}
@@ -6437,7 +6951,10 @@ def _safety_clearance_gaps(
     unexpected = [
         model
         for model in adjudicator.response_models
-        if model != expected_model and not model.startswith(f"{expected_model}-")
+        if not any(
+            model == expected or model.startswith(f"{expected}-")
+            for expected in expected_models
+        )
     ]
     if unexpected:
         gaps.append("models:" + "+".join(unexpected[:4]))
@@ -6481,10 +6998,59 @@ def _has_mixed_causal_families(
     )
 
 
+def _inconclusive_final_stage(result: L2RunResult) -> str:
+    """Name the layer whose bounded disposition ended an inconclusive review.
+
+    Every role shares one trajectory parser, so the reason code alone reads
+    as an L2 analyst stop even when the L3 critic or safety adjudicator was
+    the layer that could not settle.
+    """
+    if result.adjudicator_disposition is not None:
+        return "adjudicator"
+    if result.critic_disposition not in (None, "not_required"):
+        return "critic"
+    return "analyst"
+
+
+# An unsettled L1 escalates only while the deep review can still run a turn;
+# with less than this left the escalation would fail as lease exhaustion.
+_MIN_UNSETTLED_ESCALATION_SECONDS = 120.0
+
+
+def _escalation_time_remains(deadline: float | None) -> bool:
+    if deadline is None:
+        return True
+    remaining = deadline - asyncio.get_running_loop().time()
+    return remaining >= _MIN_UNSETTLED_ESCALATION_SECONDS
+
+
+def _routes_inconclusive_to_l3(analyst: L2RunResult, policy_version: int) -> bool:
+    """Policy v13 has two outcomes, so an unsettled L2 analyst goes to L3.
+
+    The analyst's inconclusive disposition is a reviewer state, not a policy
+    verdict. Ending the review there parks the artifact with no path to CLEAR
+    or REJECT; the independent critic and safety adjudicator still apply every
+    clearance-certificate and violation-evidence guard.
+    """
+    return (
+        policy_version >= 13
+        and not analyst.observation.ok
+        and analyst.observation.error_code == "l2-model-inconclusive"
+    )
+
+
 def _needs_violation_adjudication(
-    analyst: L2RunResult, l1_observation: SourceReviewObservation
+    analyst: L2RunResult,
+    l1_observation: SourceReviewObservation,
+    *,
+    policy_version: int = SCREENING_POLICY_VERSION,
 ) -> bool:
-    """Escalate causal ambiguity, including a mechanism narrowed away from L1."""
+    """Escalate causal ambiguity, including a mechanism narrowed away from L1.
+
+    At policy v13 an L3-confirmed breach is a terminal reject, so every L2
+    violation goes to the independent L3 adjudicator that can refute it;
+    an L2-only finding would otherwise stay a held lead forever.
+    """
     if not analyst.observation.ok or analyst.observation.risk_level not in {
         "medium",
         "high",
@@ -6494,6 +7060,8 @@ def _needs_violation_adjudication(
         return True
     if analyst.resolution_basis not in _VIOLATION_RESOLUTION_BASES:
         return False
+    if policy_version >= STRICT_TWO_OUTCOME_POLICY_VERSION:
+        return True
     categories = set(analyst.observation.categories)
     benchmark_family = bool(
         categories & {"benchmark_emulation", "embedded_evaluator_logic"}
@@ -6709,13 +7277,13 @@ def _parse_l2_review(
     generator_components = value.get("generator_components", [])
     causal_evidence_value = value.get("causal_evidence")
     submitted_summary = value["summary"]
-    if disposition not in {"safe", "violation", "inconclusive"}:
+    if not _is_allowed(disposition, {"safe", "violation", "inconclusive"}):
         raise ValueError("L2 result disposition is invalid")
     if disposition == "safe" and causal_evidence_value is not None:
         raise ValueError("L2 safe result cannot contain causal evidence")
     if disposition == "inconclusive" and causal_evidence_value is not None:
         raise ValueError("L2 inconclusive result cannot contain causal evidence")
-    if risk not in {"low", "medium", "high"}:
+    if not _is_allowed(risk, {"low", "medium", "high"}):
         raise ValueError("L2 result risk is invalid")
     if (
         not isinstance(confidence, (int, float))
@@ -6723,13 +7291,15 @@ def _parse_l2_review(
         or not 0 <= float(confidence) <= 1
     ):
         raise ValueError("L2 result confidence is invalid")
-    if resolution_basis not in _resolution_bases_for_policy(policy_version):
+    if not _is_allowed(resolution_basis, _resolution_bases_for_policy(policy_version)):
         raise ValueError("L2 result resolution basis is invalid")
     if (
         not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
         or any(
-            category not in source_review_categories_for_policy(policy_version)
+            not _is_allowed(
+                category, source_review_categories_for_policy(policy_version)
+            )
             for category in categories
         )
     ):
@@ -6773,8 +7343,8 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _ALLOWED_CATEGORIES
-            or role not in _ROLES
+            or not _is_allowed(category, _ALLOWED_CATEGORIES)
+            or not _is_allowed(role, _ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -6789,7 +7359,7 @@ def _parse_l2_review(
             not isinstance(path, str)
             or not isinstance(line, int)
             or isinstance(line, bool)
-            or role not in _ROLES
+            or not _is_allowed(role, _ROLES)
             or path not in analyzed_map
             or not _valid_location(repository, path, line)
         ):
@@ -6816,7 +7386,7 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or kind not in _GENERATOR_COMPONENT_KINDS
+            or not _is_allowed(kind, _GENERATOR_COMPONENT_KINDS)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7025,9 +7595,9 @@ def _parse_causal_evidence(
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
-    if transition not in _authority_transitions_for_policy(policy_version):
+    if not _is_allowed(transition, _authority_transitions_for_policy(policy_version)):
         raise ValueError("L2 causal authority transition is invalid")
-    if scorer_visible_effect not in _SCORER_VISIBLE_EFFECTS:
+    if not _is_allowed(scorer_visible_effect, _SCORER_VISIBLE_EFFECTS):
         raise ValueError("L2 scorer-visible effect is invalid")
     if not isinstance(bindings, list) or not 1 <= len(bindings) <= 32:
         raise ValueError("L2 causal role bindings are invalid")
@@ -7056,8 +7626,8 @@ def _parse_causal_evidence(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _MULTI_LOCATION_CATEGORIES
-            or role not in _CAUSAL_EVIDENCE_ROLES
+            or not _is_allowed(category, _MULTI_LOCATION_CATEGORIES)
+            or not _is_allowed(role, _CAUSAL_EVIDENCE_ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
             or (path, line, str(category)) not in evidence_locations
@@ -7114,6 +7684,74 @@ def _valid_location(repository: TarSourceRepository, path: str, line: int) -> bo
         return False
     total = repository.line_count(path)
     return total is None or line <= max(total, 1)
+
+
+def _route_models(
+    request: dict[str, object], model: str, fallback_models: tuple[str, ...]
+) -> None:
+    """Point an OpenRouter request at one model or an ordered model chain.
+
+    The Responses API accepts an ordered chain. The router advances only when
+    the prior model returns a retryable routing failure; it does not run
+    multiple successful completions.
+    """
+    request.pop("model", None)
+    request.pop("models", None)
+    if fallback_models:
+        request["models"] = [model, *fallback_models]
+    else:
+        request["model"] = model
+
+
+def _relayed_provider_fault(payload: object) -> bool:
+    """Whether a 200 body relays the provider's own failure, not a bad answer.
+
+    OpenRouter returns an upstream outage (``server_error``,
+    ``provider_unavailable``, a rate limit) as ``status: failed`` with an error
+    in an ordinary 200 response. That is the provider's fault; naming it a
+    response-contract failure sent operators hunting for a reviewer bug.
+    """
+    return isinstance(payload, dict) and bool(
+        payload.get("error") or payload.get("error_type")
+    )
+
+
+_RESPONSE_FAULT_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+
+
+def _response_fault_subcode(payload: object) -> str | None:
+    """Name why a 200 body was unusable: the provider's own fault code, or the
+    ``incomplete_details`` reason of a response-contract failure.
+
+    Only a bounded slug survives (``server_error``, ``429``,
+    ``context_length_exceeded``, ``max_output_tokens``); provider messages,
+    model names and request content never do. It tells a deterministic
+    rejection that recurs on every retry apart from a transient outage. The
+    reason code still carries the provider-fault vs contract classification.
+    """
+    if not isinstance(payload, dict):
+        return None
+    candidates: list[object] = []
+    error = payload.get("error")
+    if isinstance(error, Mapping):
+        candidates.extend(
+            (error.get("code"), error.get("type"), error.get("error_type"))
+        )
+    elif isinstance(error, str):
+        candidates.append(error)
+    candidates.append(payload.get("error_type"))
+    details = payload.get("incomplete_details")
+    if isinstance(details, Mapping):
+        candidates.append(details.get("reason"))
+    present = False
+    for candidate in candidates:
+        if isinstance(candidate, bool) or candidate is None or candidate == "":
+            continue
+        present = True
+        normalized = str(candidate).strip().lower()
+        if _RESPONSE_FAULT_SUBCODE_RE.fullmatch(normalized):
+            return normalized
+    return "unrecognized" if present else None
 
 
 def _response_contract_detail(payload: object) -> str:
@@ -7210,13 +7848,42 @@ def _response_output_and_usage(
                 cached_input_tokens=cached,
                 model=model,
             ),
-            reported_cost_usd=(
-                float(reported_cost) if reported_cost is not None else None
+            reported_cost_usd=_reported_turn_cost(
+                reported_cost, input_tokens, output_tokens, model
             ),
         ),
         model,
         provider,
     )
+
+
+def _reported_turn_cost(
+    reported_cost: float | None,
+    input_tokens: int,
+    output_tokens: int,
+    model: object,
+) -> float | None:
+    """Gateway cost for one turn, or ``None`` when it is not a real figure.
+
+    The screener gateway answers ``cost: 0`` for turns that spent millions of
+    tokens (SN-424: attempt 16c416c6 estimated $23.54, reported $0.00), and a
+    reported zero used to override the token estimate, so ``max_cost_usd``
+    could never trip. A zero for a turn that spent tokens is unreported: the
+    budget falls back to tokens x price and the gap is logged for alerting.
+    """
+    if reported_cost is None or (
+        reported_cost <= 0 and input_tokens + output_tokens > 0
+    ):
+        logger.warning(
+            "screener_cost_unreported model=%s reported=%s input_tokens=%d "
+            "output_tokens=%d; budget uses the token estimate",
+            model if isinstance(model, str) else "unknown",
+            "missing" if reported_cost is None else "zero",
+            input_tokens,
+            output_tokens,
+        )
+        return None
+    return float(reported_cost)
 
 
 def _selected_provider(value: object) -> str | None:
@@ -7244,12 +7911,42 @@ def _nonnegative_int(value: object) -> int:
     return value
 
 
-def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
-    reported = (
-        None
-        if left.reported_cost_usd is None and right.reported_cost_usd is None
-        else (left.reported_cost_usd or 0.0) + (right.reported_cost_usd or 0.0)
+def _effective_input_tokens(usage: L2Usage) -> int:
+    """Billable-equivalent input: cached input counts at 10%."""
+    return (
+        usage.input_tokens
+        - usage.cached_input_tokens
+        + round(usage.cached_input_tokens * 0.1)
     )
+
+
+def _billable_cost_usd(usage: L2Usage) -> float:
+    return (
+        usage.reported_cost_usd
+        if usage.reported_cost_usd is not None
+        else usage.estimated_cost_usd
+    )
+
+
+def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
+    # A reported total is only exact when every turn reported a cost; one
+    # unreported turn makes the aggregate fall back to the estimate rather
+    # than silently counting that turn as free. An empty side adds nothing.
+    def empty(usage: L2Usage) -> bool:
+        return (
+            usage.input_tokens + usage.output_tokens == 0
+            and not usage.estimated_cost_usd
+            and not usage.reported_cost_usd
+        )
+
+    if empty(left):
+        reported = right.reported_cost_usd
+    elif empty(right):
+        reported = left.reported_cost_usd
+    elif left.reported_cost_usd is None or right.reported_cost_usd is None:
+        reported = None
+    else:
+        reported = left.reported_cost_usd + right.reported_cost_usd
     return L2Usage(
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
@@ -7291,6 +7988,18 @@ def _cost(
     cached_input_tokens: int = 0,
     model: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6.1-terra" or (model or "").startswith(
+        "openai/gpt-6.1-terra-"
+    ):
+        # OpenRouter 2026-11-03: standard Terra 6.1 is $1/$5 per million with
+        # $0.05 cached input; use a 2x ceiling (as for Sol6 below) when exact
+        # reported cost is absent.
+        uncached = max(0, input_tokens - cached_input_tokens)
+        return (
+            uncached * 2.0 / 1_000_000
+            + cached_input_tokens * 0.1 / 1_000_000
+            + output_tokens * 10.0 / 1_000_000
+        )
     if model == "openai/gpt-6-sol" or (model or "").startswith("openai/gpt-6-sol-"):
         # OpenRouter 2026-09-25: standard Sol6 is $2/$10 per million;
         # use the $4/$20 OpenAI Fast ceiling when exact reported cost is absent.
@@ -7792,6 +8501,10 @@ def _classified_suffix(error: BaseException) -> str | None:
 def _error_code(prefix: str, error: BaseException) -> str:
     if isinstance(error, httpx.HTTPStatusError):
         response = error.response
+        if response.status_code == 402:
+            # One code for every layer: an unfunded review account is a fleet
+            # billing stop, not an L2/L3 reviewer failure.
+            return SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED
         code = f"{prefix}-http-{response.status_code}{_http_failure_hint(response)}"
         return code[:64]
     classified = _classified_suffix(error)
@@ -7886,10 +8599,77 @@ def _l1_evidence(observation: SourceReviewObservation) -> list[dict[str, object]
     return bounded
 
 
+# Model-facing L1 diagnostics are untrusted hypotheses. A reviewer that keeps
+# restating one concern at one site fills the 48-note ledger with paraphrases;
+# presenting every one to L2 spends tokens without adding evidence. Summaries
+# whose normalized content-word sets meet this Jaccard similarity against an
+# earlier diagnostic at the same (path, line, area, category) site are shown
+# once, with every collapsed note index retained. Lower-overlap summaries stay
+# separate, so a distinct mechanism at a shared line is never folded away.
+_L1_PARAPHRASE_SIMILARITY = 0.6
+_L1_SUMMARY_TOKEN = re.compile(r"[a-z0-9]+")
+_L1_SUMMARY_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "by",
+        "for",
+        "from",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "may",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "this",
+        "to",
+        "via",
+        "which",
+        "with",
+    }
+)
+
+
+def _l1_summary_terms(summary: str) -> frozenset[str]:
+    """Content-word set used only to recognize same-site paraphrases."""
+    terms: set[str] = set()
+    for token in _L1_SUMMARY_TOKEN.findall(summary.lower()):
+        if token in _L1_SUMMARY_STOPWORDS:
+            continue
+        for suffix in ("ing", "ed", "es", "e", "s"):
+            if len(token) > len(suffix) + 3 and token.endswith(suffix):
+                token = token[: -len(suffix)]
+                break
+        terms.add(token)
+    return frozenset(terms)
+
+
+def _l1_summaries_paraphrase(left: frozenset[str], right: frozenset[str]) -> bool:
+    if not left or not right:
+        return left == right
+    return len(left & right) / len(left | right) >= _L1_PARAPHRASE_SIMILARITY
+
+
 def _l1_lead_packet(
     observation: SourceReviewObservation,
 ) -> tuple[dict[str, object], ...]:
-    """Group repeated L1 locations while retaining every source note index."""
+    """Group repeated L1 locations while retaining every source note index.
+
+    Exact and near-paraphrase summaries at one grouped site collapse into one
+    model-facing diagnostic that lists every collapsed note index. The lead
+    still covers all of its notes, so a clear must resolve the whole site.
+    """
+    diagnostic_terms: dict[tuple[tuple[object, ...], int], frozenset[str]] = {}
     grouped: dict[tuple[object, ...], dict[str, object]] = {}
     for index, note in enumerate(observation.notes):
         if note.get("kind") != "concern":
@@ -7938,7 +8718,17 @@ def _l1_lead_packet(
         bounded_summary = (
             " ".join(summary.split())[:300] if isinstance(summary, str) else ""
         )
-        if not any(item["summary"] == bounded_summary for item in diagnostics):
+        terms = _l1_summary_terms(bounded_summary)
+        for position, item in enumerate(diagnostics):
+            if item["summary"] == bounded_summary or _l1_summaries_paraphrase(
+                diagnostic_terms[(key, position)], terms
+            ):
+                repeated = item.setdefault("repeated_note_indices", [])
+                assert isinstance(repeated, list)
+                repeated.append(index)
+                break
+        else:
+            diagnostic_terms[(key, len(diagnostics))] = terms
             diagnostics.append({"note_index": index, "summary": bounded_summary})
         confidence = note.get("confidence")
         if isinstance(confidence, (int, float)) and not isinstance(confidence, bool):

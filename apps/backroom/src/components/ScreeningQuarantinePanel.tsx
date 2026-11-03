@@ -31,6 +31,7 @@ import {
   executeScreeningQuarantineDecisions,
   getOwnerAttestations,
   getScreeningArtifact,
+  getScreeningQuarantineContext,
   listScreeningQuarantines,
   listScreeningDisputes,
   previewScreeningQuarantineDecisions,
@@ -274,12 +275,15 @@ export function ScreeningQuarantinePanel({
   const previewBatch = useServerFn(previewScreeningQuarantineDecisions)
   const executeBatch = useServerFn(executeScreeningQuarantineDecisions)
   const getArtifact = useServerFn(getScreeningArtifact)
+  const getContext = useServerFn(getScreeningQuarantineContext)
   const [items, setItems] = useState(initialItems)
   const [filter, setFilter] = useState<QuarantineFilter>('active')
   const [sort, setSort] = useState<QuarantineSort>('oldest')
   const [query, setQuery] = useState('')
   const [selected, setSelected] = useState<ScreeningQuarantine | null>(initialItems[0] ?? null)
+  const failedApproval = selected?.agent_status === 'screening_failed' && selected.status === 'resolved' && selected.resolution === 'rescreen'
   const [resolution, setResolution] = useState<QuarantineResolution>('rescreen')
+  const effectiveResolution = failedApproval ? 'release' : resolution
   const [reason, setReason] = useState('')
   const [loading, setLoading] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -471,15 +475,29 @@ export function ScreeningQuarantinePanel({
 
   const submitDecision = async () => {
     if (!selected || reason.trim().length < 3) return
-    await requestPreview([
-      {
-        quarantineId: selected.quarantine_id,
-        expectedAgentId: selected.agent_id,
-        expectedArtifactSha256: selected.artifact_sha256,
-        resolution,
-        reason: reason.trim(),
-      },
-    ])
+    try {
+      const context = failedApproval
+        ? await getContext({ data: { quarantineId: selected.quarantine_id } })
+        : null
+      if (context && (context.agent.score_count == null || !context.attempts[0])) {
+        throw new Error('Refresh after Platform supports guarded failure approval')
+      }
+      await requestPreview([
+        {
+          quarantineId: selected.quarantine_id,
+          expectedAgentId: selected.agent_id,
+          expectedArtifactSha256: selected.artifact_sha256,
+          ...(context ? {
+            expectedAttemptId: context.attempts[0].attempt_id,
+            expectedScoreCount: context.agent.score_count!,
+          } : {}),
+          resolution: effectiveResolution,
+          reason: reason.trim(),
+        },
+      ])
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to prepare approval')
+    }
   }
 
   return (
@@ -1020,7 +1038,7 @@ export function ScreeningQuarantinePanel({
                     </dl>
                   </div>
 
-                  {selected.status === 'resolved' ? (
+                  {selected.status === 'resolved' && !failedApproval ? (
                     <div className="pt-5 text-xs leading-5 text-[var(--muted-strong)]">
                       <p>
                         <span className="font-medium text-white">{selected.resolved_by ?? 'Unknown operator'}</span>{' '}
@@ -1031,14 +1049,15 @@ export function ScreeningQuarantinePanel({
                   ) : (
                     <div className="pt-6">
                       <fieldset disabled={readOnly || submitting}>
-                        <legend className="text-xs font-medium">Decision</legend>
+                        <legend className="text-xs font-medium">{failedApproval ? 'Approve after manual source review' : 'Decision'}</legend>
+                        {failedApproval ? <p className="mt-2 text-xs text-[var(--muted)]">Release this parked screening failure to build, health and validation checks. The failed attempts and prior rulings remain in its history.</p> : null}
                         <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                          {(Object.keys(resolutionCopy) as Array<QuarantineResolution>).map((value) => {
+                          {(failedApproval ? ['release' as const] : Object.keys(resolutionCopy) as Array<QuarantineResolution>).map((value) => {
                             const copy = resolutionCopy[value]
                             const Icon = copy.icon
                             return (
-                              <label key={value} className={`cursor-pointer rounded-lg border p-3 transition-colors ${resolution === value ? 'border-[var(--line-strong)] bg-white/[0.05]' : 'border-[var(--line)] hover:bg-white/[0.025]'}`}>
-                                <input type="radio" name="resolution" value={value} checked={resolution === value} onChange={() => setResolution(value)} className="sr-only" />
+                              <label key={value} className={`cursor-pointer rounded-lg border p-3 transition-colors ${effectiveResolution === value ? 'border-[var(--line-strong)] bg-white/[0.05]' : 'border-[var(--line)] hover:bg-white/[0.025]'}`}>
+                                <input type="radio" name="resolution" value={value} checked={effectiveResolution === value} onChange={() => setResolution(value)} className="sr-only" />
                                 <Icon className={`h-4 w-4 ${copy.tone}`} />
                                 <span className="mt-2 block text-xs font-medium">{copy.label}</span>
                                 <span className="mt-1 block text-[10px] leading-4 text-[var(--muted)]">{copy.description}</span>
@@ -1067,10 +1086,10 @@ export function ScreeningQuarantinePanel({
                             type="button"
                             onClick={() => void submitDecision()}
                             disabled={readOnly || submitting || reason.trim().length < 3}
-                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${resolution === 'reject' ? 'bg-[var(--red)] text-white' : resolution === 'rescreen' ? 'bg-[var(--amber)] text-[#1c1407]' : 'bg-[var(--acid)] text-[#11150d]'}`}
+                            className={`inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${effectiveResolution === 'reject' ? 'bg-[var(--red)] text-white' : effectiveResolution === 'rescreen' ? 'bg-[var(--amber)] text-[#1c1407]' : 'bg-[var(--acid)] text-[#11150d]'}`}
                           >
                             {submitting ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> : <AlertTriangle className="h-3.5 w-3.5" />}
-                            Confirm {resolution}
+                            Preview {effectiveResolution}
                           </button>
                         </div>
                       </div>

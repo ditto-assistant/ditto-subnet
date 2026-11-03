@@ -122,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("query", nargs="?", help="Case-insensitive substring")
     parser.add_argument(
         "--resolution",
-        choices=("clear", "reject", "leave"),
+        choices=("clear", "reject", "leave", "guidance"),
         help="Restrict to one holding",
     )
     parser.add_argument("--tag", help="Restrict to one frontmatter tag")

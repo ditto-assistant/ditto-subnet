@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
+from ditto.api_models.treasury_ingress import TreasurySourceClaim
+
 
 class PublicTreasuryEvent(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -48,6 +50,8 @@ class PublicTreasuryEvent(BaseModel):
     public_recipient: str
     block_hash: str
     extrinsic_index: int
+    extrinsic_hash: str | None = None
+    source_claims: list[TreasurySourceClaim] = []
     event_index: int
     actor_provenance: str
     actor_public_id: str

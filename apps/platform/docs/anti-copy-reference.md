@@ -98,6 +98,20 @@ baseline bundle is review-only and safe to refresh whenever the kit moves.
   canonical corpus from what remains, before sketching. The public Jaccard and
   containment thresholds remain `0.75` and `0.95`: after whole-file exclusion the
   residual is miner-authored surface, so the thresholds now mean what they say.
+- The lexical fingerprint also carries a `lines` sub-sketch (`l1`): one
+  shingle per source line of at least 30 non-whitespace characters, with
+  comment-only lines dropped, qualifier chains collapsed to their final name
+  (`_contracts.message(` reads as `message(`), and its own reference bundle
+  (`reference_line_v2.bin`) subtracted. A set of lines does not change when a
+  file is split into modules, reordered, or has imports inserted, and that is
+  the refactor the 4-line windows miss. On 2026-10-03, ira-1 `4d44841b` was
+  lets_638 `8d3208ad` split from one file into ~30 modules. The windows
+  measured 0.55 / 0.73, so it was never held, but its exact line Jaccard was
+  0.908. The cross-miner copy rule fires on either channel. The line channel
+  uses the same `0.75` / `0.95` bars and padding direction as the windows. The
+  closest independent-owner pair on the 27-agent calibration board measured
+  0.661. Ranking, withdrawal, and earliest-source attribution take the stronger
+  of the two channels. The same-owner resubmission rule never reads `lines`.
 - Lexical similarity carries no score-proximity precondition. A matching
   fingerprint holds on its own, in either score direction and at any distance.
   The former `0.03` composite window assumed between-seed noise of `σ ≤ 0.01`;
@@ -273,7 +287,8 @@ of a code change. Rollout order for each reference refresh is:
    not enter ATH review solely because the rollout is in progress.
 3. Run the fingerprint backfill without `--apply`, review aggregate counts, then
    separately authorize the metadata-only apply and a catch-up pass. The tool uses
-   bounded batches, is idempotent on algorithm plus corpus identity, and updates
+   bounded batches, is idempotent on algorithm plus corpus identity (including
+   the `lines` sub-sketch version, so a pre-`l1` fingerprint is stale), and updates
    only lexical, normalized-source, and prompt fingerprint metadata.
 4. Verify provenance-bearing current comparison output before enabling downstream
    bulk-eligibility presentation.

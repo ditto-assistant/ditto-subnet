@@ -37,6 +37,21 @@ def test_gpt6_sol_l2_setting_is_valid_with_existing_critic(make_config) -> None:
     assert parsed.l3_model == "openai/gpt-6-sol"
 
 
+def test_gpt61_terra_deep_review_and_raised_timeout_are_valid(make_config) -> None:
+    settings = bootstrap_review_settings(make_config()).settings.model_dump(mode="json")
+    settings["l2_model"] = "openai/gpt-6.1-terra"
+    settings["l2_fallback_models"] = ["openai/gpt-6-sol", "z-ai/glm-5.2"]
+    settings["l3_model"] = "openai/gpt-6.1-terra"
+    settings["timeout_seconds"] = 2_700
+    parsed = ReviewSettings.model_validate(settings)
+    assert parsed.l2_model == "openai/gpt-6.1-terra"
+    assert parsed.l3_model == "openai/gpt-6.1-terra"
+    assert parsed.timeout_seconds == 2_700
+    settings["timeout_seconds"] = 3_601
+    with pytest.raises(ValidationError):
+        ReviewSettings.model_validate(settings)
+
+
 def _shadow_observation(*, stages: int) -> ShadowReviewObservationRequest:
     return ShadowReviewObservationRequest(
         attempt_id=UUID("96af45fd-65da-4f59-87f8-8ddf5d57f88c"),
@@ -176,6 +191,12 @@ def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
     payload = baseline.model_dump()
     legacy = baseline.settings.model_dump(mode="json")
     legacy.pop("adjudicator_max_completion_tokens", None)
+    # Every legacy revision predates the probe battery.
+    legacy.pop("probe_battery_mode", None)
+    legacy.pop("probe_battery_timeout_seconds", None)
+    legacy.pop("probe_review_mode", None)
+    legacy.pop("probe_review_timeout_seconds", None)
+    legacy.pop("probe_review_max_cost_usd", None)
     for name in dropped:
         legacy.pop(name, None)
     payload["checksum"] = hashlib.sha256(
@@ -270,6 +291,16 @@ def _platform_shaped_payload(config, **updates: object) -> dict:
             hashed.pop(name)
     if not hashed["l2_always_escalate"]:
         hashed.pop("l2_always_escalate")
+    if hashed["probe_battery_mode"] == "off":
+        hashed.pop("probe_battery_mode")
+        hashed.pop("probe_battery_timeout_seconds")
+    if hashed["probe_review_mode"] == "off":
+        for name in (
+            "probe_review_mode",
+            "probe_review_timeout_seconds",
+            "probe_review_max_cost_usd",
+        ):
+            hashed.pop(name)
     payload["checksum"] = hashlib.sha256(
         json.dumps(hashed, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()

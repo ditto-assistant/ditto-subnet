@@ -10,13 +10,22 @@ ignored_paths = [
   "scripts/hippius-probe/**", # Operator-only probe dependencies; no service release
   "ditto/treasury/**", # Manual operator package includes signer; not imported by service runtime
   "scripts/treasury_*.py", # Manual treasury CLIs, including signing; separately deployed/reviewed
+  "scripts/collector_delegate_key.py", # Manual custody ceremony; exact reviewed main pin via protected infra, not a service image
+  "scripts/test-collector-custody.sh", # Credentials-free custody CI driver
+  "scripts/check-treasury-manual-mode.sh", # Operator-staged custody lifecycle guard; never installed by service releases
+  "scripts/test-treasury-manual-systemd.sh", # Credentials-free hosted systemd CI probe
+  "scripts/check-collector-custody-plan.py", # Protected infrastructure scope fence, not service runtime
+  "scripts/collector-custody-phase-input.py", # Typed public input for protected infrastructure only
+  "scripts/manual-mailbox-input.py", # Typed mailbox input for protected infrastructure only
   "scripts/preview-restore-snapshot.sh",
   ".env.example",
   ".agents/**",
   ".claude/**",
   ".codex/**",
+  ".depot/**", # Validation workflows only; protected releases remain on GitHub
   ".github/**",
   ".gitignore",
+  ".nvmrc", # Developer/CI Node pin; production runtimes are enforced per component and by infra
   ".impeccable/**",
   "apps/platform/dashboard/.impeccable/**",
   ".pre-commit-config.yaml",
@@ -60,6 +69,8 @@ paths = [
   "ditto/api_models/__init__.py",
   "ditto/api_models/agent_status.py",
   "ditto/api_models/attestation.py",
+  "ditto/api_models/bounty.py",
+  "ditto/api_models/contributor_identity.py",
   "ditto/api_models/health.py",
   "ditto/api_models/miner_avatar.py",
   "ditto/api_models/miner_ditto_link.py",
@@ -102,6 +113,8 @@ paths = [
   "ditto/api_models/confirmation_progress.py",
   "ditto/api_models/inference.py",
   "ditto/api_models/private_dataset.py",
+  "ditto/api_models/generator_ledger.py",
+  "ditto/api_models/generator_round_validator.py",
   "ditto/api_models/router_ledger.py",
   "ditto/api_models/router_harness.py",
   "ditto/api_models/stack_health.py",
@@ -135,6 +148,9 @@ description = "DittoBench scorer and hosted API"
 depends_on = ["dittobench_datagen", "screening_protocol"]
 paths = [
   ".github/workflows/dittobench.yml",
+  "Dockerfile.generator-scorer-release",
+  "scripts/generator-scorer-auto-update.sh",
+  "infra/ansible/roles/generator_scorer/**",
   "services/dittobench-api/Dockerfile*",
   "services/dittobench-api/calibration/**",
   "services/dittobench-api/cmd/**",
@@ -187,6 +203,13 @@ paths = [
   "packages/dittobench-coding-contract/**",
 ]
 
+[components.dittobench_generator_starter_kit]
+description = "Shadow-only generator-competition reference challenge-pack generator"
+depends_on = ["dittobench_datagen"]
+paths = [
+  "miners/dittobench-generator-starter-kit/**",
+]
+
 [components.dittobench_router_starter_kit]
 description = "Shadow-only router reference harness and local practice client"
 paths = [
@@ -236,7 +259,6 @@ paths = [
   "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
-  "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py",
   "ditto/api_models/coding_harness.py",
   "ditto/api_models/coding_claims.py",
   "ditto/api_models/coding_certification_leases.py",
@@ -253,6 +275,7 @@ description = "Public Platform dashboard UI"
 depends_on = ["screening_protocol"]
 paths = [
   "apps/platform/dashboard/**",
+  "apps/platform/.npmrc",
   "apps/platform/faircopy.config.mjs",
   "apps/platform/package-lock.json",
   "apps/platform/package.json",

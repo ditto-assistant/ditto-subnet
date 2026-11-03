@@ -14,6 +14,9 @@ Load only the returned anchors and the relevant specialized skill:
 
 - `.agents/skills/mine` for miner setup, local rehearsal vs on-chain scoring,
   packaging, upload, and local pre-submit review against the operator bar;
+- `.agents/skills/subnet-status` for the miner view of live parameters: scoring
+  bench, emission split, payout curve, champion, next epoch, and a hotkey's
+  agents (public endpoints only);
 - `.agents/skills/ditto-subnet-platform` for Platform, migrations, dashboard,
   and Backroom;
 - `.agents/skills/ditto-subnet-benchmark` for validator, scoring, DittoBench,
@@ -33,6 +36,9 @@ Load only the returned anchors and the relevant specialized skill:
   dependency-PR security review;
 - `.agents/skills/backroom-review` for quarantine triage, high-score ATH
   review, and precedents;
+- `.agents/skills/scoring-infra-triage` for a low or failed score that looks
+  like infrastructure: find the failure, fix ours before any retry, pick the
+  retry tool, or explain why the agent cannot be retried;
 - `.agents/skills/miner-comms` for Discord/DM miner replies after a live
   Backroom investigation.
 
@@ -41,6 +47,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Surface | Path |
 |---|---|
 | Miner starter kit and local rehearsal | `miners/dittobench-starter-kit/`, `.agents/skills/mine/` |
+| Miner live-status lookup | `.agents/skills/subnet-status/` |
 | Miner CLI, validator, chain client | `ditto/` |
 | Validator Compose and updater | `docker-compose.yml`, `scripts/` |
 | Platform API, DB, dashboard | `apps/platform/` |
@@ -55,6 +62,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |
+| Scoring infra-failure triage and retries | `.agents/skills/scoring-infra-triage/` |
 | Miner Discord / DM replies | `.agents/skills/miner-comms/` |
 | Dependabot / dependency-PR review | `.agents/skills/ditto-subnet-dependabot-review/` |
 | Preview channels and mock engine | `ditto/preview/`, `preview/` |

@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import copy
 import fnmatch
+import functools
 import hashlib
 import json
 import logging
 import math
+import os
 import posixpath
 import re
 import tarfile
 import tomllib
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Container, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -36,6 +38,7 @@ from ditto_screener.decision_path_prompt import (
 )
 from ditto_screener.evidence_quality import citation_admissibility
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screener.review_lineage_prompt import lineage_l1_text
 from ditto_screener.review_provider import (
     DITTO_INFERENCE_BASE_URL,
     OPENROUTER_REVIEW_BASE_URL,
@@ -43,6 +46,7 @@ from ditto_screener.review_provider import (
     default_review_base_url,
     review_gateway_headers,
 )
+from ditto_screener.review_usage import record_chat_completion_usage
 from ditto_screener.source_causality import analyze_static_candidates_v2
 from ditto_screener.source_reachability import ReachabilityState, analyze_reachability
 from ditto_screener.source_signals import (
@@ -56,6 +60,7 @@ from ditto_screener.source_signals import (
 from ditto_screening_protocol import (
     SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
+    ReviewLineagePacket,
     ScreenReviewAudit,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
@@ -68,6 +73,10 @@ from ditto_screening_protocol import (
 from ditto_screening_protocol.models import (
     source_review_invariants_for_policy,
     source_review_pass_clauses_for_policy,
+)
+from ditto_screening_protocol.reason_codes import (
+    SOURCE_REVIEW_MODEL_TIMEOUT,
+    SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
 )
 from ditto_screening_protocol.review_ledger import (
     MULTI_LOCATION_CATEGORIES,
@@ -84,7 +93,7 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def _prompt_revision(policy_version: int) -> str:
     """Prompt revision recorded in findings and audits for one policy version."""
     if policy_version == 13:
-        return "source-review-v30-policy-v13"
+        return "source-review-v41-policy-v13"
     return f"source-review-v24-policy-v{policy_version}"
 
 
@@ -121,11 +130,28 @@ _COVERAGE_COMPLETE_NUDGE = (
 )
 
 
+def _is_allowed(value: object, allowed: Container[str]) -> bool:
+    """Whether an untrusted reviewer value is one of ``allowed``.
+
+    Reviewer tool schemas are not strict, so a model can answer with a list or
+    a dict where the contract names a string. ``value in allowed`` raises
+    ``TypeError: unhashable type`` on those, and the review paths catch
+    ``ValueError``, so the exception escaped to the gate and parked an
+    ordinary contract miss as ``unexpected-infrastructure``, losing the notes
+    and the finding (ditto-subnet#2987). A non-string is never a member.
+    """
+    return isinstance(value, str) and value in allowed
+
+
 def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] | None:
     """Validate one reviewer note host-side; None when unusable."""
     kind = arguments.get("kind")
     summary = arguments.get("summary")
-    if kind not in _NOTE_KINDS or not isinstance(summary, str) or not summary.strip():
+    if (
+        not _is_allowed(kind, _NOTE_KINDS)
+        or not isinstance(summary, str)
+        or not summary.strip()
+    ):
         return None
     category = arguments.get("category")
     note: dict[str, object] = {
@@ -271,6 +297,11 @@ _MIN_MAX_COMPLETION_TOKENS = 2_000
 # among compatible providers, so a third slow post only burns another slice of
 # the lease without adding a distinct recovery path.
 _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS = (1.0,)
+# A Ditto Router blue/green deploy rejects valid endpoint keys with HTTP 401
+# for a few minutes (observed 3-7 minutes after each cutover). Waiting that
+# out keeps a half-finished review instead of discarding it; a key that is
+# really revoked still parks after about five minutes.
+ROUTER_AUTH_RETRY_DELAYS_SECONDS = (15.0, 30.0, 60.0, 90.0, 120.0)
 
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
@@ -563,9 +594,13 @@ class SourceReviewBudgetExhausted(ValueError):
         read_files_used: int,
         max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
         policy_version: int = SCREENING_POLICY_VERSION,
+        verdict_unsettled: bool = False,
+        stop_reason: str | None = None,
     ) -> None:
         super().__init__(code)
         self.code = code
+        self.verdict_unsettled = verdict_unsettled
+        self.stop_reason = stop_reason
         self.max_steps = max_steps
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
@@ -582,7 +617,33 @@ class SourceReviewBudgetExhausted(ValueError):
             steps_used=self.steps_used,
             max_read_bytes=self.max_read_bytes,
             read_bytes_used=self.read_bytes_used,
+            budget_stop_reason="step" if self.verdict_unsettled else self.stop_reason,
         )
+
+
+def l1_verdict_unsettled(observation: object) -> bool:
+    """Whether L1 stopped without one host-valid verdict it could settle on.
+
+    Two reviewer-owned stops qualify: spending every step without a valid
+    verdict (the inconsistency stays in ``error_code``), and running out of
+    L1's own time with a ledger that cannot admit or clear on its own. Either
+    way the reviewer, not infrastructure, ran out, and the deep review still
+    owes a decision on the recorded notes.
+    """
+    audit = getattr(observation, "review_audit", None)
+    code = getattr(observation, "error_code", None)
+    if not isinstance(audit, Mapping) or audit.get("stage") != "l1":
+        return False
+    if not isinstance(code, str):
+        return False
+    stop = audit.get("budget_stop_reason")
+    if stop == "step":
+        return code.startswith("source-review-inconsistent-verdict")
+    return (
+        stop == "time"
+        and code == "source-review-lease-budget-exhausted"
+        and getattr(observation, "failure_disposition", None) == "inconclusive"
+    )
 
 
 def policy_v10_static_assessment(
@@ -836,6 +897,79 @@ def _is_generator_runtime_source(path: str) -> bool:
 
 
 logger = logging.getLogger(__name__)
+
+
+# --- Configurable source-marker scan ------------------------------------------
+#
+# A deployment may pin a small set of operator-defined *provenance markers* --
+# distinctive, naturally-rare identifiers, constants, or phrases -- and have
+# every screened submission's source scanned for them. This is a neutral
+# provenance signal: it reports where a configured marker occurs (path + line +
+# marker id) into the ``review_leads`` pre-analysis and emits one structured log
+# record per hit. It never assigns a policy category, never changes a
+# submission's outcome, and is a complete no-op unless markers are configured.
+#
+# Markers are supplied out-of-band through the environment, not committed to the
+# repository, so the pinned values never appear in source control:
+#
+#   SCREENER_SOURCE_MARKER_PATTERNS='[{"id":"m1","pattern":"RARE_TOKEN_[0-9a-f]{8}"}]'
+#
+# Each entry is ``{"id": <short label>, "pattern": <python regex>}``. Patterns
+# are matched case-sensitively, line by line, against decoded UTF-8 source. An
+# invalid regex or malformed entry is dropped with a warning rather than
+# failing the screen.
+_SOURCE_MARKER_ENV = "SCREENER_SOURCE_MARKER_PATTERNS"
+_MAX_SOURCE_MARKERS = 64
+_MAX_SOURCE_MARKER_LOCATIONS = 32
+_MAX_SOURCE_MARKER_PATTERN_LEN = 512
+
+
+@dataclass(frozen=True)
+class _SourceMarker:
+    marker_id: str
+    pattern: re.Pattern[str]
+
+
+@functools.lru_cache(maxsize=1)
+def _configured_source_markers_cached(raw: str) -> tuple[_SourceMarker, ...]:
+    """Parse and compile the configured marker set (cached per raw value)."""
+    if not raw.strip():
+        return ()
+    try:
+        entries = json.loads(raw)
+    except ValueError:
+        logger.warning("source marker config is not valid JSON; scan disabled")
+        return ()
+    if not isinstance(entries, list):
+        logger.warning("source marker config must be a JSON list; scan disabled")
+        return ()
+    markers: list[_SourceMarker] = []
+    seen: set[str] = set()
+    for entry in entries[:_MAX_SOURCE_MARKERS]:
+        if not isinstance(entry, dict):
+            continue
+        marker_id = entry.get("id")
+        pattern = entry.get("pattern")
+        if not isinstance(marker_id, str) or not isinstance(pattern, str):
+            continue
+        marker_id = marker_id.strip()[:64]
+        if not marker_id or marker_id in seen:
+            continue
+        if not pattern or len(pattern) > _MAX_SOURCE_MARKER_PATTERN_LEN:
+            continue
+        try:
+            compiled = re.compile(pattern)
+        except re.error:
+            logger.warning("source marker %s has an invalid regex; dropped", marker_id)
+            continue
+        seen.add(marker_id)
+        markers.append(_SourceMarker(marker_id=marker_id, pattern=compiled))
+    return tuple(markers)
+
+
+def _configured_source_markers() -> tuple[_SourceMarker, ...]:
+    return _configured_source_markers_cached(os.environ.get(_SOURCE_MARKER_ENV, ""))
+
 
 _SYSTEM_PROMPT_HEAD = """\
 You are a defensive source reviewer for an adversarial benchmark submission.
@@ -1294,6 +1428,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -1735,6 +1877,14 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The review_leads inventory reports item_selection and fingerprint_selection:
+truncated, omitted_count and omitted_by_kind describe candidates dropped after
+per-rule/file bounds. scan_truncated separately means the archive scan hit its
+file/byte budget. Selection favors high severity, then kind diversity.
+fingerprint_selection.saturation_leads points to repeated raw-scan kinds that
+can be padded with comments or strings. Inspect these as leads, never proof of
+evasion; use source search to follow omitted kinds when needed.
+
 The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
 leads over served/executable source, each naming a matched fingerprint kind, a
 severity, and location-only path:line roles. They automate the greppable bypass
@@ -1962,17 +2112,20 @@ case IDs, active seeds, expected answers, dataset hashes, scorer identity, audit
 markers, or `bench_version` from changing substantive retrieval, capability
 ordering, authority, execution, or output beyond the published compatibility
 contract. Complete source proof is enforceable. Behavioral
-degradation alone is a lead until a versioned post-commit, controlled,
-predeclared and replicated test attributes it to evaluation dependence. Use
+degradation alone is a lead, never a breach; screening runs no separate
+behavioral test that could attribute it later. Use
 evaluation_independent_runtime or no_evaluation_identity_branch only after
 tracing the served path; unreachable_nonruntime_code remains available when the
 effective build excludes the path.
 
-I2 requires an exact applicable record or receipt, its discard point, and a
-material alternative the deciding authority can no longer evaluate. Generic
-top-k retrieval and ordinary misses are not breaches. I3 distinguishes shape
-repair from a declared genuine model critic or final selector: model-led
-refinement may pass when the selector has necessary evidence and may preserve
+I2 requires an actual applicable trusted instruction, authorization or safety
+restriction, loss of its meaning, and a material consequence. Evidence loss
+from retrieval, summaries, compaction, checkpointing, retries or fresh fallback
+alone is quality/reliability, including after a successful model consumed a
+receipt. It is not I2 or a substitute for a separate prohibited mechanism.
+I3 distinguishes shape repair from a declared genuine model critic or final
+selector: model-led
+refinement may pass with selected/summarized context under W3 and may preserve
 uncertainty, refusal, or dissent. Host accept-until-preferred loops do not pass.
 
 I4 protects finalized fields. Removing ANSWER values such as unknown, none, or
@@ -2006,7 +2159,12 @@ negation scope, setting-and-remember requests, duplicate calls followed by
 unfinished work, and identifiers available only through a supplied tool. A
 genuine authoritative model planner may produce an exact pinned plan; an
 advisory planner must remain rejectable and every valid deviation executable.
-Neither architecture bypasses authorization or safety.
+Neither architecture bypasses authorization or safety. Hiding connector-gated
+or app-specific tools on the published connector marker or the request's
+app-name wording is W4 availability narrowing, not incorrect removal, even when
+it hides a tool the case needed; apply the I7 connector and app-wording safe
+harbor below and charge only fake execution of a hidden tool, a claim that a
+removed needed tool ran, or forcing.
 
 On a scored v13 `/run`, the validator supplies `inference_base_url` as a
 case-scoped broker URL. A harness may build a per-request model client from it
@@ -2018,8 +2176,8 @@ source-side allowlist for the validator-supplied field.
 
 Opaque files are not violations by presence. Establish each loaded component's
 actual role and apply the published role-specific verification requirement.
-Private behavioral testing is mandatory only when that role requires it or
-source causality remains unresolved. Tests, diagnostics, and helpers require
+Screening runs no private behavioral test, so settle each role from traced
+source causality. Tests, diagnostics, and helpers require
 effective build/startup/runtime reachability; refuting one dormant lead does
 not clear the rest of the artifact.
 Before labeling an optional environment-gated branch reachable, inspect its
@@ -2078,6 +2236,63 @@ def _source_review_system_prompt(policy_version: int) -> str:
     )
     prompt = _SYSTEM_PROMPT_HEAD + tail + batch_guidance
     if policy_version >= 13:
+        # W3 also scopes I4's evidence-context condition. Rewrite only named
+        # legacy clauses, retaining advisory, dissent and final-field guards.
+        prompt = (
+            prompt.replace(
+                "I2 EVIDENCE RETENTION. Every deciding completion must receive the "
+                "current user's\nrecords needed to disagree. A clearly labelled "
+                "non-authoritative preliminary\npass may see a ranked subset only "
+                "when the final deciding turn receives the\ncomplete "
+                "applicable records "
+                "and the preliminary candidate is not authority.\n"
+                "Pass clauses: full_records_on_deciding_turn or\n"
+                "non_authoritative_preliminary_pass.",
+                "I2 protects applicable trusted instructions and authorization, with "
+                "material consequence proof. W3 permits selected/summarized context "
+                "and fresh fallback; evidence loss alone is not rejection. Legacy "
+                "full_records_on_deciding_turn is a pass label, "
+                "not a raw-retention rule.",
+            )
+            .replace(
+                "untrusted candidate beside the complete raw records on the "
+                "deciding turn, with\nuntrusted labeling, the model free to "
+                "choose a different value, and no\nexact-value acceptance "
+                "gate rejecting disagreement.",
+                "untrusted candidate with selected/summarized context under W3. "
+                "The candidate\nmust stay labelled non-authoritative, the model "
+                "must be free to choose a\ndifferent value, and no exact-value "
+                "acceptance gate may reject disagreement.",
+            )
+            .replace(
+                "untrusted_candidate_channel pass: complete records remain, "
+                "the candidate is\n  labelled non-authoritative, disagreement "
+                "is accepted, and no correctness gate\n  selects the model draft.",
+                "untrusted_candidate_channel pass: selected/summarized context "
+                "is permitted\n  under W3; the candidate is labelled "
+                "non-authoritative, disagreement is accepted,\n  and no "
+                "correctness gate selects the model draft.",
+            )
+            .replace(
+                "beside complete records with disagreement accepted (I4 pass), "
+                "from injecting",
+                "with selected/summarized context under W3 and disagreement "
+                "accepted (I4 pass),\n  from injecting",
+            )
+            .replace(
+                "carries the complete records and no derived value or conversion "
+                "recipe, and\nships whatever parseable result the model returns",
+                "uses selected/summarized context under W3, no derived value or "
+                "conversion\nrecipe, and ships whatever parseable result the "
+                "model returns",
+            )
+            .replace(
+                "Fail retention or dissent is benchmark_emulation.",
+                "Host suppression of a valid designated dissent needs "
+                "its own I3 proof; "
+                "missing raw support alone is not benchmark_emulation.",
+            )
+        )
         prompt = prompt.replace(
             "all seven invariants below", "all eight invariants below"
         ).replace(
@@ -2796,19 +3011,26 @@ class TarSourceRepository:
                 }
                 for item in static_v2.advisory[:16]
             ]
+        item_selection: dict[str, object] = {}
+        fingerprint_selection: dict[str, object] = {}
+        items = find_source_review_leads(
+            miner_readable, selection_report=item_selection
+        )
+        fingerprints = find_benchmark_emulation_fingerprints(
+            miner_readable, selection_report=fingerprint_selection
+        )
         return {
-            "items": [*find_source_review_leads(miner_readable), *static_advisories][
-                :_MAX_LEAD_SCAN_FILES
-            ],
-            "emulation_fingerprints": find_benchmark_emulation_fingerprints(
-                miner_readable
-            ),
+            "items": [*items, *static_advisories],
+            "item_selection": item_selection,
+            "emulation_fingerprints": fingerprints,
+            "fingerprint_selection": fingerprint_selection,
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
                     (path, mask_lead_comments(text, path)) for path, text in readable
                 )
             ),
             "generator_mirroring": self._generator_mirroring_analysis(readable),
+            "source_markers": self._source_marker_analysis(readable),
             "review_adaptive_model_routing": (
                 self._review_adaptive_model_routing_analysis(readable)
             ),
@@ -2817,6 +3039,7 @@ class TarSourceRepository:
             "members_considered": members_considered,
             "bytes_scanned": bytes_scanned,
             "nontext": nontext,
+            "scan_truncated": truncated,
             "truncated": truncated,
         }
 
@@ -3196,6 +3419,60 @@ class TarSourceRepository:
             categories=tuple(categories),
             finding=payload,
         )
+
+    def _source_marker_analysis(
+        self, readable: list[tuple[str, str]]
+    ) -> dict[str, object]:
+        """Scan decoded source for operator-configured provenance markers.
+
+        A neutral provenance signal, not a policy decision. It reports where a
+        configured marker occurs so an operator can see the match in the
+        screening pre-analysis, and emits one structured log record per marker
+        hit for out-of-band alerting. With no markers configured it is a no-op
+        and returns an empty, inexpensive result. It never changes a
+        submission's screening outcome.
+        """
+        markers = _configured_source_markers()
+        if not markers:
+            return {"configured": 0, "matched_markers": [], "locations": []}
+        locations: list[dict[str, object]] = []
+        matched: set[str] = set()
+        truncated = False
+        for path, text in readable:
+            for line_number, line in enumerate(text.splitlines(), 1):
+                for marker in markers:
+                    if marker.pattern.search(line) is None:
+                        continue
+                    matched.add(marker.marker_id)
+                    if len(locations) < _MAX_SOURCE_MARKER_LOCATIONS:
+                        locations.append(
+                            {
+                                "marker_id": marker.marker_id,
+                                "path": path,
+                                "line": line_number,
+                            }
+                        )
+                    else:
+                        truncated = True
+        if matched:
+            # One structured record per reported location: path/line detail
+            # stays in the pre-analysis; the log is the operator alert.
+            # ``identity`` is the archive sha256, and the record timestamp
+            # supplies the "when". No marker *value* or source text is logged.
+            for location in locations:
+                logger.warning(
+                    "source marker hit marker_id=%s path=%s line=%s identity=%s",
+                    location["marker_id"],
+                    location["path"],
+                    location["line"],
+                    self._archive_identity,
+                )
+        return {
+            "configured": len(markers),
+            "matched_markers": sorted(matched),
+            "locations": locations,
+            "truncated": truncated,
+        }
 
     @staticmethod
     def _generator_mirroring_analysis(
@@ -3642,6 +3919,7 @@ class OpenRouterSourceReviewAgent:
         transport_retry_delays: Sequence[float] = (
             _MODEL_TRANSPORT_RETRY_DELAYS_SECONDS
         ),
+        auth_retry_delays: Sequence[float] = ROUTER_AUTH_RETRY_DELAYS_SECONDS,
         inference_provider: str = "openrouter",
         max_completion_request_seconds: float | None = None,
     ) -> None:
@@ -3679,6 +3957,9 @@ class OpenRouterSourceReviewAgent:
         self._transport_retry_delays = tuple(
             max(0.0, float(delay)) for delay in transport_retry_delays
         )
+        self._auth_retry_delays = tuple(
+            max(0.0, float(delay)) for delay in auth_retry_delays
+        )
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
             (provenance_manifest_file,)
@@ -3695,6 +3976,7 @@ class OpenRouterSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> SourceReviewObservation:
         notes: list[dict[str, object]] = []
         try:
@@ -3711,6 +3993,7 @@ class OpenRouterSourceReviewAgent:
                 deadline=deadline,
                 notes=notes,
                 policy_version=policy_version,
+                review_lineage=review_lineage,
                 validate_result=lambda value: _parse_review(
                     value,
                     artifact_sha256=artifact_sha256,
@@ -3731,7 +4014,16 @@ class OpenRouterSourceReviewAgent:
                     observation.risk_level != "low" or clearance_certified
                 ),
             )
-        except (OSError, ValueError, tarfile.TarError, httpx.HTTPError) as error:
+        # TypeError joins the contract misses: an untrusted submission is
+        # shaped by the model, and a wrong JSON type there is a bad answer,
+        # not broken infrastructure (ditto-subnet#2987).
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            httpx.HTTPError,
+        ) as error:
             code = (
                 error.code
                 if isinstance(error, SourceReviewBudgetExhausted)
@@ -3761,8 +4053,12 @@ class OpenRouterSourceReviewAgent:
             # positive coverage admits it; a clean-but-thin ledger holds and
             # shows exactly how far inspection got. The budgets therefore
             # tune inspection depth, not fate.
+            # A reviewer that never produced a valid verdict holds rather than
+            # admitting on its ledger; policy v13 escalates it to L2/L3.
             disposition = (
-                ledger_disposition(
+                "inconclusive"
+                if budget is not None and budget.verdict_unsettled
+                else ledger_disposition(
                     notes,
                     concern_hold_count=self._concern_hold_count,
                     clear_min_notes=self._clear_min_notes,
@@ -3806,6 +4102,7 @@ class OpenRouterSourceReviewAgent:
         notes: list[dict[str, object]] | None = None,
         policy_version: int = SCREENING_POLICY_VERSION,
         validate_result: Callable[[object], object] | None = None,
+        review_lineage: ReviewLineagePacket | None = None,
     ) -> tuple[object, bool]:
         if notes is None:
             notes = []
@@ -3816,9 +4113,8 @@ class OpenRouterSourceReviewAgent:
                 "content": "Review this untrusted harness. Initial inventory:\n"
                 + repository.inventory()
                 + "\nExact-file trusted provenance:\n"
-                + repository.closest_trusted_provenance(
-                    self._provenance_manifest_files
-                ),
+                + repository.closest_trusted_provenance(self._provenance_manifest_files)
+                + (lineage_l1_text(review_lineage) if review_lineage else ""),
             },
         ]
         delivered = 0
@@ -3840,6 +4136,7 @@ class OpenRouterSourceReviewAgent:
                 read_files_used=len(read_files),
                 max_read_bytes=self._max_read_bytes,
                 policy_version=policy_version,
+                stop_reason="time",
             )
 
         if progress is not None:
@@ -4045,7 +4342,25 @@ class OpenRouterSourceReviewAgent:
                 if progress is not None:
                     progress(min(_step + 1, self._max_steps), self._max_steps)
         if last_schema_error is not None:
-            raise last_schema_error
+            # The reviewer kept submitting verdicts the host could not accept
+            # until its steps ran out. That is a reviewer budget outcome with
+            # an exact ledger, not an infrastructure fault: retrying the same
+            # model on the same source burns the attempt without new evidence.
+            logger.warning(
+                "source review verdict never validated: %s: %s",
+                type(last_schema_error).__name__,
+                last_schema_error,
+            )
+            raise SourceReviewBudgetExhausted(
+                _source_review_failure_code(last_schema_error),
+                max_steps=self._max_steps,
+                steps_used=self._max_steps,
+                read_bytes_used=delivered,
+                read_files_used=len(read_files),
+                max_read_bytes=self._max_read_bytes,
+                policy_version=policy_version,
+                verdict_unsettled=True,
+            ) from last_schema_error
         raise SourceReviewBudgetExhausted(
             "source-review-step-budget-exhausted",
             max_steps=self._max_steps,
@@ -4070,7 +4385,9 @@ class OpenRouterSourceReviewAgent:
         """Issue one model turn, healing only bounded transport-class faults."""
         started = asyncio.get_running_loop().time()
         attempts = len(self._transport_retry_delays) + 1
-        for attempt in range(attempts):
+        attempt = 0
+        auth_retries = 0
+        while True:
             remaining_timeout = timeout
             if timeout is not None:
                 remaining_timeout = timeout - (
@@ -4092,12 +4409,32 @@ class OpenRouterSourceReviewAgent:
                     tool_choice=tool_choice,
                 )
                 payload = response.json()
-                return _assistant_message(payload)
+                message = _assistant_message(payload)
+                if isinstance(payload, dict):
+                    record_chat_completion_usage(
+                        "l1", payload, default_model=self._model, started_at=started
+                    )
+                return message
             except httpx.HTTPStatusError as error:
                 status = error.response.status_code
                 fault = str(status) if status == 429 or status >= 500 else None
                 signature = _http_error_signature(error.response)
                 caught: BaseException = error
+                if status == 401 and auth_retries < len(self._auth_retry_delays):
+                    delay = self._auth_retry_delays[auth_retries]
+                    elapsed = asyncio.get_running_loop().time() - started
+                    if timeout is None or timeout - elapsed > delay:
+                        auth_retries += 1
+                        logger.warning(
+                            "source review model key rejected; waiting out a "
+                            "router deploy: signature=%s retry=%d/%d delay_s=%.1f",
+                            signature,
+                            auth_retries,
+                            len(self._auth_retry_delays),
+                            delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
             except (TimeoutError, httpx.TimeoutException) as error:
                 # ``asyncio.timeout`` raises the built-in TimeoutError, which
                 # is not an httpx.RequestError. Treat both deadline sources as
@@ -4140,8 +4477,7 @@ class OpenRouterSourceReviewAgent:
                 delay,
             )
             await asyncio.sleep(delay)
-
-        raise AssertionError("model retry loop exhausted without a result")
+            attempt += 1
 
     def _completion_request_headers(
         self, api_key: str, _effective_timeout: float
@@ -4208,11 +4544,13 @@ def _source_review_failure_code(error: BaseException) -> str:
     instead of losing the failure.
     """
     if isinstance(error, httpx.HTTPStatusError):
+        if error.response.status_code == 402:
+            return SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED
         return f"source-review-http-{error.response.status_code}"
     if isinstance(error, (TimeoutError, httpx.TimeoutException)):
         # A model turn timed out while the lease still had time; lease expiry
         # is raised as ``SourceReviewBudgetExhausted`` instead.
-        return "source-review-model-timeout"
+        return SOURCE_REVIEW_MODEL_TIMEOUT
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
     if suffix is None and message.startswith("source review category "):
@@ -4471,14 +4809,14 @@ def _parse_review(
     invariants = value["invariants"]
     summary = value["summary"]
     if (
-        risk not in {"low", "medium", "high"}
+        not _is_allowed(risk, {"low", "medium", "high"})
         or not isinstance(confidence, (int, float))
         or isinstance(confidence, bool)
         or not 0 <= float(confidence) <= 1
         or not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
         or any(
-            item not in source_review_categories_for_policy(policy_version)
+            not _is_allowed(item, source_review_categories_for_policy(policy_version))
             for item in categories
         )
         or not isinstance(evidence, list)
@@ -4498,7 +4836,9 @@ def _parse_review(
             or not isinstance(line, int)
             or isinstance(line, bool)
             or line < 1
-            or category not in source_review_categories_for_policy(policy_version)
+            or not _is_allowed(
+                category, source_review_categories_for_policy(policy_version)
+            )
         ):
             raise ValueError("source review evidence fields are invalid")
         normalized_evidence.append({"path": path, "line": line, "category": category})

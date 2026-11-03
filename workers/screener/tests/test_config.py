@@ -22,6 +22,8 @@ def _base_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SCREENER_WALLET_NAME",
         "SCREENER_WALLET_HOTKEY",
         "SCREENER_GH_TOKEN_FILE",
+        "SCREENER_DOCKER_HOST",
+        "SCREENER_REQUIRE_ROOTLESS_DOCKER",
         "SCREENER_BUILD_TIMEOUT_SECONDS",
         "SCREENER_REMOTE_BUILD_MODE",
         "SCREENER_BUILD_MEMORY",
@@ -43,7 +45,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.netuid == 118
     assert cfg.docker_bin == "docker"
     assert cfg.docker_host is None
-    assert not cfg.require_rootless_docker
+    assert cfg.require_rootless_docker
     assert cfg.container_port == 8080
     assert cfg.image_build_memory == "8g"
     assert cfg.v13_runtime_receipts_mode == "off"
@@ -189,10 +191,12 @@ def test_smoke_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_rootless_executor_config(monkeypatch: pytest.MonkeyPatch) -> None:
     _base_env(monkeypatch)
     monkeypatch.setenv("SCREENER_DOCKER_HOST", "unix:///run/user/1001/docker.sock")
-    monkeypatch.setenv("SCREENER_REQUIRE_ROOTLESS_DOCKER", "true")
     cfg = parse_screener_config_from_env()
     assert cfg.docker_host == "unix:///run/user/1001/docker.sock"
     assert cfg.require_rootless_docker
+
+    monkeypatch.setenv("SCREENER_REQUIRE_ROOTLESS_DOCKER", "false")
+    assert not parse_screener_config_from_env().require_rootless_docker
 
 
 def test_rootless_analyzer_workspace_must_be_shared_at_an_absolute_path(
@@ -337,13 +341,13 @@ def test_platform_review_budget_limits_are_accepted(monkeypatch):
     monkeypatch.setenv("SCREENER_L2_MAX_STEPS", "256")
     monkeypatch.setenv("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000000")
     monkeypatch.setenv("SCREENER_L2_MAX_COST_USD", "25")
-    monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "1800")
+    monkeypatch.setenv("SCREENER_L2_TIMEOUT_SECONDS", "3600")
     monkeypatch.setenv("SCREENER_L2_CRITIC_REASONING_EFFORT", "high")
     config = parse_screener_config_from_env()
     assert config.l2_max_steps == 256
     assert config.l2_max_output_tokens == 1_000_000
     assert config.l2_max_cost_usd == 25
-    assert config.l2_timeout_seconds == 1800
+    assert config.l2_timeout_seconds == 3600
     assert config.l2_critic_reasoning_effort == "high"
 
 
@@ -353,7 +357,7 @@ def test_platform_review_budget_limits_are_accepted(monkeypatch):
         ("SCREENER_L2_MAX_STEPS", "257"),
         ("SCREENER_L2_MAX_OUTPUT_TOKENS", "1000001"),
         ("SCREENER_L2_MAX_COST_USD", "25.01"),
-        ("SCREENER_L2_TIMEOUT_SECONDS", "1801"),
+        ("SCREENER_L2_TIMEOUT_SECONDS", "3601"),
         ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "29"),
         ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "601"),
         ("SCREENER_L2_MAX_COMPLETION_REQUEST_SECONDS", "soon"),
