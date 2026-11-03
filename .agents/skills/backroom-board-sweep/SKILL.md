@@ -97,6 +97,14 @@ front-load artifact downloads.
     don't share them with contributors who mine. Never put Jira keys in code,
     commits or PR bodies.
 
+## Infra failure triage
+
+A board row or miner report whose low score or retest looks like
+infrastructure is not a ruling. Hand it to
+[`$scoring-infra-triage`](../scoring-infra-triage/SKILL.md): pin every low
+sample, prove ours or the agent's, fix ours before any retry, and pick the
+retry tool. Never reject or clear a row because of a score drop alone.
+
 ## Gotchas
 
 - **Clean rows are attested, not held.** `clear` on an unheld `scored` or

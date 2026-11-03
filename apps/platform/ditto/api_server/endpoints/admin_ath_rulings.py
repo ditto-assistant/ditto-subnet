@@ -91,6 +91,7 @@ from ditto.api_server.endpoints.scoring import (
 )
 from ditto.api_server.hippius import HippiusClient, normalize_object_key
 from ditto.api_server.koth import (
+    CrownGate,
     KothEntry,
     KothProjection,
     _ranked_entries,
@@ -221,6 +222,7 @@ class BoardSnapshot:
     ceiling_band_clamp: bool
     statistical_band_cap: bool
     incumbent_agent_id: UUID | None
+    crown_gate: CrownGate | None
     ledger_context: _LedgerContext
     app_state: Any
     anchor_owner_root: str | None
@@ -247,6 +249,7 @@ class BoardSnapshot:
         statistical_band_cap: bool,
         incumbent_agent_id: UUID | None,
         ledger_context: _LedgerContext,
+        crown_gate: CrownGate | None = None,
         app_state: Any,
         anchor_owner_root: str | None,
         anchor_agent_id: UUID | None,
@@ -265,6 +268,7 @@ class BoardSnapshot:
             ceiling_band_clamp=ceiling_band_clamp,
             statistical_band_cap=statistical_band_cap,
             incumbent_agent_id=incumbent_agent_id,
+            crown_gate=crown_gate,
             ledger_context=ledger_context,
             app_state=app_state,
             anchor_owner_root=anchor_owner_root,
@@ -278,6 +282,7 @@ class BoardSnapshot:
                 ceiling_band_clamp=ceiling_band_clamp,
                 statistical_band_cap=statistical_band_cap,
                 incumbent_agent_id=incumbent_agent_id,
+                crown_gate=crown_gate,
             ),
             ranked_agent_ids=tuple(
                 entry.agent_id for entry in (_ranked_entries(scored) if scored else [])
@@ -445,6 +450,7 @@ async def _project_board(
         ceiling_band_clamp=snapshot.dethrone_band_mode == "headroom_capped",
         statistical_band_cap=snapshot.statistical_band_mode == "capped",
         incumbent_agent_id=incumbent,
+        crown_gate=snapshot.crown_gate,
         ledger_context=ledger_context,
         app_state=app_state,
         anchor_owner_root=anchor_owner_root,

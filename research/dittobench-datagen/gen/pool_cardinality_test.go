@@ -12,7 +12,13 @@ import (
 // gen/, universe/, and catalog/ were audited against. A new contract can
 // start drawing from a pool the ledgers call frozen, so a version bump has to
 // re-audit them before this constant moves.
-const poolLedgerAuditedThrough = protocol.BenchVersionV14
+//
+// v15 audit: no gen/ or universe/ draw branches at >= 15. The v15 generator
+// reaches exactly the v14 pools; its one new surface is the catalog's
+// connector pool, a non-answer distractor menu (no case expects a connector,
+// TestV15ArtifactCarriesConnectorsNoCaseExpectsOne) covered by the catalog
+// package's own canary.
+const poolLedgerAuditedThrough = protocol.BenchVersionV15
 
 // TestPoolCardinalityCanary is the generator's pool-cardinality canary (#492,
 // item 4). A closed pool small enough to copy into a dispatch table is a
@@ -113,6 +119,8 @@ func TestPoolCardinalityCanary(t *testing.T) {
 		Exempt: map[string]string{
 			// Configuration, report ordering, and match sets.
 			"profilesV13":              poolcanary.Internal,
+			"profilesV16":              poolcanary.Internal,
+			"v16AbstentionQuotas":      poolcanary.Keyed,
 			"V13SlotOrder":             poolcanary.Internal,
 			"v13InterimSlots":          poolcanary.Internal,
 			"v13InterimGenerators":     poolcanary.Internal,

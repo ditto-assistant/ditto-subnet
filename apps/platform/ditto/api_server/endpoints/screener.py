@@ -216,7 +216,10 @@ from ditto.db.models import (
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_SCREENER_ARTIFACT,
+    ENDPOINT_SCREENER_FANOUT_SHADOW,
     ENDPOINT_SCREENER_REVIEW_LINEAGE,
+    ENDPOINT_SCREENER_RUNTIME_SMOKE,
+    ENDPOINT_SCREENER_SOURCE_REVIEW,
     record_artifact_fetch,
 )
 from ditto.db.queries.benchmark_rollout import arrival_bench_version
@@ -276,6 +279,8 @@ from ditto_screening_protocol.private_failure import (
 )
 from ditto_screening_protocol.reason_codes import (
     DOCKER_BUILD_INFRASTRUCTURE,
+    IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+    L2_LATE_RESULT,
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_ADJUDICATOR_KEY_UNAVAILABLE,
     SOURCE_REVIEW_CONFIRMED_VIOLATION,
@@ -1548,19 +1553,39 @@ async def update_trusted_image_build(
     return _trusted_build_view(row)
 
 
-async def _locked_active_node(
+async def _authorized_node(
     request: Request,
     session: AsyncSession,
     *,
     environment: str,
     require_active: bool = True,
+    lock: bool,
 ) -> ScreenerNode:
+    """Load the caller's enrolled node, optionally taking its row lock.
+
+    The row lock serializes capacity accounting for one node, so only the
+    claim endpoints take it, and only around the count-then-claim section.
+    Job status updates lock their own job row instead: on 2026-09-07 the
+    shared node row was the single hottest lock in production (23,501 waits
+    over 500 ms, up to 12 s) because every update and every claim on
+    subnet-screener-1 queued behind whichever transaction held it.
+    """
     node_id = getattr(request.state, "screener_node_id", None)
     if node_id is None:
         raise ScreenerAuthError("node-scoped job claims require enrolled-node auth")
-    node = await session.scalar(
-        select(ScreenerNode).where(ScreenerNode.node_id == node_id).with_for_update()
-    )
+    if lock:
+        # ``populate_existing`` matters: the claim endpoints first read the
+        # node unlocked, so it is already in the identity map, and without it
+        # SQLAlchemy takes the lock but hands back that pre-lock snapshot. A
+        # node drained, disabled or re-scoped in between would still claim.
+        node = await session.scalar(
+            select(ScreenerNode)
+            .where(ScreenerNode.node_id == node_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    else:
+        node = await session.get(ScreenerNode, node_id)
     if node is None or node.environment != environment:
         raise ScreenerAuthError("screener node is not authorized for this environment")
     if require_active and node.status != "active":
@@ -1568,6 +1593,40 @@ async def _locked_active_node(
     if not require_active and node.status not in {"active", "draining"}:
         raise HTTPException(status_code=409, detail="screener node cannot update jobs")
     return node
+
+
+async def _locked_active_node(
+    request: Request,
+    session: AsyncSession,
+    *,
+    environment: str,
+    require_active: bool = True,
+) -> ScreenerNode:
+    """Row-locked variant for the claim critical section."""
+    return await _authorized_node(
+        request,
+        session,
+        environment=environment,
+        require_active=require_active,
+        lock=True,
+    )
+
+
+async def _active_node(
+    request: Request,
+    session: AsyncSession,
+    *,
+    environment: str,
+    require_active: bool = True,
+) -> ScreenerNode:
+    """Unlocked variant for reads and for job-row updates."""
+    return await _authorized_node(
+        request,
+        session,
+        environment=environment,
+        require_active=require_active,
+        lock=False,
+    )
 
 
 async def _node_sandbox_usage(session: AsyncSession, *, node_id: str) -> int:
@@ -1629,9 +1688,7 @@ async def claim_node_submission_image_build(
     """Atomically enforce node and shared-VM limits before minting a job token."""
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
-            request, session, environment=payload.environment
-        )
+        node = await _active_node(request, session, environment=payload.environment)
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
@@ -1641,6 +1698,11 @@ async def claim_node_submission_image_build(
             return SubmissionImageBuildClaimResponse(build=None)
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
+        )
+        # Re-read under the row lock: capacity accounting for this node must be
+        # serialized, but the settings reads above need no lock.
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
         )
         active_builds = await session.scalar(
             select(func.count())
@@ -1731,7 +1793,7 @@ async def update_node_submission_image_build(
 ) -> None:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
+        node = await _active_node(
             request, session, environment="prod", require_active=False
         )
         row = await session.scalar(
@@ -1810,9 +1872,7 @@ async def claim_node_submission_runtime_smoke(
 ) -> SubmissionRuntimeArtifactClaimResponse:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
-            request, session, environment=payload.environment
-        )
+        node = await _active_node(request, session, environment=payload.environment)
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
@@ -1822,6 +1882,11 @@ async def claim_node_submission_runtime_smoke(
             return SubmissionRuntimeArtifactClaimResponse(artifact=None)
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
+        )
+        # Re-read under the row lock: capacity accounting for this node must be
+        # serialized, but the settings reads above need no lock.
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
         )
         active_runtime = await session.scalar(
             select(func.count())
@@ -1859,9 +1924,28 @@ async def claim_node_submission_runtime_smoke(
         output_size_bytes = cast(int, row.output_size_bytes)
         output_key = row.output_key
         build_id = row.build_id
+        agent_id = row.agent_id
+        attempt_id = row.attempt_id
+        node_id = node.node_id
     url = await storage.presigned_get_url(
         key=output_key,
         expires_in=int(_SUBMISSION_BUILD_URL_TTL.total_seconds()),
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_SCREENER_RUNTIME_SMOKE,
+        requester_kind="screener",
+        requester_id=node_id,
+        lease_id=attempt_id,
+        source_ip=client_ip(request),
+        detail=request_detail(
+            request,
+            served_source=False,
+            served_screened_image=True,
+            build_id=str(build_id),
+            image_sha256=output_sha256,
+        ),
     )
     return SubmissionRuntimeArtifactClaimResponse(
         artifact=SubmissionRuntimeArtifactResponse(
@@ -1888,7 +1972,7 @@ async def complete_node_submission_runtime_smoke(
     storage: StorageDep,
 ) -> None:
     async with session.begin():
-        node = await _locked_active_node(
+        node = await _active_node(
             request, session, environment="prod", require_active=False
         )
         row = await session.scalar(
@@ -1953,9 +2037,7 @@ async def claim_node_submission_source_review(
 ) -> SubmissionSourceReviewClaimResponse:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
-            request, session, environment=payload.environment
-        )
+        node = await _active_node(request, session, environment=payload.environment)
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
@@ -1965,6 +2047,11 @@ async def claim_node_submission_source_review(
             return SubmissionSourceReviewClaimResponse(review=None)
         _, limits = await resolve_screener_node_channel_settings(
             session, node_id=node.node_id
+        )
+        # Re-read under the row lock: capacity accounting for this node must be
+        # serialized, but the settings reads above need no lock.
+        node = await _locked_active_node(
+            request, session, environment=payload.environment
         )
         active_reviews = await session.scalar(
             select(func.count())
@@ -2078,7 +2165,7 @@ async def update_node_submission_source_review(
 ) -> None:
     now = datetime.now(UTC)
     async with session.begin():
-        node = await _locked_active_node(
+        node = await _active_node(
             request, session, environment="prod", require_active=False
         )
         row = await session.scalar(
@@ -2128,6 +2215,7 @@ async def get_node_submission_source_review(
 )
 async def get_submission_source_review_source(
     review_id: UUID,
+    request: Request,
     session: SessionDep,
     storage: StorageDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -2144,6 +2232,9 @@ async def get_submission_source_review_source(
         agent_id = row.agent_id
         artifact_sha256 = row.artifact_sha256
         policy_version = attempt.policy_version
+        requester_id = row.node_id or row.provider or "source-review-job"
+        requester_instance_id = row.provider_resource_id
+        attempt_id = row.attempt_id
         agent = await session.get(Agent, agent_id)
         if agent is None:
             raise HTTPException(
@@ -2160,6 +2251,19 @@ async def get_submission_source_review_source(
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_SCREENER_SOURCE_REVIEW,
+        requester_kind="screener",
+        requester_id=requester_id,
+        requester_instance_id=requester_instance_id,
+        lease_id=attempt_id,
+        bench_version=bench_version,
+        artifact_sha256=artifact_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(request, served_source=True, review_id=str(review_id)),
     )
     return SubmissionSourceReviewSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),
@@ -2752,6 +2856,11 @@ async def submit_review_usage(
             "total_cost_usd": Decimal(str(round(payload.total_cost_usd, 6))),
             "elapsed_ms": payload.elapsed_ms,
             "lineage_scope": payload.lineage_scope,
+            "budget_stop": (
+                payload.budget_stop.model_dump(mode="json")
+                if payload.budget_stop is not None
+                else None
+            ),
         }
         existing = await session.get(ScreeningReviewUsage, payload.attempt_id)
         if existing is not None:
@@ -2770,6 +2879,7 @@ async def submit_review_usage(
 )
 async def get_fanout_shadow_source(
     shadow_id: UUID,
+    request: Request,
     session: SessionDep,
     storage: StorageDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -2785,9 +2895,24 @@ async def get_fanout_shadow_source(
         policy_manifest_profile = row.policy_manifest_profile
         policy_manifest_rotation_id = row.policy_manifest_rotation_id
         policy_manifest_digest_value = row.policy_manifest_digest
+        requester_id = row.provider or "fanout-shadow-job"
+        requester_instance_id = row.provider_resource_id
+        attempt_id = row.attempt_id
     url = await storage.presigned_get_url(
         key=_artifact_key(agent_id),
         expires_in=int(_SOURCE_REVIEW_URL_TTL.total_seconds()),
+    )
+    await record_artifact_fetch(
+        session,
+        agent_id=agent_id,
+        endpoint=ENDPOINT_SCREENER_FANOUT_SHADOW,
+        requester_kind="screener",
+        requester_id=requester_id,
+        requester_instance_id=requester_instance_id,
+        lease_id=attempt_id,
+        artifact_sha256=artifact_sha256,
+        source_ip=client_ip(request),
+        detail=request_detail(request, served_source=True, shadow_id=str(shadow_id)),
     )
     return FanoutShadowSourceResponse(
         source_url_b64=base64.b64encode(url.encode()).decode(),
@@ -4017,6 +4142,14 @@ async def claim(
             reason="scorer_cohort_unavailable",
             required_policy=required_policy,
         )
+    # The runtime probe must run at the harness cap scored leases carry, read
+    # from the same live board, so a screening OOM and a scored OOM mean the
+    # same thing (docs/RUNTIME-ENVELOPE.md).
+    sandbox_memory_limit_mib = (
+        await request.app.state.inference_concurrency_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+    ).benchmark_runtime.sandbox_memory_limit_mib
     items = [
         ScreenerQueueItem(
             agent_id=agent.agent_id,
@@ -4071,6 +4204,7 @@ async def claim(
                 else None
             ),
             lineage_parent_agent_id=attempt.lineage_parent_agent_id,
+            sandbox_memory_limit_mib=sandbox_memory_limit_mib,
         )
         for agent, attempt, duplicate_of in claimed
     ]
@@ -4366,6 +4500,8 @@ async def agent_review_lineage(
                 reason.value for reason in packet.full_review_reasons
             ]
             attempt.lineage_reference_kind = context.reference_kind
+            attempt.lineage_changed_file_count = packet.changed_file_count
+            attempt.lineage_changed_line_count = packet.changed_line_count
         elif attempt.lineage_packet_sha256 != packet.packet_sha256:
             raise AgentNotScreenableError(
                 "lineage packet changed after it was bound to this attempt"
@@ -5009,6 +5145,19 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
         return (
             "Source review was unavailable on the screening node before "
             "screening completed. This is operator-owned and is retried "
+            "automatically with backoff for a limited time, then held for an "
+            "operator retry."
+        )
+    if reason_code == L2_LATE_RESULT:
+        return (
+            "Ditto's private source review ran out of time before it finished. "
+            "This is operator-owned and is retried automatically once; if it "
+            "runs out of time again it is held for an operator retry."
+        )
+    if reason_code == IMAGE_UPLOAD_PLATFORM_UNAVAILABLE:
+        return (
+            "Ditto's platform was briefly unavailable while the screened image "
+            "was being stored. This is operator-owned and is retried "
             "automatically with backoff for a limited time, then held for an "
             "operator retry."
         )

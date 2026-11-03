@@ -276,3 +276,34 @@ func TestAllowanceWallDiagnostics(t *testing.T) {
 		t.Fatal("wall error text")
 	}
 }
+
+func TestDecisionLaneCarriesLedgerEvidenceAndHarnessCostHeaders(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(ledgerCostHeader, "777")
+		writeJSON(w, http.StatusOK, map[string]any{
+			"model":   "typesafe/jev-1.14",
+			"answers": map[string]any{},
+			"usage":   map[string]int{"input_tokens": 120, "output_tokens": 0},
+		})
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", llm.V9AggregateProfileRevision,
+		llm.HarnessModelForVersion(protocol.BenchVersionV15), costCeilingBudgets(1000, costCeilingModeShadow))
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.72", protocol.BenchVersionV15)
+
+	response := callDecision(broker, "192.0.2.72", `{"state":"s","questions":{"q":{"type":"choice"}}}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("decision status=%d body=%s", response.Code, response.Body.String())
+	}
+	// Decision spend is ledger cost under the run's ceiling: the harness
+	// sees it, and the broker keeps it as evidence for a later 4110.
+	if got := response.Header().Get(harnessCostSpentHeader); got != "777" {
+		t.Fatalf("%s=%q", harnessCostSpentHeader, got)
+	}
+	if got := response.Header().Get(harnessCostCeilingHeader); got != "1000" {
+		t.Fatalf("%s=%q", harnessCostCeilingHeader, got)
+	}
+}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import hashlib
 import json
 import logging
@@ -29,7 +30,7 @@ from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
     ValidatorStackHealth,
 )
-from ditto.api_models.system_health import DockerHealth, SystemMetrics
+from ditto.api_models.system_health import DockerHealth, HostSpecs, SystemMetrics
 from ditto.api_models.validator import (
     ArtifactResponse,
     BenchmarkRuntimeSettings,
@@ -4454,6 +4455,30 @@ class TestRunOnce:
         assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
         assert "slot-0" not in worker._healthy_slots
 
+    async def test_artifact_fetch_502_is_not_charged_to_the_miner(self) -> None:
+        # SN-426: an artifact-fetch 502 while Platform restarted for a deploy
+        # was handed back as scoring_error and spent the miner's attempt.
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[job], ledger=[])
+        platform.get_artifact = AsyncMock(
+            side_effect=PlatformInfrastructureError("artifact unavailable (502): ")
+        )
+        dittobench = MagicMock(score_tarball=AsyncMock())
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=dittobench,
+            chain=MagicMock(put_weights=AsyncMock()),
+            keypair=MagicMock(),
+        )
+
+        await worker.run_once()
+
+        platform.get_artifact.assert_awaited_once()
+        dittobench.score_tarball.assert_not_awaited()
+        platform.report_ticket_failed.assert_awaited_once()
+        assert platform.report_ticket_failed.await_args.args[1] == "infrastructure"
+
     async def test_derived_seed_ticket_is_scored(self) -> None:
         # The companion arm: a ticket whose seed DOES re-derive proceeds.
         agent_id = uuid4()
@@ -6455,6 +6480,35 @@ class TestResourceConstrainedAdmission:
             system_metrics=collector,
         )
         return worker, platform
+
+    def test_host_memory_admits_only_caps_that_fit(self) -> None:
+        """Sum of harness caps must fit host memory less the reserve.
+
+        Eight 8 GiB caps on a 16 GiB host let two in-cap harnesses exhaust the
+        host together; the kernel then kills one for a fault it did not commit.
+        """
+        collector = self._collector()
+        collector.host_specs = MagicMock(
+            return_value=HostSpecs(
+                cpu_count=8,
+                memory_total_mib=16_000,
+                disk_total_gib=100,
+                architecture="x86_64",
+            )
+        )
+        worker, _ = self._worker(collector=collector)
+        worker._sandbox_memory_limit_mib = 8192
+        # (16000 - 1024 reserve) // 8192 = 1 of 4 configured slots.
+        assert len(worker._available_slots()) == 1
+        worker._sandbox_memory_limit_mib = 3072
+        assert len(worker._available_slots()) == 4
+        # A host that fits one cap plus 1 GiB keeps one slot whatever the
+        # reserve, so it stays in the canonical quorum.
+        worker._sandbox_memory_limit_mib = 8192
+        worker._resource_ceilings = dataclasses.replace(
+            worker._resource_ceilings, host_memory_reserve_mib=8192
+        )
+        assert len(worker._available_slots()) == 1
 
     async def test_a_nearly_full_disk_claims_nothing_but_still_heartbeats(
         self,

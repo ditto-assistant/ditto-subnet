@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Annotated
 import bittensor
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import UUID4
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models import (
@@ -58,8 +59,10 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.distinctive_content import extract_items
 from ditto.api_server.embedding import Embedder
 from ditto.api_server.fingerprint import (
+    _excluded_from_fingerprints,
     compute_content_fingerprint,
     compute_embedding_input,
     compute_normalized_source_hash,
@@ -76,13 +79,14 @@ from ditto.api_server.source_inspect import (
     validate_upload_archive,
 )
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.structural_fingerprint import compute_structural_fingerprint
 from ditto.api_server.upload_feedback import submission_cooldown_message
 from ditto.chain import ChainError
 from ditto.db.models import AgentClaBinding, AgentStatus
 from ditto.db.queries.agents import (
     SubmissionCooldownError,
-    get_submission_retry_at,
     insert_agent,
+    submission_cooldown_decision,
 )
 from ditto.db.queries.bans import is_hotkey_banned
 from ditto.db.queries.contributor_identity import lock_identity_writes
@@ -105,6 +109,7 @@ from ditto.db.queries.submission_settings import (
     release_upload_admission_for_exact_retry,
     reserve_upload_admission,
 )
+from ditto.db.queries.unreleased_copy import store_items as store_distinctive_items
 
 if TYPE_CHECKING:
     from ditto.chain import ChainClient
@@ -447,14 +452,20 @@ async def check(
         and owner_coldkey is not None
         and not recovery_payment_verified
     ):
-        retry_at = await get_submission_retry_at(
+        decision = await submission_cooldown_decision(
             session,
             miner_coldkey=owner_coldkey,
+            miner_hotkey=body.hotkey,
             cooldown=timedelta(seconds=settings.cooldown_seconds),
         )
-        if retry_at is not None:
+        if decision is not None:
+            retry_at = decision.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(submission_cooldown_message(retry_at))
+            messages.append(
+                submission_cooldown_message(
+                    retry_at, owner_override=decision.owner_override
+                )
+            )
 
     admission = None
     if not codes and body.reserve_submission_slot:
@@ -492,7 +503,9 @@ async def check(
         except SubmissionCooldownError as exc:
             retry_at = exc.retry_at
             codes.append(ERROR_CODE_SUBMISSION_COOLDOWN)
-            messages.append(submission_cooldown_message(retry_at))
+            messages.append(
+                submission_cooldown_message(retry_at, owner_override=exc.owner_override)
+            )
 
     payment_required = not codes and not recovery_payment_verified
     return UploadCheckResponse(
@@ -857,6 +870,12 @@ async def upload_agent(
     # calibration/retroactive analysis; not yet a hold trigger. Same offload +
     # best-effort None contract.
     prompt_fingerprint = await asyncio.to_thread(compute_prompt_fingerprint, tar_bytes)
+    # 7d'. structural (AST-shape) sketch for the anti-copy gate. Platform owns
+    # this so validators never need the source tarball; same offload +
+    # best-effort None contract.
+    structural_fingerprint = await asyncio.to_thread(
+        compute_structural_fingerprint, tar_bytes
+    )
     # 7e. code embedding (shadow mode): build the canonical input (CPU-bound,
     # offloaded) then embed via the self-hosted service. Disabled by default
     # (null embedder -> None) and best-effort: a slow/unreachable embedder yields a
@@ -866,6 +885,17 @@ async def upload_agent(
     embed_input = await asyncio.to_thread(compute_embedding_input, tar_bytes)
     code_embedding = await embedder.embed(embed_input) if embed_input else None
     code_embed_model = embedder.model_tag if code_embedding is not None else None
+    # 7f. distinctive-item index for the unreleased-copy signal (shadow): the
+    # language-agnostic literal/identifier items a cross-language port keeps.
+    # Best-effort like the channels above: on failure the row is simply absent
+    # and the sentinel indexes the artifact from storage on its next tick.
+    try:
+        distinctive_items = await asyncio.to_thread(
+            extract_items, tar_bytes, excluded=_excluded_from_fingerprints
+        )
+    except Exception:
+        logger.exception("distinctive-item extraction failed")
+        distinctive_items = None
 
     if session.in_transaction():
         rollback_result = session.rollback()
@@ -911,9 +941,18 @@ async def upload_agent(
                 content_fingerprint=content_fingerprint,
                 normalized_source_hash=normalized_source_hash,
                 prompt_fingerprint=prompt_fingerprint,
+                structural_fingerprint=structural_fingerprint,
                 code_embedding=code_embedding,
                 code_embed_model=code_embed_model,
             )
+            if distinctive_items is not None:
+                try:
+                    async with session.begin_nested():
+                        await store_distinctive_items(
+                            session, agent_id=agent_id, extracted=distinctive_items
+                        )
+                except SQLAlchemyError:
+                    logger.exception("distinctive-item index write failed")
             if using_credit:
                 locked_credit = await get_evaluation_payment_for_proof(
                     session,

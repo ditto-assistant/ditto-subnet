@@ -83,6 +83,7 @@ from ditto_screening_protocol.review_lineage import (
     seal_review_lineage_packet,
 )
 from ditto_screening_protocol.review_usage import (
+    ReviewBudgetStop,
     ReviewUsageStageEntry,
     ScreeningReviewUsageRequest,
     ScreeningReviewUsageResponse,
@@ -199,6 +200,7 @@ __all__ = [
     "ReviewLineageScope",
     "review_lineage_packet_digest",
     "seal_review_lineage_packet",
+    "ReviewBudgetStop",
     "ReviewUsageStageEntry",
     "ScreeningReviewUsageRequest",
     "ScreeningReviewUsageResponse",

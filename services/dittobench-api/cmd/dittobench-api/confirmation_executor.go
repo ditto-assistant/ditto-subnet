@@ -314,8 +314,9 @@ func zeroConfirmationBytes(value []byte) {
 
 // confirmationRuntimeFactory is the only integration seam. Its production
 // implementation must acquire Source.ScreenedImage* through LocalDocker. It
-// must never build Source.TarballURL. The source URL and digest remain present
-// solely to bind artifact provenance to the already screened image.
+// must never build or fetch Source.TarballURL. The digest binds artifact
+// provenance to the already screened image; the URL is absent for source-free
+// validators.
 type confirmationRuntimeFactory interface {
 	ValidateInstallation(confirmationExecutionProfileWire) error
 	Acquire(context.Context, confirmationRuntimeIdentity) (*confirmationRuntime, error)

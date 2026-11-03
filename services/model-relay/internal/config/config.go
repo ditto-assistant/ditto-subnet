@@ -46,6 +46,19 @@ const (
 	RoutingModeAdaptive            = "adaptive"
 )
 
+// Scored aggregate provider routing, selected live from the operator's
+// scored_provider_routing board field (never from the environment).
+//
+//   - throughput: OpenRouter sorts the eligible ZDR providers by throughput.
+//   - bf16_price_order_canary: benchmark_canary tickets use the bf16 price
+//     order; every other ticket keeps throughput.
+//   - bf16_price_order: every scored chat call uses the bf16 price order.
+const (
+	ScoredProviderRoutingThroughput     = "throughput"
+	ScoredProviderRoutingBF16PriceOrder = "bf16_price_order"
+	ScoredProviderRoutingBF16Canary     = "bf16_price_order_canary"
+)
+
 // Lookup resolves one environment variable, reporting presence. It matches
 // os.LookupEnv so tests can substitute a map.
 type Lookup func(key string) (string, bool)
@@ -304,6 +317,26 @@ type InferenceProxyConfig struct {
 
 	EmbeddingRequestBodyBytes  int64 // DITTO_EMBEDDING_REQUEST_BODY_BYTES, default+max 1 MiB
 	EmbeddingResponseBodyBytes int64 // DITTO_EMBEDDING_RESPONSE_BODY_BYTES, default+max 16 MiB
+
+	// Decision lane (TypeSafe Jev via OpenRouter System One). Authenticated
+	// with OPENROUTER_API_KEY; no separate credential exists. The URL is a
+	// credential boundary like the other OpenRouter pins. Whether the lane is
+	// on, and its rails, come from the operator's decision_lane board
+	// (applySettings); these are the off-by-default fallbacks.
+	DecisionUpstreamURL          string // DITTO_DECISION_UPSTREAM_URL
+	DecisionEnabled              bool   // DB-policy only, default false
+	DecisionTicketConcurrency    int    // DB-policy fallback default 8
+	DecisionValidatorConcurrency int    // DB-policy fallback default 32
+	DecisionGlobalConcurrency    int    // DB-policy fallback default 64
+	DecisionTicketRPM            int    // DB-policy fallback default 600
+	DecisionValidatorRPM         int    // DB-policy fallback default 2400
+	DecisionGlobalRPM            int    // DB-policy fallback default 6000
+
+	// ScoredProviderRouting is the board's scored_provider_routing value
+	// (applySettings). The chat handler resolves the canary mode against the
+	// ticket purpose before the provider call, so completeChatWithRecovery
+	// only ever sees throughput or bf16_price_order. Empty means throughput.
+	ScoredProviderRouting string
 }
 
 type envReader struct {
@@ -603,6 +636,14 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 
 		EmbeddingRequestBodyBytes:  r.int64val("DITTO_EMBEDDING_REQUEST_BODY_BYTES", 1*1024*1024),
 		EmbeddingResponseBodyBytes: r.int64val("DITTO_EMBEDDING_RESPONSE_BODY_BYTES", 16*1024*1024),
+
+		DecisionUpstreamURL:          r.str("DITTO_DECISION_UPSTREAM_URL", "https://openrouter.ai/api/v1/systemone"),
+		DecisionTicketConcurrency:    8,
+		DecisionValidatorConcurrency: 32,
+		DecisionGlobalConcurrency:    64,
+		DecisionTicketRPM:            600,
+		DecisionValidatorRPM:         2400,
+		DecisionGlobalRPM:            6000,
 	}
 
 	models := strings.Split(r.str("DITTO_INFERENCE_ALLOWED_MODELS", "qwen/qwen3-32b,openai/gpt-oss-20b"), ",")
@@ -660,6 +701,8 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 		"openrouter.ai", "/api/v1/embeddings", "OpenRouter embeddings")
 	validateProviderURL("DITTO_EMBEDDING_FALLBACK_URL", ip.EmbeddingFallbackURL,
 		"api.perplexity.ai", "/v1/embeddings", "Perplexity embeddings")
+	validateProviderURL("DITTO_DECISION_UPSTREAM_URL", ip.DecisionUpstreamURL,
+		"openrouter.ai", "/api/v1/systemone", "OpenRouter System One")
 	if ip.RoutingMode != RoutingModeAggregateThroughput && ip.RoutingMode != RoutingModeAdaptive {
 		r.fail("DITTO_INFERENCE_ROUTING_MODE must be %q or %q, got %q",
 			RoutingModeAggregateThroughput, RoutingModeAdaptive, ip.RoutingMode)

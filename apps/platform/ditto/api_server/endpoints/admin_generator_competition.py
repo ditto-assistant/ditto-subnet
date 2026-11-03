@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.generator import (
     PROBE_ROTATION_CONFIRMATION,
     REINSTATE_SUBMISSION_CONFIRMATION,
@@ -142,10 +143,13 @@ async def get_settings(
 async def _retire_rounds_for_interval_change(
     session: AsyncSession, *, old: int, new: int, actor: str, reason: str
 ) -> None:
-    """A round's index is its first epoch divided by the interval, so a new
-    interval would remap rounds already in flight. A round that has opened
-    (seeded, generating or running) blocks the change; a committed round that
-    never opened holds no seed and is voided in this same transaction."""
+    """Rounds freeze their span when committed, and indexes continue from the
+    latest round (``generator_rounds.round_clock``), so a new interval only
+    sets the length of rounds committed after it. A round that has opened
+    (seeded, generating or running) still blocks the change, so no round runs
+    beside a policy it did not open under; a committed round that never
+    opened holds no seed and is voided in this same transaction, so the new
+    interval starts with the round after it."""
     open_rows = list(
         await session.scalars(
             select(GeneratorRound)
@@ -210,6 +214,18 @@ async def create_settings_revision(
             status_code=409,
             detail=f"confirmation must be exactly {expected_confirmation}",
         )
+    season_refused = payload.settings.dueling_season_refusal()
+    shadow_version = payload.settings.dueling_shadow_bench_version
+    if season_refused is None and shadow_version is not None:
+        try:
+            benchmark_contract(shadow_version)
+        except ValueError:
+            season_refused = (
+                f"dueling_shadow_bench_version {shadow_version} is not a shipped "
+                "bench contract"
+            )
+    if season_refused is not None:
+        raise HTTPException(status_code=422, detail=season_refused)
     latest = await latest_generator_settings_revision(session)
     actual = latest.revision if latest is not None else 0
     if payload.expected_revision != actual:
@@ -296,6 +312,7 @@ async def get_scorer_status(
                 live=is_live(row, now=now),
                 grading_bench_versions=row.grading_bench_versions,
                 effective_grading_bench_versions=list(grading_versions(row)),
+                dueling_work_kinds=row.dueling_work_kinds,
             )
             for row in rows
         ],

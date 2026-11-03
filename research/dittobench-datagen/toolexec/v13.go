@@ -71,6 +71,7 @@ func buildFixtureV13(masterSeed int64, benchVersion int, c protocol.ToolCase) Fi
 	}
 	f.inventory = catalog.InventoryForSeed(masterSeed)
 	f.coined = CoinedForSeed(masterSeed)
+	f.buildV16Connectors(masterSeed)
 	if f.caseCarriesNeedleV13(c) {
 		f.needle = NeedleForVersion(masterSeed, c.ID, benchVersion)
 		if strings.HasPrefix(c.Category, "world_") {
@@ -100,6 +101,9 @@ func (f Fixture) isContentToolV13(category, name string) bool {
 		return true
 	}
 	if _, isDecoy := f.decoys[name]; isDecoy {
+		return true
+	}
+	if f.isLinkedReadBearer(category, name) {
 		return true
 	}
 	return v13ContentTools[name] && isResultUsageCategory(category)
@@ -136,6 +140,20 @@ func (f Fixture) unavailable(name string, args json.RawMessage) (string, bool) {
 	}
 	if d, isDecoy := f.decoys[name]; isDecoy && !(f.has && name == f.bearer) {
 		return fmt.Sprintf("%s is not configured for this workspace. Connect %s in Settings before retrying; the request was not performed.", name, d.Brand), true
+	}
+	// v16: a linked app's connector tools are served; every other connector
+	// is refused (toolexec/v16.go).
+	if f.benchVersion >= protocol.BenchVersionV16 {
+		if msg, refused := f.connectorRefusedV16(name); refused {
+			return msg, true
+		}
+	} else if f.benchVersion >= protocol.BenchVersionV15 {
+		// v15 connector tools (catalog.ConnectorsForSeed) are never linked in
+		// the benchmark workspace: every call is refused and performs nothing,
+		// offered on this seed or not. No scored case expects one.
+		if app, isConnector := catalog.IsConnectorTool(name); isConnector {
+			return fmt.Sprintf("%s is not connected for this workspace. Link %s in Settings before retrying; the request was not performed.", name, app), true
+		}
 	}
 	switch name {
 	case "set_accent_color":
@@ -184,6 +202,9 @@ func stringArg(raw json.RawMessage, key string) string {
 // resultV13 serves the v13-specific results. handled=false falls through to
 // the frozen switch in Result.
 func (f Fixture) resultV13(name string, args json.RawMessage, r *rand.Rand, serveNeedle bool) (string, bool) {
+	if out, handled := f.resultV16Connector(name, args, r, serveNeedle); handled {
+		return out, true
+	}
 	if d, isDecoy := f.decoys[name]; isDecoy {
 		// Only reachable for the bearer (unavailable handled the rest).
 		return d.ServedResult(f.needleSentence()), true

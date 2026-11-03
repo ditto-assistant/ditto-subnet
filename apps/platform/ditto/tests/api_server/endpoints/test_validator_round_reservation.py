@@ -276,6 +276,25 @@ class TestReservedRoundSlots:
             == expected
         )
 
+    def test_a_host_s_only_healthy_slot_is_never_reserved(self) -> None:
+        """Host-memory admission leaves a 16 GiB host one healthy slot under an
+        override of 4; the round reservation must not take it from the quorum."""
+        settings = _settings(generator_round_reserved_slots=1)
+
+        def reserved(healthy: int | None) -> int:
+            return reserved_round_slots(
+                settings,
+                validator_hotkey=_BIG,
+                allowed_slots=4,
+                rounds_active=True,
+                healthy_slots=healthy,
+            )
+
+        assert reserved(1) == 0
+        assert reserved(0) == 0
+        assert reserved(3) == 1
+        assert reserved(None) == 1
+
     def test_nothing_is_reserved_while_rounds_are_disabled(self) -> None:
         settings = _settings(generator_round_reserved_slots=3)
 

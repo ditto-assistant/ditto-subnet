@@ -100,6 +100,14 @@ screener_fleet_source_review_key_file: >-
 # gateway or every review fails with 401 and lands as an operator hold.
 screener_fleet_review_inference_provider: openrouter
 screener_fleet_review_inference_base_url: ""
+# Operator provenance markers for the screener source-marker scan
+# (SCREENER_SOURCE_MARKER_PATTERNS, workers/screener source_review.py). A JSON
+# list of {"id", "pattern"} entries. Supply it only from the encrypted per-node
+# vars file passed with --extra-vars; never commit a value, because a public
+# marker cannot detect where private source travelled. Empty keeps the scan a
+# no-op. Patterns must not contain a single quote, backslash, or newline so the
+# systemd EnvironmentFile value is passed through literally (use [.] not \.).
+screener_fleet_source_marker_patterns: []
 screener_fleet_env_file: "{{ screener_fleet_config_dir }}/fleet.env"
 screener_fleet_release_env_file: "{{ screener_fleet_config_dir }}/release.env"
 screener_fleet_update_state_dir: "{{ screener_fleet_state_dir }}/updater"

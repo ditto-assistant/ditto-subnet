@@ -710,6 +710,16 @@ func (s *server) relayRunStart(ctx context.Context, runID string, benchVersion i
 }
 
 func (s *server) relayRunResult(ctx context.Context, runID string, start relayHealthSnapshot, gateway, sessionID string) (protocol.TokenUsage, relayExecutionSummary, bool) {
+	usage, execution, _, ok := s.relayRunInterval(ctx, runID, start, gateway, sessionID)
+	return usage, execution, ok
+}
+
+// relayRunInterval is relayRunResult that also returns the end snapshot. A
+// bench >= 16 run reads it once at the datagen/slice boundary: the datagen
+// half's usage and execution are the interval up to that point, so token
+// accounting, the signed model-use evidence and efficiency see the datagen
+// half only, while the whole-run interval still decides relay health.
+func (s *server) relayRunInterval(ctx context.Context, runID string, start relayHealthSnapshot, gateway, sessionID string) (protocol.TokenUsage, relayExecutionSummary, relayHealthSnapshot, bool) {
 	var end relayHealthSnapshot
 	var err error
 	if sessionID != "" {
@@ -722,19 +732,19 @@ func (s *server) relayRunResult(ctx context.Context, runID string, start relayHe
 	}
 	if err != nil {
 		s.failRelayUnavailableForContext(ctx, runID, err)
-		return protocol.TokenUsage{}, relayExecutionSummary{}, false
+		return protocol.TokenUsage{}, relayExecutionSummary{}, relayHealthSnapshot{}, false
 	}
 	usage, usageErr := relayUsageSince(start, end)
 	if usageErr != nil {
 		s.failRelayUnavailableForContext(ctx, runID, usageErr)
-		return protocol.TokenUsage{}, relayExecutionSummary{}, false
+		return protocol.TokenUsage{}, relayExecutionSummary{}, relayHealthSnapshot{}, false
 	}
 	execution, executionErr := relayExecutionSince(start, end)
 	if executionErr != nil {
 		s.failRelayUnavailableForContext(ctx, runID, executionErr)
-		return protocol.TokenUsage{}, relayExecutionSummary{}, false
+		return protocol.TokenUsage{}, relayExecutionSummary{}, relayHealthSnapshot{}, false
 	}
-	return usage, execution, true
+	return usage, execution, end, true
 }
 
 // handleRelayPreflight lets an off-netns caller verify the locked model relay is

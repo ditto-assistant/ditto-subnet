@@ -1039,6 +1039,7 @@ class ScreenerWorker:
                             scored_runtime_evidence=item.scored_runtime_evidence,
                             scored_runtime_evidence_received_at=received_at,
                             review_lineage=review_lineage,
+                            sandbox_memory_limit_mib=item.sandbox_memory_limit_mib,
                         )
                     review_usage_snapshot = (
                         review_usage,
@@ -1626,6 +1627,7 @@ class ScreenerWorker:
                     stages=collector.entries(),
                     elapsed_ms=max(0, elapsed_ms),
                     lineage_scope=lineage_scope,  # type: ignore[arg-type]
+                    budget_stop=collector.budget_stop,
                 ),
             )
         except Exception as error:

@@ -2959,6 +2959,51 @@ class TestHeartbeat:
             )
             assert await _attempt_deadline(session_maker, attempt_id) == cap
 
+    async def test_deep_review_budget_above_old_ceiling_grows_attempt_lifetime(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A 2700 s deep-review budget (above the old 1800 s ceiling) is honoured.
+
+        The renewable lease's hard lifetime is derived from the bound revision,
+        so raising ``timeout_seconds`` grows the attempt deadline with it.
+        """
+        _install_db(app, session_maker)
+        revision = await _seed_review_settings_revision(
+            session_maker,
+            ScreenerReviewSettings(
+                source_review_timeout_seconds=600,
+                timeout_seconds=2_700,
+            ),
+        )
+        now = datetime.now(UTC).replace(microsecond=0)
+        # 600 s L1 + 2700 s L2/L3 + 45 min non-review work = 100 minutes. With
+        # the old 1800 s ceiling the cap (85 minutes) would already have passed.
+        started = now - timedelta(minutes=95)
+        cap = started + timedelta(minutes=100)
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+        attempt_id = await _seed_running_attempt(
+            session_maker,
+            agent_id=agent_id,
+            started_at=started,
+            deadline=now + timedelta(minutes=1),
+            review_settings=revision,
+            review_settings_instance_id="legacy",
+        )
+        assert (
+            await _screening_heartbeat(
+                client,
+                agent_id=agent_id,
+                timestamp=int(now.timestamp()),
+                stage="source_review_60",
+                started_at=started,
+            )
+            == cap
+        )
+        assert await _attempt_deadline(session_maker, attempt_id) == cap
+
     async def test_sibling_instance_heartbeat_does_not_renew(
         self,
         app: FastAPI,
@@ -13251,6 +13296,77 @@ class TestQuarantineReviewContext:
                 == 0
             )
 
+    @pytest.mark.parametrize("resolution", ["release", "rescreen"])
+    async def test_guards_on_an_active_quarantine_name_the_row_not_a_state_change(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        resolution: str,
+    ) -> None:
+        """An active row refuses the failed-release guards by naming itself.
+
+        Operators carry expected_attempt_id and expected_score_count from the
+        batch context into every decision. The refusal used to read as a
+        concurrent conflict, so the same guards were re-derived and resubmitted
+        against a row that never accepted them (ditto-subnet#3069).
+        """
+        agent_id, ctx = await self._quarantine(app, client, session_maker)
+        assert ctx["response"].status_code == 200
+        listing = await client.get(
+            "/api/v1/admin/screening-quarantines", headers=_ADMIN_HEADERS
+        )
+        row = listing.json()["items"][0]
+        unguarded = {
+            "quarantine_id": row["quarantine_id"],
+            "expected_agent_id": str(agent_id),
+            "expected_artifact_sha256": row["artifact_sha256"],
+            "resolution": resolution,
+            "reason": "Source review cleared the held submission for scoring",
+        }
+        ready = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [unguarded]},
+        )
+        assert ready.json()["ready_count"] == 1, ready.text
+
+        guarded = {
+            **unguarded,
+            "expected_attempt_id": str(uuid4()),
+            "expected_score_count": 0,
+        }
+        blocked = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-preview",
+            headers=_ADMIN_HEADERS,
+            json={"decisions": [guarded]},
+        )
+        assert blocked.json()["blocked_count"] == 1, blocked.text
+        message = blocked.json()["items"][0]["message"]
+        assert "omit both guards" in message
+        assert "state changed" not in message
+        if resolution == "release":
+            assert "this active quarantine on a quarantined agent" in message
+        else:
+            assert "apply only to a release" in message
+
+        executed = await client.post(
+            "/api/v1/admin/screening-quarantines/batch-resolve",
+            headers=_ADMIN_HEADERS,
+            json={
+                "decisions": [guarded],
+                "preview_token": blocked.json()["preview_token"],
+                "confirmed": True,
+            },
+        )
+        assert executed.status_code == 200, executed.text
+        assert executed.json()["failed_count"] == 1
+        assert executed.json()["items"][0]["message"] == message
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.QUARANTINED
+
     async def test_batch_context_and_signed_preview_reject_changed_decisions(
         self,
         app: FastAPI,
@@ -15077,3 +15193,99 @@ class TestReviewUsage:
             headers=_ADMIN_HEADERS,
         )
         assert too_wide.status_code == 422
+
+    async def test_admin_budget_read_shows_stop_limits_and_lineage_per_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        parent_id = await _seed_agent(
+            session_maker, status=AgentStatus.REJECTED, name="budget-agent"
+        )
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            name="budget-agent",
+            agent_id=uuid4(),
+        )
+        attempt_id = await self._running_attempt(session_maker, agent_id)
+        payload = self._payload(attempt_id)
+        payload["stages"][1]["wall_ms"] = 600_000
+        payload["budget_stop"] = {
+            "stage": "l2_analyst",
+            "code": "model-total-budget",
+            "tripped": ["input"],
+            "max_raw_input_tokens": 50_000_000,
+            "max_input_tokens": 500_000,
+            "raw_input_tokens": 1_500_000,
+            "effective_input_tokens": 600_000,
+        }
+        url = f"/api/v1/screener/agent/{agent_id}/review-usage"
+        assert (await client.post(url, json=payload)).status_code == 200
+        settings = ScreenerReviewSettings(
+            mode="enforce", max_input_tokens=500_000, max_output_tokens=100_000
+        )
+        async with session_maker() as session, session.begin():
+            revision = ScreenerReviewSettingsRevision(
+                parent_revision=0,
+                scope="*",
+                settings=settings.model_dump(mode="json"),
+                checksum=_review_settings_checksum(settings),
+                reason="budget read test",
+                actor="test",
+            )
+            session.add(revision)
+            await session.flush()
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert attempt is not None
+            attempt.status = "quarantined"
+            attempt.reason_code = "l2-model-total-budget"
+            attempt.finished_at = attempt.started_at + timedelta(minutes=45)
+            attempt.review_settings_revision = revision.revision
+            attempt.review_settings_instance_id = "screener-1"
+            attempt.review_settings_scope = "*"
+            attempt.review_settings_checksum = revision.checksum
+            attempt.lineage_parent_agent_id = parent_id
+            attempt.lineage_scope = "full"
+            attempt.lineage_packet_sha256 = "ef" * 32
+            attempt.lineage_full_review_reasons = ["diff-too-large"]
+            attempt.lineage_reference_kind = "same_owner_version"
+            attempt.lineage_changed_file_count = 51
+            attempt.lineage_changed_line_count = 10_006
+
+        response = await client.get(
+            f"/api/v1/admin/screening-attempts/{attempt_id}/review-budget",
+            headers=_ADMIN_HEADERS,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["telemetry_recorded"] is True
+        assert body["wall_seconds"] == pytest.approx(2700.0)
+        stages = {row["stage"]: row for row in body["stages"]}
+        assert stages["l2_analyst"]["wall_ms"] == 600_000
+        assert stages["l2_analyst"]["tripped"] == ["input"]
+        assert stages["l1"]["tripped"] == [] and stages["l1"]["wall_ms"] is None
+        # L1 is outside the L2 aggregate budget: 0.5M uncached + 10% of 1M.
+        assert body["l2_aggregate"]["effective_input_tokens"] == 600_000
+        assert body["limits"]["max_input_tokens"] == 500_000
+        assert body["exceeded_limits"] == ["input"]
+        assert body["budget_stop"]["tripped"] == ["input"]
+        lineage = body["lineage"]
+        assert lineage["parent_agent_id"] == str(parent_id)
+        assert lineage["full_review_reasons"] == ["diff-too-large"]
+        assert (lineage["changed_file_count"], lineage["changed_line_count"]) == (
+            51,
+            10_006,
+        )
+
+        missing = await client.get(
+            f"/api/v1/admin/screening-attempts/{uuid4()}/review-budget",
+            headers=_ADMIN_HEADERS,
+        )
+        assert missing.status_code == 404

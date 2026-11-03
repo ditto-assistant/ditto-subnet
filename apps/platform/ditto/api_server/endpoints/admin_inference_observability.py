@@ -20,6 +20,7 @@ from ditto.api_models.inference_costs import (
 )
 from ditto.api_models.inference_failure_taxonomy import (
     ConfirmationFailureGroup,
+    ConfirmationFailureKind,
     ConfirmationFailureLaneWindow,
     InferenceFailureGroup,
     InferenceFailureLaneWindow,
@@ -201,7 +202,9 @@ async def get_inference_runtime_metrics(
     windows = [
         InferenceLaneWindow(
             window_seconds=int(row["window_seconds"]),
-            request_kind=cast(Literal["chat", "embedding"], str(row["request_kind"])),
+            request_kind=cast(
+                Literal["chat", "embedding", "decision"], str(row["request_kind"])
+            ),
             calls=int(row["calls"]),
             calls_per_second=round(float(row["calls_per_second"]), 4),
             tokens=int(row["tokens"]),
@@ -232,7 +235,7 @@ async def get_inference_runtime_metrics(
     }
     lanes: list[InferenceLaneCurrent] = []
     for row in current_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         if kind == "chat":
             per_ticket = settings.chat_per_ticket_concurrency
             per_validator = settings.chat_per_validator_concurrency
@@ -313,7 +316,7 @@ async def get_inference_failure_taxonomy(
         groups.append(
             InferenceFailureGroup(
                 window_seconds=key[0],
-                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
                 model=str(row["model"]),
                 gateway=cast(InferenceGateway, str(row["gateway"])),
                 upstream_route=row["upstream_route"],
@@ -341,7 +344,7 @@ async def get_inference_failure_taxonomy(
         lanes.append(
             InferenceFailureLaneWindow(
                 window_seconds=key[0],
-                request_kind=cast(Literal["chat", "embedding"], key[1]),
+                request_kind=cast(Literal["chat", "embedding", "decision"], key[1]),
                 calls=int(row["calls"]),
                 settled=settled,
                 completed=int(row["completed"]),
@@ -418,6 +421,24 @@ async def _confirmation_failure_rows(
             ),
             provider_basis=cast(InferenceRouteBasis, str(row["provider_basis"])),
             status=str(row["status"]),
+            failure_kind=cast(
+                ConfirmationFailureKind | None,
+                str(row["failure_kind"]) if row["failure_kind"] is not None else None,
+            ),
+            upstream_http_status=(
+                int(row["upstream_http_status"])
+                if row["upstream_http_status"] is not None
+                else None
+            ),
+            upstream_error_code=(
+                int(row["upstream_error_code"])
+                if row["upstream_error_code"] is not None
+                else None
+            ),
+            receipt_free=(
+                bool(row["receipt_free"]) if row["receipt_free"] is not None else None
+            ),
+            max_upstream_attempts=int(row["max_upstream_attempts"]),
             calls=int(row["calls"]),
             without_cost=int(row["without_cost"]),
             bundles_affected=int(row["bundles_affected"]),
@@ -463,7 +484,7 @@ async def _rate_limit_bursts(
         )
     bursts: list[InferenceRateLimitBurst] = []
     for row in peak_rows:
-        kind = cast(Literal["chat", "embedding"], str(row["request_kind"]))
+        kind = cast(Literal["chat", "embedding", "decision"], str(row["request_kind"]))
         count = rate_limited.get(kind, 0)
         peak = int(row["peak_global_concurrency"])
         returned = tickets.get(kind, [])

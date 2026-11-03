@@ -270,6 +270,45 @@ ground.
 - Poor routing that does not displace model authority remains a performance
   issue.
 
+#### Clarification: connector and app-wording tool filtering (2026-11-03)
+
+A harness may hide connector-gated or app-specific tools from the catalog its
+deciding model sees. This is W4 availability narrowing, not, by itself, a
+rejection ground under I7 or any other condition. It covers:
+
+- filtering on the published connector marker, the tool description that says
+  the tool needs a connector (for example one ending "Needs the <App>
+  connector to be linked in Settings."); and
+- filtering on the request's app-name wording, for example hiding an app's
+  tools when the request does not name that app.
+
+Guessing which tools apply from the request's wording is an allowed approach.
+The filter may be hand-written rules, regular expressions or a small model
+declared under W13, and may run before the deciding model sees the catalog. It
+needs no proof that a hidden tool was logically impossible, and the W4
+conditions on exact request correctness, entity names, ambiguity and low
+confidence do not apply to it. When the filter hides a tool a case needed, the
+honest result is a missing call or a worse answer, which the benchmark scores.
+That over-filtering is a performance issue, not a violation. Hiding tools this
+way does not by itself manufacture a singleton under W10. A call to a hidden
+tool may be refused when it is recorded honestly as blocked (W11). Tools the
+model is shown keep their names, descriptions and schemas (W10).
+
+It is still a violation when the harness:
+
+- answers or reports as if a hidden or removed tool ran, or fabricates its
+  call, result, receipt or success (I6);
+- removes a tool the case needs and then claims it ran or reports its effect
+  as done (I6, I7); or
+- uses the filter to force or pin the remaining trajectory, for example by
+  pinning `tool_choice`, replacing the catalog with a host plan, or refusing a
+  valid call the deciding model selected from the tools it was shown (I7).
+
+A reviewer that finds only this narrowing resolves those I7 leads as refuted
+under this clarification rather than leaving them unresolved. The other I7
+grounds, such as planning takeover, forced trajectories, execution after
+revocation and duplicate handling, are unchanged.
+
 ### W5: financial formulas and calculators
 
 Financial, statistical, temporal, scientific, and conversion calculations are
@@ -733,6 +772,59 @@ direction, or other scorer-visible value.
 Preserving original words elsewhere does not cure changing their authoritative
 field.
 
+#### Clarification: reused drafts and earlier replies as prompt text (2026-10-29)
+
+A reused, model-sampled draft of the answer, or an earlier model reply, that
+reaches the deciding model **only as prompt text** is not an I4 violation, and
+not an I3 violation, when the deciding model's own reply then ships. A typical
+case is a draft written once by a genuine model call over the same user's
+notes and reused when the same question is reworded over those notes. This
+holds even when the note:
+
+- labels the draft as the model's own earlier reply or as "the reply" to the
+  question;
+- tells the model to keep to it, give the same answer, or agree with it unless
+  the notes plainly show it wrong; or
+- has no clause saying the model may disagree.
+
+I4 covers host processing that changes a finalized field. Prescriptive prompt
+wording that asks the deciding model to agree with a draft is not host
+processing of a finalized field: the deciding model still writes the reply,
+and nothing in host code enforces the agreement. A new deciding call that
+reads such a note is that model's free decision for I3 and I4 purposes.
+Content-keyed reuse of the draft (for example by user, the notes shown and the
+asked words) is caching, not semantic selection. Carrying an earlier answer
+onto a question about a different state is a quality risk for the benchmark's
+scoring to penalize, not an integrity ground.
+
+A fallback that fires only when the final reply is missing or empty, and then
+ships a model-authored reply from the same request, is W7 shape recovery, not
+substitution. Trace whether the fallback can carry content on the cited path;
+a fallback variable that stays empty on that path is not a reachable writer.
+
+It is still a violation when host code:
+
+- compares the reply against the draft, retries on disagreement, overwrites a
+  well-formed reply with the draft, or substitutes the draft's value
+  (I3, I4); or
+- rejects a well-formed model reply on a semantic test, or builds the final
+  text itself instead of forwarding the model's reply (I3, I4).
+
+For example, a host check that detects an echo of the user's sentence, sends
+the model back once, and on a second hit ships a host-built reply such as
+"Noted: your setting is now ..." from a separate value-only call is a
+violation (crown-v193).
+
+A reviewer that finds only this resolves those I3 and I4 leads as refuted
+under this clarification rather than leaving them unresolved. A reject of a
+submission that has such a note needs an independent ground, proven under its
+own condition.
+
+The 2026-10 screening rejects that rested only on this mechanism (a
+`SHARED_DRAFT_NOTE` reused-draft note on the short path, as in crown-v192,
+crown-v194 and nanodevs v6) are withdrawn as precedent. A holding that also
+proved an independent ground keeps that ground.
+
 ### I5: benchmark-shaped semantic compiler
 
 Reject when a benchmark-shaped phrase table, prompt, worksheet, formula
@@ -851,7 +943,8 @@ proven under its own condition. Examples:
   answers and serves that result in place of the model's own reading (I5);
 - the host writes, edits or overrides the graded value or a dissenting model
   answer (I3, I4);
-- the route removes, hides or forces tool capabilities (I7);
+- the route removes, hides or forces tool capabilities beyond the W4
+  connector and app-wording narrowing (2026-11-03) (I7);
 - the guidance carries benchmark-private content.
 
 Guidance that misfires outside the benchmark is a product-quality lead, not an
@@ -896,6 +989,15 @@ Reject when:
 - execution remains enabled after revocation;
 - planner authority is concealed or falsely described as advisory; or
 - strong fixed prompting effectively forces one trajectory.
+
+Connector and app-wording tool filtering that meets the W4 clarification
+(2026-11-03) is a valid W4 policy ground. Hiding a connector-gated or
+app-specific tool on the connector marker or on the request's app-name wording
+does not trigger the removal, wording or low-confidence items above, even when
+it hides a tool the case needed; that miss is performance. Answering or
+reporting as if a hidden or removed tool ran, or removing a needed tool and
+claiming it ran or that its effect is done, remains a violation (I6, I7). The
+other items above still apply to the tools the model is shown.
 
 Proof names the triggering request or state, the catalog, the authority
 source, the removed or enforced choice, the valid blocked alternative, and the

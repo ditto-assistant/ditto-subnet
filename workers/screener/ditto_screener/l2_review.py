@@ -34,7 +34,11 @@ from ditto_screener.causal_evidence import (
 from ditto_screener.decision_path_prompt import DECISION_PATH_GUIDANCE
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.review_lineage_prompt import lineage_dossier
-from ditto_screener.review_usage import l2_stage_for_role, record_usage
+from ditto_screener.review_usage import (
+    l2_stage_for_role,
+    record_budget_stop,
+    record_usage,
+)
 from ditto_screener.scored_runtime_evidence import fetch_runtime_evidence
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
@@ -45,6 +49,7 @@ from ditto_screener.source_review import (
     TarSourceRepository,
     _body_signature,
     _http_error_signature,
+    _is_allowed,
     _retryable_model_error_type,
     l1_verdict_unsettled,
     ledger_disposition,
@@ -81,6 +86,7 @@ from ditto_screening_protocol.reason_codes import (
     L2_RUNTIME_EVIDENCE_UNAVAILABLE,
     SOURCE_REVIEW_PROVIDER_CREDITS_EXHAUSTED,
 )
+from ditto_screening_protocol.review_usage import ReviewBudgetLimit, ReviewBudgetStop
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +128,13 @@ PROVIDER_BODY_FAULT_RETRY_DELAYS_SECONDS = (15.0, 45.0, 90.0)
 _PROVIDER_BODY_FAULT_MIN_TURN_SECONDS = 45.0
 
 
+# ``l2-late-result`` subcode: ``<bound>:<masked outcome code>``. It rides the
+# private failure detail, whose renderer accepts the same character class.
+_LATE_RESULT_SUBCODE_RE = re.compile(r"[a-z0-9][a-z0-9_.:+/-]{0,159}")
+# ``ScreenReviewAudit.response_provider``; anything else is dropped.
+_AUDIT_PROVIDER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._/-]{0,63}")
+
+
 def default_completion_request_seconds(max_completion_tokens: int) -> float:
     """Wall-clock cap for one L2/L3 turn that can spend its whole budget."""
     return max(
@@ -143,35 +156,35 @@ _SUPPORTED_POLICY_VERSIONS = tuple(
 def l2_prompt_revision(policy_version: int) -> str:
     """Analyst prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l2-terra-source-review-v61-policy-v13"
+        return "l2-terra-source-review-v63-policy-v13"
     return f"l2-terra-source-review-v37-policy-v{policy_version}"
 
 
 def l2_critic_prompt_revision(policy_version: int) -> str:
     """Critic prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-adversarial-critic-v33-policy-v13"
+        return "l3-sol-adversarial-critic-v35-policy-v13"
     return f"l3-sol-adversarial-critic-v21-policy-v{policy_version}"
 
 
 def l2_cause_prompt_revision(policy_version: int) -> str:
     """Violation-cause prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-violation-cause-v38-policy-v13"
+        return "l3-sol-violation-cause-v40-policy-v13"
     return f"l3-sol-violation-cause-v27-policy-v{policy_version}"
 
 
 def l2_cause_tiebreaker_prompt_revision(policy_version: int) -> str:
     """Cause-tiebreaker prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-cause-disagreement-v18-policy-v13"
+        return "l3-sol-cause-disagreement-v20-policy-v13"
     return f"l3-sol-cause-disagreement-v7-policy-v{policy_version}"
 
 
 def l2_safety_prompt_revision(policy_version: int) -> str:
     """Safety-adjudicator prompt revision for one implemented policy version."""
     if policy_version == 13:
-        return "l3-sol-safety-adjudicator-v36-policy-v13"
+        return "l3-sol-safety-adjudicator-v38-policy-v13"
     return f"l3-sol-safety-adjudicator-v24-policy-v{policy_version}"
 
 
@@ -211,6 +224,13 @@ L2_STARTER_MANIFESTS = tuple(
 _MAX_ARCHIVE_FILES = 512
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_AGGREGATE_RAW_INPUT_TOKENS = 50_000_000
+# The limit each budget failure code reports as tripped (the aggregate code
+# names its exceeded limits from usage instead).
+_BUDGET_STOP_LIMITS: dict[str, ReviewBudgetLimit] = {
+    "model-total-budget": "input",
+    "model-tool-budget": "tools",
+    "model-step-budget": "steps",
+}
 _MAX_TOOL_BYTES = 256_000
 _MAX_AUDIT_TAIL_BYTES = 64 * 1024 * 1024
 _ROLES = frozenset({"trigger", "decision", "effect", "sink", "context"})
@@ -371,7 +391,7 @@ _SUBMISSION_VALIDATION_HINTS = {
 }
 
 
-def _submission_validation_subcode(error: ValueError) -> str:
+def _submission_validation_subcode(error: TypeError | ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
     if "L2 scorer field rewrite requires I4 breach" in message:
@@ -1346,7 +1366,11 @@ flag that strips a capability for the rest of the request, and a router told
 to pick a narrowed route (records, read-only, no tools) when unsure. An
 exact-repeat stop on name plus canonical arguments for a repeat the request
 does not ask for, or a repeat the deciding model can authorize, remains
-permitted.
+permitted. Hiding connector-gated or app-specific tools on the published
+connector marker or the request's app-name wording is W4 availability
+narrowing, not this removal, even when it hides a tool the case needed; apply
+the I7 connector and app-wording safe harbor below and charge only fake
+execution of a hidden tool, a claim that a removed needed tool ran, or forcing.
 Judge tool guards against the identity and argument schema of the offered tool,
 then trace the model-selected call to its actual local implementation or
 request-supplied endpoint. A local memory tool may check ownership of its own
@@ -3058,7 +3082,8 @@ class TerraSolSourceReviewAgent:
         review_lineage: ReviewLineagePacket | None = None,
     ) -> L2RunResult:
         started = time.monotonic()
-        local_deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        review_started_at = asyncio.get_running_loop().time()
+        local_deadline = review_started_at + self._timeout_seconds
         effective_deadline = (
             local_deadline
             if deadline is None
@@ -3235,9 +3260,32 @@ class TerraSolSourceReviewAgent:
                     runtime_evidence=runtime_evidence,
                     review_lineage=review_lineage,
                 )
-            if asyncio.get_running_loop().time() >= effective_deadline:
+            now = asyncio.get_running_loop().time()
+            if now >= effective_deadline:
+                late_audit, late_subcode = self._late_result_diagnostic(
+                    result,
+                    stage_bound=(deadline is None or local_deadline <= float(deadline)),
+                    budget_seconds=float(effective_deadline) - review_started_at,
+                    elapsed_seconds=now - review_started_at,
+                    policy_version=policy_version,
+                )
+                logger.warning(
+                    "L2 review ran past its deadline attempt_id=%s subcode=%s "
+                    "final_stage=%s steps=%d elapsed_s=%.0f budget_s=%.0f",
+                    attempt_id,
+                    late_subcode,
+                    late_audit.final_stage,
+                    late_audit.model_steps_observed or 0,
+                    now - review_started_at,
+                    float(effective_deadline) - review_started_at,
+                )
                 result = L2RunResult(
-                    observation=_failure("l2-late-result", "retryable_infra"),
+                    observation=replace(
+                        _failure("l2-late-result", "retryable_infra"),
+                        review_audit=late_audit.model_dump(mode="json"),
+                        failure_subcode=late_subcode,
+                    ),
+                    failure_subcode=late_subcode,
                     analyzed_files=result.analyzed_files,
                     causal_path=result.causal_path,
                     tools=result.tools,
@@ -3396,6 +3444,68 @@ class TerraSolSourceReviewAgent:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             os.close(lock_fd)
 
+    def _late_result_diagnostic(
+        self,
+        result: L2RunResult,
+        *,
+        stage_bound: bool,
+        budget_seconds: float,
+        elapsed_seconds: float,
+        policy_version: int,
+    ) -> tuple[ScreenReviewAudit, str]:
+        """Fixed-label accounting for a review discarded at its deadline.
+
+        ``l2-late-result`` replaces whatever the trajectory returned, so the
+        masked outcome, the layer it reached and which bound fired (this
+        layer's own ``timeout_seconds`` or the renewable attempt lease) were
+        lost; the hfull-h3 v9 and crown-v197 attempts (2026-11-01/02) read as
+        lease misses although their leases had ten minutes left. The audit
+        carries only counts and fixed labels, never source or prompts.
+        """
+        bound = "stage_timeout" if stage_bound else "lease_deadline"
+        masked = (
+            result.observation.error_code
+            if not result.observation.ok
+            else f"completed-{result.observation.risk_level or 'unknown'}"
+        )
+        subcode = f"{bound}:{masked or 'unknown'}".lower()
+        if not _LATE_RESULT_SUBCODE_RE.fullmatch(subcode):
+            subcode = bound
+        usage = result.usage
+        cost = _billable_cost_usd(usage)
+        provider = next(
+            (
+                value
+                for value in reversed(result.response_providers)
+                if _AUDIT_PROVIDER_RE.fullmatch(value)
+            ),
+            None,
+        )
+        max_elapsed_ms = min(max(1, round(budget_seconds * 1000)), 3_600_000)
+        audit = ScreenReviewAudit(
+            stage="l2",
+            reason_code="l2-late-result",
+            prompt_revision=self._analyst_prompt_revision(policy_version),
+            harness_revision=L2_HARNESS_REVISION,
+            max_steps=self._max_steps,
+            steps_used=min(len(result.response_models), self._max_steps),
+            max_input_tokens=self._max_input_tokens,
+            input_tokens_used=min(max(0, usage.input_tokens), 100_000_000),
+            max_output_tokens=self._max_output_tokens,
+            output_tokens_used=min(max(0, usage.output_tokens), 1_000_000),
+            max_cost_usd=self._max_cost_usd,
+            cost_usd_used=min(max(0.0, float(cost or 0.0)), 100.0),
+            dossier_complete=result.dossier_complete,
+            model_steps_observed=min(len(result.response_models), 10_000),
+            tool_calls_observed=min(len(result.tools), 10_000),
+            budget_stop_reason="time",
+            response_provider=provider,
+            final_stage=_inconclusive_final_stage(result),
+            max_elapsed_ms=max_elapsed_ms,
+            elapsed_ms=min(max(0, round(elapsed_seconds * 1000)), 3_600_000),
+        )
+        return audit, subcode
+
     async def _review_uncached(
         self,
         archive_path: str,
@@ -3459,11 +3569,7 @@ class TerraSolSourceReviewAgent:
                     max_output_tokens=self._max_output_tokens,
                     output_tokens_used=error.usage.output_tokens,
                     max_cost_usd=self._max_cost_usd,
-                    cost_usd_used=(
-                        error.usage.reported_cost_usd
-                        if error.usage.reported_cost_usd is not None
-                        else error.usage.estimated_cost_usd
-                    ),
+                    cost_usd_used=_billable_cost_usd(error.usage),
                     model_steps_observed=error.steps_used,
                     tool_calls_observed=len(error.tools),
                     budget_stop_reason={
@@ -3511,7 +3617,16 @@ class TerraSolSourceReviewAgent:
                 usage=L2Usage(),
                 cache_hit=False,
             )
-        except (OSError, ValueError, tarfile.TarError, httpx.HTTPError) as error:
+        # TypeError joins the contract misses: an untrusted submission is
+        # shaped by the model, and a wrong JSON type there is a bad answer,
+        # not broken infrastructure (ditto-subnet#2987).
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            tarfile.TarError,
+            httpx.HTTPError,
+        ) as error:
             logger.warning(
                 "L2 review infrastructure failed: %s: %s",
                 type(error).__name__,
@@ -4831,6 +4946,20 @@ class TerraSolSourceReviewAgent:
             )
 
         def failure(code: str, subcode: str | None = None) -> L2TrajectoryError:
+            if code in _BUDGET_STOP_LIMITS:
+                # Telemetry only: which limit ended the review and at what
+                # aggregate usage, so Backroom can show the trip per attempt.
+                # It must never change the failure the review reports.
+                with contextlib.suppress(Exception):
+                    record_budget_stop(
+                        self._budget_stop(
+                            code,
+                            role=role,
+                            usage=_add_usage(usage_before, usage),
+                            steps_used=steps_used,
+                            max_steps=max_steps or self._max_steps,
+                        )
+                    )
             return L2TrajectoryError(
                 code,
                 usage=usage,
@@ -4963,6 +5092,7 @@ class TerraSolSourceReviewAgent:
             usage = _add_usage(usage, turn_usage)
             record_usage(
                 l2_stage_for_role(role),
+                started_at=turn_started,
                 model=response_model or model,
                 input_tokens=turn_usage.input_tokens,
                 output_tokens=turn_usage.output_tokens,
@@ -5132,7 +5262,7 @@ class TerraSolSourceReviewAgent:
                                 analyzed=analyzed,
                                 repository=repository,
                             )
-                    except (json.JSONDecodeError, ValueError) as error:
+                    except (json.JSONDecodeError, TypeError, ValueError) as error:
                         request_submit_correction(
                             submitted[0],
                             reason="validation",
@@ -5273,6 +5403,50 @@ class TerraSolSourceReviewAgent:
                 )
         raise failure("model-step-budget")
 
+    def _exceeded_budget(self, usage: L2Usage) -> list[ReviewBudgetLimit]:
+        """Every aggregate limit ``usage`` exceeds, in a fixed order."""
+        effective_input = _effective_input_tokens(usage)
+        exceeded: list[ReviewBudgetLimit] = []
+        if usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS:
+            exceeded.append("raw_input")
+        if effective_input > self._max_input_tokens:
+            exceeded.append("input")
+        if usage.output_tokens > self._max_output_tokens:
+            exceeded.append("output")
+        if _billable_cost_usd(usage) > self._max_cost_usd:
+            exceeded.append("cost")
+        return exceeded
+
+    def _budget_stop(
+        self,
+        code: str,
+        *,
+        role: str,
+        usage: L2Usage,
+        steps_used: int,
+        max_steps: int,
+    ) -> ReviewBudgetStop:
+        tripped = (
+            self._exceeded_budget(usage)
+            if code == "model-total-budget"
+            else [_BUDGET_STOP_LIMITS[code]]
+        )
+        return ReviewBudgetStop(
+            stage=l2_stage_for_role(role),  # type: ignore[arg-type]
+            code=code,  # type: ignore[arg-type]
+            tripped=tripped,
+            max_raw_input_tokens=_MAX_AGGREGATE_RAW_INPUT_TOKENS,
+            max_input_tokens=self._max_input_tokens,
+            max_output_tokens=self._max_output_tokens,
+            max_cost_usd=self._max_cost_usd,
+            max_steps=max_steps,
+            raw_input_tokens=usage.input_tokens,
+            effective_input_tokens=_effective_input_tokens(usage),
+            output_tokens=usage.output_tokens,
+            cost_usd=round(_billable_cost_usd(usage), 6),
+            steps_used=steps_used,
+        )
+
     def _require_budget(self, usage: L2Usage) -> None:
         if usage.cached_input_tokens > usage.input_tokens:
             raise ValueError("L2 cached input exceeds raw input")
@@ -5280,22 +5454,8 @@ class TerraSolSourceReviewAgent:
         # input is discounted by 90%; the separate raw ceiling bounds wire
         # traffic even when nearly every prompt prefix is cached. Spending is
         # independently bounded by max_cost_usd.
-        effective_input = (
-            usage.input_tokens
-            - usage.cached_input_tokens
-            + round(usage.cached_input_tokens * 0.1)
-        )
-        billable_cost = (
-            usage.reported_cost_usd
-            if usage.reported_cost_usd is not None
-            else usage.estimated_cost_usd
-        )
-        if (
-            usage.input_tokens > _MAX_AGGREGATE_RAW_INPUT_TOKENS
-            or effective_input > self._max_input_tokens
-            or usage.output_tokens > self._max_output_tokens
-            or billable_cost > self._max_cost_usd
-        ):
+        effective_input = _effective_input_tokens(usage)
+        if self._exceeded_budget(usage):
             raise ValueError(
                 "L2 model exceeded token or cost budget "
                 f"raw_input={usage.input_tokens} "
@@ -7117,13 +7277,13 @@ def _parse_l2_review(
     generator_components = value.get("generator_components", [])
     causal_evidence_value = value.get("causal_evidence")
     submitted_summary = value["summary"]
-    if disposition not in {"safe", "violation", "inconclusive"}:
+    if not _is_allowed(disposition, {"safe", "violation", "inconclusive"}):
         raise ValueError("L2 result disposition is invalid")
     if disposition == "safe" and causal_evidence_value is not None:
         raise ValueError("L2 safe result cannot contain causal evidence")
     if disposition == "inconclusive" and causal_evidence_value is not None:
         raise ValueError("L2 inconclusive result cannot contain causal evidence")
-    if risk not in {"low", "medium", "high"}:
+    if not _is_allowed(risk, {"low", "medium", "high"}):
         raise ValueError("L2 result risk is invalid")
     if (
         not isinstance(confidence, (int, float))
@@ -7131,13 +7291,15 @@ def _parse_l2_review(
         or not 0 <= float(confidence) <= 1
     ):
         raise ValueError("L2 result confidence is invalid")
-    if resolution_basis not in _resolution_bases_for_policy(policy_version):
+    if not _is_allowed(resolution_basis, _resolution_bases_for_policy(policy_version)):
         raise ValueError("L2 result resolution basis is invalid")
     if (
         not isinstance(categories, list)
         or not 1 <= len(categories) <= 8
         or any(
-            category not in source_review_categories_for_policy(policy_version)
+            not _is_allowed(
+                category, source_review_categories_for_policy(policy_version)
+            )
             for category in categories
         )
     ):
@@ -7181,8 +7343,8 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _ALLOWED_CATEGORIES
-            or role not in _ROLES
+            or not _is_allowed(category, _ALLOWED_CATEGORIES)
+            or not _is_allowed(role, _ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7197,7 +7359,7 @@ def _parse_l2_review(
             not isinstance(path, str)
             or not isinstance(line, int)
             or isinstance(line, bool)
-            or role not in _ROLES
+            or not _is_allowed(role, _ROLES)
             or path not in analyzed_map
             or not _valid_location(repository, path, line)
         ):
@@ -7224,7 +7386,7 @@ def _parse_l2_review(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or kind not in _GENERATOR_COMPONENT_KINDS
+            or not _is_allowed(kind, _GENERATOR_COMPONENT_KINDS)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
         ):
@@ -7433,9 +7595,9 @@ def _parse_causal_evidence(
     transition = value["authority_transition"]
     scorer_visible_effect = value["scorer_visible_effect"]
     bindings = value["role_bindings"]
-    if transition not in _authority_transitions_for_policy(policy_version):
+    if not _is_allowed(transition, _authority_transitions_for_policy(policy_version)):
         raise ValueError("L2 causal authority transition is invalid")
-    if scorer_visible_effect not in _SCORER_VISIBLE_EFFECTS:
+    if not _is_allowed(scorer_visible_effect, _SCORER_VISIBLE_EFFECTS):
         raise ValueError("L2 scorer-visible effect is invalid")
     if not isinstance(bindings, list) or not 1 <= len(bindings) <= 32:
         raise ValueError("L2 causal role bindings are invalid")
@@ -7464,8 +7626,8 @@ def _parse_causal_evidence(
             or isinstance(line, bool)
             or line < 1
             or not isinstance(digest, str)
-            or category not in _MULTI_LOCATION_CATEGORIES
-            or role not in _CAUSAL_EVIDENCE_ROLES
+            or not _is_allowed(category, _MULTI_LOCATION_CATEGORIES)
+            or not _is_allowed(role, _CAUSAL_EVIDENCE_ROLES)
             or analyzed_map.get(path) != digest
             or not _valid_location(repository, path, line)
             or (path, line, str(category)) not in evidence_locations
@@ -7686,13 +7848,42 @@ def _response_output_and_usage(
                 cached_input_tokens=cached,
                 model=model,
             ),
-            reported_cost_usd=(
-                float(reported_cost) if reported_cost is not None else None
+            reported_cost_usd=_reported_turn_cost(
+                reported_cost, input_tokens, output_tokens, model
             ),
         ),
         model,
         provider,
     )
+
+
+def _reported_turn_cost(
+    reported_cost: float | None,
+    input_tokens: int,
+    output_tokens: int,
+    model: object,
+) -> float | None:
+    """Gateway cost for one turn, or ``None`` when it is not a real figure.
+
+    The screener gateway answers ``cost: 0`` for turns that spent millions of
+    tokens (SN-424: attempt 16c416c6 estimated $23.54, reported $0.00), and a
+    reported zero used to override the token estimate, so ``max_cost_usd``
+    could never trip. A zero for a turn that spent tokens is unreported: the
+    budget falls back to tokens x price and the gap is logged for alerting.
+    """
+    if reported_cost is None or (
+        reported_cost <= 0 and input_tokens + output_tokens > 0
+    ):
+        logger.warning(
+            "screener_cost_unreported model=%s reported=%s input_tokens=%d "
+            "output_tokens=%d; budget uses the token estimate",
+            model if isinstance(model, str) else "unknown",
+            "missing" if reported_cost is None else "zero",
+            input_tokens,
+            output_tokens,
+        )
+        return None
+    return float(reported_cost)
 
 
 def _selected_provider(value: object) -> str | None:
@@ -7720,12 +7911,42 @@ def _nonnegative_int(value: object) -> int:
     return value
 
 
-def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
-    reported = (
-        None
-        if left.reported_cost_usd is None and right.reported_cost_usd is None
-        else (left.reported_cost_usd or 0.0) + (right.reported_cost_usd or 0.0)
+def _effective_input_tokens(usage: L2Usage) -> int:
+    """Billable-equivalent input: cached input counts at 10%."""
+    return (
+        usage.input_tokens
+        - usage.cached_input_tokens
+        + round(usage.cached_input_tokens * 0.1)
     )
+
+
+def _billable_cost_usd(usage: L2Usage) -> float:
+    return (
+        usage.reported_cost_usd
+        if usage.reported_cost_usd is not None
+        else usage.estimated_cost_usd
+    )
+
+
+def _add_usage(left: L2Usage, right: L2Usage) -> L2Usage:
+    # A reported total is only exact when every turn reported a cost; one
+    # unreported turn makes the aggregate fall back to the estimate rather
+    # than silently counting that turn as free. An empty side adds nothing.
+    def empty(usage: L2Usage) -> bool:
+        return (
+            usage.input_tokens + usage.output_tokens == 0
+            and not usage.estimated_cost_usd
+            and not usage.reported_cost_usd
+        )
+
+    if empty(left):
+        reported = right.reported_cost_usd
+    elif empty(right):
+        reported = left.reported_cost_usd
+    elif left.reported_cost_usd is None or right.reported_cost_usd is None:
+        reported = None
+    else:
+        reported = left.reported_cost_usd + right.reported_cost_usd
     return L2Usage(
         input_tokens=left.input_tokens + right.input_tokens,
         output_tokens=left.output_tokens + right.output_tokens,
@@ -7767,6 +7988,18 @@ def _cost(
     cached_input_tokens: int = 0,
     model: str | None = None,
 ) -> float:
+    if model == "openai/gpt-6.1-terra" or (model or "").startswith(
+        "openai/gpt-6.1-terra-"
+    ):
+        # OpenRouter 2026-11-03: standard Terra 6.1 is $1/$5 per million with
+        # $0.05 cached input; use a 2x ceiling (as for Sol6 below) when exact
+        # reported cost is absent.
+        uncached = max(0, input_tokens - cached_input_tokens)
+        return (
+            uncached * 2.0 / 1_000_000
+            + cached_input_tokens * 0.1 / 1_000_000
+            + output_tokens * 10.0 / 1_000_000
+        )
     if model == "openai/gpt-6-sol" or (model or "").startswith("openai/gpt-6-sol-"):
         # OpenRouter 2026-09-25: standard Sol6 is $2/$10 per million;
         # use the $4/$20 OpenAI Fast ceiling when exact reported cost is absent.

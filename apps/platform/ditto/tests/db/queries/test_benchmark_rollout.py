@@ -225,7 +225,7 @@ async def test_admin_status_read_does_not_start_rollout(
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 through v11 makes each discoverable as a target but
         # does not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14]
+        assert control["available_target_versions"] == [8, 9, 10, 11, 12, 13, 14, 15]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
         assert [item["version"] for item in contracts] == [
@@ -242,6 +242,7 @@ async def test_admin_status_read_does_not_start_rollout(
             12,
             13,
             14,
+            15,
         ]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -265,7 +266,7 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # Model a current scorer that retains every shipped rollout
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
-            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14],
+            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12, 13, 14, 15],
             "deterministic_v13_datasets": True,
             "v14_scored_runtime_env": {
                 "bench_version": 14,
@@ -277,6 +278,24 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
                         "scored-runtime-env-v1\n14\n"
                         + revision
                         + "\nDITTOBENCH_DB\nDITTOBENCH_MODEL"
+                    ).encode()
+                ).hexdigest(),
+            },
+            "v15_scored_runtime_env": {
+                "bench_version": 15,
+                "scope": "scorer-injected-env-only",
+                "source_revision": revision,
+                "injected_keys": [
+                    "DITTOBENCH_DB",
+                    "DITTOBENCH_DECISIONS_URL",
+                    "DITTOBENCH_MODEL",
+                ],
+                "sha256": hashlib.sha256(
+                    (
+                        "scored-runtime-env-v1\n15\n"
+                        + revision
+                        + "\nDITTOBENCH_DB\nDITTOBENCH_DECISIONS_URL"
+                        + "\nDITTOBENCH_MODEL"
                     ).encode()
                 ).hexdigest(),
             },
@@ -2987,6 +3006,7 @@ def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     scorer["supported_bench_versions"] = [8, 9, 10]
     scorer.pop("deterministic_v13_datasets", None)
     scorer.pop("v14_scored_runtime_env", None)
+    scorer.pop("v15_scored_runtime_env", None)
     scorer.pop("v7_calibration")
     return capabilities, stack
 
@@ -3143,6 +3163,8 @@ def _heartbeat(
     capabilities["scorer_benchmarks"]["deterministic_v13_datasets"] = 13 in versions
     if 14 not in versions:
         capabilities["scorer_benchmarks"].pop("v14_scored_runtime_env", None)
+    if 15 not in versions:
+        capabilities["scorer_benchmarks"].pop("v15_scored_runtime_env", None)
     if 7 not in versions:
         capabilities["scorer_benchmarks"].pop("v7_calibration", None)
         capabilities["ticket_inference"] = False
@@ -3393,6 +3415,7 @@ async def test_v8_only_scorer_does_not_require_retired_v7_calibration() -> None:
     scorer = capabilities["scorer_benchmarks"]
     scorer["supported_bench_versions"] = [8]
     scorer.pop("v14_scored_runtime_env", None)
+    scorer.pop("v15_scored_runtime_env", None)
     scorer.pop("v7_calibration")
 
     assert heartbeat_supports_version(heartbeat, now=now, version=8)
@@ -3865,7 +3888,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "15")
+            await get_rollout(None, session, "16")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")
@@ -5150,3 +5173,127 @@ async def test_rollout_ticket_skips_a_member_live_at_the_source_version(
             ttl=timedelta(minutes=90),
         )
         assert other is not None and other.agent_id == agent_ids[0]
+
+
+async def test_stranded_admission_is_leased_by_the_activated_topup_lane(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """An operator-admitted stranded agent is served out of ``scored``.
+
+    It joins the activated era's top-up lane after the frozen tail, ahead of
+    it only on occupancy, and never re-gates or resizes the frozen cohort.
+    """
+    from ditto.db.queries.benchmark_admission import agent_is_admitted
+    from ditto.db.queries.stranded_admission import (
+        append_stranded_admission,
+        resolve_stranded_admission,
+    )
+
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _inherited_era_session(session_maker, now) as (
+        session,
+        agent_ids,
+        rollout,
+    ):
+        tail_id = await _activate_with_short_tail(
+            session, rollout=rollout, agent_ids=agent_ids, now=now
+        )
+        version = rollout.desired_version
+        stranded = uuid4()
+        session.add(
+            Agent(
+                agent_id=stranded,
+                miner_hotkey="miner-stranded",
+                name="agent-stranded",
+                sha256="f" * 64,
+                status=AgentStatus.SCORED,
+                screening_policy_version=9,
+                screened_image_sha256="f" * 64,
+                screened_image_size_bytes=1024,
+                screened_image_id="sha256:" + "f" * 64,
+                screened_image_ref=f"ditto-screen/{stranded}:latest",
+                screened_image_upload_id=uuid4(),
+                screened_image_verified_at=now,
+                created_at=now - timedelta(days=1),
+            )
+        )
+        await session.flush()
+        for validator in range(3):
+            session.add(
+                Score(
+                    agent_id=stranded,
+                    bench_version=rollout.from_version,
+                    validator_hotkey=f"legacy-{validator}",
+                    run_id=f"stranded-{validator}",
+                    signature="aa",
+                    seed=11,
+                    composite=0.7,
+                    tool_mean=0.7,
+                    memory_mean=0.7,
+                    median_ms=1,
+                    n=114,
+                    details={"bench_version": rollout.from_version},
+                    generated_at=now,
+                )
+            )
+        await session.flush()
+        assert not await agent_is_admitted(
+            session, bench_version=version, agent_id=stranded
+        )
+        ttl = timedelta(minutes=90)
+        target = await resolve_stranded_admission(
+            session,
+            agent_id=stranded,
+            expected_active_version=version,
+            expected_sha256="F" * 64,
+            expected_previous_score_count=3,
+        )
+        member = await append_stranded_admission(
+            session,
+            target=target,
+            dataset=DatasetPin(seed=11, sha256="d" * 64, run_size="full"),
+            seed_source="source_scores_canonical_min",
+            actor="operator",
+            reason="backfill one stranded agent",
+            now=now,
+        )
+        assert member.position == len(agent_ids) + 1
+        assert await agent_is_admitted(
+            session, bench_version=version, agent_id=stranded
+        )
+        assert rollout.cohort_size == len(agent_ids)
+        assert await open_rollout(session) is None
+        assert await active_bench_version(session) == version
+
+        # Validator a already scored the tail: its only top-up is the admitted
+        # agent, leased straight out of ``scored`` on the pinned dataset.
+        ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-a",
+            now=now,
+            ttl=ttl,
+        )
+        assert ticket is not None
+        assert ticket.agent_id == stranded
+        assert ticket.bench_version == version
+        assert ticket.purpose == TicketPurpose.CANONICAL_QUORUM
+        # Validator c still finishes the frozen tail on its own slot.
+        tail_ticket = await issue_rollout_topup_ticket(
+            session,
+            active_version=version,
+            validator_hotkey="validator-c",
+            now=now,
+            ttl=ttl,
+        )
+        assert tail_ticket is not None
+        assert tail_ticket.agent_id in {tail_id, stranded}
+
+        with pytest.raises(RolloutConflictError, match="not a stranded"):
+            await resolve_stranded_admission(
+                session,
+                agent_id=stranded,
+                expected_active_version=version,
+                expected_sha256="f" * 64,
+                expected_previous_score_count=3,
+            )

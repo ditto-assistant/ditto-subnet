@@ -427,6 +427,7 @@ async def test_v044_rolling_upgrade_negotiates_v8_and_preserves_capacity() -> No
         (["platform-fact-world-v1"], False, False),
         (["platform-private-v1", "platform-fact-world-v1"], True, False),
         (["v13-deterministic-enterprise-v1"], False, True),
+        (["screened-image-source-free-v1"], False, False),
     ],
 )
 async def test_current_scorer_preserves_versions_and_run_capacity(
@@ -456,6 +457,10 @@ async def test_current_scorer_preserves_versions_and_run_capacity(
     assert observed.status == "fresh_verified"
     assert observed.private_datasets is private
     assert observed.deterministic_v13_datasets is deterministic
+    # Only a scorer that runs images without source lets Platform withhold it.
+    assert observed.source_free_screened_images is (
+        "screened-image-source-free-v1" in features
+    )
     # The validator keeps the scorer's advertised set in the intersection: a
     # current scorer advertising v12 must reach the signed heartbeat, or the
     # Platform counts zero v12-capable validators (regression when
@@ -1429,6 +1434,21 @@ async def test_submit_does_not_forward_model_provider_credentials() -> None:
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = DittobenchClient(config, http)  # type: ignore[arg-type]
+        source_free_run = await client._submit(
+            tarball_url=None,
+            bench_version=8,
+            dataset_sha256="12" * 32,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+        )
+        assert source_free_run == "run-1"
+        assert "tarball_url" not in request_body
+        request_body.clear()
         run_id = await client._submit(
             tarball_url="https://example.test/agent.tgz",
             bench_version=8,
@@ -1871,6 +1891,8 @@ async def test_hosted_embedding_run_failure_is_retryable_infrastructure() -> Non
     [
         "sandbox_oom",
         "sandbox_tmpfs_exhausted",
+        "host_memory_pressure",
+        "harness_killed_137",
         "model_relay_unavailable",
     ],
 )
@@ -1898,14 +1920,13 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        expected_error = (
-            SandboxOomError if code == "sandbox_oom" else ValidatorInfrastructureError
-        )
-        expected_message = "memory allowance" if code == "sandbox_oom" else code
-        with pytest.raises(expected_error, match=expected_message) as caught:
+        # Every OOM the scorer could not pin on the harness's own cap --
+        # including a legacy scorer's unclassified sandbox_oom -- is no-fault.
+        with pytest.raises(ValidatorInfrastructureError, match=code) as caught:
             await DittobenchClient(cast(Any, _poll_config()), http)._poll(
                 "run-1", expected_bench_version=8
             )
+    assert not isinstance(caught.value, SandboxOomError)
     assert private_marker not in str(caught.value)
     # The scorer's own classifier survives the raise. All five codes collapse
     # into one `infrastructure` hand-back, so without this the specific code
@@ -1914,6 +1935,33 @@ async def test_sandbox_resource_failure_is_retryable_infrastructure(
     # wire as `failure_detail` and lands on the ticket.
     assert caught.value.code == code
     assert failure_detail(caught.value) == code
+
+
+@pytest.mark.asyncio
+async def test_harness_oom_at_own_cap_is_the_agents_sandbox_oom() -> None:
+    """The scorer's terminal harness_oom verdict is the only charged OOM."""
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "harness exceeded its published sandbox memory cap",
+                "failure": {
+                    "kind": "sandbox_failure",
+                    "code": "harness_oom",
+                    "retryable": False,
+                    "diagnostics": {"oom_killed": True},
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(SandboxOomError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert failure_detail(caught.value) == "harness_oom"
 
 
 @pytest.mark.asyncio

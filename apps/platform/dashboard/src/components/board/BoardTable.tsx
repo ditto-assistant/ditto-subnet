@@ -195,7 +195,7 @@ const HEADERS: HeaderSpec[] = [
     key: "rank",
     label: "Ranked agent",
     width: "300px",
-    tip: "Score rank and the miner's best-scoring agent. Open either identity for details, or copy the hotkey. Provisional runs remain unranked (–).",
+    tip: "Rank orders by official score: the continual mean of the three quorum scores plus completed retest waves, not the single three-validator canonical composite. Rank is not the crown test; the crown moves only on a head-to-head over shared seeds. Open either identity for details, or copy the hotkey. Provisional runs remain unranked (–).",
   },
   {
     key: null,
@@ -207,7 +207,7 @@ const HEADERS: HeaderSpec[] = [
     key: "composite",
     label: "Scores",
     width: "280px",
-    tip: "Current quality score with tool and memory subscores beneath it. Quality is the primary rank key; when active, efficiency breaks only exact-quality ties.",
+    tip: "Official score (the rank key) with tool and memory subscores beneath it. The canonical three-validator composite is in the row's tooltip. Quality is the primary rank key; when active, efficiency breaks only exact-quality ties.",
   },
   {
     key: "cost",
@@ -340,7 +340,15 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     <td class="scores-cell">
       <div class="score-stack">
         <div class="score-stack-row current">
-          <span class="score-stack-label">{showsEfficiencyTieBreak() ? "Quality" : "KOTH"}</span>
+          <span
+            class="score-stack-label"
+            title={
+              "Official score, the rank key. Canonical three-validator composite: " +
+              fxScore(props.entry.composite)
+            }
+          >
+            {showsEfficiencyTieBreak() ? "Quality" : "Official"}
+          </span>
           <div class="metric">
             <div class="barwrap">
               <Show when={band()}>
@@ -821,7 +829,7 @@ function BoardRow(props: {
                 </span>
                 <span
                   class="family-member-score"
-                  title="Official composite (same estimator as KOTH). Includes shared retest seeds when the continual mean is active."
+                  title="Official composite: the rank key and the crown's estimator. Includes shared retest seeds when the continual mean is active."
                 >
                   {fxScore(familyMemberDisplayComposite(member))}
                 </span>

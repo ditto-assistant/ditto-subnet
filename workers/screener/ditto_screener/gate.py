@@ -46,6 +46,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import contextvars
 import gzip
 import hashlib
 import io
@@ -72,6 +73,7 @@ from uuid import UUID
 import httpx
 
 from ditto_screener.adjudicator import build_adjudicator
+from ditto_screener.errors import ScreenedImageUploadUnavailable
 from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL, tool_capability
 from ditto_screener.heartbeat import (
     ScreenerProgressStage,
@@ -124,7 +126,11 @@ from ditto_screening_protocol import (
     ReviewLineagePacket,
     ScoredRuntimeEvidenceLease,
 )
-from ditto_screening_protocol.reason_codes import DOCKER_BUILD_INFRASTRUCTURE
+from ditto_screening_protocol.reason_codes import (
+    DOCKER_BUILD_INFRASTRUCTURE,
+    IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+)
+from ditto_screening_protocol.runtime_envelope import runtime_envelope
 
 if TYPE_CHECKING:
     from ditto_screener.config import ScreenerConfig
@@ -144,7 +150,7 @@ _PROBE_INTERVAL_SECONDS = 1.0
 _LEASE_MIN_STAGE_SECONDS = 5.0
 _MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 _MAX_ARCHIVE_MEMBERS = 20_000
-_MAX_SCREENED_IMAGE_BYTES = 8 * 1024**3
+_MAX_SCREENED_IMAGE_BYTES = runtime_envelope().screened_image_bytes
 _IMAGE_EXPORT_DISK_RESERVE_BYTES = 256 * 1024**2
 _IMAGE_HASH_CHUNK_BYTES = 8 * 1024**2
 _MAX_CANARY_RESPONSE_BYTES = 64 * 1024
@@ -175,9 +181,26 @@ _VALIDATOR_SANDBOX_TMPFS_SIZE = "512m"
 _VALIDATOR_SANDBOX_TMPFS = (
     f"/tmp:rw,noexec,nosuid,nodev,size={_VALIDATOR_SANDBOX_TMPFS_SIZE}"
 )
-_VALIDATOR_SANDBOX_MEMORY = "3g"
-_VALIDATOR_SANDBOX_CPUS = "2"
-_VALIDATOR_SANDBOX_PIDS = "512"
+# The runtime probe runs at the harness memory cap validators apply to scored
+# leases. Platform stamps the live cap on each claim; the published runtime
+# envelope (docs/RUNTIME-ENVELOPE.md) is the fallback for an older Platform.
+# Per-screen, so concurrent screens on one gate never see each other's cap.
+_SANDBOX_MEMORY_MIB: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "sandbox_memory_mib", default=runtime_envelope().memory_limit_mib
+)
+_VALIDATOR_SANDBOX_CPUS = str(runtime_envelope().cpus)
+_VALIDATOR_SANDBOX_PIDS = str(runtime_envelope().pids_limit)
+
+
+def _validator_sandbox_memory() -> str:
+    """The docker ``--memory`` value for this screen."""
+    return f"{_SANDBOX_MEMORY_MIB.get()}m"
+
+
+def _validator_sandbox_memory_label() -> str:
+    return f"{_SANDBOX_MEMORY_MIB.get()} MiB"
+
+
 _VALIDATOR_SANDBOX_DB = "/tmp/dittobench.db"
 # Known harness persistence variables, locked to the one writable filesystem the
 # runtime contract offers. A harness that honours either variable then persists
@@ -720,7 +743,7 @@ def _with_seed_probe_evidence(
     if not probe.passed:
         records.append(PolicyEvidence("stable-core", probe.code, probe.detail[:240]))
     summary = probe.usage.summary(
-        _VALIDATOR_SANDBOX_MEMORY, _VALIDATOR_SANDBOX_TMPFS_SIZE
+        _validator_sandbox_memory_label(), _VALIDATOR_SANDBOX_TMPFS_SIZE
     )
     if summary:
         records.append(
@@ -1278,8 +1301,12 @@ class BuildGate:
         scored_runtime_evidence_received_at: int | None = None,
         execution_namespace: UUID | None = None,
         review_lineage: ReviewLineagePacket | None = None,
+        sandbox_memory_limit_mib: int | None = None,
     ) -> ScreeningDecision:
         """Screen one agent end-to-end; never raises.
+
+        ``sandbox_memory_limit_mib`` is the live validator harness cap Platform
+        stamped on the claim; the runtime probe runs at exactly that cap.
 
         ``bench_version`` is the exact generation Platform assigned to this
         submission. Private behavioral challenges reuse it so the challenge
@@ -1316,6 +1343,9 @@ class BuildGate:
         loading any private challenge bank. It has no publish callback.
         """
 
+        _SANDBOX_MEMORY_MIB.set(
+            sandbox_memory_limit_mib or runtime_envelope().memory_limit_mib
+        )
         if build_only and policy_only:
             raise ValueError("build-only and policy-only modes are mutually exclusive")
         if source_only_build and (
@@ -2087,6 +2117,19 @@ class BuildGate:
                         detail=(
                             "screener error: lease budget exhausted during image upload"
                         ),
+                    )
+                except ScreenedImageUploadUnavailable as error:
+                    # Transport or 5xx on a submission-independent upload step
+                    # (Platform restarting, its gateway, or object storage):
+                    # Platform's bounded infra retry takes it from here.
+                    if held_source_review:
+                        logger.warning("held image upload failed: %s", error)
+                        return decision
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code=IMAGE_UPLOAD_PLATFORM_UNAVAILABLE,
+                        summary="Platform was unavailable for the screened image",
+                        detail=f"screener error: image upload failed: {error}",
                     )
                 except Exception as error:  # noqa: BLE001 - publish is parked infra
                     if held_source_review:
@@ -3409,7 +3452,9 @@ class BuildGate:
             "--network-alias",
             _HARNESS_ALIAS,
             "--memory",
-            _VALIDATOR_SANDBOX_MEMORY,
+            _validator_sandbox_memory(),
+            "--memory-swap",
+            _validator_sandbox_memory(),
             "--cpus",
             _VALIDATOR_SANDBOX_CPUS,
             "--pids-limit",
@@ -3648,9 +3693,11 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
             return _SeedProbe(
                 False,
                 "seed-memory-cap",
-                f"the harness exceeded the sandbox memory cap while serving "
-                f"{seed_path} and was terminated. Validators run the same cap; "
-                f"keep the store's working set inside it.",
+                f"the harness exceeded the {_validator_sandbox_memory_label()} "
+                f"sandbox memory cap while serving {seed_path} and was "
+                f"terminated. Scored validator runs apply this same cap (the "
+                f"live Platform setting); keep the store's working set inside "
+                f"it.",
             )
         if lifecycle in {"dead", "exited"}:
             return _SeedProbe(
@@ -3689,7 +3736,7 @@ with socket.create_connection(('127.0.0.1', 443), 2) as raw:
     def _seed_detail_with_usage(self, probe: _SeedProbe) -> str:
         """The miner-facing reason, with what the container was using."""
         summary = probe.usage.summary(
-            _VALIDATOR_SANDBOX_MEMORY, _VALIDATOR_SANDBOX_TMPFS_SIZE
+            _validator_sandbox_memory_label(), _VALIDATOR_SANDBOX_TMPFS_SIZE
         )
         if not summary:
             return probe.detail

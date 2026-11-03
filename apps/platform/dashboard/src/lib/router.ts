@@ -38,11 +38,11 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
   },
   overview: {
     title: "Overview",
-    sub: "Subnet snapshot and the full leaderboard · ranked by composite",
+    sub: "Subnet snapshot and the full leaderboard · ranked by official score",
   },
   leaderboard: {
     title: "Leaderboard",
-    sub: "Every scored miner · canonical ranks · sortable by any metric",
+    sub: "Every scored miner · ranked by official score · sortable by any metric",
   },
   pipeline: {
     title: "Submission pipeline",
@@ -167,6 +167,8 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "bounty",
   // The generator submission a generators-page reader opened.
   "generator",
+  // The generator round whose results a generators-page reader opened.
+  "round",
 ];
 
 // The config knobs allowed to appear in the real query string.

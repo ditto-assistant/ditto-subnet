@@ -34,6 +34,7 @@ from ditto.api_server.endpoints.inference import (
     _bounded_provider_cost,
     _ChatProviderExhausted,
     _complete_chat_with_recovery,
+    _effective_scored_provider_routing,
     _estimated_tokens,
     _exchange_message,
     _locked_confirmation_chat_payload,
@@ -762,6 +763,37 @@ def test_aggregate_route_is_throughput_sorted_and_excludes_unreviewed_routes() -
     assert _bounded_provider_cost({"usage": {"cost": float("nan")}}) is None
 
 
+def test_bf16_price_order_pins_bf16_providers_and_keeps_privacy() -> None:
+    providers = ["deepinfra", "amazon-bedrock", "groq", "dekallm"]
+    assert _provider_preferences(
+        routing_mode="aggregate_throughput",
+        provider="openrouter",
+        quantization=None,
+        scored_routing="bf16_price_order",
+    ) == {
+        "order": providers,
+        "only": providers,
+        "ignore": ["coreweave"],
+        "allow_fallbacks": True,
+        "data_collection": "deny",
+        "zdr": True,
+    }
+    # The canary mode is resolved per ticket before this call.
+    assert _effective_scored_provider_routing(
+        "bf16_price_order_canary", "benchmark_canary"
+    ) == ("bf16_price_order")
+    for routing, purpose in (
+        ("bf16_price_order_canary", "continual_retest"),
+        ("bf16_price_order_canary", None),
+        ("throughput", "benchmark_canary"),
+    ):
+        assert _effective_scored_provider_routing(routing, purpose) == "throughput"
+    assert (
+        _effective_scored_provider_routing("bf16_price_order", "canonical_quorum")
+        == "bf16_price_order"
+    )
+
+
 def _recovery_config() -> InferenceProxyConfig:
     return cast(
         InferenceProxyConfig,
@@ -770,6 +802,7 @@ def _recovery_config() -> InferenceProxyConfig:
             upstream_url="https://openrouter.ai/api/v1/chat/completions",
             openrouter_api_key="test-key",
             response_body_bytes=2 << 20,
+            scored_provider_routing="throughput",
         ),
     )
 
@@ -1974,6 +2007,62 @@ def test_router_metadata_provider_is_trusted_but_never_returned_to_harness() -> 
         "type": "function",
         "function": {"name": "lookup", "arguments": "{}"},
     }
+
+
+def test_public_response_carries_bounded_reasoning_tokens() -> None:
+    """The v13 cost ledger books answer tokens as completion minus reasoning.
+
+    #2972: the response carries ``completion_tokens_details.reasoning_tokens``
+    when the provider reports an integer in [0, completion_tokens], and leaves
+    it out otherwise. The model relay's Go mirror pins the same golden bytes
+    (``TestPublicProviderResponseCarriesBoundedReasoningTokens``), and the
+    dittobench-api broker reads them.
+    """
+    upstream: dict[str, Any] = {
+        "id": "gen-1",
+        "object": "chat.completion",
+        "created": 1755000000,
+        "model": "openai/gpt-oss-20b",
+        "choices": [
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "logprobs": None,
+                "message": {"role": "assistant", "content": "hi"},
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": 1500,
+            "cost": 0.01,
+            "completion_tokens_details": {"reasoning_tokens": 1200, "audio_tokens": 0},
+        },
+    }
+    golden = (
+        Path(__file__).parents[6]
+        / "services/model-relay/internal/inference/testdata"
+        / "public_response_reasoning_usage.json"
+    )
+    public = _public_provider_response(upstream)
+    assert json.dumps(public, separators=(",", ":")) == golden.read_text().strip()
+
+    plain = {"prompt_tokens": 10, "completion_tokens": 1500, "total_tokens": 1510}
+    for details in (
+        None,
+        {},
+        {"reasoning_tokens": None},
+        {"reasoning_tokens": -1},
+        {"reasoning_tokens": 1501},
+        {"reasoning_tokens": 12.0},
+        {"reasoning_tokens": True},
+        {"reasoning_tokens": "12"},
+        [1200],
+    ):
+        usage: dict[str, Any] = {"prompt_tokens": 10, "completion_tokens": 1500}
+        usage["completion_tokens_details"] = details
+        assert _public_provider_response({**upstream, "usage": usage})["usage"] == plain
+    absent = {"prompt_tokens": 10, "completion_tokens": 1500}
+    assert _public_provider_response({**upstream, "usage": absent})["usage"] == plain
 
 
 def test_router_metadata_rejects_ambiguous_selected_provider() -> None:

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
-	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
 const (
@@ -415,7 +415,7 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 			mutate: func(request *confirmationExecutionRequest) {
 				// The first version the scorer does not accept yet; v13 is a
 				// supported subject epoch.
-				request.BenchVersion = scoregates.BenchVersionV14 + 1
+				request.BenchVersion = protocol.NewestGeneratableBenchVersion() + 1
 			},
 			message: "confirmation execution requires a supported confirmation bench version",
 		},
@@ -598,13 +598,6 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 				request.ExecutionProfile = json.RawMessage("null")
 			},
 			message: "confirmation execution profile is missing",
-		},
-		{
-			name: "missing artifact URL",
-			mutate: func(request *confirmationExecutionRequest) {
-				request.ArtifactURL = " "
-			},
-			message: "confirmation artifact URL is missing",
 		},
 		{
 			name: "missing screened image URL",

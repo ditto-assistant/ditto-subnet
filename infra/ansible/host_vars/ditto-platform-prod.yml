@@ -53,6 +53,7 @@ platform_trace_hippius_bucket: ditto-subnet-traces
 # Setting this back to [] and re-converging is the durable rollback: it restores
 # the byte-exact pre-relay Caddyfile.
 platform_inference_relay_ports: [8010, 8011]
+platform_api_standby_port: 8002
 
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
@@ -67,6 +68,10 @@ secret_backroom_platform_operator_proof: backroom-platform-operator-proof
 # key holds no stake and needs no on-chain registration.
 platform_screener_hotkey: "5G6fGXnXFYdLM3ZyAm9whUbCY4ziQzcbMiTEqZB5c9KekTtR"
 secret_screener_api_token: "screener-api-token-prod"
+# Operator-owned ditto-ops hotkey (no miner funds at stake). Only its own
+# shadow agents may be isolated and leased to one validator as a diagnostic,
+# e.g. the source-leak honeytoken; they are never scored, ranked, or paid.
+platform_operator_diagnostic_hotkeys: "5DqcqcAKouh1CQscxXwo87SiWtvH6A4oVtnMssQ8uTMLnvT6"
 # Terraform creates the secret container and grants the Platform identity read
 # access. Operators add the payload before converging this host.
 secret_screener_controller_api_token: "screener-controller-api-token-prod"

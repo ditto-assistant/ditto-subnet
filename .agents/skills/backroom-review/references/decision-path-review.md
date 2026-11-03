@@ -96,9 +96,22 @@ its text to final_text changes field precedence even if the words survive.
 Identify the published protocol's actual overflow limit and permitted outcome;
 do not infer permission from a helper name or an invented local limit. Model-
 omitted optional fields and protocol-permitted serialization remain allowed.
-A reused model draft that reaches the deciding prompt only as text is not I4,
-with or without a disagree clause; see
-[october-29-reused-draft-no-disagree-clause](precedents/october-29-reused-draft-no-disagree-clause.md).
+
+I4 reused-draft prompt-text safe harbor (2026-10-29). A reused model-sampled
+draft or earlier model reply that reaches the deciding model only as prompt
+text is not I4 or I3 when the deciding model's own reply then ships. This
+holds even when the note labels the draft as the model's own reply, tells it
+to keep to or agree with that answer unless the notes plainly show it wrong,
+and has no disagree clause. Prompt wording is not host processing of a
+finalized field, and a new deciding call that reads the note decides freely.
+Content-keyed reuse of the draft is caching, not selection. A fallback that
+fires only on a missing or empty reply and ships a model-authored reply from
+the same request is W7 shape recovery; trace whether it can carry content on
+the cited path. Resolve such I3/I4 leads as refuted, not unresolved. Still
+charge host code that compares the reply with the draft, retries on
+disagreement, overwrites a well-formed reply or substitutes the draft's value
+(I3, I4), or rejects a well-formed reply on a semantic test or builds the
+final text itself (I3, I4).
 
 W11 / W12: follow revoked capabilities beyond the model-visible catalog to
 the dispatch map and first side effect. Provider tool_choice is not an
@@ -120,6 +133,26 @@ reachable request, the valid selected call and the refusal point. Preserve an
 exact-repeat stop on name plus canonical arguments when the request does not
 ask for the effect again, a model-authorized repeat, and an unsure route that
 keeps the complete catalog.
+
+I7 connector and app-wording safe harbor (2026-11-03). Hiding connector-gated
+or app-specific tools from the deciding model's catalog is W4 availability
+narrowing, not by itself a finding under I7 or any other condition. This
+covers filtering on the published connector marker (a description that says
+the tool needs a connector, such as "Needs the <App> connector to be linked in
+Settings.") and filtering on the request's app-name wording, such as hiding an
+app's tools when the request does not name that app. Guessing from wording is
+allowed; the filter may be rules, regular expressions or a declared small
+model and needs no proof that a hidden tool was impossible. The W4 conditions
+on exact request correctness, entity names, ambiguity and low confidence do
+not apply to it. A hidden tool the case needed is honest over-filtering, a
+performance issue, not a removed required capability or a manufactured
+singleton; resolve such I7 leads as refuted, not unresolved. Still charge
+answering or reporting as if a hidden or removed tool ran, or fabricating its
+call, result or receipt (I6); removing a needed tool and then claiming it ran
+or reporting its effect as done (I6, I7); and using the filter to pin
+`tool_choice`, replace the catalog with a host plan or refuse a valid call the
+model selected from the tools it was shown (I7). Other I7 grounds are
+unchanged.
 
 I5 case-file currency safe harbor. Bench v13 case files stamp filing times in
 shuffled order, so a plain restatement can be dated after the change note
@@ -151,7 +184,8 @@ routed notes is not a second factor; resolve such I5 leads as refuted, not
 unresolved. Reject only on an independent ground: host parsing of benchmark
 text into operands, steps, ordering or answers served in place of the model's
 reading (I5), a host-written, edited or overriding answer (I3, I4), tool
-removal, hiding or forcing (I7), or benchmark-private content in the guidance.
+removal, hiding or forcing beyond the I7 connector and app-wording safe harbor
+(I7), or benchmark-private content in the guidance.
 Evidence loss alone is not an independent ground (W3).
 
 W3 record-selection safe harbor. Choosing which retrieved records reach the
@@ -172,6 +206,9 @@ For every finding cite the current reachable caller-to-consequence chain and
 defeat applicable safe harbors. Distinguish static proof from observed runtime
 events. Prior clears and same-byte helpers require current caller/configuration
 checks; unchanged ancestors are separately reviewed, never rejected by lineage.
+
+The I4 reused-draft prompt-text safe harbor above records the operator ruling in
+[october-29-reused-draft-no-disagree-clause](precedents/october-29-reused-draft-no-disagree-clause.md).
 
 Record concise path:line evidence in the existing review record. Do not call
 missing reviewer-created records miner misconduct. For a bounded operator

@@ -237,6 +237,9 @@ export interface ValidationAttempt {
     | "grant_rate_denied"
     | "platform_capacity"
     | "provider_failure"
+    | "harness_oom"
+    | "host_memory_pressure"
+    | "harness_killed_137"
     | null;
   deadline?: string | null;
   benchmark_progress?: BenchmarkProgress | null;

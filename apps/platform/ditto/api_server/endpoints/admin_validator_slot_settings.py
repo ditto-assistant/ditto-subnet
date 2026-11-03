@@ -177,6 +177,7 @@ def _allocation(
         validator_hotkey=hotkey,
         allowed_slots=allowed,
         rounds_active=rounds_active and round_capable,
+        healthy_slots=healthy if capacity is not None else None,
     )
     seen_at = heartbeat.seen_at if heartbeat is not None else None
     if seen_at is not None and seen_at.tzinfo is None:

@@ -62,11 +62,18 @@ const GradingBenchVersion = protocol.BenchVersionV13
 // answer, distractor, and dump-guard form must read the same as rendered text.
 const GradingBenchVersionV14 = protocol.BenchVersionV14
 
+// GradingBenchVersionV15 is the v15 memory grading policy: v14's policy with
+// multi-word case values read as one phrase (grade.PolicyFloorV15). It adds no
+// pack validation rule beyond v14's; a v15 pack is validated like a v14 pack.
+// Every activatable bench version ships a pack policy of the same number
+// (tandem upgrade), so v15 rounds can run once a validator quorum supports 15.
+const GradingBenchVersionV15 = protocol.BenchVersionV15
+
 // supportedGradingBenchVersions is the ordered set of policies a pack may
 // declare. It is also the set of bench versions a generator round can run at
 // (Platform's GENERATOR_ROUND_BENCH_VERSIONS; the pin test diffs them): a
 // round at version N accepts packs graded at any supported version <= N.
-var supportedGradingBenchVersions = []int{GradingBenchVersion, GradingBenchVersionV14}
+var supportedGradingBenchVersions = []int{GradingBenchVersion, GradingBenchVersionV14, GradingBenchVersionV15}
 
 // SupportedGradingBenchVersions returns a copy of the ordered grading policies
 // a pack may declare.

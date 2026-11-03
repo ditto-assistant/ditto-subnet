@@ -40,6 +40,10 @@ MIN_PACK_CASES = 8
 # v13 run. A validator runs a round only when its scorer advertises at least
 # the round's column size (see ``generator_round_validator``).
 MAX_CASES_PER_SEED = 80
+# The shortest safe dueling season, in subnet epochs (dueling-bench.md
+# section 3): with an epoch-pinned ledger, a one-epoch season would put every
+# fold mid-rotation.
+MIN_DUELING_SEASON_EPOCHS = 2
 SOURCE_SIGNATURE_DOMAIN = "ditto-generator-v1"
 
 GeneratorMode = Literal["off", "shadow", "enforce"]
@@ -139,8 +143,9 @@ class GeneratorCompetitionSettings(BaseModel):
     """A hotkey's ledger score is its latest round column score within this
     window."""
     epochs_per_round: Annotated[int, Field(ge=1, le=48)] = 4
-    """Chain epochs (``SubnetEpochIndex``) per round:
-    ``round = SubnetEpochIndex // epochs_per_round``."""
+    """Chain epochs (``SubnetEpochIndex``) per round. A change applies to
+    rounds committed after it; round indexes keep increasing from the latest
+    round (``generator_rounds.round_clock``)."""
     counted_columns: Annotated[int, Field(ge=1, le=6)] = 5
     """Generator columns every agent is compared on: the best qualified
     generators by latest round score, filled by the public default generator
@@ -154,8 +159,11 @@ class GeneratorCompetitionSettings(BaseModel):
     """Subnet-run baseline agents added to every round panel. Each counts as
     its own independent solver owner."""
     privacy_window_rounds: Annotated[int, Field(ge=1, le=180)] = 6
-    """Rounds after a round opens before its secret, seed, and dataset are
-    revealed publicly."""
+    """Subnet epochs (one-epoch round lengths, about 72 minutes each) after a
+    round opens before its secret, seed, and dataset are revealed publicly,
+    once the round is scored or void. Counted in epochs, not in rounds of the
+    current ``epochs_per_round``, so the window keeps its wall-clock length
+    across a cadence change."""
     onchain_commitment: bool = True
     """Also publish each round's seed commitment on-chain: Platform elects up
     to three fresh validators per round to write ``dgr1:{round}:{commitment}``
@@ -189,6 +197,29 @@ class GeneratorCompetitionSettings(BaseModel):
     instead of this switch. Off by default, and a revision written before
     this field existed reads as off."""
 
+    dueling_enabled: bool = False
+    """Open dueling seasons (bench v16+, ``dueling-bench.md``): freeze up to
+    five eligible generators per season and serve their slices to every
+    bench v16+ agent run. Seasons open only while this is set and a v16+
+    contract is active or is the desired version of an open rollout (a shadow
+    season), and never while the source release policy has ``disclosure =
+    never``. Off by default, and a revision written before this field existed
+    reads as off."""
+    rounds_per_season: Annotated[int, Field(ge=1, le=48)] = 1
+    """Generator rounds per dueling season (one 4-epoch round, about 4.8 h,
+    by default). A season is at least 2 epochs: a write that enables dueling
+    with ``rounds_per_season x epochs_per_round < 2`` is refused. A revision
+    written before this field existed reads as 1."""
+
+    dueling_shadow_bench_version: Annotated[int, Field(ge=16)] | None = None
+    """A bench version (16+) to run non-authoritative shadow dueling seasons
+    at while no dueling version is active or rolling out, so
+    ``issue_benchmark_canary`` at that version can lease a slice before
+    ``start_benchmark_rollout``. Ignored while a dueling version is active or
+    rolling out. Seasons opened for it are ``shadow`` and never
+    authoritative. Must name a shipped bench contract. Null by default, and a
+    revision written before this field existed reads as null."""
+
     @model_validator(mode="after")
     def _coherent(self) -> GeneratorCompetitionSettings:
         if self.min_solver_owners > self.min_panel:
@@ -200,6 +231,22 @@ class GeneratorCompetitionSettings(BaseModel):
         if self.counted_columns + self.challenger_columns > 8:
             raise ValueError("a round holds at most 8 columns")
         return self
+
+    def dueling_season_refusal(self) -> str | None:
+        """Why this policy cannot run dueling seasons, or None.
+
+        Checked on write, not on read, so a stored revision never turns
+        invalid (and closes the lane) because of it."""
+        if self.dueling_shadow_bench_version is not None and not self.dueling_enabled:
+            return "dueling_shadow_bench_version needs dueling_enabled"
+        epochs = self.rounds_per_season * self.epochs_per_round
+        if self.dueling_enabled and epochs < MIN_DUELING_SEASON_EPOCHS:
+            return (
+                f"a dueling season must span at least {MIN_DUELING_SEASON_EPOCHS} "
+                f"epochs: rounds_per_season ({self.rounds_per_season}) x "
+                f"epochs_per_round ({self.epochs_per_round}) = {epochs}"
+            )
+        return None
 
     def score_params(self) -> dict[str, float | int]:
         """The ``challenge.ScoreParams`` view of this policy."""
@@ -286,6 +333,9 @@ class GeneratorScorerHeartbeatView(GeneratorModel):
     effective_grading_bench_versions: list[int]
     """What Platform matches rounds and qualifications against: the advertised
     list, or v13 only when none was advertised."""
+    dueling_work_kinds: list[str] | None = None
+    """Dueling work kinds (``slice``, ``battery``) the scorer advertised on its
+    ``dueling-work`` poll; None when it never polled for dueling work."""
 
 
 class AdminGeneratorScorerStatus(GeneratorModel):
@@ -575,18 +625,22 @@ class GeneratorScorerFault(GeneratorModel):
     is voided (unsupported request) or re-leased (sandbox).
     """
 
-    work: Literal["qualification", "round"]
+    work: Literal["qualification", "round", "dueling"]
     lease_id: UUID
     run_id: UUID | None = None
     submission_id: UUID | None = None
     round_index: int | None = None
+    season_id: UUID | None = None
+    """``work: "dueling"``: the season of the faulted lease, if any."""
+    preparation_id: UUID | None = None
+    """``work: "dueling"``: the slice preparation of the faulted lease."""
     error_kind: ScorerFaultKind
     detail: Annotated[str, Field(max_length=4000)] = ""
     scorer_version: Annotated[str, Field(min_length=1, max_length=64)]
 
 
 class GeneratorScorerFaultAck(GeneratorModel):
-    work: Literal["qualification", "round"]
+    work: Literal["qualification", "round", "dueling"]
     action: Literal["backed_off", "voided", "released"]
     submission_status: SubmissionStatus | None = None
     round_status: str | None = None

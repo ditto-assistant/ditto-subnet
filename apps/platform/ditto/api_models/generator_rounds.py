@@ -1,7 +1,8 @@
 """Wire models for generator-competition rounds (the agent x generator matrix).
 
-A round is keyed on the chain's epoch counter:
-``round_index = SubnetEpochIndex // epochs_per_round``. Platform commits each
+A round is keyed on the chain's epoch counter: it opens at a subnet epoch
+and spans ``epochs_per_round`` epochs, and round indexes continue from the
+latest round across a cadence change. Platform commits each
 round's secret one round ahead (``commitment``; elected validators publish
 it on-chain),
 derives the seed from the secret and the block the round opened at, and

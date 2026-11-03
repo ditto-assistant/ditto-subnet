@@ -64,7 +64,7 @@ uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
 ```
 
 The command starts and tears down the harness, the live-bench scorer (the
-active version from the public rollout endpoint, currently 14),
+active version from the public rollout endpoint, currently 15),
 trusted local reader/judge proxies, and isolated LongMemEval stores. Default
 `--run-size small` is a smoke profile, not the on-chain case count. Nothing is
 exposed to the public internet. LongMemEval remains a separately labeled
@@ -108,6 +108,13 @@ normal-only image remains valid and is never penalized for omitting that route.
 Coding remains shadow-only and score-ineligible today; see
 [`coding-unified-miner-capability-shadow.md`](coding-unified-miner-capability-shadow.md)
 for the planned compatibility boundary.
+
+Your harness runs inside a fixed resource envelope: memory cap, 2 CPUs, PID
+and `/tmp` limits, `/seed` and per-case deadlines, 8 overlapping `/run` calls,
+and the inference walls. [RUNTIME-ENVELOPE.md](RUNTIME-ENVELOPE.md) lists every
+limit and the rule that decides whether an out-of-memory kill is charged to
+you. `ditto practice` runs at the same case concurrency and reports your peak
+memory against the cap.
 
 ## Prepare for mainnet
 
@@ -359,7 +366,7 @@ result.
 
 - DittoBench generates fresh tool-use and memory-recall cases for each
   submission. Production locks every harness to one consensus model, so model
-  choice is not a miner lever: on the current contract (**Bench v14**, which
+  choice is not a miner lever: on the current contract (**Bench v15**, which
   keeps the v13 gates — see the starter kit's [*Bench v13: how to stay inside the
   gates*](../miners/dittobench-starter-kit/README.md#bench-v13-how-to-stay-inside-the-gates))
   that is **`openai/gpt-oss-20b`**, served through the platform-owned

@@ -187,6 +187,10 @@ _SCORING_PREFIX = "/api/v1/scoring"
 # deadline. Back off long enough to ride out a Platform rollout's 502 window.
 _SCORE_SUBMIT_RETRY_DELAYS = (2.0, 8.0, 20.0, 45.0, 90.0)
 _SCORE_SUBMIT_DEADLINE_MARGIN = timedelta(seconds=30)
+# An artifact fetch is a read with a fresh signed nonce per attempt, so it is
+# safe to repeat. A Platform deploy refuses connections for ~6s (SN-426); these
+# delays outlast that before the ticket is handed back as infrastructure.
+_ARTIFACT_FETCH_RETRY_DELAYS = (1.0, 3.0, 8.0)
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
 # benchmark ticket. This does not spend inference budget: no model request can
@@ -2393,7 +2397,35 @@ class PlatformClient:
         return body
 
     async def get_artifact(self, agent_id: UUID) -> ArtifactResponse:
-        """Get a presigned tarball URL with fresh proof of hotkey ownership."""
+        """Get a presigned tarball URL with fresh proof of hotkey ownership.
+
+        A timeout, rate limit, 5xx or transport failure is Platform's fault,
+        not the miner's: it is retried with backoff, and one that outlasts the
+        retries raises :class:`PlatformInfrastructureError` so the ticket is
+        handed back as no-fault ``infrastructure`` rather than ``scoring_error``
+        (SN-426). Any other refusal stays a plain :class:`PlatformError`.
+        """
+        attempts = len(_ARTIFACT_FETCH_RETRY_DELAYS) + 1
+        for attempt in range(attempts):
+            try:
+                return await self._get_artifact_once(agent_id)
+            except PlatformInfrastructureError as failure:
+                if attempt + 1 >= attempts:
+                    raise
+                delay = _ARTIFACT_FETCH_RETRY_DELAYS[attempt]
+                logger.warning(
+                    "artifact fetch for %s hit Platform infrastructure (%s); "
+                    "retrying in %.0fs (attempt %d/%d)",
+                    agent_id,
+                    failure,
+                    delay,
+                    attempt + 1,
+                    attempts,
+                )
+                await asyncio.sleep(delay)
+        raise AssertionError("unreachable")
+
+    async def _get_artifact_once(self, agent_id: UUID) -> ArtifactResponse:
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/artifact"
         requested_at = datetime.now(UTC)
         nonce = uuid4()
@@ -2412,7 +2444,11 @@ class PlatformClient:
         try:
             resp = await self._client.get(url, headers=proof_headers)
         except httpx.HTTPError as e:
-            raise PlatformError(f"artifact fetch failed: {e}") from e
+            raise PlatformInfrastructureError(f"artifact fetch failed: {e}") from e
+        if _is_transient_platform_status(resp.status_code):
+            raise PlatformInfrastructureError(
+                f"artifact unavailable ({resp.status_code}): {resp.text[:200]}"
+            )
         if resp.status_code != 200:
             raise PlatformError(
                 f"artifact rejected ({resp.status_code}): {resp.text[:200]}"
