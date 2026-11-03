@@ -461,6 +461,8 @@ func TestSliceRefusesUnsupportedLeasesAsFaults(t *testing.T) {
 		"policy outside":    func(w *duelingWork) { w.Columns[0].GradingBenchVersion = challenge.GradingBenchVersion },
 		"duplicate column":  func(w *duelingWork) { w.Columns[0].ColumnID = w.Columns[1].ColumnID },
 		"ownerless miner":   func(w *duelingWork) { w.Columns[0].OwnerKey = ""; w.Columns[0].PublicDefault = false },
+		"negative index":    func(w *duelingWork) { w.SeasonIndex = -1 },
+		"bad season id":     func(w *duelingWork) { w.SeasonID = "../season" },
 	} {
 		w := sliceWork(t, true)
 		mutate(w)
@@ -471,7 +473,7 @@ func TestSliceRefusesUnsupportedLeasesAsFaults(t *testing.T) {
 			t.Fatalf("%s: err=%v posted=%d builds=%d", name, err, len(fp.slices), sb.count())
 		}
 		if f := fp.faults; len(f) != 1 || f[0].Work != "dueling" || f[0].ErrorKind != "unsupported_request" ||
-			f[0].PreparationID != "prep-1" || f[0].SeasonID != testSeasonID {
+			f[0].PreparationID != "prep-1" || f[0].SeasonID != w.SeasonID {
 			t.Fatalf("%s: fault %+v", name, f)
 		}
 	}
@@ -549,5 +551,36 @@ func checkReproduceSlice(t *testing.T, served sliceResult, raw []byte) {
 	bad[1] = strings.Repeat("00", challenge.SeasonSecretBytes)
 	if err := reproduceSlice(context.Background(), bad, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "does not derive") {
 		t.Fatalf("wrong secret: %v", err)
+	}
+}
+
+// timeoutSandbox times out every build, as a loaded host would.
+type timeoutSandbox struct{}
+
+func (timeoutSandbox) Name() string { return "timeout" }
+
+func (timeoutSandbox) Build(context.Context, string) (genrun.Program, error) {
+	return nil, &genrun.GeneratorError{Phase: "build", Reason: "timeout"}
+}
+
+// A build timeout is host load, never the generator's failure: the battery
+// and the slice report a sandbox fault instead of failing or substituting.
+func TestBuildTimeoutsAreSandboxFaults(t *testing.T) {
+	ok := duelingArchive(t, "ok")
+	battery := &duelingWork{
+		Kind: "battery", LeaseID: "lease-t", SeasonID: "season-t", BenchVersion: testDuelingBench,
+		Cases: protocol.DuelingSliceCasesPerColumn, Seeds: batterySeeds(1),
+		Candidates: []duelingCandidate{{duelingSource: source("sub-ok", ok), OwnerKey: "coldkey:a"}},
+	}
+	for _, w := range []*duelingWork{battery, sliceWork(t, true)} {
+		fp := newFakeDuelingPlatform(t, w)
+		cache := newBuildCache(timeoutSandbox{}, buildCacheSize)
+		_, err := processDueling(context.Background(), fp.client(), cache)
+		if !errors.Is(err, genrun.ErrSandbox) || len(fp.batteries)+len(fp.slices) != 0 {
+			t.Fatalf("%s: err=%v posted=%d", w.Kind, err, len(fp.batteries)+len(fp.slices))
+		}
+		if f := fp.faults; len(f) != 1 || f[0].ErrorKind != "sandbox" || f[0].Work != "dueling" {
+			t.Fatalf("%s: fault %+v", w.Kind, f)
+		}
 	}
 }

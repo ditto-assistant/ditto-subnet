@@ -22,7 +22,9 @@ const buildCacheSize = 24
 // builtGenerator is one source archive's build. A generator's own failure
 // (an archive the contract refuses, a compile error) is recorded in Failure
 // and cached like a success: rebuilding the same bytes fails the same way. A
-// build timeout is not cached, since it can be host load.
+// build timeout is a sandbox fault instead: every dueling generator already
+// built inside the same limit to qualify, so a timeout here is host load and
+// must never count against it.
 type builtGenerator struct {
 	Prog genrun.Program
 	// TreeSHA256 is the archive's source tree digest (challenge.TreeDigest),
@@ -70,12 +72,9 @@ func (c *buildCache) get(ctx context.Context, raw []byte) (*builtGenerator, erro
 		c.touch(sum)
 		return b, nil
 	}
-	b, cacheable, err := c.build(ctx, raw)
+	b, err := c.build(ctx, raw)
 	if err != nil {
 		return nil, err
-	}
-	if !cacheable {
-		return b, nil
 	}
 	c.byID[sum] = b
 	c.touch(sum)
@@ -90,30 +89,33 @@ func (c *buildCache) get(ctx context.Context, raw []byte) (*builtGenerator, erro
 	return b, nil
 }
 
-func (c *buildCache) build(ctx context.Context, raw []byte) (*builtGenerator, bool, error) {
+func (c *buildCache) build(ctx context.Context, raw []byte) (*builtGenerator, error) {
 	dir, err := os.MkdirTemp("", "challenge-scorer-src-*")
 	if err != nil {
-		return nil, false, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
+		return nil, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
 	}
 	defer os.RemoveAll(dir)
 	// The Docker sandbox bind-mounts this directory read-only for an
 	// unprivileged container user, which cannot traverse MkdirTemp's 0700.
 	if err := os.Chmod(dir, 0o755); err != nil {
-		return nil, false, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
+		return nil, fmt.Errorf("%w: %v", genrun.ErrSandbox, err)
 	}
 	info, err := challenge.ExtractArchive(raw, dir)
 	if err != nil {
-		return &builtGenerator{Failure: "archive: " + err.Error()}, true, nil
+		return &builtGenerator{Failure: "archive: " + err.Error()}, nil
 	}
 	prog, err := c.sb.Build(ctx, dir)
 	if err != nil {
 		var gerr *genrun.GeneratorError
-		if errors.As(err, &gerr) {
-			return &builtGenerator{TreeSHA256: info.TreeSHA256, Failure: gerr.Error()}, gerr.Reason != "timeout", nil
+		if errors.As(err, &gerr) && gerr.Reason == "timeout" {
+			return nil, fmt.Errorf("%w: generator build timed out (host load)", genrun.ErrSandbox)
 		}
-		return nil, false, err
+		if errors.As(err, &gerr) {
+			return &builtGenerator{TreeSHA256: info.TreeSHA256, Failure: gerr.Error()}, nil
+		}
+		return nil, err
 	}
-	return &builtGenerator{Prog: prog, TreeSHA256: info.TreeSHA256}, true, nil
+	return &builtGenerator{Prog: prog, TreeSHA256: info.TreeSHA256}, nil
 }
 
 // Close releases every cached build.

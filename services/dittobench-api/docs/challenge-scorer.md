@@ -185,7 +185,9 @@ that predates dueling work answers 404, which the scorer treats as idle
 without logging. Builds are cached by `source_sha256` across leases (up to 24
 generators, least recently used out), so a season's binaries are built once
 and a slice is five sandboxed runs. A build's compile or archive failure is
-cached too; a build timeout is not.
+cached too. A build timeout is reported as a `sandbox` fault, never as the
+generator's failure: every dueling generator already built inside the same
+limit to qualify.
 
 - `kind=battery`: the season qualification battery.
   `{kind, lease_id, season_id, bench_version, cases, seeds: [hex],

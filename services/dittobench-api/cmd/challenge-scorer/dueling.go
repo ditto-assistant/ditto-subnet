@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -224,6 +225,10 @@ func processDueling(ctx context.Context, client *platformClient, cache *buildCac
 	return true, reportFault(ctx, client, fault, unsupported("unknown dueling work kind %q", w.Kind))
 }
 
+// seasonIDPattern mirrors the season_id rule challenge.EncodeSliceDataset
+// enforces, so a malformed header is refused before anything is built.
+var seasonIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$`)
+
 // seasonPolicies is the pack grading window a season at benchVersion accepts.
 func seasonPolicies(benchVersion int) ([]int, error) {
 	if !protocol.DuelingBenchVersion(benchVersion) {
@@ -350,8 +355,11 @@ func checkSliceSpec(spec *sliceSpec, casesPerColumn int) error {
 	if casesPerColumn != 0 && casesPerColumn != protocol.DuelingSliceCasesPerColumn {
 		return unsupported("cases_per_column %d; the v%d slice contract is %d", casesPerColumn, spec.Header.BenchVersion, protocol.DuelingSliceCasesPerColumn)
 	}
-	if spec.Header.RunSeed < 0 {
-		return unsupported("run_seed must be non-negative")
+	if spec.Header.RunSeed < 0 || spec.Header.SeasonIndex < 0 {
+		return unsupported("run_seed and season_index must be non-negative")
+	}
+	if !seasonIDPattern.MatchString(spec.Header.SeasonID) {
+		return unsupported("season_id is invalid")
 	}
 	if len(spec.Columns) != protocol.DuelingSliceColumns {
 		return unsupported("slice needs exactly %d columns, got %d", protocol.DuelingSliceColumns, len(spec.Columns))
