@@ -6,7 +6,7 @@ import contextlib
 import json
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -29,6 +29,9 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ValidatorHeartbeat,
     ValidatorTicket,
+)
+from ditto.db.queries.inference_observability import (
+    load_live_lease_inference_activity,
 )
 from ditto.metrics import VALIDATOR_HEARTBEAT_PAYLOAD_DEGRADED
 
@@ -74,6 +77,12 @@ class ActiveValidatorWork:
     ticket: ValidatorTicket
     agent: Agent
     progress: BenchmarkProgress | None
+    inference_activity_at: datetime | None = None
+    """When this lease's live inference grant last served a request.
+
+    Feeds only the ``stalled`` judgement of every public projection, so the
+    activity, rollout, agent and pipeline views agree with the fleet view.
+    """
 
 
 @dataclass(frozen=True)
@@ -659,7 +668,29 @@ async def list_active_validator_work(
                 progress=progress,
             )
         )
-    return active
+    if not active:
+        return active
+    activity = await load_live_lease_inference_activity(session, now=now)
+    return [
+        replace(
+            work,
+            inference_activity_at=(
+                lease.last_activity_at
+                if (
+                    lease := activity.get(
+                        (
+                            work.ticket.validator_hotkey,
+                            work.ticket.slot_id,
+                            work.agent.agent_id,
+                        )
+                    )
+                )
+                is not None
+                else None
+            ),
+        )
+        for work in active
+    ]
 
 
 async def list_active_validator_assignments(

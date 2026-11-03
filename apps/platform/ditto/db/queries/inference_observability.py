@@ -260,6 +260,7 @@ async def load_live_lease_inference_activity(
                 InferenceGrant.agent_id,
                 InferenceGrant.request_count,
                 InferenceGrant.embedding_request_count,
+                InferenceGrant.decision_request_count,
                 InferenceGrant.updated_at,
             ).where(
                 InferenceGrant.status == "active",
@@ -268,27 +269,30 @@ async def load_live_lease_inference_activity(
         )
     ).all()
     activity: dict[LeaseSlotKey, LeaseInferenceActivity] = {}
-    for hotkey, slot_id, agent_id, chat, embedding, updated_at in rows:
-        requests = int(chat or 0) + int(embedding or 0)
-        last = None
-        if requests > 0 and updated_at is not None:
-            # Activation also bumps ``updated_at``; only a grant that has
-            # served a request is evidence of a running harness.
-            last = updated_at if updated_at.tzinfo else updated_at.replace(tzinfo=UTC)
+    selected_updated_at: dict[LeaseSlotKey, datetime | None] = {}
+    for hotkey, slot_id, agent_id, chat, embedding, decision, updated_at in rows:
+        touched = (
+            updated_at.replace(tzinfo=UTC)
+            if updated_at is not None and updated_at.tzinfo is None
+            else updated_at
+        )
+        # Activation also bumps ``updated_at``; only a grant that has served
+        # a request (chat, embedding or decision lane) is evidence of a
+        # running harness.
+        served = int(chat or 0) + int(embedding or 0) + int(decision or 0)
         entry = LeaseInferenceActivity(
             chat_requests=int(chat or 0),
             embedding_requests=int(embedding or 0),
-            last_activity_at=last,
+            last_activity_at=touched if served > 0 else None,
         )
         key = (str(hotkey), str(slot_id), agent_id)
-        previous = activity.get(key)
-        if (
-            previous is None
-            or previous.last_activity_at is None
-            or (
-                entry.last_activity_at is not None
-                and entry.last_activity_at > previous.last_activity_at
-            )
+        previous = selected_updated_at.get(key)
+        # The most recently touched grant is the lease the validator runs,
+        # even when it has not served a request yet: an older grant's traffic
+        # must never vouch for a re-issued lease.
+        if key not in activity or (
+            touched is not None and (previous is None or touched >= previous)
         ):
             activity[key] = entry
+            selected_updated_at[key] = touched
     return activity

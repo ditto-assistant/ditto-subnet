@@ -1442,8 +1442,11 @@ def _public_benchmark_progress(
     """Project private signed counts onto the fixed public allowlist.
 
     ``inference_activity_at`` feeds only the ``stalled`` judgement; the time
-    itself is never published.
+    itself is never published. It defaults to the activity the work item
+    carries from :func:`list_active_validator_work`.
     """
+    if inference_activity_at is None:
+        inference_activity_at = work.inference_activity_at
     progress = work.progress
     started_at = cast(datetime, _aware(work.ticket.issued_at))
     agent_name = (

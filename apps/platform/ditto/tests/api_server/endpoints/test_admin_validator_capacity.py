@@ -449,3 +449,11 @@ class TestPrepareStageStalls:
             item["slot_id"]: item["stalled"] for item in entry["active_benchmarks"]
         }
         assert stalled == {"slot-0": False, "slot-1": True}
+
+        # So does every per-agent projection built from the same active work.
+        for agent_id, expected in ((busy, False), (wedged, True)):
+            summary = await client.get(f"/api/v1/public/agent/{agent_id}/summary")
+            assert summary.status_code == 200, summary.text
+            assert [
+                item["stalled"] for item in summary.json()["active_benchmarks"]
+            ] == [expected]
