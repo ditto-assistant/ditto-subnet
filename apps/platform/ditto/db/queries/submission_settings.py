@@ -19,7 +19,10 @@ from ditto.api_models.submission_settings import (
     OVERRIDABLE_COMPETITIONS,
 )
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
-from ditto.db.queries.agents import SubmissionCooldownError, get_submission_retry_at
+from ditto.db.queries.agents import (
+    SubmissionCooldownError,
+    submission_cooldown_decision,
+)
 from ditto.db.queries.submission_deposit_address import (
     effective_submission_deposit_address,
 )
@@ -303,14 +306,15 @@ async def reserve_upload_admission(
         existing = None
 
     if not replace_existing:
-        retry_at = await get_submission_retry_at(
+        decision = await submission_cooldown_decision(
             session,
             miner_coldkey=miner_coldkey,
+            miner_hotkey=miner_hotkey,
             cooldown=timedelta(seconds=settings.cooldown_seconds),
             now=current,
         )
-        if retry_at is not None:
-            raise SubmissionCooldownError(retry_at)
+        if decision is not None:
+            raise decision.error()
 
     row = UploadAdmissionReservation(
         miner_coldkey=miner_coldkey,
@@ -417,11 +421,12 @@ async def consume_or_enforce_upload_admission(
         await session.delete(existing)
         await session.flush()
 
-    submission_retry_at = await get_submission_retry_at(
+    decision = await submission_cooldown_decision(
         session,
         miner_coldkey=miner_coldkey,
+        miner_hotkey=miner_hotkey,
         cooldown=timedelta(seconds=settings.cooldown_seconds),
         now=current,
     )
-    if submission_retry_at is not None:
-        raise SubmissionCooldownError(submission_retry_at)
+    if decision is not None:
+        raise decision.error()

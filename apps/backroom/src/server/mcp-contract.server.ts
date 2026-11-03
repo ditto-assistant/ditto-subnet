@@ -138,6 +138,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_inference_concurrency_settings',
   'start_runtime_profile',
   'set_submission_cooldown',
+  'set_owner_submission_cooldown',
+  'revoke_owner_submission_cooldown',
   'set_conversation_settings',
   'authorize_conversation_retry',
   'unban_hotkey',

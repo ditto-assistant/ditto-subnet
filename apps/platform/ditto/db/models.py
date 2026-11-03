@@ -7023,6 +7023,72 @@ class SubmissionDepositAddressRevision(Base):
     )
 
 
+class OwnerSubmissionCooldownRevision(Base):
+    """Append-only, operator-audited per-owner submission cooldown override.
+
+    One row is one revision of one owner identity's override, keyed by
+    ``(scope, owner_key)`` where ``scope`` is ``coldkey`` (a payment coldkey)
+    or ``hotkey``. The newest revision for a key is its current state:
+    ``set`` installs a minimum interval between that owner's submissions until
+    ``expires_at``; ``revoke`` ends it. The effective upload cooldown is the
+    longer of the global one and every active override that names the
+    uploading hotkey or payment coldkey. See
+    :mod:`ditto.db.queries.owner_submission_cooldown`.
+    """
+
+    __tablename__ = "owner_submission_cooldown_revisions"
+
+    revision_id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_key: Mapped[str] = mapped_column(Text, nullable=False)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)
+    cooldown_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope",
+            "owner_key",
+            "revision",
+            name="owner_submission_cooldown_revisions_key",
+        ),
+        CheckConstraint(
+            "scope IN ('coldkey', 'hotkey')",
+            name="owner_submission_cooldown_scope_check",
+        ),
+        CheckConstraint(
+            "length(owner_key) BETWEEN 1 AND 128",
+            name="owner_submission_cooldown_owner_key_check",
+        ),
+        CheckConstraint(
+            "revision >= 1", name="owner_submission_cooldown_revision_check"
+        ),
+        CheckConstraint(
+            "(action = 'set' AND cooldown_seconds BETWEEN 60 AND 2592000 "
+            "AND expires_at IS NOT NULL AND expires_at > created_at) "
+            "OR (action = 'revoke' AND cooldown_seconds IS NULL "
+            "AND expires_at IS NULL)",
+            name="owner_submission_cooldown_action_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) BETWEEN 8 AND 500",
+            name="owner_submission_cooldown_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="owner_submission_cooldown_actor_check",
+        ),
+    )
+
+
 class UploadAdmissionReservation(Base):
     """Short-lived pre-payment reservation for one payment coldkey."""
 

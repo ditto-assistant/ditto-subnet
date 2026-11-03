@@ -4537,6 +4537,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/submission-settings/owner-cooldowns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Owner Cooldowns
+         * @description List operator per-owner submission cooldown overrides.
+         *
+         *     Read-only. With ``scope`` and ``owner_key`` the response also carries that
+         *     identity's full revision history, its newest submission and when the
+         *     override next lets it submit.
+         */
+        get: operations["get_owner_cooldowns_api_v1_admin_submission_settings_owner_cooldowns_get"];
+        put?: never;
+        /**
+         * Set Owner Cooldown
+         * @description Install or replace one owner identity's cooldown override (CAS).
+         */
+        post: operations["set_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/submission-settings/owner-cooldowns/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Owner Cooldown
+         * @description End one owner identity's active override early (CAS).
+         */
+        post: operations["revoke_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/traces": {
         parameters: {
             query?: never;
@@ -13085,6 +13133,14 @@ export interface components {
              */
             scope_caveat: string;
         };
+        /** AdminOwnerCooldownsResponse */
+        AdminOwnerCooldownsResponse: {
+            /** Active Count */
+            active_count: number;
+            /** Items */
+            items: components["schemas"]["OwnerCooldownRevision"][];
+            lookup?: components["schemas"]["OwnerCooldownLookup"] | null;
+        };
         /**
          * AdminOwnerFootprint
          * @description Every hotkey reachable from one key through payment records.
@@ -13905,6 +13961,27 @@ export interface components {
             /** Idempotent */
             idempotent: boolean;
             retirement: components["schemas"]["AdminSubmissionRetirement"];
+        };
+        /** AdminRevokeOwnerCooldownRequest */
+        AdminRevokeOwnerCooldownRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
         };
         /** AdminRolloutExpandRequest */
         AdminRolloutExpandRequest: {
@@ -14862,6 +14939,31 @@ export interface components {
             receipt_id: string;
             /** Worker Hotkey */
             worker_hotkey: string;
+        };
+        /** AdminSetOwnerCooldownRequest */
+        AdminSetOwnerCooldownRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Expires In Days */
+            expires_in_days: number;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
         };
         /** AdminShadowReviewObservation */
         AdminShadowReviewObservation: {
@@ -29020,6 +29122,63 @@ export interface components {
              * @description Whether a single-axis outlier may hold on its own (only in enforce mode, and only with the composite at or above min_composite_floor). Off: per-axis results are evidence only.
              */
             per_axis_enforce: boolean;
+        };
+        /**
+         * OwnerCooldownLookup
+         * @description One owner identity's override and what it means for them right now.
+         */
+        OwnerCooldownLookup: {
+            current: components["schemas"]["OwnerCooldownRevision"] | null;
+            /** Global Cooldown Seconds */
+            global_cooldown_seconds: number;
+            /** History */
+            history: components["schemas"]["OwnerCooldownRevision"][];
+            /** Latest Submission At */
+            latest_submission_at: string | null;
+            /** Next Allowed At */
+            next_allowed_at: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
+        };
+        /** OwnerCooldownRevision */
+        OwnerCooldownRevision: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "set" | "revoke";
+            /** Actor */
+            actor: string;
+            /** Cooldown Seconds */
+            cooldown_seconds: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Expires At */
+            expires_at: string | null;
+            /** Owner Key */
+            owner_key: string;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /**
+             * Scope
+             * @enum {string}
+             */
+            scope: "coldkey" | "hotkey";
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "active" | "expired" | "revoked";
         };
         /**
          * OwnerLinkProof
@@ -53789,6 +53948,111 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_owner_cooldowns_api_v1_admin_submission_settings_owner_cooldowns_get: {
+        parameters: {
+            query?: {
+                scope?: ("coldkey" | "hotkey") | null;
+                owner_key?: string | null;
+                include_inactive?: boolean;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOwnerCooldownsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminSetOwnerCooldownRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerCooldownLookup"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_owner_cooldown_api_v1_admin_submission_settings_owner_cooldowns_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRevokeOwnerCooldownRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OwnerCooldownLookup"];
                 };
             };
             /** @description Validation Error */

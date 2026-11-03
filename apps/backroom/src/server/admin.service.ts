@@ -633,6 +633,13 @@ import {
 } from '../lib/benchmark-era-stranded.schemas'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
 import {
+  ownerCooldownLookupSchema,
+  ownerCooldownsInputSchema,
+  ownerCooldownsSchema,
+  revokeOwnerCooldownInputSchema,
+  setOwnerCooldownInputSchema,
+} from '../lib/owner-submission-cooldown.schemas'
+import {
   submissionDepositAddressControlSchema,
   updateSubmissionDepositAddressInputSchema,
 } from '../lib/submission-deposit-address'
@@ -1425,6 +1432,58 @@ export async function updateSubmissionSettings(actor: string, rawInput: unknown)
     }
   }
   return control
+}
+
+const OWNER_COOLDOWNS_PATH = `${SUBMISSION_SETTINGS_PATH}/owner-cooldowns`
+
+export async function fetchOwnerCooldowns(rawInput: unknown) {
+  const input = ownerCooldownsInputSchema.parse(rawInput ?? {})
+  if ((input.scope === undefined) !== (input.ownerKey === undefined)) {
+    throw new Error('scope and ownerKey must be given together')
+  }
+  const params = new URLSearchParams({ include_inactive: String(input.includeInactive) })
+  if (input.scope !== undefined && input.ownerKey !== undefined) {
+    params.set('scope', input.scope)
+    params.set('owner_key', input.ownerKey)
+  }
+  const payload = await platformAdminRequest(`${OWNER_COOLDOWNS_PATH}?${params.toString()}`)
+  return ownerCooldownsSchema.parse(payload)
+}
+
+export async function setOwnerCooldown(actor: string, rawInput: unknown) {
+  const input = setOwnerCooldownInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(OWNER_COOLDOWNS_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      scope: input.scope,
+      owner_key: input.ownerKey,
+      cooldown_seconds: input.cooldownSeconds,
+      expires_in_days: input.expiresInDays,
+      expected_revision: input.expectedRevision,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return ownerCooldownLookupSchema.parse(payload)
+}
+
+export async function revokeOwnerCooldown(actor: string, rawInput: unknown) {
+  const input = revokeOwnerCooldownInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`${OWNER_COOLDOWNS_PATH}/revoke`, {
+    method: 'POST',
+    actor,
+    body: {
+      scope: input.scope,
+      owner_key: input.ownerKey,
+      expected_revision: input.expectedRevision,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return ownerCooldownLookupSchema.parse(payload)
 }
 
 const HOTKEY_BANS_PATH = '/api/v1/admin/hotkey-bans'

@@ -706,6 +706,7 @@ describe('Backroom MCP tools', () => {
         'decide_bounty_evaluation',
         'get_owner_attestations',
         'get_submission_cooldown',
+        'get_owner_submission_cooldowns',
         'get_competition_submission_terms',
         'get_treasury_settings',
         'get_treasury_receipts',
@@ -803,6 +804,8 @@ describe('Backroom MCP tools', () => {
         'start_runtime_profile',
         'set_source_release_policy',
         'set_submission_cooldown',
+        'set_owner_submission_cooldown',
+        'revoke_owner_submission_cooldown',
         'set_conversation_settings',
         'authorize_conversation_retry',
         'unban_hotkey',
@@ -978,7 +981,10 @@ describe('Backroom MCP tools', () => {
     // The stranded admission write and its effect read (one uuid, one SHA, two
     // guards, one-line summaries, detail in tool help) measure 226,436 bytes;
     // keep about 0.5 KB.
-    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(226_950)
+    // The per-owner submission cooldown trio (one filtered read, guarded set
+    // and revoke with SS58 key patterns; one-line summaries, detail in tool
+    // help) brings it to 228,914 bytes; keep about 0.5 KB.
+    expect(Buffer.byteLength(JSON.stringify(response.tools), 'utf8')).toBeLessThanOrEqual(229_450)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here. The budget admits the screener
@@ -1033,7 +1039,9 @@ describe('Backroom MCP tools', () => {
       // 28,613 after the competition-improvement read.
       // The one-line stranded admission write and effect read measure 28,856;
       // keep about 200 chars.
-      29_050,
+      // The per-owner submission cooldown trio's three short summaries bring
+      // it to 29,006; keep about 200 chars.
+      29_200,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2615,7 +2623,7 @@ describe('Backroom MCP tools', () => {
     expect(queue.isError).not.toBe(true)
     expect(readJsonResult(queue)).toMatchObject({ queued: 1, skipped: 0 })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+      29_200,
       'https://platform-api.heyditto.ai/api/v1/admin/v9-contract-retests?limit=100&offset=0',
       expect.any(Object),
     )
@@ -2749,6 +2757,120 @@ describe('Backroom MCP tools', () => {
         method: 'GET',
       }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads, sets and revokes one owner submission cooldown with CAS', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const ownerKey = '5FakeHotkeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
+    const revision = {
+      scope: 'hotkey',
+      owner_key: ownerKey,
+      revision: 1,
+      action: 'set',
+      cooldown_seconds: 86_400,
+      expires_at: '2026-11-17T12:00:00Z',
+      reason: 'repeated copy rejects; slow this owner down',
+      actor: 'operator@example.com',
+      created_at: '2026-11-03T12:00:00Z',
+      state: 'active',
+    }
+    const lookup = {
+      scope: 'hotkey',
+      owner_key: ownerKey,
+      current: revision,
+      global_cooldown_seconds: 3600,
+      latest_submission_at: '2026-11-03T11:00:00Z',
+      next_allowed_at: '2026-11-04T11:00:00Z',
+      history: [revision],
+    }
+    const revoked = { ...revision, revision: 2, action: 'revoke', cooldown_seconds: null, expires_at: null, state: 'revoked' }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ active_count: 1, items: [revision], lookup }))
+      .mockResolvedValueOnce(Response.json(lookup))
+      .mockResolvedValueOnce(
+        Response.json({ ...lookup, current: revoked, next_allowed_at: null, history: [revoked, revision] }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const read = await client.callTool({
+      name: 'get_owner_submission_cooldowns',
+      arguments: { scope: 'hotkey', ownerKey },
+    })
+    expect(read.isError).not.toBe(true)
+    expect(readJsonResult(read)).toMatchObject({ active_count: 1, lookup: { next_allowed_at: '2026-11-04T11:00:00Z' } })
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      `https://platform-api.heyditto.ai/api/v1/admin/submission-settings/owner-cooldowns?include_inactive=false&scope=hotkey&owner_key=${ownerKey}`,
+    )
+
+    const set = await client.callTool({
+      name: 'set_owner_submission_cooldown',
+      arguments: {
+        scope: 'hotkey',
+        ownerKey,
+        cooldownSeconds: 86_400,
+        expiresInDays: 14,
+        expectedRevision: 0,
+        reason: 'repeated copy rejects; slow this owner down',
+        confirmation: `SET OWNER SUBMISSION COOLDOWN HOTKEY ${ownerKey} 86400 SECONDS FOR 14 DAYS`,
+      },
+    })
+    expect(set.isError).not.toBe(true)
+    const [setUrl, setInit] = fetchMock.mock.calls[1] ?? []
+    expect(setUrl).toBe('https://platform-api.heyditto.ai/api/v1/admin/submission-settings/owner-cooldowns')
+    expect(JSON.parse(String((setInit as RequestInit).body))).toMatchObject({
+      scope: 'hotkey',
+      owner_key: ownerKey,
+      cooldown_seconds: 86_400,
+      expires_in_days: 14,
+      expected_revision: 0,
+      confirmation: `SET OWNER SUBMISSION COOLDOWN HOTKEY ${ownerKey} 86400 SECONDS FOR 14 DAYS`,
+    })
+
+    const revoke = await client.callTool({
+      name: 'revoke_owner_submission_cooldown',
+      arguments: {
+        scope: 'hotkey',
+        ownerKey,
+        expectedRevision: 1,
+        reason: 'operator lifted the cooldown early',
+        confirmation: `REVOKE OWNER SUBMISSION COOLDOWN HOTKEY ${ownerKey}`,
+      },
+    })
+    expect(revoke.isError).not.toBe(true)
+    expect(readJsonResult(revoke)).toMatchObject({ current: { state: 'revoked', revision: 2 } })
+    expect(fetchMock.mock.calls[2]?.[0]).toBe(
+      'https://platform-api.heyditto.ai/api/v1/admin/submission-settings/owner-cooldowns/revoke',
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses a malformed owner key before calling Platform', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_owner_submission_cooldown',
+      arguments: {
+        scope: 'coldkey',
+        ownerKey: 'not-a-key',
+        cooldownSeconds: 86_400,
+        expiresInDays: 14,
+        expectedRevision: 0,
+        reason: 'repeated copy rejects; slow this owner down',
+        confirmation: 'SET OWNER SUBMISSION COOLDOWN COLDKEY not-a-key 86400 SECONDS FOR 14 DAYS',
+      },
+    })
+    expect(response.isError).toBe(true)
+    expect(fetchMock).not.toHaveBeenCalled()
 
     await client.close()
     await server.close()
@@ -2911,7 +3033,7 @@ describe('Backroom MCP tools', () => {
       effect: { admitted: true, ticket_state: 'awaiting_first_lease' },
     })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+      29_200,
       `https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/stranded-previous-era/${agentId}/admit`,
       expect.objectContaining({
         method: 'POST',
@@ -4108,7 +4230,7 @@ describe('Backroom MCP tools', () => {
     // The signed-in operator, not a shared service identity, is what the
     // platform records as the actor on a revision that moves TAO.
     expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+      29_200,
       'https://platform-api.heyditto.ai/api/v1/admin/burn-settings',
       expect.objectContaining({
         method: 'POST',
@@ -4247,7 +4369,7 @@ describe('Backroom MCP tools', () => {
       effective: { revision: 1, in_force_bps: split, served: true },
     })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+      29_200,
       'https://platform-api.heyditto.ai/api/v1/admin/track-share-settings',
       expect.objectContaining({
         method: 'POST',
@@ -4367,7 +4489,7 @@ describe('Backroom MCP tools', () => {
     expect(response.isError).not.toBe(true)
     expect(readJsonResult(response)).toMatchObject({ revision: 1, in_sync: true })
     expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
+      29_200,
       'https://platform-api.heyditto.ai/api/v1/admin/emission-allocation',
       expect.objectContaining({
         method: 'POST',

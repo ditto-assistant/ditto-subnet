@@ -687,6 +687,54 @@ false makes uploads free, null leaves it to the generator
 (the Backroom panel does this). An upload must pay its competition's fee
 exactly, and one transfer funds one upload across both lanes.
 
+## Per-owner submission cooldown overrides
+
+The global cooldown (`get_submission_cooldown`) is one interval per payment
+coldkey for every miner. An operator override requires a longer minimum
+interval for one owner identity until it expires or is revoked:
+`scope` `coldkey` names a payment coldkey and `hotkey` names an uploading
+hotkey. Revisions are append-only per identity, so the history is the audit
+trail (reason, actor, created_at, expiry).
+
+`get_owner_submission_cooldowns(scope?, ownerKey?, includeInactive?)` lists
+the current revision of every overridden identity (active only unless
+`includeInactive`). With `scope` and `ownerKey` it adds `lookup`: the
+identity's history, the global cooldown, its newest submission (by the hotkey,
+or paid by the coldkey) and `next_allowed_at` under the override.
+`lookup.current=null` means never overridden.
+
+`set_owner_submission_cooldown` installs or replaces one identity's override.
+`expectedRevision` is `lookup.current.revision`, or 0 when `current` is null.
+A 24-hour interval for 14 days on one hotkey:
+
+```json
+{
+  "scope": "hotkey",
+  "ownerKey": "<SS58 hotkey>",
+  "cooldownSeconds": 86400,
+  "expiresInDays": 14,
+  "expectedRevision": 0,
+  "reason": "repeated copy rejects",
+  "confirmation": "SET OWNER SUBMISSION COOLDOWN HOTKEY <SS58 hotkey> 86400 SECONDS FOR 14 DAYS"
+}
+```
+
+`cooldownSeconds` is 60..2592000 and `expiresInDays` 1..90 from the write.
+`revoke_owner_submission_cooldown(scope, ownerKey, expectedRevision, reason,
+confirmation)` ends an active override early with the phrase
+`REVOKE OWNER SUBMISSION COOLDOWN <SCOPE> <ownerKey>`.
+
+Upload check, slot reservation and legacy uploads enforce the longer of the
+global cooldown and every active override naming the uploading hotkey or the
+payment coldkey. The interval is measured from the owner's newest submission
+under either identity, so a hotkey override still holds an owner who pays from
+a fresh coldkey, and a coldkey override holds an owner who rotates hotkeys.
+An override never shortens the global cooldown and never holds past its own
+expiry. An admission already reserved before the write is honored. The miner
+gets the existing cooldown error (1105, HTTP 429 on upload) with the interval
+and expiry; the operator's reason is never shown. To cover an owner who pays
+from several coldkeys, set the hotkey and each coldkey separately.
+
 ## Reading miner source
 
 Three tools, used in this order. Skipping the middle one is the expensive
