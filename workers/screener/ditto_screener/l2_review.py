@@ -391,7 +391,7 @@ _SUBMISSION_VALIDATION_HINTS = {
 }
 
 
-def _submission_validation_subcode(error: ValueError) -> str:
+def _submission_validation_subcode(error: TypeError | ValueError) -> str:
     """Reduce fixed host validation failures to source-free correction codes."""
     message = str(error)
     if "L2 scorer field rewrite requires I4 breach" in message:
