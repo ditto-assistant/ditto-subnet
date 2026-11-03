@@ -397,3 +397,48 @@ func TestSliceExecutionCasesDropsRepeatsOfEarlierColumns(t *testing.T) {
 		t.Fatal("cases run in column order")
 	}
 }
+
+// A pack that cannot be compacted, a pack not in compact form, and a compact
+// pack with the wrong recorded digest each fail with their own reason; only
+// the last is a digest mismatch.
+func TestSliceColumnPackFailuresAreDistinct(t *testing.T) {
+	t.Parallel()
+	raw, _ := encodedTestSlice(t, 123)
+	var ds SliceDataset
+	if err := json.Unmarshal(raw, &ds); err != nil {
+		t.Fatal(err)
+	}
+	good := ds.Columns[0]
+	if _, err := checkSliceColumnPackBytes(good); err != nil {
+		t.Fatalf("a well-formed column must pass: %v", err)
+	}
+
+	broken := good
+	broken.Pack = json.RawMessage(`{"cases":`)
+	if _, err := checkSliceColumnPackBytes(broken); err == nil || !strings.Contains(err.Error(), "compaction failed") || strings.Contains(err.Error(), "digest") {
+		t.Fatalf("an uncompactable pack must report a compaction error, got %v", err)
+	}
+
+	spaced := good
+	spaced.Pack = append(json.RawMessage(" "), good.Pack...)
+	if _, err := checkSliceColumnPackBytes(spaced); err == nil || !strings.Contains(err.Error(), "compact form") || strings.Contains(err.Error(), "digest") {
+		t.Fatalf("a non-compact pack must report its form, got %v", err)
+	}
+
+	wrong := good
+	wrong.PackSHA256 = strings.Repeat("0", 64)
+	if _, err := checkSliceColumnPackBytes(wrong); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("a wrong recorded digest must report a mismatch, got %v", err)
+	}
+
+	// Through the decoder: whitespace inside a pack is a form error, not a
+	// digest mismatch.
+	needle := `"pack":{`
+	if !strings.Contains(string(raw), needle) {
+		t.Fatal("encoded slice has no compact pack to perturb")
+	}
+	bad := []byte(strings.Replace(string(raw), needle, `"pack":{ `, 1))
+	if _, _, err := DecodeSliceDataset(bad, Digest(bad)); err == nil || !strings.Contains(err.Error(), "compact form") {
+		t.Fatalf("decoder must report a non-compact pack, got %v", err)
+	}
+}
