@@ -1098,16 +1098,18 @@ def _authorize_replacement_payment(
     )
     spent = ""
     if isinstance(error, PaymentReplayedError):
-        # 3207 also refuses a proof for another hotkey, a generator upload or a
-        # changed owner. Only "already used" can be an earlier upload of this
-        # hotkey whose response was lost, so only it points at a rerun.
+        # Platform answers every 3207 with the same "payment proof already
+        # used" envelope, whether the proof funded an earlier upload, belongs
+        # to another hotkey, funded a generator upload or no longer matches the
+        # reservation owner. The CLI cannot tell which, so it names them all
+        # and states the rerun only as the one case it can recover.
         spent = (
-            "This proof cannot fund this upload. It was already used; if it "
-            "funded an earlier upload whose response was lost, rerunning that "
-            "upload's exact archive returns it without paying again.\n"
-            if "already used" in str(error)
-            else "This proof cannot fund this upload, and rerunning an earlier "
-            "archive will not recover it.\n"
+            "This proof cannot fund this upload. Platform does not say why: it "
+            "may have funded an earlier upload, belong to another hotkey, have "
+            "funded a generator upload, or no longer match this reservation. "
+            "Only if it funded an earlier upload of this hotkey whose response "
+            "was lost does rerunning that upload's exact archive return it "
+            "without paying again.\n"
         )
     print(
         f"warning: the platform rejected the saved payment proof ({error}).\n"

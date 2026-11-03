@@ -288,8 +288,10 @@ because its 24-hour recovery window expired, or because it cannot fund this
 upload (`3207`: it already funded another upload, typically an earlier one
 whose response was lost before a retry with a different archive, or it belongs
 to another hotkey or owner), the CLI prints the rejected proof and sends
-nothing. A proof that funded an earlier upload still returns that agent when
-you rerun its exact archive, without paying again. In an interactive terminal it asks whether to pay the
+nothing. Platform gives the same `3207` answer for each of these causes, so the
+CLI cannot say which applies. Only a proof that funded an earlier upload of
+this hotkey returns that agent when you rerun its exact archive, without paying
+again. In an interactive terminal it asks whether to pay the
 currently reserved TAO fee. For non-interactive recovery, opt in explicitly:
 
 ```sh

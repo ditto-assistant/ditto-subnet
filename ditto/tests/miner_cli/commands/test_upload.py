@@ -19,22 +19,26 @@ from __future__ import annotations
 
 import argparse
 import io
+import re
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import ANY, MagicMock, call, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from ditto.api_models import (
     EvalPricingResponse,
     UploadAgentResponse,
+    UploadCheckRequest,
     UploadCheckResponse,
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.contributor_identity import ClaStatus, ClaVersionView
 from ditto.miner_cli import preferences
+from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.commands.upload import (
     _offer_owner_link,
     _post_upload_with_retries,
@@ -225,6 +229,46 @@ def _payment_receipt() -> PaymentReceipt:
         block_number=42,
         extrinsic_index=3,
     )
+
+
+# Platform's 3207 handler (apps/platform/ditto/api_server/middleware/
+# error_envelope.py) answers every refused proof with this one message.
+PLATFORM_ENVELOPE = (
+    Path(__file__).resolve().parents[4]
+    / "apps/platform/ditto/api_server/middleware/error_envelope.py"
+)
+WIRE_3207_MESSAGE = "payment proof already used"
+
+
+def _wire_replay_rejection() -> PaymentReplayedError:
+    """The error ``post_upload_check`` raises for Platform's real 3207 body."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            402,
+            json={
+                "error_code": 3207,
+                "message": WIRE_3207_MESSAGE,
+                "request_id": "req-3207",
+            },
+        )
+
+    client = ApiClient(base_url="http://test")
+    client._client.close()
+    client._client = httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://test"
+    )
+    request = UploadCheckRequest(
+        hotkey=HOTKEY,
+        sha256="ef" * 32,
+        file_size_bytes=1024,
+        signature="cd" * 64,
+        signature_timestamp=1_798_000_000,
+        signature_nonce=uuid4(),
+    )
+    with client, pytest.raises(PaymentReplayedError) as raised:
+        client.post_upload_check(request)
+    return raised.value
 
 
 def _upload_response() -> UploadAgentResponse:
@@ -1387,23 +1431,27 @@ class TestUploadFailurePaths:
         ]
         pay.assert_called_once()
 
-    @pytest.mark.parametrize(
-        "reason",
-        [
-            "payment credit belongs to a different hotkey",
-            "payment proof already funded a generator upload",
-            "payment owner no longer matches this admission reservation",
-        ],
-    )
-    def test_unrecoverable_replay_offers_no_earlier_archive_rerun(
+    def test_platform_sends_one_message_for_every_replay_cause(self) -> None:
+        # Another hotkey's credit, a generator upload and a changed owner all
+        # raise 3207 too, yet the handler never forwards the reason.
+        source = PLATFORM_ENVELOPE.read_text(encoding="utf-8")
+        handler = source[source.index("@app.exception_handler(PaymentReplayedError)") :]
+        handler = handler[: handler.index("@app.exception_handler", 1)]
+        response = re.search(r"return envelope_response\(([^)]*)\)", handler)
+        assert response is not None
+        assert re.fullmatch(
+            rf'\s*402,\s*ERROR_CODE_PAYMENT_REPLAYED,\s*"{WIRE_3207_MESSAGE}"\s*',
+            response.group(1),
+        )
+
+    def test_wire_replay_names_every_cause_and_offers_the_rerun_only_conditionally(
         self,
         good_tar: Path,
         monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str],
-        reason: str,
     ) -> None:
-        # 3207 also covers proofs no earlier upload of this hotkey spent, so
-        # only "already used" may point at rerunning an earlier archive.
+        # The CLI sees the same 3207 for a recoverable earlier upload and for a
+        # proof no rerun can recover, so it must not promise either.
         monkeypatch.setattr("sys.stdin.isatty", lambda: False)
         spent = PendingUploadPayment(
             network="local",
@@ -1412,19 +1460,31 @@ class TestUploadFailurePaths:
             sha256="ef" * 32,
             payment=_payment_receipt(),
         )
+        rejection = _wire_replay_rejection()
+        assert "code=3207" in str(rejection)
 
         rc, _client, clear, pay = self._replayed_run(
-            good_tar, saved=(spent,), checks=[PaymentReplayedError(reason)]
+            good_tar, saved=(spent,), checks=[rejection]
         )
 
         assert rc == 1
         clear.assert_not_called()
         pay.assert_not_called()
-        err = capsys.readouterr().err
-        assert reason in err
+        err = " ".join(capsys.readouterr().err.split())
+        assert f"code=3207 {WIRE_3207_MESSAGE}" in err
         assert "cannot fund this upload" in err
-        assert "exact archive" not in err
-        assert "rerunning an earlier archive will not recover it" in err
+        assert "Platform does not say why" in err
+        for cause in (
+            "funded an earlier upload",
+            "belong to another hotkey",
+            "funded a generator upload",
+            "no longer match this reservation",
+        ):
+            assert cause in err
+        assert (
+            "Only if it funded an earlier upload of this hotkey whose response "
+            "was lost does rerunning that upload's exact archive return it"
+        ) in err
 
     def test_spent_proof_flags_without_a_saved_copy_retire_nothing(
         self, good_tar: Path
