@@ -274,6 +274,6 @@ class AdminDuelingRotateRequest(BaseModel):
     immediate: bool = False
     """Close now instead of at the next round boundary. No season serves
     slices until the next season opens at the following round boundary."""
-    reason: Annotated[str, Field(min_length=8, max_length=2000)]
+    reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str

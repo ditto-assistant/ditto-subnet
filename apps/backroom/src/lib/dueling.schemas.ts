@@ -129,7 +129,7 @@ export const rotateDuelingSeasonInputSchema = z
   .object({
     seasonId: uuid.optional(),
     immediate: z.boolean().default(false),
-    reason: auditReasonSchema(8).max(2000),
+    reason: auditReasonSchema(8),
     confirmation: z.string(),
   })
   .superRefine((input, context) => {
