@@ -4978,6 +4978,10 @@ class ConfirmationScore(Base):
     )
     """Bench v16+: the dueling season this rescore ran in (NULL below 16)."""
 
+    dueling: Mapped[dict | None] = mapped_column(_NULLABLE_JSON_VARIANT, nullable=True)
+    """Bench v16+: this seed's ``details.dueling`` aggregates, which the
+    pair-masked per-seed fold recomputes composites from (NULL below 16)."""
+
     v9_efficiency_token_total: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )

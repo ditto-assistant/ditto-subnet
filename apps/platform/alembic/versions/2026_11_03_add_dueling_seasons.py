@@ -22,7 +22,8 @@ out.
   ``dueling`` poll.
 - ``validator_tickets`` gains ``dueling_season_id`` and ``slice_sha256``;
   ``scores`` gains ``dueling_season_id`` and the ``dueling`` aggregates;
-  ``confirmation_scores`` gains ``dueling_season_id``.
+  ``confirmation_scores`` gains ``dueling_season_id`` and the per-seed
+  ``dueling`` aggregates the pair-masked fold reads.
 
 Every bench-version constraint here is a floor (``>= 16``), never an
 enumeration. The hot-table columns are nullable and undefaulted, so they go
@@ -60,6 +61,7 @@ def upgrade() -> None:
     safe_add_column("scores", "dueling_season_id", "UUID")
     safe_add_column("scores", "dueling", "JSONB")
     safe_add_column("confirmation_scores", "dueling_season_id", "UUID")
+    safe_add_column("confirmation_scores", "dueling", "JSONB")
 
     # Every existing row is NULL, so NOT VALID loses nothing and skips the
     # full-table validation scan under the lock.
@@ -321,6 +323,7 @@ def downgrade() -> None:
         "ALTER TABLE scores DROP CONSTRAINT IF EXISTS "
         "ck_scores_scores_dueling_bench_floor"
     )
+    safe_drop_column("confirmation_scores", "dueling")
     safe_drop_column("confirmation_scores", "dueling_season_id")
     safe_drop_column("scores", "dueling")
     safe_drop_column("scores", "dueling_season_id")
