@@ -2356,9 +2356,14 @@ export const DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 // kept as the audited rollback path rather than as the default.
 export const DEFAULT_WAVE_MEMBERSHIP = 'participants'
 // Protocol-34 crown rules, mirroring the platform's shipped defaults and bounds.
-// A challenger cannot hold more shared seeds than the lane retains (15).
+// A challenger cannot hold more shared seeds than the lane retains (the
+// platform's 10-seed continual-retest work cap, TOP5_MAX_CONFIRMATION_SEEDS).
 export const DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
-export const MAX_MIN_DETHRONE_CONFIRMATIONS = 15
+export const MAX_MIN_DETHRONE_CONFIRMATIONS = 10
+// Reads stay lenient up to the validator's 15-seed fold ceiling so a Platform
+// still serving a revision written under the former 15-seed cap stays
+// displayable; writes are bounded by MAX_MIN_DETHRONE_CONFIRMATIONS.
+export const MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS = 15
 export const DEFAULT_CHAMPION_STANDING_RANK = 3
 
 // The ceiling can never cut into the cohort the rank cutoff already admitted.
@@ -2402,7 +2407,7 @@ const continualRetestSettingsBaseSchema = z.object({
     .number()
     .int()
     .min(2)
-    .max(MAX_MIN_DETHRONE_CONFIRMATIONS)
+    .max(MAX_SERVED_MIN_DETHRONE_CONFIRMATIONS)
     .default(DEFAULT_MIN_DETHRONE_CONFIRMATIONS),
   champion_standing_rank: z
     .number()
@@ -9209,6 +9214,12 @@ export const continualRetestDiagnosticSchema = z.object({
   completed_wave_depth: z.number().int().nonnegative().default(0),
   official_sample_count: z.number().int().nonnegative().default(0),
   raw_confirmation_depth: z.number().int().nonnegative().default(0),
+  // The lane's seed budget: minimum before variance may stop it, the work cap
+  // (and active fold window), and the variance-sized target it plans toward
+  // now. 0/0/null against a platform that predates the fields.
+  confirmation_seed_floor: z.number().int().nonnegative().default(0),
+  confirmation_seed_cap: z.number().int().nonnegative().default(0),
+  confirmation_seed_target: z.number().int().nonnegative().nullable().default(null),
   composite_stderr: z.number().nonnegative().nullable().default(null),
   aggregate_mode: z.enum(['disabled', 'fleet_ready', 'enabled']).default('fleet_ready'),
   wave_membership: z.enum(['strict', 'participants', 'per_agent']).default('participants'),

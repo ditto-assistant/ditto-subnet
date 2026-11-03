@@ -419,7 +419,10 @@ result.
   strictly below the ceiling — a perfect run always takes the crown. The cap
   only ever lowers the bar, never raises it, and the leaderboard's "beat this
   to contend" figure already includes it. A near-miss is settled by re-scoring
-  both agents on shared seeds rather than dataset luck.
+  both agents on shared seeds rather than dataset luck. Each top agent is
+  re-scored on at least 8 and at most 10 shared seeds (more than 8 only while
+  the measured spread still asks for it); the official score folds at most
+  those 10.
 - Competitive weight is distributed to the champion and next four distinct
   miners by the payout curve the public leaderboard reports as `rank_shares`
   (default 65% / 14% / 10% / 7% / 4%; operators can set another curve, which

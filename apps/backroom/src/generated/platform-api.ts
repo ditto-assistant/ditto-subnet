@@ -11519,6 +11519,18 @@ export interface components {
             /** Configured Max Size */
             configured_max_size: number;
             /**
+             * Confirmation Seed Cap
+             * @default 0
+             */
+            confirmation_seed_cap: number;
+            /**
+             * Confirmation Seed Floor
+             * @default 0
+             */
+            confirmation_seed_floor: number;
+            /** Confirmation Seed Target */
+            confirmation_seed_target?: number | null;
+            /**
              * Eligibility Mode
              * @enum {string}
              */
