@@ -19,7 +19,7 @@ import (
 // v16KnownVectorWant is the dueling contract's datagen-half vector (seed
 // 123456789, full profile, public surface salt 0). docs/bench-versions.md and
 // the README publish the same string.
-const v16KnownVectorWant = "e3593934af6873eae7db89cf78a6fe9364732c1fd49598b4af5158f17f9a6a4f"
+const v16KnownVectorWant = "30ab40c287fe7457859b4040e1334bcc5a0f8b50cc49f97e5bd98650753de34d"
 
 // V16 is the dueling contract, STAGED: generatable with its own epoch and seed
 // domain, not yet in the supported set. This module generates only the

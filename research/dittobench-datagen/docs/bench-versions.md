@@ -1392,7 +1392,11 @@ one world, and v16 pins it per profile to the v15 world of the same run size.
 The tool passes take the scale from `datagen.ToolWorldScale`, which maps the
 v16 tool counts (50, 24) to the v15 full and medium scales instead of keying
 on the case count (through v15 the thresholds are 80 and 30), so the tool
-cases read the larger world too. The world itself, every probe record
+cases read the larger world too. The v13 conversion floors follow the same split:
+the world-family floor follows the world (three per family on the scale-3
+world), while the ordinary-singleton rule follows the sample size (the 50-case
+half is a partial sample, so singletons may be replaced; keeping them would
+leave 4 convertible slots on every seed). The world itself, every probe record
 included, is the v15 world byte for byte.
 
 The 125-case table asks about part of that world:
@@ -1469,7 +1473,7 @@ it is left for a later contract. Accepted by the operator for v16.0.
 
 For seed `123456789`, full profile, public surface salt 0,
 `TestV16KnownVector` pins:
-`e3593934af6873eae7db89cf78a6fe9364732c1fd49598b4af5158f17f9a6a4f`, with
+`30ab40c287fe7457859b4040e1334bcc5a0f8b50cc49f97e5bd98650753de34d`, with
 epoch `2027-08-01T00:00:00Z`. Every v2 to v15 vector is unchanged (v15 stays
 `33232bf35e829cbd08efc56777988d1e8784760487837aaa2f185c6f2077783d`).
 Contract tests: `gen/v16_contract_test.go`, `catalog/v16_test.go`,

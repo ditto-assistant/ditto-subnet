@@ -449,18 +449,22 @@ func v13ConversionOrderForVersion(seed int64, benchVersion int, cases []protocol
 		}
 		return true
 	}
-	// Profile-scaled floors: the full profile keeps one case per ordinary family
-	// and three per world family; smaller profiles never held a per-family floor
-	// (their v9 draw is a partial weighted sample), so they keep one per world
-	// family and may replace ordinary singletons after every duplicate. These
-	// floors are case budgets and stay keyed on the tool-case count at every
-	// version: the 50-case v16 full half reads the scale-3 world
-	// (ToolWorldScale) but is a partial sample like the 48-case medium run, and
-	// the full floors would leave it 4 convertible slots on every seed in
-	// 1..300, below the v13 and v16 quotas.
+	// Profile-scaled floors. The world-family floor follows the world the run
+	// reads: three per world family on the full (scale-3) world, one on smaller
+	// worlds. The ordinary-singleton rule follows the sample: the 100-case full
+	// draw keeps one case per ordinary family, while smaller draws are a
+	// partial weighted sample, so their ordinary singletons may be replaced
+	// after every duplicate. Through v15 the two coincide (scale 3 iff 80+
+	// cases). The 50-case v16 full half reads the scale-3 world with a partial
+	// sample, so it keeps the full world-family floor and may replace
+	// singletons; keeping singletons too would leave it 4 convertible slots on
+	// every seed in 1..300, below the v13 and v16 quotas.
 	worldFloor, allowSingletons := v13WorldFamilyFloor, false
+	if scale < 3 {
+		worldFloor = 1
+	}
 	if len(cases) < 80 {
-		worldFloor, allowSingletons = 1, true
+		allowSingletons = true
 	}
 	var ordinary, singletons, world, routed []int
 	remaining := map[string]int{}
