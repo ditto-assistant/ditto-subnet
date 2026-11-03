@@ -5309,8 +5309,9 @@ class ConfirmationSeedAnchor(Base):
     CRN seeds (:mod:`ditto.api_server.crn`) hash one input a miner cannot know
     when they submit: the hash of ``anchor_block = ready_block + Δ``, read only
     once that height is **finalized**. One row per ``(champion, bench_version)``
-    reign, created at the first continual-retest claim of the reign with the
-    hash still null (the finality wait), then pinned exactly once. The row is
+    reign (``(champion, bench_version, season)`` from the dueling floor),
+    created at the first continual-retest claim of the reign with the hash
+    still null (the finality wait), then pinned exactly once. The row is
     append-only after the pin: the family it names is what validators already
     scored, so a re-pin would tear every recorded wave.
 
@@ -5326,6 +5327,16 @@ class ConfirmationSeedAnchor(Base):
 
     bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
     """Major benchmark version the family is scoped to."""
+
+    season_key: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True),
+        nullable=False,
+        server_default=text("'00000000-0000-0000-0000-000000000000'::uuid"),
+    )
+    """Bench v16+: the dueling season this reign anchor belongs to, so every
+    season rotation starts a fresh confirmation family per ``(champion,
+    bench_version, season)``. The nil UUID below the dueling floor (one anchor
+    per reign) and at v16+ while no season has opened."""
 
     ready_block: Mapped[int] = mapped_column(BigInteger, nullable=False)
     """``B_ready``: the latest block when the reign first asked for a seed."""
@@ -5350,7 +5361,13 @@ class ConfirmationSeedAnchor(Base):
         PrimaryKeyConstraint(
             "champion_agent_id",
             "bench_version",
+            "season_key",
             name="confirmation_seed_anchors_pkey",
+        ),
+        CheckConstraint(
+            "season_key = '00000000-0000-0000-0000-000000000000'::uuid "
+            "OR bench_version >= 16",
+            name="confirmation_seed_anchors_season_floor",
         ),
         ForeignKeyConstraint(
             ["champion_agent_id"],

@@ -383,6 +383,7 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
 )
 from ditto.db.queries.score_retests import (
+    DUELING_ROTATION_RETEST_BASIS,
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
 )
@@ -2571,6 +2572,42 @@ async def _dueling_lease_fields(
     }
 
 
+async def _activate_dueling_rotation_retest(
+    session: AsyncSession,
+    *,
+    validator_hotkey: str,
+    heartbeat: ValidatorHeartbeat | None,
+    bench_version: int,
+    now: datetime,
+    validator_running_benchmark: bool,
+    slot_id: str,
+    ttl: timedelta,
+) -> ValidatorTicket | None:
+    """Promote this validator's next dueling season rotation re-test, if any.
+
+    Only at ``bench_version`` and only on a slot whose heartbeat serves it
+    (which, at v16+, includes forwarding the version's dueling slices). Runs
+    beside ordinary work on free slots, like activation-critical contract
+    repair: rotation is the season's mini-rollout.
+    """
+    return await activate_next_score_retest(
+        session,
+        validator_hotkey=validator_hotkey,
+        now=now,
+        supports_version=lambda version: (
+            heartbeat is not None
+            and version == bench_version
+            and heartbeat_supports_version(heartbeat, now=now, version=version)
+        ),
+        validator_running_benchmark=validator_running_benchmark,
+        slot_id=slot_id,
+        required_basis=DUELING_ROTATION_RETEST_BASIS,
+        allow_parallel_ordinary=True,
+        allow_parallel_contract_retests=True,
+        ttl=ttl,
+    )
+
+
 async def _dueling_evidence(
     session: AsyncSession, report: ScoreReport, ticket: ValidatorTicket, agent: Agent
 ) -> tuple[UUID | None, dict[str, Any] | None]:
@@ -4228,6 +4265,23 @@ async def request_job(
                 if target_benchmark_ready
                 else None
             )
+            if (
+                ticket is None
+                and target_benchmark_ready
+                and is_dueling_bench_version(rollout.desired_version)
+            ):
+                # A shadow dueling season rotation re-scores the frozen cohort
+                # on the new generator set before any other desired-era work.
+                ticket = await _activate_dueling_rotation_retest(
+                    session,
+                    validator_hotkey=payload.validator_hotkey,
+                    heartbeat=heartbeat,
+                    bench_version=rollout.desired_version,
+                    now=now,
+                    validator_running_benchmark=slot_running_benchmark,
+                    slot_id=slot_id,
+                    ttl=ticket_ttl,
+                )
             # The activation boundary waits for every frozen member, not just
             # the first-five authority subset.  Give that bounded cohort first
             # refusal on every capable slot while the rollout is open.  The
@@ -4485,6 +4539,23 @@ async def request_job(
                         ttl=ticket_ttl,
                         validator_running_benchmark=slot_running_benchmark,
                         slot_id=slot_id,
+                    )
+                if (
+                    not gated
+                    and ticket is None
+                    and is_dueling_bench_version(canonical_version)
+                ):
+                    # A dueling season rotation re-scores the champion, then
+                    # the retest cohort by rank, ahead of ordinary quorum work.
+                    ticket = await _activate_dueling_rotation_retest(
+                        session,
+                        validator_hotkey=payload.validator_hotkey,
+                        heartbeat=heartbeat,
+                        bench_version=canonical_version,
+                        now=now,
+                        validator_running_benchmark=slot_running_benchmark,
+                        slot_id=slot_id,
+                        ttl=ticket_ttl,
                     )
                 ticket = (
                     ticket
@@ -5370,6 +5441,7 @@ async def _champion_anchored_seed_set(
         session,
         agent_ids=tuple(member.agent_id for member in members),
         bench_version=canonical_version,
+        planning=True,
     )
     block_hash, allow_fresh_seeds = await reign_seed_planning(
         session,
@@ -5436,6 +5508,7 @@ async def _top5_confirmation_seed_plan(
         session,
         agent_ids=tuple(dict.fromkeys((*cohort_ids, member_agent_id))),
         bench_version=canonical_version,
+        planning=True,
     )
     wave_history = {agent_id: history.get(agent_id, {}) for agent_id in wave_member_ids}
     if seed_planning is None:
@@ -5587,7 +5660,7 @@ async def _unserved_catchup_members(
     if len(wave_members) < 2:
         return frozenset()
     history = await confirmation_composites_by_seed(
-        session, agent_ids=members, bench_version=canonical_version
+        session, agent_ids=members, bench_version=canonical_version, planning=True
     )
     block_hash, allow_fresh_seeds = await reign_seed_planning(
         session, champion_agent_id=champion_agent_id, bench_version=canonical_version
@@ -5850,6 +5923,7 @@ async def _top5_member_is_least_covered(
         session,
         agent_ids=member_ids,
         bench_version=canonical_version,
+        planning=True,
     )
     eligible: list[UUID] = []
     for member_id in member_ids:

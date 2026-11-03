@@ -38,6 +38,7 @@ from ditto.api_server.crn import (
 )
 from ditto.chain import ChainConnectionError, ExtrinsicNotFoundError
 from ditto.db.models import Agent, ConfirmationSeedAnchor
+from ditto.db.queries.confirmation_seed_anchors import NIL_SEASON_KEY
 
 _HASH = "0x" + "ab" * 32
 _OTHER_HASH = "0x" + "cd" * 32
@@ -204,7 +205,9 @@ async def test_a_slow_chain_read_is_bounded_and_treated_as_not_pinned(
         assert not session.in_transaction()
     assert finalized == {}
     async with session_maker() as session:
-        row = await session.get(ConfirmationSeedAnchor, (champion, _BOUND_VERSION))
+        row = await session.get(
+            ConfirmationSeedAnchor, (champion, _BOUND_VERSION, NIL_SEASON_KEY)
+        )
         assert row is not None and row.anchor_block_hash is None
 
 
@@ -226,8 +229,8 @@ async def test_prefetch_is_bounded_per_claim_and_skips_pinned_rows(
         )
     # Oldest anchors first, at most ``limit`` reads.
     assert set(finalized) == {
-        (champions[0], _BOUND_VERSION),
-        (champions[1], _BOUND_VERSION),
+        (champions[0], _BOUND_VERSION, NIL_SEASON_KEY),
+        (champions[1], _BOUND_VERSION, NIL_SEASON_KEY),
     }
     assert chain.get_finalized_block_hash.await_count == 2
     # Pin the first two; the third is the only one still waiting.
@@ -243,7 +246,7 @@ async def test_prefetch_is_bounded_per_claim_and_skips_pinned_rows(
         finalized = await prefetch_finalized_anchor_hashes(
             session, chain, latest_block=500
         )
-    assert finalized == {(champions[2], _BOUND_VERSION): _OTHER_HASH}
+    assert finalized == {(champions[2], _BOUND_VERSION, NIL_SEASON_KEY): _OTHER_HASH}
     chain.get_finalized_block_hash.assert_awaited_once_with(
         102 + CRN_ANCHOR_BLOCK_DELTA
     )
@@ -276,7 +279,9 @@ async def test_finality_pins_once_and_later_claims_keep_the_ready_block(
     assert again is not None and again.block_hash == _HASH
     drifted.get_finalized_block_hash.assert_not_awaited()
     async with session_maker() as session:
-        row = await session.get(ConfirmationSeedAnchor, (champion, _BOUND_VERSION))
+        row = await session.get(
+            ConfirmationSeedAnchor, (champion, _BOUND_VERSION, NIL_SEASON_KEY)
+        )
         assert row is not None
         assert row.anchor_block_hash == _HASH
         assert row.pinned_at is not None
@@ -298,7 +303,7 @@ async def test_a_prefetched_hash_for_another_reign_pins_nothing_here(
             bench_version=_BOUND_VERSION,
             ready_block=100,
             now=_NOW,
-            finalized_hashes={(first, _BOUND_VERSION): _HASH},
+            finalized_hashes={(first, _BOUND_VERSION, NIL_SEASON_KEY): _HASH},
         )
     assert anchor is not None and not anchor.pinned
 
@@ -315,7 +320,7 @@ async def test_every_issued_seed_binds_back_to_the_reign_that_introduced_it(
             bench_version=_BOUND_VERSION,
             ready_block=100,
             now=_NOW,
-            finalized_hashes={(first, _BOUND_VERSION): _HASH},
+            finalized_hashes={(first, _BOUND_VERSION, NIL_SEASON_KEY): _HASH},
         )
         await resolve_reign_seed_anchor(
             session,
@@ -323,7 +328,7 @@ async def test_every_issued_seed_binds_back_to_the_reign_that_introduced_it(
             bench_version=_BOUND_VERSION,
             ready_block=500,
             now=_NOW,
-            finalized_hashes={(second, _BOUND_VERSION): _OTHER_HASH},
+            finalized_hashes={(second, _BOUND_VERSION, NIL_SEASON_KEY): _OTHER_HASH},
         )
     async with session_maker() as session:
         anchors = await list_reign_seed_anchors(session, bench_version=_BOUND_VERSION)
