@@ -1301,12 +1301,11 @@ async def resolve_dueling_slice(
                     DuelingSlicePreparation.run_seed == run_seed,
                 )
             )
-            if pinned is not None:
-                if (
-                    pinned.status == "ready"
-                    and pinned.slice_sha256 == pinned_slice_sha256
-                    and pinned.slice_bytes is not None
-                ):
+            # The pin names this seed only when the preparation for it is the
+            # one the ticket was served (its digest); any other row is a new
+            # seed's preparation and resolves through the open season below.
+            if pinned is not None and pinned.slice_sha256 == pinned_slice_sha256:
+                if pinned.status == "ready" and pinned.slice_bytes is not None:
                     return DuelingLeaseSlice(
                         pinned_season_id, pinned.slice_bytes, pinned_slice_sha256
                     )

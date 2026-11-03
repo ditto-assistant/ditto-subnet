@@ -778,6 +778,32 @@ class TestDuelingLease:
                 now=now,
             )
         assert "no longer servable" in pruned.value.detail
+        # A later retest on the same ticket row (a new seed, the old pin)
+        # resolves through the open season instead of the pin.
+        async with session_maker() as session, session.begin():
+            season = await session.get(DuelingSeason, season_id)
+            assert season is not None
+            season.status = "open"
+        with pytest.raises(DuelingSliceUnavailable) as new_seed:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=8,
+                pinned_season_id=season_id,
+                pinned_slice_sha256=served.slice_sha256,
+                now=now,
+            )
+        assert new_seed.value.detail == "dueling slice preparation pending"
+        with pytest.raises(DuelingSliceUnavailable) as still_new:
+            await resolve_dueling_slice(
+                session_maker,
+                bench_version=16,
+                run_seed=8,
+                pinned_season_id=season_id,
+                pinned_slice_sha256=served.slice_sha256,
+                now=now,
+            )
+        assert still_new.value.detail == "dueling slice preparation pending"
 
     def test_score_evidence_is_bound_to_the_lease(self) -> None:
         season_id = uuid4()
