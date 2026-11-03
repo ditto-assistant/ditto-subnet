@@ -45,6 +45,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "run size: must be small, medium, or full")
 		os.Exit(2)
 	}
+	if *gate && *benchVersion >= protocol.BenchVersionV16 && *runSize != "full" {
+		// MixGateV16 is calibrated on the full dueling table (its abstention
+		// target is the scale-2 share); smaller tables have no gate.
+		fmt.Fprintln(os.Stderr, "-gate is only defined for the full run size from bench_version 16")
+		os.Exit(2)
+	}
 
 	rows := make([]row, 0, *seeds)
 	violating := 0
