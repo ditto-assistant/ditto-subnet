@@ -69,8 +69,12 @@ DEFAULT_MIN_DETHRONE_CONFIRMATIONS = 3
 DEFAULT_CHAMPION_STANDING_RANK = 3
 # A challenger cannot hold more shared seeds than the continual lane retains:
 # mirror ``ditto.api_server.koth.TOP5_MAX_CONFIRMATION_SEEDS`` (the work cap and
-# active fold window). Every stored revision so far uses 3.
+# active fold window). New writes are bounded by it and the served crown gate is
+# clamped to it. Every stored revision so far uses 3.
 MAX_MIN_DETHRONE_CONFIRMATIONS = 10
+# Revisions written under the former 15-seed cap still parse faithfully (their
+# stored checksum covers the stored value), up to the validator's fold ceiling.
+MAX_STORED_MIN_DETHRONE_CONFIRMATIONS = 15
 
 
 class LedgerPinStatus(BaseModel):
@@ -125,10 +129,12 @@ class ContinualRetestSettings(BaseModel):
     """
 
     min_dethrone_confirmations: Annotated[
-        int, Field(ge=2, le=MAX_MIN_DETHRONE_CONFIRMATIONS)
+        int, Field(ge=2, le=MAX_STORED_MIN_DETHRONE_CONFIRMATIONS)
     ] = DEFAULT_MIN_DETHRONE_CONFIRMATIONS
     """Shared-seed confirmations a challenger must hold against the champion
-    before it may dethrone. Two is the paired statistic's own floor."""
+    before it may dethrone. Two is the paired statistic's own floor. A new
+    write accepts at most :data:`MAX_MIN_DETHRONE_CONFIRMATIONS`; a stored
+    revision above it is served clamped (``crown_gate_for``)."""
 
     champion_standing_rank: Annotated[int, Field(ge=1, le=EMISSION_SET_SIZE)] = (
         DEFAULT_CHAMPION_STANDING_RANK
@@ -329,29 +335,6 @@ class ContinualRetestSettings(BaseModel):
             )
         return self
 
-    @classmethod
-    def from_stored(cls, raw: object) -> ContinualRetestSettings:
-        """Validate a persisted revision, clamping bounds that later narrowed.
-
-        A revision written while ``min_dethrone_confirmations`` allowed up to
-        15 (the former seed cap) stays loadable: the value is clamped to
-        :data:`MAX_MIN_DETHRONE_CONFIRMATIONS`, since a challenger can no
-        longer hold more shared seeds than that, instead of one out-of-range
-        field discarding the whole policy. New writes still validate strictly.
-        """
-        if isinstance(raw, dict):
-            value = raw.get("min_dethrone_confirmations")
-            if (
-                isinstance(value, int)
-                and not isinstance(value, bool)
-                and value > MAX_MIN_DETHRONE_CONFIRMATIONS
-            ):
-                raw = {
-                    **raw,
-                    "min_dethrone_confirmations": MAX_MIN_DETHRONE_CONFIRMATIONS,
-                }
-        return cls.model_validate(raw)
-
 
 class ContinualRetestSettingsRevision(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
@@ -423,6 +406,17 @@ class AdminContinualRetestSettingsRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str
+
+    @model_validator(mode="after")
+    def _check_write_bounds(self) -> AdminContinualRetestSettingsRequest:
+        if self.settings.min_dethrone_confirmations > MAX_MIN_DETHRONE_CONFIRMATIONS:
+            raise ValueError(
+                "min_dethrone_confirmations "
+                f"({self.settings.min_dethrone_confirmations}) cannot exceed the "
+                f"{MAX_MIN_DETHRONE_CONFIRMATIONS}-seed continual-retest work cap: "
+                "a challenger never holds more shared seeds than that"
+            )
+        return self
 
 
 class AdminContinualRetestSettingsResponse(BaseModel):

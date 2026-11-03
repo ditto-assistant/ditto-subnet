@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from ditto.api_models.continual_retest_settings import (
     MAX_MIN_DETHRONE_CONFIRMATIONS,
+    AdminContinualRetestSettingsRequest,
     ContinualRetestSettings,
 )
 from ditto.api_models.validator import ConfirmationScoreRecord, LedgerEntry
@@ -242,19 +243,32 @@ def test_pins_replay_only_a_well_formed_gate() -> None:
     assert served_crown_gate(past) is None
 
 
+def _write(min_confirmations: int) -> AdminContinualRetestSettingsRequest:
+    return AdminContinualRetestSettingsRequest(
+        expected_revision=0,
+        settings=ContinualRetestSettings(min_dethrone_confirmations=min_confirmations),
+        reason="seed cap bound check",
+        confirmation="APPLY",
+    )
+
+
 def test_operators_cannot_require_more_confirmations_than_the_work_cap() -> None:
     assert MAX_MIN_DETHRONE_CONFIRMATIONS == TOP5_MAX_CONFIRMATION_SEEDS == 10
-    ContinualRetestSettings(min_dethrone_confirmations=10)
+    assert _write(10).settings.min_dethrone_confirmations == 10
     with pytest.raises(ValidationError):
-        ContinualRetestSettings(min_dethrone_confirmations=11)
+        _write(11)
 
 
 def test_a_revision_stored_under_the_former_cap_keeps_its_policy() -> None:
-    """A stored 11-15 dethrone minimum clamps to the cap; nothing else resets."""
+    """A stored 11-15 minimum loads faithfully (its checksum still matches) and
+    is served clamped to the work cap; nothing else resets."""
     from types import SimpleNamespace
     from typing import cast
 
-    from ditto.api_server.continual_retest_settings import settings_from_row
+    from ditto.api_server.continual_retest_settings import (
+        crown_gate_for,
+        settings_from_row,
+    )
     from ditto.db.models import ContinualRetestSettingsRevision
 
     stored = {
@@ -271,8 +285,12 @@ def test_a_revision_stored_under_the_former_cap_keeps_its_policy() -> None:
 
     loaded = settings_from_row(row)
 
-    assert loaded.min_dethrone_confirmations == MAX_MIN_DETHRONE_CONFIRMATIONS
+    assert loaded.min_dethrone_confirmations == 12
     assert loaded.crown_gate_mode == "fleet_ready"
     assert loaded.crown_incumbent_mode == "fleet_ready"
     assert loaded.champion_standing_rank == 2
-    assert ContinualRetestSettings.from_stored(stored) == loaded
+    assert crown_gate_for(loaded, fleet_protocol_ready=True) == CrownGate(
+        MAX_MIN_DETHRONE_CONFIRMATIONS, 2
+    )
+    with pytest.raises(ValidationError):
+        ContinualRetestSettings(min_dethrone_confirmations=16)

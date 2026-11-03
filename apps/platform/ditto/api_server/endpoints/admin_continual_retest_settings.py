@@ -71,7 +71,7 @@ def _revision(row: RevisionRow) -> ContinualRetestSettingsRevision:
         revision=row.revision,
         parent_revision=row.parent_revision,
         scope=row.scope,
-        settings=ContinualRetestSettings.from_stored(row.settings),
+        settings=ContinualRetestSettings.model_validate(row.settings),
         reason=row.reason,
         actor=row.actor,
         created_at=row.created_at,
