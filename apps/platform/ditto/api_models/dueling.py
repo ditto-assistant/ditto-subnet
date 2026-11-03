@@ -358,7 +358,7 @@ class AdminDuelingSliceRetryRequest(BaseModel):
 # --- public reveal and generator source release -----------------------------
 
 GeneratorSourceReleaseStatus = Literal[
-    "waiting_close", "waiting_reveal", "embargoed", "withheld", "released"
+    "waiting_close", "waiting_reveal", "embargoed", "due", "withheld", "released"
 ]
 
 
@@ -439,7 +439,8 @@ class PublicDuelingSeasonList(DuelingModel):
 class PublicDuelingSlice(DuelingModel):
     """One revealed slice: ``-run-seed``, ``-expect-sha256`` and ``-pins``."""
 
-    run_seed: int
+    run_seed: Annotated[str, Field(pattern=r"^(0|[1-9][0-9]{0,18})$")]
+    """Decimal text: a run seed is an int64, beyond JavaScript's exact range."""
     slice_sha256: str
     ready_at: datetime | None
     pins: PublicDuelingPins

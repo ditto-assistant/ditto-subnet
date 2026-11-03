@@ -152,7 +152,7 @@ export const duelingSlicesSchema = z.object({
 // max(reveal of the last season that pinned it, close of the first season that
 // pinned it + embargo_hours); released once due while the policy publishes.
 export const generatorSourceReleaseStatus = z.enum([
-  'waiting_close', 'waiting_reveal', 'embargoed', 'withheld', 'released',
+  'waiting_close', 'waiting_reveal', 'embargoed', 'due', 'withheld', 'released',
 ])
 
 export const generatorSourceReleasesSchema = z.object({

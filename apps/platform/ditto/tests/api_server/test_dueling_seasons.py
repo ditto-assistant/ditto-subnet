@@ -1387,7 +1387,14 @@ class TestDuelingReveal:
 
         page = (await client.get(f"{base}/seasons/{revealed}/slices")).json()
         [entry] = page["slices"]
-        assert entry["run_seed"] == 7
+        assert entry["run_seed"] == "7"
+        filtered = await client.get(
+            f"{base}/seasons/{revealed}/slices", params={"run_seed": "8"}
+        )
+        assert filtered.json()["total"] == 0
+        # The late generator is pinned only by an open season: no public status.
+        status = await client.get(f"{base}/generator-sources/{late.submission_id}")
+        assert status.status_code == 404
         assert entry["slice_sha256"] == hashlib.sha256(b"{}").hexdigest()
         c0, c1 = entry["pins"]["columns"][:2]
         assert c0["substituted"] is False and c0["owner_key"] == "coldkey:eve"
@@ -1403,11 +1410,11 @@ class TestDuelingReveal:
         )
         assert archive.status_code == 200
         assert hashlib.sha256(archive.content).hexdigest() == miner.source_sha256
-        # Still pinned by an open season: not released yet.
+        # Pinned only by an open season: not public at all yet.
         held = await client.get(
             f"{base}/generator-sources/{late.submission_id}/archive"
         )
-        assert held.status_code == 425
+        assert held.status_code == 404
         unknown = await client.get(f"{base}/generator-sources/{uuid4()}/archive")
         assert unknown.status_code == 404
 

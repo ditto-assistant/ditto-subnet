@@ -49,6 +49,7 @@ from ditto.api_models.dueling import (
     GeneratorSourceReleaseView,
     retry_dueling_slice_confirmation,
 )
+from ditto.api_models.source_disclosure import SourceDisclosure
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.dueling_seasons import (
     dueling_target,
@@ -394,7 +395,10 @@ def release_status(row: GeneratorSourceRelease, *, now: datetime) -> str:
     if row.last_revealed_at is None:
         return "waiting_reveal"
     if row.release_at is not None and row.release_at <= now:
-        return "withheld"  # due, but the policy does not publish
+        # Due: released on the next season tick while the policy publishes.
+        if row.disclosure == SourceDisclosure.PUBLIC.value:
+            return "due"
+        return "withheld"
     return "embargoed"
 
 

@@ -1904,7 +1904,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
 
   registerTool('list_generator_source_releases', {
     title: 'List generator source releases',
-    description: 'Pinned dueling generators\' source releases (bench v16+), one per submission: tree/source SHA-256, first and last pinning season, release_at = max(last pinning season reveal, first pinning season close + embargo_hours), released_at, embargo, disclosure, scorer revision. status: waiting_close, waiting_reveal, embargoed, withheld (due but policy does not publish), released (public archive). counts covers every row. Requires backroom:read.',
+    description: 'Pinned dueling generators\' source releases (bench v16+), one per submission: tree/source SHA-256, first and last pinning season, release_at = max(last pinning season reveal, first pinning season close + embargo_hours), released_at, embargo, disclosure, scorer revision. status: waiting_close, waiting_reveal, embargoed, due (releases next tick), withheld (due but policy does not publish), released (public archive). counts covers every row. Requires backroom:read.',
     inputSchema: listGeneratorSourceReleasesInputSchema, annotations: toolAnnotations('read'),
   }, async (input) => result(await listGeneratorSourceReleases(input)))
 

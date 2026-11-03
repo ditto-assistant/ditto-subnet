@@ -25,7 +25,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
@@ -53,6 +53,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 _CACHE = "public, max-age=60"
 _MAX_SEASONS = 50
 _MAX_SLICES = 500
+_MAX_RUN_SEED = (1 << 63) - 1
 
 
 def _archive_path(submission_id: UUID) -> str:
@@ -161,12 +162,23 @@ async def public_dueling_seasons(
     session: SessionDep,
     limit: Annotated[int, Query(ge=1, le=_MAX_SEASONS)] = 10,
     before_index: Annotated[int | None, Query(ge=0)] = None,
+    before_bench_version: Annotated[int | None, Query(ge=16)] = None,
 ) -> PublicDuelingSeasonList:
-    """Revealed seasons, newest first; ``before_index`` pages backwards."""
+    """Revealed seasons, newest first.
+
+    Page backwards with the last row's ``season_index`` as ``before_index``
+    and its ``bench_version`` as ``before_bench_version`` (a shadow and an
+    authoritative season can share an index); ``before_index`` alone skips
+    the whole index."""
     response.headers["Cache-Control"] = _CACHE
     stmt = select(DuelingSeason).where(DuelingSeason.status == "revealed")
     if before_index is not None:
-        stmt = stmt.where(DuelingSeason.season_index < before_index)
+        stmt = stmt.where(
+            tuple_(DuelingSeason.season_index, DuelingSeason.bench_version)
+            < tuple_(before_index, before_bench_version)
+            if before_bench_version is not None
+            else DuelingSeason.season_index < before_index
+        )
     seasons = list(
         await session.scalars(
             stmt.order_by(
@@ -200,7 +212,13 @@ async def public_dueling_slices(
     session: SessionDep,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=_MAX_SLICES)] = 100,
-    run_seed: Annotated[int | None, Query(ge=0)] = None,
+    run_seed: Annotated[
+        str | None,
+        Query(
+            pattern=r"^(0|[1-9][0-9]{0,18})$",
+            description="Decimal run seed (an int64; sent as text so it is exact)",
+        ),
+    ] = None,
 ) -> PublicDuelingSlicePage:
     """Every slice of a revealed season that has a digest, by run seed."""
     response.headers["Cache-Control"] = _CACHE
@@ -210,7 +228,9 @@ async def public_dueling_slices(
         DuelingSlicePreparation.slice_sha256.is_not(None),
     ]
     if run_seed is not None:
-        where.append(DuelingSlicePreparation.run_seed == run_seed)
+        if int(run_seed) > _MAX_RUN_SEED:
+            raise HTTPException(status_code=422, detail="run_seed exceeds int64")
+        where.append(DuelingSlicePreparation.run_seed == int(run_seed))
     total = await session.scalar(
         select(func.count()).select_from(DuelingSlicePreparation).where(*where)
     )
@@ -231,7 +251,7 @@ async def public_dueling_slices(
         limit=limit,
         slices=[
             PublicDuelingSlice(
-                run_seed=int(row.run_seed),
+                run_seed=str(int(row.run_seed)),
                 slice_sha256=str(row.slice_sha256),
                 ready_at=row.ready_at,
                 pins=PublicDuelingPins.model_validate(slice_pins(season, row)),
@@ -251,9 +271,11 @@ async def _source(
         stmt = stmt.options(defer(GeneratorSubmission.source_bytes))
     sub = await session.scalar(stmt)
     release = await session.get(GeneratorSourceRelease, submission_id)
-    if sub is None or (release is None and not sub.public_default):
-        # Only a generator some dueling season pinned (or the public default)
-        # has a release at all; every other generator's source stays private.
+    if sub is None or (
+        not sub.public_default and (release is None or release.last_revealed_at is None)
+    ):
+        # Only a generator pinned by a revealed season (or the public default)
+        # has a public source status; an unrevealed pin stays private.
         raise HTTPException(status_code=404, detail="no dueling source release")
     return sub, release
 
@@ -268,7 +290,18 @@ async def public_generator_source(
     return _source_view(sub, release, publishes=publishes)
 
 
-@router.get("/generator-sources/{submission_id}/archive")
+@router.get(
+    "/generator-sources/{submission_id}/archive",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {
+                "application/gzip": {"schema": {"type": "string", "format": "binary"}}
+            },
+            "description": "The exact pinned archive (``source_sha256``).",
+        }
+    },
+)
 async def public_generator_source_archive(
     submission_id: UUID, session: SessionDep
 ) -> Response:

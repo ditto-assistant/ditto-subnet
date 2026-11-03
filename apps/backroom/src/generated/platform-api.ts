@@ -7621,7 +7621,12 @@ export interface paths {
         };
         /**
          * Public Dueling Seasons
-         * @description Revealed seasons, newest first; ``before_index`` pages backwards.
+         * @description Revealed seasons, newest first.
+         *
+         *     Page backwards with the last row's ``season_index`` as ``before_index``
+         *     and its ``bench_version`` as ``before_bench_version`` (a shadow and an
+         *     authoritative season can share an index); ``before_index`` alone skips
+         *     the whole index.
          */
         get: operations["public_dueling_seasons_api_v1_public_dueling_seasons_get"];
         put?: never;
@@ -25917,7 +25922,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "waiting_close" | "waiting_reveal" | "embargoed" | "withheld" | "released";
+            status: "waiting_close" | "waiting_reveal" | "embargoed" | "due" | "withheld" | "released";
             /**
              * Submission Id
              * Format: uuid
@@ -32643,7 +32648,7 @@ export interface components {
             /** Ready At */
             ready_at: string | null;
             /** Run Seed */
-            run_seed: number;
+            run_seed: string;
             /** Slice Sha256 */
             slice_sha256: string;
         };
@@ -50385,7 +50390,7 @@ export interface operations {
     admin_generator_source_releases_api_v1_admin_generator_competition_dueling_source_releases_get: {
         parameters: {
             query?: {
-                status?: ("waiting_close" | "waiting_reveal" | "embargoed" | "withheld" | "released") | null;
+                status?: ("waiting_close" | "waiting_reveal" | "embargoed" | "due" | "withheld" | "released") | null;
                 submission_id?: string | null;
                 limit?: number;
                 offset?: number;
@@ -61037,13 +61042,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Successful Response */
+            /** @description The exact pinned archive (``source_sha256``). */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/gzip": string;
                 };
             };
             /** @description Validation Error */
@@ -61062,6 +61067,7 @@ export interface operations {
             query?: {
                 limit?: number;
                 before_index?: number | null;
+                before_bench_version?: number | null;
             };
             header?: never;
             path?: never;
@@ -61125,7 +61131,8 @@ export interface operations {
             query?: {
                 offset?: number;
                 limit?: number;
-                run_seed?: number | null;
+                /** @description Decimal run seed (an int64; sent as text so it is exact) */
+                run_seed?: string | null;
             };
             header?: never;
             path: {

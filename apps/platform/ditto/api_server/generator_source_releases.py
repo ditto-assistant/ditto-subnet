@@ -37,7 +37,7 @@ from ditto.db.models import (
     GeneratorSubmission,
 )
 from ditto.db.queries.artifact_release_settings import artifact_release_policy
-from ditto_screening_protocol.dueling import slice_seed
+from ditto_screening_protocol.dueling import DUELING_MIN_BENCH_VERSION, slice_seed
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -79,6 +79,7 @@ async def sync_generator_source_releases(
             .where(
                 DuelingSeason.status.in_(PINNING_STATUSES),
                 DuelingSeason.columns.is_not(None),
+                DuelingSeason.bench_version >= DUELING_MIN_BENCH_VERSION,
             )
             .order_by(DuelingSeason.season_index, DuelingSeason.created_at)
         )
