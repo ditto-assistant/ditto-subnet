@@ -18,12 +18,16 @@ ReviewModel = Literal[
     "openai/gpt-5.6-terra",
     "openai/gpt-6-sol",
     "openai/gpt-6.1-terra",
+    "openai/gpt-6.1-sol",
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
 ]
 L3ReviewModel = Literal[
-    "openai/gpt-5.6-sol", "openai/gpt-6-sol", "openai/gpt-6.1-terra"
+    "openai/gpt-5.6-sol",
+    "openai/gpt-6-sol",
+    "openai/gpt-6.1-terra",
+    "openai/gpt-6.1-sol",
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
 SourceReviewModel = Literal["openai/gpt-5.6-luna", "openai/gpt-6-luna"]

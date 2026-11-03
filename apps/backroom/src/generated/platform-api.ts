@@ -40135,13 +40135,13 @@ export interface components {
              *       "openai/gpt-5.6-sol"
              *     ]
              */
-            l2_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            l2_fallback_models: ("openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "openai/gpt-6.1-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
             /**
              * L2 Model
              * @default openai/gpt-5.6-terra
              * @enum {string}
              */
-            l2_model: "openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
+            l2_model: "openai/gpt-5.6-terra" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "openai/gpt-6.1-sol" | "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
             /**
              * L3 Enabled
              * @default true
@@ -40152,7 +40152,7 @@ export interface components {
              * @default openai/gpt-5.6-sol
              * @enum {string}
              */
-            l3_model: "openai/gpt-5.6-sol" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra";
+            l3_model: "openai/gpt-5.6-sol" | "openai/gpt-6-sol" | "openai/gpt-6.1-terra" | "openai/gpt-6.1-sol";
             /**
              * Max Completion Tokens
              * @default 2400

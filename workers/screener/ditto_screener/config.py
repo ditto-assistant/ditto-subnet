@@ -610,11 +610,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         "openai/gpt-5.6-terra",
         "openai/gpt-6-sol",
         "openai/gpt-6.1-terra",
+        "openai/gpt-6.1-sol",
         "moonshotai/kimi-k3",
     }:
         raise ScreenerConfigError(
             "SCREENER_L2_REVIEW_MODEL must be openai/gpt-5.6-terra, "
-            "openai/gpt-6-sol, openai/gpt-6.1-terra, or moonshotai/kimi-k3"
+            "openai/gpt-6-sol, openai/gpt-6.1-terra, openai/gpt-6.1-sol, "
+            "or moonshotai/kimi-k3"
         )
     if config.review_inference_provider not in REVIEW_INFERENCE_PROVIDERS:
         raise ScreenerConfigError(
@@ -636,10 +638,11 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         "openai/gpt-5.6-sol",
         "openai/gpt-6-sol",
         "openai/gpt-6.1-terra",
+        "openai/gpt-6.1-sol",
     }:
         raise ScreenerConfigError(
             "SCREENER_L3_REVIEW_MODEL must be openai/gpt-5.6-sol, "
-            "openai/gpt-6-sol, or openai/gpt-6.1-terra"
+            "openai/gpt-6-sol, openai/gpt-6.1-terra, or openai/gpt-6.1-sol"
         )
     if config.l3_review_provider != config.review_inference_provider:
         raise ScreenerConfigError(

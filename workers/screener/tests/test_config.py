@@ -92,6 +92,15 @@ def test_gpt6_models_are_valid_when_explicit(monkeypatch: pytest.MonkeyPatch) ->
     assert config.l3_review_model == "openai/gpt-6-sol"
 
 
+def test_gpt61_sol_is_valid_for_l2_and_l3(monkeypatch: pytest.MonkeyPatch) -> None:
+    _base_env(monkeypatch)
+    monkeypatch.setenv("SCREENER_L2_REVIEW_MODEL", "openai/gpt-6.1-sol")
+    monkeypatch.setenv("SCREENER_L3_REVIEW_MODEL", "openai/gpt-6.1-sol")
+    config = parse_screener_config_from_env()
+    assert config.l2_review_model == "openai/gpt-6.1-sol"
+    assert config.l3_review_model == "openai/gpt-6.1-sol"
+
+
 def test_signed_runtime_lease_requires_explicit_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

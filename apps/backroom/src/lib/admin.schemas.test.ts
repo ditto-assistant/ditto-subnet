@@ -2387,6 +2387,21 @@ describe('screener review settings schemas', () => {
     expect(() => screenerReviewSettingsSchema.parse({ ...settings, timeout_seconds: 3_601 })).toThrow()
   })
 
+  it('accepts GPT-6.1 Sol for L2 and L3 with a GPT-6.1 Terra fallback', () => {
+    const parsed = screenerReviewSettingsSchema.parse({
+      ...settings,
+      l2_model: 'openai/gpt-6.1-sol',
+      l2_fallback_models: ['openai/gpt-6.1-terra', 'z-ai/glm-5.2'],
+      l3_model: 'openai/gpt-6.1-sol',
+      timeout_seconds: 2_700,
+    })
+    expect(parsed.l2_model).toBe('openai/gpt-6.1-sol')
+    expect(parsed.l3_model).toBe('openai/gpt-6.1-sol')
+    expect(() => screenerReviewSettingsSchema.parse({
+      ...settings, source_review_model: 'openai/gpt-6.1-luna',
+    })).toThrow()
+  })
+
   it('parses current, history, and signed worker application status', () => {
     const parsed = screenerReviewControlSchema.parse({
       current: [],
