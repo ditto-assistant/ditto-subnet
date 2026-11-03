@@ -162,7 +162,7 @@ func v16ConnectorSlots(seed int64, cases []protocol.ToolCase) []int {
 	}
 	var out []int
 	used := map[int]bool{}
-	for _, i := range v13ConversionOrder(seed, cases) {
+	for _, i := range v13ConversionOrderForVersion(seed, protocol.BenchVersionV16, cases) {
 		if free(cases[i]) {
 			out = append(out, i)
 			used[i] = true

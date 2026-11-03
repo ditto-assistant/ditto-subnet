@@ -1,6 +1,11 @@
 package gen
 
-import "github.com/ditto-assistant/dittobench-datagen/protocol"
+import (
+	"strings"
+
+	"github.com/ditto-assistant/dittobench-datagen/protocol"
+	"github.com/ditto-assistant/dittobench-datagen/universe"
+)
 
 // Bench v16 dueling profile: the DATAGEN HALF of the dueling run
 // (docs/dueling-bench.md sections 1 and 7.1).
@@ -12,27 +17,33 @@ import "github.com/ditto-assistant/dittobench-datagen/protocol"
 // table. The 175/175 split is a contract constant: changing either count is a
 // new bench version.
 //
-// One shared world. The tool phase seeds the coherent world through the v9
-// world carrier and the memory phase stages corrections against the same
-// world, so the two phases must draw one world scale. 50 tool cases select the
-// scale-2 world (the tool passes key their world on the case count, >= 30), so
-// the v16 memory table is built on the scale-2 world too: six story arcs, the
-// scale-2 abstention, as-of and isolation families, and a larger share of the
-// world-independent families (programs, record quantity, divergence) than the
-// v13 medium table carries. The memory slot table, not Profile.Mem, is the
-// contract; Mem is the key that selects the table and the world scale.
+// One shared world, at the v15 scale. The tool phase seeds the coherent world
+// through the v9 world carrier and the memory phase stages corrections against
+// the same world, so both phases draw one world scale, and v16 pins it per
+// profile to the v15 scale of the same run size: the full run reads the v15
+// full world (28 people, 18 projects, 12 trips, 13 story arcs) and medium the
+// v15 medium world. The tool passes take the scale from
+// datagen.ToolWorldScale, which maps the v16 tool counts to these scales
+// instead of keying on the case count.
 //
-// Medium scales down the same way the earlier contracts do (roughly 0.4 of the
-// full run): 24 tool cases on the scale-1 world with a 43-case table. Small is
-// the v13 smoke profile unchanged.
+// The 125-case table asks about part of that world: six of the 13 story arcs
+// (the other seven stay seeded as haystack), half of the world's abstention
+// and as-of twins (a family-quota subset; every probe record stays
+// planted), and the world-independent families at about the v15 proportions.
+// The memory slot table, not Profile.Mem, is the contract; Mem is the key that
+// selects the table and the world scale (v8WorldProfile).
+//
+// Small is the v15 smoke profile unchanged.
 
-// profilesV16 is the dueling datagen-half envelope. Profile.Mem is a key: full
-// 96 and medium 24 select the scale-2 and scale-1 worlds (v8WorldProfile) and
-// the v16 slot tables below.
+// profilesV16 is the dueling datagen-half envelope. Profile.Mem is a key:
+// full 125 and medium 64 select the scale-3 and scale-2 worlds
+// (v8WorldProfile), the v15 full and medium scales, and the v16 slot tables
+// below. Waves, raw-pairs fraction and isolation quota are the v15 values for
+// the same world.
 var profilesV16 = map[string]Profile{
 	"small":  {Tools: 6, Mem: 6, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
-	"medium": {Tools: 24, Mem: 24, Waves: 1, RawPairsFrac: 0, IsoCases: 0},
-	"full":   {Tools: 50, Mem: 96, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},
+	"medium": {Tools: 24, Mem: 64, Waves: 4, RawPairsFrac: 0.45, IsoCases: 5},
+	"full":   {Tools: 50, Mem: 125, Waves: 5, RawPairsFrac: 0.5, IsoCases: 9},
 }
 
 // V16DatagenHalfCases is the full-profile datagen-half case count (tool plus
@@ -40,27 +51,25 @@ var profilesV16 = map[string]Profile{
 const V16DatagenHalfCases = 175
 
 // V16FullEnvelope is the published 125-case full-profile memory table on the
-// scale-2 world. The scale-2 world fixes story (6 arcs x 6 oracles), the
-// abstention families (8), the as-of twins (4) and isolation (5); the
-// integrity tail is the full 14 (three chitchat, three acknowledgement, three
-// behaviour, one canary, four injection). The world-independent families take
-// the rest at about the v13 full proportions.
-//
-// Record quantity is held at 4 (the smallest compiler group) and personal
-// programs take the slack, so the money share of computed answers stays under
-// the v13 cap at the smaller envelope (cmd/mixaudit -bench-version 16 -gate:
-// 0.227 worst case over seeds 1..40, cap 0.25).
+// v15 full (scale-3) world: six story arcs x six oracles, 12 of the world's 25
+// abstention twins (about 10%, the v15 share; v16AbstentionQuotas), 3 of its 6
+// as-of twin pairs,
+// the 14-case integrity tail, the 9 isolation cases the scale-3 world fixes,
+// and the world-independent families. Ordinary world holds the 12 answerable
+// abstention twins plus 8 plain questions (the staged corrections need six).
 var V16FullEnvelope = V13MemoryEnvelope{
-	Story: 36, OrdinaryWorld: 14, BusinessPrograms: 16, PersonalPrograms: 16, Abstention: 8,
-	RecordQuantity: 4, Divergence: 8, PointInTime: 4, Integrity: 14, Isolation: 5,
+	Story: 36, OrdinaryWorld: 20, BusinessPrograms: 16, PersonalPrograms: 4, Abstention: 12,
+	RecordQuantity: 4, Divergence: 4, PointInTime: 6, Integrity: 14, Isolation: 9,
+	StoryArcs: 6,
 }
 
-// v16MediumEnvelope is the 43-case medium table on the scale-1 world (one
-// story arc, no abstention, as-of or isolation families, the three-probe
-// injection tail).
+// v16MediumEnvelope is the medium table on the v15 medium (scale-2) world:
+// three story arcs, 4 of 8 abstention twins, 1 of 2 as-of pairs, the full
+// integrity tail and the scale-2 isolation quota.
 var v16MediumEnvelope = V13MemoryEnvelope{
-	Story: 6, OrdinaryWorld: 4, BusinessPrograms: 8, PersonalPrograms: 4, Abstention: 0,
-	RecordQuantity: 4, Divergence: 4, PointInTime: 0, Integrity: 13, Isolation: 0,
+	Story: 18, OrdinaryWorld: 8, BusinessPrograms: 4, PersonalPrograms: 4, Abstention: 4,
+	RecordQuantity: 0, Divergence: 4, PointInTime: 2, Integrity: 14, Isolation: 5,
+	StoryArcs: 3,
 }
 
 // v16EnvelopeFor maps a v16 Profile.Mem key to its slot table. Like
@@ -112,17 +121,10 @@ func profilesForEnvelope(benchVersion int) map[string]Profile {
 	return profilesV13
 }
 
-// MixGateV16 is the #1529 / #1848 gate at the dueling envelope. Every cap and
-// floor is MixGateV13's except the abstention target: the scale-2 world fixes
-// eight decision pairs (universe.V13AbsenceFamilyCounts), so abstention is
-// 8/125 = 6.4% of the table (16 cases, 12.8%, with the answerable twins). The
-// world is deliberately not rebalanced for v16: it is the same scale-2 world
-// v13..v15 build, which the tool phase also reads.
-var MixGateV16 = func() MixGate {
-	g := MixGateV13
-	g.AbstentionTarget = float64(V16FullEnvelope.Abstention) / float64(V16FullEnvelope.Total())
-	return g
-}()
+// MixGateV16 is the #1529 / #1848 gate at the dueling envelope: MixGateV13
+// unchanged, abstention target included (12/125 = 9.6%, inside 10% +/- 1%).
+// It stays a named gate so a later v16 calibration has one place to land.
+var MixGateV16 = MixGateV13
 
 // MixGateForVersion is the full-profile mix gate a contract publishes.
 func MixGateForVersion(benchVersion int) MixGate {
@@ -130,4 +132,78 @@ func MixGateForVersion(benchVersion int) MixGate {
 		return MixGateV16
 	}
 	return MixGateV13
+}
+
+// v16AbstentionQuotas fixes, per v16 abstention slot size, how many twin pairs
+// each absence family contributes. The two misleading-evidence families that
+// are not about contacts (false premise on trips, insufficient composition on
+// projects) take one more pair each than a plain rotation would give them:
+// the v16 table asks half the world's twins, and an even split would put the
+// contacts sub-domain over the 20% mix cap. Every family stays represented.
+var v16AbstentionQuotas = map[int]map[string]int{
+	12: {
+		universe.V13FamilyPureAbsence: 2, universe.V13FamilyNearMiss: 2, universe.V13FamilyStaleRemoved: 1,
+		universe.V13FamilyCrossUser: 1, universe.V13FamilyFalsePremise: 3, universe.V13FamilyInsufficient: 3,
+	},
+	4: {
+		universe.V13FamilyPureAbsence: 1, universe.V13FamilyNearMiss: 1,
+		universe.V13FamilyFalsePremise: 1, universe.V13FamilyInsufficient: 1,
+	},
+}
+
+// v16AbstentionSubset keeps the v16 abstention slot's twin pairs by family
+// quota, preserving the builder's order.
+func v16AbstentionSubset(pairs [][2]StagedCase, want int) [][2]StagedCase {
+	quota, ok := v16AbstentionQuotas[want]
+	if !ok || len(pairs) <= want {
+		return balancedTwinSubset(pairs, want)
+	}
+	taken := map[string]int{}
+	out := make([][2]StagedCase, 0, want)
+	for _, pair := range pairs {
+		family := strings.TrimPrefix(pair[0].Case.QuestionType, QTAbsence)
+		if taken[family] < quota[family] {
+			taken[family]++
+			out = append(out, pair)
+		}
+	}
+	return out
+}
+
+// balancedTwinSubset keeps want twin pairs, taking one pair per family in
+// rotation (families in first-appearance order) and preserving the builder's
+// order among the kept pairs. A builder that produced want pairs or fewer is
+// returned unchanged, so the generator's own count check still fails closed.
+func balancedTwinSubset(pairs [][2]StagedCase, want int) [][2]StagedCase {
+	if want < 0 || len(pairs) <= want {
+		return pairs
+	}
+	var families []string
+	byFamily := map[string][]int{}
+	for i, pair := range pairs {
+		family := pair[0].Case.QuestionType
+		if _, seen := byFamily[family]; !seen {
+			families = append(families, family)
+		}
+		byFamily[family] = append(byFamily[family], i)
+	}
+	keep := make([]bool, len(pairs))
+	for kept, round := 0, 0; kept < want; round++ {
+		for _, family := range families {
+			if kept == want {
+				break
+			}
+			if round < len(byFamily[family]) {
+				keep[byFamily[family][round]] = true
+				kept++
+			}
+		}
+	}
+	out := make([][2]StagedCase, 0, want)
+	for i, pair := range pairs {
+		if keep[i] {
+			out = append(out, pair)
+		}
+	}
+	return out
 }
