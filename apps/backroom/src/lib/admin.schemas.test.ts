@@ -176,6 +176,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -207,6 +208,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -240,6 +242,7 @@ describe('admin API schemas', () => {
       ...settings,
       decision_lane: DEFAULT_DECISION_LANE_SETTINGS,
       scored_provider_routing: 'throughput',
+      danilabs_percent: 0,
     })
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -303,6 +306,9 @@ describe('admin API schemas', () => {
         confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
       })
     expect(write({}).settings.scored_provider_routing).toBeUndefined()
+    expect(write({}).settings.danilabs_percent).toBeUndefined()
+    expect(write({ danilabs_percent: 10 }).settings.danilabs_percent).toBe(10)
+    expect(() => write({ danilabs_percent: 101 })).toThrow()
     expect(write({ scored_provider_routing: 'bf16_price_order_canary' }).settings
       .scored_provider_routing).toBe('bf16_price_order_canary')
     expect(() => write({ scored_provider_routing: 'fp4_cheapest' })).toThrow()

@@ -3655,6 +3655,8 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   scored_provider_routing: scoredProviderRoutingSchema
     .nullish()
     .transform((value) => value ?? 'throughput'),
+  danilabs_percent: z.number().int().min(0).max(100)
+    .nullish().transform((value) => value ?? 0),
 })
 
 // The platform enforces this hierarchy with its own model validator and 422s a
@@ -3663,7 +3665,7 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
 const refineInferenceConcurrencyHierarchy = (
   value: Omit<
     z.infer<typeof inferenceConcurrencySettingsBaseSchema>,
-    'decision_lane' | 'scored_provider_routing'
+    'decision_lane' | 'scored_provider_routing' | 'danilabs_percent'
   >,
   context: z.RefinementCtx,
 ) => {
@@ -3751,6 +3753,7 @@ const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBase
     // Optional on writes for the same reason: an omitted value keeps the
     // effective route, so a concurrency change never flips provider routing.
     scored_provider_routing: scoredProviderRoutingSchema.optional(),
+    danilabs_percent: z.number().int().min(0).max(100).optional(),
   })
   .superRefine(refineInferenceConcurrencyHierarchy)
 

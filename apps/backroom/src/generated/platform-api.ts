@@ -26374,6 +26374,11 @@ export interface components {
              * @default 25000000
              */
             chat_token_budget: number;
+            /**
+             * Danilabs Percent
+             * @default 0
+             */
+            danilabs_percent: number;
             decision_lane?: components["schemas"]["DecisionLaneSettings"];
             /**
              * Embedding Global Concurrency
