@@ -212,6 +212,7 @@ from ditto.api_server.koth import (
     continual_composite,
     effective_composite,
     emission_set,
+    ledger_row_dueling_fields,
     project_koth,
     retest_cohort,
     top5_round_is_due,
@@ -4902,6 +4903,7 @@ async def _current_koth_entries(
             efficiency_bonus=efficiency_bonuses.get(row.agent_id),
             efficiency_factor=efficiency_factors.get(row.agent_id),
             efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+            **ledger_row_dueling_fields(row),
         )
         for rank, row in enumerate(raw_rows, start=1)
     ]
@@ -5004,6 +5006,7 @@ async def _current_koth_entries(
                 efficiency_bonus=efficiency_bonuses.get(row.agent_id),
                 efficiency_factor=efficiency_factors.get(row.agent_id),
                 efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
             )
         )
     quality_primary = any(entry.efficiency_factor is not None for entry in entries)

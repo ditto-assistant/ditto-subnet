@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import math
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
+
+from pydantic import ValidationError
 
 from ditto.api_models.validator import CrownGateMarker, LedgerEntry
 from ditto.api_server.efficiency import (
@@ -23,6 +25,11 @@ from ditto.api_server.efficiency import (
     is_factor_curve,
 )
 from ditto.score_order import rank_submissions, score_order_key
+from ditto_screening_protocol.dueling import (
+    DuelingReport,
+    dueling_composite,
+    is_dueling_bench_version,
+)
 
 # Frozen consensus constants from ditto-subnet/ditto/validator/config.py.
 KOTH_MARGIN = 0.007
@@ -70,6 +77,16 @@ class CrownGate:
     standing_rank: int
 
 
+@dataclass(frozen=True, eq=False)
+class DuelingSeedRecord:
+    """One bench >= 16 confirmation record: its seed, version and the signed
+    ``details.dueling`` aggregates (``None`` when the record has none)."""
+
+    seed: int
+    bench_version: int
+    report: DuelingReport | None
+
+
 @dataclass(frozen=True)
 class KothEntry:
     """The public-safe subset of one active ledger row used by the fold."""
@@ -88,6 +105,16 @@ class KothEntry:
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
     efficiency_curve_version: int | None = None
+    # Bench >= 16 (dueling): the row's season, its signed ``details.dueling``
+    # aggregates, and every confirmation record's aggregates. Mirrors
+    # ``LedgerEntry.dueling_season_id`` / ``dueling`` and
+    # ``ConfirmationScoreRecord.dueling``; excluded from equality and hashing
+    # because the reports are value objects with list fields.
+    dueling_season_id: str | None = None
+    dueling: DuelingReport | None = field(default=None, compare=False)
+    dueling_records: tuple[DuelingSeedRecord, ...] | None = field(
+        default=None, compare=False
+    )
 
 
 def crown_gate_marker(gate: CrownGate | None) -> CrownGateMarker | None:
@@ -173,6 +200,22 @@ def koth_entries_from_ledger(entries: Sequence[LedgerEntry]) -> list[KothEntry]:
                 efficiency_bonus=entry.efficiency_bonus,
                 efficiency_factor=entry.efficiency_factor,
                 efficiency_curve_version=entry.efficiency_curve_version,
+                dueling_season_id=entry.dueling_season_id,
+                dueling=entry.dueling,
+                # A receipt row never pairs on continual history, exactly as
+                # the validator's ``_entry_seed_composites`` refuses it.
+                dueling_records=(
+                    None
+                    if receipt is not None or not entry.confirmation_history
+                    else tuple(
+                        DuelingSeedRecord(
+                            seed=record.seed,
+                            bench_version=record.bench_version,
+                            report=record.dueling,
+                        )
+                        for record in entry.confirmation_history
+                    )
+                ),
             )
         )
     return lifted
@@ -398,7 +441,7 @@ def _score_ceiling_cohort(
 ) -> tuple[KothEntry, ...]:
     # Curve-v3 protocol 21 has no continuous adjusted-score ceiling: quality is
     # the primary order and efficiency only breaks an exact quality tie.
-    if _quality_primary_efficiency_active(entries):
+    if _quality_primary_efficiency_active(_fold_pool(entries)):
         return ()
     ranked = _distinct_ranked(entries)
     challenger = next(
@@ -511,7 +554,7 @@ def crown_standings(
     """
     if projection is None:
         return None
-    scored = [entry for entry in entries if entry.composite > 0.0]
+    scored = _fold_pool(entries)
     ranked = _ranked_entries(scored)
     positions = {entry.agent_id: index for index, entry in enumerate(ranked, start=1)}
     quality_primary = _quality_primary_efficiency_active(scored)
@@ -547,7 +590,7 @@ def crown_standings(
 
 
 def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
-    ranked = _ranked_entries(entry for entry in entries if entry.composite > 0.0)
+    ranked = _ranked_entries(_fold_pool(entries))
     distinct: list[KothEntry] = []
     seen_hotkeys: set[str] = set()
     for entry in ranked:
@@ -681,8 +724,8 @@ def retest_cohort(
     champion = projection.champion
     ranked = _ranked_entries(
         entry
-        for entry in entries
-        if entry.composite > 0.0 and entry.miner_hotkey != champion.miner_hotkey
+        for entry in _fold_pool(entries)
+        if entry.miner_hotkey != champion.miner_hotkey
     )
     base_size = max(1, size)
     ceiling = base_size if max_size is None else max(base_size, max_size)
@@ -834,7 +877,7 @@ def project_koth(
     seeds against it (else the rank-1 entry), and only standing challengers
     are walked, each needing a paired win on ``min_shared_seeds`` seeds.
     """
-    scored = [entry for entry in entries if entry.composite > 0.0]
+    scored = _fold_pool(entries)
     if not scored:
         return None
 
@@ -898,9 +941,9 @@ def project_koth(
             tail_members.append(entry)
             if len(tail_members) == KOTH_TAIL_SIZE:
                 break
-        tail = tuple(tail_members)
+        tail = tuple(_dueling_adjacent_order(tail_members))
     else:
-        tail = tuple(ranked_tail[:KOTH_TAIL_SIZE])
+        tail = tuple(_dueling_adjacent_order(ranked_tail[:KOTH_TAIL_SIZE]))
     raw_leader = ranked[0]
     decision = (
         None
@@ -1135,26 +1178,205 @@ def _seed_composites(entry: KothEntry) -> dict[int, float] | None:
     return out
 
 
+# --- Dueling bench (bench_version >= 16) -------------------------------------
+#
+# Mirrors ``ditto/validator/weights.py`` (``research/dittobench-datagen/docs/
+# dueling-bench.md`` sections 3 and 7.7) byte for byte, all inert below v16:
+# two v16 rows compare only inside one ``(bench_version, season_id)``, the
+# paired statistic recomputes every shared seed's composite for both agents
+# with ``{owner(A), owner(B)}`` masked, the paid tail is ordered by the same
+# pair-masked comparison between neighbours, and a v16 row without its season
+# or aggregates never ranks or pays. ``ditto/tests/fixtures/
+# crown_gate_cases.json`` folds both implementations over the same cases.
+
+
+def _is_dueling_entry(entry: KothEntry) -> bool:
+    return is_dueling_bench_version(entry.bench_version)
+
+
+def _entry_season(entry: KothEntry) -> str | None:
+    """The row's season, cross-checked against its signed report's season."""
+    report = entry.dueling
+    if report is None:
+        return None
+    if entry.dueling_season_id is None:
+        return report.season_id
+    return (
+        entry.dueling_season_id if entry.dueling_season_id == report.season_id else None
+    )
+
+
+def dueling_fold_ready(entry: KothEntry) -> bool:
+    """Pre-16 rows always; a v16 row only with its season and aggregates."""
+    return not _is_dueling_entry(entry) or _entry_season(entry) is not None
+
+
+def _fold_pool(entries: Iterable[KothEntry]) -> list[KothEntry]:
+    """Positive rows the fold may rank: the validator's ``filter_eligible``
+    plus its positive-composite filter."""
+    return [
+        entry
+        for entry in entries
+        if entry.composite > 0.0 and dueling_fold_ready(entry)
+    ]
+
+
+def _dueling_incomparable(a: KothEntry, b: KothEntry) -> bool:
+    """Both v16+ without one shared ``(bench_version, season_id)``."""
+    if not (_is_dueling_entry(a) and _is_dueling_entry(b)):
+        return False
+    season_a = _entry_season(a)
+    return (
+        season_a is None
+        or season_a != _entry_season(b)
+        or a.bench_version != b.bench_version
+    )
+
+
+def _dueling_pair_mask(a: KothEntry, b: KothEntry) -> frozenset[str] | None:
+    """``{owner(A), owner(B)}`` for two comparable v16 rows, else ``None``."""
+    if not (_is_dueling_entry(a) and _is_dueling_entry(b)):
+        return None
+    if _dueling_incomparable(a, b):
+        return None
+    if a.dueling is None or b.dueling is None:
+        return None
+    return frozenset({a.dueling.owner_key, b.dueling.owner_key})
+
+
+def ledger_row_dueling_fields(row: object) -> dict[str, Any]:
+    """``KothEntry`` dueling keyword arguments from a Platform ledger row.
+
+    Database-sourced projections carry the representative score's season and
+    signed ``details.dueling`` so a v16 row stays in the pool (the fold drops
+    one without them). A stored report that no longer validates is withheld,
+    which the fold reads as no dueling evidence. Per-seed records come only
+    from the served ledger (:func:`koth_entries_from_ledger`).
+    """
+    season = getattr(row, "dueling_season_id", None)
+    raw = getattr(row, "dueling", None)
+    report: DuelingReport | None = None
+    if isinstance(raw, DuelingReport):
+        report = raw
+    elif isinstance(raw, dict):
+        try:
+            report = DuelingReport.model_validate(raw)
+        except ValidationError:
+            report = None
+    return {
+        "dueling_season_id": None if season is None else str(season),
+        "dueling": report,
+    }
+
+
+def _record_masked_composite(
+    entry: KothEntry, record: DuelingSeedRecord, mask: frozenset[str]
+) -> float | None:
+    """One record's composite with ``mask``'s columns removed, when the record
+    is evidence for this row (same season, owner and bench version)."""
+    report = record.report
+    if report is None or entry.dueling is None:
+        return None
+    if (
+        report.season_id != _entry_season(entry)
+        or report.owner_key != entry.dueling.owner_key
+        or record.bench_version != entry.bench_version
+    ):
+        return None
+    value = dueling_composite(
+        report.datagen_raw, report.datagen_gate, report.columns, mask
+    )
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        return None
+    return value
+
+
+def _dueling_seed_composites(
+    entry: KothEntry, mask: frozenset[str]
+) -> dict[int, float] | None:
+    """Per-seed pair-masked medians over the bounded confirmation window."""
+    records = entry.dueling_records
+    if not records:
+        return None
+    window = set(
+        sorted({record.seed for record in records})[:TOP5_MAX_CONFIRMATION_SEEDS]
+    )
+    grouped: dict[int, list[float]] = {}
+    for record in records:
+        if record.seed not in window:
+            continue
+        value = _record_masked_composite(entry, record, mask)
+        if value is not None:
+            grouped.setdefault(record.seed, []).append(value)
+    if not grouped:
+        return None
+    return {seed: _median(values) for seed, values in sorted(grouped.items())}
+
+
+def _paired_seed_maps(
+    a: KothEntry, b: KothEntry
+) -> tuple[dict[int, float], dict[int, float]] | None:
+    """The per-seed maps a pairing compares (pair-masked for two v16 rows)."""
+    if _is_dueling_entry(a) and _is_dueling_entry(b):
+        mask = _dueling_pair_mask(a, b)
+        if mask is None:
+            return None
+        a_map = _dueling_seed_composites(a, mask)
+        b_map = _dueling_seed_composites(b, mask)
+    else:
+        a_map = _seed_composites(a)
+        b_map = _seed_composites(b)
+    if a_map is None or b_map is None:
+        return None
+    return a_map, b_map
+
+
+def _dueling_adjacent_order(ranked: Sequence[KothEntry]) -> list[KothEntry]:
+    """Order paid tail slots by the pair-masked comparison between neighbours.
+
+    Mirrors the validator's ``_dueling_adjacent_order``: membership never
+    moves, adjacent same-season v16 rows swap on a strictly positive paired
+    lead, and the passes are bounded by the list length.
+    """
+    ordered = list(ranked)
+    if not any(_is_dueling_entry(entry) for entry in ordered):
+        return ordered
+    for _ in range(len(ordered)):
+        swapped = False
+        for index in range(len(ordered) - 1):
+            upper, lower = ordered[index], ordered[index + 1]
+            if _dueling_pair_mask(lower, upper) is None:
+                continue
+            paired = _paired_statistic(lower, upper)
+            if paired is not None and paired.mean_difference > 0.0:
+                ordered[index], ordered[index + 1] = lower, upper
+                swapped = True
+        if not swapped:
+            break
+    return ordered
+
+
 def shared_seed_count(a: KothEntry, b: KothEntry) -> int:
     """Confirmation seeds both entries carry a validated composite for.
 
     Mirrors the validator's ``_shared_seed_count``: the depth the protocol-34
     crown gate counts, and the depth the public board reports per challenger.
+    Two v16 rows count pair-masked seeds inside one season.
     """
-    a_map = _seed_composites(a)
-    b_map = _seed_composites(b)
-    if a_map is None or b_map is None:
+    maps = _paired_seed_maps(a, b)
+    if maps is None:
         return 0
+    a_map, b_map = maps
     return len(a_map.keys() & b_map.keys())
 
 
 def _paired_statistic(
     challenger: KothEntry, champion: KothEntry
 ) -> PairedStatistic | None:
-    challenger_by_seed = _seed_composites(challenger)
-    champion_by_seed = _seed_composites(champion)
-    if challenger_by_seed is None or champion_by_seed is None:
+    maps = _paired_seed_maps(challenger, champion)
+    if maps is None:
         return None
+    challenger_by_seed, champion_by_seed = maps
     shared = sorted(challenger_by_seed.keys() & champion_by_seed.keys())
     if len(shared) < 2:
         return None
@@ -1189,6 +1411,8 @@ def _weight_tied(
     candidate: KothEntry, anchor: KothEntry, *, statistical_band_cap: bool = False
 ) -> bool:
     """Mirror the validator's fail-closed tie grouping rule."""
+    if _dueling_incomparable(candidate, anchor):
+        return False
     if _quality_primary_efficiency_active((candidate, anchor)):
         return continual_composite(candidate) == continual_composite(
             anchor
@@ -1227,6 +1451,10 @@ def _dethrone_decision(
         ceiling_band_clamp=ceiling_band_clamp,
         statistical_band_cap=statistical_band_cap,
     )
+    if _dueling_incomparable(challenger, champion):
+        # Two v16 rows from different seasons never dethrone each other (the
+        # validator's ``_beats``); the ceiling read stays the ungated one.
+        decision = replace(decision, dethrones=False)
     if crown_gate is None:
         return decision
     qualified = (

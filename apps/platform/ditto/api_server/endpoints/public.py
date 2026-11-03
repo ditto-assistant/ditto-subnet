@@ -297,6 +297,7 @@ from ditto.api_server.koth import (
     crown_standings,
     emission_allocation,
     koth_entries_from_ledger,
+    ledger_row_dueling_fields,
     project_koth,
 )
 from ditto.api_server.ledger_pin import (
@@ -3063,6 +3064,7 @@ def _public_koth_emissions(
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
                 efficiency_curve_version=curve_values.get(row.agent_id),
+                **ledger_row_dueling_fields(row),
             )
         )
 
