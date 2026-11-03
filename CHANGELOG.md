@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.442.0 (2026-11-03)
+
+### Features
+
+- **platform,backroom**: Prune released dueling slice bytes and tidy follow-ups
+  ([#3365](https://github.com/ditto-assistant/ditto-subnet/pull/3365),
+  [`073b6ef`](https://github.com/ditto-assistant/ditto-subnet/commit/073b6efbee4735785e67d1f0e47274cad41904f3))
+
+
 ## v0.441.0 (2026-11-03)
 
 ### Features
